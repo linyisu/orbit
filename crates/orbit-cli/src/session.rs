@@ -173,6 +173,47 @@ impl SessionState {
         Ok(())
     }
 
+    pub async fn resumable(&self) -> Result<Vec<orbit_store::types::Session>> {
+        Ok(self
+            .store
+            .list()
+            .await?
+            .into_iter()
+            .filter(|saved| {
+                saved.workspace == self.snapshot.session.workspace
+                    && saved.demo == self.snapshot.session.demo
+                    && saved.id != self.id()
+                    && !saved.title.is_empty()
+            })
+            .collect())
+    }
+
+    pub async fn resume(&mut self, id: &str) -> Result<()> {
+        ensure!(!self.active, "请先取消当前响应，再恢复会话。");
+        if id == self.id() {
+            self.snapshot = self.store.load(id).await?;
+            return Ok(());
+        }
+        let saved = self.store.load(id).await?;
+        ensure!(
+            saved.session.workspace == self.snapshot.session.workspace,
+            "该会话属于其他项目，请在对应目录恢复。"
+        );
+        ensure!(
+            saved.session.demo == self.snapshot.session.demo,
+            "演示会话和真实 API 会话不能混用。"
+        );
+        // Acquire and load the destination before replacing the current writer.
+        // A missing/locked session must leave the current session fully usable.
+        let writer = self.store.acquire(id).await?;
+        let snapshot = self.store.load(id).await?;
+        self.writer = writer;
+        self.snapshot = snapshot;
+        self.pending.clear();
+        self.flushed_at = Instant::now();
+        Ok(())
+    }
+
     pub async fn clear(&mut self, model: String, demo: bool) -> Result<()> {
         ensure!(!self.active, "cannot switch sessions during a run");
         let writer = self
@@ -183,5 +224,76 @@ impl SessionState {
         self.writer = writer;
         self.snapshot = snapshot;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn switching_restores_context_preserves_old_session_and_checks_scope_and_locks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state =
+            SessionState::open(tmp.path().join("sessions.db"), None, "model".into(), true)
+                .await
+                .unwrap();
+        let first = state.id().to_owned();
+        let history = vec![
+            ChatMessage::user("first question"),
+            ChatMessage::assistant("first answer"),
+        ];
+        state
+            .begin("first question".into(), "model".into())
+            .await
+            .unwrap();
+        assert!(state.resume("missing").await.is_err());
+        state
+            .finish("completed", Some(history.clone()))
+            .await
+            .unwrap();
+        // Resuming the current session reloads the latest successful history.
+        state.resume(&first).await.unwrap();
+        assert_eq!(state.snapshot.history, history);
+        state.clear("model".into(), true).await.unwrap();
+        let second = state.id().to_owned();
+        let foreign = state
+            .store
+            .create("/another/project".into(), "model".into(), true)
+            .await
+            .unwrap();
+        let live = state
+            .store
+            .create(
+                state.snapshot.session.workspace.clone(),
+                "model".into(),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(state.resume(foreign.id()).await.is_err());
+        assert!(state.resume(live.id()).await.is_err());
+        assert_eq!(
+            state
+                .resumable()
+                .await
+                .unwrap()
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![first.as_str()]
+        );
+        let locked = state.store.acquire(&first).await.unwrap();
+        assert!(state.resume(&first).await.is_err());
+        assert_eq!(state.id(), second);
+        assert!(state.resume("missing").await.is_err());
+        assert_eq!(state.id(), second);
+        drop(locked);
+        state.resume(&first).await.unwrap();
+        assert_eq!(state.snapshot.history, history);
+        assert_eq!(state.snapshot.runs.len(), 1);
+        assert!(state.store.load(&second).await.is_ok());
+        // The old lease is released after a successful switch.
+        assert!(state.store.acquire(&second).await.is_ok());
     }
 }
