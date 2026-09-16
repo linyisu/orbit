@@ -1,6 +1,6 @@
 # orbit-tools
 
-当前提供 `Workspace`、读取工具 `read_file` 、需要逐次确认的写入工具 `write_file` 和沙箱命令工具 `run_command`。`Workspace` 的根目录在 CLI 启动时取当前目录。
+当前提供 `Workspace`、读取工具 `read_file`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。修改文件和执行命令需要逐次确认。`Workspace` 的根目录在 CLI 启动时取当前目录。
 
 ## 调用链
 
@@ -54,6 +54,8 @@ cargo test -p orbit-tools --offline
 
 ## write_file 参数与确认
 
+新建文件或有意整体重写时使用 `write_file`；日常修改已有文件优先使用 `edit_file`。
+
 ```json
 {"path":"orbit-demo.txt","content":"你好\n"}
 ```
@@ -79,3 +81,27 @@ TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中�
 ## run_command
 
 通过完整命令确认后在 Linux Bubblewrap 中执行，原项目只读、无网络，默认 30 秒超时。离线演示输入 `run pwd` 即可测试。依赖与边界详见 [SANDBOX.md](SANDBOX.md)。
+
+## edit_file 局部编辑
+
+```json
+{"path":"src/main.rs","old_text":"println!(\"hello\");","new_text":"println!(\"你好\");"}
+```
+
+- 必须先读取文件，提交精确的旧文本和新文本，不需要模型重新生成整个文件。旧文本非空，默认只能匹配一个位置；多处匹配时应提供更多上下文，或者显式设置 `replace_all: true`。
+- `new_text` 为空表示删除。插入时，将已有文本作为锚点，让新文本包含锚点及插入内容。不按易变化的行号定位，不进行模糊匹配或正则替换。
+- 严格保留未修改的内容，包括空白、CRLF 和末尾换行；`replace_all` 从左向右替换不重叠的匹配。默认唯一性检查也会拒绝重叠的歧义匹配（例如在 `aaa` 中查找 `aa`）。
+- 只编辑已存在的文件；没有匹配、没有实际变化、非法参数或结果超过 32 KiB 时，在审批前返回错误。当前文件大小上限与 `write_file` 一致。
+- 复用 `write_file` 的完整前后预览、路径保护、拒绝/取消、冲突检查及原子提交。模型只传局部修改，磁盘提交仍通过临时文件原子替换；这避免原地写入中断造成半个文件。
+
+设计参考 [Anthropic 官方文本编辑工具](https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool) 的精确替换方式；这里使用通用函数工具协议，并自行接入 Orbit 的工作区和审批逻辑，没有依赖第三方编辑库。[OpenAI Codex 的 apply-patch](https://github.com/openai/codex/tree/main/codex-rs/apply-patch) 是另一种补丁方案，尚未接入。
+
+无 API 测试：启动 `tui --demo`，依次输入并批准：
+
+```text
+write orbit-demo.txt 你好，世界
+edit {"path":"orbit-demo.txt","old_text":"你好","new_text":"您好"}
+read orbit-demo.txt
+```
+
+输入 `edit` 后的 JSON 支持多行文本的 `\n` 转义，以及包含空格的路径。批准前不会修改文件，也可以按 Esc 验证拒绝路径。

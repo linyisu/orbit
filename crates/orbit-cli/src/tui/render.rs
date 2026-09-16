@@ -110,7 +110,7 @@ fn welcome(state: &UiState) -> Vec<Line<'static>> {
             muted(" 查看帮助    /model 查看模型"),
         ]),
         Line::from(muted(
-            "  read_file 读取 · write_file / run_command 执行前确认。",
+            "  read_file 读取 · write_file / edit_file / run_command 执行前确认。",
         )),
         Line::from(""),
     ]

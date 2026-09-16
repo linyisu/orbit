@@ -58,7 +58,7 @@ fn response(request: &ChatRequest) -> ChatMessage {
         }
         if value.get("written_bytes").is_some() {
             return ChatMessage::assistant(format!(
-                "已通过真实 write_file 工具写入 {}，共 {} 字节。\n\n这次写入经过你的确认；没有调用模型 API。",
+                "已通过真实文件工具写入 {}，共 {} 字节。\n\n这次写入经过你的确认；没有调用模型 API。",
                 value["path"].as_str().unwrap_or_default(),
                 value["written_bytes"]
             ));
@@ -74,6 +74,26 @@ fn response(request: &ChatRequest) -> ChatMessage {
                 "读取完成。"
             },
         ));
+    }
+    if let Some(ChatMessage::User { content }) = request.messages.last()
+        && let Some(edit) = content.strip_prefix("edit ")
+    {
+        let args: serde_json::Value = match serde_json::from_str(edit) {
+            Ok(args) => args,
+            Err(_) => {
+                return ChatMessage::assistant(
+                    "演示编辑用法：edit {\"path\":\"orbit-demo.txt\",\"old_text\":\"你好\",\"new_text\":\"您好\"}",
+                );
+            }
+        };
+        return ChatMessage::Assistant {
+            content: Some("准备局部编辑，请检查修改预览。".into()),
+            tool_calls: vec![ToolCall::function(
+                format!("demo-edit-{turns}"),
+                "edit_file",
+                args,
+            )],
+        };
     }
     if let Some(ChatMessage::User { content }) = request.messages.last()
         && let Some(command) = content.strip_prefix("run ")
