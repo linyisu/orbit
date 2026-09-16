@@ -209,3 +209,19 @@ async fn actual_file_result_and_lifecycle_events_flow_through_agent() {
     }
     assert_eq!(lifecycle, ["started", "finished", "completed"]);
 }
+
+#[test]
+fn protects_database_sidecars_created_after_registry_initialization() {
+    let root = Fixture::new();
+    let sidecar = root.0.join("sessions.db-wal");
+    let mut workspace = Workspace::new(&root.0).unwrap();
+    workspace.protect(&sidecar).unwrap();
+    fs::write(&sidecar, "private conversation").unwrap();
+    assert!(
+        workspace
+            .open_read(std::path::Path::new("sessions.db-wal"))
+            .is_err()
+    );
+    fs::hard_link(&sidecar, root.0.join("alias")).unwrap();
+    assert!(workspace.open_read(std::path::Path::new("alias")).is_err());
+}

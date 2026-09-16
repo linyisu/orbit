@@ -49,7 +49,17 @@ impl Workspace {
     }
 
     pub fn protect(&mut self, path: impl AsRef<Path>) -> Result<(), WorkspaceError> {
-        self.protected.push(path.as_ref().canonicalize()?);
+        let path = path.as_ref();
+        let resolved = match path.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => path
+                .parent()
+                .ok_or(WorkspaceError::InvalidPath)?
+                .canonicalize()?
+                .join(path.file_name().ok_or(WorkspaceError::InvalidPath)?),
+            Err(error) => return Err(error.into()),
+        };
+        self.protected.push(resolved);
         Ok(())
     }
 
