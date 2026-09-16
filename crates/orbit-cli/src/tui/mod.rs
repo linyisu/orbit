@@ -62,6 +62,11 @@ pub async fn run(
                     let Some(event) = event else { break };
                     dirty = true;
                     let event = event?;
+                    if matches!(&event, Event::Key(key) if key.code == KeyCode::F(2) && key.kind == KeyEventKind::Press) {
+                        terminal::set_mouse_capture(!state.mouse_capture)?;
+                        state.mouse_capture = !state.mouse_capture;
+                        continue;
+                    }
                     if pending.is_some() {
                         match approval::handle(&mut state, event) {
                             approval::Action::Approve => {
@@ -229,8 +234,10 @@ async fn run_command(
             history.clear();
             let input = std::mem::take(&mut state.input);
             let demo = state.demo;
+            let mouse_capture = state.mouse_capture;
             *state = UiState::new(state.model.clone());
             state.demo = demo;
+            state.mouse_capture = mouse_capture;
             state.input = input;
             session.restore_ui(state);
         }

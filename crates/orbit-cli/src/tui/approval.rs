@@ -81,7 +81,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let areas = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(1),
-        Constraint::Length(2),
+        Constraint::Length(3),
     ])
     .split(frame.area());
     frame.render_widget(
@@ -143,7 +143,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         "Ctrl+Y 允许这次写入 · Ctrl+N / Esc 拒绝 · Ctrl+C 取消本轮\n↑↓ / 鼠标 / PgUp PgDn 翻阅 · Enter 不会确认"
     };
-    frame.render_widget(Paragraph::new(help), areas[2]);
+    let mouse_hint = if state.mouse_capture {
+        "F2 切回拖选复制"
+    } else {
+        "可拖选复制 · F2 开启滚轮"
+    };
+    frame.render_widget(Paragraph::new(format!("{help}\n{mouse_hint}")), areas[2]);
     state.approval_shown = true;
 }
 

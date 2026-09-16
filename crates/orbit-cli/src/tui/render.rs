@@ -61,14 +61,17 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_status(frame, state, areas[2]);
     draw_composer(frame, state, areas[3], input_lines, cursor);
     draw_panel(frame, state, areas[4]);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![muted(if state.running() {
-            "  esc 取消 · 可先编辑下一条消息"
-        } else {
-            "  / 命令  ·  ? 快捷键  ·  ctrl+j 换行"
-        })])),
-        areas[5],
-    );
+    let mouse_hint = if state.mouse_capture {
+        "滚轮浏览 · F2 切回拖选"
+    } else {
+        "可拖选复制 · F2 开启滚轮"
+    };
+    let hint = if state.running() {
+        format!("  {mouse_hint} · esc 取消")
+    } else {
+        format!("  {mouse_hint} · PgUp/PgDn 翻页 · / 命令")
+    };
+    frame.render_widget(Paragraph::new(Line::from(muted(hint))), areas[5]);
 }
 
 fn draw_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {

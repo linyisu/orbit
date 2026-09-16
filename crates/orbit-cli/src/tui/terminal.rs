@@ -1,4 +1,4 @@
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 
 use crossterm::{
     cursor::{Hide, Show},
@@ -21,6 +21,16 @@ fn restore() {
         Show,
         LeaveAlternateScreen
     );
+    let _ = io::stdout().write_all(b"\x1b[?1007r");
+    let _ = io::stdout().flush();
+}
+
+pub fn set_mouse_capture(enabled: bool) -> io::Result<()> {
+    if enabled {
+        execute!(io::stdout(), EnableMouseCapture)
+    } else {
+        execute!(io::stdout(), DisableMouseCapture)
+    }
 }
 
 impl TerminalGuard {
@@ -37,9 +47,13 @@ impl TerminalGuard {
             stdout,
             EnterAlternateScreen,
             EnableBracketedPaste,
-            EnableMouseCapture,
+            DisableMouseCapture,
             Hide
         )?;
+        // Save and disable alternate-scroll translation: otherwise some terminals
+        // turn wheel input into Up/Down and accidentally navigate prompt history.
+        stdout.write_all(b"\x1b[?1007s\x1b[?1007l")?;
+        stdout.flush()?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
         Ok((guard, terminal))
     }
