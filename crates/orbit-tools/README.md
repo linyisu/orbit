@@ -1,6 +1,6 @@
 # orbit-tools
 
-当前提供 `Workspace`、读取工具 `read_file`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。修改文件和执行命令需要逐次确认。`Workspace` 的根目录在 CLI 启动时取当前目录。
+当前提供 `Workspace`、读取工具 `read_file`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
 
 ## 调用链
 
@@ -61,7 +61,7 @@ cargo test -p orbit-tools --offline
 ```
 
 - 在已有目录中创建或替换一个文件，旧内容和新内容各不超过 32 KiB，仅支持无 NUL 的 UTF-8 文本。
-- 先读取旧内容，在聊天下方展示内联修改预览，保留对话和输入草稿；折叠修改范围外的相同内容，保留附近三行上下文。`Ctrl+Y` 只批准当前一次写入，`Ctrl+N` / `Esc` 拒绝，`Ctrl+C` 取消本轮。Enter、粘贴内容不会批准。
+- 先读取旧内容，在聊天下方展示内联修改预览，保留对话和输入草稿；折叠修改范围外的相同内容，保留附近三行上下文。使用 ← / → 选择允许或拒绝，Enter 确认，Esc 拒绝，Ctrl+C 取消本轮；粘贴不会批准。`yolo` 模式自动批准修改，路径和冲突检查仍生效。
 - 预览可用鼠标滚轮、方向键、PageUp / PageDown、Home / End 翻阅；控制字符转义显示，明确标注文件末尾是否有换行。
 - 确认前不创建文件、目录或临时文件。没有确认接收方或确认界面关闭时，拒绝写入。
 - 写入前重新检查旧内容、inode、时间戳及父目录。确认期间文件发生变化时返回冲突，必须重新生成预览；拒绝符号链接、硬链接、二进制文件和受保护路径。
@@ -72,7 +72,7 @@ cargo test -p orbit-tools --offline
 
 TUI 的真实模型和离线演示均可请求写入。一次性 `chat` 没有确认界面，因此仍只注册读取工具。
 
-离线测试：启动 `tui --demo` 后输入 `write orbit-demo.txt 你好`。这会申请**真实写入**当前工作区；确认后输入 `read orbit-demo.txt` 检查结果。再次请求写入同一路径可测试替换或拒绝。
+离线测试：启动 `tui --demo` 后输入 `write orbit-demo.txt 你好`。这会申请**真实写入**当前工作区；允许后输入 `read orbit-demo.txt` 检查结果。再次请求写入同一路径可测试替换或拒绝。
 
 实现参考了本地 SztuCode 的 `core/tools/builtin/write_file.py` 中的工作区写入权限分类，以及 Zed 的 `crates/agent/src/tools/write_file_tool.rs` 中编辑会话与取消的组织方式；Orbit 的路径检查、确认通道与文件提交逻辑由本仓库实现。
 
@@ -80,7 +80,7 @@ TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中�
 
 ## run_command
 
-通过完整命令确认后在 Linux Bubblewrap 中执行，原项目只读、无网络，默认 30 秒超时。离线演示输入 `run pwd` 即可测试。依赖与边界详见 [SANDBOX.md](SANDBOX.md)。
+按当前审批模式在 Linux Bubblewrap 中执行，原项目只读、无网络，默认 30 秒超时。离线演示输入 `run pwd` 即可测试。依赖与边界详见 [SANDBOX.md](SANDBOX.md)。
 
 ## edit_file 局部编辑
 
@@ -104,6 +104,6 @@ edit {"path":"orbit-demo.txt","old_text":"你好","new_text":"您好"}
 read orbit-demo.txt
 ```
 
-输入 `edit` 后的 JSON 支持多行文本的 `\n` 转义，以及包含空格的路径。批准前不会修改文件，也可以按 Esc 验证拒绝路径。
+输入 `edit` 后的 JSON 支持多行文本的 `\n` 转义，以及包含空格的路径。需要审批时，批准前不会修改文件，也可以按 Esc 验证拒绝路径。
 
 拖选事件立即从屏幕快照重绘，不等待流输出刷新周期；拖选期间不重新排版聊天历史。终端原生选区与应用内选区仍是两种不同机制。

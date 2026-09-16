@@ -79,7 +79,14 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         "  滚轮浏览 · 拖选后 Ctrl+C 复制 · / 命令"
     };
-    frame.render_widget(Paragraph::new(Line::from(muted(hint))), areas[6]);
+    frame.render_widget(
+        Paragraph::new(Line::from(muted(format!(
+            "  [{}] Shift+Tab 切换 · {}",
+            state.permission_mode.label(),
+            hint.trim()
+        )))),
+        areas[6],
+    );
 }
 
 fn draw_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
@@ -122,7 +129,7 @@ fn welcome(state: &UiState) -> Vec<Line<'static>> {
             muted(" 查看帮助    /model 查看模型"),
         ]),
         Line::from(muted(
-            "  read_file 读取 · write_file / edit_file / run_command 执行前确认。",
+            "  read_file 读取 · 默认命令自动执行、文件修改确认 · /mode 调整。",
         )),
         Line::from(""),
     ]
@@ -486,7 +493,7 @@ mod tests {
         assert!(text.contains("price.c"));
         assert!(text.contains("- return subtotal > 10000;"));
         assert!(text.contains("+ return subtotal >= 10000;"));
-        assert!(text.contains("Ctrl+Y"));
+        assert!(text.replace(' ', "").contains("Enter确认"), "{text}");
         assert!(state.approval_shown);
     }
 

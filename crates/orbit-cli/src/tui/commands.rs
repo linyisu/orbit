@@ -34,6 +34,10 @@ pub const COMMANDS: &[Command] = &[
         description: "总结旧对话，保留最近两轮；真实模式调用模型",
     },
     Command {
+        name: "/mode",
+        description: "ask 逐次确认 · auto 自动命令 · yolo 自动修改和命令",
+    },
+    Command {
         name: "/exit",
         description: "退出 Orbit",
     },

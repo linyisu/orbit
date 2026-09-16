@@ -51,6 +51,17 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                 };
             }
             match key.code {
+                KeyCode::Left | KeyCode::Right => {
+                    state.approval_choice ^= 1;
+                    return Action::None;
+                }
+                KeyCode::Enter if state.approval_shown => {
+                    return if state.approval_choice == 0 {
+                        Action::Approve
+                    } else {
+                        Action::Deny
+                    };
+                }
                 KeyCode::Esc => return Action::Deny,
                 KeyCode::Up => -1,
                 KeyCode::Down => 1,
@@ -214,12 +225,32 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .min(u16::MAX as usize) as u16;
     state.approval_scroll = state.approval_scroll.min(state.approval_max_scroll);
     frame.render_widget(paragraph.scroll((state.approval_scroll, 0)), areas[1]);
-    let help = if frame.area().width < 80 {
-        "Ctrl+Y 允许  Esc 拒绝\n↑↓ 翻页  Ctrl+C 取消"
-    } else {
-        "Ctrl+Y 允许这次操作 · Ctrl+N / Esc 拒绝 · Ctrl+C 取消本轮\n↑↓ / 鼠标 / PgUp PgDn 翻阅 · Enter 不会确认"
-    };
-    frame.render_widget(Paragraph::new(help), areas[2]);
+    let options = Line::from(vec![
+        ratatui::text::Span::styled(
+            "  允许  ",
+            if state.approval_choice == 0 {
+                Style::default().bg(Color::White).fg(Color::Black)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ),
+        ratatui::text::Span::raw("   "),
+        ratatui::text::Span::styled(
+            "  拒绝  ",
+            if state.approval_choice == 1 {
+                Style::default().bg(Color::White).fg(Color::Black)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ),
+    ]);
+    frame.render_widget(
+        Paragraph::new(vec![
+            options,
+            Line::from("← → 切换 · Enter 确认 · Esc 拒绝"),
+        ]),
+        areas[2],
+    );
     state.selection.area = areas[1].inner(ratatui::layout::Margin::new(1, 1));
     state.approval_shown = true;
 }
@@ -269,9 +300,32 @@ mod tests {
                 &mut state,
                 Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             ),
-            Action::None
+            Action::Approve
         );
         assert_eq!(handle(&mut state, yes), Action::Approve);
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        );
+        assert_eq!(
+            handle(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            ),
+            Action::Deny
+        );
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+        );
+        assert_eq!(
+            handle(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            ),
+            Action::Approve
+        );
+
         assert_eq!(
             handle(
                 &mut state,
@@ -316,6 +370,9 @@ mod render_tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(text.contains("END\\marker\\u{1b}"), "{text}");
-        assert!(text.contains("Ctrl+Y"));
+        assert!(
+            text.replace(' ', "").contains("允许") && text.replace(' ', "").contains("拒绝"),
+            "{text}"
+        );
     }
 }

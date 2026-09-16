@@ -3,6 +3,7 @@ mod approval;
 pub mod commands;
 mod demo;
 pub mod input;
+mod permissions;
 pub mod render;
 mod selection;
 pub mod terminal;
@@ -73,6 +74,14 @@ pub async fn run(
                             }
                         })?;
                         dirty = false;
+                        continue;
+                    }
+                    if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release) {
+                        state.permission_mode = state.permission_mode.next();
+                        if state.approval_shown && pending.as_ref().is_some_and(|request| state.permission_mode.allows(&request.preview)) {
+                            if let Some(request) = pending.take() { let _ = request.decision.send(true); }
+                            state.approval = None;
+                        }
                         continue;
                     }
                     if pending.is_some() {
@@ -149,10 +158,15 @@ pub async fn run(
                 }
                 Some(request) = approvals.recv() => {
                     if request.decision.is_closed() { continue; }
+                    if state.permission_mode.allows(&request.preview) {
+                        let _ = request.decision.send(true);
+                        continue;
+                    }
                     state.selection = Default::default();
                     state.approval = Some(request.preview.clone());
                     state.approval_scroll = 0;
                     state.approval_shown = false;
+                    state.approval_choice = 0;
                     pending = Some(request);
                     dirty = true;
                 }
@@ -267,14 +281,24 @@ async fn run_command(
             state.input = input;
             session.restore_ui(state);
         }
+        "/mode" | "/permissions" => {
+            if !argument.is_empty() {
+                let Some(mode) = permissions::Mode::parse(argument) else {
+                    state.transcript.push(TranscriptItem::Error("用法：/mode ask | auto | yolo".into()));
+                    return Ok(false);
+                };
+                state.permission_mode = mode;
+            }
+            state.transcript.push(TranscriptItem::Notice(format!("{}\nShift+Tab 切换 · /mode ask|auto|yolo\n仅本会话有效；重启、恢复或 /clear 后回到 auto。",state.permission_mode.description())));
+        }
         "/context" if argument.is_empty() => {
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
             state.transcript.push(TranscriptItem::Notice(format!("上下文估算：{estimated} tokens（含工具定义）\n输出预留：4096 tokens · 总预算：{}\n这是通用估算，不等于服务端实际用量。\n/compact 总结旧对话并保留最近两轮；真实模式会调用模型，演示模式生成机械提要。",state.context_tokens)));
         }
         "/sessions" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(crate::session::list_text(&session.store).await?)),
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
-            "会话  {}\n数据库  {}\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / write_file / edit_file / run_command · 写入和沙箱命令需逐次确认",
-            session.id(), session.store.path().display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs()
+            "会话  {}\n数据库  {}\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / write_file / edit_file / run_command · 审批：{}",
+            session.id(), session.store.path().display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
         "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
         "/model" => {
