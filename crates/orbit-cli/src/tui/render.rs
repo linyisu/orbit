@@ -90,7 +90,7 @@ fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
     );
 }
 
-fn welcome() -> Vec<Line<'static>> {
+fn wordmark() -> Vec<Line<'static>> {
     [
         " ▄██████▄   ███████▄   ███████▄   ████  ██████████",
         "██      ██  ██     ██  ██     ██   ██       ██",
@@ -99,8 +99,64 @@ fn welcome() -> Vec<Line<'static>> {
         " ▀██████▀   ██     ██  ███████▀   ████      ██",
     ]
     .into_iter()
-    .map(|line| Line::from(Span::styled(line, Style::default().fg(ACCENT))))
+    .map(|line| {
+        Line::from(Span::styled(
+            line,
+            Style::default().fg(Color::Rgb(230, 222, 210)),
+        ))
+    })
     .collect()
+}
+
+fn welcome() -> Vec<Line<'static>> {
+    let orbit = Style::default().fg(Color::Rgb(131, 91, 74));
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "                 .────────────────────────.",
+            orbit,
+        )),
+        Line::from(vec![
+            Span::styled("         .──────╯                          ╰────", orbit),
+            Span::styled("●", Style::default().fg(ACCENT)),
+            Span::styled("─.", orbit),
+        ]),
+        Line::from(Span::styled(
+            "     .──╯                                            ╰──.",
+            orbit,
+        )),
+    ];
+    let edges = [
+        ("   ╱", "╲"),
+        ("  ╱", " ╲"),
+        (" (", "  )"),
+        ("  ╲", " ╱"),
+        ("   ╲", "╱"),
+    ];
+    for (word, (left, right)) in wordmark().into_iter().zip(edges) {
+        let mut spans = vec![Span::styled(format!("{left:<6}"), orbit)];
+        let padding = 49usize.saturating_sub(word.width());
+        spans.extend(word.spans);
+        spans.push(Span::styled(
+            format!("{}{right}", " ".repeat(padding)),
+            orbit,
+        ));
+        lines.push(Line::from(spans));
+    }
+    lines.extend([
+        Line::from(Span::styled(
+            "     '──.                                            .──'",
+            orbit,
+        )),
+        Line::from(Span::styled(
+            "         '──────.                          .──────'",
+            orbit,
+        )),
+        Line::from(Span::styled(
+            "                 '────────────────────────'",
+            orbit,
+        )),
+    ]);
+    lines
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
@@ -115,6 +171,10 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     if state.transcript.is_empty() {
         let mut logo = welcome();
         let mut width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
+        if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
+            logo = wordmark();
+            width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
+        }
         if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
             logo = vec![Line::from(Span::styled(
                 "Orbit",
