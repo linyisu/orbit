@@ -128,18 +128,40 @@ pub(crate) fn stream(
 
         match event.kind.as_str() {
             "content_block_start" => {
-                if let Some(block) = event.content_block.filter(|block| block.kind == "tool_use") {
-                    events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
-                        index: event.index.unwrap_or_default(),
-                        id: block.id,
-                        name: block.name,
-                        arguments: String::new(),
-                    }));
+                if let Some(block) = event.content_block {
+                    match block.kind.as_str() {
+                        "tool_use" => events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
+                            index: event.index.unwrap_or_default(),
+                            id: block.id,
+                            name: block.name,
+                            arguments: block
+                                .input
+                                .filter(|v| v.as_object().is_some_and(|m| !m.is_empty()))
+                                .map(|v| v.to_string())
+                                .unwrap_or_default(),
+                        })),
+                        "text" => {
+                            if let Some(text) = block.text.filter(|s| !s.is_empty()) {
+                                events.push(StreamEvent::TextDelta(text));
+                            }
+                        }
+                        "thinking" => {
+                            if let Some(text) = block.thinking.filter(|s| !s.is_empty()) {
+                                events.push(StreamEvent::ReasoningDelta(text));
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
             "content_block_delta" => {
                 if let Some(delta) = event.delta {
                     match delta.kind.as_deref() {
+                        Some("thinking_delta") => {
+                            if let Some(text) = delta.thinking {
+                                events.push(StreamEvent::ReasoningDelta(text));
+                            }
+                        }
                         Some("text_delta") => {
                             if let Some(text) = delta.text {
                                 events.push(StreamEvent::TextDelta(text));
@@ -163,7 +185,7 @@ pub(crate) fn stream(
                 if let Some(delta) = event.delta {
                     events.push(StreamEvent::Completed {
                         finish_reason: delta.stop_reason,
-                        usage: delta.usage.map(Into::into),
+                        usage: event.usage.or(delta.usage).map(Into::into),
                     });
                 }
             }
@@ -188,6 +210,7 @@ struct AnthropicBlock {
     #[serde(rename = "type")]
     kind: String,
     text: Option<String>,
+    thinking: Option<String>,
     id: Option<String>,
     name: Option<String>,
     input: Option<Value>,
@@ -216,6 +239,7 @@ struct AnthropicEvent {
     index: Option<usize>,
     content_block: Option<AnthropicBlock>,
     delta: Option<AnthropicDelta>,
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(Deserialize)]
@@ -223,6 +247,7 @@ struct AnthropicDelta {
     #[serde(rename = "type")]
     kind: Option<String>,
     text: Option<String>,
+    thinking: Option<String>,
     partial_json: Option<String>,
     stop_reason: Option<String>,
     usage: Option<AnthropicUsage>,

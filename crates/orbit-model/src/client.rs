@@ -584,6 +584,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn anthropic_thinking_and_top_level_usage_survive_token_exhaustion() {
+        let (base_url, request) = test_server(concat!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"first \"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"reasoning\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":16384}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        )).await;
+        let client = client(&base_url, "anthropic_messages", "fixture", None);
+        let mut req = ChatRequest::new(vec![ChatMessage::user("think")]);
+        req.max_tokens = Some(16384);
+        let mut stream = client.stream(req).await.unwrap();
+        let mut thinking = String::new();
+        let mut finished = false;
+        while let Some(event) = stream.next().await {
+            match event.unwrap() {
+                StreamEvent::ReasoningDelta(text) => thinking.push_str(&text),
+                StreamEvent::Completed {
+                    finish_reason,
+                    usage,
+                } => {
+                    assert_eq!(finish_reason.as_deref(), Some("max_tokens"));
+                    assert_eq!(usage.unwrap().completion_tokens, Some(16384));
+                    finished = true;
+                }
+                _ => panic!("unexpected event"),
+            }
+        }
+        assert_eq!(thinking, "first reasoning");
+        assert!(finished);
+        assert!(request.await.contains("\"max_tokens\":16384"));
+    }
+
+    #[tokio::test]
     async fn anthropic_messages_maps_text_and_uses_anthropic_headers() {
         let (base_url, request) = test_server(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"id\":\"msg-1\",\"model\":\"claude\",\"content\":[{\"type\":\"text\",\"text\":\"hello from claude\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":4,\"output_tokens\":5}}",
