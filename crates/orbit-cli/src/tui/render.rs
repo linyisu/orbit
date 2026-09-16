@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph},
 };
 
 use super::app::{RunStatus, ToolStatus, TranscriptItem, UiState};
@@ -90,18 +90,17 @@ fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
     );
 }
 
-fn welcome(_state: &UiState) -> Vec<Line<'static>> {
+fn welcome() -> Vec<Line<'static>> {
     [
-        "",
-        r"   ___       _     _ _   ",
-        r"  / _ \ _ __| |__ (_) |_ ",
-        r" | | | | '__| '_ \| | __|",
-        r" | |_| | |  | |_) | | |_ ",
-        r"  \___/|_|  |_.__/|_|\__|",
-        "",
+        " ██████╗ ██████╗ ██████╗ ██╗████████╗",
+        "██╔═══██╗██╔══██╗██╔══██╗██║╚══██╔══╝",
+        "██║   ██║██████╔╝██████╔╝██║   ██║",
+        "██║   ██║██╔══██╗██╔══██╗██║   ██║",
+        "╚██████╔╝██║  ██║██████╔╝██║   ██║",
+        " ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝   ╚═╝",
     ]
     .into_iter()
-    .map(|line| Line::from(Span::styled(line.to_owned(), Style::default().fg(ACCENT))))
+    .map(|line| Line::from(Span::styled(line, Style::default().fg(ACCENT))))
     .collect()
 }
 
@@ -115,12 +114,23 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         return;
     }
     if state.transcript.is_empty() {
-        frame.render_widget(
-            Paragraph::new(welcome(state))
-                .block(Block::default().padding(Padding::horizontal(2)))
-                .wrap(Wrap { trim: false }),
-            area,
+        let mut logo = welcome();
+        let mut width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
+        if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
+            logo = vec![Line::from(Span::styled(
+                "Orbit",
+                Style::default().fg(ACCENT),
+            ))];
+            width = 5;
+        }
+        let height = logo.len() as u16;
+        let centered = Rect::new(
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(height) / 2,
+            width,
+            height,
         );
+        frame.render_widget(Paragraph::new(logo), centered);
         return;
     }
     let width = area.width.saturating_sub(4);
