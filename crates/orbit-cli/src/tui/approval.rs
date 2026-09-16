@@ -19,11 +19,28 @@ pub enum Action {
 
 pub fn handle(state: &mut UiState, event: Event) -> Action {
     let amount = match event {
-        Event::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => -3,
-            MouseEventKind::ScrollDown => 3,
-            _ => 0,
-        },
+        Event::Mouse(mouse) => {
+            let amount = match mouse.kind {
+                MouseEventKind::ScrollUp => -3,
+                MouseEventKind::ScrollDown => 3,
+                _ => 0,
+            };
+            if !state
+                .approval_area
+                .contains((mouse.column, mouse.row).into())
+            {
+                if mouse.row < state.approval_area.y {
+                    if amount < 0 {
+                        state.scroll_up(3);
+                    }
+                    if amount > 0 {
+                        state.scroll_down(3);
+                    }
+                }
+                return Action::None;
+            }
+            amount
+        }
         Event::Key(key) if key.kind != KeyEventKind::Release => {
             if key.modifiers == KeyModifiers::CONTROL {
                 return match key.code {
@@ -135,6 +152,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 }
 
 pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    state.approval_area = area;
     let proposal = state
         .approval
         .as_ref()
@@ -210,6 +228,33 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
+
+    #[test]
+    fn wheel_targets_chat_or_inline_preview_without_changing_input() {
+        let mut state = UiState::new("mock");
+        state.input.insert("draft");
+        state.max_scroll = 100;
+        state.approval_max_scroll = 100;
+        state.approval_area = Rect::new(0, 12, 80, 10);
+        let wheel = |kind, row| {
+            Event::Mouse(crossterm::event::MouseEvent {
+                kind,
+                column: 10,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        handle(&mut state, wheel(MouseEventKind::ScrollUp, 5));
+        assert_eq!(state.scroll, 3);
+        assert_eq!(state.approval_scroll, 0);
+        handle(&mut state, wheel(MouseEventKind::ScrollDown, 15));
+        assert_eq!(state.scroll, 3);
+        assert_eq!(state.approval_scroll, 3);
+        handle(&mut state, wheel(MouseEventKind::ScrollDown, 5));
+        assert_eq!(state.scroll, 0);
+        assert_eq!(state.approval_scroll, 3);
+        assert_eq!(state.input.text, "draft");
+    }
 
     #[test]
     fn approval_requires_explicit_key_after_preview_and_preserves_draft() {

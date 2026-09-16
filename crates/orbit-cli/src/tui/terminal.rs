@@ -46,7 +46,9 @@ impl TerminalGuard {
         // turn wheel input into Up/Down and accidentally navigate prompt history.
         // Keep button/drag tracking, but do not flood the event loop with
         // ordinary pointer motion (1003) while the user is not selecting.
-        stdout.write_all(b"\x1b[?1003l\x1b[?1007s\x1b[?1007l")?;
+        // Tracking modes are mutually exclusive in some terminals: explicitly
+        // enable button tracking AFTER resetting all-motion tracking.
+        stdout.write_all(b"\x1b[?1003l\x1b[?1002h\x1b[?1007s\x1b[?1007l")?;
         stdout.flush()?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
         Ok((guard, terminal))
