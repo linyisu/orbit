@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Position, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap},
@@ -21,6 +21,7 @@ fn muted(text: impl Into<String>) -> Span<'static> {
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let area = frame.area();
+    state.selection.area = Rect::default();
     if area.width < 24 || area.height < 10 {
         frame.render_widget(
             Paragraph::new("请放大终端\n至少 24 列 × 10 行\nCtrl+D 退出"),
@@ -61,15 +62,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_status(frame, state, areas[2]);
     draw_composer(frame, state, areas[3], input_lines, cursor);
     draw_panel(frame, state, areas[4]);
-    let mouse_hint = if state.mouse_capture {
-        "滚轮浏览 · F2 切回拖选"
-    } else {
-        "可拖选复制 · F2 开启滚轮"
-    };
     let hint = if state.running() {
-        format!("  {mouse_hint} · esc 取消")
+        "  滚轮浏览 · 拖选后 Ctrl+C 复制 · esc 取消"
     } else {
-        format!("  {mouse_hint} · PgUp/PgDn 翻页 · / 命令")
+        "  滚轮浏览 · 拖选后 Ctrl+C 复制 · / 命令"
     };
     frame.render_widget(Paragraph::new(Line::from(muted(hint))), areas[5]);
 }
@@ -119,6 +115,11 @@ fn welcome(state: &UiState) -> Vec<Line<'static>> {
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    state.selection.area = Rect {
+        x: area.x + 2,
+        width: area.width.saturating_sub(4),
+        ..area
+    };
     let lines = if state.transcript.is_empty() {
         welcome(state)
     } else {
@@ -321,11 +322,11 @@ fn draw_composer(
         );
         frame.render_widget(Paragraph::new(text), text_area);
     }
-    if !state.running() && text_area.width > 0 && text_area.height > 0 {
-        frame.set_cursor_position(Position::new(
-            text_area.x + (cursor.0 as u16).min(text_area.width - 1),
-            text_area.y + (cursor.1.saturating_sub(scroll) as u16).min(text_area.height - 1),
-        ));
+    if text_area.width > 0 && text_area.height > 0 {
+        // A steady, rendered caret never moves the terminal hardware cursor.
+        let x = text_area.x + (cursor.0 as u16).min(text_area.width - 1);
+        let y = text_area.y + (cursor.1.saturating_sub(scroll) as u16).min(text_area.height - 1);
+        frame.buffer_mut()[(x, y)].set_style(Style::default().bg(Color::Gray).fg(Color::Black));
     }
 }
 
@@ -406,18 +407,60 @@ mod tests {
     }
 
     #[test]
-    fn streaming_hides_cursor_and_completion_restores_it() {
+    fn rendered_caret_stays_fixed_while_streaming_and_selecting() {
         let mut state = UiState::new("mock");
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        state.input.insert("draft");
         state.submit("hello".into());
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut state);
+                state.selection.paint(frame);
+            })
+            .unwrap();
         assert!(!terminal.backend().cursor_visible());
+        let caret = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .position(|c| c.bg == Color::Gray)
+            .unwrap();
+        let input_cursor = state.input.cursor;
+        for kind in [
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+        ] {
+            state
+                .selection
+                .handle(&crossterm::event::Event::Mouse(
+                    crossterm::event::MouseEvent {
+                        kind,
+                        column: 4,
+                        row: 3,
+                        modifiers: crossterm::event::KeyModifiers::NONE,
+                    },
+                ))
+                .unwrap();
+        }
+        state.apply(orbit_agent::events::AgentEvent::Model(
+            orbit_model::types::StreamEvent::TextDelta("new output".into()),
+        ));
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut state);
+                state.selection.paint(frame);
+            })
+            .unwrap();
+        assert_eq!(state.input.cursor, input_cursor);
+        assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
         state.apply(orbit_agent::events::AgentEvent::Completed {
             turns: 1,
             tool_calls: 0,
         });
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-        assert!(terminal.backend().cursor_visible());
+        assert!(!terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
     }
 
     #[test]

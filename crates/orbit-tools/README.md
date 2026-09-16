@@ -46,7 +46,7 @@ cargo run -p orbit-cli -- tui --demo
 
 输入 `read Cargo.toml`：演示模型生成工具调用，工具读取真实文件，再生成明确标注的演示回答。
 
-输入 `read ../outside.txt` 或 `read missing.txt` 可以观察失败路径。`Ctrl+O` 展开工具结果，默认可直接拖选复制；按 F2 切换到鼠标滚轮浏览，再按 F2 恢复拖选。PageUp / PageDown 始终可翻页。
+输入 `read ../outside.txt` 或 `read missing.txt` 可以观察失败路径。`Ctrl+O` 展开工具结果，鼠标滚轮浏览输出，直接拖选文本后 Ctrl+C 复制；鼠标操作不会移动输入光标。
 
 ```bash
 cargo test -p orbit-tools --offline
@@ -60,7 +60,7 @@ cargo test -p orbit-tools --offline
 
 - 在已有目录中创建或替换一个文件，旧内容和新内容各不超过 32 KiB，仅支持无 NUL 的 UTF-8 文本。
 - 先读取旧内容并展示完整修改前后预览。`Ctrl+Y` 只批准当前一次写入，`Ctrl+N` / `Esc` 拒绝，`Ctrl+C` 取消本轮。Enter、粘贴内容不会批准。
-- 预览可用 F2 开启的鼠标滚轮、方向键、PageUp / PageDown、Home / End 翻阅；控制字符转义显示，明确标注文件末尾是否有换行。
+- 预览可用鼠标滚轮、方向键、PageUp / PageDown、Home / End 翻阅；控制字符转义显示，明确标注文件末尾是否有换行。
 - 确认前不创建文件、目录或临时文件。没有确认接收方或确认界面关闭时，拒绝写入。
 - 写入前重新检查旧内容、inode、时间戳及父目录。确认期间文件发生变化时返回冲突，必须重新生成预览；拒绝符号链接、硬链接、二进制文件和受保护路径。
 - 在同一父目录创建排他的临时文件，写入并同步后使用 rename 提交；新建文件用 NOREPLACE，避免覆盖确认期间出现的文件。保留替换前的普通 Unix 权限位，新文件权限为 0600。不会保留旧 inode 的所有权、扩展属性等其他元数据。
@@ -74,4 +74,4 @@ TUI 的真实模型和离线演示均可请求写入。一次性 `chat` 没有�
 
 实现参考了本地 SztuCode 的 `core/tools/builtin/write_file.py` 中的工作区写入权限分类，以及 Zed 的 `crates/agent/src/tools/write_file_tool.rs` 中编辑会话与取消的组织方式；Orbit 的路径检查、确认通道与文件提交逻辑由本仓库实现。
 
-TUI 默认不捕获鼠标。按 F2 在原生选择与应用滚轮浏览之间切换（输出期间及写入预览中也可切换）。启动时保存并关闭终端 alternate-scroll 模式，退出恢复，以避免滚轮被翻译成上下方向键后切换输入历史；此模式取决于终端支持。[终端协议说明](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)。
+TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中时冻结所选视图，模型事件仍继续接收和保存；点击、滚动、输入或 Esc 清除选区后显示新内容。选中时 Ctrl+C 复制，没有选区时保留取消/退出行为。复制通过 OSC 52 完成，需要终端允许剪贴板写入。输入光标用固定单元格绘制，运行中不显示终端硬件光标，避免重绘触发光标动画。

@@ -1389,6 +1389,7 @@ name = "orbit-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "crossterm",
  "futures-util",

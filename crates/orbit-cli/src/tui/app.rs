@@ -47,7 +47,7 @@ pub struct UiState {
     pub approval_scroll: u16,
     pub approval_max_scroll: u16,
     pub approval_shown: bool,
-    pub mouse_capture: bool,
+    pub selection: super::selection::Selection,
     pub model: String,
     pub demo: bool,
     pub workspace: String,
@@ -74,7 +74,7 @@ impl UiState {
             approval_scroll: 0,
             approval_max_scroll: 0,
             approval_shown: false,
-            mouse_capture: false,
+            selection: super::selection::Selection::default(),
             model: model.into(),
             demo: false,
             workspace: std::env::current_dir()

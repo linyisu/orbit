@@ -143,12 +143,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         "Ctrl+Y 允许这次写入 · Ctrl+N / Esc 拒绝 · Ctrl+C 取消本轮\n↑↓ / 鼠标 / PgUp PgDn 翻阅 · Enter 不会确认"
     };
-    let mouse_hint = if state.mouse_capture {
-        "F2 切回拖选复制"
-    } else {
-        "可拖选复制 · F2 开启滚轮"
-    };
-    frame.render_widget(Paragraph::new(format!("{help}\n{mouse_hint}")), areas[2]);
+    frame.render_widget(
+        Paragraph::new(format!("{help}\n拖选后 Ctrl+C 复制")),
+        areas[2],
+    );
+    state.selection.area = areas[1].inner(ratatui::layout::Margin::new(1, 1));
     state.approval_shown = true;
 }
 

@@ -4,6 +4,7 @@ pub mod commands;
 mod demo;
 pub mod input;
 pub mod render;
+mod selection;
 pub mod terminal;
 
 use std::time::Duration;
@@ -62,11 +63,7 @@ pub async fn run(
                     let Some(event) = event else { break };
                     dirty = true;
                     let event = event?;
-                    if matches!(&event, Event::Key(key) if key.code == KeyCode::F(2) && key.kind == KeyEventKind::Press) {
-                        terminal::set_mouse_capture(!state.mouse_capture)?;
-                        state.mouse_capture = !state.mouse_capture;
-                        continue;
-                    }
+                    if state.selection.handle(&event)? { continue; }
                     if pending.is_some() {
                         match approval::handle(&mut state, event) {
                             approval::Action::Approve => {
@@ -128,6 +125,7 @@ pub async fn run(
                 }
                 Some(request) = approvals.recv() => {
                     if request.decision.is_closed() { continue; }
+                    state.selection = Default::default();
                     state.approval = Some(request.preview.clone());
                     state.approval_scroll = 0;
                     state.approval_shown = false;
@@ -145,7 +143,7 @@ pub async fn run(
                     dirty = true;
                     task = None;
                     pending = None;
-                    state.approval = None;
+                    if state.approval.take().is_some() { state.selection = Default::default(); }
                     // Drain the completed run before accepting another prompt or clearing history.
                     if let Some(rx) = receiver.as_mut() {
                         while let Ok(event) = rx.try_recv() { apply_live_event(event, &mut state, &mut session); }
@@ -173,7 +171,10 @@ pub async fn run(
                 _ = ticks.tick() => {
                     session.flush_due().await?;
                     if dirty || state.running() {
-                        terminal.draw(|frame| render::draw(frame, &mut state))?;
+                        terminal.draw(|frame| {
+                            render::draw(frame, &mut state);
+                            state.selection.paint(frame);
+                        })?;
                         dirty = false;
                     }
                 }
@@ -234,10 +235,8 @@ async fn run_command(
             history.clear();
             let input = std::mem::take(&mut state.input);
             let demo = state.demo;
-            let mouse_capture = state.mouse_capture;
             *state = UiState::new(state.model.clone());
             state.demo = demo;
-            state.mouse_capture = mouse_capture;
             state.input = input;
             session.restore_ui(state);
         }

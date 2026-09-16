@@ -25,14 +25,6 @@ fn restore() {
     let _ = io::stdout().flush();
 }
 
-pub fn set_mouse_capture(enabled: bool) -> io::Result<()> {
-    if enabled {
-        execute!(io::stdout(), EnableMouseCapture)
-    } else {
-        execute!(io::stdout(), DisableMouseCapture)
-    }
-}
-
 impl TerminalGuard {
     pub fn enter() -> anyhow::Result<(Self, AppTerminal)> {
         let previous = std::panic::take_hook();
@@ -47,7 +39,7 @@ impl TerminalGuard {
             stdout,
             EnterAlternateScreen,
             EnableBracketedPaste,
-            DisableMouseCapture,
+            EnableMouseCapture,
             Hide
         )?;
         // Save and disable alternate-scroll translation: otherwise some terminals

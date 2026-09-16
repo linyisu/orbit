@@ -8,6 +8,7 @@ name = "orbit"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22.1"
 anyhow.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
