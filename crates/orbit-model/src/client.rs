@@ -96,18 +96,26 @@ impl ModelClient {
         request: ChatRequest,
         cancellation: CancellationToken,
     ) -> Result<ChatCompletion, ModelError> {
-        let response = self.send(request, false, cancellation).await?;
-
-        match self.config.api_format {
-            ApiFormat::OpenaiChatCompletions => {
-                crate::openai::chat_completions::decode_completion(response).await
+        let response = self.send(request, false, cancellation.clone()).await?;
+        let decode = async {
+            match self.config.api_format {
+                ApiFormat::OpenaiChatCompletions => {
+                    crate::openai::chat_completions::decode_completion(response).await
+                }
+                ApiFormat::OpenaiResponses => {
+                    crate::openai::responses::decode_completion(response).await
+                }
+                ApiFormat::AnthropicMessages => {
+                    crate::anthropic::messages::decode_completion(response).await
+                }
             }
-            ApiFormat::OpenaiResponses => {
-                crate::openai::responses::decode_completion(response).await
-            }
-            ApiFormat::AnthropicMessages => {
-                crate::anthropic::messages::decode_completion(response).await
-            }
+        };
+        select! {
+            _ = cancellation.cancelled() => Err(ModelError::Cancelled),
+            result = time::timeout(self.config.timeout, decode) => result.unwrap_or_else(|_| Err(ModelError::Timeout {
+                duration: self.config.timeout,
+                stage: "HTTP response headers received; waiting for the complete JSON body".into(),
+            })),
         }
     }
 
@@ -193,7 +201,7 @@ impl ModelClient {
                 match result {
                     Ok(result) => result?,
                     Err(Elapsed { .. }) => {
-                        return Err(ModelError::Timeout(self.config.timeout));
+                        return Err(ModelError::Timeout { duration: self.config.timeout, stage: "waiting for HTTP response headers (no response body received)".into() });
                     }
                 }
             }
@@ -211,10 +219,14 @@ impl ModelClient {
             .and_then(|value| value.to_str().ok())
             .map(|value| format!(" [request {value}]"))
             .unwrap_or_default();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<unreadable response body>".to_owned());
+        let body = select! {
+            _ = cancellation.cancelled() => return Err(ModelError::Cancelled),
+            result = time::timeout(self.config.timeout, response.text()) => match result {
+                Ok(Ok(body)) => body,
+                Ok(Err(_)) => "<unreadable response body>".to_owned(),
+                Err(_) => "<timed out reading HTTP error body>".to_owned(),
+            },
+        };
 
         Err(ModelError::Http {
             status,
@@ -237,7 +249,9 @@ where
     let mut body = response.bytes_stream();
 
     Box::pin(stream! {
-        let mut buffer = String::new();
+        let mut buffer = Vec::new();
+        let mut received_bytes = 0;
+        let mut decoded_events = 0;
 
         loop {
             let next = select! {
@@ -247,7 +261,10 @@ where
                         Ok(Some(Ok(chunk))) => Ok(Some(chunk)),
                         Ok(Some(Err(error))) => Err(ModelError::Request(error)),
                         Ok(None) => Ok(None),
-                        Err(Elapsed { .. }) => Err(ModelError::Timeout(timeout)),
+                        Err(Elapsed { .. }) => Err(ModelError::Timeout {
+                            duration: timeout,
+                            stage: format!("no SSE data received during the idle timeout ({received_bytes} body bytes received previously, {decoded_events} model events)"),
+                        }),
                     }
                 }
             };
@@ -256,7 +273,7 @@ where
                 Ok(next) => next,
                 Err(error) => {
                     yield Err(error);
-                    break;
+                    return;
                 }
             };
 
@@ -264,26 +281,36 @@ where
                 break;
             };
 
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            received_bytes += chunk.len();
+            buffer.extend_from_slice(&chunk);
 
             while let Some(end) = find_sse_separator(&buffer) {
-                let separator_len = if buffer[end..].starts_with("\r\n\r\n") {
+                let separator_len = if buffer[end..].starts_with(b"\r\n\r\n") {
                     4
                 } else {
                     2
                 };
-                let frame = buffer.drain(..end + separator_len).collect::<String>();
+                let bytes = buffer.drain(..end + separator_len).collect::<Vec<_>>();
+                let frame = match String::from_utf8(bytes) {
+                    Ok(frame) => frame,
+                    Err(_) => {
+                        yield Err(ModelError::Protocol("SSE frame contains invalid UTF-8".to_owned()));
+                        return;
+                    }
+                };
 
                 if let Some(data) = sse_data(&frame) {
                     if data == "[DONE]" {
                         return;
                     }
 
-                    match decode(&data) {
-                        Ok(events) => {
+                    match decode_sse_data(&data, &decode) {
+                        Ok((events, terminal)) => {
+                            decoded_events += events.len();
                             for event in events {
                                 yield Ok(event);
                             }
+                            if terminal { return; }
                         }
                         Err(error) => {
                             yield Err(error);
@@ -294,15 +321,91 @@ where
             }
         }
 
+        let buffer = match String::from_utf8(buffer) {
+            Ok(buffer) => buffer,
+            Err(_) => {
+                yield Err(ModelError::Protocol("SSE stream ended inside a UTF-8 character".to_owned()));
+                return;
+            }
+        };
         if !buffer.trim().is_empty() {
-            yield Err(ModelError::IncompleteSseEvent);
+            match sse_data(&buffer) {
+                Some(data) if data == "[DONE]" => {}
+                Some(data) => match decode_sse_data(&data, &decode) {
+                    Ok((events, _)) => {
+                        for event in events {
+                            yield Ok(event);
+                        }
+                    }
+                    Err(error) => yield Err(error),
+                },
+                None => yield Err(ModelError::IncompleteSseEvent),
+            }
         }
     })
 }
 
-pub(crate) fn find_sse_separator(buffer: &str) -> Option<usize> {
-    let lf = buffer.find("\n\n");
-    let crlf = buffer.find("\r\n\r\n");
+fn decode_sse_data<F>(data: &str, decode: &F) -> Result<(Vec<StreamEvent>, bool), ModelError>
+where
+    F: Fn(&str) -> Result<Vec<StreamEvent>, ModelError>,
+{
+    let value: serde_json::Value = serde_json::from_str(data)?;
+    if let Some(error) = upstream_error(&value) {
+        return Err(error);
+    }
+    let terminal = matches!(
+        value["type"].as_str(),
+        Some("response.completed" | "response.incomplete" | "message_stop")
+    );
+    Ok((decode(data)?, terminal))
+}
+
+pub(crate) fn upstream_error(value: &serde_json::Value) -> Option<ModelError> {
+    let kind = value["type"].as_str();
+    let error = value
+        .get("error")
+        .filter(|error| !error.is_null())
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("error"))
+                .filter(|error| !error.is_null())
+        });
+    if error.is_none()
+        && !matches!(kind, Some("error" | "response.failed"))
+        && value["status"] != "failed"
+    {
+        return None;
+    }
+    let message = error
+        .and_then(|error| {
+            error
+                .get("message")
+                .and_then(|message| message.as_str())
+                .or_else(|| error.as_str())
+        })
+        .or_else(|| value["message"].as_str())
+        .unwrap_or("provider reported a failed response");
+    let code = error
+        .and_then(|error| error.get("code").or_else(|| error.get("type")))
+        .and_then(|code| code.as_str());
+    let response_id = value
+        .get("response")
+        .and_then(|response| response["id"].as_str())
+        .or_else(|| value["id"].as_str())
+        .map(|id| format!(" [response {id}]"))
+        .unwrap_or_default();
+    Some(ModelError::Upstream {
+        message: code
+            .map(|code| format!("{code}: {message}"))
+            .unwrap_or_else(|| message.to_owned()),
+        response_id,
+    })
+}
+
+pub(crate) fn find_sse_separator(buffer: &[u8]) -> Option<usize> {
+    let lf = buffer.windows(2).position(|bytes| bytes == b"\n\n");
+    let crlf = buffer.windows(4).position(|bytes| bytes == b"\r\n\r\n");
 
     match (lf, crlf) {
         (Some(lf), Some(crlf)) => Some(lf.min(crlf)),
@@ -478,6 +581,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_accepts_done_frame_without_trailing_separator() {
+        let (base_url, _) = test_server(concat!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n",
+            "data: [DONE]",
+        ))
+        .await;
+        let client = client(&base_url, "openai_chat_completions", "mock-chat", None);
+        let mut stream = client
+            .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
+            .await
+            .expect("stream starts");
+        let mut text = String::new();
+
+        while let Some(event) = stream.next().await {
+            if let StreamEvent::TextDelta(delta) = event.expect("stream event succeeds") {
+                text.push_str(&delta);
+            }
+        }
+
+        assert_eq!(text, "hello");
+    }
+
+    #[tokio::test]
     async fn responses_stream_maps_text_and_completion() {
         let (base_url, _) = test_server(concat!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
@@ -505,6 +632,157 @@ mod tests {
         assert!(completed);
     }
 
+    #[test]
+    fn reports_error_envelopes_in_all_stream_formats() {
+        for value in [
+            serde_json::json!({"error": {"message": "overloaded", "code": "upstream_error"}}),
+            serde_json::json!({"type": "error", "error": {"type": "overloaded_error", "message": "overloaded"}}),
+            serde_json::json!({"type": "response.failed", "response": {"id": "resp-test", "error": {"code": "upstream_error", "message": "overloaded"}}}),
+        ] {
+            let error = decode_sse_data(&value.to_string(), &|_| {
+                panic!("failed responses must not reach the normal decoder")
+            })
+            .unwrap_err();
+            assert!(
+                matches!(error, ModelError::Upstream { message, .. } if message.contains("overloaded"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_completion_does_not_wait_for_connection_close() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+        );
+        let (url, _) =
+            test_server_held(vec![response.as_bytes().to_vec()], Duration::from_secs(2)).await;
+        let model = client(&url, "openai_responses", "mock", None);
+        let mut events = model
+            .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
+            .await
+            .unwrap();
+        time::timeout(Duration::from_millis(300), async {
+            let mut completed = false;
+            while let Some(event) = events.next().await {
+                completed |= matches!(event.unwrap(), StreamEvent::Completed { .. });
+            }
+            assert!(completed);
+        })
+        .await
+        .expect("terminal SSE event ends the stream immediately");
+    }
+
+    #[tokio::test]
+    async fn json_body_timeout_is_bounded_and_identifies_the_stage() {
+        let (url, _) = test_server_held(
+            vec![
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n"
+                    .to_vec(),
+            ],
+            Duration::from_secs(2),
+        )
+        .await;
+        let model = ModelClient::new(ModelConfig {
+            base_url: url,
+            timeout: Duration::from_millis(100),
+            ..ModelConfig::default()
+        })
+        .unwrap();
+        let error = time::timeout(
+            Duration::from_secs(1),
+            model.complete(ChatRequest::new(vec![ChatMessage::user("hello")])),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(matches!(error, ModelError::Timeout { stage, .. } if stage.contains("JSON body")));
+    }
+
+    #[tokio::test]
+    async fn active_stream_can_run_longer_than_the_idle_timeout() {
+        let mut chunks =
+            vec![b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n".to_vec()];
+        for _ in 0..30 {
+            chunks.push(b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"},\"finish_reason\":null}]}\n\n".to_vec());
+        }
+        chunks.push(b"data: [DONE]\n\n".to_vec());
+        let (url, _) = test_server_chunks(chunks).await;
+        let timeout = Duration::from_millis(200);
+        let model = ModelClient::new(ModelConfig {
+            base_url: url,
+            timeout,
+            ..ModelConfig::default()
+        })
+        .unwrap();
+        let mut events = model
+            .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
+            .await
+            .unwrap();
+        let started = time::Instant::now();
+        let mut count = 0;
+        while let Some(event) = events.next().await {
+            assert!(matches!(event.unwrap(), StreamEvent::ReasoningDelta(_)));
+            count += 1;
+        }
+        assert_eq!(count, 30);
+        assert!(started.elapsed() > timeout);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_only_stream_times_out_with_received_byte_count() {
+        let (url, _) = test_server_held(
+            vec![b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n: PING\n\n".to_vec()],
+            Duration::from_secs(2),
+        )
+        .await;
+        let model = ModelClient::new(ModelConfig {
+            base_url: url,
+            timeout: Duration::from_millis(100),
+            ..ModelConfig::default()
+        })
+        .unwrap();
+        let mut events = model
+            .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
+            .await
+            .unwrap();
+        let error = time::timeout(Duration::from_secs(1), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            matches!(error, ModelError::Timeout { stage, .. } if stage.contains("8 body bytes received previously, 0 model events"))
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_unicode_split_across_network_chunks() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"中文\"},\"finish_reason\":null}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let split = response.find('中').unwrap() + 1;
+        let (base_url, _) = test_server_chunks(vec![
+            response.as_bytes()[..split].to_vec(),
+            response.as_bytes()[split..].to_vec(),
+        ])
+        .await;
+        let mut stream = client(&base_url, "openai_chat_completions", "mock", None)
+            .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
+            .await
+            .unwrap();
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            if let StreamEvent::TextDelta(delta) = event.unwrap() {
+                text.push_str(&delta);
+            }
+        }
+        assert_eq!(text, "中文");
+    }
+
     fn client(base_url: &str, api_format: &str, model: &str, api_key: Option<&str>) -> ModelClient {
         ModelClient::new(ModelConfig {
             api_format: ApiFormat::parse(api_format).unwrap(),
@@ -519,11 +797,24 @@ mod tests {
     async fn test_server(
         response: impl Into<String>,
     ) -> (String, impl std::future::Future<Output = String>) {
+        test_server_chunks(vec![response.into().into_bytes()]).await
+    }
+
+    async fn test_server_chunks(
+        chunks: Vec<Vec<u8>>,
+    ) -> (String, impl std::future::Future<Output = String>) {
+        test_server_held(chunks, Duration::ZERO).await
+    }
+
+    async fn test_server_held(
+        chunks: Vec<Vec<u8>>,
+        hold: Duration,
+    ) -> (String, impl std::future::Future<Output = String>) {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind test server");
         let address = listener.local_addr().expect("local address");
-        let response = Arc::new(response.into());
+        let chunks = Arc::new(chunks);
         let (sender, receiver) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
@@ -543,10 +834,11 @@ mod tests {
                 }
             }
 
-            socket
-                .write_all(response.as_bytes())
-                .await
-                .expect("write response");
+            for chunk in chunks.iter() {
+                socket.write_all(chunk).await.expect("write response");
+                time::sleep(Duration::from_millis(10)).await;
+            }
+            time::sleep(hold).await;
             let _ = socket.shutdown().await;
             let _ = sender.send(String::from_utf8_lossy(&bytes).to_ascii_lowercase());
         });

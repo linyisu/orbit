@@ -115,7 +115,11 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
 }
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {
-    let payload: ResponsesResponse = response.json().await?;
+    let value: Value = response.json().await?;
+    if let Some(error) = crate::client::upstream_error(&value) {
+        return Err(error);
+    }
+    let payload: ResponsesResponse = serde_json::from_value(value)?;
     let (text, calls) = output_parts(payload.output_text.as_deref(), &payload.output);
 
     Ok(ChatCompletion {

@@ -12,8 +12,13 @@ pub enum ModelError {
     InvalidBaseUrl(String),
     #[error("request failed: {0}")]
     Request(#[from] reqwest::Error),
-    #[error("model request timed out after {0:?}")]
-    Timeout(Duration),
+    #[error("model request timed out after {duration:?}: {stage}")]
+    Timeout { duration: Duration, stage: String },
+    #[error("upstream error: {message}{response_id}")]
+    Upstream {
+        message: String,
+        response_id: String,
+    },
     #[error("model request was cancelled")]
     Cancelled,
     #[error("model returned HTTP {status}{request_id}: {body}")]
@@ -35,12 +40,13 @@ impl ModelError {
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Http { retryable, .. } => *retryable,
-            Self::Request(_) | Self::Timeout(_) => true,
+            Self::Request(_) | Self::Timeout { .. } => true,
             Self::InvalidModel
             | Self::UnsupportedApiFormat(_)
             | Self::InvalidBaseUrl(_)
             | Self::Cancelled
             | Self::Decode(_)
+            | Self::Upstream { .. }
             | Self::Protocol(_)
             | Self::IncompleteSseEvent => false,
         }

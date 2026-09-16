@@ -54,7 +54,11 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
 }
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {
-    let payload: AnthropicResponse = response.json().await?;
+    let value: Value = response.json().await?;
+    if let Some(error) = crate::client::upstream_error(&value) {
+        return Err(error);
+    }
+    let payload: AnthropicResponse = serde_json::from_value(value)?;
     let mut text = String::new();
     let mut calls = Vec::new();
 

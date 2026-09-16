@@ -46,7 +46,11 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
 }
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {
-    let payload: WireCompletionResponse = response.json().await?;
+    let value: Value = response.json().await?;
+    if let Some(error) = crate::client::upstream_error(&value) {
+        return Err(error);
+    }
+    let payload: WireCompletionResponse = serde_json::from_value(value)?;
     let choice = payload.choices.into_iter().next().ok_or_else(|| {
         crate::client::invalid_response("OpenAI response did not contain choices")
     })?;
