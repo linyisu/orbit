@@ -43,7 +43,7 @@ pub enum TranscriptItem {
 
 #[derive(Debug)]
 pub struct UiState {
-    pub approval: Option<orbit_tools::approval::WritePreview>,
+    pub approval: Option<orbit_tools::approval::ApprovalPreview>,
     pub approval_scroll: u16,
     pub approval_max_scroll: u16,
     pub approval_shown: bool,

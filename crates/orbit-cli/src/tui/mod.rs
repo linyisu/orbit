@@ -53,7 +53,7 @@ pub async fn run(
     let mut receiver: Option<mpsc::Receiver<AgentEvent>> = None;
     let mut cancellation: Option<CancellationToken> = None;
     let mut task: Option<RunTask> = None;
-    let mut pending: Option<orbit_tools::approval::WriteApproval> = None;
+    let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
 
     let result: Result<()> = async {
         let mut dirty = true;
@@ -242,7 +242,7 @@ async fn run_command(
         }
         "/sessions" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(crate::session::list_text(&session.store).await?)),
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
-            "会话  {}\n数据库  {}\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / write_file · 写入需要逐次确认",
+            "会话  {}\n数据库  {}\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / write_file / run_command · 写入和沙箱命令需逐次确认",
             session.id(), session.store.path().display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs()
         ))),
         "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),

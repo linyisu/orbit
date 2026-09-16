@@ -57,7 +57,7 @@ fn start(
     let call = call(path, content);
     tokio::spawn(async move { tool.execute(call, token).await })
 }
-async fn request(receiver: &mut ApprovalReceiver) -> approval::WriteApproval {
+async fn request(receiver: &mut ApprovalReceiver) -> approval::ApprovalRequest {
     tokio::time::timeout(Duration::from_secs(2), receiver.recv())
         .await
         .unwrap()
@@ -87,8 +87,11 @@ async fn requires_approval_then_creates_and_replaces_exact_utf8_with_mode_preser
         }
         let task = start(tool, "file", after, CancellationToken::new());
         let approval = request(&mut approvals).await;
-        assert_eq!(approval.preview.before.as_deref(), before);
-        assert_eq!(approval.preview.after, after);
+        let approval::ApprovalPreview::Write(preview) = &approval.preview else {
+            panic!("expected file preview")
+        };
+        assert_eq!(preview.before.as_deref(), before);
+        assert_eq!(preview.after, after);
         assert_eq!(
             fs::read_to_string(root.0.join("file")).ok().as_deref(),
             before

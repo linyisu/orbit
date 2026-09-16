@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    approval::{ApprovalSender, WriteApproval, WritePreview},
+    approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, WritePreview},
     workspace::{Workspace, WorkspaceError},
 };
 
@@ -77,8 +77,8 @@ impl Tool for WriteFile {
                 .map_err(failed)??;
             check_cancelled(&cancellation)?;
             let (sender, receiver) = oneshot::channel();
-            let approval = WriteApproval {
-                preview: prepared.preview.clone(),
+            let approval = ApprovalRequest {
+                preview: ApprovalPreview::Write(prepared.preview.clone()),
                 decision: sender,
             };
             tokio::select! {

@@ -74,7 +74,7 @@ fn visible(text: &str) -> String {
 }
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
-    let preview = state
+    let proposal = state
         .approval
         .as_ref()
         .expect("approval screen requires a proposal");
@@ -84,51 +84,80 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         Constraint::Length(3),
     ])
     .split(frame.area());
-    frame.render_widget(
-        Paragraph::new(format!(
-            "写入确认 · {}\n{} · {} 字节 → {} 字节",
-            visible(&preview.path),
-            if preview.before.is_some() {
-                "替换文件"
+    let (title, lines) = match proposal {
+        orbit_tools::approval::ApprovalPreview::Write(preview) => {
+            let title = format!(
+                "写入确认 · {}\n{} · {} 字节 → {} 字节",
+                visible(&preview.path),
+                if preview.before.is_some() {
+                    "替换文件"
+                } else {
+                    "创建文件"
+                },
+                preview.before.as_ref().map_or(0, String::len),
+                preview.after.len()
+            );
+            let mut lines = vec![
+                Line::from(format!("目标文件：{}", visible(&preview.path))),
+                Line::from("--- 修改前（完整内容）"),
+            ];
+            if let Some(before) = &preview.before {
+                lines.extend(before.split('\n').map(|line| {
+                    Line::styled(
+                        format!("- {}", visible(line)),
+                        Style::default().fg(Color::Red),
+                    )
+                }));
+                lines.push(Line::from(if before.ends_with('\n') {
+                    "[末尾有换行]"
+                } else {
+                    "[末尾无换行]"
+                }));
             } else {
-                "创建文件"
-            },
-            preview.before.as_ref().map_or(0, String::len),
-            preview.after.len()
-        )),
-        areas[0],
-    );
-    let mut lines = vec![
-        Line::from(format!("目标文件：{}", visible(&preview.path))),
-        Line::from("--- 修改前（完整内容）"),
-    ];
-    if let Some(before) = &preview.before {
-        lines.extend(before.split('\n').map(|line| {
-            Line::styled(
-                format!("- {}", visible(line)),
-                Style::default().fg(Color::Red),
+                lines.push(Line::from("[文件不存在]"));
+            }
+            lines.push(Line::from("+++ 修改后（完整内容）"));
+            lines.extend(preview.after.split('\n').map(|line| {
+                Line::styled(
+                    format!("+ {}", visible(line)),
+                    Style::default().fg(Color::Green),
+                )
+            }));
+            lines.push(Line::from(if preview.after.ends_with('\n') {
+                "[末尾有换行]"
+            } else {
+                "[末尾无换行]"
+            }));
+            (title, lines)
+        }
+        orbit_tools::approval::ApprovalPreview::Command(preview) => {
+            let mut lines = vec![
+                Line::from("运行环境：Linux Bubblewrap · 禁止联网"),
+                Line::from("工作目录：/workspace（过滤后的只读快照，不修改原项目）"),
+                Line::from("临时目录：/tmp（本次执行结束后丢弃）"),
+                Line::from("隐藏配置、数据库和 .git 等元数据；不复制符号链接"),
+                Line::from("跳过 target / node_modules / .venv / __pycache__"),
+                Line::from("快照最多 64 MiB / 10000 项；仅提供系统 /usr/bin 工具"),
+                Line::from("stdout / stderr 各最多 32 KiB，超限会终止进程"),
+                Line::from(""),
+                Line::from("完整命令："),
+            ];
+            lines.extend(
+                preview
+                    .command
+                    .split('\n')
+                    .map(|line| Line::styled(visible(line), Style::default().fg(Color::Cyan))),
+            );
+            (
+                format!(
+                    "命令执行确认\n超时：{} 秒 · 原项目只读 · 无网络",
+                    preview.timeout_seconds
+                ),
+                lines,
             )
-        }));
-        lines.push(Line::from(if before.ends_with('\n') {
-            "[末尾有换行]"
-        } else {
-            "[末尾无换行]"
-        }));
-    } else {
-        lines.push(Line::from("[文件不存在]"));
-    }
-    lines.push(Line::from("+++ 修改后（完整内容）"));
-    lines.extend(preview.after.split('\n').map(|line| {
-        Line::styled(
-            format!("+ {}", visible(line)),
-            Style::default().fg(Color::Green),
-        )
-    }));
-    lines.push(Line::from(if preview.after.ends_with('\n') {
-        "[末尾有换行]"
-    } else {
-        "[末尾无换行]"
-    }));
+        }
+    };
+    frame.render_widget(Paragraph::new(title), areas[0]);
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL));
@@ -141,7 +170,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let help = if frame.area().width < 80 {
         "Ctrl+Y 允许  Esc 拒绝\n↑↓ 翻页  Ctrl+C 取消"
     } else {
-        "Ctrl+Y 允许这次写入 · Ctrl+N / Esc 拒绝 · Ctrl+C 取消本轮\n↑↓ / 鼠标 / PgUp PgDn 翻阅 · Enter 不会确认"
+        "Ctrl+Y 允许这次操作 · Ctrl+N / Esc 拒绝 · Ctrl+C 取消本轮\n↑↓ / 鼠标 / PgUp PgDn 翻阅 · Enter 不会确认"
     };
     frame.render_widget(
         Paragraph::new(format!("{help}\n拖选后 Ctrl+C 复制")),
@@ -192,14 +221,16 @@ mod render_tests {
     #[test]
     fn full_preview_scrolls_to_end_and_escapes_terminal_controls() {
         let mut state = UiState::new("mock");
-        state.approval = Some(WritePreview {
-            path: "file".into(),
-            before: Some("old".into()),
-            after: format!(
-                "{}END\\marker\u{1b}",
-                "long line that wraps across the screen\n".repeat(80)
-            ),
-        });
+        state.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
+            WritePreview {
+                path: "file".into(),
+                before: Some("old".into()),
+                after: format!(
+                    "{}END\\marker\u{1b}",
+                    "long line that wraps across the screen\n".repeat(80)
+                ),
+            },
+        ));
         let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
         terminal.draw(|f| draw(f, &mut state)).unwrap();
         assert!(state.approval_shown);
