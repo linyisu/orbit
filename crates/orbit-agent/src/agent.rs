@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, HashSet};
+
 use futures_util::StreamExt;
 use orbit_model::types::{
     ChatCompletion, ChatMessage, ChatRequest, FunctionCall, StreamEvent, ToolCall, ToolCallDelta,
@@ -157,6 +159,7 @@ where
                 ChatMessage::Assistant { tool_calls, .. } => tool_calls.clone(),
                 _ => Vec::new(),
             };
+            validate_tool_ids(&calls)?;
             history.push(assistant);
 
             if calls.is_empty() {
@@ -216,7 +219,7 @@ where
         let fallback_request = request.clone();
         let mut stream = self.backend.stream(request, cancellation.clone()).await?;
         let mut text = String::new();
-        let mut calls = Vec::new();
+        let mut calls = BTreeMap::new();
         let mut finish_reason = None;
         let mut usage = None;
 
@@ -285,7 +288,7 @@ where
             model: None,
             message: ChatMessage::Assistant {
                 content: (!text.is_empty()).then_some(text),
-                tool_calls: calls,
+                tool_calls: calls.into_values().collect(),
             },
             finish_reason,
             usage,
@@ -345,6 +348,7 @@ where
                 ChatMessage::Assistant { tool_calls, .. } => tool_calls.clone(),
                 _ => Vec::new(),
             };
+            validate_tool_ids(&calls)?;
             history.push(assistant.clone());
 
             if calls.is_empty() {
@@ -385,7 +389,7 @@ where
         let fallback_request = request.clone();
         let mut stream = self.backend.stream(request, cancellation.clone()).await?;
         let mut text = String::new();
-        let mut calls = Vec::new();
+        let mut calls = BTreeMap::new();
         let mut finish_reason = None;
         let mut usage = None;
 
@@ -443,7 +447,7 @@ where
             model: None,
             message: ChatMessage::Assistant {
                 content: (!text.is_empty()).then_some(text),
-                tool_calls: calls,
+                tool_calls: calls.into_values().collect(),
             },
             finish_reason,
             usage,
@@ -451,19 +455,29 @@ where
     }
 }
 
-fn merge_tool_call(calls: &mut Vec<ToolCall>, delta: ToolCallDelta) {
-    while calls.len() <= delta.index {
-        calls.push(ToolCall {
-            id: String::new(),
-            kind: "function".to_owned(),
-            function: FunctionCall {
-                name: String::new(),
-                arguments: String::new(),
-            },
-        });
+fn validate_tool_ids(calls: &[ToolCall]) -> Result<(), AgentError> {
+    let mut ids = HashSet::new();
+    for call in calls {
+        if call.id.trim().is_empty() || !ids.insert(&call.id) {
+            return Err(AgentError::Model(orbit_model::error::ModelError::Protocol(
+                "model returned empty or duplicate tool call IDs; no tools in this response were executed".into(),
+            )));
+        }
     }
+    Ok(())
+}
 
-    let call = &mut calls[delta.index];
+fn merge_tool_call(calls: &mut BTreeMap<usize, ToolCall>, delta: ToolCallDelta) {
+    // Providers index all output blocks, including text and reasoning. Only
+    // materialize actual tool blocks; never pad sparse indices with fake calls.
+    let call = calls.entry(delta.index).or_insert_with(|| ToolCall {
+        id: String::new(),
+        kind: "function".to_owned(),
+        function: FunctionCall {
+            name: String::new(),
+            arguments: String::new(),
+        },
+    });
     if let Some(id) = delta.id {
         call.id = id;
     }
@@ -536,6 +550,154 @@ mod tests {
 
     fn request() -> ChatRequest {
         ChatRequest::new(vec![ChatMessage::user("hello")])
+    }
+
+    struct SparseToolModel(MockModel);
+
+    impl ModelBackend for SparseToolModel {
+        fn complete<'a>(
+            &'a self,
+            request: ChatRequest,
+            token: CancellationToken,
+        ) -> crate::model::CompletionFuture<'a> {
+            self.0.complete(request, token)
+        }
+        fn stream<'a>(
+            &'a self,
+            request: ChatRequest,
+            token: CancellationToken,
+        ) -> crate::model::StreamFuture<'a> {
+            Box::pin(async move {
+                let stream = self.0.stream(request, token).await?;
+                Ok(Box::pin(stream.map(|event| {
+                    event.map(|event| match event {
+                        StreamEvent::ToolCallDelta(mut delta) => {
+                            delta.index = delta.index * 3 + 2;
+                            StreamEvent::ToolCallDelta(delta)
+                        }
+                        other => other,
+                    })
+                })) as orbit_model::types::ModelStream)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn sparse_content_indices_execute_only_real_tools_in_both_stream_paths() {
+        for channel in [false, true] {
+            let calls = vec![
+                ToolCall::function("first", "echo", json!({"text":"one"})),
+                ToolCall::function("second", "echo", json!({"text":"two"})),
+            ];
+            let mock = MockModel::new(vec![
+                ChatCompletion {
+                    id: None,
+                    model: None,
+                    message: ChatMessage::Assistant {
+                        content: Some("Reading files".into()),
+                        tool_calls: calls.clone(),
+                    },
+                    finish_reason: Some("tool_use".into()),
+                    usage: None,
+                },
+                assistant_text("done"),
+            ]);
+            let mut tools = ToolRegistry::new();
+            tools.register(ClosureTool::new(
+                "echo",
+                "echo",
+                json!({"type":"object"}),
+                |args, _| async move { Ok(args.to_string()) },
+            ));
+            let agent = Agent::new(SparseToolModel(mock.clone()), tools, AgentConfig::default());
+            let result = if channel {
+                let (tx, _rx) = mpsc::channel(64);
+                agent
+                    .run_with_agent_events(request(), CancellationToken::new(), tx)
+                    .await
+            } else {
+                agent
+                    .run_with_events(request(), CancellationToken::new(), |_| {})
+                    .await
+            }
+            .unwrap();
+            assert_eq!(result.tool_calls, 2);
+            let sent = mock.requests();
+            assert_eq!(sent.len(), 2);
+            assert_eq!(sent[1].messages.len(), 4);
+            let ChatMessage::Assistant { tool_calls, .. } = &sent[1].messages[1] else {
+                panic!("assistant")
+            };
+            assert_eq!(tool_calls, &calls);
+            assert!(
+                matches!(&sent[1].messages[2], ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "first")
+            );
+            assert!(
+                matches!(&sent[1].messages[3], ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "second")
+            );
+        }
+    }
+
+    #[test]
+    fn sparse_and_large_indices_merge_argument_fragments_without_padding() {
+        let mut calls = BTreeMap::new();
+        for (index, id, name, arguments) in [
+            (usize::MAX, Some("later"), Some("echo"), "{\"text\":"),
+            (2, Some("first"), Some("echo"), "{}"),
+            (usize::MAX, None, None, "\"你好\"}"),
+        ] {
+            merge_tool_call(
+                &mut calls,
+                ToolCallDelta {
+                    index,
+                    id: id.map(str::to_owned),
+                    name: name.map(str::to_owned),
+                    arguments: arguments.into(),
+                },
+            );
+        }
+        let calls: Vec<_> = calls.into_values().collect();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "first");
+        assert_eq!(calls[1].function.arguments, "{\"text\":\"你好\"}");
+    }
+
+    #[tokio::test]
+    async fn malformed_ids_stop_before_tools_or_a_followup_request() {
+        for ids in [["", ""], ["same", "same"]] {
+            for streaming in [false, true] {
+                let mock = MockModel::new(vec![ChatCompletion {
+                    id: None,
+                    model: None,
+                    message: ChatMessage::assistant_tool_calls(
+                        ids.into_iter()
+                            .map(|id| ToolCall::function(id, "fail_if_executed", json!({})))
+                            .collect(),
+                    ),
+                    finish_reason: None,
+                    usage: None,
+                }]);
+                let mut tools = ToolRegistry::new();
+                tools.register(ClosureTool::new(
+                    "fail_if_executed",
+                    "",
+                    json!({}),
+                    |_, _| async { panic!("invalid response must not execute any tools") },
+                ));
+                let agent = Agent::new(mock.clone(), tools, AgentConfig::default());
+                let error = if streaming {
+                    let (tx, _rx) = mpsc::channel(64);
+                    agent
+                        .run_with_agent_events(request(), CancellationToken::new(), tx)
+                        .await
+                } else {
+                    agent.run(request(), CancellationToken::new()).await
+                }
+                .unwrap_err();
+                assert!(error.to_string().contains("empty or duplicate"));
+                assert_eq!(mock.requests().len(), 1);
+            }
+        }
     }
 
     struct ReasoningModel;
