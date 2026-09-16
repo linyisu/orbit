@@ -20,3 +20,16 @@
 `cargo test -p orbit-cli --offline` 覆盖流式追加时视口不跳、回到底部恢复跟随、分片代码围栏、中文和组合字符换行与 Ratatui 原始渲染的一致性、一万行历史的缓存复用、帧请求合并，以及现有框选/审批滚动回归。
 
 缓存主要消除了历史重复排版的成本。首次加载和改变终端宽度仍需计算历史布局；单个特别长且不换行的源文本行仍需按该行长度处理。
+
+## 会话恢复与帮助
+
+参考 [Claude Code 的 `/resume` 会话选择器](https://code.claude.com/docs/en/sessions)和 [OpenCode 的会话对话框](https://github.com/anomalyco/opencode/blob/dev/packages/tui/src/component/dialog-session-list.tsx)：
+
+- `/resume` 打开当前项目、相同运行模式的历史会话列表，按最近更新排序。输入标题或 ID 筛选，↑↓ 或滚轮选择，Enter 恢复，Esc 返回；`/sessions` 是同一入口。
+- `/resume <完整 ID>` 直接恢复。当前会话和无历史的空会话不列入选择器。运行中的任务必须先结束或取消，不能直接切换。
+- 切换先校验项目和模式，再取得目标会话的独占锁并加载上下文，成功后才释放当前会话。不存在、跨项目、模式不匹配或已被其他进程占用时保留当前会话，不重跑旧工具。
+- 恢复沿用当前 API 配置、模型和预算；审批模式回到 auto。历史记录与输入历史从目标会话重建，后续消息追加到原会话 ID。
+
+帮助入口也参考 [OpenCode 的 `help.show` → DialogHelp](https://github.com/anomalyco/opencode/blob/dev/packages/tui/src/app.tsx)。`/help` 或空输入时按 `?` 打开独立帮助对话框；←→ / Tab 切换命令与快捷键，↑↓ / 滚轮浏览，Esc 返回。帮助不再塞在命令补全列表下方的固定 10 行中。底栏和欢迎页显示帮助、恢复入口；命令补全列表在小窗口中会跟随选中项滚动。
+
+会话选择器、独立帮助和局部导航沿用主流 TUI 的交互方式，Orbit 的中文文案、分组和尺寸适配由本项目实现，并不声称逐像素复刻其他产品。

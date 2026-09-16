@@ -6,10 +6,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap},
 };
 
-use super::{
-    app::{RunStatus, ToolStatus, TranscriptItem, UiState},
-    commands::COMMANDS,
-};
+use super::app::{RunStatus, ToolStatus, TranscriptItem, UiState};
 
 const ACCENT: Color = Color::Rgb(218, 139, 109);
 const MUTED: Color = Color::Rgb(145, 145, 145);
@@ -38,8 +35,6 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let menu = state.menu();
     let panel_height = if !menu.is_empty() {
         menu.len() as u16 + 1
-    } else if state.show_help {
-        10
     } else {
         0
     };
@@ -77,7 +72,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let hint = if state.running() {
         "  滚轮浏览 · 拖选后 Ctrl+C 复制 · esc 取消"
     } else {
-        "  滚轮浏览 · 拖选后 Ctrl+C 复制 · / 命令"
+        "  ? 帮助 · /resume 恢复 · / 命令"
     };
     frame.render_widget(
         Paragraph::new(Line::from(muted(format!(
@@ -87,6 +82,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         )))),
         areas[6],
     );
+    super::dialogs::draw(frame, state);
 }
 
 fn draw_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
@@ -126,7 +122,7 @@ fn welcome(state: &UiState) -> Vec<Line<'static>> {
         Line::from(""),
         Line::from(vec![
             Span::styled("  /help", Style::default().fg(ACCENT)),
-            muted(" 查看帮助    /model 查看模型"),
+            muted(" 查看帮助    /resume 恢复会话"),
         ]),
         Line::from(muted(
             "  read_file 读取 · 默认命令自动执行、文件修改确认 · /mode 调整。",
@@ -409,9 +405,13 @@ fn draw_composer(
 
 fn draw_panel(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
     let menu = state.menu();
+    let visible = area.height.saturating_sub(1).max(1) as usize;
+    let first = state.menu_index.saturating_sub(visible - 1);
     let lines = if !menu.is_empty() {
         menu.iter()
             .enumerate()
+            .skip(first)
+            .take(visible)
             .map(|(index, command)| {
                 let selected = index == state.menu_index.min(menu.len() - 1);
                 Line::from(vec![
@@ -430,24 +430,6 @@ fn draw_panel(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
                 "    ↑↓ 选择 · tab 补全 · enter 执行 · esc 关闭",
             ))))
             .collect::<Vec<_>>()
-    } else if state.show_help {
-        let mut lines = COMMANDS
-            .iter()
-            .map(|command| {
-                Line::from(muted(format!(
-                    "  {:<10} {}",
-                    command.name, command.description
-                )))
-            })
-            .collect::<Vec<_>>();
-        lines.extend([
-            Line::from(muted("  Enter 发送 · Ctrl+J / Shift+Enter 换行")),
-            Line::from(muted("  Esc 取消响应 / 关闭菜单 · Ctrl+D 退出")),
-            Line::from(muted("  ↑↓ 输入历史 · 滚轮/PgUp/PgDn 滚动 · Ctrl+O 展开")),
-            Line::from(muted("  Ctrl+A/E 行首/尾 · Ctrl+U/K 删除到行首/尾")),
-            Line::from(muted("  Ctrl+C 取消响应 / 清空输入 / 空输入时退出")),
-        ]);
-        lines
     } else {
         Vec::new()
     };

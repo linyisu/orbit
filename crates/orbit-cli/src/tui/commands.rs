@@ -22,8 +22,12 @@ pub const COMMANDS: &[Command] = &[
         description: "查看模型；/model <名称> 切换模型",
     },
     Command {
+        name: "/resume",
+        description: "搜索并恢复当前项目的历史会话",
+    },
+    Command {
         name: "/sessions",
-        description: "列出已保存会话；启动时用 --resume <ID> 恢复",
+        description: "打开会话选择器（同 /resume）",
     },
     Command {
         name: "/context",

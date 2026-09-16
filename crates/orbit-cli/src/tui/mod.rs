@@ -2,6 +2,7 @@ pub mod app;
 mod approval;
 pub mod commands;
 mod demo;
+mod dialogs;
 mod frames;
 pub mod input;
 mod permissions;
@@ -85,6 +86,14 @@ pub async fn run(
                     dirty = true;
                     let event = event?;
                     frames.request(time::Instant::now());
+                    if state.show_help || state.picker.is_some() {
+                        if let Some(id) = dialogs::handle(&mut state, event)
+                            && let Err(error) = resume_session(&id, &mut state, &mut history, &mut session).await
+                            && let Some(picker) = &mut state.picker {
+                            picker.error = Some(error.to_string());
+                        }
+                        continue;
+                    }
                     if state.selection.handle(&event)? {
                         terminal.draw(|frame| {
                             if !state.selection.draw_frozen(frame) {
@@ -297,7 +306,12 @@ async fn run_command(
     let argument = argument.trim();
     match command {
         "/exit" | "/quit" if argument.is_empty() => return Ok(true),
-        "/help" if argument.is_empty() => state.show_help = true,
+        "/help" if argument.is_empty() => {
+            state.selection = Default::default();
+            state.show_help = true;
+            state.help_keys = false;
+            state.help_scroll = 0;
+        },
         "/clear" if argument.is_empty() => {
             session.clear(state.model.clone(), state.demo).await?;
             history.clear();
@@ -326,7 +340,11 @@ async fn run_command(
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
             state.transcript.push(TranscriptItem::Notice(format!("上下文估算：{estimated} tokens（含工具定义）\n输出上限及预留：{} tokens · 总预算：{}\n这是通用估算，不等于服务端实际用量。\n/compact 总结旧对话并保留最近两轮；真实模式会调用模型，演示模式生成机械提要。",state.max_output_tokens,state.context_tokens)));
         }
-        "/sessions" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(crate::session::list_text(&session.store).await?)),
+        "/resume" | "/sessions" if argument.is_empty() => {
+            state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
+            state.selection = Default::default();
+        }
+        "/resume" => resume_session(argument, state, history, session).await?,
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
             "会话  {}\n数据库  {}\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / write_file / edit_file / run_command · 审批：{}",
             session.id(), session.store.path().display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs(), state.permission_mode.label()
@@ -353,6 +371,23 @@ async fn run_command(
     state.follow_bottom = true;
     state.menu_dismissed = false;
     Ok(false)
+}
+
+async fn resume_session(
+    id: &str,
+    state: &mut UiState,
+    history: &mut Vec<ChatMessage>,
+    session: &mut SessionState,
+) -> Result<()> {
+    session.resume(id).await?;
+    *history = session.snapshot.history.clone();
+    let mut restored = UiState::new(state.model.clone());
+    restored.demo = state.demo;
+    restored.context_tokens = state.context_tokens;
+    restored.max_output_tokens = state.max_output_tokens;
+    session.restore_ui(&mut restored);
+    *state = restored;
+    Ok(())
 }
 
 #[derive(Debug, PartialEq)]
@@ -464,7 +499,11 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 .map(Action::Submit)
                 .unwrap_or(Action::None);
         }
-        KeyCode::Char('?') if state.input.text.is_empty() => state.show_help = !state.show_help,
+        KeyCode::Char('?') if state.input.text.is_empty() => {
+            state.selection = Default::default();
+            state.show_help = true;
+            state.help_scroll = 0;
+        }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) => {
             state.input.insert(&c.to_string());
             state.menu_index = 0;
