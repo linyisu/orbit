@@ -20,6 +20,18 @@
 
 原项目不挂载到沙箱中，也不回写副本。命令不能修改原项目；文件修改使用 `write_file` 的内容预览流程。副本未保留文件可执行位，项目脚本可以使用 `sh script.sh` 等显式解释器运行。
 
+## 在临时可写副本中构建和测试
+
+```json
+{"command":"mkdir -p build && cc main.c -o build/main && ./build/main","writable_snapshot":true,"timeout_seconds":60}
+```
+
+`writable_snapshot` 默认为 `false`。设为 `true` 时，将过滤副本只读挂载为 `/orbit-source`，再复制到独立的 128 MiB tmpfs `/workspace` 中执行命令。这个总容量包括源文件和所有构建产物；单文件仍受 64 MiB 限制。网络、宿主目录和环境变量的隔离保持不变。复制准备也计入命令超时，准备失败不会继续执行用户命令。
+
+命令可以修改副本、创建构建目录和运行测试，但所有修改在进程退出后丢弃，不回写原项目，也不在下一次命令中复用。因此构建与依赖它的测试必须组合为同一条命令。审批界面会明确标记临时可写和清理行为。
+
+此模式适用于系统已安装工具、无需联网且体积较小的构建。尚未提供持久缓存、依赖下载、宿主 home 下的工具链或原项目直接可写挂载；不是所有项目都能在当前限制下构建。
+
 沙箱只读挂载系统 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 和动态链接缓存；使用独立的进程、网络、IPC、用户和 UTS 命名空间，禁止嵌套用户命名空间，清空 Linux capabilities。`/proc` 只展示沙箱进程，`/dev` 为最小设备集合，`/tmp` 为本次执行独占的 64 MiB tmpfs。
 
 子进程环境被清空，只设置 PATH、HOME、TMPDIR、LANG。不继承代理变量、SSH agent socket 或 API Key 等环境变量；宿主 home、临时目录和网络均不可访问。宿主用户目录安装的 Cargo、Node 版本管理器和缓存不会出现；`.git` 不可见，因此不能直接执行依赖真实仓库元数据的 Git 操作。
@@ -41,6 +53,8 @@ cargo run -p orbit-cli -- tui --demo
 ```
 
 输入 `run pwd` 或 `run ls`，检查确认界面后批准。输入 `run echo changed > Cargo.toml` 会在只读副本中失败，原文件保持不变。
+
+输入 `build mkdir -p build && echo hello > build/result.txt && cat build/result.txt`，可测试临时可写副本。随后输入 `run test ! -e build/result.txt && echo discarded`，确认产物没有写回原项目。这里 `build` 是离线演示的输入前缀，实际工具仍为 `run_command`。
 
 普通测试和需要命名空间的专项测试分开运行：
 

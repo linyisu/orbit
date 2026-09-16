@@ -63,6 +63,7 @@ async fn validates_command_parameters_before_approval() {
         json!({"command":""}),
         json!({"command":"echo hi","timeout_seconds":0}),
         json!({"command":"echo hi","timeout_seconds":121}),
+        json!({"command":"echo hi","writable_snapshot":"yes"}),
         json!({"command":"x\u{0000}"}),
         json!({"command":"echo hi","unknown":true}),
     ] {
@@ -189,4 +190,54 @@ async fn output_limits_stop_infinite_producers_and_preserve_exit_codes() {
     assert_eq!(result.exit_code, Some(7));
     assert_eq!(result.stdout, "out");
     assert_eq!(result.stderr, "err");
+}
+
+#[tokio::test]
+#[ignore = "requires Linux user namespaces and /usr/bin/cc"]
+async fn writable_snapshot_builds_without_changing_host_and_discards_outputs() {
+    let (root, workspace) = fixture();
+    fs::write(
+        root.path().join("main.c"),
+        "#include <stdio.h>\nint main(void) { puts(\"built safely\"); return 0; }\n",
+    )
+    .unwrap();
+    fs::write(root.path().join(".env"), "private").unwrap();
+    let result = sandbox::run_with_options(workspace.clone(),
+        "set -e; mkdir build; cc main.c -o build/program; ./build/program; echo edited > source.txt; test ! -e .env; test ! -e /home; test ! -e /orbit-source/.env; test $(stat -f -c %T /workspace) = tmpfs; echo changed > /orbit-source/source.txt".into(),
+        Duration::from_secs(20), CancellationToken::new(), true).await.unwrap();
+    assert_ne!(result.exit_code, Some(0), "{result:?}"); // Attempt to modify the source mount fails.
+    assert!(result.stdout.contains("built safely"), "{result:?}");
+    assert!(
+        result.stderr.contains("Read-only file system"),
+        "{result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("source.txt")).unwrap(),
+        "hello sandbox\n"
+    );
+    assert!(!root.path().join("build").exists());
+    let second = sandbox::run_with_options(
+        workspace,
+        "test ! -e build && test \"$(cat source.txt)\" = 'hello sandbox'".into(),
+        Duration::from_secs(10),
+        CancellationToken::new(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.exit_code, Some(0));
+}
+
+#[tokio::test]
+#[ignore = "requires Linux user namespaces"]
+async fn writable_workspace_has_a_total_size_limit() {
+    let (_root, workspace) = fixture();
+    let result = sandbox::run_with_options(workspace,
+        "dd if=/dev/zero of=one bs=1M count=48 2>/dev/null; dd if=/dev/zero of=two bs=1M count=48 2>/dev/null; dd if=/dev/zero of=three bs=1M count=48".into(),
+        Duration::from_secs(15), CancellationToken::new(), true).await.unwrap();
+    assert_ne!(result.exit_code, Some(0));
+    assert!(
+        result.stderr.contains("No space left on device"),
+        "{result:?}"
+    );
 }

@@ -9,6 +9,7 @@ pub struct WritePreview {
 
 #[derive(Clone, Debug)]
 pub struct CommandPreview {
+    pub writable_snapshot: bool,
     pub command: String,
     pub timeout_seconds: u64,
 }

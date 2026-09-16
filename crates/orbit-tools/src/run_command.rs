@@ -22,6 +22,8 @@ pub struct RunCommand {
 #[serde(deny_unknown_fields)]
 struct Arguments {
     command: String,
+    #[serde(default)]
+    writable_snapshot: bool,
     #[serde(default = "default_timeout")]
     timeout_seconds: u64,
 }
@@ -42,8 +44,8 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",
-            "Run a /bin/sh command after one-time user approval in a Linux Bubblewrap sandbox. No network, credentials or host home. /workspace is a READ-ONLY filtered snapshot; /tmp is disposable. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. Only system tools in /usr/bin and /bin are available. Default timeout 30 seconds; maximum 120. stdout/stderr each capped at 32 KiB; exceeding a cap stops the process. Never automatically retry a denied command.",
-            json!({"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":120,"default":30}},"required":["command"],"additionalProperties":false}),
+            "Run a /bin/sh command after one-time user approval in a Linux Bubblewrap sandbox. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). All changes and build artifacts are discarded after the command; combine build and test in one command. /tmp is disposable. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. Only system tools in /usr/bin and /bin are available. Default timeout 30 seconds; maximum 120. stdout/stderr each capped at 32 KiB; exceeding a cap stops the process. Never automatically retry a denied command.",
+            json!({"type":"object","properties":{"writable_snapshot":{"type":"boolean","default":false},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":120,"default":30}},"required":["command"],"additionalProperties":false}),
         )
     }
 
@@ -64,6 +66,7 @@ impl Tool for RunCommand {
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     command: args.command.clone(),
+                    writable_snapshot: args.writable_snapshot,
                     timeout_seconds: args.timeout_seconds,
                 }),
                 decision: sender,
@@ -83,11 +86,12 @@ impl Tool for RunCommand {
                     "user denied command; do not retry without a new user request".into(),
                 ));
             }
-            let result = sandbox::run(
+            let result = sandbox::run_with_options(
                 self.workspace.clone(),
                 args.command,
                 Duration::from_secs(args.timeout_seconds),
                 cancellation,
+                args.writable_snapshot,
             )
             .await?;
             serde_json::to_string(&result).map_err(|e| ToolError::ExecutionFailed(e.to_string()))

@@ -96,14 +96,16 @@ fn response(request: &ChatRequest) -> ChatMessage {
         };
     }
     if let Some(ChatMessage::User { content }) = request.messages.last()
-        && let Some(command) = content.strip_prefix("run ")
+        && let Some(command) = content
+            .strip_prefix("run ")
+            .or_else(|| content.strip_prefix("build "))
     {
         return ChatMessage::Assistant {
             content: Some("准备在沙箱中执行命令，请检查完整命令及访问范围。".into()),
             tool_calls: vec![ToolCall::function(
                 format!("demo-command-{turns}"),
                 "run_command",
-                serde_json::json!({"command":command}),
+                serde_json::json!({"command":command,"writable_snapshot":content.starts_with("build ")}),
             )],
         };
     }

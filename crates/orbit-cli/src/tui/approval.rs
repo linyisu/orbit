@@ -133,7 +133,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
             let mut lines = vec![
                 Line::from("运行环境：Linux Bubblewrap · 禁止联网"),
-                Line::from("工作目录：/workspace（过滤后的只读快照，不修改原项目）"),
+                Line::from(if preview.writable_snapshot {
+                    "工作目录：/workspace（128 MiB 临时可写副本，结束后丢弃全部修改）"
+                } else {
+                    "工作目录：/workspace（过滤后的只读快照，不修改原项目）"
+                }),
                 Line::from("临时目录：/tmp（本次执行结束后丢弃）"),
                 Line::from("隐藏配置、数据库和 .git 等元数据；不复制符号链接"),
                 Line::from("跳过 target / node_modules / .venv / __pycache__"),

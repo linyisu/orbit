@@ -127,7 +127,7 @@ impl Snapshot {
     }
 }
 
-fn command(snapshot: &Path, script: &str) -> Result<Command, ToolError> {
+fn command(snapshot: &Path, script: &str, writable_snapshot: bool) -> Result<Command, ToolError> {
     use std::os::unix::fs::MetadataExt;
     let executable = PathBuf::from("/usr/bin/bwrap");
     let metadata = executable.metadata().map_err(|_| failed("sandbox unavailable: install Bubblewrap at /usr/bin/bwrap; refusing unsandboxed execution"))?;
@@ -165,7 +165,12 @@ fn command(snapshot: &Path, script: &str) -> Result<Command, ToolError> {
     if Path::new("/etc/ld.so.cache").exists() {
         command.args(["--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache"]);
     }
-    command.arg("--ro-bind").arg(snapshot).arg("/workspace");
+    if writable_snapshot {
+        command.arg("--ro-bind").arg(snapshot).arg("/orbit-source");
+        command.args(["--size", "134217728", "--tmpfs", "/workspace"]);
+    } else {
+        command.arg("--ro-bind").arg(snapshot).arg("/workspace");
+    }
     command.args([
         "--proc",
         "/proc",
@@ -202,9 +207,16 @@ fn command(snapshot: &Path, script: &str) -> Result<Command, ToolError> {
         "--",
         "/bin/sh",
         "-c",
-        script,
+        if writable_snapshot {
+            "cp -R /orbit-source/. /workspace/ && exec /bin/sh -c \"$1\" orbit-command"
+        } else {
+            script
+        },
         "orbit-command",
     ]);
+    if writable_snapshot {
+        command.arg(script);
+    }
     Ok(command)
 }
 
@@ -235,6 +247,16 @@ pub async fn run(
     timeout: Duration,
     token: CancellationToken,
 ) -> Result<CommandResult, ToolError> {
+    run_with_options(workspace, script, timeout, token, false).await
+}
+
+pub async fn run_with_options(
+    workspace: Workspace,
+    script: String,
+    timeout: Duration,
+    token: CancellationToken,
+    writable_snapshot: bool,
+) -> Result<CommandResult, ToolError> {
     if token.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
@@ -245,7 +267,7 @@ pub async fn run(
     if token.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
-    let mut child = command(snapshot.directory.path(), &script)?
+    let mut child = command(snapshot.directory.path(), &script, writable_snapshot)?
         .spawn()
         .map_err(failed)?;
     let limit = CancellationToken::new();
@@ -287,7 +309,11 @@ pub async fn run(
         timed_out,
         cancelled,
         output_truncated: truncated.load(Ordering::Relaxed),
-        sandbox: "bubblewrap; no network; read-only filtered workspace snapshot",
+        sandbox: if writable_snapshot {
+            "bubblewrap; no network; disposable writable workspace snapshot (128 MiB); changes discarded"
+        } else {
+            "bubblewrap; no network; read-only filtered workspace snapshot"
+        },
         workspace_files: snapshot.files,
         skipped_entries: snapshot.skipped,
     })
