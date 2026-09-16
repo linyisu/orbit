@@ -181,7 +181,7 @@ async fn refuses_changes_and_file_replacements_during_approval() {
 async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_before_asking() {
     let root = Fixture::new();
     fs::write(root.0.join("binary"), [0, 1, 2]).unwrap();
-    fs::write(root.0.join("large"), vec![b'x'; 32769]).unwrap();
+    fs::write(root.0.join("large"), vec![b'x'; 1048577]).unwrap();
     fs::write(root.0.join("original"), "text").unwrap();
     fs::hard_link(root.0.join("original"), root.0.join("hard")).unwrap();
     symlink("original", root.0.join("symlink")).unwrap();
@@ -213,7 +213,7 @@ async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_befor
     }
     let (tool, _) = root.tool();
     assert!(
-        tool.execute(call("file", &"x".repeat(32769)), CancellationToken::new())
+        tool.execute(call("file", &"x".repeat(1048577)), CancellationToken::new())
             .await
             .is_err()
     );

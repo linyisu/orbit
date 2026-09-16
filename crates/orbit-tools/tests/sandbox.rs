@@ -62,7 +62,7 @@ async fn validates_command_parameters_before_approval() {
     for args in [
         json!({"command":""}),
         json!({"command":"echo hi","timeout_seconds":0}),
-        json!({"command":"echo hi","timeout_seconds":121}),
+        json!({"command":"echo hi","timeout_seconds":601}),
         json!({"command":"echo hi","writable_snapshot":"yes"}),
         json!({"command":"x\u{0000}"}),
         json!({"command":"echo hi","unknown":true}),
@@ -240,4 +240,70 @@ async fn writable_workspace_has_a_total_size_limit() {
         result.stderr.contains("No space left on device"),
         "{result:?}"
     );
+}
+
+#[tokio::test]
+async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
+    use orbit_tools::approval::ApprovalPreview;
+    use orbit_tools::run_command::CommandLimits;
+    let (_root, workspace) = fixture();
+    let (tx, mut rx) = approval::channel();
+    let tool = RunCommand::with_limits(
+        workspace,
+        tx,
+        CommandLimits {
+            default_timeout_seconds: 300,
+            max_timeout_seconds: 1800,
+        },
+    );
+    assert!(
+        tool.execute(
+            ToolCall::function(
+                "bad",
+                "run_command",
+                json!({"command":"true", "timeout_seconds":1801})
+            ),
+            CancellationToken::new()
+        )
+        .await
+        .is_err()
+    );
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function("run", "run_command", json!({"command":"true"})),
+            CancellationToken::new(),
+        )
+        .await
+    });
+    let request = rx.recv().await.unwrap();
+    let ApprovalPreview::Command(preview) = request.preview else {
+        panic!("command preview")
+    };
+    assert_eq!(preview.timeout_seconds, 300);
+    request.decision.send(false).unwrap();
+    assert!(task.await.unwrap().is_err());
+    assert!(
+        CommandLimits {
+            default_timeout_seconds: 601,
+            max_timeout_seconds: 600
+        }
+        .validate()
+        .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Linux user namespaces"]
+async fn process_limits_follow_the_command_budget() {
+    let (_root, workspace) = fixture();
+    let result = sandbox::run(
+        workspace,
+        "ulimit -t; ulimit -v; ulimit -n".into(),
+        Duration::from_secs(600),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.stdout, "601\n4194304\n1024\n");
 }

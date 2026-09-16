@@ -127,7 +127,12 @@ impl Snapshot {
     }
 }
 
-fn command(snapshot: &Path, script: &str, writable_snapshot: bool) -> Result<Command, ToolError> {
+fn command(
+    snapshot: &Path,
+    script: &str,
+    writable_snapshot: bool,
+    timeout: Duration,
+) -> Result<Command, ToolError> {
     use std::os::unix::fs::MetadataExt;
     let executable = PathBuf::from("/usr/bin/bwrap");
     let metadata = executable.metadata().map_err(|_| failed("sandbox unavailable: install Bubblewrap at /usr/bin/bwrap; refusing unsandboxed execution"))?;
@@ -199,11 +204,11 @@ fn command(snapshot: &Path, script: &str, writable_snapshot: bool) -> Result<Com
         "C.UTF-8",
         "--",
         "/usr/bin/prlimit",
-        "--cpu=30:30",
-        "--as=1073741824:1073741824",
+        &format!("--cpu={0}:{0}", timeout.as_secs().saturating_add(1)),
+        "--as=4294967296:4294967296",
         "--fsize=67108864:67108864",
-        "--nofile=64:64",
-        "--nproc=256:256",
+        "--nofile=1024:1024",
+        "--nproc=1024:1024",
         "--",
         "/bin/sh",
         "-c",
@@ -267,9 +272,14 @@ pub async fn run_with_options(
     if token.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
-    let mut child = command(snapshot.directory.path(), &script, writable_snapshot)?
-        .spawn()
-        .map_err(failed)?;
+    let mut child = command(
+        snapshot.directory.path(),
+        &script,
+        writable_snapshot,
+        timeout,
+    )?
+    .spawn()
+    .map_err(failed)?;
     let limit = CancellationToken::new();
     let truncated = Arc::new(AtomicBool::new(false));
     let stdout = capture(

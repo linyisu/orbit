@@ -32,7 +32,7 @@ impl Tool for EditFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "edit_file",
-            "Edit an existing UTF-8 workspace file by exact text replacement, after approval. Read the file first. old_text must be nonempty and match exactly once unless replace_all is explicitly true. Include surrounding context to disambiguate. new_text may be empty to delete; include the existing anchor in new_text to insert. Whitespace and line endings must match exactly; no regex or fuzzy matching. Old and new files are limited to 32 KiB. Uses the same protected-path and conflict checks as write_file. Never retry a denied edit without a new user request.",
+            "Edit an existing UTF-8 workspace file by exact text replacement, after approval. Read the file first. old_text must be nonempty and match exactly once unless replace_all is explicitly true. Include surrounding context to disambiguate. new_text may be empty to delete; include the existing anchor in new_text to insert. Whitespace and line endings must match exactly; no regex or fuzzy matching. Old and new files are limited to 1 MiB. Uses the same protected-path and conflict checks as write_file. Never retry a denied edit without a new user request.",
             json!({"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"},"replace_all":{"type":"boolean","default":false}},"required":["path","old_text","new_text"],"additionalProperties":false}),
         )
     }
@@ -47,12 +47,12 @@ impl Tool for EditFile {
             })?;
             if args.path.trim().is_empty()
                 || args.old_text.is_empty()
-                || args.old_text.len() > 32 * 1024
-                || args.new_text.len() > 32 * 1024
+                || args.old_text.len() > 1024 * 1024
+                || args.new_text.len() > 1024 * 1024
                 || args.old_text.contains('\0')
                 || args.new_text.contains('\0')
             {
-                return Err(ToolError::InvalidArguments { tool: "edit_file".into(), message: "path and old_text must be nonempty; old_text and new_text must be text without NUL, at most 32 KiB each".into() });
+                return Err(ToolError::InvalidArguments { tool: "edit_file".into(), message: "path and old_text must be nonempty; old_text and new_text must be text without NUL, at most 1 MiB each".into() });
             }
             self.writer.edit(args.path, move |before| {
                 // Count overlapping candidates too: `aa` in `aaa` is ambiguous.
@@ -66,8 +66,8 @@ impl Tool for EditFile {
                 // replace_all uses left-to-right, non-overlapping replacement.
                 let count = before.matches(&args.old_text).count();
                 let new_len = before.len() - count * args.old_text.len();
-                if args.new_text.len().checked_mul(count).and_then(|n| new_len.checked_add(n)).is_none_or(|n| n > 32 * 1024) {
-                    return Err(ToolError::ExecutionFailed("edited file would exceed 32 KiB".into()));
+                if args.new_text.len().checked_mul(count).and_then(|n| new_len.checked_add(n)).is_none_or(|n| n > 1024 * 1024) {
+                    return Err(ToolError::ExecutionFailed("edited file would exceed 1 MiB".into()));
                 }
                 Ok(before.replace(&args.old_text, &args.new_text))
             }, cancellation).await

@@ -21,7 +21,7 @@ use crate::{
     workspace::{Workspace, WorkspaceError},
 };
 
-const MAX_BYTES: usize = 32 * 1024;
+const MAX_BYTES: usize = 1024 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Deserialize)]
@@ -65,7 +65,7 @@ impl WriteFile {
             let after = transform(before)?;
             if after.len() > MAX_BYTES || after.contains('\0') {
                 return Err(failed(
-                    "edited content must be UTF-8 text without NUL, at most 32 KiB",
+                    "edited content must be UTF-8 text without NUL, at most 1 MiB",
                 ));
             }
             if after == before {
@@ -86,7 +86,7 @@ impl Tool for WriteFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "write_file",
-            "Create or intentionally replace a whole UTF-8 file; prefer edit_file for localized changes to existing files. Write a file in an existing workspace directory after user approval of the before/after change preview. Use relative paths. Old and new content must each be at most 32 KiB. Symlinks, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
+            "Create or intentionally replace a whole UTF-8 file; prefer edit_file for localized changes to existing files. Write a file in an existing workspace directory after user approval of the before/after change preview. Use relative paths. Old and new content must each be at most 1 MiB. Symlinks, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
             json!({"type":"object", "properties":{"path":{"type":"string"},"content":{"type":"string"}}, "required":["path","content"],"additionalProperties":false}),
         )
     }
@@ -104,7 +104,7 @@ impl Tool for WriteFile {
                 || args.content.contains('\0')
             {
                 return Err(failed(
-                    "path must be nonempty and content must be UTF-8 text without NUL, at most 32 KiB",
+                    "path must be nonempty and content must be UTF-8 text without NUL, at most 1 MiB",
                 ));
             }
             check_cancelled(&cancellation)?;
@@ -295,7 +295,7 @@ fn snapshot(
         .read_to_end(&mut bytes)
         .map_err(failed)?;
     if bytes.len() > MAX_BYTES {
-        return Err(failed("existing file exceeds the 32 KiB write limit"));
+        return Err(failed("existing file exceeds the 1 MiB write limit"));
     }
     let text = String::from_utf8(bytes).map_err(|_| failed("existing file is not UTF-8 text"))?;
     if text.contains('\0') {

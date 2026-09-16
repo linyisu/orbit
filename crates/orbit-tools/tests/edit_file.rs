@@ -80,7 +80,7 @@ async fn rejects_ambiguous_missing_invalid_noop_and_oversized_edits_before_appro
         json!({"path":"file","old_text":"","new_text":"y"}),
         json!({"path":"file","old_text":"aaa","new_text":"aaa"}),
         json!({"path":"file","old_text":"aaa","new_text":"\u{0}"}),
-        json!({"path":"file","old_text":"x","new_text":"z".repeat(20000),"replace_all":true}),
+        json!({"path":"file","old_text":"x","new_text":"z".repeat(600000),"replace_all":true}),
         json!({"path":"missing","old_text":"x","new_text":"y"}),
         json!({"path":"../file","old_text":"x","new_text":"y"}),
         json!({"path":"file","old_text":"aaa","new_text":"y","unknown":true}),
@@ -146,4 +146,22 @@ async fn rejects_protected_files_and_links() {
         assert!(task.await.unwrap().is_err());
         assert!(rx.try_recv().is_err());
     }
+}
+
+#[tokio::test]
+async fn edits_large_source_without_replacing_unrelated_content() {
+    let root = tempfile::tempdir().unwrap();
+    let before = format!("{}\nunique anchor\n", "x".repeat(128 * 1024));
+    fs::write(root.path().join("large"), &before).unwrap();
+    let (task, mut rx) = start(
+        root.path(),
+        json!({"path":"large","old_text":"unique anchor","new_text":"updated anchor"}),
+        CancellationToken::new(),
+    );
+    rx.recv().await.unwrap().decision.send(true).unwrap();
+    task.await.unwrap().unwrap();
+    assert_eq!(
+        fs::read_to_string(root.path().join("large")).unwrap(),
+        before.replace("unique anchor", "updated anchor")
+    );
 }
