@@ -9,7 +9,9 @@ use ratatui::{
 use super::app::{RunStatus, ToolStatus, TranscriptItem, UiState};
 
 const ACCENT: Color = Color::Rgb(218, 139, 109);
-const MUTED: Color = Color::Rgb(145, 145, 145);
+// Use the terminal foreground for readable text on both light and dark themes.
+// Reserve subdued colors for borders and decorative artwork.
+const MUTED: Color = Color::Reset;
 const BORDER: Color = Color::Rgb(85, 85, 85);
 
 fn muted(text: impl Into<String>) -> Span<'static> {

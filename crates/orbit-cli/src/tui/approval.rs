@@ -135,7 +135,7 @@ fn write_diff(preview: &orbit_tools::approval::WritePreview) -> Vec<Line<'static
         ));
     };
     for text in &before[start..prefix] {
-        add(text, "  ", Color::DarkGray);
+        add(text, "  ", Color::Reset);
     }
     for text in &before[prefix..before.len() - suffix] {
         add(text, "- ", Color::Red);
@@ -144,7 +144,7 @@ fn write_diff(preview: &orbit_tools::approval::WritePreview) -> Vec<Line<'static
         add(text, "+ ", Color::Green);
     }
     for text in after[after.len() - suffix..].iter().take(3) {
-        add(text, "  ", Color::DarkGray);
+        add(text, "  ", Color::Reset);
     }
     if suffix > 3 {
         lines.push(Line::from(format!("  … 后 {} 行未改动", suffix - 3)));
@@ -231,7 +231,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             if state.approval_choice == 0 {
                 Style::default().bg(Color::White).fg(Color::Black)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::Reset)
             },
         ),
         ratatui::text::Span::raw("   "),
@@ -240,7 +240,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             if state.approval_choice == 1 {
                 Style::default().bg(Color::White).fg(Color::Black)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::Reset)
             },
         ),
     ]);
