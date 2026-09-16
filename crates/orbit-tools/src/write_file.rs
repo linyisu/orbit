@@ -43,13 +43,50 @@ impl WriteFile {
             approvals,
         }
     }
+    pub(crate) async fn edit(
+        &self,
+        path: String,
+        transform: impl FnOnce(&str) -> Result<String, ToolError> + Send + 'static,
+        cancellation: CancellationToken,
+    ) -> Result<String, ToolError> {
+        check_cancelled(&cancellation)?;
+        let workspace = self.workspace.clone();
+        let prepared = tokio::task::spawn_blocking(move || {
+            let mut prepared = Prepared::new(
+                workspace,
+                Arguments {
+                    path,
+                    content: String::new(),
+                },
+            )?;
+            let before = prepared.preview.before.as_deref().ok_or_else(|| {
+                failed("edit requires an existing file; use write_file to create one")
+            })?;
+            let after = transform(before)?;
+            if after.len() > MAX_BYTES || after.contains('\0') {
+                return Err(failed(
+                    "edited content must be UTF-8 text without NUL, at most 32 KiB",
+                ));
+            }
+            if after == before {
+                return Err(failed("edit makes no change"));
+            }
+            prepared.preview.after = after;
+            Ok::<_, ToolError>(prepared)
+        })
+        .await
+        .map_err(failed)??;
+        prepared
+            .approve_and_commit(&self.approvals, cancellation)
+            .await
+    }
 }
 
 impl Tool for WriteFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "write_file",
-            "Create or replace a UTF-8 file in an existing workspace directory after user approval of the complete before/after preview. Use relative paths. Old and new content must each be at most 32 KiB. Symlinks, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
+            "Create or intentionally replace a whole UTF-8 file; prefer edit_file for localized changes to existing files. Write a file in an existing workspace directory after user approval of the complete before/after preview. Use relative paths. Old and new content must each be at most 32 KiB. Symlinks, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
             json!({"type":"object", "properties":{"path":{"type":"string"},"content":{"type":"string"}}, "required":["path","content"],"additionalProperties":false}),
         )
     }
@@ -75,33 +112,9 @@ impl Tool for WriteFile {
             let prepared = tokio::task::spawn_blocking(move || Prepared::new(workspace, args))
                 .await
                 .map_err(failed)??;
-            check_cancelled(&cancellation)?;
-            let (sender, receiver) = oneshot::channel();
-            let approval = ApprovalRequest {
-                preview: ApprovalPreview::Write(prepared.preview.clone()),
-                decision: sender,
-            };
-            tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-                sent = self.approvals.send(approval) => { sent.map_err(|_| failed("write approval unavailable; no file was changed"))?; }
-            }
-            let approved = tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-                answer = receiver => answer.unwrap_or(false),
-            };
-            if !approved {
-                return Err(failed(
-                    "user denied write; do not retry without a new user request",
-                ));
-            }
-            check_cancelled(&cancellation)?;
-            // Once the blocking commit starts, await its actual result rather than report
-            // cancellation while a detached write may still be completing.
-            tokio::task::spawn_blocking(move || prepared.commit(cancellation))
+            prepared
+                .approve_and_commit(&self.approvals, cancellation)
                 .await
-                .map_err(failed)?
         })
     }
 }
@@ -150,6 +163,41 @@ impl Prepared {
             before,
             parent: (metadata.dev(), metadata.ino()),
         })
+    }
+
+    async fn approve_and_commit(
+        self,
+        approvals: &ApprovalSender,
+        cancellation: CancellationToken,
+    ) -> Result<String, ToolError> {
+        let prepared = self;
+        check_cancelled(&cancellation)?;
+        let (sender, receiver) = oneshot::channel();
+        let approval = ApprovalRequest {
+            preview: ApprovalPreview::Write(prepared.preview.clone()),
+            decision: sender,
+        };
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+            sent = approvals.send(approval) => { sent.map_err(|_| failed("write approval unavailable; no file was changed"))?; }
+        }
+        let approved = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+            answer = receiver => answer.unwrap_or(false),
+        };
+        if !approved {
+            return Err(failed(
+                "user denied write; do not retry without a new user request",
+            ));
+        }
+        check_cancelled(&cancellation)?;
+        // Once the blocking commit starts, await its actual result rather than report
+        // cancellation while a detached write may still be completing.
+        tokio::task::spawn_blocking(move || prepared.commit(cancellation))
+            .await
+            .map_err(failed)?
     }
 
     fn commit(self, cancellation: CancellationToken) -> Result<String, ToolError> {

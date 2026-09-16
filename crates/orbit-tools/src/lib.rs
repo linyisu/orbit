@@ -1,4 +1,5 @@
 pub mod approval;
+pub mod edit_file;
 pub mod read_file;
 pub mod run_command;
 pub mod sandbox;
