@@ -7,6 +7,7 @@ edition.workspace = true
 async-stream.workspace = true
 orbit-model = { path = "../orbit-model" }
 serde_json.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true

@@ -158,14 +158,14 @@ pub struct ChatCompletion {
     pub usage: Option<Usage>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Usage {
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StreamEvent {
     TextDelta(String),
     ReasoningDelta(String),
@@ -176,7 +176,7 @@ pub enum StreamEvent {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCallDelta {
     pub index: usize,
     pub id: Option<String>,

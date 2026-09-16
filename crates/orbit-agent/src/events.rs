@@ -1,6 +1,6 @@
 use orbit_model::types::{StreamEvent, ToolCall};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum AgentEvent {
     TurnStarted { turn: usize },
     Model(StreamEvent),
