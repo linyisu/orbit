@@ -10,6 +10,29 @@ use tokio_util::sync::CancellationToken;
 pub struct DemoModel;
 
 fn response(request: &ChatRequest) -> ChatMessage {
+    if matches!(request.messages.first(), Some(ChatMessage::System { content }) if content == orbit_agent::context::SUMMARY_PROMPT)
+    {
+        let messages: Vec<ChatMessage> = match request.messages.last() {
+            Some(ChatMessage::User { content }) => {
+                serde_json::from_str(content).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        let prompts: Vec<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                ChatMessage::User { content } => {
+                    Some(content.chars().take(100).collect::<String>())
+                }
+                _ => None,
+            })
+            .take(12)
+            .collect();
+        return ChatMessage::assistant(format!(
+            "离线演示机械提要（非模型语义总结）：旧对话中的用户请求包括 {}。详细回答与工具结果保留在原始会话记录中。",
+            prompts.join("；")
+        ));
+    }
     let turns = request
         .messages
         .iter()

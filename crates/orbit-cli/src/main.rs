@@ -86,6 +86,12 @@ struct FileConfig {
     api_key: String,
     model: String,
     timeout_seconds: u64,
+    #[serde(default = "default_context_tokens")]
+    context_tokens: usize,
+}
+
+fn default_context_tokens() -> usize {
+    32_000
 }
 
 fn default_api_format() -> ApiFormat {
@@ -103,6 +109,9 @@ impl FileConfig {
             bail!("api_key is empty in {}", path.display());
         }
 
+        if config.context_tokens < 8192 {
+            bail!("context_tokens must be at least 8192");
+        }
         Ok(config)
     }
 
@@ -156,10 +165,12 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             runtime::workspace_tools(&config_path, Some(session.store.path()), Some(approvals))?,
             session,
             approval_receiver,
+            default_context_tokens(),
         )
         .await;
     }
     let file_config = FileConfig::load(&config_path)?;
+    let context_tokens = file_config.context_tokens;
     let model_name = file_config.model.clone();
     let client = ModelClient::new(file_config.model_config())?;
     let session =
@@ -171,19 +182,24 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         runtime::workspace_tools(&config_path, Some(session.store.path()), Some(approvals))?,
         session,
         approval_receiver,
+        context_tokens,
     )
     .await
 }
 
 async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
     let file_config = FileConfig::load(&config_path)?;
+    let context_tokens = file_config.context_tokens;
     let client = ModelClient::new(file_config.model_config())?;
     let request = ChatRequest::new(vec![ChatMessage::user(args.prompt)]);
 
     let agent = Agent::new(
         ModelClientBackend::new(client),
         runtime::workspace_tools(&config_path, None, None)?,
-        AgentConfig::default(),
+        AgentConfig {
+            context_tokens,
+            ..AgentConfig::default()
+        },
     );
 
     if args.stream {

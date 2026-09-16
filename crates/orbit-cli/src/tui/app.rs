@@ -48,6 +48,7 @@ pub struct UiState {
     pub approval_max_scroll: u16,
     pub approval_shown: bool,
     pub selection: super::selection::Selection,
+    pub context_tokens: usize,
     pub model: String,
     pub demo: bool,
     pub workspace: String,
@@ -75,6 +76,7 @@ impl UiState {
             approval_max_scroll: 0,
             approval_shown: false,
             selection: super::selection::Selection::default(),
+            context_tokens: 32_000,
             model: model.into(),
             demo: false,
             workspace: std::env::current_dir()

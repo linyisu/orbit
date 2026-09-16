@@ -26,6 +26,14 @@ pub const COMMANDS: &[Command] = &[
         description: "列出已保存会话；启动时用 --resume <ID> 恢复",
     },
     Command {
+        name: "/context",
+        description: "查看上下文估算和预算",
+    },
+    Command {
+        name: "/compact",
+        description: "总结旧对话，保留最近两轮；真实模式调用模型",
+    },
+    Command {
         name: "/exit",
         description: "退出 Orbit",
     },

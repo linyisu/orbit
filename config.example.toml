@@ -4,3 +4,6 @@ base_url = "https://api.openai.com/v1"
 api_key = ""
 model = "gpt-5.6-sol"
 timeout_seconds = 120
+
+# Approximate context budget including output reserve, not provider billing tokens.
+context_tokens = 32000
