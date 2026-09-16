@@ -1,9 +1,15 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{
+    fs,
+    io::{self, Write},
+    path::PathBuf,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use orbit_agent::{
     agent::{Agent, AgentConfig},
+    events::AgentEvent,
     model::ModelClientBackend,
     tool::ToolRegistry,
 };
@@ -13,6 +19,8 @@ use orbit_model::{
 };
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
+
+mod tui;
 
 #[derive(Debug, Parser)]
 #[command(name = "orbit")]
@@ -32,6 +40,14 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Chat(ChatArgs),
+    Tui(TuiArgs),
+}
+
+#[derive(Debug, Args)]
+struct TuiArgs {
+    /// Preview the interface with a simulated model, without an API key.
+    #[arg(long)]
+    demo: bool,
 }
 
 #[derive(Debug, Args)]
@@ -87,7 +103,23 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Chat(args) => chat(cli.config, args).await,
+        Command::Tui(args) => run_tui(cli.config, args).await,
     }
+}
+
+async fn run_tui(config_path: PathBuf, args: TuiArgs) -> Result<()> {
+    if args.demo {
+        let config = ModelConfig {
+            model: "演示模式 · 不连接 API".into(),
+            ..ModelConfig::default()
+        };
+        let name = config.model.clone();
+        return tui::run(ModelClient::new(config)?, name, true, ToolRegistry::new()).await;
+    }
+    let file_config = FileConfig::load(&config_path)?;
+    let model_name = file_config.model.clone();
+    let client = ModelClient::new(file_config.model_config())?;
+    tui::run(client, model_name, false, ToolRegistry::new()).await
 }
 
 async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
@@ -102,13 +134,32 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
     );
 
     if args.stream {
-        agent
-            .run_with_events(request, CancellationToken::new(), |event| {
-                if let StreamEvent::TextDelta(text) | StreamEvent::ReasoningDelta(text) = event {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
+        let cancellation = CancellationToken::new();
+        let task = tokio::spawn(async move {
+            agent
+                .run_with_agent_events(request, cancellation, sender)
+                .await
+        });
+
+        while let Some(event) = receiver.recv().await {
+            match event {
+                AgentEvent::Model(StreamEvent::TextDelta(text))
+                | AgentEvent::Model(StreamEvent::ReasoningDelta(text)) => {
                     print!("{text}");
+                    io::stdout().flush()?;
                 }
-            })
-            .await?;
+                AgentEvent::Failed { error } => eprintln!("agent failed: {error}"),
+                AgentEvent::ToolStarted { call } => {
+                    eprintln!("tool started: {}", call.function.name)
+                }
+                AgentEvent::ToolFailed { call, error } => {
+                    eprintln!("tool failed: {}: {error}", call.function.name)
+                }
+                _ => {}
+            }
+        }
+        task.await??;
         println!();
     } else {
         let result = agent.run(request, CancellationToken::new()).await?;
