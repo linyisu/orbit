@@ -2,6 +2,7 @@ pub mod app;
 mod approval;
 pub mod commands;
 mod demo;
+mod frames;
 pub mod input;
 mod permissions;
 pub mod render;
@@ -67,11 +68,13 @@ pub async fn run(
     session.restore_ui(&mut state);
     let mut history = session.snapshot.history.clone();
     let mut events = EventStream::new();
-    let mut ticks = time::interval(Duration::from_millis(80));
+    let mut ticks = time::interval(Duration::from_millis(33));
+    ticks.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let mut receiver: Option<mpsc::Receiver<AgentEvent>> = None;
     let mut cancellation: Option<CancellationToken> = None;
     let mut task: Option<RunTask> = None;
     let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
+    let mut frames = frames::Frames::default();
 
     let result: Result<()> = async {
         let mut dirty = true;
@@ -81,6 +84,7 @@ pub async fn run(
                     let Some(event) = event else { break };
                     dirty = true;
                     let event = event?;
+                    frames.request(time::Instant::now());
                     if state.selection.handle(&event)? {
                         terminal.draw(|frame| {
                             if !state.selection.draw_frozen(frame) {
@@ -89,6 +93,12 @@ pub async fn run(
                             }
                         })?;
                         dirty = false;
+                        frames.drawn(time::Instant::now());
+                        continue;
+                    }
+                    if matches!(&event, Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)) {
+                        if pending.is_some() { approval::handle(&mut state, event); }
+                        else { keyboard_action(&mut state, event, task.is_some()); }
                         continue;
                     }
                     if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release) {
@@ -223,15 +233,17 @@ pub async fn run(
                     receiver = None;
                     cancellation = None;
                 }
+                _ = time::sleep_until(frames.deadline()), if frames.pending() => {
+                    terminal.draw(|frame| {
+                        render::draw(frame, &mut state);
+                        state.selection.paint(frame);
+                    })?;
+                    frames.drawn(time::Instant::now());
+                    dirty = false;
+                }
                 _ = ticks.tick() => {
+                    if dirty || state.running() { frames.request(time::Instant::now()); }
                     session.flush_due().await?;
-                    if dirty || state.running() {
-                        terminal.draw(|frame| {
-                            render::draw(frame, &mut state);
-                            state.selection.paint(frame);
-                        })?;
-                        dirty = false;
-                    }
                 }
             }
         }
