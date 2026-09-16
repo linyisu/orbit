@@ -109,7 +109,9 @@ fn welcome(state: &UiState) -> Vec<Line<'static>> {
             Span::styled("  /help", Style::default().fg(ACCENT)),
             muted(" 查看帮助    /model 查看模型"),
         ]),
-        Line::from(muted("  read_file 读取 · write_file 写入前确认。")),
+        Line::from(muted(
+            "  read_file 读取 · write_file / run_command 执行前确认。",
+        )),
         Line::from(""),
     ]
 }
@@ -219,14 +221,30 @@ fn transcript_lines(state: &UiState) -> Vec<Line<'static>> {
                         row.name,
                         serde_json::from_str::<serde_json::Value>(&row.arguments)
                             .ok()
-                            .and_then(|value| value["path"].as_str().map(str::to_owned))
+                            .and_then(|value| value["path"]
+                                .as_str()
+                                .or_else(|| value["command"].as_str())
+                                .map(str::to_owned))
                             .unwrap_or_default()
                     ),
                     Style::default().fg(color),
                 )));
                 let output = serde_json::from_str::<serde_json::Value>(&row.output)
                     .ok()
-                    .and_then(|value| value["content"].as_str().map(str::to_owned))
+                    .and_then(|value| {
+                        if value.get("stdout").is_some() {
+                            Some(format!(
+                                "exit {} · timeout {} · truncated {}\n{}{}",
+                                value["exit_code"],
+                                value["timed_out"],
+                                value["output_truncated"],
+                                value["stdout"].as_str().unwrap_or_default(),
+                                value["stderr"].as_str().unwrap_or_default()
+                            ))
+                        } else {
+                            value["content"].as_str().map(str::to_owned)
+                        }
+                    })
                     .unwrap_or_else(|| row.output.clone());
                 for line in output
                     .lines()
@@ -250,7 +268,26 @@ fn transcript_lines(state: &UiState) -> Vec<Line<'static>> {
             }
         }
     }
+    for line in &mut lines {
+        for span in &mut line.spans {
+            span.content = safe_output(&span.content).into();
+        }
+    }
     lines
+}
+
+fn safe_output(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c == '\t' {
+                "    ".into()
+            } else if c.is_control() {
+                c.escape_default().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }
 
 fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
@@ -461,6 +498,14 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         assert!(!terminal.backend().cursor_visible());
         assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
+    }
+
+    #[test]
+    fn output_control_sequences_are_visible_text_not_terminal_commands() {
+        assert_eq!(
+            safe_output("a\x1b]52;c;secret\x07"),
+            "a\\u{1b}]52;c;secret\\u{7}"
+        );
     }
 
     #[test]

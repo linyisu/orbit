@@ -1,6 +1,6 @@
 # orbit-tools
 
-当前提供 `Workspace`、读取工具 `read_file` 和需要逐次确认的写入工具 `write_file`。`Workspace` 的根目录在 CLI 启动时取当前目录。
+当前提供 `Workspace`、读取工具 `read_file` 、需要逐次确认的写入工具 `write_file` 和沙箱命令工具 `run_command`。`Workspace` 的根目录在 CLI 启动时取当前目录。
 
 ## 调用链
 
@@ -34,7 +34,7 @@
 
 当前文件打开实现面向 Unix，使用 Rust `rustix` 的目录文件描述符与 `openat`。每一级路径都不跟随符号链接，拒绝绝对路径和 `..`，不采用“检查路径后再按原路径打开”的方式。
 
-默认拒绝 `.git`、`.zcode`、`.codex`、`.env`、`.env.*` 和 `config.toml` 路径。TUI 还会显式保护实际加载的配置文件、会话数据库、数据库附属文件和会话锁目录；受保护文件的硬链接同样拒绝读取。`.orbit-write-` 前缀为工具内部临时文件保留。这里提供文件工具边界与写入确认，尚未实现操作系统进程沙箱。
+默认拒绝 `.git`、`.zcode`、`.codex`、`.env`、`.env.*` 和 `config.toml` 路径。TUI 还会显式保护实际加载的配置文件、会话数据库、数据库附属文件和会话锁目录；受保护文件的硬链接同样拒绝读取。`.orbit-write-` 前缀为工具内部临时文件保留。文件工具使用上述边界，命令工具的进程隔离详见 [SANDBOX.md](SANDBOX.md)。
 
 ## 无 API 验证
 
@@ -75,3 +75,7 @@ TUI 的真实模型和离线演示均可请求写入。一次性 `chat` 没有�
 实现参考了本地 SztuCode 的 `core/tools/builtin/write_file.py` 中的工作区写入权限分类，以及 Zed 的 `crates/agent/src/tools/write_file_tool.rs` 中编辑会话与取消的组织方式；Orbit 的路径检查、确认通道与文件提交逻辑由本仓库实现。
 
 TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中时冻结所选视图，模型事件仍继续接收和保存；点击、滚动、输入或 Esc 清除选区后显示新内容。选中时 Ctrl+C 复制，没有选区时保留取消/退出行为。复制通过 OSC 52 完成，需要终端允许剪贴板写入。输入光标用固定单元格绘制，运行中不显示终端硬件光标，避免重绘触发光标动画。
+
+## run_command
+
+通过完整命令确认后在 Linux Bubblewrap 中执行，原项目只读、无网络，默认 30 秒超时。离线演示输入 `run pwd` 即可测试。依赖与边界详见 [SANDBOX.md](SANDBOX.md)。

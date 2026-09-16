@@ -22,6 +22,17 @@ fn response(request: &ChatRequest) -> ChatMessage {
             ));
         }
         let value: serde_json::Value = serde_json::from_str(content).unwrap_or_default();
+        if value.get("sandbox").is_some() {
+            return ChatMessage::assistant(format!(
+                "沙箱执行结束，退出码：{}\nstdout:\n{}\nstderr:\n{}\n超时：{} · 取消：{} · 输出截断：{}\n\n命令在隔离环境中真实执行，原项目未被修改，没有调用模型 API。",
+                value["exit_code"],
+                value["stdout"].as_str().unwrap_or_default(),
+                value["stderr"].as_str().unwrap_or_default(),
+                value["timed_out"],
+                value["cancelled"],
+                value["output_truncated"]
+            ));
+        }
         if value.get("written_bytes").is_some() {
             return ChatMessage::assistant(format!(
                 "已通过真实 write_file 工具写入 {}，共 {} 字节。\n\n这次写入经过你的确认；没有调用模型 API。",
@@ -40,6 +51,18 @@ fn response(request: &ChatRequest) -> ChatMessage {
                 "读取完成。"
             },
         ));
+    }
+    if let Some(ChatMessage::User { content }) = request.messages.last()
+        && let Some(command) = content.strip_prefix("run ")
+    {
+        return ChatMessage::Assistant {
+            content: Some("准备在沙箱中执行命令，请检查完整命令及访问范围。".into()),
+            tool_calls: vec![ToolCall::function(
+                format!("demo-command-{turns}"),
+                "run_command",
+                serde_json::json!({"command":command}),
+            )],
+        };
     }
     if let Some(ChatMessage::User { content }) = request.messages.last()
         && let Some(write) = content.strip_prefix("write ")
@@ -69,7 +92,7 @@ fn response(request: &ChatRequest) -> ChatMessage {
         };
     }
     ChatMessage::assistant(format!(
-        "这是 Orbit 的演示模式，没有调用真实模型。\n\n你正在进行第 {turns} 次对话。\n\n输入 read Cargo.toml，可以体验完整流程：\n• Agent 发起 read_file 调用\n• 工具实际读取工作区文件\n• 工具结果回到 Agent，再生成演示回答\n\n输入 write orbit-demo.txt 你好，可测试真实写入：预览后 Ctrl+Y 允许，Esc 拒绝。\n\n也可以输入 read ../outside.txt 测试路径边界，或 read missing.txt 查看失败状态。\n\n/ 查看命令 · Ctrl+J 换行 · Esc 取消 · Ctrl+O 展开工具结果。"
+        "这是 Orbit 的演示模式，没有调用真实模型。\n\n你正在进行第 {turns} 次对话。\n\n输入 read Cargo.toml，可以体验完整流程：\n• Agent 发起 read_file 调用\n• 工具实际读取工作区文件\n• 工具结果回到 Agent，再生成演示回答\n\n输入 run pwd，可测试需要确认的沙箱命令。\n\n输入 write orbit-demo.txt 你好，可测试真实写入：预览后 Ctrl+Y 允许，Esc 拒绝。\n\n也可以输入 read ../outside.txt 测试路径边界，或 read missing.txt 查看失败状态。\n\n/ 查看命令 · Ctrl+J 换行 · Esc 取消 · Ctrl+O 展开工具结果。"
     ))
 }
 

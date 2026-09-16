@@ -3,7 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 use orbit_agent::tool::ToolRegistry;
 use orbit_tools::{
-    approval::ApprovalSender, read_file::ReadFile, workspace::Workspace, write_file::WriteFile,
+    approval::ApprovalSender, read_file::ReadFile, run_command::RunCommand, workspace::Workspace,
+    write_file::WriteFile,
 };
 
 pub fn workspace_tools(
@@ -27,7 +28,8 @@ pub fn workspace_tools(
     let mut tools = ToolRegistry::new();
     tools.register(ReadFile::new(workspace.clone()));
     if let Some(approvals) = approvals {
-        tools.register(WriteFile::new(workspace, approvals));
+        tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
+        tools.register(RunCommand::new(workspace, approvals));
     }
     Ok(tools)
 }
