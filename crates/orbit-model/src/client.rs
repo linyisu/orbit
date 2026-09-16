@@ -73,6 +73,24 @@ impl ModelClient {
             ));
         }
 
+        let host = endpoint.host_str().unwrap_or_default();
+        if (host.starts_with("sk-") && !host.contains('.') && host.len() > 20)
+            || config
+                .api_key
+                .as_deref()
+                .is_some_and(|key| !key.is_empty() && host == key)
+        {
+            return Err(ModelError::InvalidBaseUrl(
+                "base_url appears to contain an API key instead of a service address; put the service URL in base_url and the credential in api_key".into(),
+            ));
+        }
+        if !endpoint.username().is_empty() || endpoint.password().is_some() {
+            return Err(ModelError::InvalidBaseUrl(
+                "base_url must not contain login credentials; use api_key for authentication"
+                    .into(),
+            ));
+        }
+
         let http = Client::builder().connect_timeout(config.timeout).build()?;
 
         Ok(Self {
@@ -450,6 +468,23 @@ pub(crate) fn invalid_response(message: &str) -> ModelError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejects_credentials_used_as_service_addresses_without_echoing_them() {
+        for address in [
+            "http://sk-not-a-real-secret-123456789",
+            "https://name:private-password@example.com/v1",
+        ] {
+            let config = crate::types::ModelConfig {
+                base_url: address.into(),
+                ..Default::default()
+            };
+            let error = super::ModelClient::new(config).unwrap_err().to_string();
+            assert!(error.contains("base URL is invalid"));
+            assert!(!error.contains("sk-not-a-real-secret"));
+            assert!(!error.contains("private-password"));
+        }
+    }
+
     use super::*;
     use futures_util::StreamExt;
     use std::sync::Arc;
