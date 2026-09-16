@@ -2,10 +2,15 @@
 # Create an isolated exercise and start Orbit with the user's real model config.
 set -euo pipefail
 orbit_repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-if [[ ${1:-} != '' && ${1:-} != '--prepare-only' ]]; then
-    echo 'Usage: bash scripts/try-live.sh [--prepare-only]' >&2
-    exit 2
-fi
+orbit_prepare=false
+orbit_hard=false
+for orbit_arg in "$@"; do
+    case "$orbit_arg" in
+        --prepare-only) orbit_prepare=true ;;
+        --hard) orbit_hard=true ;;
+        *) echo 'Usage: bash scripts/try-live.sh [--hard] [--prepare-only]' >&2; exit 2 ;;
+    esac
+done
 if [[ ! -f "$orbit_repo/config.toml" ]]; then
     echo "Missing configuration: $orbit_repo/config.toml" >&2
     exit 1
@@ -13,6 +18,9 @@ fi
 cargo build --manifest-path "$orbit_repo/Cargo.toml" -p orbit-cli --offline
 orbit_trial=$(mktemp -d /tmp/orbit-live-XXXXXX)
 mkdir "$orbit_trial/project"
+if [[ "$orbit_hard" == true ]]; then
+    cp -R "$orbit_repo/scripts/fixtures/scheduler/." "$orbit_trial/project/"
+else
 cat > "$orbit_trial/project/price.c" <<'SOURCE'
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +66,7 @@ price.c 有一个边界条件错误。请完成：
 
 构建副本的产物会丢弃，因此编译和测试已经组合在同一个 test.sh 中。原项目修改必须通过 edit_file。
 TASK
+fi
 cat > "$orbit_trial/start.sh" <<START
 #!/usr/bin/env bash
 set -euo pipefail
@@ -66,6 +75,6 @@ exec '$orbit_repo/target/debug/orbit' --config '$orbit_repo/config.toml' --datab
 START
 chmod 700 "$orbit_trial/start.sh"
 printf '\n测试项目：%s/project\n启动入口：bash %s/start.sh\n\n进入后发送：请读取 TASK.md，完成修复并实际运行测试。\n使用真实 API；修改和命令执行按界面提示批准。\n\n' "$orbit_trial" "$orbit_trial"
-if [[ ${1:-} != '--prepare-only' ]]; then
+if [[ "$orbit_prepare" == false ]]; then
     exec bash "$orbit_trial/start.sh"
 fi
