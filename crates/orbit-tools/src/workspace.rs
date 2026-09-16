@@ -63,7 +63,7 @@ impl Workspace {
         Ok(())
     }
 
-    pub fn open_read(&self, path: &Path) -> Result<File, WorkspaceError> {
+    pub(crate) fn checked_relative(&self, path: &Path) -> Result<PathBuf, WorkspaceError> {
         let mut parts = Vec::new();
         for component in path.components() {
             match component {
@@ -73,6 +73,7 @@ impl Workspace {
                         name_text.as_ref(),
                         ".git" | ".zcode" | ".codex" | ".env" | "config.toml"
                     ) || name_text.starts_with(".env.")
+                        || name_text.starts_with(".orbit-write-")
                     {
                         return Err(WorkspaceError::ProtectedPath);
                     }
@@ -90,11 +91,43 @@ impl Workspace {
         if self
             .protected
             .iter()
-            .any(|protected| *protected == self.path.join(&relative))
+            .any(|protected| self.path.join(&relative).starts_with(protected))
         {
             return Err(WorkspaceError::ProtectedPath);
         }
 
+        Ok(relative)
+    }
+
+    pub(crate) fn write_parent(
+        &self,
+        path: &Path,
+    ) -> Result<(File, std::ffi::OsString), WorkspaceError> {
+        let relative = self.checked_relative(path)?;
+        let mut directory = self.root.try_clone()?;
+        for name in relative.parent().ok_or(WorkspaceError::InvalidPath)?.iter() {
+            directory = File::from(
+                openat(
+                    &directory,
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                    Mode::empty(),
+                )
+                .map_err(io::Error::from)?,
+            );
+        }
+        Ok((
+            directory,
+            relative
+                .file_name()
+                .ok_or(WorkspaceError::InvalidPath)?
+                .to_owned(),
+        ))
+    }
+
+    pub fn open_read(&self, path: &Path) -> Result<File, WorkspaceError> {
+        let relative = self.checked_relative(path)?;
+        let parts: Vec<_> = relative.iter().collect();
         // Each component is opened relative to an already-open directory, never via a
         // canonicalize-then-open path that could follow a swapped symlink.
         let mut directory = self.root.try_clone()?;
