@@ -31,7 +31,7 @@ async fn restart_preserves_event_order_and_successful_context() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create("/work".into(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -69,7 +69,7 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
     let store = Store::open(db.path()).await.unwrap();
     let other = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create("/work".into(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -94,7 +94,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create("/work".into(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
         .await
         .unwrap();
     writer.begin("prompt".into(), "mock".into()).await.unwrap();
@@ -108,7 +108,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=2").unwrap();
+    connection.execute_batch("PRAGMA user_version=3").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }
@@ -118,7 +118,7 @@ async fn finalization_rolls_back_events_status_and_context_together() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create("/work".into(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
         .await
         .unwrap();
     writer.begin("prompt".into(), "mock".into()).await.unwrap();
@@ -152,5 +152,152 @@ async fn finalization_rolls_back_events_status_and_context_together() {
     assert_eq!(
         store.load(writer.id()).await.unwrap().runs[0].events.len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn project_rename_preserves_history_without_markers_and_copy_is_separate() {
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let old = db.0.join("original");
+    let moved = db.0.join("renamed");
+    let copy = db.0.join("copy");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::write(old.join("user.txt"), "user content").unwrap();
+    let project = store.resolve_project(&old).await.unwrap();
+    let mut writer = store
+        .create(old.to_str().unwrap().into(), "mock".into(), true)
+        .await
+        .unwrap();
+    let session = writer.id().to_owned();
+    writer
+        .begin("remember".into(), "mock".into())
+        .await
+        .unwrap();
+    writer
+        .finish(
+            "completed",
+            vec![text("answer")],
+            Some(vec![ChatMessage::user("remember")]),
+        )
+        .await
+        .unwrap();
+    drop(writer);
+    assert_eq!(std::fs::read_dir(&old).unwrap().count(), 1);
+    std::fs::rename(&old, &moved).unwrap();
+    let renamed = store.resolve_project(&moved).await.unwrap();
+    if std::fs::metadata(&moved).unwrap().created().is_ok() && cfg!(any(unix, windows)) {
+        assert_eq!(renamed.id, project.id);
+        assert_eq!(
+            store.load(&session).await.unwrap().session.workspace,
+            moved.to_str().unwrap()
+        );
+    } else {
+        store.link_project(&project.id, &moved).await.unwrap();
+    }
+    std::fs::create_dir(&copy).unwrap();
+    std::fs::copy(moved.join("user.txt"), copy.join("user.txt")).unwrap();
+    assert_ne!(store.resolve_project(&copy).await.unwrap().id, project.id);
+    std::fs::create_dir(&old).unwrap();
+    assert_ne!(store.resolve_project(&old).await.unwrap().id, project.id);
+    std::fs::write(moved.join("user.txt"), "changed").unwrap();
+    assert_eq!(store.resolve_project(&moved).await.unwrap().id, project.id);
+    assert_eq!(store.load(&session).await.unwrap().runs[0].events.len(), 1);
+    assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn explicit_link_rejects_copies_active_writers_and_populated_destinations() {
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let old = db.0.join("old");
+    let new = db.0.join("new");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::create_dir(&new).unwrap();
+    let project = store.resolve_project(&old).await.unwrap();
+    let writer = store
+        .create(old.to_str().unwrap().into(), "mock".into(), true)
+        .await
+        .unwrap();
+    let session = writer.id().to_owned();
+    assert!(store.link_project(&project.id, &new).await.is_err());
+    std::fs::remove_dir(&old).unwrap();
+    assert!(store.link_project(&project.id, &new).await.is_err());
+    assert_eq!(
+        store.load(&session).await.unwrap().session.workspace,
+        old.to_str().unwrap()
+    );
+    drop(writer);
+    let empty = store.resolve_project(&new).await.unwrap();
+    assert_ne!(empty.id, project.id);
+    store.link_project(&project.id, &new).await.unwrap();
+    assert_eq!(store.resolve_project(&new).await.unwrap().id, project.id);
+    assert_eq!(
+        store.load(&session).await.unwrap().session.workspace,
+        new.to_str().unwrap()
+    );
+    let destination = db.0.join("populated");
+    std::fs::create_dir(&destination).unwrap();
+    let mut other = store
+        .create(destination.to_str().unwrap().into(), "mock".into(), true)
+        .await
+        .unwrap();
+    other
+        .begin("keep separate".into(), "mock".into())
+        .await
+        .unwrap();
+    other.finish("failed", vec![], None).await.unwrap();
+    drop(other);
+    std::fs::remove_dir(&new).unwrap();
+    assert!(store.link_project(&project.id, &destination).await.is_err());
+}
+
+#[tokio::test]
+async fn schema_one_migration_preserves_sessions_runs_and_context() {
+    let db = Database::new();
+    std::fs::create_dir_all(&db.0).unwrap();
+    let connection = rusqlite::Connection::open(db.path()).unwrap();
+    connection.execute_batch("CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, demo INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0, history TEXT NOT NULL DEFAULT '[]');
+    CREATE TABLE runs (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), prompt TEXT NOT NULL, status TEXT NOT NULL);
+    CREATE TABLE events (id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES runs(id), payload TEXT NOT NULL);
+    PRAGMA user_version=1;").unwrap();
+    let id = "a".repeat(32);
+    let history = vec![ChatMessage::user("old conversation")];
+    connection
+        .execute(
+            "INSERT INTO sessions(id,workspace,model,demo,history) VALUES(?1,?2,'mock',1,?3)",
+            rusqlite::params![
+                id,
+                db.0.to_str().unwrap(),
+                serde_json::to_string(&history).unwrap()
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO runs VALUES(1,?1,'old conversation','completed')",
+            [&id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES(1,1,?1)",
+            [serde_json::to_string(&text("old answer")).unwrap()],
+        )
+        .unwrap();
+    drop(connection);
+    let store = Store::open(db.path()).await.unwrap();
+    let snapshot = store.load(&id).await.unwrap();
+    assert_eq!(snapshot.history, history);
+    assert_eq!(snapshot.runs[0].events.len(), 1);
+    assert_eq!(
+        store.resolve_project(&db.0).await.unwrap().id,
+        snapshot.session.project_id
+    );
+    drop(store);
+    let reopened = Store::open(db.path()).await.unwrap();
+    assert_eq!(
+        reopened.load(&id).await.unwrap().session.project_id,
+        snapshot.session.project_id
     );
 }

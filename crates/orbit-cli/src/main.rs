@@ -46,11 +46,24 @@ struct Cli {
 enum Command {
     Chat(ChatArgs),
     Tui(TuiArgs),
+    /// List projects or reconnect a moved directory without connecting to an API.
+    Projects {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
     /// List or inspect saved sessions without connecting to an API.
     Sessions {
         #[command(subcommand)]
         command: SessionCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProjectCommand {
+    /// List stable project IDs and their last known directory.
+    List,
+    /// Associate a moved project with the current directory. Close its TUI first.
+    Link { id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -167,6 +180,30 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Chat(args) => chat(cli.config, args).await,
         Command::Tui(args) => run_tui(cli.config, cli.database, args).await,
+        Command::Projects { command } => {
+            let store =
+                orbit_store::store::Store::open(session::database_path(cli.database)?).await?;
+            match command {
+                ProjectCommand::List => {
+                    for project in store.projects().await? {
+                        println!(
+                            "{}  {}",
+                            project.id,
+                            project.path.as_deref().unwrap_or("（未关联目录）")
+                        );
+                    }
+                }
+                ProjectCommand::Link { id } => {
+                    let project = store.link_project(&id, std::env::current_dir()?).await?;
+                    println!(
+                        "已关联项目 {} → {}。重新打开 TUI 后用 /resume 恢复会话。",
+                        project.id,
+                        project.path.unwrap_or_default()
+                    );
+                }
+            }
+            Ok(())
+        }
         Command::Sessions { command } => {
             let store =
                 orbit_store::store::Store::open(session::database_path(cli.database)?).await?;

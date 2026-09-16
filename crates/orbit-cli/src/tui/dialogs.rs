@@ -272,6 +272,7 @@ mod tests {
             id: id.into(),
             title: title.into(),
             workspace: "/project".into(),
+            project_id: "project-id".into(),
             model: "model".into(),
             demo: true,
             updated_at: 0,

@@ -1437,10 +1437,10 @@ dependencies = [
  "orbit-agent",
  "orbit-model",
  "rusqlite",
- "rustix",
  "serde",
  "serde_json",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -21,9 +21,30 @@ pub fn database_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
         .filter(|p| !p.is_empty())
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/share")))
-        .context("set --database or HOME to select a session database")?;
+        .or_else(user_data_directory)
+        .context("set --database or a user data directory to select a session database")?;
     Ok(data.join("orbit/orbit.db"))
+}
+
+fn user_data_directory() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(|p| PathBuf::from(p).join("Library/Application Support"))
+            .filter(|p| p.is_absolute())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        std::env::var_os("HOME")
+            .map(|p| PathBuf::from(p).join(".local/share"))
+            .filter(|p| p.is_absolute())
+    }
 }
 
 pub async fn list_text(store: &Store) -> Result<String> {
@@ -67,10 +88,11 @@ impl SessionState {
             .canonicalize()?
             .to_string_lossy()
             .into_owned();
+        let project = store.resolve_project(&workspace).await?;
         let writer = if let Some(id) = resume {
             let saved = store.load(&id).await?;
             ensure!(
-                saved.session.workspace == workspace,
+                saved.session.project_id == project.id,
                 "session belongs to workspace {}",
                 saved.session.workspace
             );
@@ -180,7 +202,7 @@ impl SessionState {
             .await?
             .into_iter()
             .filter(|saved| {
-                saved.workspace == self.snapshot.session.workspace
+                saved.project_id == self.snapshot.session.project_id
                     && saved.demo == self.snapshot.session.demo
                     && saved.id != self.id()
                     && !saved.title.is_empty()
@@ -196,7 +218,7 @@ impl SessionState {
         }
         let saved = self.store.load(id).await?;
         ensure!(
-            saved.session.workspace == self.snapshot.session.workspace,
+            saved.session.project_id == self.snapshot.session.project_id,
             "该会话属于其他项目，请在对应目录恢复。"
         );
         ensure!(
@@ -257,9 +279,15 @@ mod tests {
         assert_eq!(state.snapshot.history, history);
         state.clear("model".into(), true).await.unwrap();
         let second = state.id().to_owned();
+        let foreign_path = tmp.path().join("foreign");
+        std::fs::create_dir(&foreign_path).unwrap();
         let foreign = state
             .store
-            .create("/another/project".into(), "model".into(), true)
+            .create(
+                foreign_path.to_string_lossy().into_owned(),
+                "model".into(),
+                true,
+            )
             .await
             .unwrap();
         let live = state

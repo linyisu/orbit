@@ -1,6 +1,5 @@
 use std::{
     fs::{File, OpenOptions},
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -10,7 +9,8 @@ use anyhow::{Context, Result, bail, ensure};
 use orbit_agent::events::AgentEvent;
 use orbit_model::types::ChatMessage;
 use rusqlite::{Connection, params};
-use rustix::fs::{FlockOperation, flock};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use crate::types::{Run, Session, Snapshot};
 
@@ -35,23 +35,19 @@ impl Store {
         tokio::task::spawn_blocking(move || {
             let parent = path.parent().context("database has no parent")?;
             std::fs::create_dir_all(parent)?;
-            OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .mode(0o600)
-                .open(&path)?;
+            private_file(&path)?;
             let connection = Connection::open(&path)?;
             connection.busy_timeout(Duration::from_secs(3))?;
             connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+            connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 1,
+                version <= 2,
                 "database schema {version} is newer than this Orbit supports"
             );
-            connection.execute_batch(
-                "BEGIN IMMEDIATE;
-                CREATE TABLE IF NOT EXISTS sessions (
+            if version == 0 {
+                connection.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL,
                     demo INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
                     updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -68,9 +64,13 @@ impl Store {
                     payload TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS events_run ON events(run_id, id);
-                PRAGMA user_version = 1;
-                COMMIT;",
-            )?;
+                PRAGMA user_version = 1;",
+                )?;
+            }
+            if version < 2 {
+                crate::projects::migrate(&connection)?;
+            }
+            connection.execute_batch("COMMIT;")?;
             Ok(Self {
                 connection: Arc::new(Mutex::new(connection)),
                 path: path.canonicalize()?,
@@ -83,7 +83,7 @@ impl Store {
         &self.path
     }
 
-    async fn access<T: Send + 'static>(
+    pub(crate) async fn access<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&mut Connection) -> Result<T> + Send + 'static,
     ) -> Result<T> {
@@ -103,13 +103,14 @@ impl Store {
         model: String,
         demo: bool,
     ) -> Result<SessionWriter> {
+        let project = self.resolve_project(&workspace).await?;
         let id = self
             .access(move |conn| {
                 let id: String =
                     conn.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
                 conn.execute(
-                    "INSERT INTO sessions(id,workspace,model,demo) VALUES(?1,?2,?3,?4)",
-                    params![id, workspace, model, demo],
+                    "INSERT INTO sessions(id,workspace,model,demo,project_id) VALUES(?1,?2,?3,?4,?5)",
+                    params![id, workspace, model, demo, project.id],
                 )?;
                 Ok(id)
             })
@@ -119,7 +120,7 @@ impl Store {
 
     pub async fn list(&self) -> Result<Vec<Session>> {
         self.access(|conn| {
-            let mut statement = conn.prepare("SELECT id,workspace,model,demo,title,updated_at FROM sessions ORDER BY updated_at DESC, rowid DESC")?;
+            let mut statement = conn.prepare("SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id ORDER BY s.updated_at DESC, s.rowid DESC")?;
             Ok(statement.query_map([], session_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
@@ -131,7 +132,7 @@ impl Store {
             let transaction = conn.transaction()?;
             let session = transaction
                 .query_row(
-                    "SELECT id,workspace,model,demo,title,updated_at FROM sessions WHERE id=?1",
+                    "SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?1",
                     [&id],
                     session_row,
                 )
@@ -187,14 +188,8 @@ impl Store {
         let lock_id = id.clone();
         let lock = tokio::task::spawn_blocking(move || -> Result<File> {
             std::fs::create_dir_all(&lock_dir)?;
-            let file = OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .mode(0o600)
-                .open(lock_dir.join(lock_id))?;
-            flock(&file, FlockOperation::NonBlockingLockExclusive)
+            let file = private_file(&lock_dir.join(lock_id))?;
+            file.try_lock()
                 .context("session is already open in another process")?;
             Ok(file)
         })
@@ -314,5 +309,14 @@ fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         demo: row.get(3)?,
         title: row.get(4)?,
         updated_at: row.get(5)?,
+        project_id: row.get(6)?,
     })
+}
+
+pub(crate) fn private_file(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path)
 }

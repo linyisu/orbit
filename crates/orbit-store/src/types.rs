@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct Session {
     pub id: String,
     pub workspace: String,
+    pub project_id: String,
     pub model: String,
     pub demo: bool,
     pub title: String,
