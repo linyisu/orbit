@@ -186,7 +186,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             ));
             lines.push(Line::styled(
                 format!("  {} · {}", session.id, clean(&session.model)),
-                Style::default().fg(Color::Reset),
+                Style::default().fg(Color::Rgb(170, 170, 170)),
             ));
         }
         if lines.is_empty() {
