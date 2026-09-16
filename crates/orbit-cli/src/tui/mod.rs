@@ -36,6 +36,13 @@ use self::{
 
 type RunTask = JoinHandle<Result<AgentResult, AgentError>>;
 
+pub struct RequestBudget {
+    pub context_tokens: usize,
+    pub max_output_tokens: u32,
+    pub max_turns: usize,
+    pub max_tool_calls: usize,
+}
+
 pub async fn run(
     mut model: ModelClient,
     model_name: String,
@@ -43,12 +50,19 @@ pub async fn run(
     tools: ToolRegistry,
     mut session: SessionState,
     mut approvals: orbit_tools::approval::ApprovalReceiver,
-    context_tokens: usize,
+    budget: RequestBudget,
 ) -> Result<()> {
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut state = UiState::new(model_name);
     state.demo = demo;
+    let RequestBudget {
+        context_tokens,
+        max_output_tokens,
+        max_turns,
+        max_tool_calls,
+    } = budget;
     state.context_tokens = context_tokens;
+    state.max_output_tokens = max_output_tokens;
     session.restore_ui(&mut state);
     let mut history = session.snapshot.history.clone();
     let mut events = EventStream::new();
@@ -125,14 +139,15 @@ pub async fn run(
                             state.submit(prompt.clone());
                             let mut messages = history.clone();
                             if !compacting { messages.push(ChatMessage::user(prompt)); }
-                            let request = ChatRequest::new(messages);
+                            let mut request = ChatRequest::new(messages);
+                            request.max_tokens = Some(max_output_tokens);
                             let (sender, rx) = mpsc::channel(256);
                             receiver = Some(rx);
                             let token = CancellationToken::new();
                             cancellation = Some(token.clone());
                             let tools = tools.clone();
                             let backend = ModelClientBackend::new(model.clone());
-                            let config = AgentConfig { context_tokens, ..AgentConfig::default() };
+                            let config = AgentConfig { context_tokens, max_turns, max_tool_calls };
                             let agent = Agent::new(backend.clone(), tools.clone(), config.clone());
                             task = Some(tokio::spawn(async move {
                                 if compacting {
@@ -141,6 +156,7 @@ pub async fn run(
                                     } else {
                                         orbit_agent::context::compact(&backend, request.messages, &tools.definitions(), context_tokens, token).await?
                                     };
+                                    orbit_agent::context::check_budget(&compacted.history, &tools.definitions(), max_output_tokens as usize, context_tokens)?;
                                     let report = format!("上下文已压缩：估算 {} → {} tokens。保留最近两轮完整对话，原始记录仍在。\n\n{}", compacted.before_tokens, compacted.after_tokens, compacted.summary);
                                     sender.send(AgentEvent::Model(orbit_model::types::StreamEvent::TextDelta(report.clone()))).await.map_err(|_| AgentError::EventChannelClosed)?;
                                     return Ok(AgentResult { final_message: ChatMessage::assistant(report), history: compacted.history, turns: 1, tool_calls: 0 });
@@ -188,7 +204,7 @@ pub async fn run(
                     }
                     let (status, final_event, completed_history) = match result {
                         Ok(Ok(result)) if matches!(&result.final_message, ChatMessage::Assistant { content, tool_calls } if content.as_deref().unwrap_or_default().trim().is_empty() && tool_calls.is_empty()) => {
-                            ("failed", AgentEvent::Failed { error: "API 返回了空回答，请重试或使用 /model 切换模型。".into() }, None)
+                            ("failed", AgentEvent::Failed { error: "模型已结束响应，但未返回回答或工具调用；请检查服务端返回内容。".into() }, None)
                         }
                         Ok(Ok(result)) => {
                             ("completed", AgentEvent::Completed { turns: result.turns, tool_calls: result.tool_calls }, Some(result.history))
@@ -275,9 +291,11 @@ async fn run_command(
             let input = std::mem::take(&mut state.input);
             let demo = state.demo;
             let context_tokens = state.context_tokens;
+            let max_output_tokens = state.max_output_tokens;
             *state = UiState::new(state.model.clone());
             state.demo = demo;
             state.context_tokens = context_tokens;
+            state.max_output_tokens = max_output_tokens;
             state.input = input;
             session.restore_ui(state);
         }
@@ -293,7 +311,7 @@ async fn run_command(
         }
         "/context" if argument.is_empty() => {
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
-            state.transcript.push(TranscriptItem::Notice(format!("上下文估算：{estimated} tokens（含工具定义）\n输出预留：4096 tokens · 总预算：{}\n这是通用估算，不等于服务端实际用量。\n/compact 总结旧对话并保留最近两轮；真实模式会调用模型，演示模式生成机械提要。",state.context_tokens)));
+            state.transcript.push(TranscriptItem::Notice(format!("上下文估算：{estimated} tokens（含工具定义）\n输出上限及预留：{} tokens · 总预算：{}\n这是通用估算，不等于服务端实际用量。\n/compact 总结旧对话并保留最近两轮；真实模式会调用模型，演示模式生成机械提要。",state.max_output_tokens,state.context_tokens)));
         }
         "/sessions" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(crate::session::list_text(&session.store).await?)),
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(

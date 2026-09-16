@@ -3,7 +3,23 @@ api_format = "openai_chat_completions"
 base_url = "https://api.openai.com/v1"
 api_key = ""
 model = "gpt-5.6-sol"
-timeout_seconds = 120
+# Streaming idle timeout (resets on received data); non-streaming total timeout.
+timeout_seconds = 600
 
 # Approximate context budget including output reserve, not provider billing tokens.
-context_tokens = 32000
+context_tokens = 128000
+
+# Per-request output limit; reasoning can consume this budget too.
+max_output_tokens = 32000
+
+# Per user request. Zero means unlimited; cancellation remains available.
+max_turns = 0
+max_tool_calls = 0
+
+# Override the generic token budgets for your provider/model, e.g. current
+# DeepSeek Flash: context_tokens = 1000000, max_output_tokens = 64000.
+# Keep these token settings above [command] (they are top-level settings).
+
+[command]
+default_timeout_seconds = 120
+max_timeout_seconds = 600

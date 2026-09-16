@@ -85,13 +85,30 @@ struct FileConfig {
     base_url: String,
     api_key: String,
     model: String,
+    #[serde(default = "default_timeout_seconds")]
     timeout_seconds: u64,
     #[serde(default = "default_context_tokens")]
     context_tokens: usize,
+    #[serde(default = "default_max_output_tokens")]
+    max_output_tokens: u32,
+    #[serde(default)]
+    max_turns: usize,
+    #[serde(default)]
+    max_tool_calls: usize,
+    #[serde(default)]
+    command: orbit_tools::run_command::CommandLimits,
+}
+
+fn default_max_output_tokens() -> u32 {
+    32_000
 }
 
 fn default_context_tokens() -> usize {
-    32_000
+    128_000
+}
+
+fn default_timeout_seconds() -> u64 {
+    600
 }
 
 fn default_api_format() -> ApiFormat {
@@ -112,7 +129,24 @@ impl FileConfig {
         if config.context_tokens < 8192 {
             bail!("context_tokens must be at least 8192");
         }
+        if config.max_output_tokens == 0
+            || config.max_output_tokens as usize >= config.context_tokens
+        {
+            bail!("max_output_tokens must be positive and smaller than context_tokens");
+        }
+        if config.timeout_seconds == 0 {
+            bail!("timeout_seconds must be positive");
+        }
+        config.command.validate().map_err(anyhow::Error::msg)?;
         Ok(config)
+    }
+
+    fn agent_config(&self) -> AgentConfig {
+        AgentConfig {
+            context_tokens: self.context_tokens,
+            max_turns: self.max_turns,
+            max_tool_calls: self.max_tool_calls,
+        }
     }
 
     fn model_config(self) -> ModelConfig {
@@ -162,15 +196,28 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             ModelClient::new(config)?,
             name,
             true,
-            runtime::workspace_tools(&config_path, Some(session.store.path()), Some(approvals))?,
+            runtime::workspace_tools(
+                &config_path,
+                Some(session.store.path()),
+                Some(approvals),
+                Default::default(),
+            )?,
             session,
             approval_receiver,
-            default_context_tokens(),
+            tui::RequestBudget {
+                context_tokens: default_context_tokens(),
+                max_output_tokens: default_max_output_tokens(),
+                max_turns: 0,
+                max_tool_calls: 0,
+            },
         )
         .await;
     }
     let file_config = FileConfig::load(&config_path)?;
+    let agent_config = file_config.agent_config();
+    let command_limits = file_config.command;
     let context_tokens = file_config.context_tokens;
+    let max_output_tokens = file_config.max_output_tokens;
     let model_name = file_config.model.clone();
     let client = ModelClient::new(file_config.model_config())?;
     let session =
@@ -179,27 +226,37 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         client,
         model_name,
         false,
-        runtime::workspace_tools(&config_path, Some(session.store.path()), Some(approvals))?,
+        runtime::workspace_tools(
+            &config_path,
+            Some(session.store.path()),
+            Some(approvals),
+            command_limits,
+        )?,
         session,
         approval_receiver,
-        context_tokens,
+        tui::RequestBudget {
+            context_tokens,
+            max_output_tokens,
+            max_turns: agent_config.max_turns,
+            max_tool_calls: agent_config.max_tool_calls,
+        },
     )
     .await
 }
 
 async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
     let file_config = FileConfig::load(&config_path)?;
-    let context_tokens = file_config.context_tokens;
+    let agent_config = file_config.agent_config();
+    let command_limits = file_config.command;
+    let max_output_tokens = file_config.max_output_tokens;
     let client = ModelClient::new(file_config.model_config())?;
-    let request = ChatRequest::new(vec![ChatMessage::user(args.prompt)]);
+    let mut request = ChatRequest::new(vec![ChatMessage::user(args.prompt)]);
+    request.max_tokens = Some(max_output_tokens);
 
     let agent = Agent::new(
         ModelClientBackend::new(client),
-        runtime::workspace_tools(&config_path, None, None)?,
-        AgentConfig {
-            context_tokens,
-            ..AgentConfig::default()
-        },
+        runtime::workspace_tools(&config_path, None, None, command_limits)?,
+        agent_config,
     );
 
     if args.stream {
@@ -239,4 +296,32 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_limits_use_working_defaults_and_explicit_limits_survive() {
+        let input = r#"base_url = "http://localhost"
+api_key = "test"
+model = "test"
+"#;
+        let config: FileConfig = toml::from_str(input).unwrap();
+        assert_eq!(config.context_tokens, 128000);
+        assert_eq!(config.max_output_tokens, 32000);
+        assert_eq!(config.timeout_seconds, 600);
+        assert_eq!(config.agent_config().max_turns, 0);
+        assert_eq!(config.agent_config().max_tool_calls, 0);
+        assert_eq!(config.command.default_timeout_seconds, 120);
+        assert_eq!(config.command.max_timeout_seconds, 600);
+        let config: FileConfig = toml::from_str(&format!("{input}context_tokens = 1000000\nmax_output_tokens = 64000\nmax_turns = 75\nmax_tool_calls = 500\n[command]\ndefault_timeout_seconds = 300\nmax_timeout_seconds = 1800\n")).unwrap();
+        assert_eq!(config.agent_config().max_turns, 75);
+        assert_eq!(config.agent_config().max_tool_calls, 500);
+        assert_eq!(config.max_output_tokens, 64000);
+        assert_eq!(config.context_tokens, 1000000);
+        assert_eq!(config.command.max_timeout_seconds, 1800);
+        assert!(config.command.validate().is_ok());
+    }
 }

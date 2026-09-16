@@ -2,7 +2,7 @@
 
 Agent 在每次模型请求之前检查上下文预算，包括工具定义、历史消息和输出预留；工具返回后进入下一次模型请求时重新检查。超过预算时停止本次运行，不会静默删除旧消息。
 
-`config.toml` 可设置 `context_tokens = 32000`，省略时默认为 32000，CLI 要求至少 8192。此值是用户配置的总预算，不会自动查询模型的上下文窗口。当前按序列化 JSON 的字节数除以 3，再计入消息开销，进行跨协议近似估算；它不是精确 tokenizer，也不是服务端计费用量。未指定请求输出上限时按 4096 tokens 预留，这个预留本身不会设置服务端输出上限。请根据所用模型调整预算并留有余量。
+`config.toml` 可设置 `context_tokens = 128000`，省略时默认为 128000，CLI 要求至少 8192。此值是用户配置的总预算，不会自动查询模型的上下文窗口。当前按序列化 JSON 的字节数除以 3，再计入消息开销，进行跨协议近似估算；它不是精确 tokenizer，也不是服务端计费用量。CLI 的 `max_output_tokens` 默认 32000，既作为请求的输出上限，也计入上下文预算预留；必须为正数且小于 `context_tokens`。部分模型的思考也消耗此预算。直接使用 Agent 库且未指定请求输出上限时仍按 4096 tokens 预留。请根据所用模型调整预算并留有余量。
 
 ## TUI 命令
 
@@ -22,3 +22,9 @@ cargo run -p orbit-cli -- --database /tmp/orbit-context.db tui --demo
 依次输入三次 `read Cargo.toml`，每次等待完成，然后输入 `/context`、`/compact` 和 `/context`。演示模式生成明确标记的机械提要，仅用于测试预算、压缩、持久化和恢复流程，不代表真实模型的语义总结质量。内容过短、无法缩小时会保留原上下文并提示失败。
 
 退出后可用相同数据库路径执行 `sessions list`，再用 `tui --demo --resume <ID>` 恢复。原始事件和当前上下文可通过 `sessions show <ID>` 检查。
+
+模型返回 `max_tokens` / `length` / `incomplete` 时，Agent 明确报告输出未完成，不执行该条响应的工具，也不自动发送同样预算的回退请求。流式思考可显示，但不会加入普通回答上下文。增加预算能延长输出空间，不保证模型一定完成任务，也不能超过服务端支持的限制。
+
+`max_turns` 和 `max_tool_calls` 默认均为 `0`（本轮任务不限次数），可配置正数设限；TUI 仍可用 Ctrl+C 取消。默认 `timeout_seconds = 600`，流式请求按无数据间隔计时，持续收到思考或输出不会因总耗时超过十分钟被截断；非流式请求按总时长计时。
+
+默认量级参考 [Claude Code 的输出和命令配置](https://code.claude.com/docs/en/env-vars)及[默认不限任务轮数](https://code.claude.com/docs/en/cli-reference)。通用上下文默认 128000 并不代表所有模型都支持；模型能力以服务端为准，显式配置优先。例如当前 [DeepSeek Flash](https://api-docs.deepseek.com/quick_start/pricing/) 公布 1M 上下文和最高 384K 输出，可配置 1000000 上下文、64000 输出作为实际工作预算。不会自动根据模型名称套用可能过时的上限。

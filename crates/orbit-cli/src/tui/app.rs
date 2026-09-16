@@ -52,6 +52,7 @@ pub struct UiState {
     pub permission_mode: super::permissions::Mode,
     pub selection: super::selection::Selection,
     pub context_tokens: usize,
+    pub max_output_tokens: u32,
     pub model: String,
     pub demo: bool,
     pub workspace: String,
@@ -82,7 +83,8 @@ impl UiState {
             approval_choice: 0,
             permission_mode: super::permissions::Mode::default(),
             selection: super::selection::Selection::default(),
-            context_tokens: 32_000,
+            context_tokens: 128_000,
+            max_output_tokens: 32_000,
             model: model.into(),
             demo: false,
             workspace: std::env::current_dir()

@@ -19,9 +19,9 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            max_turns: 8,
-            max_tool_calls: 32,
-            context_tokens: 32_000,
+            max_turns: 0,
+            max_tool_calls: 0,
+            context_tokens: 128_000,
         }
     }
 }
@@ -154,6 +154,7 @@ where
                     sender,
                 )
                 .await?;
+            check_finish_reason(completion.finish_reason.as_deref())?;
             let assistant = completion.message.clone();
             let calls = match &assistant {
                 ChatMessage::Assistant { tool_calls, .. } => tool_calls.clone(),
@@ -240,7 +241,8 @@ where
             }
         }
 
-        if text.is_empty() && calls.is_empty() {
+        check_finish_reason(finish_reason.as_deref())?;
+        if text.is_empty() && calls.is_empty() && finish_reason.is_none() {
             let completion = self
                 .backend
                 .complete(fallback_request, cancellation)
@@ -343,6 +345,7 @@ where
                 }
             };
 
+            check_finish_reason(completion.finish_reason.as_deref())?;
             let assistant = completion.message.clone();
             let calls = match &assistant {
                 ChatMessage::Assistant { tool_calls, .. } => tool_calls.clone(),
@@ -411,7 +414,8 @@ where
             }
         }
 
-        if text.is_empty() && calls.is_empty() {
+        check_finish_reason(finish_reason.as_deref())?;
+        if text.is_empty() && calls.is_empty() && finish_reason.is_none() {
             let completion = self
                 .backend
                 .complete(fallback_request, cancellation)
@@ -453,6 +457,18 @@ where
             usage,
         })
     }
+}
+
+fn check_finish_reason(reason: Option<&str>) -> Result<(), AgentError> {
+    if reason.is_some_and(|r| matches!(r, "max_tokens" | "length" | "incomplete")) {
+        return Err(AgentError::Model(orbit_model::error::ModelError::Protocol(
+            format!(
+                "模型输出达到上限或未完成（stop_reason={}）。思考也可能占用输出预算；请提高 config.toml 的 max_output_tokens。未执行本条响应中的工具，也未自动重试。",
+                reason.unwrap()
+            ),
+        )));
+    }
+    Ok(())
 }
 
 fn validate_tool_ids(calls: &[ToolCall]) -> Result<(), AgentError> {
@@ -550,6 +566,50 @@ mod tests {
 
     fn request() -> ChatRequest {
         ChatRequest::new(vec![ChatMessage::user("hello")])
+    }
+
+    #[tokio::test]
+    async fn token_exhaustion_does_not_retry_or_execute_partial_tools() {
+        for message in [
+            ChatMessage::assistant(""),
+            ChatMessage::assistant_tool_calls(vec![ToolCall::function(
+                "partial",
+                "forbidden",
+                json!({}),
+            )]),
+        ] {
+            for streaming in [false, true] {
+                let backend = MockModel::new(vec![ChatCompletion {
+                    id: None,
+                    model: None,
+                    message: message.clone(),
+                    finish_reason: Some("max_tokens".into()),
+                    usage: None,
+                }]);
+                let mut tools = ToolRegistry::new();
+                tools.register(ClosureTool::new("forbidden", "", json!({}), |_, _| async {
+                    panic!("truncated response must not run tools")
+                }));
+                let agent = Agent::new(backend.clone(), tools, AgentConfig::default());
+                let mut req = request();
+                req.max_tokens = Some(16384);
+                let result = if streaming {
+                    let (tx, _rx) = mpsc::channel(64);
+                    agent
+                        .run_with_agent_events(req, CancellationToken::new(), tx)
+                        .await
+                } else {
+                    agent.run(req, CancellationToken::new()).await
+                };
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains("max_tokens") && error.contains("max_output_tokens"),
+                    "{error}"
+                );
+                assert_eq!(backend.requests().len(), 1);
+                assert_eq!(backend.requests()[0].max_tokens, Some(16384));
+            }
+        }
     }
 
     struct SparseToolModel(MockModel);
@@ -860,6 +920,30 @@ mod tests {
             ChatMessage::Tool { content, .. }
                 if content.contains("invalid arguments for tool echo")
         ));
+    }
+
+    #[tokio::test]
+    async fn default_budget_allows_long_tasks() {
+        for streaming in [false, true] {
+            let responses = (0..40)
+                .map(|i| assistant_tool_call(&format!("call-{i}"), "missing", "{}"))
+                .chain(std::iter::once(assistant_text("finished")));
+            let agent = Agent::new(
+                MockModel::new(responses),
+                ToolRegistry::new(),
+                AgentConfig::default(),
+            );
+            let result = if streaming {
+                agent
+                    .run_with_events(request(), CancellationToken::new(), |_| {})
+                    .await
+            } else {
+                agent.run(request(), CancellationToken::new()).await
+            }
+            .unwrap();
+            assert_eq!(result.turns, 41);
+            assert_eq!(result.tool_calls, 40);
+        }
     }
 
     #[tokio::test]

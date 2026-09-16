@@ -11,6 +11,7 @@ pub fn workspace_tools(
     config: &Path,
     database: Option<&Path>,
     approvals: Option<ApprovalSender>,
+    command_limits: orbit_tools::run_command::CommandLimits,
 ) -> Result<ToolRegistry> {
     let mut workspace = Workspace::new(std::env::current_dir()?)?;
     if config.exists() {
@@ -30,7 +31,11 @@ pub fn workspace_tools(
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
-        tools.register(RunCommand::new(workspace, approvals));
+        tools.register(RunCommand::with_limits(
+            workspace,
+            approvals,
+            command_limits,
+        ));
     }
     Ok(tools)
 }
