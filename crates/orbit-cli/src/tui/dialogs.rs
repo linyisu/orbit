@@ -227,14 +227,14 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 "↑ / ↓          输入历史",
                 "滚轮           滚动对话，不移动输入光标",
                 "拖选 + Ctrl+C  复制选区",
-                "Ctrl+O         展开思考和工具结果",
+                "Ctrl+O         展开/收起视口底部的工具结果",
                 "Shift+Tab      切换 ask / auto / yolo",
                 "Esc            取消响应 / 关闭面板",
                 "Ctrl+A / E     移到行首 / 行尾",
                 "Ctrl+U / K     删除到行首 / 行尾",
                 "Ctrl+C         取消响应 / 清空输入 / 空输入时退出",
                 "Ctrl+D         空输入时退出",
-                "? / /help      打开帮助",
+                "?              打开快捷键帮助",
             ]
             .into_iter()
             .map(Line::from)
@@ -324,7 +324,8 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(text.contains("/help"));
+        assert!(text.contains("?"));
+        assert!(!text.contains("/help"));
         handle(&mut state, key(KeyCode::Esc));
         assert!(!state.show_help);
     }

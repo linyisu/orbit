@@ -69,66 +69,40 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     }
     draw_composer(frame, state, areas[4], input_lines, cursor);
     draw_panel(frame, state, areas[5]);
-    let hint = if state.running() {
-        "  滚轮浏览 · 拖选后 Ctrl+C 复制 · esc 取消"
-    } else {
-        "  ? 帮助 · /resume 恢复 · / 命令"
-    };
     frame.render_widget(
         Paragraph::new(Line::from(muted(format!(
-            "  [{}] Shift+Tab 切换 · {}",
-            state.permission_mode.label(),
-            hint.trim()
+            "  {} · {}",
+            safe_output(&state.model),
+            state.permission_mode.label()
         )))),
         areas[6],
     );
     super::dialogs::draw(frame, state);
 }
 
-fn draw_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
-    let line = Line::from(vec![
-        Span::styled(
+fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
             "  ◇ Orbit",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
-        muted(format!(
-            "  v{}  ·  {}",
-            env!("CARGO_PKG_VERSION"),
-            state.model
-        )),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+        ))),
+        area,
+    );
 }
 
-fn welcome(state: &UiState) -> Vec<Line<'static>> {
-    vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "  开始一段新对话",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  ◇  ", Style::default().fg(ACCENT)),
-            Span::raw("你好，我是 Orbit。"),
-        ]),
-        Line::from(muted(if state.demo {
-            "     输入 read Cargo.toml，体验真实文件读取。"
-        } else {
-            "     输入问题，按 Enter 开始。"
-        })),
-        Line::from(""),
-        Line::from(muted(format!("  {}", state.workspace))),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  /help", Style::default().fg(ACCENT)),
-            muted(" 查看帮助    /resume 恢复会话"),
-        ]),
-        Line::from(muted(
-            "  read_file 读取 · 默认命令自动执行、文件修改确认 · /mode 调整。",
-        )),
-        Line::from(""),
+fn welcome(_state: &UiState) -> Vec<Line<'static>> {
+    [
+        "",
+        r"   ___       _     _ _   ",
+        r"  / _ \ _ __| |__ (_) |_ ",
+        r" | | | | '__| '_ \| | __|",
+        r" | |_| | |  | |_) | | |_ ",
+        r"  \___/|_|  |_.__/|_|\__|",
+        "",
     ]
+    .into_iter()
+    .map(|line| Line::from(Span::styled(line.to_owned(), Style::default().fg(ACCENT))))
+    .collect()
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
@@ -204,14 +178,7 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 lines.push(Line::from(""));
             }
             TranscriptItem::Thinking(text) => {
-                if expanded {
-                    lines.extend(
-                        text.lines()
-                            .map(|line| Line::from(muted(format!("  ┊ {line}")))),
-                    );
-                } else {
-                    lines.push(Line::from(muted("  ┊ 思考内容 · ctrl+o 展开")));
-                }
+                lines.extend(text.lines().map(thinking_line));
             }
             TranscriptItem::Tool(row) => {
                 let (marker, color) = match row.status {
@@ -254,7 +221,7 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                     lines.push(Line::from(muted(format!("    {line}"))));
                 }
                 if !expanded && output.lines().count() > 2 {
-                    lines.push(Line::from(muted("    … ctrl+o 展开")));
+                    lines.push(Line::from(muted("    …")));
                 }
             }
             TranscriptItem::Error(text) | TranscriptItem::Notice(text) => {
@@ -454,12 +421,57 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_is_visible_and_expansion_only_affects_one_visible_tool() {
+        use super::super::app::ToolRow;
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let mut state = UiState::new("model");
+        state.apply(orbit_agent::events::AgentEvent::Model(
+            orbit_model::types::StreamEvent::ReasoningDelta("reasoning visible now".into()),
+        ));
+        assert!(render(&mut state, 100, 30).contains("reasoning visible now"));
+        for id in ["older", "latest"] {
+            state.transcript.push(TranscriptItem::Tool(ToolRow {
+                id: id.into(),
+                name: "read_file".into(),
+                arguments: "{}".into(),
+                status: ToolStatus::Finished,
+                output: format!("first\nsecond\n{id}-detail"),
+            }));
+        }
+        let collapsed = render(&mut state, 100, 30);
+        assert!(!collapsed.contains("latest-detail"));
+        assert!(!collapsed.contains("ctrl+o"));
+        super::super::keyboard_action(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+            false,
+        );
+        let expanded = render(&mut state, 100, 30);
+        assert!(expanded.contains("latest-detail"));
+        assert!(!expanded.contains("older-detail"));
+        assert!(expanded.contains("reasoning visible now"));
+        super::super::keyboard_action(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+            false,
+        );
+        assert!(!render(&mut state, 100, 30).contains("latest-detail"));
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let footer: String = (0..100).map(|x| buffer[(x, 29)].symbol()).collect();
+        assert!(footer.contains("model") && footer.contains(state.permission_mode.label()));
+        assert!(!footer.contains("Shift") && !footer.contains("恢复"));
+    }
+
+    #[test]
     fn welcome_commands_and_small_terminal_render() {
         let mut state = UiState::new("mock-model");
         let screen = render(&mut state, 100, 30);
         assert!(screen.contains("Orbit"));
         assert!(screen.contains("mock-model"));
-        assert!(screen.replace(' ', "").contains("开始一段新对话"));
+        assert!(!screen.contains("开始一段新对话"));
+        assert!(!screen.contains("/help"));
         state.input.insert("/");
         assert!(render(&mut state, 100, 30).contains("/clear"));
         assert!(render(&mut state, 20, 5).contains("请"));

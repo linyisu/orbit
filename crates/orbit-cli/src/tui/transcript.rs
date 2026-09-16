@@ -94,7 +94,7 @@ impl Entry {
 pub(super) struct TranscriptLayout {
     entries: Vec<Entry>,
     width: u16,
-    expanded: bool,
+    expanded: Option<usize>,
     dirty_from: usize,
 }
 
@@ -103,11 +103,16 @@ impl TranscriptLayout {
         self.dirty_from = self.dirty_from.min(index);
     }
 
-    pub fn update(&mut self, items: &[TranscriptItem], expanded: bool, width: u16) {
-        if self.width != width || self.expanded != expanded || items.len() < self.entries.len() {
+    pub fn update(&mut self, items: &[TranscriptItem], expanded: Option<usize>, width: u16) {
+        if self.width != width || items.len() < self.entries.len() {
             self.entries.clear();
             self.dirty_from = 0;
             self.width = width;
+        }
+        if self.expanded != expanded {
+            for index in self.expanded.into_iter().chain(expanded) {
+                self.invalidate_from(index);
+            }
             self.expanded = expanded;
         }
         if width == 0 {
@@ -116,13 +121,20 @@ impl TranscriptLayout {
         let first = self.dirty_from.min(self.entries.len());
         self.entries.resize_with(items.len(), Entry::default);
         let mut end = first.checked_sub(1).map_or(0, |i| self.entries[i].end);
-        for (entry, item) in self.entries[first..].iter_mut().zip(&items[first..]) {
+        for (relative, (entry, item)) in self.entries[first..]
+            .iter_mut()
+            .zip(&items[first..])
+            .enumerate()
+        {
             match item {
                 TranscriptItem::Assistant(text) => entry.stream(text, false, width),
-                TranscriptItem::Thinking(text) if expanded => entry.stream(text, true, width),
+                TranscriptItem::Thinking(text) => entry.stream(text, true, width),
                 _ => {
                     *entry = Entry::default();
-                    for line in render::transcript_lines(std::slice::from_ref(item), expanded) {
+                    for line in render::transcript_lines(
+                        std::slice::from_ref(item),
+                        expanded == Some(first + relative),
+                    ) {
                         entry.push(line, width);
                     }
                 }
@@ -131,6 +143,24 @@ impl TranscriptLayout {
             entry.end = end;
         }
         self.dirty_from = items.len();
+    }
+
+    pub fn visible_tool(
+        &self,
+        items: &[TranscriptItem],
+        offset: usize,
+        height: usize,
+    ) -> Option<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, entry)| {
+                (entry.end > offset
+                    && entry.end - entry.height < offset + height
+                    && matches!(items.get(index), Some(TranscriptItem::Tool(_))))
+                .then_some(index)
+            })
     }
 
     pub fn height(&self) -> usize {
@@ -186,7 +216,7 @@ mod tests {
             text.push_str(chunk);
             layout.invalidate_from(0);
             for width in [17] {
-                layout.update(&items, false, width);
+                layout.update(&items, None, width);
                 let reference = render::transcript_lines(&items, false);
                 assert_eq!(
                     layout.height(),
@@ -227,15 +257,15 @@ mod tests {
         ];
         let mut layout = TranscriptLayout::default();
         for (width, expanded) in [
-            (80, false),
-            (20, false),
-            (20, true),
-            (80, true),
-            (80, false),
+            (80, None),
+            (20, None),
+            (20, Some(1)),
+            (80, Some(1)),
+            (80, None),
         ] {
             layout.update(&items, expanded, width);
-            let expected = Paragraph::new(render::transcript_lines(&items, expanded))
-                .wrap(Wrap { trim: false });
+            let expected =
+                Paragraph::new(render::transcript_lines(&items, false)).wrap(Wrap { trim: false });
             assert_eq!(layout.height(), expected.line_count(width));
             let offset = layout.height().saturating_sub(6);
             let mut actual_terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
@@ -257,7 +287,7 @@ mod tests {
     fn streaming_keeps_completed_lines_and_scrolling_reuses_layout() {
         let mut items = vec![TranscriptItem::Assistant("history line\n".repeat(10000))];
         let mut layout = TranscriptLayout::default();
-        layout.update(&items, false, 100);
+        layout.update(&items, None, 100);
         let stable = layout.entries[0].rows[500].line.spans[0].content.as_ptr();
         for _ in 0..30 {
             let TranscriptItem::Assistant(text) = &mut items[0] else {
@@ -265,7 +295,7 @@ mod tests {
             };
             text.push_str("stream delta ");
             layout.invalidate_from(0);
-            layout.update(&items, false, 100);
+            layout.update(&items, None, 100);
             assert_eq!(
                 stable,
                 layout.entries[0].rows[500].line.spans[0].content.as_ptr()
@@ -274,7 +304,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let started = std::time::Instant::now();
         for offset in (0..10000).step_by(100) {
-            layout.update(&items, false, 100);
+            layout.update(&items, None, 100);
             terminal.draw(|f| layout.draw(f, f.area(), offset)).unwrap();
         }
         eprintln!(

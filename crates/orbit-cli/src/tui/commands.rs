@@ -6,10 +6,6 @@ pub struct Command {
 
 pub const COMMANDS: &[Command] = &[
     Command {
-        name: "/help",
-        description: "查看命令和快捷键",
-    },
-    Command {
         name: "/clear",
         description: "清空当前对话，开始新会话",
     },

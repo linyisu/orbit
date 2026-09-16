@@ -306,12 +306,6 @@ async fn run_command(
     let argument = argument.trim();
     match command {
         "/exit" | "/quit" if argument.is_empty() => return Ok(true),
-        "/help" if argument.is_empty() => {
-            state.selection = Default::default();
-            state.show_help = true;
-            state.help_keys = false;
-            state.help_scroll = 0;
-        },
         "/clear" if argument.is_empty() => {
             session.clear(state.model.clone(), state.demo).await?;
             history.clear();
@@ -366,7 +360,7 @@ async fn run_command(
                 }
             }
         }
-        _ => state.transcript.push(TranscriptItem::Notice(format!("无法识别命令：{prompt}\n输入 /help 查看可用命令。"))),
+        _ => state.transcript.push(TranscriptItem::Notice(format!("无法识别命令：{prompt}\n输入 / 查看可用命令。"))),
     }
     state.follow_bottom = true;
     state.menu_dismissed = false;
@@ -442,7 +436,21 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.input.cursor = start;
             }
             KeyCode::Char('l') => return Action::Redraw,
-            KeyCode::Char('o') => state.expanded = !state.expanded,
+            KeyCode::Char('o') => {
+                let offset = state.max_scroll.saturating_sub(state.scroll);
+                if let Some(index) = state.transcript_layout.visible_tool(
+                    &state.transcript,
+                    offset,
+                    state.selection.area.height as usize,
+                ) {
+                    state.expanded = if state.expanded == Some(index) {
+                        None
+                    } else {
+                        Some(index)
+                    };
+                    state.selection = Default::default();
+                }
+            }
             _ => {}
         }
         return Action::None;
@@ -544,7 +552,7 @@ mod tests {
         press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
         assert_eq!(
             press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
-            Action::Submit("/clear".into())
+            Action::Submit("/status".into())
         );
         state.input.insert("next question");
         assert_eq!(
