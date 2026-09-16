@@ -92,11 +92,12 @@ fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
 
 fn wordmark() -> Vec<Line<'static>> {
     [
-        " ▄██████▄   ███████▄   ███████▄   ████  ██████████",
-        "██      ██  ██     ██  ██     ██   ██       ██",
-        "██      ██  ███████▀   ████████    ██       ██",
-        "██      ██  ██    ██   ██     ██   ██       ██",
-        " ▀██████▀   ██     ██  ███████▀   ████      ██",
+        " ██████╗ ██████╗ ██████╗ ██╗████████╗",
+        "██╔═══██╗██╔══██╗██╔══██╗██║╚══██╔══╝",
+        "██║   ██║██████╔╝██████╔╝██║   ██║",
+        "██║   ██║██╔══██╗██╔══██╗██║   ██║",
+        "╚██████╔╝██║  ██║██████╔╝██║   ██║",
+        " ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝   ╚═╝",
     ]
     .into_iter()
     .map(|line| {
@@ -109,54 +110,72 @@ fn wordmark() -> Vec<Line<'static>> {
 }
 
 fn welcome() -> Vec<Line<'static>> {
-    let orbit = Style::default().fg(Color::Rgb(131, 91, 74));
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "                 .────────────────────────.",
-            orbit,
-        )),
-        Line::from(vec![
-            Span::styled("         .──────╯                          ╰────", orbit),
-            Span::styled("●", Style::default().fg(ACCENT)),
-            Span::styled("─.", orbit),
-        ]),
-        Line::from(Span::styled(
-            "     .──╯                                            ╰──.",
-            orbit,
-        )),
+    let rear = Style::default().fg(Color::Rgb(112, 80, 69));
+    let front = Style::default().fg(ACCENT);
+    let mut canvas = vec![vec![(' ', rear); 58]; 12];
+    let stamp =
+        |canvas: &mut Vec<Vec<(char, Style)>>, x: usize, y: usize, text: &str, style: Style| {
+            for (offset, ch) in text.chars().enumerate() {
+                if ch != ' ' {
+                    canvas[y][x + offset] = (ch, style);
+                }
+            }
+        };
+    // The rear arc is occluded by the letters; the foreground arc crosses them.
+    let back_arc = [
+        "",
+        "",
+        "                                       ╱───────────────",
+        "                             ╱─────────                ╲",
+        "                      ╱──────",
+        "               ╱──────",
+        "          ╱────",
+        "      ╱───",
+        "   ╱──",
+        "  ─",
+        "",
+        "",
     ];
-    let edges = [
-        ("   ╱", "╲"),
-        ("  ╱", " ╲"),
-        (" (", "  )"),
-        ("  ╲", " ╱"),
-        ("   ╲", "╱"),
-    ];
-    for (word, (left, right)) in wordmark().into_iter().zip(edges) {
-        let mut spans = vec![Span::styled(format!("{left:<6}"), orbit)];
-        let padding = 49usize.saturating_sub(word.width());
-        spans.extend(word.spans);
-        spans.push(Span::styled(
-            format!("{}{right}", " ".repeat(padding)),
-            orbit,
-        ));
-        lines.push(Line::from(spans));
+    for (y, row) in back_arc.iter().enumerate() {
+        stamp(&mut canvas, 0, y, row, rear);
     }
-    lines.extend([
-        Line::from(Span::styled(
-            "     '──.                                            .──'",
-            orbit,
-        )),
-        Line::from(Span::styled(
-            "         '──────.                          .──────'",
-            orbit,
-        )),
-        Line::from(Span::styled(
-            "                 '────────────────────────'",
-            orbit,
-        )),
-    ]);
-    lines
+    for (y, row) in wordmark().into_iter().enumerate() {
+        let mut x = 10;
+        for span in row.spans {
+            stamp(&mut canvas, x, y + 3, &span.content, span.style);
+            x += span.content.chars().count();
+        }
+    }
+    let front_arc = [
+        "",
+        "",
+        "",
+        "                                                       ╱",
+        "                                                    ╱──",
+        "                                                ╱───",
+        "                                           ╱────",
+        "                                    ╱──────",
+        "                             ╱──────",
+        "  ─                ╱─────────",
+        "   ╲───────────────",
+        "",
+    ];
+    for (y, row) in front_arc.iter().enumerate() {
+        stamp(&mut canvas, 0, y, row, front);
+    }
+    for (x, y, star) in [(7, 1, "✦"), (50, 10, "✧"), (53, 1, "·"), (16, 11, "·")] {
+        stamp(&mut canvas, x, y, star, front);
+    }
+    canvas
+        .into_iter()
+        .map(|row| {
+            Line::from(
+                row.into_iter()
+                    .map(|(ch, style)| Span::styled(ch.to_string(), style))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
