@@ -125,6 +125,41 @@ impl Workspace {
         ))
     }
 
+    pub(crate) fn directory_entries(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
+        use std::os::unix::ffi::OsStrExt;
+        let directory = if path.as_os_str().is_empty() {
+            self.root.try_clone()?
+        } else {
+            let (parent, name) = self.write_parent(path)?;
+            File::from(
+                openat(
+                    &parent,
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(io::Error::from)?,
+            )
+        };
+        let entries = rustix::fs::Dir::read_from(&directory).map_err(io::Error::from)?;
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(io::Error::from)?;
+            let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes());
+            if name != "." && name != ".." {
+                names.push(name.to_owned());
+            }
+            if names.len() > 10_000 {
+                return Err(io::Error::other("snapshot directory exceeds 10000 entries").into());
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
     pub fn open_read(&self, path: &Path) -> Result<File, WorkspaceError> {
         let relative = self.checked_relative(path)?;
         let parts: Vec<_> = relative.iter().collect();
