@@ -28,6 +28,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         );
         return;
     }
+    if state.approval.is_some() {
+        super::approval::draw(frame, state);
+        return;
+    }
     let width = area.width.saturating_sub(6) as usize;
     let (input_lines, cursor) = state.input.visual_lines(width);
     let input_height = input_lines
@@ -106,7 +110,7 @@ fn welcome(state: &UiState) -> Vec<Line<'static>> {
             Span::styled("  /help", Style::default().fg(ACCENT)),
             muted(" 查看帮助    /model 查看模型"),
         ]),
-        Line::from(muted("  已接入 read_file · 只读访问当前工作区文件。")),
+        Line::from(muted("  read_file 读取 · write_file 写入前确认。")),
         Line::from(""),
     ]
 }

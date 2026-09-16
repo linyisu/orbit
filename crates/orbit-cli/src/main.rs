@@ -140,6 +140,7 @@ async fn main() -> Result<()> {
 
 async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs) -> Result<()> {
     let database = session::database_path(database)?;
+    let (approvals, approval_receiver) = orbit_tools::approval::channel();
     if args.demo {
         let config = ModelConfig {
             model: "演示模式 · 不连接 API".into(),
@@ -152,8 +153,9 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             ModelClient::new(config)?,
             name,
             true,
-            runtime::workspace_tools(&config_path, Some(session.store.path()))?,
+            runtime::workspace_tools(&config_path, Some(session.store.path()), Some(approvals))?,
             session,
+            approval_receiver,
         )
         .await;
     }
@@ -166,8 +168,9 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         client,
         model_name,
         false,
-        runtime::workspace_tools(&config_path, Some(session.store.path()))?,
+        runtime::workspace_tools(&config_path, Some(session.store.path()), Some(approvals))?,
         session,
+        approval_receiver,
     )
     .await
 }
@@ -179,7 +182,7 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
 
     let agent = Agent::new(
         ModelClientBackend::new(client),
-        runtime::workspace_tools(&config_path, None)?,
+        runtime::workspace_tools(&config_path, None, None)?,
         AgentConfig::default(),
     );
 

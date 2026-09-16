@@ -1,4 +1,5 @@
 pub mod app;
+mod approval;
 pub mod commands;
 mod demo;
 pub mod input;
@@ -39,6 +40,7 @@ pub async fn run(
     demo: bool,
     tools: ToolRegistry,
     mut session: SessionState,
+    mut approvals: orbit_tools::approval::ApprovalReceiver,
 ) -> Result<()> {
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut state = UiState::new(model_name);
@@ -50,6 +52,7 @@ pub async fn run(
     let mut receiver: Option<mpsc::Receiver<AgentEvent>> = None;
     let mut cancellation: Option<CancellationToken> = None;
     let mut task: Option<RunTask> = None;
+    let mut pending: Option<orbit_tools::approval::WriteApproval> = None;
 
     let result: Result<()> = async {
         let mut dirty = true;
@@ -58,7 +61,28 @@ pub async fn run(
                 event = events.next() => {
                     let Some(event) = event else { break };
                     dirty = true;
-                    match keyboard_action(&mut state, event?, task.is_some()) {
+                    let event = event?;
+                    if pending.is_some() {
+                        match approval::handle(&mut state, event) {
+                            approval::Action::Approve => {
+                                if let Some(request) = pending.take() { let _ = request.decision.send(true); }
+                                state.approval = None;
+                            }
+                            approval::Action::Deny => {
+                                if let Some(request) = pending.take() { let _ = request.decision.send(false); }
+                                state.approval = None;
+                            }
+                            approval::Action::Cancel => {
+                                pending = None;
+                                state.approval = None;
+                                state.cancel();
+                                if let Some(token) = &cancellation { token.cancel(); }
+                            }
+                            approval::Action::None => {}
+                        }
+                        continue;
+                    }
+                    match keyboard_action(&mut state, event, task.is_some()) {
                         Action::Quit => break,
                         Action::Redraw => terminal.clear()?,
                         Action::Cancel => {
@@ -86,22 +110,24 @@ pub async fn run(
                             let tools = tools.clone();
                             let agent = Agent::new(ModelClientBackend::new(model.clone()), tools.clone(), AgentConfig::default());
                             task = Some(tokio::spawn(async move {
-                                select! {
-                                    biased;
-                                    _ = token.cancelled() => Err(AgentError::Cancelled),
-                                    result = async {
-                                        if demo {
-                                            Agent::new(self::demo::DemoModel, tools, AgentConfig::default())
-                                                .run_with_agent_events(request, token.clone(), sender).await
-                                        } else {
-                                            agent.run_with_agent_events(request, token.clone(), sender).await
-                                        }
-                                    } => result,
+                                if demo {
+                                    Agent::new(self::demo::DemoModel, tools, AgentConfig::default())
+                                        .run_with_agent_events(request, token, sender).await
+                                } else {
+                                    agent.run_with_agent_events(request, token, sender).await
                                 }
                             }));
                         }
                         Action::None => {}
                     }
+                }
+                Some(request) = approvals.recv() => {
+                    if request.decision.is_closed() { continue; }
+                    state.approval = Some(request.preview.clone());
+                    state.approval_scroll = 0;
+                    state.approval_shown = false;
+                    pending = Some(request);
+                    dirty = true;
                 }
                 event = async { receiver.as_mut().unwrap().recv().await }, if receiver.is_some() => {
                     dirty = true;
@@ -113,6 +139,8 @@ pub async fn run(
                 result = async { task.as_mut().unwrap().await }, if task.is_some() => {
                     dirty = true;
                     task = None;
+                    pending = None;
+                    state.approval = None;
                     // Drain the completed run before accepting another prompt or clearing history.
                     if let Some(rx) = receiver.as_mut() {
                         while let Ok(event) = rx.try_recv() { apply_live_event(event, &mut state, &mut session); }
@@ -124,6 +152,7 @@ pub async fn run(
                         Ok(Ok(result)) => {
                             ("completed", AgentEvent::Completed { turns: result.turns, tool_calls: result.tool_calls }, Some(result.history))
                         }
+                        Ok(Err(_)) if cancellation.as_ref().is_some_and(CancellationToken::is_cancelled) => ("cancelled", AgentEvent::Cancelled, None),
                         Ok(Err(AgentError::Cancelled)) => ("cancelled", AgentEvent::Cancelled, None),
                         Ok(Err(error)) => ("failed", AgentEvent::Failed { error: error.to_string() }, None),
                         Err(error) => ("failed", AgentEvent::Failed { error: format!("后台任务中断：{error}") }, None),
@@ -148,6 +177,7 @@ pub async fn run(
         Ok(())
     }.await;
 
+    drop(pending);
     if let Some(token) = cancellation {
         token.cancel();
     }
@@ -206,7 +236,7 @@ async fn run_command(
         }
         "/sessions" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(crate::session::list_text(&session.store).await?)),
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
-            "会话  {}\n数据库  {}\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file · 只读访问当前工作区",
+            "会话  {}\n数据库  {}\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / write_file · 写入需要逐次确认",
             session.id(), session.store.path().display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs()
         ))),
         "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),

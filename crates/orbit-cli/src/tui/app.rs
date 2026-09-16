@@ -43,6 +43,10 @@ pub enum TranscriptItem {
 
 #[derive(Debug)]
 pub struct UiState {
+    pub approval: Option<orbit_tools::approval::WritePreview>,
+    pub approval_scroll: u16,
+    pub approval_max_scroll: u16,
+    pub approval_shown: bool,
     pub model: String,
     pub demo: bool,
     pub workspace: String,
@@ -65,6 +69,10 @@ pub struct UiState {
 impl UiState {
     pub fn new(model: impl Into<String>) -> Self {
         Self {
+            approval: None,
+            approval_scroll: 0,
+            approval_max_scroll: 0,
+            approval_shown: false,
             model: model.into(),
             demo: false,
             workspace: std::env::current_dir()

@@ -1,6 +1,6 @@
 # orbit-tools
 
-当前提供 `Workspace` 和只读工具 `read_file`。`Workspace` 的根目录在 CLI 启动时取当前目录。
+当前提供 `Workspace`、读取工具 `read_file` 和需要逐次确认的写入工具 `write_file`。`Workspace` 的根目录在 CLI 启动时取当前目录。
 
 ## 调用链
 
@@ -34,7 +34,7 @@
 
 当前文件打开实现面向 Unix，使用 Rust `rustix` 的目录文件描述符与 `openat`。每一级路径都不跟随符号链接，拒绝绝对路径和 `..`，不采用“检查路径后再按原路径打开”的方式。
 
-默认拒绝 `.git`、`.zcode`、`.codex`、`.env`、`.env.*` 和 `config.toml` 路径。CLI 还会显式保护实际加载的配置文件及其硬链接。这里只实现了文件工具的访问边界，尚未实现进程沙箱或交互式授权系统。
+默认拒绝 `.git`、`.zcode`、`.codex`、`.env`、`.env.*` 和 `config.toml` 路径。TUI 还会显式保护实际加载的配置文件、会话数据库、数据库附属文件和会话锁目录；受保护文件的硬链接同样拒绝读取。`.orbit-write-` 前缀为工具内部临时文件保留。这里提供文件工具边界与写入确认，尚未实现操作系统进程沙箱。
 
 ## 无 API 验证
 
@@ -51,3 +51,25 @@ cargo run -p orbit-cli -- tui --demo
 ```bash
 cargo test -p orbit-tools --offline
 ```
+
+## write_file 参数与确认
+
+```json
+{"path":"orbit-demo.txt","content":"你好\n"}
+```
+
+- 在已有目录中创建或替换一个文件，旧内容和新内容各不超过 32 KiB，仅支持无 NUL 的 UTF-8 文本。
+- 先读取旧内容并展示完整修改前后预览。`Ctrl+Y` 只批准当前一次写入，`Ctrl+N` / `Esc` 拒绝，`Ctrl+C` 取消本轮。Enter、粘贴内容不会批准。
+- 预览可用鼠标滚轮、方向键、PageUp / PageDown、Home / End 翻阅；控制字符转义显示，明确标注文件末尾是否有换行。
+- 确认前不创建文件、目录或临时文件。没有确认接收方或确认界面关闭时，拒绝写入。
+- 写入前重新检查旧内容、inode、时间戳及父目录。确认期间文件发生变化时返回冲突，必须重新生成预览；拒绝符号链接、硬链接、二进制文件和受保护路径。
+- 在同一父目录创建排他的临时文件，写入并同步后使用 rename 提交；新建文件用 NOREPLACE，避免覆盖确认期间出现的文件。保留替换前的普通 Unix 权限位，新文件权限为 0600。不会保留旧 inode 的所有权、扩展属性等其他元数据。
+- 写入结果包含 `written_bytes`、`created`、`directory_synced`。取消不回滚已经提交的修改；崩溃恢复不会重放确认或工具调用。进程在写入临时文件时被强制终止，可能遗留 `.orbit-write-*` 文件。
+
+这些检查用于防止误覆盖，不是针对恶意并发进程的完整隔离。既有文件的最终检查与 rename 之间仍有竞争窗口；原子替换保证读者不会看到半个文件，不提供跨进程内容比较交换。
+
+TUI 的真实模型和离线演示均可请求写入。一次性 `chat` 没有确认界面，因此仍只注册读取工具。
+
+离线测试：启动 `tui --demo` 后输入 `write orbit-demo.txt 你好`。这会申请**真实写入**当前工作区；确认后输入 `read orbit-demo.txt` 检查结果。再次请求写入同一路径可测试替换或拒绝。
+
+实现参考了本地 SztuCode 的 `core/tools/builtin/write_file.py` 中的工作区写入权限分类，以及 Zed 的 `crates/agent/src/tools/write_file_tool.rs` 中编辑会话与取消的组织方式；Orbit 的路径检查、确认通道与文件提交逻辑由本仓库实现。

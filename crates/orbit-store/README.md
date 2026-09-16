@@ -38,4 +38,4 @@ cargo run -p orbit-cli -- --database /tmp/orbit-test.db tui --demo
 
 恢复要求工作区及演示/真实模式一致。模型和连接沿用本次配置，数据库不保存 API Key。会话内容和工具输出为本地明文，数据库及其 WAL/SHM/journal 文件禁止通过该 TUI 的 `read_file` 读取。新建数据库文件权限为 0600。
 
-本轮持久化入口是 TUI；现有一次性 `chat` 命令仍不保存会话。`sessions show` 输出包含事件与上下文的 JSON，可用于调试。当前尚不提供上下文总结、文件写入及命令执行。
+本轮持久化入口是 TUI；现有一次性 `chat` 命令仍不保存会话。`sessions show` 输出包含事件与上下文的 JSON，可用于调试。当前尚不提供上下文总结及命令执行。
