@@ -7,6 +7,7 @@ mod permissions;
 pub mod render;
 mod selection;
 pub mod terminal;
+mod transcript;
 
 use std::time::Duration;
 

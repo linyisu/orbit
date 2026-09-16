@@ -60,14 +60,15 @@ pub struct UiState {
     pub menu_dismissed: bool,
     pub show_help: bool,
     pub expanded: bool,
-    pub max_scroll: u16,
+    pub max_scroll: usize,
+    pub(super) transcript_layout: super::transcript::TranscriptLayout,
     pub elapsed: std::time::Duration,
     pub input: InputState,
     pub transcript: Vec<TranscriptItem>,
     pub status: RunStatus,
     pub turn: usize,
     pub tool_calls: usize,
-    pub scroll: u16,
+    pub scroll: usize,
     pub follow_bottom: bool,
     pub started_at: Option<Instant>,
 }
@@ -95,6 +96,7 @@ impl UiState {
             show_help: false,
             expanded: false,
             max_scroll: 0,
+            transcript_layout: Default::default(),
             elapsed: std::time::Duration::ZERO,
             input: InputState::default(),
             transcript: Vec::new(),
@@ -173,12 +175,12 @@ impl UiState {
         }
     }
 
-    pub fn scroll_up(&mut self, amount: u16) {
+    pub fn scroll_up(&mut self, amount: usize) {
         self.scroll = self.scroll.saturating_add(amount).min(self.max_scroll);
         self.follow_bottom = false;
     }
 
-    pub fn scroll_down(&mut self, amount: u16) {
+    pub fn scroll_down(&mut self, amount: usize) {
         self.scroll = self.scroll.saturating_sub(amount);
         if self.scroll == 0 {
             self.follow_bottom = true;
@@ -204,6 +206,8 @@ impl UiState {
     }
 
     fn apply_model_event(&mut self, event: StreamEvent) {
+        self.transcript_layout
+            .invalidate_from(self.transcript.len().saturating_sub(1));
         match event {
             StreamEvent::TextDelta(text) => {
                 self.ensure_assistant_item();
@@ -227,12 +231,14 @@ impl UiState {
     }
 
     fn update_tool(&mut self, call: &ToolCall, status: ToolStatus, output: String) {
-        if let Some(TranscriptItem::Tool(row)) = self
+        if let Some((index, TranscriptItem::Tool(row))) = self
             .transcript
             .iter_mut()
+            .enumerate()
             .rev()
-            .find(|item| matches!(item, TranscriptItem::Tool(row) if row.id == call.id))
+            .find(|(_, item)| matches!(item, TranscriptItem::Tool(row) if row.id == call.id))
         {
+            self.transcript_layout.invalidate_from(index);
             row.status = status;
             row.output = output;
         }

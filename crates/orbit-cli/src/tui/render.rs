@@ -144,19 +144,24 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     if state.approval.is_none() && state.selection.restore_viewport(frame) {
         return;
     }
-    let lines = if state.transcript.is_empty() {
-        welcome(state)
-    } else {
-        transcript_lines(state)
-    };
-    let paragraph = Paragraph::new(Text::from(lines))
-        .block(Block::default().padding(Padding::horizontal(2)))
-        .wrap(Wrap { trim: false });
+    if state.transcript.is_empty() {
+        frame.render_widget(
+            Paragraph::new(welcome(state))
+                .block(Block::default().padding(Padding::horizontal(2)))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
+    let width = area.width.saturating_sub(4);
+    state
+        .transcript_layout
+        .update(&state.transcript, state.expanded, width);
     let previous_max = state.max_scroll;
-    state.max_scroll = paragraph
-        .line_count(area.width.saturating_sub(4))
-        .saturating_sub(area.height as usize)
-        .min(u16::MAX as usize) as u16;
+    state.max_scroll = state
+        .transcript_layout
+        .height()
+        .saturating_sub(area.height as usize);
     if !state.follow_bottom {
         state.scroll = state
             .scroll
@@ -168,12 +173,14 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     } else {
         state.max_scroll.saturating_sub(state.scroll)
     };
-    frame.render_widget(paragraph.scroll((offset, 0)), area);
+    state
+        .transcript_layout
+        .draw(frame, state.selection.area, offset);
 }
 
-fn transcript_lines(state: &UiState) -> Vec<Line<'static>> {
+pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for item in &state.transcript {
+    for item in items {
         match item {
             TranscriptItem::User(text) => {
                 for (index, line) in text.lines().enumerate() {
@@ -196,33 +203,12 @@ fn transcript_lines(state: &UiState) -> Vec<Line<'static>> {
                 }
                 let mut code = false;
                 for (index, line) in text.lines().enumerate() {
-                    let prefix = if index == 0 { "● " } else { "  " };
-                    if line.trim_start().starts_with("```") {
-                        code = !code;
-                        let label = line.trim_start().trim_start_matches('`');
-                        lines.push(Line::from(muted(if code {
-                            format!("  ┌─ {label}")
-                        } else {
-                            "  └─".into()
-                        })));
-                    } else if code {
-                        lines.push(Line::from(vec![
-                            muted("  │ "),
-                            Span::styled(line.to_owned(), Style::default().fg(Color::Cyan)),
-                        ]));
-                    } else if line.starts_with('#') {
-                        lines.push(Line::from(Span::styled(
-                            format!("{prefix}{}", line.trim_start_matches('#').trim_start()),
-                            Style::default().add_modifier(Modifier::BOLD),
-                        )));
-                    } else {
-                        lines.push(Line::from(format!("{prefix}{line}")));
-                    }
+                    lines.push(assistant_line(line, index, &mut code));
                 }
                 lines.push(Line::from(""));
             }
             TranscriptItem::Thinking(text) => {
-                if state.expanded {
+                if expanded {
                     lines.extend(
                         text.lines()
                             .map(|line| Line::from(muted(format!("  ┊ {line}")))),
@@ -268,13 +254,10 @@ fn transcript_lines(state: &UiState) -> Vec<Line<'static>> {
                         }
                     })
                     .unwrap_or_else(|| row.output.clone());
-                for line in output
-                    .lines()
-                    .take(if state.expanded { usize::MAX } else { 2 })
-                {
+                for line in output.lines().take(if expanded { usize::MAX } else { 2 }) {
                     lines.push(Line::from(muted(format!("    {line}"))));
                 }
-                if !state.expanded && output.lines().count() > 2 {
+                if !expanded && output.lines().count() > 2 {
                     lines.push(Line::from(muted("    … ctrl+o 展开")));
                 }
             }
@@ -296,6 +279,41 @@ fn transcript_lines(state: &UiState) -> Vec<Line<'static>> {
         }
     }
     lines
+}
+
+pub(super) fn assistant_line(line: &str, index: usize, code: &mut bool) -> Line<'static> {
+    let prefix = if index == 0 { "● " } else { "  " };
+    if line.trim_start().starts_with("```") {
+        *code = !*code;
+        let label = line.trim_start().trim_start_matches('`');
+        Line::from(muted(if *code {
+            format!("  ┌─ {label}")
+        } else {
+            "  └─".into()
+        }))
+    } else if *code {
+        Line::from(vec![
+            muted("  │ "),
+            Span::styled(line.to_owned(), Style::default().fg(Color::Cyan)),
+        ])
+    } else if line.starts_with('#') {
+        Line::from(Span::styled(
+            format!("{prefix}{}", line.trim_start_matches('#').trim_start()),
+            Style::default().add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        Line::from(format!("{prefix}{line}"))
+    }
+}
+
+pub(super) fn thinking_line(line: &str) -> Line<'static> {
+    Line::from(muted(format!("  ┊ {line}")))
+}
+
+pub(super) fn sanitize_line(line: &mut Line<'_>) {
+    for span in &mut line.spans {
+        span.content = safe_output(&span.content).into();
+    }
 }
 
 fn safe_output(text: &str) -> String {
@@ -560,6 +578,31 @@ mod tests {
             safe_output("a\x1b]52;c;secret\x07"),
             "a\\u{1b}]52;c;secret\\u{7}"
         );
+    }
+
+    #[test]
+    fn scrolling_during_streaming_keeps_the_visible_anchor() {
+        use orbit_agent::events::AgentEvent;
+        use orbit_model::types::StreamEvent;
+        let mut state = UiState::new("mock");
+        state.apply(AgentEvent::Model(StreamEvent::TextDelta(
+            (0..200).map(|i| format!("line {i:03}\n")).collect(),
+        )));
+        render(&mut state, 80, 24);
+        state.scroll_up(30);
+        let before = render(&mut state, 80, 24);
+        let offset = state.max_scroll - state.scroll;
+        state.apply(AgentEvent::Model(StreamEvent::TextDelta(
+            "more output\n".repeat(20),
+        )));
+        assert_eq!(before, render(&mut state, 80, 24));
+        assert_eq!(state.max_scroll - state.scroll, offset);
+        state.scroll_down(3);
+        render(&mut state, 80, 24);
+        assert_eq!(state.max_scroll - state.scroll, offset + 3);
+        state.scroll_down(usize::MAX);
+        assert!(state.follow_bottom);
+        assert!(render(&mut state, 80, 24).contains("more output"));
     }
 
     #[test]
