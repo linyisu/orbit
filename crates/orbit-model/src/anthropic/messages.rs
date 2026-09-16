@@ -25,14 +25,41 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
     for message in request.messages {
         match message {
             ChatMessage::System { .. } => {}
-            ChatMessage::User { content } => messages.push(json!({"role": "user", "content": [{"type": "text", "text": content}]})),
-            ChatMessage::Assistant { content, tool_calls } => {
+            ChatMessage::User { content } => messages
+                .push(json!({"role": "user", "content": [{"type": "text", "text": content}]})),
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+            } => {
                 let mut blocks = Vec::new();
-                if let Some(content) = content { blocks.push(json!({"type": "text", "text": content})); }
+                if let Some(content) = content {
+                    blocks.push(json!({"type": "text", "text": content}));
+                }
                 blocks.extend(tool_calls.into_iter().map(|call| json!({"type": "tool_use", "id": call.id, "name": call.function.name, "input": serde_json::from_str::<Value>(&call.function.arguments).unwrap_or_else(|_| json!({}))})));
                 messages.push(json!({"role": "assistant", "content": blocks}));
             }
-            ChatMessage::Tool { tool_call_id, content } => messages.push(json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_call_id, "content": content}]})),
+            ChatMessage::Tool {
+                tool_call_id,
+                content,
+            } => {
+                let block =
+                    json!({"type":"tool_result", "tool_use_id":tool_call_id, "content":content});
+                // All results for one assistant tool batch must be in the very
+                // next user message, not separate messages per tool result.
+                if let Some(last) = messages.last_mut().filter(|m| {
+                    m["role"] == "user"
+                        && m["content"].as_array().is_some_and(|blocks| {
+                            blocks.first().is_some_and(|b| b["type"] == "tool_result")
+                        })
+                }) {
+                    last["content"]
+                        .as_array_mut()
+                        .expect("result blocks")
+                        .push(block);
+                } else {
+                    messages.push(json!({"role":"user", "content":[block]}));
+                }
+            }
         }
     }
 
@@ -199,4 +226,44 @@ struct AnthropicDelta {
     partial_json: Option<String>,
     stop_reason: Option<String>,
     usage: Option<AnthropicUsage>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn batches_all_tool_results_in_the_immediately_following_user_message() {
+        let (body, _) = encode(
+            "test",
+            ChatRequest::new(vec![
+                ChatMessage::user("read two files"),
+                ChatMessage::assistant_tool_calls(vec![
+                    ToolCall::function("a", "read_file", json!({"path":"a"})),
+                    ToolCall::function("b", "read_file", json!({"path":"b"})),
+                ]),
+                ChatMessage::tool("a", "first"),
+                ChatMessage::tool("b", "tool error: not found"),
+                ChatMessage::assistant("done"),
+                ChatMessage::user("another request"),
+                ChatMessage::assistant_tool_calls(vec![ToolCall::function(
+                    "c",
+                    "read_file",
+                    json!({"path":"c"}),
+                )]),
+                ChatMessage::tool("c", "third"),
+            ]),
+            true,
+        );
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 7);
+        assert_eq!(messages[2]["role"], "user");
+        let results = messages[2]["content"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["tool_use_id"], "a");
+        assert_eq!(results[1]["tool_use_id"], "b");
+        assert_eq!(results[1]["content"], "tool error: not found");
+        assert_eq!(messages[3]["role"], "assistant");
+        assert_eq!(messages[6]["content"][0]["tool_use_id"], "c");
+    }
 }
