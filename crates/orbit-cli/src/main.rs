@@ -2,12 +2,17 @@ use std::{fs, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use futures_util::StreamExt;
+use orbit_agent::{
+    agent::{Agent, AgentConfig},
+    model::ModelClientBackend,
+    tool::ToolRegistry,
+};
 use orbit_model::{
     client::{ApiFormat, ModelClient},
     types::{ChatMessage, ChatRequest, ModelConfig, StreamEvent},
 };
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Parser)]
 #[command(name = "orbit")]
@@ -90,23 +95,25 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
     let client = ModelClient::new(file_config.model_config())?;
     let request = ChatRequest::new(vec![ChatMessage::user(args.prompt)]);
 
-    if args.stream {
-        let mut events = client.stream(request).await?;
+    let agent = Agent::new(
+        ModelClientBackend::new(client),
+        ToolRegistry::new(),
+        AgentConfig::default(),
+    );
 
-        while let Some(event) = events.next().await {
-            match event? {
-                StreamEvent::TextDelta(text) | StreamEvent::ReasoningDelta(text) => {
+    if args.stream {
+        agent
+            .run_with_events(request, CancellationToken::new(), |event| {
+                if let StreamEvent::TextDelta(text) | StreamEvent::ReasoningDelta(text) = event {
                     print!("{text}");
                 }
-                StreamEvent::Completed { .. } | StreamEvent::ToolCallDelta(_) => {}
-            }
-        }
-
+            })
+            .await?;
         println!();
     } else {
-        let completion = client.complete(request).await?;
+        let result = agent.run(request, CancellationToken::new()).await?;
 
-        if let orbit_model::types::ChatMessage::Assistant { content, .. } = completion.message {
+        if let ChatMessage::Assistant { content, .. } = result.final_message {
             println!("{}", content.unwrap_or_default());
         }
     }

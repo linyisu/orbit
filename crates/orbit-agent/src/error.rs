@@ -1,0 +1,20 @@
+use orbit_model::error::ModelError;
+use thiserror::Error;
+
+use crate::tool::ToolError;
+
+#[derive(Debug, Error)]
+pub enum AgentError {
+    #[error("model failed: {0}")]
+    Model(#[from] ModelError),
+    #[error("tool failed: {0}")]
+    Tool(#[from] ToolError),
+    #[error("agent reached the maximum number of turns")]
+    MaxTurns,
+    #[error("agent reached the maximum number of tool calls")]
+    MaxToolCalls,
+    #[error("agent was cancelled")]
+    Cancelled,
+    #[error("initial request must contain at least one message")]
+    InvalidInitialRequest,
+}
