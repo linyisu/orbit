@@ -171,10 +171,10 @@ fn run_command(
             state.input = input;
         }
         "/status" if argument.is_empty() && !state.demo => state.transcript.push(TranscriptItem::Notice(format!(
-            "模型  {}\n协议  {:?}\n上下文  {} 条消息 · 仅保存在本次进程内\n超时  {}s\n工具  尚未接入文件或命令执行工具\n连接  发送消息后验证", state.model, model.config().api_format, history.len(), model.config().timeout.as_secs()
+            "模型  {}\n协议  {:?}\n上下文  {} 条消息 · 仅保存在本次进程内\n超时  {}s\n工具  read_file · 只读访问当前工作区\n连接  发送消息后验证", state.model, model.config().api_format, history.len(), model.config().timeout.as_secs()
         ))),
         "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
-        "/status" if state.demo => state.transcript.push(TranscriptItem::Notice(format!("演示模式 · 无网络请求\n上下文 {} 条消息", history.len()))),
+        "/status" if state.demo => state.transcript.push(TranscriptItem::Notice(format!("演示模式 · 无网络请求\n工具 read_file · 真实读取工作区文件\n上下文 {} 条消息", history.len()))),
         "/model" => {
             if argument.is_empty() {
                 state.transcript.push(TranscriptItem::Notice(format!("当前模型：{}\n输入 /model <名称> 切换；沿用当前 API 配置。", state.model)));

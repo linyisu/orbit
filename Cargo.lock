@@ -1361,6 +1361,7 @@ dependencies = [
  "futures-util",
  "orbit-agent",
  "orbit-model",
+ "orbit-tools",
  "ratatui",
  "serde",
  "serde_json",

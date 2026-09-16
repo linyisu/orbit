@@ -11,7 +11,6 @@ use orbit_agent::{
     agent::{Agent, AgentConfig},
     events::AgentEvent,
     model::ModelClientBackend,
-    tool::ToolRegistry,
 };
 use orbit_model::{
     client::{ApiFormat, ModelClient},
@@ -20,6 +19,7 @@ use orbit_model::{
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+mod runtime;
 mod tui;
 
 #[derive(Debug, Parser)]
@@ -114,12 +114,24 @@ async fn run_tui(config_path: PathBuf, args: TuiArgs) -> Result<()> {
             ..ModelConfig::default()
         };
         let name = config.model.clone();
-        return tui::run(ModelClient::new(config)?, name, true, ToolRegistry::new()).await;
+        return tui::run(
+            ModelClient::new(config)?,
+            name,
+            true,
+            runtime::workspace_tools(&config_path)?,
+        )
+        .await;
     }
     let file_config = FileConfig::load(&config_path)?;
     let model_name = file_config.model.clone();
     let client = ModelClient::new(file_config.model_config())?;
-    tui::run(client, model_name, false, ToolRegistry::new()).await
+    tui::run(
+        client,
+        model_name,
+        false,
+        runtime::workspace_tools(&config_path)?,
+    )
+    .await
 }
 
 async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
@@ -129,7 +141,7 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
 
     let agent = Agent::new(
         ModelClientBackend::new(client),
-        ToolRegistry::new(),
+        runtime::workspace_tools(&config_path)?,
         AgentConfig::default(),
     );
 

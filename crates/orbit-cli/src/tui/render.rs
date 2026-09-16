@@ -95,7 +95,7 @@ fn welcome(state: &UiState) -> Vec<Line<'static>> {
             Span::raw("你好，我是 Orbit。"),
         ]),
         Line::from(muted(if state.demo {
-            "     输入问题，体验演示回答。"
+            "     输入 read Cargo.toml，体验真实文件读取。"
         } else {
             "     输入问题，按 Enter 开始。"
         })),
@@ -106,7 +106,7 @@ fn welcome(state: &UiState) -> Vec<Line<'static>> {
             Span::styled("  /help", Style::default().fg(ACCENT)),
             muted(" 查看帮助    /model 查看模型"),
         ]),
-        Line::from(muted("  当前支持对话；文件与命令工具尚未接入。")),
+        Line::from(muted("  已接入 read_file · 只读访问当前工作区文件。")),
         Line::from(""),
     ]
 }
