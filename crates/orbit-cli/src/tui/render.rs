@@ -126,7 +126,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let height = logo.len() as u16;
         let centered = Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(height) / 2,
+            area.y + u16::from(area.height > height),
             width,
             height,
         );
