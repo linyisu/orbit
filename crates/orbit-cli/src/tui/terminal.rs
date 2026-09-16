@@ -44,7 +44,9 @@ impl TerminalGuard {
         )?;
         // Save and disable alternate-scroll translation: otherwise some terminals
         // turn wheel input into Up/Down and accidentally navigate prompt history.
-        stdout.write_all(b"\x1b[?1007s\x1b[?1007l")?;
+        // Keep button/drag tracking, but do not flood the event loop with
+        // ordinary pointer motion (1003) while the user is not selecting.
+        stdout.write_all(b"\x1b[?1003l\x1b[?1007s\x1b[?1007l")?;
         stdout.flush()?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
         Ok((guard, terminal))

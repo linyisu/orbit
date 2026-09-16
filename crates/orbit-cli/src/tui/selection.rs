@@ -155,6 +155,35 @@ impl Selection {
         lines.join("\n")
     }
 
+    /// Redraw a drag directly from the unhighlighted viewport, without laying
+    /// out growing conversation history or waiting for the stream render tick.
+    pub fn draw_frozen(&mut self, frame: &mut Frame<'_>) -> bool {
+        let Some(buffer) = &self.frozen else {
+            return false;
+        };
+        if buffer.area != frame.area() {
+            return false;
+        }
+        *frame.buffer_mut() = buffer.clone();
+        self.paint(frame);
+        true
+    }
+
+    pub fn restore_viewport(&self, frame: &mut Frame<'_>) -> bool {
+        let Some(buffer) = &self.frozen else {
+            return false;
+        };
+        if buffer.area != frame.area() {
+            return false;
+        }
+        for y in self.area.y..self.area.bottom() {
+            for x in self.area.x..self.area.right() {
+                frame.buffer_mut()[(x, y)] = buffer[(x, y)].clone();
+            }
+        }
+        true
+    }
+
     pub fn paint(&mut self, frame: &mut Frame<'_>) {
         // Hold the selected viewport still while model events continue to accumulate.
         // Copying always uses this unhighlighted snapshot, never the changing stream.
@@ -169,7 +198,9 @@ impl Selection {
                 }
             }
         }
-        self.latest = Some(frame.buffer_mut().clone());
+        if self.frozen.is_none() {
+            self.latest = Some(frame.buffer_mut().clone());
+        }
         for (x, y) in self.cells() {
             let width = frame.buffer_mut()[(x, y)].symbol().width().max(1) as u16;
             for column in x..x.saturating_add(width).min(self.area.right()) {
@@ -193,6 +224,40 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         })
+    }
+
+    #[test]
+    fn direct_drag_redraw_uses_the_snapshot_and_preserves_copied_text() {
+        let mut terminal = Terminal::new(TestBackend::new(30, 6)).unwrap();
+        let mut selection = Selection {
+            area: Rect::new(0, 0, 30, 3),
+            ..Default::default()
+        };
+        terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new("abcdef"), selection.area);
+                selection.paint(frame);
+            })
+            .unwrap();
+        selection
+            .handle(&mouse(MouseEventKind::Down(MouseButton::Left), 0, 0))
+            .unwrap();
+        selection
+            .handle(&mouse(MouseEventKind::Drag(MouseButton::Left), 4, 0))
+            .unwrap();
+        terminal
+            .draw(|frame| assert!(selection.draw_frozen(frame)))
+            .unwrap();
+        assert_eq!(selection.text(), "abcde");
+        assert_eq!(terminal.backend().buffer()[(4, 0)].bg, Color::Blue);
+        selection
+            .handle(&mouse(MouseEventKind::Drag(MouseButton::Left), 2, 0))
+            .unwrap();
+        terminal
+            .draw(|frame| assert!(selection.draw_frozen(frame)))
+            .unwrap();
+        assert_eq!(selection.text(), "abc");
+        assert_ne!(terminal.backend().buffer()[(4, 0)].bg, Color::Blue);
     }
 
     #[test]

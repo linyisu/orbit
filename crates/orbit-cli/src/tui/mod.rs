@@ -65,7 +65,16 @@ pub async fn run(
                     let Some(event) = event else { break };
                     dirty = true;
                     let event = event?;
-                    if state.selection.handle(&event)? { continue; }
+                    if state.selection.handle(&event)? {
+                        terminal.draw(|frame| {
+                            if !state.selection.draw_frozen(frame) {
+                                render::draw(frame, &mut state);
+                                state.selection.paint(frame);
+                            }
+                        })?;
+                        dirty = false;
+                        continue;
+                    }
                     if pending.is_some() {
                         match approval::handle(&mut state, event) {
                             approval::Action::Approve => {

@@ -29,10 +29,6 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         );
         return;
     }
-    if state.approval.is_some() {
-        super::approval::draw(frame, state);
-        return;
-    }
     let width = area.width.saturating_sub(6) as usize;
     let (input_lines, cursor) = state.input.visual_lines(width);
     let input_height = input_lines
@@ -47,10 +43,16 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         0
     };
+    let approval_height = if state.approval.is_some() {
+        (area.height / 2).min(18)
+    } else {
+        0
+    };
     let areas = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(1),
         Constraint::Length(1),
+        Constraint::Length(approval_height),
         Constraint::Length(input_height + 2),
         Constraint::Length(panel_height.min(area.height.saturating_sub(input_height + 8))),
         Constraint::Length(1),
@@ -60,14 +62,24 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_header(frame, state, areas[0]);
     draw_transcript(frame, state, areas[1]);
     draw_status(frame, state, areas[2]);
-    draw_composer(frame, state, areas[3], input_lines, cursor);
-    draw_panel(frame, state, areas[4]);
+    if state.approval.is_some() {
+        super::approval::draw_in(frame, state, areas[3]);
+        // Selection covers both the conversation and the inline proposal.
+        state.selection.area = Rect::new(
+            area.x + 2,
+            areas[1].y,
+            area.width.saturating_sub(4),
+            areas[3].bottom().saturating_sub(areas[1].y),
+        );
+    }
+    draw_composer(frame, state, areas[4], input_lines, cursor);
+    draw_panel(frame, state, areas[5]);
     let hint = if state.running() {
         "  滚轮浏览 · 拖选后 Ctrl+C 复制 · esc 取消"
     } else {
         "  滚轮浏览 · 拖选后 Ctrl+C 复制 · / 命令"
     };
-    frame.render_widget(Paragraph::new(Line::from(muted(hint))), areas[5]);
+    frame.render_widget(Paragraph::new(Line::from(muted(hint))), areas[6]);
 }
 
 fn draw_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
@@ -122,6 +134,9 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         width: area.width.saturating_sub(4),
         ..area
     };
+    if state.approval.is_none() && state.selection.restore_viewport(frame) {
+        return;
+    }
     let lines = if state.transcript.is_empty() {
         welcome(state)
     } else {
@@ -441,6 +456,38 @@ mod tests {
         state.input.insert("/");
         assert!(render(&mut state, 100, 30).contains("/clear"));
         assert!(render(&mut state, 20, 5).contains("请"));
+    }
+
+    #[test]
+    fn approval_stays_below_conversation_and_keeps_the_draft_visible() {
+        let mut state = UiState::new("mock");
+        state.transcript.push(TranscriptItem::Assistant(
+            "Conversation remains visible".into(),
+        ));
+        state.input.insert("my draft");
+        state.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
+            orbit_tools::approval::WritePreview {
+                path: "price.c".into(),
+                before: Some("return subtotal > 10000;\n".into()),
+                after: "return subtotal >= 10000;\n".into(),
+            },
+        ));
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Conversation remains visible"));
+        assert!(text.contains("my draft"));
+        assert!(text.contains("price.c"));
+        assert!(text.contains("- return subtotal > 10000;"));
+        assert!(text.contains("+ return subtotal >= 10000;"));
+        assert!(text.contains("Ctrl+Y"));
+        assert!(state.approval_shown);
     }
 
     #[test]

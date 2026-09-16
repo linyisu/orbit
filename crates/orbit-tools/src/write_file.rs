@@ -86,7 +86,7 @@ impl Tool for WriteFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "write_file",
-            "Create or intentionally replace a whole UTF-8 file; prefer edit_file for localized changes to existing files. Write a file in an existing workspace directory after user approval of the complete before/after preview. Use relative paths. Old and new content must each be at most 32 KiB. Symlinks, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
+            "Create or intentionally replace a whole UTF-8 file; prefer edit_file for localized changes to existing files. Write a file in an existing workspace directory after user approval of the before/after change preview. Use relative paths. Old and new content must each be at most 32 KiB. Symlinks, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
             json!({"type":"object", "properties":{"path":{"type":"string"},"content":{"type":"string"}}, "required":["path","content"],"additionalProperties":false}),
         )
     }

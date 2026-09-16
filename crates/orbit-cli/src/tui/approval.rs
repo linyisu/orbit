@@ -1,7 +1,7 @@
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -73,17 +73,78 @@ fn visible(text: &str) -> String {
         .collect()
 }
 
+fn write_diff(preview: &orbit_tools::approval::WritePreview) -> Vec<Line<'static>> {
+    let before: Vec<_> = preview
+        .before
+        .as_deref()
+        .unwrap_or("")
+        .split_inclusive('\n')
+        .collect();
+    let after: Vec<_> = preview.after.split_inclusive('\n').collect();
+    let prefix = before
+        .iter()
+        .zip(&after)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let suffix = before[prefix..]
+        .iter()
+        .rev()
+        .zip(after[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let start = prefix.saturating_sub(3);
+    let mut lines = Vec::new();
+    if start > 0 {
+        lines.push(Line::from(format!("  … 前 {start} 行未改动")));
+    }
+    let mut add = |text: &str, marker: &str, color: Color| {
+        lines.push(Line::styled(
+            format!(
+                "{marker}{}",
+                visible(text.strip_suffix('\n').unwrap_or(text))
+            ),
+            Style::default().fg(color),
+        ));
+    };
+    for text in &before[start..prefix] {
+        add(text, "  ", Color::DarkGray);
+    }
+    for text in &before[prefix..before.len() - suffix] {
+        add(text, "- ", Color::Red);
+    }
+    for text in &after[prefix..after.len() - suffix] {
+        add(text, "+ ", Color::Green);
+    }
+    for text in after[after.len() - suffix..].iter().take(3) {
+        add(text, "  ", Color::DarkGray);
+    }
+    if suffix > 3 {
+        lines.push(Line::from(format!("  … 后 {} 行未改动", suffix - 3)));
+    }
+    lines.push(Line::from(if preview.after.ends_with('\n') {
+        "[修改后末尾有换行]"
+    } else {
+        "[修改后末尾无换行]"
+    }));
+    lines
+}
+
+#[cfg(test)]
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
+    draw_in(frame, state, frame.area());
+}
+
+pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     let proposal = state
         .approval
         .as_ref()
         .expect("approval screen requires a proposal");
     let areas = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(2),
         Constraint::Min(1),
-        Constraint::Length(3),
+        Constraint::Length(2),
     ])
-    .split(frame.area());
+    .split(area);
     let (title, lines) = match proposal {
         orbit_tools::approval::ApprovalPreview::Write(preview) => {
             let title = format!(
@@ -97,54 +158,18 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 preview.before.as_ref().map_or(0, String::len),
                 preview.after.len()
             );
-            let mut lines = vec![
-                Line::from(format!("目标文件：{}", visible(&preview.path))),
-                Line::from("--- 修改前（完整内容）"),
-            ];
-            if let Some(before) = &preview.before {
-                lines.extend(before.split('\n').map(|line| {
-                    Line::styled(
-                        format!("- {}", visible(line)),
-                        Style::default().fg(Color::Red),
-                    )
-                }));
-                lines.push(Line::from(if before.ends_with('\n') {
-                    "[末尾有换行]"
-                } else {
-                    "[末尾无换行]"
-                }));
-            } else {
-                lines.push(Line::from("[文件不存在]"));
-            }
-            lines.push(Line::from("+++ 修改后（完整内容）"));
-            lines.extend(preview.after.split('\n').map(|line| {
-                Line::styled(
-                    format!("+ {}", visible(line)),
-                    Style::default().fg(Color::Green),
-                )
-            }));
-            lines.push(Line::from(if preview.after.ends_with('\n') {
-                "[末尾有换行]"
-            } else {
-                "[末尾无换行]"
-            }));
+            let lines = write_diff(preview);
             (title, lines)
         }
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
             let mut lines = vec![
-                Line::from("运行环境：Linux Bubblewrap · 禁止联网"),
                 Line::from(if preview.writable_snapshot {
-                    "工作目录：/workspace（128 MiB 临时可写副本，结束后丢弃全部修改）"
+                    "临时可写副本 · 128 MiB · 结束后丢弃修改 · 无网络"
                 } else {
-                    "工作目录：/workspace（过滤后的只读快照，不修改原项目）"
+                    "只读项目副本 · 无网络 · 不修改原项目"
                 }),
-                Line::from("临时目录：/tmp（本次执行结束后丢弃）"),
-                Line::from("隐藏配置、数据库和 .git 等元数据；不复制符号链接"),
-                Line::from("跳过 target / node_modules / .venv / __pycache__"),
-                Line::from("快照最多 64 MiB / 10000 项；仅提供系统 /usr/bin 工具"),
-                Line::from("stdout / stderr 各最多 32 KiB，超限会终止进程"),
+                Line::from("不含配置、数据库、.git、符号链接和依赖缓存；仅系统工具。"),
                 Line::from(""),
-                Line::from("完整命令："),
             ];
             lines.extend(
                 preview
@@ -176,10 +201,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         "Ctrl+Y 允许这次操作 · Ctrl+N / Esc 拒绝 · Ctrl+C 取消本轮\n↑↓ / 鼠标 / PgUp PgDn 翻阅 · Enter 不会确认"
     };
-    frame.render_widget(
-        Paragraph::new(format!("{help}\n拖选后 Ctrl+C 复制")),
-        areas[2],
-    );
+    frame.render_widget(Paragraph::new(help), areas[2]);
     state.selection.area = areas[1].inner(ratatui::layout::Margin::new(1, 1));
     state.approval_shown = true;
 }
