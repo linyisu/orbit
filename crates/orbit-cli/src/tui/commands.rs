@@ -22,6 +22,10 @@ pub const COMMANDS: &[Command] = &[
         description: "查看模型；/model <名称> 切换模型",
     },
     Command {
+        name: "/sessions",
+        description: "列出已保存会话；启动时用 --resume <ID> 恢复",
+    },
+    Command {
         name: "/exit",
         description: "退出 Orbit",
     },

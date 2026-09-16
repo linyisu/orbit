@@ -24,6 +24,8 @@ use orbit_model::{
 use tokio::{select, sync::mpsc, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 
+use crate::session::SessionState;
+
 use self::{
     app::{TranscriptItem, UiState},
     terminal::TerminalGuard,
@@ -36,11 +38,13 @@ pub async fn run(
     model_name: String,
     demo: bool,
     tools: ToolRegistry,
+    mut session: SessionState,
 ) -> Result<()> {
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut state = UiState::new(model_name);
     state.demo = demo;
-    let mut history = Vec::new();
+    session.restore_ui(&mut state);
+    let mut history = session.snapshot.history.clone();
     let mut events = EventStream::new();
     let mut ticks = time::interval(Duration::from_millis(80));
     let mut receiver: Option<mpsc::Receiver<AgentEvent>> = None;
@@ -63,9 +67,14 @@ pub async fn run(
                         }
                         Action::Submit(prompt) => {
                             if prompt.starts_with('/') {
-                                if run_command(&prompt, &mut state, &mut model, &mut history) { break; }
+                                match run_command(&prompt, &mut state, &mut model, &mut history, &mut session).await {
+                                    Ok(true) => break,
+                                    Ok(false) => {},
+                                    Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
+                                }
                                 continue;
                             }
+                            session.begin(prompt.clone(), state.model.clone()).await?;
                             state.submit(prompt.clone());
                             let mut messages = history.clone();
                             messages.push(ChatMessage::user(prompt));
@@ -97,34 +106,38 @@ pub async fn run(
                 event = async { receiver.as_mut().unwrap().recv().await }, if receiver.is_some() => {
                     dirty = true;
                     match event {
-                        Some(event) => state.apply(event),
+                        Some(event) => { apply_live_event(event, &mut state, &mut session); session.flush_due().await?; },
                         None => receiver = None,
                     }
                 }
                 result = async { task.as_mut().unwrap().await }, if task.is_some() => {
                     dirty = true;
+                    task = None;
                     // Drain the completed run before accepting another prompt or clearing history.
                     if let Some(rx) = receiver.as_mut() {
-                        while let Ok(event) = rx.try_recv() { state.apply(event); }
+                        while let Ok(event) = rx.try_recv() { apply_live_event(event, &mut state, &mut session); }
                     }
-                    match result {
+                    let (status, final_event, completed_history) = match result {
                         Ok(Ok(result)) if matches!(&result.final_message, ChatMessage::Assistant { content, tool_calls } if content.as_deref().unwrap_or_default().trim().is_empty() && tool_calls.is_empty()) => {
-                            state.fail("API 返回了空回答，请重试或使用 /model 切换模型。");
+                            ("failed", AgentEvent::Failed { error: "API 返回了空回答，请重试或使用 /model 切换模型。".into() }, None)
                         }
                         Ok(Ok(result)) => {
-                            history = result.history;
-                            state.apply(AgentEvent::Completed { turns: result.turns, tool_calls: result.tool_calls });
+                            ("completed", AgentEvent::Completed { turns: result.turns, tool_calls: result.tool_calls }, Some(result.history))
                         }
-                        Ok(Err(AgentError::Cancelled)) => state.apply(AgentEvent::Cancelled),
-                        Ok(Err(error)) if state.running() => state.fail(error.to_string()),
-                        Ok(Err(_)) => {},
-                        Err(error) => state.fail(format!("后台任务中断：{error}")),
-                    }
+                        Ok(Err(AgentError::Cancelled)) => ("cancelled", AgentEvent::Cancelled, None),
+                        Ok(Err(error)) => ("failed", AgentEvent::Failed { error: error.to_string() }, None),
+                        Err(error) => ("failed", AgentEvent::Failed { error: format!("后台任务中断：{error}") }, None),
+                    };
+                    session.record(&final_event);
+                    session.finish(status, completed_history.clone()).await?;
+                    if let Some(saved) = completed_history { history = saved; }
+                    state.apply(final_event);
                     task = None;
                     receiver = None;
                     cancellation = None;
                 }
                 _ = ticks.tick() => {
+                    session.flush_due().await?;
                     if dirty || state.running() {
                         terminal.draw(|frame| render::draw(frame, &mut state))?;
                         dirty = false;
@@ -146,35 +159,57 @@ pub async fn run(
         task.abort();
         let _ = task.await;
     }
-    result
+    if let Some(rx) = receiver.as_mut() {
+        while let Ok(event) = rx.try_recv() {
+            session.record(&event);
+        }
+    }
+    let saved = session.close().await;
+    result.and(saved)
 }
 
-fn run_command(
+fn apply_live_event(event: AgentEvent, state: &mut UiState, session: &mut SessionState) {
+    // The joined task is authoritative: persist terminal status with its context atomically.
+    if matches!(
+        event,
+        AgentEvent::Completed { .. } | AgentEvent::Failed { .. } | AgentEvent::Cancelled
+    ) {
+        return;
+    }
+    session.record(&event);
+    state.apply(event);
+}
+
+async fn run_command(
     prompt: &str,
     state: &mut UiState,
     model: &mut ModelClient,
     history: &mut Vec<ChatMessage>,
-) -> bool {
+    session: &mut SessionState,
+) -> Result<bool> {
     let (command, argument) = prompt
         .split_once(char::is_whitespace)
         .unwrap_or((prompt, ""));
     let argument = argument.trim();
     match command {
-        "/exit" | "/quit" if argument.is_empty() => return true,
+        "/exit" | "/quit" if argument.is_empty() => return Ok(true),
         "/help" if argument.is_empty() => state.show_help = true,
         "/clear" if argument.is_empty() => {
+            session.clear(state.model.clone(), state.demo).await?;
             history.clear();
             let input = std::mem::take(&mut state.input);
             let demo = state.demo;
             *state = UiState::new(state.model.clone());
             state.demo = demo;
             state.input = input;
+            session.restore_ui(state);
         }
-        "/status" if argument.is_empty() && !state.demo => state.transcript.push(TranscriptItem::Notice(format!(
-            "模型  {}\n协议  {:?}\n上下文  {} 条消息 · 仅保存在本次进程内\n超时  {}s\n工具  read_file · 只读访问当前工作区\n连接  发送消息后验证", state.model, model.config().api_format, history.len(), model.config().timeout.as_secs()
+        "/sessions" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(crate::session::list_text(&session.store).await?)),
+        "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
+            "会话  {}\n数据库  {}\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file · 只读访问当前工作区",
+            session.id(), session.store.path().display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs()
         ))),
         "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
-        "/status" if state.demo => state.transcript.push(TranscriptItem::Notice(format!("演示模式 · 无网络请求\n工具 read_file · 真实读取工作区文件\n上下文 {} 条消息", history.len()))),
         "/model" => {
             if argument.is_empty() {
                 state.transcript.push(TranscriptItem::Notice(format!("当前模型：{}\n输入 /model <名称> 切换；沿用当前 API 配置。", state.model)));
@@ -195,7 +230,7 @@ fn run_command(
     }
     state.follow_bottom = true;
     state.menu_dismissed = false;
-    false
+    Ok(false)
 }
 
 #[derive(Debug, PartialEq)]
