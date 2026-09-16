@@ -17,4 +17,6 @@ pub enum AgentError {
     Cancelled,
     #[error("initial request must contain at least one message")]
     InvalidInitialRequest,
+    #[error("agent event channel is closed")]
+    EventChannelClosed,
 }
