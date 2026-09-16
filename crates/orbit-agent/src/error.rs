@@ -13,6 +13,12 @@ pub enum AgentError {
     MaxTurns,
     #[error("agent reached the maximum number of tool calls")]
     MaxToolCalls,
+    #[error(
+        "estimated context {estimated} tokens exceeds budget {limit}; use /compact or raise context_tokens"
+    )]
+    ContextBudget { estimated: usize, limit: usize },
+    #[error("context compaction failed: {0}")]
+    Compaction(String),
     #[error("agent was cancelled")]
     Cancelled,
     #[error("initial request must contain at least one message")]

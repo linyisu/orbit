@@ -11,6 +11,7 @@ use crate::{error::AgentError, events::AgentEvent, model::ModelBackend, tool::To
 pub struct AgentConfig {
     pub max_turns: usize,
     pub max_tool_calls: usize,
+    pub context_tokens: usize,
 }
 
 impl Default for AgentConfig {
@@ -18,6 +19,7 @@ impl Default for AgentConfig {
         Self {
             max_turns: 8,
             max_tool_calls: 32,
+            context_tokens: 32_000,
         }
     }
 }
@@ -129,6 +131,12 @@ where
                 return Err(AgentError::MaxTurns);
             }
 
+            crate::context::check_budget(
+                &history,
+                &self.tools.definitions(),
+                request.max_tokens.unwrap_or(4096) as usize,
+                self.config.context_tokens,
+            )?;
             turns += 1;
             send_agent_event(sender, AgentEvent::TurnStarted { turn: turns }).await?;
 
@@ -307,6 +315,12 @@ where
                 return Err(AgentError::MaxTurns);
             }
 
+            crate::context::check_budget(
+                &history,
+                &self.tools.definitions(),
+                request.max_tokens.unwrap_or(4096) as usize,
+                self.config.context_tokens,
+            )?;
             turns += 1;
             let model_request = ChatRequest {
                 messages: history.clone(),
@@ -698,6 +712,7 @@ mod tests {
             AgentConfig {
                 max_turns: 1,
                 max_tool_calls: 10,
+                ..AgentConfig::default()
             },
         );
 
@@ -739,6 +754,7 @@ mod tests {
             AgentConfig {
                 max_turns: 4,
                 max_tool_calls: 1,
+                ..AgentConfig::default()
             },
         );
 
