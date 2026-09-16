@@ -27,15 +27,17 @@ cargo run -p orbit-cli -- sessions list
 cargo run -p orbit-cli -- tui --demo --resume <ID>
 ```
 
-`/status` 显示会话 ID、数据库路径及上下文数量；`/sessions` 列出会话；`/clear` 创建新会话并保留旧记录。
+`/status` 显示会话 ID、数据库路径及上下文数量；`/resume` 或 `/sessions` 打开当前项目的会话选择器；`/clear` 创建新会话并保留旧记录。
 
 ```sh
 cargo run -p orbit-cli -- sessions show <ID>
 cargo run -p orbit-cli -- --database /tmp/orbit-test.db tui --demo
 ```
 
-默认数据库位置为 `$XDG_DATA_HOME/orbit/orbit.db`，未设置时使用 `$HOME/.local/share/orbit/orbit.db`。也可通过 `orbit_database` 或 `--database` 指定；所有相关命令应使用同一个路径。
+数据库默认不放在项目内。默认数据库位置为 `$XDG_DATA_HOME/orbit/orbit.db`，未设置时使用 `$HOME/.local/share/orbit/orbit.db`。也可通过 `orbit_database` 或 `--database` 指定；所有相关命令应使用同一个路径。
 
-恢复要求工作区及演示/真实模式一致。模型和连接沿用本次配置，数据库不保存 API Key。会话内容和工具输出为本地明文，数据库及其 WAL/SHM/journal 文件禁止通过该 TUI 的 `read_file` 读取。新建数据库文件权限为 0600。
+目前恢复按工作区绝对路径及演示/真实模式匹配，目录改名会导致旧会话无法自动出现在选择器中；这是当前实现限制，并不表示数据库记录丢失。模型和连接沿用本次配置，数据库不保存 API Key。会话内容和工具输出为本地明文，数据库及其 WAL/SHM/journal 文件禁止通过该 TUI 的 `read_file` 读取。新建数据库文件权限为 0600。
 
 持久化入口是 TUI；现有一次性 `chat` 命令仍不保存会话。`sessions show` 输出包含事件与上下文的 JSON，可用于调试。上下文预算与手动总结参见 [orbit-agent 使用说明](../orbit-agent/README.md)。
+
+`scripts/try-live.sh` 为验收隔离数据，显式使用 `/tmp/orbit-live-XXXXXX/sessions.db`，测试项目位于同目录下的 `project/`。测试库不在项目目录内部，也不会自动合并进正常使用的全局数据库。

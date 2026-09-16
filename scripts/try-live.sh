@@ -74,7 +74,7 @@ cd -- '$orbit_trial/project'
 exec '$orbit_repo/target/debug/orbit' --config '$orbit_repo/config.toml' --database '$orbit_trial/sessions.db' tui
 START
 chmod 700 "$orbit_trial/start.sh"
-printf '\n测试项目：%s/project\n启动入口：bash %s/start.sh\n\n进入后发送：请读取 TASK.md，完成修复并实际运行测试。\n使用真实 API；修改和命令执行按界面提示批准。\n\n' "$orbit_trial" "$orbit_trial"
+printf '\n测试项目：%s/project\n测试数据库：%s/sessions.db（独立于项目；正常启动使用用户数据目录）\n启动入口：bash %s/start.sh\n\n进入后发送：请读取 TASK.md，完成修复并实际运行测试。\n使用真实 API；修改和命令执行按界面提示批准。\n\n' "$orbit_trial" "$orbit_trial" "$orbit_trial"
 if [[ "$orbit_prepare" == false ]]; then
     exec bash "$orbit_trial/start.sh"
 fi
