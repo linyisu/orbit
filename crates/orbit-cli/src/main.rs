@@ -101,13 +101,7 @@ struct ChatArgs {
 
 #[derive(Debug, Deserialize)]
 struct FileConfig {
-    #[serde(default = "default_api_format")]
-    api_format: ApiFormat,
-    base_url: String,
-    api_key: String,
-    model: String,
-    #[serde(default = "default_timeout_seconds")]
-    timeout_seconds: u64,
+    default_provider: String,
     #[serde(default = "default_context_tokens")]
     context_tokens: usize,
     #[serde(default = "default_auto_compact")]
@@ -176,10 +170,6 @@ impl FileConfig {
         let config: Self = toml::from_str(&content)
             .with_context(|| format!("failed to parse {}", path.display()))?;
 
-        if config.api_key.trim().is_empty() {
-            bail!("api_key is empty in {}", path.display());
-        }
-
         if config.context_tokens < 8192 {
             bail!("context_tokens must be at least 8192");
         }
@@ -187,9 +177,6 @@ impl FileConfig {
             || config.max_output_tokens as usize >= config.context_tokens
         {
             bail!("max_output_tokens must be positive and smaller than context_tokens");
-        }
-        if config.timeout_seconds == 0 {
-            bail!("timeout_seconds must be positive");
         }
         for (name, provider) in &config.providers {
             if name.trim().is_empty()
@@ -204,6 +191,15 @@ impl FileConfig {
             }
         }
         let options = config.model_options()?;
+        if !options
+            .iter()
+            .any(|option| option.provider == config.default_provider && option.default_for_provider)
+        {
+            bail!(
+                "default_provider {:?} does not name a configured provider",
+                config.default_provider
+            );
+        }
         let mut aliases = std::collections::BTreeSet::new();
         for option in options {
             if option.alias.trim().is_empty() || !aliases.insert(option.alias) {
@@ -223,23 +219,8 @@ impl FileConfig {
         }
     }
 
-    fn model_config(&self) -> ModelConfig {
-        ModelConfig {
-            api_format: self.api_format,
-            base_url: self.base_url.clone(),
-            api_key: Some(self.api_key.clone()),
-            model: self.model.clone(),
-            timeout: Duration::from_secs(self.timeout_seconds),
-        }
-    }
-
     fn model_options(&self) -> Result<Vec<tui::ModelOption>> {
-        let mut options = vec![tui::ModelOption {
-            alias: self.model.clone(),
-            provider: "default".into(),
-            default_for_provider: true,
-            config: self.model_config(),
-        }];
+        let mut options = Vec::new();
         for (name, provider) in &self.providers {
             options.push(tui::ModelOption {
                 alias: name.clone(),
@@ -279,6 +260,13 @@ impl FileConfig {
             });
         }
         Ok(options)
+    }
+
+    fn default_model_option(&self) -> Result<tui::ModelOption> {
+        self.model_options()?
+            .into_iter()
+            .find(|option| option.provider == self.default_provider && option.default_for_provider)
+            .ok_or_else(|| anyhow::anyhow!("default_provider is not configured"))
     }
 }
 
@@ -376,13 +364,14 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     }
     let file_config = FileConfig::load(&config_path)?;
     let model_options = file_config.model_options()?;
+    let default_model = file_config.default_model_option()?;
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
     let context_tokens = file_config.context_tokens;
     let max_output_tokens = file_config.max_output_tokens;
-    let model_name = file_config.model.clone();
-    let client = ModelClient::new(file_config.model_config())?;
+    let model_name = default_model.alias.clone();
+    let client = ModelClient::new(default_model.config)?;
     let session =
         session::SessionState::open(database, args.resume, model_name.clone(), false).await?;
     tui::run(
@@ -418,7 +407,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
     let max_output_tokens = file_config.max_output_tokens;
-    let client = ModelClient::new(file_config.model_config())?;
+    let client = ModelClient::new(file_config.default_model_option()?.config)?;
     let instructions = instructions::load_current();
     let mut messages = vec![ChatMessage::user(args.prompt)];
     instructions::inject(&mut messages, &instructions);
@@ -492,23 +481,27 @@ mod config_tests {
 
     #[test]
     fn omitted_limits_use_working_defaults_and_explicit_limits_survive() {
-        let input = r#"base_url = "http://localhost"
+        let provider = r#"[providers.test]
+base_url = "http://localhost"
 api_key = "test"
 model = "test"
 "#;
-        let config: FileConfig = toml::from_str(input).unwrap();
+        let input = format!("default_provider = \"test\"\n{provider}");
+        let config: FileConfig = toml::from_str(&input).unwrap();
         assert_eq!(config.context_tokens, 128000);
         assert!(config.auto_compact);
-        let disabled: FileConfig =
-            toml::from_str(&format!("{input}auto_compact = false\n")).unwrap();
+        let disabled: FileConfig = toml::from_str(&format!(
+            "default_provider = \"test\"\nauto_compact = false\n{provider}"
+        ))
+        .unwrap();
         assert!(!disabled.agent_config().auto_compact);
         assert_eq!(config.max_output_tokens, 32000);
-        assert_eq!(config.timeout_seconds, 600);
+        assert_eq!(config.providers["test"].timeout_seconds, 600);
         assert_eq!(config.agent_config().max_turns, 0);
         assert_eq!(config.agent_config().max_tool_calls, 0);
         assert_eq!(config.command.default_timeout_seconds, 120);
         assert_eq!(config.command.max_timeout_seconds, 600);
-        let config: FileConfig = toml::from_str(&format!("{input}context_tokens = 1000000\nmax_output_tokens = 64000\nmax_turns = 75\nmax_tool_calls = 500\n[command]\ndefault_timeout_seconds = 300\nmax_timeout_seconds = 1800\n")).unwrap();
+        let config: FileConfig = toml::from_str(&format!("default_provider = \"test\"\ncontext_tokens = 1000000\nmax_output_tokens = 64000\nmax_turns = 75\nmax_tool_calls = 500\n[command]\ndefault_timeout_seconds = 300\nmax_timeout_seconds = 1800\n{provider}")).unwrap();
         assert_eq!(config.agent_config().max_turns, 75);
         assert_eq!(config.agent_config().max_tool_calls, 500);
         assert_eq!(config.max_output_tokens, 64000);
@@ -520,10 +513,7 @@ model = "test"
     #[test]
     fn configured_model_aliases_select_their_provider_connection() {
         let config: FileConfig = toml::from_str(
-            r#"base_url = "https://default.example/v1"
-api_key = "default-key"
-model = "default-model"
-
+            r#"default_provider = "deepseek"
 [providers.deepseek]
 api_format = "openai_chat_completions"
 base_url = "https://deepseek.example/v1"
@@ -538,22 +528,19 @@ model = "deepseek-reasoner"
         )
         .unwrap();
         let options = config.model_options().unwrap();
-        assert_eq!(options.len(), 3);
-        assert_eq!(options[0].provider, "default");
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].alias, "deepseek");
         assert!(options[0].default_for_provider);
-        assert_eq!(options[1].alias, "deepseek");
-        assert_eq!(options[1].config.model, "deepseek-chat");
-        assert_eq!(options[2].alias, "reasoner");
-        assert_eq!(options[2].config.model, "deepseek-reasoner");
-        assert_eq!(options[2].config.base_url, "https://deepseek.example/v1");
+        assert_eq!(options[0].config.model, "deepseek-chat");
+        assert_eq!(options[1].alias, "reasoner");
+        assert_eq!(options[1].config.model, "deepseek-reasoner");
+        assert_eq!(options[1].config.base_url, "https://deepseek.example/v1");
     }
 
     #[test]
     fn aliases_must_target_known_providers_and_be_unique() {
         let unknown: FileConfig = toml::from_str(
-            r#"base_url = "https://default.example/v1"
-api_key = "key"
-model = "default"
+            r#"default_provider = "missing"
 [[models]]
 alias = "other"
 provider = "missing"
@@ -562,9 +549,7 @@ provider = "missing"
         .unwrap();
         assert!(unknown.model_options().is_err());
 
-        let duplicate = r#"base_url = "https://default.example/v1"
-api_key = "key"
-model = "default"
+        let duplicate = r#"default_provider = "other"
 [providers.other]
 base_url = "https://other.example/v1"
 api_key = "other-key"

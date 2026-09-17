@@ -1,10 +1,25 @@
-# Copy this file to config.toml and fill in your API key.
+# Copy this file to config.toml and replace both API keys as needed.
+# The initial TUI model is the default model of this provider.
+default_provider = "openai"
+
+[providers.openai]
 api_format = "openai_chat_completions"
 base_url = "https://api.openai.com/v1"
-api_key = ""
+api_key = "replace-with-openai-key"
 model = "gpt-5.6-sol"
-# Streaming idle timeout (resets on received data); non-streaming total timeout.
 timeout_seconds = 600
+
+[providers.deepseek]
+api_format = "openai_chat_completions"
+base_url = "https://api.deepseek.com/v1"
+api_key = "replace-with-deepseek-key"
+model = "deepseek-chat"
+timeout_seconds = 600
+
+[[models]]
+alias = "deepseek-reasoner"
+provider = "deepseek"
+model = "deepseek-reasoner"
 
 # Approximate context budget including output reserve, not provider billing tokens.
 context_tokens = 128000
@@ -23,22 +38,9 @@ max_tool_calls = 0
 # DeepSeek Flash: context_tokens = 1000000, max_output_tokens = 64000.
 # Keep these token settings above [command] (they are top-level settings).
 
-# Optional additional providers and named model aliases. Models are declared rather
-# than discovered remotely: provider catalog APIs vary and many gateways disable
-# them. In the TUI, /model lists aliases and /provider lists provider defaults.
-# The top-level connection above remains the provider named "default".
-#
-# [providers.deepseek]
-# api_format = "openai_chat_completions"
-# base_url = "https://api.deepseek.com/v1"
-# api_key = "replace-me"
-# model = "deepseek-chat"
-# timeout_seconds = 600
-#
-# [[models]]
-# alias = "deepseek-reasoner"
-# provider = "deepseek"
-# model = "deepseek-reasoner"
+# Models are declared rather than discovered remotely: provider catalog APIs vary
+# and many gateways disable them. In the TUI, /model lists aliases and /provider
+# lists provider defaults. Add more [[models]] blocks for per-provider variants.
 
 [command]
 default_timeout_seconds = 120
