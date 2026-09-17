@@ -243,7 +243,18 @@ pub async fn run(
                         Action::Submit(prompt) => {
                             let compacting = prompt.trim() == "/compact";
                             if prompt.starts_with('/') && !compacting {
+                                let command = prompt
+                                    .split_once(char::is_whitespace)
+                                    .map_or(prompt.as_str(), |(command, _)| command);
                                 state.transcript.push(TranscriptItem::Command(prompt.clone()));
+                                if task.is_some()
+                                    && !commands::available_while_running(command)
+                                {
+                                    state.transcript.push(TranscriptItem::CommandError(
+                                        "运行中只能使用 /status、/model、/context 或 /mode；请先按 Esc 取消当前响应。".into(),
+                                    ));
+                                    continue;
+                                }
                                 match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, model_options: &model_options }).await {
                                     Ok(true) => break,
                                     Ok(false) => refresh_context_usage(&mut state, &history, &tools),
@@ -1073,7 +1084,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.input.set(menu[state.menu_index].name.to_owned());
                 return Action::None;
             }
-            KeyCode::Enter if key.modifiers.is_empty() && !busy => {
+            KeyCode::Enter if key.modifiers.is_empty() => {
                 state.input.set(menu[state.menu_index].name.to_owned());
             }
             _ => {}
@@ -1089,7 +1100,11 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         }
         KeyCode::Enter if busy => {
             if let Some(guidance) = state.input.take() {
-                return Action::Steer(guidance);
+                return if guidance.starts_with('/') {
+                    Action::Submit(guidance)
+                } else {
+                    Action::Steer(guidance)
+                };
             }
         }
         KeyCode::Enter if state.input.text.ends_with('\\') => {
@@ -1197,7 +1212,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_selects_commands_and_busy_enter_steers_with_the_draft() {
+    fn menu_selects_commands_and_busy_enter_routes_commands_locally() {
         let mut state = UiState::new("mock");
         state.input.insert("/");
         press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
@@ -1211,6 +1226,11 @@ mod tests {
             Action::Steer("next question".into())
         );
         assert!(state.input.text.is_empty());
+        state.input.insert("/model");
+        assert_eq!(
+            press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
+            Action::Submit("/model".into())
+        );
         assert_eq!(
             press(&mut state, KeyCode::Esc, KeyModifiers::NONE, true),
             Action::Cancel

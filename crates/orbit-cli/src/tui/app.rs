@@ -252,10 +252,15 @@ impl UiState {
     }
 
     pub fn menu(&self) -> Vec<&'static super::commands::Command> {
-        if self.menu_dismissed || self.running() {
+        if self.menu_dismissed {
             Vec::new()
         } else {
             super::commands::matching(&self.input.text)
+                .into_iter()
+                .filter(|command| {
+                    !self.running() || super::commands::available_while_running(command.name)
+                })
+                .collect()
         }
     }
 
@@ -346,5 +351,17 @@ mod tests {
             &state.transcript[2],
             TranscriptItem::Tool(row) if row.status == ToolStatus::Finished && row.output == "done"
         ));
+    }
+
+    #[test]
+    fn running_menu_keeps_only_safe_local_commands() {
+        let mut state = UiState::new("mock");
+        state.status = RunStatus::Running;
+        state.input.insert("/");
+        let commands = state.menu();
+        assert!(commands.iter().any(|command| command.name == "/model"));
+        assert!(commands.iter().any(|command| command.name == "/status"));
+        assert!(!commands.iter().any(|command| command.name == "/new"));
+        assert!(!commands.iter().any(|command| command.name == "/compact"));
     }
 }

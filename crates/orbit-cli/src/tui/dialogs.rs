@@ -434,7 +434,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         );
         let lines: Vec<Line> = if state.help_keys {
             [
-                "Enter          发送消息；运行中提交引导",
+                "Enter          发送消息；运行中提交引导或本地命令",
                 "Ctrl+J / Shift+Enter  换行",
                 "Ctrl+V / Alt+V  粘贴剪贴板图片或文字",
                 "←→ + Backspace/Delete  选择或删除图片",

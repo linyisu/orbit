@@ -54,6 +54,17 @@ pub fn matching(input: &str) -> Vec<&'static Command> {
         .collect()
 }
 
+/// These commands only inspect or adjust the local UI. They may run while an
+/// agent request is streaming without changing its session, history, or tool
+/// execution. All other commands require the current run to finish or be
+/// cancelled first.
+pub fn available_while_running(name: &str) -> bool {
+    matches!(
+        name,
+        "/status" | "/model" | "/context" | "/mode" | "/permissions"
+    )
+}
+
 pub fn suggestion(input: &str) -> Option<&'static Command> {
     let typed = input
         .split_once(char::is_whitespace)
