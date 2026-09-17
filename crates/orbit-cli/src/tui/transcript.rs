@@ -67,7 +67,13 @@ impl Entry {
                 }
                 index += text[consumed..consumed + bytes].lines().count();
                 consumed += bytes;
-                if consumed < text.len() {
+                // A partial next row (even just "| ") can temporarily end the parser's
+                // table. Do not freeze it until a complete terminating line arrives.
+                if text[consumed..]
+                    .split_inclusive('\n')
+                    .next()
+                    .is_some_and(|line| line.ends_with('\n') && !line.trim_start().starts_with('|'))
+                {
                     self.stable_rows = self.rows.len();
                     self.parsed_bytes = consumed;
                     self.logical_index = index;
@@ -240,6 +246,29 @@ mod tests {
         let start = std::time::Instant::now();
         layout.update(&state.transcript, None, 100);
         eprintln!("layout: {:?}, rows: {}", start.elapsed(), layout.height());
+    }
+
+    #[test]
+    fn table_streaming_one_character_at_a_time_matches_complete_render() {
+        let source = "| # | 语言 | 特性 |\n|---|---|---|\n| 1 | **Python** | `complex` |\n| 2 | C | restrict |\n| 3 | C++ | 模板 |\n\n后文\n";
+        let mut text = String::new();
+        let mut layout = TranscriptLayout::default();
+        for ch in source.chars() {
+            text.push(ch);
+            let items = [TranscriptItem::Assistant(text.clone())];
+            layout.invalidate_from(0);
+            layout.update(&items, None, 80);
+            let mut fresh = TranscriptLayout::default();
+            fresh.update(&items, None, 80);
+            let lines = |l: &TranscriptLayout| {
+                l.entries[0]
+                    .rows
+                    .iter()
+                    .map(|r| r.line.clone())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(lines(&layout), lines(&fresh), "input: {text:?}");
+        }
     }
 
     #[test]
