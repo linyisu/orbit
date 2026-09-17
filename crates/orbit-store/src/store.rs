@@ -43,7 +43,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 3,
+                version <= 4,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -78,6 +78,12 @@ impl Store {
                 connection.execute_batch(
                     "ALTER TABLE runs ADD COLUMN elapsed_ms INTEGER;
                      PRAGMA user_version=3;",
+                )?;
+            }
+            if version < 4 {
+                connection.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT;
+                     PRAGMA user_version=4;",
                 )?;
             }
             connection.execute_batch("COMMIT;")?;
@@ -130,7 +136,7 @@ impl Store {
 
     pub async fn list(&self) -> Result<Vec<Session>> {
         self.access(|conn| {
-            let mut statement = conn.prepare("SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id ORDER BY s.updated_at DESC, s.rowid DESC")?;
+            let mut statement = conn.prepare("SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.reasoning_effort,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id ORDER BY s.updated_at DESC, s.rowid DESC")?;
             Ok(statement.query_map([], session_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
@@ -140,7 +146,7 @@ impl Store {
         let id = id.to_owned();
         self.access(move |conn| {
             conn.query_row(
-                "SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?1",
+                "SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.reasoning_effort,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?1",
                 [&id], session_row,
             ).context("session not found")
         }).await
@@ -153,7 +159,7 @@ impl Store {
             let transaction = conn.transaction()?;
             let session = transaction
                 .query_row(
-                    "SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?1",
+                    "SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.reasoning_effort,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?1",
                     [&id],
                     session_row,
                 )
@@ -241,6 +247,23 @@ impl Store {
 impl SessionWriter {
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    pub async fn set_model_profile(
+        &self,
+        model: String,
+        reasoning_effort: Option<String>,
+    ) -> Result<()> {
+        let id = self.id.clone();
+        self.store
+            .access(move |conn| {
+                conn.execute(
+                    "UPDATE sessions SET model=?2, reasoning_effort=?3, updated_at=unixepoch() WHERE id=?1",
+                    params![id, model, reasoning_effort],
+                )?;
+                Ok(())
+            })
+            .await
     }
 
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
@@ -337,10 +360,11 @@ fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         id: row.get(0)?,
         workspace: row.get(1)?,
         model: row.get(2)?,
-        demo: row.get(3)?,
-        title: row.get(4)?,
-        updated_at: row.get(5)?,
-        project_id: row.get(6)?,
+        reasoning_effort: row.get(3)?,
+        demo: row.get(4)?,
+        title: row.get(5)?,
+        updated_at: row.get(6)?,
+        project_id: row.get(7)?,
     })
 }
 

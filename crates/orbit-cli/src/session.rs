@@ -8,6 +8,7 @@ use anyhow::{Context, Result, ensure};
 use orbit_agent::events::AgentEvent;
 use orbit_model::types::Attachment;
 use orbit_model::types::ChatMessage;
+use orbit_model::types::ReasoningEffort;
 use orbit_store::{
     store::{SessionWriter, Store},
     types::Snapshot,
@@ -171,11 +172,41 @@ impl SessionState {
         }
         if !self.snapshot.runs.is_empty() {
             state.transcript.push(TranscriptItem::Notice(format!(
-                "会话 {} · 自动保存\n模型沿用当前配置：{}",
+                "会话 {} · 自动保存",
                 self.id(),
-                state.model
             )));
         }
+    }
+
+    pub fn saved_model_profile(&self) -> (&str, Option<ReasoningEffort>) {
+        (
+            &self.snapshot.session.model,
+            self.snapshot
+                .session
+                .reasoning_effort
+                .as_deref()
+                .and_then(ReasoningEffort::from_str),
+        )
+    }
+
+    pub async fn set_model_profile(
+        &mut self,
+        model: String,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> Result<()> {
+        self.writer
+            .set_model_profile(
+                model.clone(),
+                reasoning_effort
+                    .map(ReasoningEffort::as_str)
+                    .map(str::to_owned),
+            )
+            .await?;
+        self.snapshot.session.model = model;
+        self.snapshot.session.reasoning_effort = reasoning_effort
+            .map(ReasoningEffort::as_str)
+            .map(str::to_owned);
+        Ok(())
     }
 
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
@@ -352,6 +383,29 @@ mod tests {
         let mut ui = UiState::new("model");
         restored.restore_ui(&mut ui);
         assert!(ui.elapsed >= Duration::from_millis(5));
+    }
+
+    #[tokio::test]
+    async fn resumed_session_keeps_its_selected_model_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let database = tmp.path().join("sessions.db");
+        let mut state = SessionState::open(database.clone(), None, "qwen::default".into())
+            .await
+            .unwrap();
+        let id = state.id().to_owned();
+        state
+            .set_model_profile("deepseek::flash".into(), Some(ReasoningEffort::High))
+            .await
+            .unwrap();
+        drop(state);
+
+        let restored = SessionState::open(database, Some(id), "qwen::default".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            restored.saved_model_profile(),
+            ("deepseek::flash", Some(ReasoningEffort::High))
+        );
     }
 
     #[tokio::test]

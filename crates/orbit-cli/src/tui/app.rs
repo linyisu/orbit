@@ -42,7 +42,6 @@ pub enum TranscriptItem {
     Notice(String),
     CommandResult(String),
     CommandError(String),
-    ModelChanged(String),
 }
 
 #[derive(Debug)]

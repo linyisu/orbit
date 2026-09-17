@@ -8,6 +8,9 @@ pub struct Session {
     pub workspace: String,
     pub project_id: String,
     pub model: String,
+    /// The selected reasoning setting, stored independently from provider
+    /// configuration so a resumed conversation keeps its own preference.
+    pub reasoning_effort: Option<String>,
     pub demo: bool,
     pub title: String,
     pub updated_at: i64,

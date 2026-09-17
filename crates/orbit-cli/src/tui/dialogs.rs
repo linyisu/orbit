@@ -488,6 +488,7 @@ mod tests {
             workspace: "/project".into(),
             project_id: "project-id".into(),
             model: "model".into(),
+            reasoning_effort: None,
             demo: true,
             updated_at: 0,
         }

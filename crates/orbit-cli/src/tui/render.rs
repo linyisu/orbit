@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
@@ -16,7 +16,6 @@ const ACCENT: Color = Color::Rgb(218, 139, 109);
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
 const BORDER: Color = Color::Rgb(85, 85, 85);
-const MODEL_CHANGE: Color = Color::Rgb(145, 145, 145);
 
 fn muted(text: impl Into<String>) -> Span<'static> {
     Span::styled(text.into(), Style::default().fg(MUTED))
@@ -631,16 +630,6 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 }
                 lines.push(Line::from(""));
             }
-            TranscriptItem::ModelChanged(text) => {
-                lines.push(
-                    Line::from(Span::styled(
-                        text.to_owned(),
-                        Style::default().fg(MODEL_CHANGE),
-                    ))
-                    .alignment(Alignment::Center),
-                );
-                lines.push(Line::from(""));
-            }
             TranscriptItem::CommandResult(text) => {
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(Span::styled(
@@ -1051,12 +1040,10 @@ mod tests {
     }
 
     #[test]
-    fn model_change_is_centered_and_has_no_notice_prefix() {
-        let item = TranscriptItem::ModelChanged("qwen::old → qwen::new".into());
+    fn model_change_uses_the_same_result_style_as_other_commands() {
+        let item = TranscriptItem::CommandResult("qwen::old → qwen::new".into());
         let lines = transcript_lines(&[item], false);
-        assert_eq!(lines[0].to_string(), "qwen::old → qwen::new");
-        assert_eq!(lines[0].alignment, Some(Alignment::Center));
-        assert!(!lines[0].to_string().starts_with('›'));
+        assert_eq!(lines[0].to_string(), "  ⎿  qwen::old → qwen::new");
     }
 
     #[test]

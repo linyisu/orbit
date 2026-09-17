@@ -109,7 +109,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=4").unwrap();
+    connection.execute_batch("PRAGMA user_version=5").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }

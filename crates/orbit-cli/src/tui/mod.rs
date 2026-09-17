@@ -106,6 +106,7 @@ pub async fn run(
         .map(ModelOption::qualified_name)
         .collect();
     session.restore_ui(&mut state);
+    restore_model_profile(&mut state, &mut model, &model_options, &session);
     let mut history = session.snapshot.history.clone();
     crate::instructions::inject(&mut history, &instructions);
     refresh_context_usage(&mut state, &history, &tools);
@@ -143,18 +144,21 @@ pub async fn run(
                     frames.request(time::Instant::now());
                     if state.show_help || state.picker.is_some() || state.model_picker.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
-                            && let Err(error) = resume_session(&id, &mut state, &mut history, &mut session, &instructions).await
+                            && let Err(error) = resume_session(&id, &mut state, &mut model, &mut history, &mut session, &instructions, &model_options).await
                             && let Some(picker) = &mut state.picker {
                             picker.error = Some(error.to_string());
                         }
                         if let Some(name) = state.chosen_model.take() {
-                            select_model(
+                            if let Err(error) = select_model(
                                 &name,
                                 state.chosen_effort.take(),
                                 &mut state,
                                 &mut model,
                                 &model_options,
-                            );
+                                &mut session,
+                            ).await {
+                                state.transcript.push(TranscriptItem::Error(error.to_string()));
+                            }
                         }
                         continue;
                     }
@@ -575,6 +579,9 @@ async fn run_command(
         "/exit" | "/quit" if argument.is_empty() => return Ok(true),
         "/new" if argument.is_empty() => {
             session.new_session(state.model.clone()).await?;
+            session
+                .set_model_profile(state.model.clone(), state.reasoning_effort)
+                .await?;
             history.clear();
             crate::instructions::inject(history, instructions);
             let input = std::mem::take(&mut state.input);
@@ -629,7 +636,18 @@ async fn run_command(
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
             state.selection = Default::default();
         }
-        "/resume" => resume_session(argument, state, history, session, instructions).await?,
+        "/resume" => {
+            resume_session(
+                argument,
+                state,
+                model,
+                history,
+                session,
+                instructions,
+                model_options,
+            )
+            .await?
+        }
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::CommandResult(format!(
             "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / write_file / edit_file / run_command · 审批：{}",
             session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
@@ -660,7 +678,9 @@ async fn run_command(
                         state,
                         model,
                         model_options,
-                    );
+                        session,
+                    )
+                    .await?;
                 } else {
                     state.transcript.push(TranscriptItem::CommandResult(format!("模型 {argument:?} 未找到。")));
                 }
@@ -680,13 +700,14 @@ async fn run_command(
     Ok(false)
 }
 
-fn select_model(
+async fn select_model(
     qualified_name: &str,
     selected_effort: Option<orbit_model::types::ReasoningEffort>,
     state: &mut UiState,
     model: &mut ModelClient,
     model_options: &[ModelOption],
-) {
+    session: &mut SessionState,
+) -> Result<()> {
     let Some(choice) = model_options
         .iter()
         .find(|choice| choice.qualified_name() == qualified_name)
@@ -694,7 +715,7 @@ fn select_model(
         state
             .transcript
             .push(TranscriptItem::Error("所选模型已不在当前配置中。".into()));
-        return;
+        return Ok(());
     };
     let mut config = choice.config.clone();
     if let Some(effort) = selected_effort {
@@ -703,11 +724,16 @@ fn select_model(
     match ModelClient::new(config) {
         Ok(client) => {
             let previous_model = state.model.clone();
+            let model_name = choice.qualified_name();
+            let reasoning_effort = client.config().reasoning_effort;
+            session
+                .set_model_profile(model_name.clone(), reasoning_effort)
+                .await?;
             *model = client;
-            state.model = choice.qualified_name();
-            state.reasoning_effort = model.config().reasoning_effort;
+            state.model = model_name;
+            state.reasoning_effort = reasoning_effort;
             if previous_model != state.model {
-                state.transcript.push(TranscriptItem::ModelChanged(format!(
+                state.transcript.push(TranscriptItem::CommandResult(format!(
                     "{previous_model} → {}",
                     state.model
                 )));
@@ -717,6 +743,7 @@ fn select_model(
             .transcript
             .push(TranscriptItem::Error(error.to_string())),
     }
+    Ok(())
 }
 
 fn attachment_path(argument: &str) -> std::path::PathBuf {
@@ -904,9 +931,11 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
 async fn resume_session(
     id: &str,
     state: &mut UiState,
+    model: &mut ModelClient,
     history: &mut Vec<ChatMessage>,
     session: &mut SessionState,
     instructions: &crate::instructions::Instructions,
+    model_options: &[ModelOption],
 ) -> Result<()> {
     session.resume(id).await?;
     *history = session.snapshot.history.clone();
@@ -915,9 +944,36 @@ async fn resume_session(
     restored.context_tokens = state.context_tokens;
     restored.auto_compact = state.auto_compact;
     restored.max_output_tokens = state.max_output_tokens;
+    restored.model_completions = state.model_completions.clone();
     session.restore_ui(&mut restored);
     *state = restored;
+    restore_model_profile(state, model, model_options, session);
     Ok(())
+}
+
+fn restore_model_profile(
+    state: &mut UiState,
+    model: &mut ModelClient,
+    model_options: &[ModelOption],
+    session: &SessionState,
+) {
+    let (saved_model, saved_effort) = session.saved_model_profile();
+    let Some(choice) = model_options
+        .iter()
+        .find(|choice| choice.qualified_name() == saved_model)
+    else {
+        return;
+    };
+    let mut config = choice.config.clone();
+    if let Some(effort) = saved_effort.filter(|effort| choice.reasoning_efforts.contains(effort)) {
+        config.reasoning_effort = Some(effort);
+    }
+    let Ok(client) = ModelClient::new(config) else {
+        return;
+    };
+    *model = client;
+    state.model = choice.qualified_name();
+    state.reasoning_effort = model.config().reasoning_effort;
 }
 
 #[derive(Debug, PartialEq)]
