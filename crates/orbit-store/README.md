@@ -32,6 +32,7 @@ cargo run -p orbit-cli -- tui --demo --resume <ID>
 
 ```sh
 cargo run -p orbit-cli -- sessions show <ID>
+cargo run -p orbit-cli -- sessions compactions <ID>
 cargo run -p orbit-cli -- --database /tmp/orbit-test.db tui --demo
 ```
 
@@ -64,3 +65,5 @@ orbit tui
 持久化入口是 TUI；现有一次性 `chat` 命令仍不保存会话。`sessions show` 输出包含事件与上下文的 JSON，可用于调试。上下文预算与手动总结参见 [orbit-agent 使用说明](../orbit-agent/README.md)。
 
 `scripts/try-live.sh` 为验收隔离数据，显式使用 `/tmp/orbit-live-XXXXXX/sessions.db`，测试项目位于同目录下的 `project/`。测试库不在项目目录内部，也不会自动合并进正常使用的全局数据库。
+
+`sessions compactions <ID>` 只读返回该会话的结构化压缩审计事件，包括运行状态、摘要、保留边界和确定性文件操作记录。尚未完成或失败运行中的记录不会自动成为恢复点。旧版只有用量提示的压缩事件仍能读取，但不会凭空补造摘要或审计记录。
