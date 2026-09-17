@@ -36,6 +36,19 @@ fn prime_full_redraw<B: Backend>(terminal: &mut Terminal<B>) {
     terminal.swap_buffers();
 }
 
+fn draw_buffer<B: Backend>(
+    terminal: &mut Terminal<B>,
+    render: impl FnOnce(&mut Frame<'_>),
+) -> Result<(), B::Error> {
+    {
+        let mut frame = terminal.get_frame();
+        render(&mut frame);
+    }
+    terminal.flush()?;
+    terminal.swap_buffers();
+    Backend::flush(terminal.backend_mut())
+}
+
 pub struct TerminalGuard;
 
 fn restore() {
@@ -99,13 +112,12 @@ pub fn draw_synchronized(
         if actual != previous {
             // Fullscreen autoresize calls Clear(All). Recreate a fixed viewport
             // at the new size so dragging remains immediate without blank frames.
-            terminal.show_cursor()?;
             let mut replacement = fixed_terminal(io::stdout(), actual)?;
             prime_full_redraw(&mut replacement);
             let old = std::mem::replace(terminal, replacement);
             drop(old);
         }
-        terminal.draw(render).map(drop)
+        draw_buffer(terminal, render)
     })();
     let end = terminal
         .backend_mut()
@@ -136,7 +148,7 @@ mod tests {
         buffer::Cell,
     };
 
-    use super::prime_full_redraw;
+    use super::{draw_buffer, prime_full_redraw};
 
     #[test]
     fn full_redraw_overwrites_stale_cells_without_a_terminal_clear() {
@@ -149,7 +161,7 @@ mod tests {
             .unwrap();
 
         prime_full_redraw(&mut terminal);
-        terminal.draw(|_| {}).unwrap();
+        draw_buffer(&mut terminal, |_| {}).unwrap();
 
         assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), " ");
     }

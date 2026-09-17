@@ -31,14 +31,6 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.reset_caret();
     state.input_area = Rect::default();
     state.attachment_areas.clear();
-    if area.width < 24 || area.height < 10 {
-        state.navigation.reset_area();
-        frame.render_widget(
-            Paragraph::new("请放大终端\n至少 24 列 × 10 行\nCtrl+D 退出"),
-            area,
-        );
-        return;
-    }
     let width = area.width.saturating_sub(6) as usize;
     state.input_width = width;
     let (input_lines, cursor) = state.input.visual_lines(width);
@@ -780,7 +772,9 @@ mod tests {
         assert!(!screen.contains("/help"));
         state.input.insert("/");
         assert!(render(&mut state, 100, 30).contains("/new"));
-        assert!(render(&mut state, 20, 5).contains("请"));
+        for (width, height) in [(20, 5), (10, 3), (1, 1)] {
+            assert!(!render(&mut state, width, height).contains("请放大终端"));
+        }
     }
 
     #[test]
