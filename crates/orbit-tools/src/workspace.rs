@@ -125,11 +125,7 @@ impl Workspace {
         ))
     }
 
-    pub(crate) fn directory_entries(
-        &self,
-        path: &Path,
-    ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
-        use std::os::unix::ffi::OsStrExt;
+    pub(crate) fn open_directory(&self, path: &Path) -> Result<File, WorkspaceError> {
         let directory = if path.as_os_str().is_empty() {
             self.root.try_clone()?
         } else {
@@ -144,6 +140,15 @@ impl Workspace {
                 .map_err(io::Error::from)?,
             )
         };
+        Ok(directory)
+    }
+
+    pub(crate) fn directory_entries(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
+        use std::os::unix::ffi::OsStrExt;
+        let directory = self.open_directory(path)?;
         let entries = rustix::fs::Dir::read_from(&directory).map_err(io::Error::from)?;
         let mut names = Vec::new();
         for entry in entries {
@@ -153,7 +158,7 @@ impl Workspace {
                 names.push(name.to_owned());
             }
             if names.len() > 10_000 {
-                return Err(io::Error::other("snapshot directory exceeds 10000 entries").into());
+                return Err(io::Error::other("directory exceeds 10000 entries").into());
             }
         }
         names.sort();
