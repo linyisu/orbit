@@ -4,5 +4,6 @@ pub mod list_files;
 pub mod read_file;
 pub mod run_command;
 pub mod sandbox;
+pub mod web_fetch;
 pub mod workspace;
 pub mod write_file;
