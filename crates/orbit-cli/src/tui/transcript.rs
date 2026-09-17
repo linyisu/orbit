@@ -54,10 +54,28 @@ impl Entry {
         }
         self.rows.truncate(self.stable_rows);
         self.height = self.rows.last().map_or(0, |row| row.start + row.height);
-        let mut code = self.code;
+        let mut code = self.code.clone();
         let mut index = self.logical_index;
         let mut consumed = self.parsed_bytes;
-        for part in text[self.parsed_bytes..].split_inclusive('\n') {
+        while consumed < text.len() {
+            if !thinking
+                && code.is_none()
+                && let Some((bytes, lines)) = super::markdown::table(&text[consumed..], width)
+            {
+                for line in lines {
+                    self.push(line, width);
+                }
+                index += text[consumed..consumed + bytes].lines().count();
+                consumed += bytes;
+                if consumed < text.len() {
+                    self.stable_rows = self.rows.len();
+                    self.parsed_bytes = consumed;
+                    self.logical_index = index;
+                    self.code = code.clone();
+                }
+                continue;
+            }
+            let part = text[consumed..].split_inclusive('\n').next().unwrap();
             let complete = part.ends_with('\n');
             let line = if complete {
                 part.trim_end_matches('\n')
@@ -76,11 +94,11 @@ impl Entry {
             );
             index += 1;
             consumed += part.len();
-            if complete {
+            if complete && (thinking || code.is_some() || !line.contains('|')) {
                 self.stable_rows = self.rows.len();
                 self.parsed_bytes = consumed;
                 self.logical_index = index;
-                self.code = code;
+                self.code = code.clone();
             }
         }
         if !thinking && !text.is_empty() {
@@ -198,6 +216,37 @@ impl TranscriptLayout {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn streamed_tables_match_fresh_layout_through_split_delimiters_and_resize() {
+        let mut text = String::new();
+        let mut layout = TranscriptLayout::default();
+        for chunk in [
+            "intro\n| 名称 | 数量 |\n",
+            "| ---",
+            " | ---: |\n",
+            "| 中文 | 12",
+            "3 |\n",
+            "| **test** | 4 |\n",
+            "\n```rust\n/* hi\n",
+            "comment */\nlet x = 1;\n```\nafter\n",
+        ] {
+            text.push_str(chunk);
+            let items = vec![TranscriptItem::Assistant(text.clone())];
+            layout.invalidate_from(0);
+            layout.update(&items, None, 35);
+            let mut fresh = TranscriptLayout::default();
+            fresh.update(&items, None, 35);
+            assert_eq!(layout.height(), fresh.height());
+            let actual: Vec<_> = layout.entries[0].rows.iter().map(|r| &r.line).collect();
+            let expected: Vec<_> = fresh.entries[0].rows.iter().map(|r| &r.line).collect();
+            assert_eq!(actual, expected, "source: {text}");
+        }
+        for width in [12, 60] {
+            layout.update(&[TranscriptItem::Assistant(text.clone())], None, width);
+            assert!(layout.height() > 0);
+        }
+    }
 
     #[test]
     fn incremental_layout_matches_ratatui_for_unicode_wrapping_and_split_fences() {
