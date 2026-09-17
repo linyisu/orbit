@@ -12,15 +12,22 @@ use syntect::{
     highlighting::{
         Color as SyntaxColor, HighlightState, StyleModifier, Theme, ThemeItem, ThemeSettings,
     },
-    parsing::{ParseState, SyntaxSet},
+    parsing::{ParseState, SyntaxReference, SyntaxSet},
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_nonewlines);
-// Follow bat's scope-based themes, but deliberately use only two muted accents.
+// Link grammars at build time, not when the user first resumes a conversation.
+static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(|| {
+    syntect::dumps::from_uncompressed_data(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/syntaxes.bin"
+    )))
+    .expect("valid compiled syntax bundle")
+});
+// Follow bat's scope-based themes with a restrained, readable palette.
 // Reference: https://github.com/sharkdp/bat/blob/master/assets/themes/ansi.tmTheme
-// Keep function names, numbers and punctuation in the readable base foreground.
+// Group related syntax roles; keep punctuation in the base foreground.
 static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
     let color = |r, g, b| SyntaxColor { r, g, b, a: 255 };
     Theme {
@@ -32,6 +39,22 @@ static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
         scopes: [
             ("keyword - keyword.operator, storage", color(184, 202, 220)),
             ("string", color(201, 207, 180)),
+            (
+                "entity.name.function, support.function",
+                color(184, 211, 211),
+            ),
+            (
+                "entity.name.type, entity.name.class, support.type, support.class",
+                color(210, 194, 216),
+            ),
+            (
+                "constant.numeric, constant.language, constant.character",
+                color(219, 194, 161),
+            ),
+            (
+                "entity.name.tag, entity.other.attribute-name",
+                color(184, 202, 220),
+            ),
             (
                 "comment, punctuation.definition.comment",
                 color(170, 176, 184),
@@ -205,6 +228,46 @@ fn wrap_cell(cell: &Line<'static>, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+/// Resolve standard names, common Markdown aliases, attributes and filenames.
+/// Ambiguous platform names (e.g. .NET) and unknown labels stay plain text.
+fn syntax_for_label(info: &str) -> Option<&'static SyntaxReference> {
+    let normalized = info
+        .trim()
+        .trim_matches(|c| c == '{' || c == '}')
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    let full = normalized.strip_prefix("language-").unwrap_or(&normalized);
+    if let Some(syntax) = SYNTAXES.find_syntax_by_token(full) {
+        return Some(syntax);
+    }
+    let token = match full {
+        "visual basic" | "visual basic .net" | "visual basic.net" => "vb",
+        "c sharp" => "cs",
+        other => other.split_whitespace().next().unwrap_or(""),
+    };
+    let token = token.trim_start_matches('.');
+    let token = match token {
+        "csharp" | "c#" | "c-sharp" => "cs",
+        "vb.net" | "vbnet" | "visualbasic" | "visualbasic.net" => "vb",
+        "fsharp" | "f#" => "fs",
+        "c++" | "cplusplus" => "cpp",
+        "rs" => "rust",
+        "js" | "node" | "nodejs" => "javascript",
+        "py" | "python3" => "python",
+        "sh" | "shell" | "console" => "bash",
+        "ts" => "typescript",
+        "tsx" => "TypescriptReact",
+        "yml" => "yaml",
+        "text" | "txt" | "plaintext" => return Some(SYNTAXES.find_syntax_plain_text()),
+        other => other,
+    };
+    SYNTAXES.find_syntax_by_token(token).or_else(|| {
+        token
+            .rsplit_once('.')
+            .and_then(|(_, ext)| SYNTAXES.find_syntax_by_extension(ext))
+    })
+}
+
 pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'static> {
     let trimmed = source.trim_start();
     let marker = trimmed.chars().next().unwrap_or(' ');
@@ -234,28 +297,23 @@ pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'stati
         && count >= 3
         && !(marker == '`' && trimmed[count..].contains('`'))
     {
-        let language = trimmed[count..]
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let token = match language.as_str() {
-            "rs" => "rust",
-            "js" => "javascript",
-            "py" => "python",
-            "sh" | "shell" => "bash",
-            other => other,
-        };
-        let syntax = SYNTAXES
-            .find_syntax_by_token(token)
-            .unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
+        let label = trimmed[count..].trim();
+        let resolved = syntax_for_label(label);
+        let syntax = resolved.unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
         *fence = Some(CodeFence {
             delimiter: marker,
             length: count,
             state: HighlightLines::new(syntax, &CODE_THEME).state(),
         });
         return Line::styled(
-            format!("  ┌─ {}", trimmed[count..].trim()),
+            format!(
+                "  ┌─ {label}{}",
+                if !label.is_empty() && resolved.is_none() {
+                    " · 纯文本"
+                } else {
+                    ""
+                }
+            ),
             Style::default().fg(SECONDARY),
         );
     }
@@ -345,6 +403,60 @@ pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'stati
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolves_real_model_labels_aliases_attributes_and_filename_extensions() {
+        for label in [
+            "csharp",
+            "C#",
+            "cs",
+            "C Sharp",
+            "{.csharp}",
+            "language-csharp",
+            "Program.cs",
+            "csharp title=demo",
+        ] {
+            assert_eq!(syntax_for_label(label).unwrap().name, "C#", "{label}");
+        }
+        for label in [
+            "vb",
+            "VB.NET",
+            "vbnet",
+            "Visual Basic",
+            "Visual Basic .NET",
+            "Module.vb",
+        ] {
+            assert_eq!(
+                syntax_for_label(label).unwrap().name,
+                "Visual Basic .NET",
+                "{label}"
+            );
+        }
+        for label in ["typescript", "ts", "tsx", "toml", "Dockerfile", "python3"] {
+            assert!(syntax_for_label(label).is_some(), "{label}");
+        }
+        assert!(syntax_for_label(".NET").is_none());
+        assert!(syntax_for_label("invented-language").is_none());
+        for (label, sample) in [
+            (
+                "csharp",
+                "public static int Fact(int n) { return 42; } // note",
+            ),
+            ("vb", "Public Function Fact(n As Integer) As Long ' note"),
+        ] {
+            let mut fence = None;
+            line(&format!("```{label}"), 0, &mut fence);
+            let rendered = line(sample, 1, &mut fence);
+            let mut colors = Vec::new();
+            for span in rendered.spans.iter().skip(1) {
+                if !colors.contains(&span.style.fg) {
+                    colors.push(span.style.fg);
+                }
+            }
+            assert!(colors.len() >= 3, "{label}: {rendered:?}");
+            assert_eq!(rendered.to_string(), format!("  │ {sample}"));
+        }
+    }
 
     #[test]
     fn tables_align_unicode_wrap_cells_and_preserve_inline_content() {

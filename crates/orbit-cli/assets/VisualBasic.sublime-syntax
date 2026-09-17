@@ -1,0 +1,39 @@
+%YAML 1.2
+---
+# Adapted from highlight.js src/languages/vbnet.js (2026-09-17).
+# https://github.com/highlightjs/highlight.js/blob/main/src/languages/vbnet.js
+# Copyright highlight.js contributors; see LICENSE.highlightjs.
+# Lexical highlighting only; XML literals/interpolation are not a semantic parser.
+name: Visual Basic .NET
+file_extensions: [vb, vbnet]
+scope: source.vbnet
+contexts:
+  main:
+    - match: "'|(?i:\\bREM\\b)"
+      scope: punctuation.definition.comment.vbnet
+      push:
+        - meta_scope: comment.line.vbnet
+        - match: '$'
+          pop: true
+    - match: '\$?"'
+      scope: punctuation.definition.string.begin.vbnet
+      push:
+        - meta_scope: string.quoted.double.vbnet
+        - match: '""'
+          scope: constant.character.escape.vbnet
+        - match: '"[cC]?|$'
+          pop: true
+    - match: '(?i)\b(Function|Sub)\s+([\p{L}_][\w]*)'
+      captures:
+        1: storage.type.function.vbnet
+        2: entity.name.function.vbnet
+    - match: '(?i)(&H[\dA-F_]+|&O[0-7_]+|&B[01_]+|\b\d[\d_]*(\.[\d_]+)?(E[+-]?[\d_]+)?)(U?[SIL]|[RFD@!#%&])?'
+      scope: constant.numeric.vbnet
+    - match: '(?i)\b(addhandler|alias|aggregate|ansi|as|async|assembly|auto|binary|by|byref|byval|call|case|catch|class|compare|const|continue|custom|declare|default|delegate|dim|distinct|do|each|equals|else|elseif|end|enum|erase|error|event|exit|explicit|finally|for|friend|from|function|get|global|goto|group|handles|if|implements|imports|in|inherits|interface|into|iterator|join|key|let|lib|loop|me|mid|module|mustinherit|mustoverride|mybase|myclass|namespace|narrowing|new|next|notinheritable|notoverridable|of|off|on|operator|option|optional|order|overloads|overridable|overrides|paramarray|partial|preserve|private|property|protected|public|raiseevent|readonly|redim|removehandler|resume|return|select|set|shadows|shared|skip|static|step|stop|structure|strict|sub|synclock|take|text|then|throw|to|try|unicode|until|using|when|where|while|widening|with|withevents|writeonly|yield)\b'
+      scope: keyword.control.vbnet
+    - match: '(?i)\b(addressof|and|andalso|await|directcast|gettype|getxmlnamespace|is|isfalse|isnot|istrue|like|mod|nameof|new|not|or|orelse|trycast|typeof|xor|cbool|cbyte|cchar|cdate|cdbl|cdec|cint|clng|cobj|csbyte|cshort|csng|cstr|cuint|culng|cushort)\b'
+      scope: support.function.vbnet
+    - match: '(?i)\b(boolean|byte|char|date|decimal|double|integer|long|object|sbyte|short|single|string|uinteger|ulong|ushort)\b'
+      scope: storage.type.vbnet
+    - match: '(?i)\b(true|false|nothing)\b'
+      scope: constant.language.vbnet
