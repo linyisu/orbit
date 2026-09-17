@@ -9,9 +9,9 @@ context_tokens = 128000
 auto_compact = true
 # Per-request output limit; reasoning can consume this budget too.
 max_output_tokens = 32000
-# Per user request. Zero means unlimited; cancellation remains available.
-max_turns = 0
-max_tool_calls = 0
+# Per user request. Set either to 0 only when an unlimited loop is intentional.
+max_turns = 75
+max_tool_calls = 500
 
 [providers.openai]
 api_format = "openai_responses"

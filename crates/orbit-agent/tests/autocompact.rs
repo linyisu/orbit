@@ -6,6 +6,7 @@ use orbit_agent::{
     model::MockModel,
     tool::{ClosureTool, ToolRegistry},
 };
+use orbit_model::error::ModelError;
 use orbit_model::types::{ChatCompletion, ChatMessage, ChatRequest, ToolCall};
 use tokio_util::sync::CancellationToken;
 
@@ -181,6 +182,28 @@ async fn invalid_summary_uses_local_fallback_and_cancellation_preserves_history(
             .is_err()
     );
     assert!(backend.requests().is_empty());
+}
+
+#[tokio::test]
+async fn automatic_compaction_preserves_history_after_a_retryable_summary_failure() {
+    let history = long_task();
+    let original = history.clone();
+    let plan = autocompact::plan(&history, &[], 1000, 8000).unwrap();
+    let backend = MockModel::from_results([Err(ModelError::Http {
+        status: 429,
+        request_id: String::new(),
+        body: "rate limited".into(),
+        retryable: true,
+    })]);
+    let result =
+        autocompact::execute_automatic(&backend, plan, &[], 1000, 8000, CancellationToken::new())
+            .await;
+    assert!(matches!(
+        result,
+        Err(orbit_agent::error::AgentError::Model(_))
+    ));
+    assert_eq!(history, original);
+    assert_eq!(backend.requests().len(), 1);
 }
 
 #[test]

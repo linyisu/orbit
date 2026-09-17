@@ -192,6 +192,57 @@ pub async fn execute<B: ModelBackend>(
     limit: usize,
     cancellation: CancellationToken,
 ) -> Result<CompactedContext, AgentError> {
+    execute_with_policy(
+        backend,
+        plan,
+        tools,
+        output,
+        limit,
+        cancellation,
+        FallbackPolicy::Always,
+    )
+    .await
+}
+
+/// Automatic compaction must not replace a usable working context merely
+/// because the provider had a transient transport failure. It will surface the
+/// failure and try again on a later request; an explicit `/compact` continues
+/// to use the local fallback for models that cannot summarize at all.
+pub async fn execute_automatic<B: ModelBackend>(
+    backend: &B,
+    plan: Plan,
+    tools: &[ToolDefinition],
+    output: usize,
+    limit: usize,
+    cancellation: CancellationToken,
+) -> Result<CompactedContext, AgentError> {
+    execute_with_policy(
+        backend,
+        plan,
+        tools,
+        output,
+        limit,
+        cancellation,
+        FallbackPolicy::PreserveOnTransientFailure,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum FallbackPolicy {
+    Always,
+    PreserveOnTransientFailure,
+}
+
+async fn execute_with_policy<B: ModelBackend>(
+    backend: &B,
+    plan: Plan,
+    tools: &[ToolDefinition],
+    output: usize,
+    limit: usize,
+    cancellation: CancellationToken,
+    policy: FallbackPolicy,
+) -> Result<CompactedContext, AgentError> {
     match model_summary(backend, &plan, limit, cancellation.clone()).await {
         Ok(summary) => match finish(&plan, tools, output, limit, summary, false) {
             Ok(result) => Ok(result),
@@ -199,11 +250,27 @@ pub async fn execute<B: ModelBackend>(
             // help. Treat it exactly like any other unusable summary.
             Err(_) => finish(&plan, tools, output, limit, local_fallback_summary(), true),
         },
-        Err(AgentError::Cancelled) => return Err(AgentError::Cancelled),
+        Err(AgentError::Cancelled) => Err(AgentError::Cancelled),
         // A compacted model context is preferable to an unusable, over-limit
         // one. The full transcript remains in the durable run/event log; this
         // fallback only controls what is sent to the next model request.
-        Err(_) => finish(&plan, tools, output, limit, local_fallback_summary(), true),
+        Err(error) if fallback_allowed(&error, policy) => {
+            finish(&plan, tools, output, limit, local_fallback_summary(), true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn fallback_allowed(error: &AgentError, policy: FallbackPolicy) -> bool {
+    match policy {
+        FallbackPolicy::Always => true,
+        FallbackPolicy::PreserveOnTransientFailure => match error {
+            AgentError::Model(error) => !error.is_retryable(),
+            // This is the compaction-specific deadline above, independent of
+            // the provider's own timeout type.
+            AgentError::Compaction(message) => message != "summary request timed out",
+            _ => true,
+        },
     }
 }
 

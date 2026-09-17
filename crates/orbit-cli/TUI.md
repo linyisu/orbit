@@ -34,7 +34,7 @@
 
 ## 中断与引导
 
-运行中按 Esc 或 Ctrl+C 是硬中断：立即取消模型流和可取消工具，当前未完成轮次不会成为下一次模型请求的上下文。运行中仍可在输入框写入补充要求，按 Enter 会将它作为引导：Orbit 取消当前请求，保留已经完成的历史和原始任务，再自动带着这条引导发起下一次请求。以 `/` 开头的输入始终优先作为本地命令处理；运行中可用 `/status`、`/model`、`/context`、`/mode`，其余会明确要求先取消当前响应。服务端已经收到的流式请求不能在连接中直接追加消息，因此引导发生在请求边界；工具已经完成的写入不会被回滚。
+运行中按 Esc 或 Ctrl+C 是硬中断：立即取消模型流和可取消工具，当前未完成轮次不会成为下一次模型请求的上下文。运行中仍可在输入框写入补充要求，按 Enter 会将它作为引导：Orbit 取消当前请求，保留已经完成的历史和原始任务，再自动带着这条引导发起下一次请求。以 `/` 开头的输入始终优先作为本地命令处理；运行中可用 `/status`、`/model`、`/context`、`/mode`，其余会明确要求先取消当前响应。运行中的 `/model` 不影响已发出的请求，但会保存新的模型与思考强度，并用于下一次请求。服务端已经收到的流式请求不能在连接中直接追加消息，因此引导发生在请求边界；工具已经完成的写入不会被回滚。
 
 ## 模型与思考强度
 
@@ -54,9 +54,9 @@ context_tokens = 128000
 reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
 ```
 
-`context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。可用思考值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，因此网关重命名模型或新增供应商不会触发模型名判断。未写 `reasoning` 时，Orbit 不发送任何思考参数。
+`context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。可用思考值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，但不能覆盖模型、流式传输、工具、输出预算、温度或已配置的思考强度。未写 `reasoning` 时，Orbit 不发送任何思考参数。
 
-`/compact` 优先让当前模型总结旧对话并保留最近两轮。单个摘要请求最多等待 30 秒；模型无法返回有效结构化摘要时，自动使用本地回退压缩并提示，旧对话仍在会话运行记录中。
+`/compact` 优先让当前模型总结旧对话并保留最近两轮。单个摘要请求最多等待 30 秒；手动执行时，模型无法返回有效结构化摘要或暂时不可用会使用本地回退压缩并提示。自动压缩遇到网络、限流或超时时保留原上下文并在下次需要时重试；旧对话始终保留在会话运行记录中。
 
 ## 图片与文档
 

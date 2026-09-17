@@ -169,6 +169,14 @@ pub(crate) fn stream(
         let mut events = Vec::new();
 
         match event.kind.as_str() {
+            "message_start" => {
+                if let Some(usage) = event.message.and_then(|message| message.usage) {
+                    events.push(StreamEvent::Completed {
+                        finish_reason: None,
+                        usage: Some(usage.into()),
+                    });
+                }
+            }
             "content_block_start" => {
                 if let Some(block) = event.content_block {
                     match block.kind.as_str() {
@@ -281,6 +289,12 @@ struct AnthropicEvent {
     index: Option<usize>,
     content_block: Option<AnthropicBlock>,
     delta: Option<AnthropicDelta>,
+    usage: Option<AnthropicUsage>,
+    message: Option<AnthropicMessageStart>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicMessageStart {
     usage: Option<AnthropicUsage>,
 }
 

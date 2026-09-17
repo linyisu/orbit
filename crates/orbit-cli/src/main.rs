@@ -106,9 +106,9 @@ struct FileConfig {
     auto_compact: bool,
     #[serde(default = "default_max_output_tokens")]
     max_output_tokens: u32,
-    #[serde(default)]
+    #[serde(default = "default_max_turns")]
     max_turns: usize,
-    #[serde(default)]
+    #[serde(default = "default_max_tool_calls")]
     max_tool_calls: usize,
     #[serde(default)]
     command: orbit_tools::run_command::CommandLimits,
@@ -156,6 +156,52 @@ fn default_auto_compact() -> bool {
 
 fn default_context_tokens() -> usize {
     128_000
+}
+
+fn default_max_turns() -> usize {
+    75
+}
+
+fn default_max_tool_calls() -> usize {
+    500
+}
+
+fn validate_reasoning_extra(model: &str, api_format: ApiFormat, extra: &toml::Table) -> Result<()> {
+    // `extra` is for provider extensions. These fields are owned by Orbit's
+    // request encoder; accepting them here would silently replace the model,
+    // transport shape, output budget, or tool contract.
+    for key in [
+        "model",
+        "messages",
+        "input",
+        "stream",
+        "tools",
+        "tool_choice",
+        "max_tokens",
+        "max_output_tokens",
+        "temperature",
+    ] {
+        if extra.contains_key(key) {
+            bail!(
+                "model {model:?}: reasoning.extra may not override the standard request field {key:?}"
+            );
+        }
+    }
+    let conflicts_effort = match api_format {
+        ApiFormat::OpenaiChatCompletions => extra.contains_key("reasoning_effort"),
+        ApiFormat::OpenaiResponses => extra
+            .get("reasoning")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|reasoning| reasoning.contains_key("effort")),
+        ApiFormat::AnthropicMessages => extra
+            .get("output_config")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|output| output.contains_key("effort")),
+    };
+    if conflicts_effort {
+        bail!("model {model:?}: reasoning.extra may not override the configured reasoning effort");
+    }
+    Ok(())
 }
 
 fn default_timeout_seconds() -> u64 {
@@ -241,6 +287,7 @@ impl FileConfig {
                             );
                         }
                     }
+                    validate_reasoning_extra(&model.id, provider.api_format, &reasoning.extra)?;
                 }
                 let context_tokens = model.context_tokens.unwrap_or(config.context_tokens);
                 if context_tokens < 8192 || config.max_output_tokens as usize >= context_tokens {
@@ -505,8 +552,8 @@ id = "test"
         assert!(!disabled.agent_config().auto_compact);
         assert_eq!(config.max_output_tokens, 32000);
         assert_eq!(config.providers["test"].timeout_seconds, 600);
-        assert_eq!(config.agent_config().max_turns, 0);
-        assert_eq!(config.agent_config().max_tool_calls, 0);
+        assert_eq!(config.agent_config().max_turns, 75);
+        assert_eq!(config.agent_config().max_tool_calls, 500);
         assert_eq!(config.command.default_timeout_seconds, 120);
         assert_eq!(config.command.max_timeout_seconds, 600);
         let config: FileConfig = toml::from_str(&format!("default_provider = \"test\"\ncontext_tokens = 1000000\nmax_output_tokens = 64000\nmax_turns = 75\nmax_tool_calls = 500\n[command]\ndefault_timeout_seconds = 300\nmax_timeout_seconds = 1800\n{provider}")).unwrap();
@@ -567,6 +614,27 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default =
             option.config.reasoning_adapter,
             Some(ReasoningAdapter::OpenaiResponses)
         );
+    }
+
+    #[test]
+    fn reasoning_extra_cannot_replace_standard_request_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"default_provider = "openai"
+[providers.openai]
+api_format = "openai_responses"
+base_url = "https://openai.example/v1"
+api_key = "openai-key"
+[[providers.openai.models]]
+id = "reasoning-model"
+reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default = "high", extra = { stream = false } }
+"#,
+        )
+        .unwrap();
+        let error = FileConfig::load(&path).unwrap_err().to_string();
+        assert!(error.contains("reasoning.extra") && error.contains("stream"));
     }
 
     #[test]

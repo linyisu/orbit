@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use futures_util::StreamExt;
 use orbit_model::types::{
     ChatCompletion, ChatMessage, ChatRequest, FunctionCall, StreamEvent, ToolCall, ToolCallDelta,
+    Usage,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -20,8 +21,10 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            max_turns: 0,
-            max_tool_calls: 0,
+            // Large enough for sustained repository work, while still placing
+            // a firm bound on a malformed model/tool loop.
+            max_turns: 75,
+            max_tool_calls: 500,
             context_tokens: 128_000,
             auto_compact: true,
         }
@@ -250,7 +253,7 @@ where
             if let Some(sender) = sender {
                 send_agent_event(sender, AgentEvent::CompactionStarted).await?;
             }
-            let event = match crate::autocompact::execute(
+            let event = match crate::autocompact::execute_automatic(
                 &self.backend,
                 plan.with_files(files),
                 &tools,
@@ -333,9 +336,7 @@ where
                     if reason.is_some() {
                         finish_reason = reason;
                     }
-                    if event_usage.is_some() {
-                        usage = event_usage;
-                    }
+                    merge_usage(&mut usage, event_usage);
                 }
             }
         }
@@ -523,9 +524,7 @@ where
                     if reason.is_some() {
                         finish_reason = reason;
                     }
-                    if event_usage.is_some() {
-                        usage = event_usage;
-                    }
+                    merge_usage(&mut usage, event_usage);
                 }
             }
         }
@@ -638,6 +637,19 @@ fn check_finish_reason(reason: Option<&str>) -> Result<(), AgentError> {
         )));
     }
     Ok(())
+}
+
+fn merge_usage(current: &mut Option<Usage>, update: Option<Usage>) {
+    let Some(update) = update else {
+        return;
+    };
+    if let Some(current) = current {
+        current.prompt_tokens = update.prompt_tokens.or(current.prompt_tokens);
+        current.completion_tokens = update.completion_tokens.or(current.completion_tokens);
+        current.total_tokens = update.total_tokens.or(current.total_tokens);
+    } else {
+        *current = Some(update);
+    }
 }
 
 fn validate_tool_ids(calls: &[ToolCall]) -> Result<(), AgentError> {
@@ -1379,5 +1391,35 @@ mod tests {
 
         assert!(matches!(error, AgentError::Cancelled));
         assert!(model.requests().is_empty());
+    }
+
+    #[test]
+    fn usage_events_combine_input_and_output_counts() {
+        let mut usage = None;
+        merge_usage(
+            &mut usage,
+            Some(Usage {
+                prompt_tokens: Some(321),
+                completion_tokens: None,
+                total_tokens: None,
+            }),
+        );
+        merge_usage(
+            &mut usage,
+            Some(Usage {
+                prompt_tokens: None,
+                completion_tokens: Some(16384),
+                total_tokens: None,
+            }),
+        );
+
+        assert_eq!(
+            usage,
+            Some(Usage {
+                prompt_tokens: Some(321),
+                completion_tokens: Some(16384),
+                total_tokens: None,
+            })
+        );
     }
 }

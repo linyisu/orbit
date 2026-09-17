@@ -619,6 +619,7 @@ mod tests {
     async fn anthropic_thinking_and_top_level_usage_survive_token_exhaustion() {
         let (base_url, request) = test_server(concat!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":321}}}\n\n",
             "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"first \"}}\n\n",
             "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"reasoning\"}}\n\n",
             "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":16384}}\n\n",
@@ -629,6 +630,7 @@ mod tests {
         req.max_tokens = Some(16384);
         let mut stream = client.stream(req).await.unwrap();
         let mut thinking = String::new();
+        let mut input_tokens = None;
         let mut finished = false;
         while let Some(event) = stream.next().await {
             match event.unwrap() {
@@ -637,14 +639,20 @@ mod tests {
                     finish_reason,
                     usage,
                 } => {
-                    assert_eq!(finish_reason.as_deref(), Some("max_tokens"));
-                    assert_eq!(usage.unwrap().completion_tokens, Some(16384));
-                    finished = true;
+                    let usage = usage.unwrap();
+                    if finish_reason.is_none() {
+                        input_tokens = usage.prompt_tokens;
+                    } else {
+                        assert_eq!(finish_reason.as_deref(), Some("max_tokens"));
+                        assert_eq!(usage.completion_tokens, Some(16384));
+                        finished = true;
+                    }
                 }
                 _ => panic!("unexpected event"),
             }
         }
         assert_eq!(thinking, "first reasoning");
+        assert_eq!(input_tokens, Some(321));
         assert!(finished);
         assert!(request.await.contains("\"max_tokens\":16384"));
     }

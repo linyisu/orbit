@@ -222,7 +222,9 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
         })
         .collect();
     while widths.iter().sum::<usize>() > available {
-        let i = (0..cols).max_by_key(|&i| widths[i]).unwrap();
+        let Some(i) = (0..cols).max_by_key(|&i| widths[i]) else {
+            break;
+        };
         widths[i] -= 1;
     }
     let border = |left: &str, join: &str, right: &str| {

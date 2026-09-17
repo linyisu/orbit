@@ -397,6 +397,12 @@ fn git_owned(
     }
     let mut command = Command::new("git");
     command
+        .env_clear()
+        .env(
+            "PATH",
+            std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()),
+        )
+        .env("LC_ALL", "C")
         .arg("--no-pager")
         .arg("-c")
         .arg("core.fsmonitor=false")
