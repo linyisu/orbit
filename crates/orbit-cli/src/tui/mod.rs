@@ -540,6 +540,7 @@ async fn start_agent_run(
                 max_output_tokens as usize,
                 context_tokens,
             )?;
+            let fallback = compacted.record.fallback;
             sender
                 .send(AgentEvent::CompactionRecorded {
                     record: compacted.record,
@@ -547,8 +548,10 @@ async fn start_agent_run(
                 .await
                 .map_err(|_| AgentError::EventChannelClosed)?;
             let report = format!(
-                "上下文已压缩：估算 {} → {} tokens。保留最近两轮完整对话，原始记录仍在。\n\n{}",
-                compacted.before_tokens, compacted.after_tokens, compacted.summary
+                "上下文已压缩：估算 {} → {} tokens{}。",
+                compacted.before_tokens,
+                compacted.after_tokens,
+                if fallback { "（本地回退）" } else { "" },
             );
             sender
                 .send(AgentEvent::Model(
@@ -644,7 +647,7 @@ async fn run_command(
             let tool_tokens = orbit_agent::context::estimate_tokens(&[], &tools.definitions());
             let sources = if instructions.sources.is_empty() { "未找到".to_owned() } else { format!("{} 条", instructions.sources.len()) };
             let truncation = if instructions.truncated { "（达到 32 KiB 上限，后续文件未加载）" } else { "" };
-            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；总结会调用当前模型。", instructions.source_summary(), state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；模型摘要不可用时使用本地回退。", instructions.source_summary(), state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
