@@ -26,3 +26,9 @@ max_tool_calls = 0
 [command]
 default_timeout_seconds = 120
 max_timeout_seconds = 600
+
+# Optional trusted HTTP(S) proxy for web_fetch only. Never set by the model.
+# The proxy resolves destination domains and must enforce its own egress policy.
+# Omit for strict direct connections; environment proxies are not used implicitly.
+[web]
+# proxy = "http://127.0.0.1:7897"

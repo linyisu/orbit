@@ -118,6 +118,8 @@ struct FileConfig {
     max_tool_calls: usize,
     #[serde(default)]
     command: orbit_tools::run_command::CommandLimits,
+    #[serde(default)]
+    web: orbit_tools::web_fetch::WebConfig,
 }
 
 fn default_max_output_tokens() -> u32 {
@@ -255,6 +257,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
                 Some(session.store.path()),
                 Some(approvals),
                 Default::default(),
+                Default::default(),
             )?,
             session,
             approval_receiver,
@@ -271,6 +274,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let file_config = FileConfig::load(&config_path)?;
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command;
+    let web = file_config.web.clone();
     let context_tokens = file_config.context_tokens;
     let max_output_tokens = file_config.max_output_tokens;
     let model_name = file_config.model.clone();
@@ -286,6 +290,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             Some(session.store.path()),
             Some(approvals),
             command_limits,
+            web,
         )?,
         session,
         approval_receiver,
@@ -304,6 +309,7 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
     let file_config = FileConfig::load(&config_path)?;
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command;
+    let web = file_config.web.clone();
     let max_output_tokens = file_config.max_output_tokens;
     let client = ModelClient::new(file_config.model_config())?;
     let mut request = ChatRequest::new(vec![ChatMessage::user(args.prompt)]);
@@ -311,7 +317,7 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
 
     let agent = Agent::new(
         ModelClientBackend::new(client),
-        runtime::workspace_tools(&config_path, None, None, command_limits)?,
+        runtime::workspace_tools(&config_path, None, None, command_limits, web)?,
         agent_config,
     );
 

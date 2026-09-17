@@ -12,6 +12,7 @@ pub fn workspace_tools(
     database: Option<&Path>,
     approvals: Option<ApprovalSender>,
     command_limits: orbit_tools::run_command::CommandLimits,
+    web: orbit_tools::web_fetch::WebConfig,
 ) -> Result<ToolRegistry> {
     let mut workspace = Workspace::new(std::env::current_dir()?)?;
     if config.exists() {
@@ -29,7 +30,7 @@ pub fn workspace_tools(
     let mut tools = ToolRegistry::new();
     tools.register(ReadFile::new(workspace.clone()));
     tools.register(ListFiles::new(workspace.clone()));
-    tools.register(orbit_tools::web_fetch::WebFetch);
+    tools.register(orbit_tools::web_fetch::WebFetch::new(web)?);
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
