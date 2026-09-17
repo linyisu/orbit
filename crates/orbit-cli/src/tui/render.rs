@@ -323,7 +323,7 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 if text.is_empty() {
                     continue;
                 }
-                let mut code = false;
+                let mut code = None;
                 for (index, line) in text.lines().enumerate() {
                     lines.push(assistant_line(line, index, &mut code));
                 }
@@ -396,29 +396,12 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
     lines
 }
 
-pub(super) fn assistant_line(line: &str, index: usize, code: &mut bool) -> Line<'static> {
-    let prefix = if index == 0 { "● " } else { "  " };
-    if line.trim_start().starts_with("```") {
-        *code = !*code;
-        let label = line.trim_start().trim_start_matches('`');
-        Line::from(muted(if *code {
-            format!("  ┌─ {label}")
-        } else {
-            "  └─".into()
-        }))
-    } else if *code {
-        Line::from(vec![
-            muted("  │ "),
-            Span::styled(line.to_owned(), Style::default().fg(Color::Cyan)),
-        ])
-    } else if line.starts_with('#') {
-        Line::from(Span::styled(
-            format!("{prefix}{}", line.trim_start_matches('#').trim_start()),
-            Style::default().add_modifier(Modifier::BOLD),
-        ))
-    } else {
-        Line::from(format!("{prefix}{line}"))
-    }
+pub(super) fn assistant_line(
+    line: &str,
+    index: usize,
+    code: &mut super::markdown::Fence,
+) -> Line<'static> {
+    super::markdown::line(line, index, code)
 }
 
 pub(super) fn thinking_line(line: &str) -> Line<'static> {

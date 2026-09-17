@@ -5,6 +5,7 @@ mod demo;
 mod dialogs;
 mod frames;
 pub mod input;
+mod markdown;
 mod permissions;
 pub mod render;
 mod selection;

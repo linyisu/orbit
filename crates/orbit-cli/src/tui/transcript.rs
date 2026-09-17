@@ -27,7 +27,7 @@ struct Entry {
     stable_rows: usize,
     parsed_bytes: usize,
     logical_index: usize,
-    code: bool,
+    code: super::markdown::Fence,
     observed_bytes: Option<usize>,
 }
 
@@ -205,6 +205,9 @@ mod tests {
         let mut items = vec![TranscriptItem::Assistant(String::new())];
         for chunk in [
             "你好 e\u{301} words words",
+            " **加",
+            "粗** 与 `代码`",
+            "\n- 项目 [链接](https://example.com)\n> 引用",
             "\n# Heading\n`",
             "``rust\n",
             "let x = 1;\n```",

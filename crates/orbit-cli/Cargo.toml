@@ -19,6 +19,7 @@ orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
 serde_json.workspace = true
 ratatui.workspace = true
+pulldown-cmark = { version = "0.13.4", default-features = false }
 serde.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
