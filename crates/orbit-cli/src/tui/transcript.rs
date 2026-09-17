@@ -244,7 +244,7 @@ impl Entry {
             };
             self.push(
                 if thinking {
-                    render::thinking_line(line)
+                    render::thinking_line(line, index, &mut code)
                 } else {
                     render::assistant_line(line, index, &mut code)
                 },
@@ -292,7 +292,7 @@ impl Entry {
         }
 
         let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
-        let top_label = "╭─ 你 ";
+        let top_label = "╭─❯ ";
         self.push(
             Line::from(Span::styled(
                 format!(

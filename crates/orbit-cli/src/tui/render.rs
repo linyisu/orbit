@@ -368,7 +368,10 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 lines.push(Line::from(""));
             }
             TranscriptItem::Thinking(text) => {
-                lines.extend(text.lines().map(thinking_line));
+                let mut code = None;
+                for (index, line) in text.lines().enumerate() {
+                    lines.push(thinking_line(line, index, &mut code));
+                }
             }
             TranscriptItem::Tool(row) => {
                 let (marker, color) = match row.status {
@@ -500,9 +503,27 @@ pub(super) fn assistant_line(
     super::markdown::line(line, index, code)
 }
 
-pub(super) fn thinking_line(line: &str) -> Line<'static> {
-    Line::from(vec![Span::raw("  ┊ "), Span::raw(line.to_owned())])
-        .style(Style::default().fg(Color::Rgb(170, 170, 170)))
+pub(super) fn thinking_line(
+    line: &str,
+    index: usize,
+    code: &mut super::markdown::Fence,
+) -> Line<'static> {
+    let mut rendered = super::markdown::line(line, index, code);
+    // `markdown::line` reserves two columns for ordinary transcript content.
+    // Replace that indentation with a muted thinking rail while retaining the
+    // markdown spans behind it.
+    if let Some(first) = rendered.spans.first_mut()
+        && let Some(rest) = first.content.strip_prefix("  ")
+    {
+        if rest.is_empty() {
+            rendered.spans.remove(0);
+        } else {
+            first.content = rest.to_owned().into();
+        }
+    }
+    rendered.spans.insert(0, Span::raw("  ┊ "));
+    rendered.style = Style::default().fg(Color::Rgb(155, 155, 155));
+    rendered
 }
 
 pub(super) fn sanitize_line(line: &mut Line<'_>) {
@@ -1088,6 +1109,25 @@ mod tests {
             safe_output("a\x1b]52;c;secret\x07"),
             "a\\u{1b}]52;c;secret\\u{7}"
         );
+    }
+
+    #[test]
+    fn thinking_uses_markdown_with_a_subdued_continuous_rail() {
+        let mut code = None;
+        let line = thinking_line("- **重点** 与 `code`", 0, &mut code);
+        assert_eq!(line.spans[0].content, "  ┊ ");
+        assert!(
+            line.spans
+                .iter()
+                .any(|span| span.content == "重点"
+                    && span.style.add_modifier.contains(Modifier::BOLD))
+        );
+        assert!(
+            line.spans
+                .iter()
+                .any(|span| span.content == "code" && span.style.fg == Some(Color::LightCyan))
+        );
+        assert_eq!(line.style.fg, Some(Color::Rgb(155, 155, 155)));
     }
 
     #[test]
