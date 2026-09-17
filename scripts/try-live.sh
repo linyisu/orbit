@@ -6,16 +6,22 @@ orbit_prepare=false
 orbit_hard=false
 orbit_context=false
 orbit_discovery=false
+orbit_web=false
 orbit_config="$orbit_repo/config.toml"
 for orbit_arg in "$@"; do
     case "$orbit_arg" in
         --prepare-only) orbit_prepare=true ;;
         --hard) orbit_hard=true ;;
+        --web) orbit_web=true ;;
         --discovery) orbit_discovery=true ;;
         --context) orbit_hard=true; orbit_context=true ;;
-        *) echo 'Usage: bash scripts/try-live.sh [--hard | --context | --discovery] [--prepare-only]' >&2; exit 2 ;;
+        *) echo 'Usage: bash scripts/try-live.sh [--hard | --context | --discovery | --web] [--prepare-only]' >&2; exit 2 ;;
     esac
 done
+if [[ "$orbit_web" == true && ( "$orbit_hard" == true || "$orbit_discovery" == true ) ]]; then
+    echo "--web cannot be combined with other exercises" >&2
+    exit 2
+fi
 if [[ "$orbit_discovery" == true && "$orbit_hard" == true ]]; then
     echo "--discovery cannot be combined with --hard or --context" >&2
     exit 2
@@ -27,7 +33,9 @@ fi
 cargo build --manifest-path "$orbit_repo/Cargo.toml" -p orbit-cli --offline
 orbit_trial=$(mktemp -d /tmp/orbit-live-XXXXXX)
 mkdir "$orbit_trial/project"
-if [[ "$orbit_hard" == true ]]; then
+if [[ "$orbit_web" == true ]]; then
+    python3 "$orbit_repo/scripts/prepare-web.py" "$orbit_trial"
+elif [[ "$orbit_hard" == true ]]; then
     cp -R "$orbit_repo/scripts/fixtures/scheduler/." "$orbit_trial/project/"
 else
 cat > "$orbit_trial/project/price.c" <<'SOURCE'

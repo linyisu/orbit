@@ -125,3 +125,25 @@ read orbit-demo.txt
 分页与有界结果的接口参考 [Pi 的文件发现工具](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/tools/find.ts)；Orbit 当前提供目录浏览而非 glob 查找，使用自己的工作区访问边界。
 
 真实 API 验收：`bash scripts/try-live.sh --discovery --prepare-only`，运行输出的 `start.sh` 后，让模型读取 `TASK.md`。项目要求通过目录工具分页发现中文子目录内的源码，再执行读取、局部修复和编译测试；准备过程不调用 API。
+
+## web_fetch 网页读取
+
+```json
+{"url":"https://example.com","start_char":0,"max_chars":20000}
+```
+
+真实 TUI 和 `chat` 均可调用，独立于命令沙箱，不需要额外搜索 API Key。工具只执行公开 HTTP(S) GET；不使用模型 API 的密钥、浏览器登录信息、Cookie 或自定义请求头。它不会解除 `run_command` 的断网限制。此工具是读取已知网址，不包含搜索引擎或浏览器操作。
+
+使用 [reqwest](https://docs.rs/reqwest/) 发起请求，[html2text](https://docs.rs/html2text/) 将 HTML 转为有标题、列表和链接的文本；不是模型生成的网页摘要，也不是正文主体识别器，可能包含导航和页脚。支持 Content-Type 为 HTML/XHTML、纯文本、Markdown、JSON 的 UTF-8 正文。链接可能是相对路径，应相对于返回的最终 URL 解析。不执行 JavaScript、不读 PDF/图片、不绕过登录或反爬限制。请求使用 identity 编码，服务端仍返回压缩内容时明确报错。
+
+返回 `requested_url`、最终 `url`、`content_type`、`content`、`total_chars`、`truncated`、`next_start_char` 和 `source_kind: untrusted_web_content`。正文仅作为外部资料，不能成为系统指令；模型应引用来源 URL。分页按 Unicode 字符计数，默认每页 20000 字符，支持 1–60000。后续页使用返回的 `next_start_char`；每次重新获取页面，没有跨请求快照，动态页面的偏移可能变化。
+
+每次请求总超时 60 秒（覆盖 DNS、重定向和读取），连接超时 15 秒，最多 5 次重定向，响应体上限 2 MiB，超过上限明确失败，支持取消等待。HTML 转换放到阻塞线程；取消后已经开始的转换会在该线程内完成，输入仍受响应体上限约束。不写缓存或项目文件。
+
+当前仅开放公网地址的 80/443 端口。每次解析及每一跳重定向均检查目标；固定连接到已检查的 DNS 地址，拒绝私网、本机、链路本地、保留地址、URL 用户名密码与 HTTPS 降级。客户端明确不使用环境代理，以免代理绕开目标地址检查；需要代理的网络环境目前可能无法访问，不能把这种失败当作模型 API 故障。
+
+```sh
+bash scripts/try-live.sh --web --prepare-only
+```
+
+运行输出的启动脚本，让模型读取 TASK.md。验收覆盖公开页面、分页、地址拒绝及保存实际来源。准备过程不联网、不调用模型 API。内部测试另含默认跳过的 `fetches_a_real_public_page`，可显式运行验证公网链路。
