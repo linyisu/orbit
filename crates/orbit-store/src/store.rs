@@ -125,6 +125,17 @@ impl Store {
         }).await
     }
 
+    /// Read identity and display metadata without deserializing the event log.
+    pub async fn session(&self, id: &str) -> Result<Session> {
+        let id = id.to_owned();
+        self.access(move |conn| {
+            conn.query_row(
+                "SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?1",
+                [&id], session_row,
+            ).context("session not found")
+        }).await
+    }
+
     pub async fn load(&self, id: &str) -> Result<Snapshot> {
         let id = id.to_owned();
         self.access(move |conn| {
@@ -182,7 +193,7 @@ impl Store {
             id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),
             "invalid session ID"
         );
-        self.load(id).await?;
+        self.session(id).await?;
         let id = id.to_owned();
         let lock_dir = self.path.with_extension("session-locks");
         let lock_id = id.clone();

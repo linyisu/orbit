@@ -90,14 +90,14 @@ impl SessionState {
             .into_owned();
         let project = store.resolve_project(&workspace).await?;
         let writer = if let Some(id) = resume {
-            let saved = store.load(&id).await?;
+            let saved = store.session(&id).await?;
             ensure!(
-                saved.session.project_id == project.id,
+                saved.project_id == project.id,
                 "session belongs to workspace {}",
-                saved.session.workspace
+                saved.workspace
             );
             ensure!(
-                saved.session.demo == demo,
+                saved.demo == demo,
                 "session mode differs; use --demo for a demo session"
             );
             store.acquire(&id).await?
@@ -217,13 +217,13 @@ impl SessionState {
             self.snapshot = self.store.load(id).await?;
             return Ok(());
         }
-        let saved = self.store.load(id).await?;
+        let saved = self.store.session(id).await?;
         ensure!(
-            saved.session.project_id == self.snapshot.session.project_id,
+            saved.project_id == self.snapshot.session.project_id,
             "该会话属于其他项目，请在对应目录恢复。"
         );
         ensure!(
-            saved.session.demo == self.snapshot.session.demo,
+            saved.demo == self.snapshot.session.demo,
             "演示会话和真实 API 会话不能混用。"
         );
         // Acquire and load the destination before replacing the current writer.
