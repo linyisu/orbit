@@ -187,6 +187,12 @@ impl TranscriptLayout {
             })
     }
 
+    pub(super) fn item_offset(&self, index: usize) -> Option<usize> {
+        self.entries
+            .get(index)
+            .map(|entry| entry.end - entry.height)
+    }
+
     pub fn height(&self) -> usize {
         self.entries.last().map_or(0, |entry| entry.end)
     }

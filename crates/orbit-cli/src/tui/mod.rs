@@ -6,6 +6,7 @@ mod dialogs;
 mod frames;
 pub mod input;
 mod markdown;
+mod navigation;
 mod permissions;
 pub mod render;
 mod selection;
@@ -91,6 +92,13 @@ pub async fn run(
                     let Some(event) = event else { break };
                     let event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+                    if !state.show_help && state.picker.is_none()
+                        && let Some(changed) = navigation::handle(&mut state, &event) {
+                        if changed { dirty = true; frames.request(time::Instant::now()); }
+                        continue;
+                    }
+                    // Unused pointer motion must not trigger full-frame redraws.
+                    if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) { continue; }
                     dirty = true;
                     frames.request(time::Instant::now());
                     if state.show_help || state.picker.is_some() {

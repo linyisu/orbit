@@ -21,7 +21,7 @@ pub struct Selection {
 }
 
 impl Selection {
-    fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         self.anchor = None;
         self.end = None;
         self.frozen = None;

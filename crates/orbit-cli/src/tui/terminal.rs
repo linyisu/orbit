@@ -44,11 +44,9 @@ impl TerminalGuard {
         )?;
         // Save and disable alternate-scroll translation: otherwise some terminals
         // turn wheel input into Up/Down and accidentally navigate prompt history.
-        // Keep button/drag tracking, but do not flood the event loop with
-        // ordinary pointer motion (1003) while the user is not selecting.
-        // Tracking modes are mutually exclusive in some terminals: explicitly
-        // enable button tracking AFTER resetting all-motion tracking.
-        stdout.write_all(b"\x1b[?1003l\x1b[?1002h\x1b[?1007s\x1b[?1007l")?;
+        // Hover navigation requires all-motion tracking. The event loop discards
+        // motion unless the hovered target changes, avoiding redraw floods.
+        stdout.write_all(b"\x1b[?1002l\x1b[?1003h\x1b[?1007s\x1b[?1007l")?;
         stdout.flush()?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
         Ok((guard, terminal))

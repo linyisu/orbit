@@ -43,6 +43,7 @@ pub enum TranscriptItem {
 
 #[derive(Debug)]
 pub struct UiState {
+    pub(super) navigation: super::navigation::Navigation,
     pub approval: Option<orbit_tools::approval::ApprovalPreview>,
     pub approval_area: ratatui::layout::Rect,
     pub approval_scroll: u16,
@@ -83,6 +84,7 @@ pub struct UiState {
 impl UiState {
     pub fn new(model: impl Into<String>) -> Self {
         Self {
+            navigation: Default::default(),
             approval: None,
             approval_area: ratatui::layout::Rect::default(),
             approval_scroll: 0,

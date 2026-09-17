@@ -26,6 +26,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.area = Rect::default();
     state.ime_cursor = None;
     if area.width < 24 || area.height < 10 {
+        state.navigation.reset_area();
         frame.render_widget(
             Paragraph::new("请放大终端\n至少 24 列 × 10 行\nCtrl+D 退出"),
             area,
@@ -252,6 +253,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         return;
     }
     if state.transcript.is_empty() {
+        state.navigation.reset_area();
         let mut logo = welcome();
         let mut width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
         if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
@@ -298,6 +300,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     state
         .transcript_layout
         .draw(frame, state.selection.area, offset);
+    super::navigation::draw(frame, state, area, offset);
 }
 
 pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<Line<'static>> {
@@ -465,7 +468,7 @@ pub(super) fn sanitize_line(line: &mut Line<'_>) {
     }
 }
 
-fn safe_output(text: &str) -> String {
+pub(super) fn safe_output(text: &str) -> String {
     text.chars()
         .map(|c| {
             if c == '\t' {
