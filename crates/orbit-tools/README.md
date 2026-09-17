@@ -1,6 +1,6 @@
 # orbit-tools
 
-当前提供 `Workspace`、文本读取工具 `read_file`、项目检索工具 `search_text`、图片读取工具 `read_image`、文档解析工具 `read_document`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
+当前提供 `Workspace`、文本读取工具 `read_file`、项目检索工具 `search_text`、Git 只读检查工具 `git_inspect`、图片读取工具 `read_image`、文档解析工具 `read_document`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
 
 ## search_text 项目检索
 
@@ -11,6 +11,18 @@
 ```
 
 结果包含相对路径、1 起始的行列号、匹配行和前后上下文。`offset` 与 `next_offset` 按匹配条目分页；单次最多返回 500 项或 32 KiB JSON。单个文件超过 2 MiB、二进制或无法读取时跳过；全次搜索最多检查 20000 个文件、读取 16 MiB 文本，达到总量时 `scan_truncated=true`。使用 `read_file` 继续查看匹配文件的完整、带行号内容。
+
+## git_inspect Git 检查
+
+`git_inspect` 为模型提供结构化、分页的 Git 观察结果，不要求它通过通用命令工具自行解析文本。工作区必须就是 Git 仓库根目录；从仓库子目录启动时会拒绝，以免把工作区外的状态意外暴露到模型上下文。
+
+```json
+{"view":"status","limit":100}
+```
+
+`status` 返回当前分支、HEAD 基线、上游 ahead/behind 和修改路径。`diff` 返回受 256 KiB 原始输出上限约束的统一差异，可用 `staged: true` 查看暂存区，并通过 `offset` 和 `limit` 按行继续。`history` 返回提交 ID、作者时间、作者和标题，按提交条目分页。`path` 仅接受工作区相对路径，不支持 `..`、`.git` 或受保护路径。
+
+工具显式关闭 pager、hooks、fsmonitor、外部 diff、textconv、用户/系统 Git 配置和可能改变仓库位置的 Git 环境变量。它不执行 `add`、`commit`、`reset`、`fetch`，也不会创建索引锁；差异只是读取调用当刻的工作树，后续中央检查点会单独记录 Orbit 造成的变更。
 
 ## read_image 图片输入
 

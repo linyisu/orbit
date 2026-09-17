@@ -1,5 +1,6 @@
 pub mod approval;
 pub mod edit_file;
+pub mod git_inspect;
 pub mod image_assets;
 pub mod list_files;
 pub mod read_document;

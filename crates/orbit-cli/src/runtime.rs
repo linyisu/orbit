@@ -3,9 +3,10 @@ use std::path::Path;
 use anyhow::Result;
 use orbit_agent::tool::ToolRegistry;
 use orbit_tools::{
-    approval::ApprovalSender, edit_file::EditFile, image_assets::ImageAssets,
-    list_files::ListFiles, read_document::ReadDocument, read_file::ReadFile, read_image::ReadImage,
-    run_command::RunCommand, search_text::SearchText, workspace::Workspace, write_file::WriteFile,
+    approval::ApprovalSender, edit_file::EditFile, git_inspect::GitInspect,
+    image_assets::ImageAssets, list_files::ListFiles, read_document::ReadDocument,
+    read_file::ReadFile, read_image::ReadImage, run_command::RunCommand, search_text::SearchText,
+    workspace::Workspace, write_file::WriteFile,
 };
 
 pub fn workspace_tools(
@@ -41,6 +42,7 @@ pub fn workspace_tools(
     }
     tools.register(ListFiles::new(workspace.clone()));
     tools.register(SearchText::new(workspace.clone()));
+    tools.register(GitInspect::new(workspace.clone()));
     tools.register(orbit_tools::web_fetch::WebFetch::new(web)?);
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
