@@ -24,6 +24,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 mod instructions;
+mod project_state;
 mod runtime;
 mod session;
 mod tui;
@@ -445,17 +446,24 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let input_context_tokens = default_model.input_context_tokens;
     let client = ModelClient::new(default_model.config)?;
     let session = session::SessionState::open(database, args.resume, model_name.clone()).await?;
+    let mut tools = runtime::workspace_tools(
+        &config_path,
+        Some(session.store.path()),
+        Some(approvals),
+        command_limits,
+        web,
+        Some(session.scratch.clone()),
+    )?;
+    project_state::register(
+        &mut tools,
+        session.store.clone(),
+        session.snapshot.session.project_id.clone(),
+        session.id().to_owned(),
+    );
     tui::run(
         client,
         model_name,
-        runtime::workspace_tools(
-            &config_path,
-            Some(session.store.path()),
-            Some(approvals),
-            command_limits,
-            web,
-            Some(session.scratch.clone()),
-        )?,
+        tools,
         session,
         approval_receiver,
         tui::RequestBudget {
