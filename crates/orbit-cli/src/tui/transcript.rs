@@ -38,7 +38,7 @@ impl Entry {
         let gutter = if line
             .spans
             .first()
-            .is_some_and(|span| matches!(span.content.as_ref(), "  │ " | "  ┊ "))
+            .is_some_and(|span| span.content.as_ref() == "  │ ")
         {
             Some(line.spans.remove(0))
         } else {
@@ -257,28 +257,21 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
-    fn wrapped_thinking_and_code_keep_gutters_even_when_scrolled_mid_line() {
+    fn wrapped_code_keeps_gutters_even_when_scrolled_mid_line() {
         let text = "中文 words 👋 words ".repeat(80);
-        for (item, marker) in [
-            (TranscriptItem::Thinking(text.clone()), "┊"),
-            (
-                TranscriptItem::Assistant(format!("```rust\n// {text}\n```")),
-                "│",
-            ),
-        ] {
-            let mut layout = TranscriptLayout::default();
-            layout.update(&[item], None, 24);
-            let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
-            terminal
-                .draw(|frame| layout.draw(frame, frame.area(), 3))
-                .unwrap();
-            let buffer = terminal.backend().buffer();
-            for y in 0..6 {
-                assert_eq!(buffer[(0, y)].symbol(), " ");
-                assert_eq!(buffer[(1, y)].symbol(), " ");
-                assert_eq!(buffer[(2, y)].symbol(), marker);
-                assert_eq!(buffer[(3, y)].symbol(), " ");
-            }
+        let item = TranscriptItem::Assistant(format!("```rust\n// {text}\n```"));
+        let mut layout = TranscriptLayout::default();
+        layout.update(&[item], None, 24);
+        let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
+        terminal
+            .draw(|frame| layout.draw(frame, frame.area(), 3))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for y in 0..6 {
+            assert_eq!(buffer[(0, y)].symbol(), " ");
+            assert_eq!(buffer[(1, y)].symbol(), " ");
+            assert_eq!(buffer[(2, y)].symbol(), "│");
+            assert_eq!(buffer[(3, y)].symbol(), " ");
         }
     }
 
@@ -417,7 +410,7 @@ mod tests {
     fn width_and_expansion_invalidate_cached_heights() {
         let items = vec![
             TranscriptItem::User("question".into()),
-            TranscriptItem::Thinking("thinking\n".repeat(80)),
+            TranscriptItem::Thinking("thinking words ".repeat(80)),
             TranscriptItem::Assistant("answer words ".repeat(80)),
         ];
         let mut layout = TranscriptLayout::default();
