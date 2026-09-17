@@ -125,6 +125,7 @@ struct FooterLayout {
     context_details_visible: bool,
 }
 
+#[cfg(test)]
 fn footer(state: &UiState, width: usize) -> Line<'static> {
     footer_layout(state, width).line
 }
