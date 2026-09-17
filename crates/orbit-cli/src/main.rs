@@ -102,6 +102,8 @@ struct FileConfig {
     timeout_seconds: u64,
     #[serde(default = "default_context_tokens")]
     context_tokens: usize,
+    #[serde(default = "default_auto_compact")]
+    auto_compact: bool,
     #[serde(default = "default_max_output_tokens")]
     max_output_tokens: u32,
     #[serde(default)]
@@ -114,6 +116,10 @@ struct FileConfig {
 
 fn default_max_output_tokens() -> u32 {
     32_000
+}
+
+fn default_auto_compact() -> bool {
+    true
 }
 
 fn default_context_tokens() -> usize {
@@ -157,6 +163,7 @@ impl FileConfig {
     fn agent_config(&self) -> AgentConfig {
         AgentConfig {
             context_tokens: self.context_tokens,
+            auto_compact: self.auto_compact,
             max_turns: self.max_turns,
             max_tool_calls: self.max_tool_calls,
         }
@@ -243,6 +250,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             approval_receiver,
             tui::RequestBudget {
                 context_tokens: default_context_tokens(),
+                auto_compact: true,
                 max_output_tokens: default_max_output_tokens(),
                 max_turns: 0,
                 max_tool_calls: 0,
@@ -274,6 +282,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         tui::RequestBudget {
             context_tokens,
             max_output_tokens,
+            auto_compact: agent_config.auto_compact,
             max_turns: agent_config.max_turns,
             max_tool_calls: agent_config.max_tool_calls,
         },
@@ -312,6 +321,14 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
                     print!("{text}");
                     io::stdout().flush()?;
                 }
+                AgentEvent::CompactionStarted => eprintln!("正在自动整理上下文…"),
+                AgentEvent::ContextCompacted {
+                    before_tokens,
+                    after_tokens,
+                } => eprintln!("上下文已自动压缩：{before_tokens} → {after_tokens} tokens"),
+                AgentEvent::CompactionFailed { error } => {
+                    eprintln!("自动压缩未完成，保留原上下文：{error}")
+                }
                 AgentEvent::Failed { error } => eprintln!("agent failed: {error}"),
                 AgentEvent::ToolStarted { call } => {
                     eprintln!("tool started: {}", call.function.name)
@@ -347,6 +364,10 @@ model = "test"
 "#;
         let config: FileConfig = toml::from_str(input).unwrap();
         assert_eq!(config.context_tokens, 128000);
+        assert!(config.auto_compact);
+        let disabled: FileConfig =
+            toml::from_str(&format!("{input}auto_compact = false\n")).unwrap();
+        assert!(!disabled.agent_config().auto_compact);
         assert_eq!(config.max_output_tokens, 32000);
         assert_eq!(config.timeout_seconds, 600);
         assert_eq!(config.agent_config().max_turns, 0);

@@ -8,6 +8,9 @@ timeout_seconds = 600
 
 # Approximate context budget including output reserve, not provider billing tokens.
 context_tokens = 128000
+# Automatically summarize older context near 85% of the available input budget.
+# Uses additional model requests; original conversation records remain stored.
+auto_compact = true
 
 # Per-request output limit; reasoning can consume this budget too.
 max_output_tokens = 32000

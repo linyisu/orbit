@@ -41,6 +41,7 @@ type RunTask = JoinHandle<Result<AgentResult, AgentError>>;
 
 pub struct RequestBudget {
     pub context_tokens: usize,
+    pub auto_compact: bool,
     pub max_output_tokens: u32,
     pub max_turns: usize,
     pub max_tool_calls: usize,
@@ -60,11 +61,13 @@ pub async fn run(
     state.demo = demo;
     let RequestBudget {
         context_tokens,
+        auto_compact,
         max_output_tokens,
         max_turns,
         max_tool_calls,
     } = budget;
     state.context_tokens = context_tokens;
+    state.auto_compact = auto_compact;
     state.max_output_tokens = max_output_tokens;
     session.restore_ui(&mut state);
     let mut history = session.snapshot.history.clone();
@@ -167,7 +170,7 @@ pub async fn run(
                             cancellation = Some(token.clone());
                             let tools = tools.clone();
                             let backend = ModelClientBackend::new(model.clone());
-                            let config = AgentConfig { context_tokens, max_turns, max_tool_calls };
+                            let config = AgentConfig { context_tokens, max_turns, max_tool_calls, auto_compact };
                             let agent = Agent::new(backend.clone(), tools.clone(), config.clone());
                             task = Some(tokio::spawn(async move {
                                 if compacting {
@@ -312,10 +315,12 @@ async fn run_command(
             let input = std::mem::take(&mut state.input);
             let demo = state.demo;
             let context_tokens = state.context_tokens;
+            let auto_compact = state.auto_compact;
             let max_output_tokens = state.max_output_tokens;
             *state = UiState::new(state.model.clone());
             state.demo = demo;
             state.context_tokens = context_tokens;
+            state.auto_compact = auto_compact;
             state.max_output_tokens = max_output_tokens;
             state.input = input;
             session.restore_ui(state);
@@ -332,7 +337,7 @@ async fn run_command(
         }
         "/context" if argument.is_empty() => {
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
-            state.transcript.push(TranscriptItem::Notice(format!("上下文估算：{estimated} tokens（含工具定义）\n输出上限及预留：{} tokens · 总预算：{}\n这是通用估算，不等于服务端实际用量。\n/compact 总结旧对话并保留最近两轮；真实模式会调用模型，演示模式生成机械提要。",state.max_output_tokens,state.context_tokens)));
+            state.transcript.push(TranscriptItem::Notice(format!("上下文估算：{estimated} tokens（含工具定义）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量。\n/compact 总结旧对话并保留最近两轮；真实模式会调用模型，演示模式生成机械提要。",state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
@@ -378,6 +383,7 @@ async fn resume_session(
     let mut restored = UiState::new(state.model.clone());
     restored.demo = state.demo;
     restored.context_tokens = state.context_tokens;
+    restored.auto_compact = state.auto_compact;
     restored.max_output_tokens = state.max_output_tokens;
     session.restore_ui(&mut restored);
     *state = restored;

@@ -52,6 +52,7 @@ pub struct UiState {
     pub permission_mode: super::permissions::Mode,
     pub selection: super::selection::Selection,
     pub context_tokens: usize,
+    pub auto_compact: bool,
     pub max_output_tokens: u32,
     pub model: String,
     pub demo: bool,
@@ -87,6 +88,7 @@ impl UiState {
             permission_mode: super::permissions::Mode::default(),
             selection: super::selection::Selection::default(),
             context_tokens: 128_000,
+            auto_compact: true,
             max_output_tokens: 32_000,
             model: model.into(),
             demo: false,
@@ -144,6 +146,18 @@ impl UiState {
                 self.turn = turn;
                 self.ensure_assistant_item();
             }
+            AgentEvent::CompactionStarted => self
+                .transcript
+                .push(TranscriptItem::Notice("正在自动整理上下文…".into())),
+            AgentEvent::ContextCompacted {
+                before_tokens,
+                after_tokens,
+            } => self.transcript.push(TranscriptItem::Notice(format!(
+                "上下文已自动压缩：{before_tokens} → {after_tokens} tokens，继续执行。"
+            ))),
+            AgentEvent::CompactionFailed { error } => self.transcript.push(TranscriptItem::Notice(
+                format!("自动压缩未完成，保留原上下文：{error}"),
+            )),
             AgentEvent::Model(event) => self.apply_model_event(event),
             AgentEvent::ToolStarted { call } => {
                 self.tool_calls += 1;

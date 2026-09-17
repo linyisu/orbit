@@ -2,12 +2,35 @@ use orbit_model::types::{StreamEvent, ToolCall};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum AgentEvent {
-    TurnStarted { turn: usize },
+    TurnStarted {
+        turn: usize,
+    },
     Model(StreamEvent),
-    ToolStarted { call: ToolCall },
-    ToolFinished { call: ToolCall, content: String },
-    ToolFailed { call: ToolCall, error: String },
-    Completed { turns: usize, tool_calls: usize },
-    Failed { error: String },
+    ToolStarted {
+        call: ToolCall,
+    },
+    ToolFinished {
+        call: ToolCall,
+        content: String,
+    },
+    ToolFailed {
+        call: ToolCall,
+        error: String,
+    },
+    Completed {
+        turns: usize,
+        tool_calls: usize,
+    },
+    Failed {
+        error: String,
+    },
+    CompactionStarted,
+    ContextCompacted {
+        before_tokens: usize,
+        after_tokens: usize,
+    },
+    CompactionFailed {
+        error: String,
+    },
     Cancelled,
 }

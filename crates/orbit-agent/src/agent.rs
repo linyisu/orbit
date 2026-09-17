@@ -14,6 +14,7 @@ pub struct AgentConfig {
     pub max_turns: usize,
     pub max_tool_calls: usize,
     pub context_tokens: usize,
+    pub auto_compact: bool,
 }
 
 impl Default for AgentConfig {
@@ -22,6 +23,7 @@ impl Default for AgentConfig {
             max_turns: 0,
             max_tool_calls: 0,
             context_tokens: 128_000,
+            auto_compact: true,
         }
     }
 }
@@ -124,6 +126,7 @@ where
         let mut history = request.messages;
         let mut turns = 0;
         let mut tool_calls = 0;
+        let mut compact_after = 0;
 
         loop {
             if cancellation.is_cancelled() {
@@ -133,12 +136,14 @@ where
                 return Err(AgentError::MaxTurns);
             }
 
-            crate::context::check_budget(
-                &history,
-                &self.tools.definitions(),
+            self.prepare_context(
+                &mut history,
                 request.max_tokens.unwrap_or(4096) as usize,
-                self.config.context_tokens,
-            )?;
+                &mut compact_after,
+                cancellation.clone(),
+                Some(sender),
+            )
+            .await?;
             turns += 1;
             send_agent_event(sender, AgentEvent::TurnStarted { turn: turns }).await?;
 
@@ -209,6 +214,66 @@ where
                 }
             }
         }
+    }
+
+    async fn prepare_context(
+        &self,
+        history: &mut Vec<ChatMessage>,
+        output: usize,
+        compact_after: &mut usize,
+        cancellation: CancellationToken,
+        sender: Option<&mpsc::Sender<AgentEvent>>,
+    ) -> Result<(), AgentError> {
+        let tools = self.tools.definitions();
+        let estimated = crate::context::estimate_tokens(history, &tools);
+        if self.config.auto_compact
+            && estimated >= *compact_after
+            && let Some(plan) =
+                crate::autocompact::plan(history, &tools, output, self.config.context_tokens)
+        {
+            if let Some(sender) = sender {
+                send_agent_event(sender, AgentEvent::CompactionStarted).await?;
+            }
+            let event = match crate::autocompact::execute(
+                &self.backend,
+                plan,
+                &tools,
+                output,
+                self.config.context_tokens,
+                cancellation.clone(),
+            )
+            .await
+            {
+                Ok(result) => {
+                    let event = AgentEvent::ContextCompacted {
+                        before_tokens: result.before_tokens,
+                        after_tokens: result.after_tokens,
+                    };
+                    *history = result.history;
+                    *compact_after = result
+                        .after_tokens
+                        .saturating_add(self.config.context_tokens.saturating_sub(output) / 10);
+                    event
+                }
+                Err(AgentError::Cancelled) => return Err(AgentError::Cancelled),
+                Err(error) => {
+                    // A failed early attempt must not cause a summary request on
+                    // every tool call. Retry only after substantial input growth.
+                    *compact_after = estimated
+                        .saturating_add(self.config.context_tokens.saturating_sub(output) / 10);
+                    AgentEvent::CompactionFailed {
+                        error: error.to_string(),
+                    }
+                }
+            };
+            if let Some(sender) = sender {
+                send_agent_event(sender, event).await?;
+            }
+        }
+        if cancellation.is_cancelled() {
+            return Err(AgentError::Cancelled);
+        }
+        crate::context::check_budget(history, &tools, output, self.config.context_tokens)
     }
 
     async fn collect_stream_with_agent_events(
@@ -310,6 +375,7 @@ where
         let mut history = request.messages;
         let mut turns = 0;
         let mut tool_calls = 0;
+        let mut compact_after = 0;
 
         loop {
             if cancellation.is_cancelled() {
@@ -320,12 +386,14 @@ where
                 return Err(AgentError::MaxTurns);
             }
 
-            crate::context::check_budget(
-                &history,
-                &self.tools.definitions(),
+            self.prepare_context(
+                &mut history,
                 request.max_tokens.unwrap_or(4096) as usize,
-                self.config.context_tokens,
-            )?;
+                &mut compact_after,
+                cancellation.clone(),
+                None,
+            )
+            .await?;
             turns += 1;
             let model_request = ChatRequest {
                 messages: history.clone(),

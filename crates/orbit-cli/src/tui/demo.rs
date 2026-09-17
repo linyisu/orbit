@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 pub struct DemoModel;
 
 fn response(request: &ChatRequest) -> ChatMessage {
-    if matches!(request.messages.first(), Some(ChatMessage::System { content }) if content == orbit_agent::context::SUMMARY_PROMPT)
+    if matches!(request.messages.first(), Some(ChatMessage::System { content }) if content.starts_with(orbit_agent::context::SUMMARY_PROMPT))
     {
         let messages: Vec<ChatMessage> = match request.messages.last() {
             Some(ChatMessage::User { content }) => {
