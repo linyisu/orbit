@@ -264,6 +264,70 @@ impl Entry {
         }
         self.observed_bytes = Some(text.len());
     }
+
+    fn user(&mut self, text: &str, width: u16) {
+        // A complete frame lets user turns remain visually distinct after their
+        // contents wrap. Keep a plain fallback for terminals too narrow to
+        // draw the two side rails without stealing all useful text width.
+        if width < 9 {
+            for (index, line) in text.lines().enumerate() {
+                self.push(
+                    Line::from(vec![
+                        Span::styled(
+                            if index == 0 { "❯ " } else { "  " },
+                            ratatui::style::Style::default()
+                                .fg(ratatui::style::Color::Rgb(218, 139, 109)),
+                        ),
+                        Span::styled(
+                            line.to_owned(),
+                            ratatui::style::Style::default()
+                                .add_modifier(ratatui::style::Modifier::BOLD),
+                        ),
+                    ]),
+                    width,
+                );
+            }
+            self.push(Line::from(""), width);
+            return;
+        }
+
+        let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
+        let top_label = "╭─ 你 ";
+        self.push(
+            Line::from(Span::styled(
+                format!(
+                    "{top_label}{}╮",
+                    "─".repeat(usize::from(width) - top_label.width() - 1)
+                ),
+                border,
+            )),
+            width,
+        );
+        let inner_width = width - 4;
+        for source in text.split('\n') {
+            let content = Line::from(Span::styled(
+                source.to_owned(),
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+            ));
+            let (wrapped, _) = wrap_line(&content, inner_width);
+            for line in wrapped {
+                let padding = usize::from(inner_width).saturating_sub(line.width());
+                let mut spans = vec![Span::styled("│ ", border)];
+                spans.extend(line.spans);
+                spans.push(Span::raw(" ".repeat(padding)));
+                spans.push(Span::styled(" │", border));
+                self.push(Line::from(spans), width);
+            }
+        }
+        self.push(
+            Line::from(Span::styled(
+                format!("╰{}╯", "─".repeat(usize::from(width) - 2)),
+                border,
+            )),
+            width,
+        );
+        self.push(Line::from(""), width);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -347,6 +411,10 @@ impl TranscriptLayout {
             match item {
                 TranscriptItem::Assistant(text) => entry.stream(text, false, width),
                 TranscriptItem::Thinking(text) => entry.stream(text, true, width),
+                TranscriptItem::User(text) => {
+                    *entry = Entry::default();
+                    entry.user(text, width);
+                }
                 _ => {
                     *entry = Entry::default();
                     for line in render::transcript_lines(
@@ -661,7 +729,6 @@ mod tests {
     #[test]
     fn width_and_expansion_invalidate_cached_heights() {
         let items = vec![
-            TranscriptItem::User("question".into()),
             TranscriptItem::Thinking("thinking words ".repeat(80)),
             TranscriptItem::Assistant("answer words ".repeat(80)),
         ];
@@ -691,6 +758,30 @@ mod tests {
                 expected_terminal.backend().buffer()
             );
         }
+    }
+
+    #[test]
+    fn user_turns_use_a_framed_bubble_and_wrap_inside_its_side_rails() {
+        let mut layout = TranscriptLayout::default();
+        layout.update(
+            &[TranscriptItem::User(
+                "一段很长的用户输入，需要在边框内换行。".repeat(4),
+            )],
+            None,
+            24,
+        );
+        let rows = &layout.entries[0].rows;
+        assert_eq!(
+            rows.first().unwrap().line.to_string().chars().next(),
+            Some('╭')
+        );
+        assert_eq!(rows.last().unwrap().line.to_string(), "");
+        assert!(
+            rows.iter()
+                .any(|row| row.line.to_string().starts_with("│ "))
+        );
+        assert!(rows.iter().any(|row| row.line.to_string().starts_with('╰')));
+        assert!(rows.iter().all(|row| row.line.width() <= 24));
     }
 
     #[test]
