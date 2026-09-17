@@ -156,7 +156,7 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let right_budget = available.saturating_sub(8);
     let ring = context_ring(context_percent(state));
     let detailed_right = format!(
-        "{ring} {}%/{}  {model_label} · {effort}",
+        "{ring} {}%/{} 输入  {model_label} · {effort}",
         context_percent(state),
         compact_tokens(input_context_budget(state)),
     );
@@ -1392,7 +1392,7 @@ mod tests {
             if width >= 80 {
                 assert!(text.contains("思考"));
                 assert!(text.contains('◕'));
-                assert!(text.contains("53%/96k"));
+                assert!(text.contains("53%/96k 输入"));
                 assert!(text.contains(state.permission_mode.label()));
             }
             assert!(text.ends_with("  "));
