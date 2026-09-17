@@ -48,6 +48,7 @@ pub struct RequestBudget {
     pub max_output_tokens: u32,
     pub max_turns: usize,
     pub max_tool_calls: usize,
+    pub instructions: crate::instructions::Instructions,
 }
 
 pub async fn run(
@@ -68,12 +69,14 @@ pub async fn run(
         max_output_tokens,
         max_turns,
         max_tool_calls,
+        instructions,
     } = budget;
     state.context_tokens = context_tokens;
     state.auto_compact = auto_compact;
     state.max_output_tokens = max_output_tokens;
     session.restore_ui(&mut state);
     let mut history = session.snapshot.history.clone();
+    crate::instructions::inject(&mut history, &instructions);
     let mut events = EventStream::new();
     let mut ticks = time::interval(Duration::from_millis(33));
     ticks.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -103,7 +106,7 @@ pub async fn run(
                     frames.request(time::Instant::now());
                     if state.show_help || state.picker.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
-                            && let Err(error) = resume_session(&id, &mut state, &mut history, &mut session).await
+                            && let Err(error) = resume_session(&id, &mut state, &mut history, &mut session, &instructions).await
                             && let Some(picker) = &mut state.picker {
                             picker.error = Some(error.to_string());
                         }
@@ -189,7 +192,7 @@ pub async fn run(
                         Action::Submit(prompt) => {
                             let compacting = prompt.trim() == "/compact";
                             if prompt.starts_with('/') && !compacting {
-                                match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, &tools).await {
+                                match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, &tools, &instructions).await {
                                     Ok(true) => break,
                                     Ok(false) => {},
                                     Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
@@ -302,7 +305,10 @@ pub async fn run(
                     };
                     session.record(&final_event);
                     session.finish(status, completed_history.clone()).await?;
-                    if let Some(saved) = completed_history { history = saved; }
+                    if let Some(saved) = completed_history {
+                        history = saved;
+                        crate::instructions::inject(&mut history, &instructions);
+                    }
                     state.apply(final_event);
                     task = None;
                     receiver = None;
@@ -371,6 +377,7 @@ async fn run_command(
     history: &mut Vec<ChatMessage>,
     session: &mut SessionState,
     tools: &ToolRegistry,
+    instructions: &crate::instructions::Instructions,
 ) -> Result<bool> {
     let (command, argument) = prompt
         .split_once(char::is_whitespace)
@@ -381,6 +388,7 @@ async fn run_command(
         "/new" if argument.is_empty() => {
             session.new_session(state.model.clone(), state.demo).await?;
             history.clear();
+            crate::instructions::inject(history, instructions);
             let input = std::mem::take(&mut state.input);
             let demo = state.demo;
             let context_tokens = state.context_tokens;
@@ -436,16 +444,37 @@ async fn run_command(
         }
         "/context" if argument.is_empty() => {
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
-            state.transcript.push(TranscriptItem::Notice(format!("上下文估算：{estimated} tokens（含工具定义）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量。\n/compact 总结旧对话并保留最近两轮；真实模式会调用模型，演示模式生成机械提要。",state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            let system = history
+                .iter()
+                .filter(|message| matches!(message, ChatMessage::System { .. }) && !crate::instructions::is_orbit_instruction(message))
+                .cloned()
+                .collect::<Vec<_>>();
+            let project_rules = history
+                .iter()
+                .filter(|message| crate::instructions::is_orbit_instruction(message))
+                .cloned()
+                .collect::<Vec<_>>();
+            let conversation = history
+                .iter()
+                .filter(|message| !matches!(message, ChatMessage::System { .. }))
+                .cloned()
+                .collect::<Vec<_>>();
+            let system_tokens = orbit_agent::context::estimate_tokens(&system, &[]);
+            let project_instruction_tokens = orbit_agent::context::estimate_tokens(&project_rules, &[]);
+            let conversation_tokens = orbit_agent::context::estimate_tokens(&conversation, &[]);
+            let tool_tokens = orbit_agent::context::estimate_tokens(&[], &tools.definitions());
+            let sources = if instructions.sources.is_empty() { "未找到".to_owned() } else { format!("{} 条", instructions.sources.len()) };
+            let truncation = if instructions.truncated { "（达到 32 KiB 上限，后续文件未加载）" } else { "" };
+            state.transcript.push(TranscriptItem::Notice(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；真实模式会调用模型，演示模式生成机械提要。", instructions.source_summary(), state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
             state.selection = Default::default();
         }
-        "/resume" => resume_session(argument, state, history, session).await?,
+        "/resume" => resume_session(argument, state, history, session, instructions).await?,
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
-            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / web_fetch / write_file / edit_file / run_command · 审批：{}",
-            session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs(), state.permission_mode.label()
+            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / web_fetch / write_file / edit_file / run_command · 审批：{}",
+            session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
         "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
         "/model" => {
@@ -658,9 +687,11 @@ async fn resume_session(
     state: &mut UiState,
     history: &mut Vec<ChatMessage>,
     session: &mut SessionState,
+    instructions: &crate::instructions::Instructions,
 ) -> Result<()> {
     session.resume(id).await?;
     *history = session.snapshot.history.clone();
+    crate::instructions::inject(history, instructions);
     let mut restored = UiState::new(state.model.clone());
     restored.demo = state.demo;
     restored.context_tokens = state.context_tokens;

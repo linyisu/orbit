@@ -19,6 +19,7 @@ use orbit_model::{
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+mod instructions;
 mod runtime;
 mod session;
 mod tui;
@@ -238,6 +239,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs) -> Result<()> {
+    let instructions = instructions::load_current();
     let database = session::database_path(database)?;
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
     if args.demo {
@@ -268,6 +270,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
                 max_output_tokens: default_max_output_tokens(),
                 max_turns: 0,
                 max_tool_calls: 0,
+                instructions,
             },
         )
         .await;
@@ -302,6 +305,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             auto_compact: agent_config.auto_compact,
             max_turns: agent_config.max_turns,
             max_tool_calls: agent_config.max_tool_calls,
+            instructions,
         },
     )
     .await
@@ -314,7 +318,10 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     let web = file_config.web.clone();
     let max_output_tokens = file_config.max_output_tokens;
     let client = ModelClient::new(file_config.model_config())?;
-    let mut request = ChatRequest::new(vec![ChatMessage::user(args.prompt)]);
+    let instructions = instructions::load_current();
+    let mut messages = vec![ChatMessage::user(args.prompt)];
+    instructions::inject(&mut messages, &instructions);
+    let mut request = ChatRequest::new(messages);
     request.max_tokens = Some(max_output_tokens);
 
     let database = session::database_path(database)?;
