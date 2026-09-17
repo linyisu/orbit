@@ -2,7 +2,7 @@
 use crossterm::event::{Event, MouseEventKind};
 use std::time::{Duration, Instant};
 
-pub(super) const LINES: usize = 2;
+pub(super) const LINES: usize = 5;
 const INTERVAL: Duration = Duration::from_millis(40);
 
 #[derive(Default)]
@@ -48,7 +48,7 @@ mod tests {
     }
 
     #[test]
-    fn dense_bursts_move_two_lines_and_reversal_is_immediate() {
+    fn dense_bursts_move_five_lines_and_reversal_is_immediate() {
         let mut filter = Wheel::default();
         let now = Instant::now();
         let up = wheel(MouseEventKind::ScrollUp);
@@ -58,7 +58,7 @@ mod tests {
                 moved += LINES;
             }
         }
-        assert_eq!(moved, 2);
+        assert_eq!(moved, 5);
         assert!(filter.accept(
             &wheel(MouseEventKind::ScrollDown),
             now + Duration::from_millis(39)
