@@ -98,17 +98,13 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     }
     nav.first = nav.first.min(anchors.len().saturating_sub(slots));
     let shown = (anchors.len() - nav.first).min(slots);
+    let first_row = area.y + ((slots - shown) / 2) as u16;
     let active = anchors
         .partition_point(|(start, _)| *start <= offset)
         .saturating_sub(1);
     for (j, (start, text)) in anchors.iter().skip(nav.first).take(slots).enumerate() {
         let index = nav.first + j;
-        let y = area.y
-            + if shown == 1 {
-                0
-            } else {
-                (j * (slots - 1) / (shown - 1)) as u16
-            };
+        let y = first_row + j as u16;
         let hovered = nav.hovered == Some(y);
         let symbol = if hovered {
             "◆"
