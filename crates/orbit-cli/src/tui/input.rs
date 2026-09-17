@@ -149,6 +149,19 @@ impl InputState {
         }
     }
 
+    pub fn move_to(&mut self, column: usize, row: usize, width: usize) {
+        let (_, positions) = self.layout(width);
+        let last_row = positions.last().unwrap().2;
+        if let Some(&(index, _, _)) = positions
+            .iter()
+            .filter(|p| p.2 == row.min(last_row))
+            .min_by_key(|p| p.1.abs_diff(column))
+        {
+            self.cursor = index;
+            self.preferred_column = None;
+        }
+    }
+
     pub fn visual_lines(&self, width: usize) -> (Vec<String>, (usize, usize)) {
         let (lines, positions) = self.layout(width);
         let &(_, column, row) = positions.iter().find(|p| p.0 == self.cursor).unwrap();
@@ -239,6 +252,20 @@ mod tests {
         assert_eq!(input.visual_lines(4).1, (2, 0));
         input.backspace();
         assert!(input.text.starts_with("好"));
+    }
+
+    #[test]
+    fn mouse_positions_use_grapheme_boundaries_and_wrapped_rows() {
+        let mut input = InputState::default();
+        input.set("你好e\u{301}👩‍💻xy\nlast".into());
+        input.move_to(1, 0, 4);
+        assert_eq!(input.cursor, 0);
+        input.move_to(2, 0, 4);
+        assert_eq!(input.cursor, "你".len());
+        input.move_to(1, 1, 4);
+        assert_eq!(&input.text[input.cursor..], "👩‍💻xy\nlast");
+        input.move_to(50, 50, 4);
+        assert_eq!(input.cursor, input.text.len());
     }
 
     #[test]

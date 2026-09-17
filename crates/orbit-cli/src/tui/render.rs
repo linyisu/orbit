@@ -25,6 +25,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let area = frame.area();
     state.selection.area = Rect::default();
     state.ime_cursor = None;
+    state.selection.reset_caret();
+    state.input_area = Rect::default();
     if area.width < 24 || area.height < 10 {
         state.navigation.reset_area();
         frame.render_widget(
@@ -81,6 +83,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         Paragraph::new(footer(state, areas[6].width as usize)),
         areas[6],
     );
+    state.selection.area = area;
     super::dialogs::draw(frame, state);
 }
 
@@ -249,6 +252,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         width: area.width.saturating_sub(4),
         ..area
     };
+    state.selection.viewport = state.selection.area;
     if state.approval.is_none() && state.selection.restore_viewport(frame) {
         return;
     }
@@ -297,9 +301,10 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     } else {
         state.max_scroll.saturating_sub(state.scroll)
     };
+    state.selection.offset = offset;
     state
         .transcript_layout
-        .draw(frame, state.selection.area, offset);
+        .draw(frame, state.selection.viewport, offset);
     super::navigation::draw(frame, state, area, offset);
 }
 
@@ -537,6 +542,8 @@ fn draw_composer(
     let scroll = cursor
         .1
         .saturating_sub(text_area.height.saturating_sub(1) as usize);
+    state.input_area = text_area;
+    state.input_scroll = scroll;
     // IME preedit belongs to the terminal; placeholder text underneath it is misleading.
     let text = Text::from(
         lines
@@ -546,11 +553,14 @@ fn draw_composer(
             .collect::<Vec<_>>(),
     );
     frame.render_widget(Paragraph::new(text), text_area);
-    if text_area.width > 0 && text_area.height > 0 {
+    if text_area.width > 0 && text_area.height > 0 && !state.selection.active() {
         // Draw a steady caret; restore the hidden hardware cursor after flushing.
         let x = text_area.x + (cursor.0 as u16).min(text_area.width - 1);
         let y = text_area.y + (cursor.1.saturating_sub(scroll) as u16).min(text_area.height - 1);
         state.ime_cursor = Some((x, y).into());
+        state
+            .selection
+            .set_caret((x, y), frame.buffer_mut()[(x, y)].clone());
         frame.buffer_mut()[(x, y)].set_style(Style::default().bg(Color::Gray).fg(Color::Black));
         // Overwriting half of a CJK glyph with the caret can color its other
         // half in the terminal even though that trailing buffer cell is blank.
@@ -734,7 +744,64 @@ mod tests {
     }
 
     #[test]
-    fn rendered_caret_stays_fixed_while_streaming_and_selecting() {
+    fn composer_and_footer_can_be_selected_without_a_visible_caret() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut state = UiState::new("model-name");
+        state.input.insert("你好 draft");
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        for footer in [false, true] {
+            state.selection.clear();
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut state);
+                    state.selection.paint(frame);
+                })
+                .unwrap();
+            let (x, y, end) = if footer {
+                (0, 23, 79)
+            } else {
+                (
+                    state.input_area.x,
+                    state.input_area.y,
+                    state.input_area.x + 3,
+                )
+            };
+            for (kind, column) in [
+                (MouseEventKind::Down(MouseButton::Left), x),
+                (MouseEventKind::Drag(MouseButton::Left), end),
+                (MouseEventKind::Up(MouseButton::Left), end),
+            ] {
+                state
+                    .selection
+                    .handle(&Event::Mouse(MouseEvent {
+                        kind,
+                        column,
+                        row: y,
+                        modifiers: KeyModifiers::NONE,
+                    }))
+                    .unwrap();
+            }
+            terminal
+                .draw(|frame| assert!(state.selection.draw_frozen(frame)))
+                .unwrap();
+            assert!(
+                terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .all(|cell| cell.bg != Color::Gray)
+            );
+            if footer {
+                assert!(state.selection.text().contains("model-name"));
+            } else {
+                assert_eq!(state.selection.text(), "你好");
+            }
+        }
+    }
+
+    #[test]
+    fn selecting_hides_caret_without_moving_input_position() {
         let mut state = UiState::new("mock");
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         state.input.insert("draft");
@@ -780,14 +847,14 @@ mod tests {
             })
             .unwrap();
         assert_eq!(state.input.cursor, input_cursor);
-        assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
+        assert_ne!(terminal.backend().buffer().content[caret].bg, Color::Gray);
         state.apply(orbit_agent::events::AgentEvent::Completed {
             turns: 1,
             tool_calls: 0,
         });
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         assert!(!terminal.backend().cursor_visible());
-        assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
+        assert_ne!(terminal.backend().buffer().content[caret].bg, Color::Gray);
     }
 
     #[test]

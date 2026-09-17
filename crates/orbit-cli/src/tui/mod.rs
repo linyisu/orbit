@@ -109,6 +109,12 @@ pub async fn run(
                         }
                         continue;
                     }
+                    if let Some((x, y)) = state.selection.click(&event)
+                        && state.input_area.contains((x, y).into()) {
+                        state.input.move_to((x - state.input_area.x) as usize,
+                            (y - state.input_area.y) as usize + state.input_scroll,
+                            state.input_width);
+                    }
                     if state.selection.handle(&event)? {
                         terminal.draw(|frame| {
                             if !state.selection.draw_frozen(frame) {
@@ -464,7 +470,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 if let Some(index) = state.transcript_layout.visible_tool(
                     &state.transcript,
                     offset,
-                    state.selection.area.height as usize,
+                    state.selection.viewport.height as usize,
                 ) {
                     state.expanded = if state.expanded == Some(index) {
                         None

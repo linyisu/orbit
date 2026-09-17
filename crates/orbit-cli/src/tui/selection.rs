@@ -4,15 +4,26 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
-    buffer::Buffer,
+    buffer::{Buffer, Cell},
     layout::Rect,
     style::{Color, Style},
 };
 use unicode_width::UnicodeWidthStr;
 
+#[derive(Debug)]
+struct RetainedSelection {
+    text: String,
+    // Transcript rows use document coordinates; composer/footer rows stay fixed.
+    cells: Vec<(u16, i64, bool)>,
+}
+
 #[derive(Debug, Default)]
 pub struct Selection {
     pub area: Rect,
+    pub viewport: Rect,
+    pub offset: usize,
+    caret: Option<((u16, u16), Cell)>,
+    retained: Option<RetainedSelection>,
     latest: Option<Buffer>,
     frozen: Option<Buffer>,
     anchor: Option<(u16, u16)>,
@@ -22,10 +33,35 @@ pub struct Selection {
 
 impl Selection {
     pub(super) fn clear(&mut self) {
+        self.retained = None;
         self.anchor = None;
         self.end = None;
         self.frozen = None;
         self.dragging = false;
+    }
+
+    pub fn active(&self) -> bool {
+        self.anchor.is_some() || self.retained.is_some()
+    }
+
+    pub fn reset_caret(&mut self) {
+        self.caret = None;
+    }
+
+    pub fn set_caret(&mut self, position: (u16, u16), cell: Cell) {
+        self.caret = Some((position, cell));
+    }
+
+    pub fn click(&self, event: &Event) -> Option<(u16, u16)> {
+        if let Event::Mouse(mouse) = event
+            && mouse.kind == MouseEventKind::Up(MouseButton::Left)
+            && self.dragging
+            && self.anchor == Some((mouse.column, mouse.row))
+        {
+            Some((mouse.column, mouse.row))
+        } else {
+            None
+        }
     }
 
     pub fn handle(&mut self, event: &Event) -> io::Result<bool> {
@@ -63,12 +99,35 @@ impl Selection {
                         }
                         return Ok(true);
                     }
-                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.clear(),
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                        if self.frozen.is_some() =>
+                    {
+                        let cells = self
+                            .cells()
+                            .into_iter()
+                            .map(|(x, y)| {
+                                let chat = self.viewport.contains((x, y).into());
+                                (
+                                    x,
+                                    i64::from(y) + if chat { self.offset as i64 } else { 0 },
+                                    chat,
+                                )
+                            })
+                            .collect();
+                        self.retained = Some(RetainedSelection {
+                            text: self.text(),
+                            cells,
+                        });
+                        self.frozen = None;
+                        self.anchor = None;
+                        self.end = None;
+                        self.dragging = false;
+                    }
                     _ => {}
                 }
             }
             Event::Key(key) if key.kind != KeyEventKind::Release => {
-                if self.anchor.is_some()
+                if self.active()
                     && key.code == KeyCode::Char('c')
                     && key.modifiers.contains(KeyModifiers::CONTROL)
                 {
@@ -85,7 +144,7 @@ impl Selection {
                     }
                     return Ok(true);
                 }
-                if self.anchor.is_some() && key.code == KeyCode::Esc {
+                if self.active() && key.code == KeyCode::Esc {
                     self.clear();
                     return Ok(true);
                 }
@@ -135,6 +194,9 @@ impl Selection {
     }
 
     pub fn text(&self) -> String {
+        if let Some(retained) = &self.retained {
+            return retained.text.clone();
+        }
         let Some(buffer) = &self.frozen else {
             return String::new();
         };
@@ -199,9 +261,29 @@ impl Selection {
             }
         }
         if self.frozen.is_none() {
-            self.latest = Some(frame.buffer_mut().clone());
+            let mut snapshot = frame.buffer_mut().clone();
+            if let Some((position, cell)) = &self.caret
+                && snapshot.area.contains((*position).into())
+            {
+                snapshot[*position] = cell.clone();
+            }
+            self.latest = Some(snapshot);
         }
-        for (x, y) in self.cells() {
+        let cells = if let Some(retained) = &self.retained {
+            retained
+                .cells
+                .iter()
+                .filter_map(|&(x, y, chat)| {
+                    let y = y - if chat { self.offset as i64 } else { 0 };
+                    let y = u16::try_from(y).ok()?;
+                    let area = if chat { self.viewport } else { self.area };
+                    area.contains((x, y).into()).then_some((x, y))
+                })
+                .collect()
+        } else {
+            self.cells()
+        };
+        for (x, y) in cells {
             let width = frame.buffer_mut()[(x, y)].symbol().width().max(1) as u16;
             for column in x..x.saturating_add(width).min(self.area.right()) {
                 frame.buffer_mut()[(column, y)]
@@ -224,6 +306,45 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         })
+    }
+
+    #[test]
+    fn scrolling_moves_highlight_with_transcript_and_keeps_copy_offscreen() {
+        let mut terminal = Terminal::new(TestBackend::new(20, 6)).unwrap();
+        let mut selection = Selection {
+            area: Rect::new(0, 0, 20, 6),
+            viewport: Rect::new(0, 0, 20, 4),
+            offset: 10,
+            ..Default::default()
+        };
+        terminal
+            .draw(|frame| {
+                frame.render_widget(
+                    Paragraph::new("zero\none\nselected\nthree"),
+                    selection.viewport,
+                );
+                selection.paint(frame);
+            })
+            .unwrap();
+        for (kind, x) in [
+            (MouseEventKind::Down(MouseButton::Left), 0),
+            (MouseEventKind::Drag(MouseButton::Left), 7),
+            (MouseEventKind::Up(MouseButton::Left), 7),
+        ] {
+            selection.handle(&mouse(kind, x, 2)).unwrap();
+        }
+        selection
+            .handle(&mouse(MouseEventKind::ScrollDown, 1, 2))
+            .unwrap();
+        for (offset, expected_row) in [(11, Some(1)), (20, None), (10, Some(2))] {
+            selection.offset = offset;
+            terminal.draw(|frame| selection.paint(frame)).unwrap();
+            let selected_rows: Vec<_> = (0..6)
+                .filter(|&y| terminal.backend().buffer()[(0, y)].bg == Color::Blue)
+                .collect();
+            assert_eq!(selected_rows, expected_row.into_iter().collect::<Vec<_>>());
+            assert_eq!(selection.text(), "selected");
+        }
     }
 
     #[test]
@@ -293,6 +414,6 @@ mod tests {
         selection
             .handle(&mouse(MouseEventKind::ScrollUp, 4, 1))
             .unwrap();
-        assert!(selection.text().is_empty());
+        assert_eq!(selection.text(), "你好abc\nsecond");
     }
 }
