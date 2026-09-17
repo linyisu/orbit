@@ -43,7 +43,8 @@ pub fn workspace_tools(
     tools.register(ListFiles::new(workspace.clone()));
     tools.register(SearchText::new(workspace.clone()));
     tools.register(GitInspect::new(workspace.clone()));
-    tools.register(orbit_tools::web_fetch::WebFetch::new(web)?);
+    tools.register(orbit_tools::web_fetch::WebFetch::new(web.clone())?);
+    tools.register(orbit_tools::web_fetch::WebSearch::new(web)?);
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
