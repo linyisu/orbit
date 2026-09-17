@@ -60,6 +60,7 @@ async fn restart_preserves_event_order_and_successful_context() {
         assert!(matches!(event, AgentEvent::Model(StreamEvent::TextDelta(t)) if t == expected));
     }
     assert_eq!(snapshot.runs[1].status, "cancelled");
+    assert!(snapshot.runs.iter().all(|run| run.elapsed_ms.is_some()));
     assert_eq!(store.list().await.unwrap()[0].title, "你好");
 }
 
@@ -108,7 +109,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=3").unwrap();
+    connection.execute_batch("PRAGMA user_version=4").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }

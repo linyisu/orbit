@@ -165,6 +165,10 @@ impl SessionState {
                     .fail("上次运行被中断；已恢复到最后一次成功完成的模型上下文，未重新执行工具。"),
                 _ => state.fail("上次运行失败；模型上下文保留在上一轮成功状态。"),
             }
+            if let Some(elapsed_ms) = run.elapsed_ms {
+                state.elapsed = Duration::from_millis(elapsed_ms);
+                state.started_at = None;
+            }
             for item in &mut state.transcript {
                 if let TranscriptItem::Tool(tool) = item
                     && tool.status == ToolStatus::Running
@@ -322,6 +326,44 @@ mod tests {
         assert!(name.starts_with("clipboard-") && name.ends_with(".png"));
         assert_eq!(mime_type, "image/png");
         assert!(path.starts_with(tmp.path().join("sessions.attachments")));
+    }
+
+    #[tokio::test]
+    async fn restored_completed_run_keeps_its_persisted_elapsed_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let database = tmp.path().join("sessions.db");
+        let mut state = SessionState::open(database.clone(), None, "model".into(), true)
+            .await
+            .unwrap();
+        let id = state.id().to_owned();
+        state
+            .begin("question".into(), "model".into())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        state
+            .finish(
+                "completed",
+                Some(vec![
+                    ChatMessage::user("question"),
+                    ChatMessage::assistant("answer"),
+                ]),
+            )
+            .await
+            .unwrap();
+        drop(state);
+
+        let restored = SessionState::open(database, Some(id), "model".into(), true)
+            .await
+            .unwrap();
+        assert!(
+            restored.snapshot.runs[0]
+                .elapsed_ms
+                .is_some_and(|ms| ms >= 5)
+        );
+        let mut ui = UiState::new("model");
+        restored.restore_ui(&mut ui);
+        assert!(ui.elapsed >= Duration::from_millis(5));
     }
 
     #[tokio::test]

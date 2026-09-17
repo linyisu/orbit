@@ -17,6 +17,9 @@ pub struct Session {
 pub struct Run {
     pub prompt: String,
     pub status: String,
+    /// Wall-clock duration measured by the writer, in milliseconds. Runs saved
+    /// before this column existed retain `None` rather than a fabricated value.
+    pub elapsed_ms: Option<u64>,
     pub events: Vec<AgentEvent>,
 }
 

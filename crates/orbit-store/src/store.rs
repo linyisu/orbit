@@ -27,6 +27,7 @@ pub struct SessionWriter {
     id: String,
     _lock: File,
     active_run: Option<i64>,
+    active_started: Option<std::time::Instant>,
 }
 
 impl Store {
@@ -42,7 +43,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 2,
+                version <= 3,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -56,7 +57,8 @@ impl Store {
                 CREATE TABLE IF NOT EXISTS runs (
                     id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
                     prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running'
-                        CHECK(status IN ('running','completed','failed','cancelled','interrupted'))
+                        CHECK(status IN ('running','completed','failed','cancelled','interrupted')),
+                    elapsed_ms INTEGER
                 );
                 CREATE INDEX IF NOT EXISTS runs_session ON runs(session_id, id);
                 CREATE TABLE IF NOT EXISTS events (
@@ -69,6 +71,14 @@ impl Store {
             }
             if version < 2 {
                 crate::projects::migrate(&connection)?;
+            }
+            if version == 0 {
+                connection.execute_batch("PRAGMA user_version=3;")?;
+            } else if version < 3 {
+                connection.execute_batch(
+                    "ALTER TABLE runs ADD COLUMN elapsed_ms INTEGER;
+                     PRAGMA user_version=3;",
+                )?;
             }
             connection.execute_batch("COMMIT;")?;
             Ok(Self {
@@ -153,18 +163,21 @@ impl Store {
                     r.get(0)
                 })?;
             let mut statement = transaction
-                .prepare("SELECT id,prompt,status FROM runs WHERE session_id=?1 ORDER BY id")?;
+                .prepare("SELECT id,prompt,status,elapsed_ms FROM runs WHERE session_id=?1 ORDER BY id")?;
             let rows = statement
                 .query_map([&id], |r| {
                     Ok((
                         r.get::<_, i64>(0)?,
                         r.get::<_, String>(1)?,
                         r.get::<_, String>(2)?,
+                        r.get::<_, Option<i64>>(3)?.map(|milliseconds| {
+                            milliseconds.max(0) as u64
+                        }),
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let mut runs = Vec::new();
-            for (run_id, prompt, status) in rows {
+            for (run_id, prompt, status, elapsed_ms) in rows {
                 let mut events = transaction
                     .prepare("SELECT payload FROM events WHERE run_id=?1 ORDER BY id")?;
                 let payloads = events
@@ -173,6 +186,7 @@ impl Store {
                 runs.push(Run {
                     prompt,
                     status,
+                    elapsed_ms,
                     events: payloads
                         .iter()
                         .map(|p| serde_json::from_str(p))
@@ -219,6 +233,7 @@ impl Store {
             id,
             _lock: lock,
             active_run: None,
+            active_started: None,
         })
     }
 }
@@ -241,6 +256,7 @@ impl SessionWriter {
             Ok(run)
         }).await?;
         self.active_run = Some(run);
+        self.active_started = Some(std::time::Instant::now());
         Ok(())
     }
 
@@ -278,6 +294,9 @@ impl SessionWriter {
         let Some(run) = self.active_run else {
             bail!("no active run")
         };
+        let elapsed_ms = self
+            .active_started
+            .map(|started| started.elapsed().as_millis().min(i64::MAX as u128) as i64);
         let status = status.to_owned();
         let id = self.id.clone();
         self.store
@@ -290,8 +309,8 @@ impl SessionWriter {
                     )?;
                 }
                 transaction.execute(
-                    "UPDATE runs SET status=?2 WHERE id=?1",
-                    params![run, status],
+                    "UPDATE runs SET status=?2,elapsed_ms=?3 WHERE id=?1",
+                    params![run, status, elapsed_ms],
                 )?;
                 if let Some(history) = history {
                     transaction.execute(
@@ -308,6 +327,7 @@ impl SessionWriter {
             })
             .await?;
         self.active_run = None;
+        self.active_started = None;
         Ok(())
     }
 }
