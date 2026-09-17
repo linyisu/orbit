@@ -121,11 +121,14 @@ pub async fn run(
                     let Some(event) = event else { break };
                     let event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+                    let context_hover_changed = !state.selection.dragging()
+                        && matches!(render::handle_context_hover(&mut state, &event), Some(true));
                     if !state.selection.dragging() && !state.show_help && state.picker.is_none() && state.model_picker.is_none()
                         && let Some(changed) = navigation::handle(&mut state, &event) {
-                        if changed { dirty = true; frames.request(time::Instant::now()); }
+                        if changed || context_hover_changed { dirty = true; frames.request(time::Instant::now()); }
                         continue;
                     }
+                    if context_hover_changed { dirty = true; frames.request(time::Instant::now()); continue; }
                     // Unused pointer motion must not trigger full-frame redraws.
                     if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) { continue; }
                     dirty = true;
@@ -227,6 +230,7 @@ pub async fn run(
                         Action::Submit(prompt) => {
                             let compacting = prompt.trim() == "/compact";
                             if prompt.starts_with('/') && !compacting {
+                                state.transcript.push(TranscriptItem::Command(prompt.clone()));
                                 match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, model_options: &model_options }).await {
                                     Ok(true) => break,
                                     Ok(false) => refresh_context_usage(&mut state, &history, &tools),
@@ -438,45 +442,17 @@ async fn run_command(
             state.input = input;
             session.restore_ui(state);
         }
-        "/attach" if argument.is_empty() => state.transcript.push(TranscriptItem::Error(
-            "用法：/attach <图片路径>；支持 PNG、JPEG、GIF、WebP".into(),
-        )),
-        "/attach" => {
-            let path = attachment_path(argument);
-            let path = if path.is_absolute() {
-                path
-            } else {
-                std::env::current_dir()?.join(path)
-            };
-            let attachment = session.import_image(&path)?;
-            let name = attachment.name().to_owned();
-            if !queue_attachment(state, attachment) {
-                state.transcript.push(TranscriptItem::Notice(format!(
-                    "图片 {name} 已在待发送列表中。"
-                )));
-            } else {
-                state.transcript.push(TranscriptItem::Notice(format!(
-                    "已添加图片 {name} · 随下一条消息发送 · /detach 清空"
-                )));
-            }
-        }
-        "/detach" if argument.is_empty() => {
-            let count = state.attachments.len();
-            state.attachments.clear();
-            state.attachment_cursor = None;
-            state.transcript.push(TranscriptItem::Notice(format!(
-                "已清空 {count} 个待发送图片。"
-            )));
-        }
         "/mode" | "/permissions" => {
             if !argument.is_empty() {
                 let Some(mode) = permissions::Mode::parse(argument) else {
-                    state.transcript.push(TranscriptItem::Error("用法：/mode ask | auto | yolo".into()));
+                    state
+                        .transcript
+                        .push(TranscriptItem::CommandResult("用法：/mode ask | auto | yolo".into()));
                     return Ok(false);
                 };
                 state.permission_mode = mode;
             }
-            state.transcript.push(TranscriptItem::Notice(format!("{}\nShift+Tab 切换 · /mode ask|auto|yolo\n仅本会话有效；重启、恢复或 /new 后回到 auto。",state.permission_mode.description())));
+            state.transcript.push(TranscriptItem::CommandResult(format!("{}\nShift+Tab 切换 · /mode ask|auto|yolo\n仅本会话有效；重启、恢复或 /new 后回到 auto。",state.permission_mode.description())));
         }
         "/context" if argument.is_empty() => {
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
@@ -501,14 +477,14 @@ async fn run_command(
             let tool_tokens = orbit_agent::context::estimate_tokens(&[], &tools.definitions());
             let sources = if instructions.sources.is_empty() { "未找到".to_owned() } else { format!("{} 条", instructions.sources.len()) };
             let truncation = if instructions.truncated { "（达到 32 KiB 上限，后续文件未加载）" } else { "" };
-            state.transcript.push(TranscriptItem::Notice(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；总结会调用当前模型。", instructions.source_summary(), state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；总结会调用当前模型。", instructions.source_summary(), state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
             state.selection = Default::default();
         }
         "/resume" => resume_session(argument, state, history, session, instructions).await?,
-        "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
+        "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::CommandResult(format!(
             "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / write_file / edit_file / run_command · 审批：{}",
             session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
@@ -540,11 +516,18 @@ async fn run_command(
                         model_options,
                     );
                 } else {
-                    state.transcript.push(TranscriptItem::Error(format!("未找到模型 {argument:?}。使用 /model 打开选择器；不带供应商时只在当前供应商中查找。")));
+                    state.transcript.push(TranscriptItem::CommandResult(format!("模型 {argument:?} 未找到。")));
                 }
             }
         }
-        _ => state.transcript.push(TranscriptItem::Notice(format!("无法识别命令：{prompt}\n输入 / 查看可用命令。"))),
+        _ => {
+            let result = if let Some(suggestion) = commands::suggestion(command) {
+                format!("未知命令：{command}。是否想输入 {}？", suggestion.name)
+            } else {
+                format!("未知命令：{command}。输入 / 查看可用命令。")
+            };
+            state.transcript.push(TranscriptItem::CommandError(result));
+        }
     }
     state.follow_bottom = true;
     state.menu_dismissed = false;

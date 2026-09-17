@@ -34,11 +34,14 @@ pub struct ToolRow {
 #[derive(Clone, Debug)]
 pub enum TranscriptItem {
     User(String),
+    Command(String),
     Assistant(String),
     Thinking(String),
     Tool(ToolRow),
     Error(String),
     Notice(String),
+    CommandResult(String),
+    CommandError(String),
     ModelChanged(String),
 }
 
@@ -57,6 +60,8 @@ pub struct UiState {
     pub context_tokens: usize,
     /// Same approximate request-context count displayed by `/context`.
     pub context_used_tokens: usize,
+    pub context_ring_area: ratatui::layout::Rect,
+    pub context_hovered: bool,
     pub auto_compact: bool,
     pub max_output_tokens: u32,
     pub model: String,
@@ -109,6 +114,8 @@ impl UiState {
             selection: super::selection::Selection::default(),
             context_tokens: 128_000,
             context_used_tokens: 0,
+            context_ring_area: ratatui::layout::Rect::default(),
+            context_hovered: false,
             auto_compact: true,
             max_output_tokens: 32_000,
             model: model.into(),

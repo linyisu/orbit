@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -28,6 +28,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.input = Rect::default();
     state.selection.footer = Rect::default();
     state.selection.approval = Rect::default();
+    state.context_ring_area = Rect::default();
     state.ime_cursor = None;
     state.selection.reset_caret();
     state.input_area = Rect::default();
@@ -76,11 +77,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     }
     draw_composer(frame, state, areas[4], input_lines, cursor);
     draw_panel(frame, state, areas[5]);
-    frame.render_widget(
-        Paragraph::new(footer(state, areas[6].width as usize)),
-        areas[6],
-    );
+    let footer = footer_layout(state, areas[6].width as usize);
+    if let Some(offset) = footer.ring_offset {
+        state.context_ring_area = Rect::new(areas[6].x + offset, areas[6].y, 1, 1);
+    }
+    frame.render_widget(Paragraph::new(footer.line), areas[6]);
     state.selection.footer = areas[6];
+    draw_context_tooltip(frame, state);
     super::dialogs::draw(frame, state);
 }
 
@@ -115,7 +118,16 @@ pub(super) fn fit_label(text: &str, width: usize, tail: bool) -> String {
     }
 }
 
+struct FooterLayout {
+    line: Line<'static>,
+    ring_offset: Option<u16>,
+}
+
 fn footer(state: &UiState, width: usize) -> Line<'static> {
+    footer_layout(state, width).line
+}
+
+fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let mode = state.permission_mode.label();
     let model_label = if state.attachments.is_empty() {
         safe_output(&state.model)
@@ -132,23 +144,8 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
         .unwrap_or_else(|| "思考 —".into());
     let available = width.saturating_sub(4);
     let right_budget = available.saturating_sub(8);
-    let without_context = format!("{model_label} · {effort}");
-    let used_percent = state
-        .context_used_tokens
-        .saturating_mul(100)
-        .checked_div(state.context_tokens.max(1))
-        .unwrap_or(0);
-    let context = format!(
-        "上下文 {used_percent}% · {}/{}",
-        compact_tokens(state.context_used_tokens),
-        compact_tokens(state.context_tokens)
-    );
-    let with_context = format!("{context} · {without_context}");
-    let right = if with_context.width() <= right_budget {
-        with_context
-    } else {
-        without_context
-    };
+    let ring = context_ring(context_percent(state));
+    let right = format!("{ring} {model_label} · {effort}");
     let right = fit_label(&right, right_budget, false);
     let path = std::env::var_os("HOME")
         .and_then(|home| {
@@ -173,13 +170,30 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
         format!("{path} · {mode}")
     };
     let gap = available.saturating_sub(left.width() + right.width());
-    Line::from(vec![
+    let right_start = 2 + left.width() + gap;
+    let ring_offset = right.starts_with(ring).then_some(right_start as u16);
+    let right_spans = if let Some(rest) = right.strip_prefix(ring) {
+        vec![
+            Span::styled(
+                ring,
+                Style::default().fg(context_ring_color(context_percent(state))),
+            ),
+            Span::raw(rest.to_owned()),
+        ]
+    } else {
+        vec![Span::raw(right)]
+    };
+    let mut spans = vec![
         Span::raw("  "),
         Span::styled(left, Style::default().fg(Color::Rgb(170, 170, 170))),
         Span::raw(" ".repeat(gap)),
-        Span::raw(right),
-        Span::raw("  "),
-    ])
+    ];
+    spans.extend(right_spans);
+    spans.push(Span::raw("  "));
+    FooterLayout {
+        line: Line::from(spans),
+        ring_offset,
+    }
 }
 
 fn compact_tokens(tokens: usize) -> String {
@@ -188,6 +202,97 @@ fn compact_tokens(tokens: usize) -> String {
     } else {
         tokens.to_string()
     }
+}
+
+fn context_percent(state: &UiState) -> usize {
+    state
+        .context_used_tokens
+        .saturating_mul(100)
+        .checked_div(state.context_tokens.max(1))
+        .unwrap_or(0)
+}
+
+fn context_ring(percent: usize) -> &'static str {
+    match percent {
+        0..=24 => "◔",
+        25..=49 => "◑",
+        50..=74 => "◕",
+        _ => "●",
+    }
+}
+
+fn context_ring_color(percent: usize) -> Color {
+    match percent {
+        0..=74 => Color::Rgb(175, 175, 175),
+        75..=89 => ACCENT,
+        _ => Color::Rgb(220, 100, 88),
+    }
+}
+
+pub(super) fn handle_context_hover(
+    state: &mut UiState,
+    event: &crossterm::event::Event,
+) -> Option<bool> {
+    let crossterm::event::Event::Mouse(mouse) = event else {
+        return None;
+    };
+    if mouse.kind != crossterm::event::MouseEventKind::Moved {
+        return None;
+    }
+    let hovered = state
+        .context_ring_area
+        .contains((mouse.column, mouse.row).into());
+    let changed = state.context_hovered != hovered;
+    state.context_hovered = hovered;
+    Some(changed)
+}
+
+fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
+    if !state.context_hovered || state.context_ring_area.width == 0 {
+        return;
+    }
+    let percent = context_percent(state);
+    let remaining = 100usize.saturating_sub(percent.min(100));
+    let lines = [
+        "上下文窗口".to_owned(),
+        format!("{percent}% 已用（剩余 {remaining}%）"),
+        format!(
+            "已用 {} 标记，共 {}",
+            compact_tokens(state.context_used_tokens),
+            compact_tokens(state.context_tokens)
+        ),
+    ];
+    let width = lines
+        .iter()
+        .map(|line| line.width())
+        .max()
+        .unwrap_or(0)
+        .saturating_add(4)
+        .min(frame.area().width as usize) as u16;
+    let height = 5;
+    let x = state
+        .context_ring_area
+        .x
+        .saturating_sub(width.saturating_sub(1))
+        .min(frame.area().right().saturating_sub(width));
+    let y = state.context_ring_area.y.saturating_sub(height);
+    let area = Rect::new(x, y, width, height);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(BORDER))
+        .style(Style::default().bg(Color::Rgb(48, 48, 52)));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).style(
+            Style::default()
+                .fg(Color::Rgb(222, 218, 212))
+                .bg(Color::Rgb(48, 48, 52)),
+        ),
+        inner,
+    );
 }
 
 fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
@@ -382,6 +487,20 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 }
                 lines.push(Line::from(""));
             }
+            TranscriptItem::Command(text) => {
+                for (index, line) in text.lines().enumerate() {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            if index == 0 { "❯ " } else { "  " },
+                            Style::default().fg(ACCENT),
+                        ),
+                        Span::styled(
+                            line.to_owned(),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                }
+            }
             TranscriptItem::Assistant(text) => {
                 if text.is_empty() {
                     continue;
@@ -464,6 +583,24 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                     ))
                     .alignment(Alignment::Center),
                 );
+                lines.push(Line::from(""));
+            }
+            TranscriptItem::CommandResult(text) => {
+                for (index, line) in text.lines().enumerate() {
+                    lines.push(Line::from(Span::styled(
+                        format!("{}{}", if index == 0 { "  ⎿  " } else { "     " }, line),
+                        Style::default().fg(Color::Rgb(190, 190, 190)),
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+            TranscriptItem::CommandError(text) => {
+                for (index, line) in text.lines().enumerate() {
+                    lines.push(Line::from(Span::styled(
+                        format!("{}{}", if index == 0 { "● " } else { "  " }, line),
+                        Style::default().fg(ACCENT),
+                    )));
+                }
                 lines.push(Line::from(""));
             }
             TranscriptItem::Error(text) | TranscriptItem::Notice(text) => {
@@ -841,6 +978,22 @@ mod tests {
     }
 
     #[test]
+    fn command_results_use_a_distinct_result_rail() {
+        let lines = transcript_lines(
+            &[
+                TranscriptItem::Command("/model asd".into()),
+                TranscriptItem::CommandResult("状态\n细节".into()),
+                TranscriptItem::CommandError("未知命令：/stauts。是否想输入 /status？".into()),
+            ],
+            false,
+        );
+        assert_eq!(lines[0].to_string(), "❯ /model asd");
+        assert_eq!(lines[1].to_string(), "  ⎿  状态");
+        assert_eq!(lines[2].to_string(), "     细节");
+        assert!(lines[4].to_string().starts_with("● 未知命令"));
+    }
+
+    #[test]
     fn welcome_commands_and_small_terminal_render() {
         let mut state = UiState::new("mock-model");
         let screen = render(&mut state, 100, 30);
@@ -1122,7 +1275,8 @@ mod tests {
             }
             if width >= 80 {
                 assert!(text.contains("思考"));
-                assert!(text.contains("上下文 40%") && text.contains("51k/128k"));
+                assert!(text.contains('◑'));
+                assert!(!text.contains("上下文 40%"));
                 assert!(text.contains(state.permission_mode.label()));
             }
             assert!(text.ends_with("  "));
@@ -1130,6 +1284,44 @@ mod tests {
         assert_eq!(fit_label("你好e\u{301}", 3, true), "…e\u{301}");
         assert_eq!(compact_tokens(999), "999");
         assert_eq!(compact_tokens(1_999), "1k");
+    }
+
+    #[test]
+    fn context_ring_reveals_its_budget_on_hover() {
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+
+        let mut state = UiState::new("model");
+        state.context_used_tokens = 51_200;
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let ring = state.context_ring_area;
+        assert_eq!(ring.width, 1);
+        let hover = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: ring.x,
+            row: ring.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(handle_context_hover(&mut state, &hover), Some(true));
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            content.contains("40%") && content.contains("51k"),
+            "{content}"
+        );
+        let outside = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(handle_context_hover(&mut state, &outside), Some(true));
     }
 
     #[test]
