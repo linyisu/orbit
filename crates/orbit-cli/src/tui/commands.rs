@@ -38,10 +38,6 @@ pub const COMMANDS: &[Command] = &[
         description: "ask 逐次确认 · auto 自动命令 · yolo 自动修改和命令",
     },
     Command {
-        name: "/clear",
-        description: "/new 的兼容别名，不删除历史会话",
-    },
-    Command {
         name: "/exit",
         description: "退出 Orbit",
     },
