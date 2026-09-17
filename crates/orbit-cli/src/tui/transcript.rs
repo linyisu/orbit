@@ -1,18 +1,26 @@
-//! Cache logical-line layout, and hand only visible lines to Ratatui.
-//! Ratatui still owns word wrapping and grapheme widths. Scrolling never asks a
-//! Paragraph to wrap and skip the entire conversation from its beginning.
+//! Cache Unicode-aware physical-line layout, and hand only visible lines to
+//! Ratatui. Scrolling never asks a Paragraph to wrap and skip the entire
+//! conversation from its beginning.
+#[cfg(test)]
+use ratatui::widgets::Wrap;
 use ratatui::{
     Frame,
     layout::Rect,
     text::{Line, Span},
-    widgets::{Paragraph, Widget, Wrap},
+    widgets::{Paragraph, Widget},
 };
+use std::{collections::HashSet, ops::Range};
+use unicode_linebreak::linebreaks;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use super::{app::TranscriptItem, render};
 
 #[derive(Debug)]
 struct Row {
     line: Line<'static>,
+    wrapped: Vec<Line<'static>>,
+    ranges: Vec<Range<usize>>,
     gutter: Option<Gutter>,
     start: usize,
     height: usize,
@@ -47,10 +55,35 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
             width,
         });
     }
+    let mut quote_end = None;
+    for (index, span) in line.spans.iter().enumerate() {
+        if span.content == "▎ " {
+            quote_end = Some(index);
+        } else if !span.content.chars().all(char::is_whitespace) {
+            break;
+        }
+    }
+    if let Some(end) = quote_end {
+        let prefix = line.spans.drain(..=end).collect::<Vec<_>>();
+        let width = prefix.iter().map(Span::width).sum::<usize>() as u16;
+        let gutter = Line::from(prefix);
+        return Some(Gutter {
+            first: gutter.clone(),
+            continuation: gutter,
+            width,
+        });
+    }
     let marker = line
         .spans
         .iter()
-        .position(|span| list_marker(&span.content))?;
+        .enumerate()
+        .find(|(index, span)| {
+            list_marker(&span.content)
+                && line.spans[..*index]
+                    .iter()
+                    .all(|prefix| prefix.content.chars().all(char::is_whitespace))
+        })
+        .map(|(index, _)| index)?;
     let prefix = line.spans.drain(..=marker).collect::<Vec<_>>();
     let width = prefix.iter().map(Span::width).sum::<usize>() as u16;
     Some(Gutter {
@@ -58,6 +91,78 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
         continuation: Line::from(" ".repeat(width as usize)),
         width,
     })
+}
+
+fn slice_line(line: &Line<'static>, range: Range<usize>) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut offset = 0;
+    for span in &line.spans {
+        let start = offset;
+        let end = start + span.content.len();
+        offset = end;
+        let from = range.start.max(start);
+        let to = range.end.min(end);
+        if from < to {
+            spans.push(Span::styled(
+                span.content[from - start..to - start].to_owned(),
+                span.style,
+            ));
+        }
+    }
+    Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans,
+    }
+}
+
+fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
+    if text.is_empty() || width == 0 {
+        return std::iter::once_with(|| 0..0).collect();
+    }
+    let opportunities = linebreaks(text)
+        .map(|(index, _)| index)
+        .collect::<HashSet<_>>();
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    while start < text.len() {
+        let mut used = 0;
+        let mut hard_end = start;
+        let mut allowed = None;
+        let mut overflowed = false;
+        for (relative, grapheme) in text[start..].grapheme_indices(true) {
+            let end = start + relative + grapheme.len();
+            let size = grapheme.width();
+            if used + size > usize::from(width) && hard_end > start {
+                overflowed = true;
+                break;
+            }
+            used += size;
+            hard_end = end;
+            if opportunities.contains(&end) {
+                allowed = Some(end);
+            }
+        }
+        if !overflowed || hard_end == text.len() {
+            ranges.push(start..text.len());
+            break;
+        }
+        let end = allowed.filter(|end| *end > start).unwrap_or(hard_end);
+        ranges.push(start..end);
+        start = end;
+    }
+    ranges
+}
+
+fn wrap_line(line: &Line<'static>, width: u16) -> (Vec<Line<'static>>, Vec<Range<usize>>) {
+    let text = line.to_string();
+    let ranges = wrap_ranges(&text, width);
+    let lines = ranges
+        .iter()
+        .cloned()
+        .map(|range| slice_line(line, range))
+        .collect();
+    (lines, ranges)
 }
 
 #[derive(Debug, Default)]
@@ -79,12 +184,13 @@ impl Entry {
         render::sanitize_line(&mut line);
         let gutter = take_gutter(&mut line);
         let content_width = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
-        let height = Paragraph::new(line.clone())
-            .wrap(Wrap { trim: false })
-            .line_count(content_width);
+        let (wrapped, ranges) = wrap_line(&line, content_width);
+        let height = wrapped.len();
         self.rows.push(Row {
             gutter,
             line,
+            wrapped,
+            ranges,
             start: self.height,
             height,
         });
@@ -168,7 +274,49 @@ pub(super) struct TranscriptLayout {
     dirty_from: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TranscriptAnchor {
+    entry: usize,
+    row: usize,
+    byte: usize,
+}
+
 impl TranscriptLayout {
+    pub(super) fn width(&self) -> u16 {
+        self.width
+    }
+
+    pub(super) fn anchor_at(&self, offset: usize) -> Option<TranscriptAnchor> {
+        let entry_index = self.entries.partition_point(|entry| entry.end <= offset);
+        let entry = self.entries.get(entry_index)?;
+        let entry_start = entry.end.saturating_sub(entry.height);
+        let relative = offset.saturating_sub(entry_start);
+        let row_index = entry
+            .rows
+            .partition_point(|row| row.start + row.height <= relative)
+            .min(entry.rows.len().saturating_sub(1));
+        let row = entry.rows.get(row_index)?;
+        let wrapped = relative
+            .saturating_sub(row.start)
+            .min(row.ranges.len().saturating_sub(1));
+        Some(TranscriptAnchor {
+            entry: entry_index,
+            row: row_index,
+            byte: row.ranges.get(wrapped)?.start,
+        })
+    }
+
+    pub(super) fn offset_for_anchor(&self, anchor: TranscriptAnchor) -> Option<usize> {
+        let entry = self.entries.get(anchor.entry)?;
+        let row = entry.rows.get(anchor.row)?;
+        let wrapped = row
+            .ranges
+            .partition_point(|range| range.start <= anchor.byte)
+            .saturating_sub(1)
+            .min(row.ranges.len().saturating_sub(1));
+        Some(entry.end.saturating_sub(entry.height) + row.start + wrapped)
+    }
+
     pub fn invalidate_from(&mut self, index: usize) {
         self.dirty_from = self.dirty_from.min(index);
     }
@@ -282,18 +430,23 @@ impl TranscriptLayout {
                         .render(Rect::new(area.x, y + dy, gutter_width, 1), buffer);
                     }
                 }
-                Paragraph::new(row.line.clone())
-                    .wrap(Wrap { trim: false })
-                    .scroll((skip.min(u16::MAX as usize) as u16, 0))
-                    .render(
+                for (dy, line) in row
+                    .wrapped
+                    .iter()
+                    .skip(skip)
+                    .take(height as usize)
+                    .enumerate()
+                {
+                    Paragraph::new(line.clone()).render(
                         Rect::new(
                             area.x + gutter_width,
-                            y,
+                            y + dy as u16,
                             area.width.saturating_sub(gutter_width),
-                            height,
+                            1,
                         ),
                         buffer,
                     );
+                }
                 y += height;
             }
         }
@@ -353,6 +506,36 @@ mod tests {
         assert_eq!(buffer[(2, 1)].symbol(), " ");
         assert_eq!(buffer[(3, 1)].symbol(), " ");
         assert_eq!(buffer[(4, 1)].symbol(), " ");
+    }
+
+    #[test]
+    fn unicode_line_breaks_fill_cjk_rows_and_quotes_keep_a_continuous_rail() {
+        let source = "前缀 + 杂乱客厅背景 后文";
+        let ranges = wrap_ranges(source, 10);
+        assert!(source[ranges[0].clone()].width() >= 9);
+        assert!(ranges.len() >= 2);
+
+        let mut layout = TranscriptLayout::default();
+        layout.update(
+            &[TranscriptItem::Assistant(format!(
+                "> {}",
+                "这是一段需要换行的引用内容".repeat(4)
+            ))],
+            None,
+            20,
+        );
+        let row = &layout.entries[0].rows[0];
+        let gutter = row.gutter.as_ref().unwrap();
+        assert_eq!(gutter.first.to_string(), "  ▎ ");
+        assert_eq!(gutter.continuation.to_string(), "  ▎ ");
+        assert!(row.height > 1);
+        let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
+        terminal
+            .draw(|frame| layout.draw(frame, frame.area(), 0))
+            .unwrap();
+        for y in 0..5 {
+            assert_eq!(terminal.backend().buffer()[(2, y)].symbol(), "▎");
+        }
     }
 
     #[tokio::test]

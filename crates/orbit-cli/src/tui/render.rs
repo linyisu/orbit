@@ -291,18 +291,32 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         return;
     }
     let width = area.width.saturating_sub(4);
+    let previous_max = state.max_scroll;
+    let previous_offset = previous_max.saturating_sub(state.scroll);
+    let resize_anchor = (!state.follow_bottom
+        && state.transcript_layout.width() != 0
+        && state.transcript_layout.width() != width)
+        .then(|| state.transcript_layout.anchor_at(previous_offset))
+        .flatten();
     state
         .transcript_layout
         .update(&state.transcript, state.expanded, width);
-    let previous_max = state.max_scroll;
     state.max_scroll = state
         .transcript_layout
         .height()
         .saturating_sub(area.height as usize);
     if !state.follow_bottom {
-        state.scroll = state
-            .scroll
-            .saturating_add(state.max_scroll.saturating_sub(previous_max));
+        if let Some(offset) =
+            resize_anchor.and_then(|anchor| state.transcript_layout.offset_for_anchor(anchor))
+        {
+            state.scroll = state
+                .max_scroll
+                .saturating_sub(offset.min(state.max_scroll));
+        } else {
+            state.scroll = state
+                .scroll
+                .saturating_add(state.max_scroll.saturating_sub(previous_max));
+        }
     }
     state.scroll = state.scroll.min(state.max_scroll);
     let offset = if state.follow_bottom {
@@ -1085,5 +1099,29 @@ mod tests {
         assert!(state.max_scroll > 10);
         state.scroll_up(8);
         assert!(!render(&mut state, 40, 16).contains("THE END"));
+    }
+
+    #[test]
+    fn resize_preserves_the_current_source_anchor() {
+        let mut state = UiState::new("mock");
+        state.transcript.push(TranscriptItem::Assistant(
+            (0..80)
+                .map(|index| format!("段落 {index:02} {}\n", "中文内容 words ".repeat(8)))
+                .collect(),
+        ));
+        render(&mut state, 90, 18);
+        state.scroll_up(70);
+        render(&mut state, 90, 18);
+        let old_offset = state.max_scroll - state.scroll;
+        let anchor = state.transcript_layout.anchor_at(old_offset).unwrap();
+
+        render(&mut state, 48, 18);
+        let expected = state
+            .transcript_layout
+            .offset_for_anchor(anchor)
+            .unwrap()
+            .min(state.max_scroll);
+        assert_eq!(state.max_scroll - state.scroll, expected);
+        assert!(!state.follow_bottom);
     }
 }

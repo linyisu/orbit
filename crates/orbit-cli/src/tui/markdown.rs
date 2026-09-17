@@ -417,7 +417,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                     Tag::Emphasis => style = style.add_modifier(Modifier::ITALIC),
                     Tag::Strikethrough => style = style.add_modifier(Modifier::CROSSED_OUT),
                     Tag::BlockQuote(_) => {
-                        spans.push(Span::styled("│ ", Style::default().fg(ACCENT)))
+                        spans.push(Span::styled("▎ ", Style::default().fg(ACCENT)));
                     }
                     Tag::List(start) => ordered = start,
                     Tag::Item => spans.push(Span::styled(
@@ -636,7 +636,7 @@ mod tests {
         assert_eq!(render("## 标题").to_string(), "  标题");
         assert_eq!(render("  - **项目**").to_string(), "    • 项目");
         assert_eq!(render("3. 第三项").to_string(), "  3. 第三项");
-        assert_eq!(render("> 引用").to_string(), "  │ 引用");
+        assert_eq!(render("> 引用").to_string(), "  ▎ 引用");
         assert!(render("- [x] 完成").to_string().contains("☑ 完成"));
         assert!(render("#hashtag").to_string().contains("#hashtag"));
     }
