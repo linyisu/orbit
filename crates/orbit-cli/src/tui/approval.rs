@@ -21,8 +21,8 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
     let amount = match event {
         Event::Mouse(mouse) => {
             let amount = match mouse.kind {
-                MouseEventKind::ScrollUp => -3,
-                MouseEventKind::ScrollDown => 3,
+                MouseEventKind::ScrollUp => -(super::wheel::LINES as i16),
+                MouseEventKind::ScrollDown => super::wheel::LINES as i16,
                 _ => 0,
             };
             if !state
@@ -31,10 +31,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
             {
                 if mouse.row < state.approval_area.y {
                     if amount < 0 {
-                        state.scroll_up(3);
+                        state.scroll_up(super::wheel::LINES);
                     }
                     if amount > 0 {
-                        state.scroll_down(3);
+                        state.scroll_down(super::wheel::LINES);
                     }
                 }
                 return Action::None;
@@ -276,14 +276,14 @@ mod tests {
             })
         };
         handle(&mut state, wheel(MouseEventKind::ScrollUp, 5));
-        assert_eq!(state.scroll, 3);
+        assert_eq!(state.scroll, 2);
         assert_eq!(state.approval_scroll, 0);
         handle(&mut state, wheel(MouseEventKind::ScrollDown, 15));
-        assert_eq!(state.scroll, 3);
-        assert_eq!(state.approval_scroll, 3);
+        assert_eq!(state.scroll, 2);
+        assert_eq!(state.approval_scroll, 2);
         handle(&mut state, wheel(MouseEventKind::ScrollDown, 5));
         assert_eq!(state.scroll, 0);
-        assert_eq!(state.approval_scroll, 3);
+        assert_eq!(state.approval_scroll, 2);
         assert_eq!(state.input.text, "draft");
     }
 

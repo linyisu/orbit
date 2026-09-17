@@ -10,6 +10,7 @@ pub mod render;
 mod selection;
 pub mod terminal;
 mod transcript;
+mod wheel;
 
 use std::time::Duration;
 
@@ -79,6 +80,7 @@ pub async fn run(
     let mut task: Option<RunTask> = None;
     let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
     let mut frames = frames::Frames::default();
+    let mut wheel = wheel::Wheel::default();
 
     let result: Result<()> = async {
         let mut dirty = true;
@@ -86,8 +88,9 @@ pub async fn run(
             select! {
                 event = events.next() => {
                     let Some(event) = event else { break };
-                    dirty = true;
                     let event = event?;
+                    if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+                    dirty = true;
                     frames.request(time::Instant::now());
                     if state.show_help || state.picker.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
@@ -406,8 +409,8 @@ enum Action {
 fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
     if let Event::Mouse(mouse) = event {
         match mouse.kind {
-            MouseEventKind::ScrollUp => state.scroll_up(3),
-            MouseEventKind::ScrollDown => state.scroll_down(3),
+            MouseEventKind::ScrollUp => state.scroll_up(wheel::LINES),
+            MouseEventKind::ScrollDown => state.scroll_down(wheel::LINES),
             _ => {}
         }
         return Action::None;
@@ -596,7 +599,7 @@ mod tests {
             );
             assert_eq!(state.input.text, "draft");
             if kind == MouseEventKind::ScrollUp {
-                assert_eq!(state.scroll, 3);
+                assert_eq!(state.scroll, wheel::LINES);
                 assert!(!state.follow_bottom);
             }
         }

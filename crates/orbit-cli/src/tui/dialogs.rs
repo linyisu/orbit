@@ -101,10 +101,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 _ => {}
             },
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
-                state.help_scroll = state.help_scroll.saturating_sub(3)
+                state.help_scroll = state.help_scroll.saturating_sub(super::wheel::LINES)
             }
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
-                state.help_scroll += 3
+                state.help_scroll += super::wheel::LINES
             }
             _ => {}
         }
