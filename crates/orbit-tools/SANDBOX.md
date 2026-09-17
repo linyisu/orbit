@@ -75,3 +75,16 @@ cargo test -p orbit-tools --test sandbox --offline -- --ignored
 设计参考了本地 SztuCode `core/tools/builtin/bash.py` 的命令参数和输出限制，以及 Zed `crates/sandbox/src/linux_bubblewrap.rs` 的命名空间、只读挂载和失败关闭策略。本实现使用过滤副本，不直接沿用它们的工作区授权范围。
 
 完整限制审计及尚未解决的能力缺口见 [LIMITS.md](LIMITS.md)。
+
+## 可选 Rust 工具链
+
+宿主的 `/usr/bin/rustc`、`cargo` 可能只是 rustup 代理；隔离的 HOME 没有已安装工具链时，它们不能编译。可在配置中显式选择 `rustup which rustc` 所在 `bin` 的父目录：
+
+```toml
+[command]
+rust_toolchain = "/absolute/path/to/.rustup/toolchains/stable-x86_64-unknown-linux-gnu"
+```
+
+Orbit 将该工具链目录只读挂载到 `/opt/orbit-rust`，并把其 `bin` 放到沙箱 PATH 首位，直接使用真实 rustc/cargo。不会挂载整个 home、Cargo 凭据或注册表缓存，也不会运行 rustup 自动安装。配置路径必须为绝对路径，并包含 `bin/rustc`、`bin/cargo` 和 `lib/rustlib`。默认不挂载额外工具链。
+
+无第三方依赖的 Rust 程序可直接编译；Cargo 项目仍受无网络、无宿主依赖缓存和现有沙箱容量限制。此配置不意味着所有 Cargo 项目都能构建。

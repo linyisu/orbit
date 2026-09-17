@@ -29,9 +29,10 @@ struct Arguments {
     timeout_seconds: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CommandLimits {
+    pub rust_toolchain: Option<std::path::PathBuf>,
     pub default_timeout_seconds: u64,
     pub max_timeout_seconds: u64,
 }
@@ -39,6 +40,7 @@ pub struct CommandLimits {
 impl Default for CommandLimits {
     fn default() -> Self {
         Self {
+            rust_toolchain: None,
             default_timeout_seconds: 120,
             max_timeout_seconds: 600,
         }
@@ -53,6 +55,13 @@ impl CommandLimits {
             return Err(
                 "command timeout defaults must be positive and not exceed max_timeout_seconds",
             );
+        }
+        if self
+            .rust_toolchain
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err("command.rust_toolchain must be an absolute toolchain directory");
         }
         Ok(())
     }
@@ -80,7 +89,7 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",
-            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). All changes and build artifacts are discarded after the command; combine build and test in one command. /tmp is disposable. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. Only system tools in /usr/bin and /bin are available. Timeout defaults and maximum are specified in the tool schema. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts; excess output is discarded, never a reason to stop execution. Timeout and cancellation still stop the process. Never automatically retry a denied command.",
+            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). All changes and build artifacts are discarded after the command; combine build and test in one command. /tmp is disposable. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Cargo dependencies are not inherited and network remains blocked. Timeout defaults and maximum are specified in the tool schema. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts; excess output is discarded, never a reason to stop execution. Timeout and cancellation still stop the process. Never automatically retry a denied command.",
             json!({"type":"object","properties":{"writable_snapshot":{"type":"boolean","default":false},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":self.limits.max_timeout_seconds,"default":self.limits.default_timeout_seconds}},"required":["command"],"additionalProperties":false}),
         )
     }
@@ -126,12 +135,13 @@ impl Tool for RunCommand {
                     "user denied command; do not retry without a new user request".into(),
                 ));
             }
-            let result = sandbox::run_with_options(
+            let result = sandbox::run_with_toolchain(
                 self.workspace.clone(),
                 args.command,
                 Duration::from_secs(timeout_seconds),
                 cancellation,
                 args.writable_snapshot,
+                self.limits.rust_toolchain.as_deref(),
             )
             .await?;
             serde_json::to_string(&result).map_err(|e| ToolError::ExecutionFailed(e.to_string()))

@@ -131,6 +131,7 @@ fn command(
     script: &Path,
     writable_snapshot: bool,
     timeout: Duration,
+    rust_toolchain: Option<&Path>,
 ) -> Result<Command, ToolError> {
     use std::os::unix::fs::MetadataExt;
     let executable = PathBuf::from("/usr/bin/bwrap");
@@ -179,6 +180,18 @@ fn command(
     } else {
         command.arg("--ro-bind").arg(snapshot).arg("/workspace");
     }
+    if let Some(path) = rust_toolchain {
+        let path = path.canonicalize().map_err(failed)?;
+        if !path.join("bin/rustc").is_file()
+            || !path.join("bin/cargo").is_file()
+            || !path.join("lib/rustlib").is_dir()
+        {
+            return Err(failed(
+                "configured Rust toolchain must contain bin/rustc, bin/cargo and lib/rustlib",
+            ));
+        }
+        command.arg("--ro-bind").arg(path).arg("/opt/orbit-rust");
+    }
     command.args([
         "--proc",
         "/proc",
@@ -195,7 +208,11 @@ fn command(
         "--clearenv",
         "--setenv",
         "PATH",
-        "/usr/bin:/bin",
+        if rust_toolchain.is_some() {
+            "/opt/orbit-rust/bin:/usr/bin:/bin"
+        } else {
+            "/usr/bin:/bin"
+        },
         "--setenv",
         "HOME",
         "/tmp/home",
@@ -270,6 +287,17 @@ pub async fn run_with_options(
     token: CancellationToken,
     writable_snapshot: bool,
 ) -> Result<CommandResult, ToolError> {
+    run_with_toolchain(workspace, script, timeout, token, writable_snapshot, None).await
+}
+
+pub async fn run_with_toolchain(
+    workspace: Workspace,
+    script: String,
+    timeout: Duration,
+    token: CancellationToken,
+    writable_snapshot: bool,
+    rust_toolchain: Option<&Path>,
+) -> Result<CommandResult, ToolError> {
     if token.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
@@ -290,6 +318,7 @@ pub async fn run_with_options(
         script_file.path(),
         writable_snapshot,
         timeout,
+        rust_toolchain,
     )?
     .spawn()
     .map_err(failed)?;

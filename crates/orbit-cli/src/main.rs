@@ -273,7 +273,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     }
     let file_config = FileConfig::load(&config_path)?;
     let agent_config = file_config.agent_config();
-    let command_limits = file_config.command;
+    let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
     let context_tokens = file_config.context_tokens;
     let max_output_tokens = file_config.max_output_tokens;
@@ -308,7 +308,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
 async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
     let file_config = FileConfig::load(&config_path)?;
     let agent_config = file_config.agent_config();
-    let command_limits = file_config.command;
+    let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
     let max_output_tokens = file_config.max_output_tokens;
     let client = ModelClient::new(file_config.model_config())?;

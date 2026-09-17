@@ -255,6 +255,7 @@ async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
         workspace,
         tx,
         CommandLimits {
+            rust_toolchain: None,
             default_timeout_seconds: 300,
             max_timeout_seconds: 1800,
         },
@@ -287,6 +288,7 @@ async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
     assert!(task.await.unwrap().is_err());
     assert!(
         CommandLimits {
+            rust_toolchain: None,
             default_timeout_seconds: 601,
             max_timeout_seconds: 600
         }
@@ -379,4 +381,23 @@ async fn large_commands_reach_approval_without_an_arbitrary_tool_size_limit() {
             .to_string()
             .contains("denied")
     );
+}
+
+#[tokio::test]
+#[ignore = "requires Linux user namespaces and ORBIT_TEST_RUST_TOOLCHAIN"]
+async fn configured_rust_toolchain_compiles_and_runs_without_host_home() {
+    let toolchain =
+        std::env::var_os("ORBIT_TEST_RUST_TOOLCHAIN").expect("set ORBIT_TEST_RUST_TOOLCHAIN");
+    let (root, workspace) = fixture();
+    fs::write(
+        root.path().join("main.rs"),
+        "fn main() { let n: u64 = (1..=10).product(); println!(\"RUST_OK={n}\"); }",
+    )
+    .unwrap();
+    let result = sandbox::run_with_toolchain(workspace,
+        "rustc main.rs -o /tmp/rust-test && /tmp/rust-test && cargo --version && test ! -e /tmp/home/.cargo/credentials.toml && test ! -e /opt/orbit-rust/../.cargo && test ! -w /opt/orbit-rust/bin/rustc".into(),
+        Duration::from_secs(30), CancellationToken::new(), false, Some(std::path::Path::new(&toolchain))).await.unwrap();
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert!(result.stdout.contains("RUST_OK=3628800"));
+    assert!(!root.path().join("rust-test").exists());
 }
