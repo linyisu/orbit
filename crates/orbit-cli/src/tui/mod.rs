@@ -547,12 +547,17 @@ async fn start_agent_run(
                 })
                 .await
                 .map_err(|_| AgentError::EventChannelClosed)?;
-            let report = format!(
-                "上下文已压缩：估算 {} → {} tokens{}。",
-                compacted.before_tokens,
-                compacted.after_tokens,
-                if fallback { "（本地回退）" } else { "" },
-            );
+            let report = if fallback {
+                format!(
+                    "上下文压缩已完成。估算用量：{} → {} tokens。模型摘要不可用，已采用本地回退。",
+                    compacted.before_tokens, compacted.after_tokens,
+                )
+            } else {
+                format!(
+                    "上下文压缩已完成。估算用量：{} → {} tokens。",
+                    compacted.before_tokens, compacted.after_tokens,
+                )
+            };
             sender
                 .send(AgentEvent::Model(
                     orbit_model::types::StreamEvent::TextDelta(report.clone()),

@@ -729,15 +729,14 @@ pub(super) fn thinking_line(
             first.content = rest.to_owned().into();
         }
     }
-    // Markdown still contributes structure and semantic color. Blend each
-    // source foreground towards the reasoning gray so headings, links and code
-    // remain distinguishable without competing with the final answer.
+    // Markdown still contributes structure and semantic color. Apply only a
+    // light neutral wash so thinking stays distinct without becoming dim.
     for span in &mut rendered.spans {
         span.style = span.style.fg(desaturate_for_thinking(span.style.fg));
     }
     rendered.spans.insert(
         0,
-        Span::styled("  ┊ ", Style::default().fg(Color::Rgb(125, 125, 125))),
+        Span::styled("  ┊ ", Style::default().fg(Color::Rgb(145, 145, 145))),
     );
     rendered
 }
@@ -756,7 +755,7 @@ fn desaturate_for_thinking(color: Option<Color>) -> Color {
         Color::White => (232, 232, 228),
         Color::Indexed(_) | Color::Reset => (190, 190, 188),
     };
-    let blend = |channel| ((u16::from(channel) * 2 + 155 * 3) / 5) as u8;
+    let blend = |channel| ((u16::from(channel) * 4 + 175) / 5) as u8;
     Color::Rgb(blend(red), blend(green), blend(blue))
 }
 
@@ -1423,7 +1422,7 @@ mod tests {
             line.spans
                 .iter()
                 .any(|span| span.content == "code"
-                    && span.style.fg == Some(Color::Rgb(143, 175, 176)))
+                    && span.style.fg == Some(Color::Rgb(135, 199, 201)))
         );
         assert_eq!(line.style.fg, None);
     }
