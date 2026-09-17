@@ -560,6 +560,15 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 }
             }
             TranscriptItem::Tool(row) => {
+                // A tool is a separate execution step. Keep one measured row
+                // around it so reasoning, results, and adjacent tools do not
+                // visually collapse into a single block.
+                if lines
+                    .last()
+                    .is_some_and(|line| !line.to_string().trim().is_empty())
+                {
+                    lines.push(Line::from(""));
+                }
                 let (marker, color) = match row.status {
                     ToolStatus::Running => ("◌", ACCENT),
                     ToolStatus::Finished => ("✓", Color::Green),
@@ -616,6 +625,7 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 if !expanded && output.lines().count() > 2 {
                     lines.push(Line::from(muted("    …")));
                 }
+                lines.push(Line::from(""));
             }
             TranscriptItem::ModelChanged(text) => {
                 lines.push(
@@ -725,9 +735,35 @@ pub(super) fn thinking_line(
             first.content = rest.to_owned().into();
         }
     }
-    rendered.spans.insert(0, Span::raw("  ┊ "));
-    rendered.style = Style::default().fg(Color::Rgb(155, 155, 155));
+    // Markdown still contributes structure and semantic color. Blend each
+    // source foreground towards the reasoning gray so headings, links and code
+    // remain distinguishable without competing with the final answer.
+    for span in &mut rendered.spans {
+        span.style = span.style.fg(desaturate_for_thinking(span.style.fg));
+    }
+    rendered.spans.insert(
+        0,
+        Span::styled("  ┊ ", Style::default().fg(Color::Rgb(125, 125, 125))),
+    );
     rendered
+}
+
+fn desaturate_for_thinking(color: Option<Color>) -> Color {
+    let (red, green, blue) = match color.unwrap_or(Color::Rgb(218, 218, 212)) {
+        Color::Rgb(red, green, blue) => (red, green, blue),
+        Color::Black => (0, 0, 0),
+        Color::Red | Color::LightRed => (220, 110, 104),
+        Color::Green | Color::LightGreen => (114, 205, 142),
+        Color::Yellow | Color::LightYellow => (224, 194, 110),
+        Color::Blue | Color::LightBlue => (128, 180, 225),
+        Color::Magenta | Color::LightMagenta => (205, 144, 215),
+        Color::Cyan | Color::LightCyan => (126, 205, 208),
+        Color::Gray | Color::DarkGray => (155, 155, 155),
+        Color::White => (232, 232, 228),
+        Color::Indexed(_) | Color::Reset => (190, 190, 188),
+    };
+    let blend = |channel| ((u16::from(channel) * 2 + 155 * 3) / 5) as u8;
+    Color::Rgb(blend(red), blend(green), blend(blue))
 }
 
 pub(super) fn sanitize_line(line: &mut Line<'_>) {
@@ -1394,9 +1430,10 @@ mod tests {
         assert!(
             line.spans
                 .iter()
-                .any(|span| span.content == "code" && span.style.fg == Some(Color::LightCyan))
+                .any(|span| span.content == "code"
+                    && span.style.fg == Some(Color::Rgb(143, 175, 176)))
         );
-        assert_eq!(line.style.fg, Some(Color::Rgb(155, 155, 155)));
+        assert_eq!(line.style.fg, None);
     }
 
     #[test]

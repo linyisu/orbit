@@ -328,6 +328,59 @@ impl Entry {
         );
         self.push(Line::from(""), width);
     }
+
+    fn command_result(&mut self, text: &str, width: u16) {
+        if width < 12 {
+            for (index, line) in text.lines().enumerate() {
+                self.push(
+                    Line::from(Span::styled(
+                        format!("{}{}", if index == 0 { "⎿ " } else { "  " }, line),
+                        ratatui::style::Style::default()
+                            .fg(ratatui::style::Color::Rgb(190, 190, 190)),
+                    )),
+                    width,
+                );
+            }
+            self.push(Line::from(""), width);
+            return;
+        }
+
+        let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(130, 130, 134));
+        let content_style =
+            ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(196, 196, 198));
+        let label = "╭─⎿ ";
+        self.push(
+            Line::from(Span::styled(
+                format!(
+                    "{label}{}╮",
+                    "─".repeat(usize::from(width) - label.width() - 1)
+                ),
+                border,
+            )),
+            width,
+        );
+        let inner_width = width - 4;
+        for source in text.split('\n') {
+            let content = Line::from(Span::styled(source.to_owned(), content_style));
+            let (wrapped, _) = wrap_line(&content, inner_width);
+            for line in wrapped {
+                let padding = usize::from(inner_width).saturating_sub(line.width());
+                let mut spans = vec![Span::styled("│ ", border)];
+                spans.extend(line.spans);
+                spans.push(Span::raw(" ".repeat(padding)));
+                spans.push(Span::styled(" │", border));
+                self.push(Line::from(spans), width);
+            }
+        }
+        self.push(
+            Line::from(Span::styled(
+                format!("╰{}╯", "─".repeat(usize::from(width) - 2)),
+                border,
+            )),
+            width,
+        );
+        self.push(Line::from(""), width);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -414,6 +467,10 @@ impl TranscriptLayout {
                 TranscriptItem::User(text) => {
                     *entry = Entry::default();
                     entry.user(text, width);
+                }
+                TranscriptItem::CommandResult(text) => {
+                    *entry = Entry::default();
+                    entry.command_result(text, width);
                 }
                 _ => {
                     *entry = Entry::default();
@@ -574,6 +631,20 @@ mod tests {
         assert_eq!(buffer[(2, 1)].symbol(), " ");
         assert_eq!(buffer[(3, 1)].symbol(), " ");
         assert_eq!(buffer[(4, 1)].symbol(), " ");
+    }
+
+    #[test]
+    fn command_results_use_a_compact_framed_block() {
+        let mut layout = TranscriptLayout::default();
+        layout.update(
+            &[TranscriptItem::CommandResult("状态\n第二行细节".into())],
+            None,
+            32,
+        );
+        let rows = &layout.entries[0].rows;
+        assert!(rows[0].line.to_string().starts_with("╭─⎿ "));
+        assert!(rows.iter().any(|row| row.line.to_string().contains("状态")));
+        assert!(rows.iter().any(|row| row.line.to_string().starts_with("╰")));
     }
 
     #[test]
