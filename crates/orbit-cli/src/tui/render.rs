@@ -444,6 +444,7 @@ fn welcome() -> Vec<Line<'static>> {
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    super::navigation::clear_previous_tooltip(frame, state);
     state.selection.viewport = Rect {
         x: area.x + 2,
         // Keep one blank column between wrapped output and the navigation dots.
@@ -773,6 +774,10 @@ pub(super) fn thinking_line(
 
 fn desaturate_for_thinking(color: Option<Color>) -> Color {
     let (red, green, blue) = match color.unwrap_or(Color::Rgb(218, 218, 212)) {
+        // Warm structural Markdown accents need to stay legible over the
+        // wallpaper. Cool syntax colors already retain enough contrast after
+        // the neutral wash below.
+        Color::Rgb(218, 139, 109) => return Color::Rgb(224, 142, 108),
         Color::Rgb(red, green, blue) => (red, green, blue),
         Color::Black => (0, 0, 0),
         Color::Red | Color::LightRed => (220, 110, 104),
@@ -1467,6 +1472,10 @@ mod tests {
                     && span.style.fg == Some(Color::Rgb(135, 199, 201)))
         );
         assert_eq!(line.style.fg, None);
+        assert_eq!(
+            desaturate_for_thinking(Some(ACCENT)),
+            Color::Rgb(224, 142, 108)
+        );
     }
 
     #[test]

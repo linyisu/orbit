@@ -13,6 +13,7 @@ use ratatui::{
 #[derive(Debug, Default)]
 pub(super) struct Navigation {
     area: Rect,
+    tooltip_area: Rect,
     targets: Vec<(u16, usize, String)>,
     hovered: Option<u16>,
     show_latest: bool,
@@ -28,6 +29,17 @@ impl Navigation {
     pub(super) fn clear_hover(&mut self) {
         self.hovered = None;
     }
+}
+
+/// Remove the tooltip from the previous frame before the transcript redraws
+/// beneath it. Ratatui updates only changed cells, so merely omitting the new
+/// tooltip would otherwise leave its old text in the terminal buffer.
+pub(super) fn clear_previous_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
+    let area = state.navigation.tooltip_area;
+    if area.width != 0 && area.height != 0 {
+        frame.render_widget(Clear, area);
+    }
+    state.navigation.tooltip_area = Rect::default();
 }
 
 /// None means normal input; Some(false) consumes motion without a redraw.
@@ -171,6 +183,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
             ),
             tooltip_area,
         );
+        nav.tooltip_area = tooltip_area;
     }
 }
 
@@ -274,6 +287,36 @@ mod tests {
         state.show_help = true;
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
         assert_eq!(state.navigation.hovered, None);
+    }
+
+    #[test]
+    fn leaving_a_dot_erases_its_rendered_preview() {
+        let mut state = UiState::new("model");
+        state.transcript.push(TranscriptItem::User("first".into()));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        let (row, _, _) = state.navigation.targets[0].clone();
+        let column = state.navigation.area.x;
+        handle(&mut state, &mouse(MouseEventKind::Moved, column, row));
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        let shown = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(shown.replace(' ', "").contains("第1轮"), "{shown}");
+        handle(&mut state, &mouse(MouseEventKind::Moved, 0, 0));
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        let hidden = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!hidden.replace(' ', "").contains("第1轮"), "{hidden}");
     }
 
     #[test]
