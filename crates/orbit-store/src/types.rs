@@ -32,3 +32,104 @@ pub struct Snapshot {
     pub history: Vec<ChatMessage>,
     pub runs: Vec<Run>,
 }
+
+/// A durable, user-visible unit of project work. Tasks live on the stable
+/// project identity rather than a single conversation so a resumed or new
+/// session can continue the same plan after a directory rename.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectTask {
+    pub id: i64,
+    pub project_id: String,
+    pub parent_id: Option<i64>,
+    pub title: String,
+    pub details: String,
+    pub status: TaskStatus,
+    pub priority: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Pending,
+    InProgress,
+    Blocked,
+    Completed,
+    Cancelled,
+}
+
+impl TaskStatus {
+    pub const ALL: [Self; 5] = [
+        Self::Pending,
+        Self::InProgress,
+        Self::Blocked,
+        Self::Completed,
+        Self::Cancelled,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Blocked => "blocked",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|status| status.as_str() == value)
+    }
+}
+
+/// A concise, project-scoped fact deliberately saved for future sessions.
+/// This is separate from conversation compression: memories are never an
+/// implicit replacement for historical messages.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectMemory {
+    pub id: i64,
+    pub project_id: String,
+    pub category: MemoryCategory,
+    pub title: String,
+    pub content: String,
+    pub source_session_id: Option<String>,
+    pub active: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryCategory {
+    Constraint,
+    Decision,
+    Fact,
+    Preference,
+}
+
+impl MemoryCategory {
+    pub const ALL: [Self; 4] = [
+        Self::Constraint,
+        Self::Decision,
+        Self::Fact,
+        Self::Preference,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Constraint => "constraint",
+            Self::Decision => "decision",
+            Self::Fact => "fact",
+            Self::Preference => "preference",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|category| category.as_str() == value)
+    }
+}

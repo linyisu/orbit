@@ -1,6 +1,7 @@
 use orbit_agent::events::AgentEvent;
 use orbit_model::types::{ChatMessage, StreamEvent};
 use orbit_store::store::Store;
+use orbit_store::types::{MemoryCategory, TaskStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -109,7 +110,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=5").unwrap();
+    connection.execute_batch("PRAGMA user_version=6").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }
@@ -378,4 +379,90 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
     );
     assert_eq!(store.compactions(&id).await.unwrap().len(), 1);
     assert!(store.compactions("missing").await.is_err());
+}
+
+#[tokio::test]
+async fn project_tasks_and_memories_survive_project_rename_without_workspace_files() {
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let old = db.0.join("old");
+    let moved = db.0.join("moved");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::write(old.join("user-file.txt"), "only user content").unwrap();
+    let project = store.resolve_project(&old).await.unwrap();
+
+    let parent = store
+        .create_task(
+            &project.id,
+            None,
+            "Ship the project overview".into(),
+            "Make the plan visible in every session.".into(),
+            10,
+        )
+        .await
+        .unwrap();
+    let child = store
+        .create_task(
+            &project.id,
+            Some(parent.id),
+            "Add the task command".into(),
+            String::new(),
+            5,
+        )
+        .await
+        .unwrap();
+    let updated = store
+        .update_task(
+            &project.id,
+            child.id,
+            None,
+            None,
+            Some(TaskStatus::InProgress),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status, TaskStatus::InProgress);
+
+    let memory = store
+        .remember(
+            &project.id,
+            MemoryCategory::Constraint,
+            "No project metadata".into(),
+            "Orbit must keep its own state outside the user workspace.".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(memory.active);
+    assert_eq!(store.tasks(&project.id, false).await.unwrap().len(), 2);
+    assert_eq!(store.memories(&project.id, false).await.unwrap().len(), 1);
+    assert_eq!(std::fs::read_dir(&old).unwrap().count(), 1);
+
+    std::fs::rename(&old, &moved).unwrap();
+    let renamed = store.resolve_project(&moved).await.unwrap();
+    if renamed.id != project.id {
+        store.link_project(&project.id, &moved).await.unwrap();
+    }
+    let tasks = store.tasks(&project.id, false).await.unwrap();
+    assert_eq!(
+        tasks
+            .iter()
+            .find(|task| task.id == parent.id)
+            .unwrap()
+            .parent_id,
+        None
+    );
+    assert_eq!(
+        store.memories(&project.id, false).await.unwrap()[0].id,
+        memory.id
+    );
+
+    let inactive = store
+        .set_memory_active(&project.id, memory.id, false)
+        .await
+        .unwrap();
+    assert!(!inactive.active);
+    assert!(store.memories(&project.id, false).await.unwrap().is_empty());
+    assert_eq!(store.memories(&project.id, true).await.unwrap().len(), 1);
 }

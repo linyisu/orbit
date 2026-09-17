@@ -12,7 +12,9 @@ use rusqlite::{Connection, params};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use crate::types::{Run, Session, Snapshot};
+use crate::types::{
+    MemoryCategory, ProjectMemory, ProjectTask, Run, Session, Snapshot, TaskStatus,
+};
 
 #[derive(Clone)]
 pub struct Store {
@@ -43,7 +45,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 4,
+                version <= 5,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -84,6 +86,35 @@ impl Store {
                 connection.execute_batch(
                     "ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT;
                      PRAGMA user_version=4;",
+                )?;
+            }
+            if version < 5 {
+                connection.execute_batch(
+                    "CREATE TABLE project_tasks (
+                        id INTEGER PRIMARY KEY,
+                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        parent_id INTEGER REFERENCES project_tasks(id) ON DELETE SET NULL,
+                        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 512),
+                        details TEXT NOT NULL DEFAULT '' CHECK(length(details) <= 8192),
+                        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','blocked','completed','cancelled')),
+                        priority INTEGER NOT NULL DEFAULT 0 CHECK(priority BETWEEN -100 AND 100),
+                        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                    );
+                    CREATE INDEX project_tasks_project_status ON project_tasks(project_id,status,priority DESC,id);
+                    CREATE TABLE project_memories (
+                        id INTEGER PRIMARY KEY,
+                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        category TEXT NOT NULL CHECK(category IN ('constraint','decision','fact','preference')),
+                        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 512),
+                        content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 8192),
+                        source_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+                        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+                        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                    );
+                    CREATE INDEX project_memories_project_active ON project_memories(project_id,active,updated_at DESC,id DESC);
+                    PRAGMA user_version=5;",
                 )?;
             }
             connection.execute_batch("COMMIT;")?;
@@ -242,6 +273,234 @@ impl Store {
             active_started: None,
         })
     }
+
+    pub async fn tasks(&self, project_id: &str, include_closed: bool) -> Result<Vec<ProjectTask>> {
+        let project_id = project_id.to_owned();
+        self.access(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT id,project_id,parent_id,title,details,status,priority,created_at,updated_at
+                 FROM project_tasks WHERE project_id=?1
+                 AND (?2 OR status NOT IN ('completed','cancelled'))
+                 ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'blocked' THEN 1 ELSE 2 END,
+                          priority DESC, id",
+            )?;
+            statement
+                .query_map(params![project_id, include_closed], task_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn create_task(
+        &self,
+        project_id: &str,
+        parent_id: Option<i64>,
+        title: String,
+        details: String,
+        priority: i64,
+    ) -> Result<ProjectTask> {
+        validate_task_fields(&title, &details, priority)?;
+        let project_id = project_id.to_owned();
+        self.access(move |conn| {
+            let transaction = conn.transaction()?;
+            let project_exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+                [&project_id],
+                |row| row.get(0),
+            )?;
+            ensure!(project_exists, "project not found");
+            if let Some(parent_id) = parent_id {
+                let valid_parent: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM project_tasks WHERE id=?1 AND project_id=?2)",
+                    params![parent_id, project_id],
+                    |row| row.get(0),
+                )?;
+                ensure!(valid_parent, "parent task does not belong to this project");
+            }
+            transaction.execute(
+                "INSERT INTO project_tasks(project_id,parent_id,title,details,priority) VALUES(?1,?2,?3,?4,?5)",
+                params![project_id, parent_id, title, details, priority],
+            )?;
+            let id = transaction.last_insert_rowid();
+            let task = transaction.query_row(
+                "SELECT id,project_id,parent_id,title,details,status,priority,created_at,updated_at FROM project_tasks WHERE id=?1",
+                [id],
+                task_row,
+            )?;
+            transaction.commit()?;
+            Ok(task)
+        })
+        .await
+    }
+
+    pub async fn update_task(
+        &self,
+        project_id: &str,
+        id: i64,
+        title: Option<String>,
+        details: Option<String>,
+        status: Option<TaskStatus>,
+        priority: Option<i64>,
+    ) -> Result<ProjectTask> {
+        if let Some(title) = &title {
+            validate_task_fields(
+                title,
+                details.as_deref().unwrap_or(""),
+                priority.unwrap_or(0),
+            )?;
+        }
+        if let Some(details) = &details {
+            ensure!(details.len() <= 8192, "task details exceed 8192 bytes");
+        }
+        if let Some(priority) = priority {
+            ensure!(
+                (-100..=100).contains(&priority),
+                "task priority must be between -100 and 100"
+            );
+        }
+        let project_id = project_id.to_owned();
+        self.access(move |conn| {
+            let changed = conn.execute(
+                "UPDATE project_tasks
+                 SET title=COALESCE(?3,title), details=COALESCE(?4,details),
+                     status=COALESCE(?5,status), priority=COALESCE(?6,priority), updated_at=unixepoch()
+                 WHERE id=?1 AND project_id=?2",
+                params![id, project_id, title, details, status.map(TaskStatus::as_str), priority],
+            )?;
+            ensure!(changed == 1, "task not found in this project");
+            conn.query_row(
+                "SELECT id,project_id,parent_id,title,details,status,priority,created_at,updated_at FROM project_tasks WHERE id=?1",
+                [id],
+                task_row,
+            ).map_err(Into::into)
+        }).await
+    }
+
+    pub async fn memories(
+        &self,
+        project_id: &str,
+        include_inactive: bool,
+    ) -> Result<Vec<ProjectMemory>> {
+        let project_id = project_id.to_owned();
+        self.access(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT id,project_id,category,title,content,source_session_id,active,created_at,updated_at
+                 FROM project_memories WHERE project_id=?1 AND (?2 OR active=1)
+                 ORDER BY active DESC, updated_at DESC, id DESC",
+            )?;
+            statement
+                .query_map(params![project_id, include_inactive], memory_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        }).await
+    }
+
+    pub async fn remember(
+        &self,
+        project_id: &str,
+        category: MemoryCategory,
+        title: String,
+        content: String,
+        source_session_id: Option<String>,
+    ) -> Result<ProjectMemory> {
+        validate_memory_fields(&title, &content)?;
+        let project_id = project_id.to_owned();
+        self.access(move |conn| {
+            let transaction = conn.transaction()?;
+            let project_exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+                [&project_id],
+                |row| row.get(0),
+            )?;
+            ensure!(project_exists, "project not found");
+            transaction.execute(
+                "INSERT INTO project_memories(project_id,category,title,content,source_session_id) VALUES(?1,?2,?3,?4,?5)",
+                params![project_id, category.as_str(), title, content, source_session_id],
+            )?;
+            let id = transaction.last_insert_rowid();
+            let memory = transaction.query_row(
+                "SELECT id,project_id,category,title,content,source_session_id,active,created_at,updated_at FROM project_memories WHERE id=?1",
+                [id],
+                memory_row,
+            )?;
+            transaction.commit()?;
+            Ok(memory)
+        }).await
+    }
+
+    pub async fn set_memory_active(
+        &self,
+        project_id: &str,
+        id: i64,
+        active: bool,
+    ) -> Result<ProjectMemory> {
+        let project_id = project_id.to_owned();
+        self.access(move |conn| {
+            let changed = conn.execute(
+                "UPDATE project_memories SET active=?3,updated_at=unixepoch() WHERE id=?1 AND project_id=?2",
+                params![id, project_id, active],
+            )?;
+            ensure!(changed == 1, "memory not found in this project");
+            conn.query_row(
+                "SELECT id,project_id,category,title,content,source_session_id,active,created_at,updated_at FROM project_memories WHERE id=?1",
+                [id],
+                memory_row,
+            ).map_err(Into::into)
+        }).await
+    }
+}
+
+fn validate_task_fields(title: &str, details: &str, priority: i64) -> Result<()> {
+    ensure!(!title.trim().is_empty(), "task title must not be empty");
+    ensure!(title.len() <= 512, "task title exceeds 512 bytes");
+    ensure!(details.len() <= 8192, "task details exceed 8192 bytes");
+    ensure!(
+        (-100..=100).contains(&priority),
+        "task priority must be between -100 and 100"
+    );
+    Ok(())
+}
+
+fn validate_memory_fields(title: &str, content: &str) -> Result<()> {
+    ensure!(!title.trim().is_empty(), "memory title must not be empty");
+    ensure!(title.len() <= 512, "memory title exceeds 512 bytes");
+    ensure!(
+        !content.trim().is_empty(),
+        "memory content must not be empty"
+    );
+    ensure!(content.len() <= 8192, "memory content exceeds 8192 bytes");
+    Ok(())
+}
+
+fn task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectTask> {
+    let status: String = row.get(5)?;
+    Ok(ProjectTask {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        parent_id: row.get(2)?,
+        title: row.get(3)?,
+        details: row.get(4)?,
+        status: TaskStatus::parse(&status).ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+        priority: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectMemory> {
+    let category: String = row.get(2)?;
+    Ok(ProjectMemory {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        category: MemoryCategory::parse(&category).ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+        title: row.get(3)?,
+        content: row.get(4)?,
+        source_session_id: row.get(5)?,
+        active: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
 }
 
 impl SessionWriter {
