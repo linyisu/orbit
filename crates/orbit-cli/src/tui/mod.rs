@@ -57,6 +57,7 @@ struct CommandContext<'a> {
 pub struct ModelOption {
     pub provider: String,
     pub model: String,
+    pub context_tokens: usize,
     pub default_for_provider: bool,
     pub reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
     pub config: orbit_model::types::ModelConfig,
@@ -246,25 +247,33 @@ pub async fn run(
                         }
                         Action::Submit(prompt) => {
                             let compacting = prompt.trim() == "/compact";
-                            if prompt.starts_with('/') && !compacting {
+                            if prompt.starts_with('/') {
                                 let command = prompt
                                     .split_once(char::is_whitespace)
                                     .map_or(prompt.as_str(), |(command, _)| command);
                                 state.transcript.push(TranscriptItem::Command(prompt.clone()));
-                                if task.is_some()
-                                    && !commands::available_while_running(command)
-                                {
+                                if compacting && task.is_some() {
                                     state.transcript.push(TranscriptItem::CommandError(
-                                        "运行中只能使用 /status、/model、/context 或 /mode；请先按 Esc 取消当前响应。".into(),
+                                        "运行中不能压缩上下文；请先按 Esc 取消当前响应。".into(),
                                     ));
                                     continue;
                                 }
-                                match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, model_options: &model_options }).await {
-                                    Ok(true) => break,
-                                    Ok(false) => refresh_context_usage(&mut state, &history, &tools),
-                                    Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
+                                if !compacting {
+                                    if task.is_some()
+                                        && !commands::available_while_running(command)
+                                    {
+                                        state.transcript.push(TranscriptItem::CommandError(
+                                            "运行中只能使用 /status、/model、/context 或 /mode；请先按 Esc 取消当前响应。".into(),
+                                        ));
+                                        continue;
+                                    }
+                                    match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, model_options: &model_options }).await {
+                                        Ok(true) => break,
+                                        Ok(false) => refresh_context_usage(&mut state, &history, &tools),
+                                        Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
+                                    }
+                                    continue;
                                 }
-                                continue;
                             }
                             let attachments = if compacting {
                                 Vec::new()
@@ -275,6 +284,7 @@ pub async fn run(
                             active_context = (!compacting).then(|| {
                                 ChatMessage::user_with_attachments(prompt.clone(), attachments.clone())
                             });
+                            let active_context_tokens = state.context_tokens;
                             let started = start_agent_run(
                                 prompt,
                                 attachments,
@@ -284,7 +294,7 @@ pub async fn run(
                                 &history,
                                 &model,
                                 &tools,
-                                context_tokens,
+                                active_context_tokens,
                                 auto_compact,
                                 max_output_tokens,
                                 max_turns,
@@ -483,7 +493,11 @@ async fn start_agent_run(
             format!("{prompt}\n{labels}")
         }
     };
-    state.submit(display_prompt);
+    if compacting {
+        state.begin_run();
+    } else {
+        state.submit(display_prompt);
+    }
     let mut messages = history.to_vec();
     if !compacting {
         messages.push(ChatMessage::user_with_attachments(prompt, attachments));
@@ -731,6 +745,7 @@ async fn select_model(
                 .await?;
             *model = client;
             state.model = model_name;
+            state.context_tokens = choice.context_tokens;
             state.reasoning_effort = reasoning_effort;
             if previous_model != state.model {
                 state.transcript.push(TranscriptItem::CommandResult(format!(
@@ -973,6 +988,7 @@ fn restore_model_profile(
     };
     *model = client;
     state.model = choice.qualified_name();
+    state.context_tokens = choice.context_tokens;
     state.reasoning_effort = model.config().reasoning_effort;
 }
 

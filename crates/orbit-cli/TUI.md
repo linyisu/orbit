@@ -28,7 +28,7 @@
 - `/resume` 打开当前项目、相同运行模式的历史会话列表，按最近更新排序。输入标题或 ID 筛选，↑↓ 或滚轮选择，Enter 恢复，Esc 返回；`/sessions` 是同一入口。
 - `/resume <完整 ID>` 直接恢复。当前会话和无历史的空会话不列入选择器。运行中的任务必须先结束或取消，不能直接切换。
 - 切换先校验项目和模式，再取得目标会话的独占锁并加载上下文，成功后才释放当前会话。不存在、跨项目、模式不匹配或已被其他进程占用时保留当前会话，不重跑旧工具。
-- 恢复沿用当前 API 配置、模型和预算；审批模式回到 auto。历史记录与输入历史从目标会话重建，后续消息追加到原会话 ID。
+- 恢复沿用当前 API 配置；若会话保存的模型仍在配置中，会恢复该模型和思考强度，并采用该模型当前声明的上下文窗口。审批模式回到 auto。历史记录与输入历史从目标会话重建，后续消息追加到原会话 ID。
 
 `/` 直接显示可用命令；已移除 `/help` 命令，空输入时 `?` 仍可查看快捷键。新对话页只显示 Orbit ASCII 标志；底栏显示权限模式、上下文圆环、模型和思考强度。
 
@@ -50,10 +50,11 @@ api_key = "replace-with-key"
 
 [[providers.openai.models]]
 id = "gpt-5.6-sol"
+context_tokens = 128000
 reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
 ```
 
-可用值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，因此网关重命名模型或新增供应商不会触发模型名判断。未写 `reasoning` 时，Orbit 不发送任何思考参数。
+`context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。可用思考值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，因此网关重命名模型或新增供应商不会触发模型名判断。未写 `reasoning` 时，Orbit 不发送任何思考参数。
 
 ## 图片与文档
 

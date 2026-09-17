@@ -2,6 +2,17 @@
 # The initial TUI model is the default model of this provider.
 default_provider = "openai"
 
+# Default context window, including output reserve; a model-level value overrides it.
+context_tokens = 128000
+# Automatically summarize older context near 85% of the available input budget.
+# Uses additional model requests; original conversation records remain stored.
+auto_compact = true
+# Per-request output limit; reasoning can consume this budget too.
+max_output_tokens = 32000
+# Per user request. Zero means unlimited; cancellation remains available.
+max_turns = 0
+max_tool_calls = 0
+
 [providers.openai]
 api_format = "openai_responses"
 base_url = "https://api.openai.com/v1"
@@ -10,10 +21,12 @@ timeout_seconds = 600
 
 [[providers.openai.models]]
 id = "gpt-5.6-sol"
+context_tokens = 128000
 reasoning = { adapter = "openai_responses", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high" }
 
 [[providers.openai.models]]
 id = "gpt-6-astra"
+context_tokens = 128000
 reasoning = { adapter = "openai_responses", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high" }
 
 [providers.deepseek]
@@ -24,28 +37,13 @@ timeout_seconds = 600
 
 [[providers.deepseek.models]]
 id = "deepseek-flash"
+context_tokens = 128000
 reasoning = { adapter = "anthropic_messages", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high", extra = { thinking = { type = "enabled" } } }
 
 [[providers.deepseek.models]]
 id = "deepseek-pro"
-reasoning = { adapter = "anthropic_messages", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high", extra = { thinking = { type = "enabled" } } }
-
-# Approximate context budget including output reserve, not provider billing tokens.
 context_tokens = 128000
-# Automatically summarize older context near 85% of the available input budget.
-# Uses additional model requests; original conversation records remain stored.
-auto_compact = true
-
-# Per-request output limit; reasoning can consume this budget too.
-max_output_tokens = 32000
-
-# Per user request. Zero means unlimited; cancellation remains available.
-max_turns = 0
-max_tool_calls = 0
-
-# Override the generic token budgets for your provider/model, e.g. current
-# DeepSeek Flash: context_tokens = 1000000, max_output_tokens = 64000.
-# Keep these token settings above [command] (they are top-level settings).
+reasoning = { adapter = "anthropic_messages", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high", extra = { thinking = { type = "enabled" } } }
 
 [command]
 default_timeout_seconds = 120

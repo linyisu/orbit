@@ -533,15 +533,13 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(vec![
                         Span::styled(
-                            if index == 0 { "❯ " } else { "  " },
+                            if index == 0 { "  󰅴 " } else { "    " },
                             Style::default().fg(ACCENT),
                         ),
-                        Span::styled(
-                            line.to_owned(),
-                            Style::default().add_modifier(Modifier::BOLD),
-                        ),
+                        Span::raw(line.to_owned()),
                     ]));
                 }
+                lines.push(Line::from(""));
             }
             TranscriptItem::Assistant(text) => {
                 if text.is_empty() {
@@ -631,9 +629,9 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 lines.push(Line::from(""));
             }
             TranscriptItem::CommandResult(text) => {
-                for (index, line) in text.lines().enumerate() {
+                for line in text.lines() {
                     lines.push(Line::from(Span::styled(
-                        format!("{}{}", if index == 0 { "  ⎿  " } else { "     " }, line),
+                        format!("  {line}"),
                         Style::default().fg(Color::Rgb(190, 190, 190)),
                     )));
                 }
@@ -1043,7 +1041,7 @@ mod tests {
     fn model_change_uses_the_same_result_style_as_other_commands() {
         let item = TranscriptItem::CommandResult("qwen::old → qwen::new".into());
         let lines = transcript_lines(&[item], false);
-        assert_eq!(lines[0].to_string(), "  ⎿  qwen::old → qwen::new");
+        assert_eq!(lines[0].to_string(), "  qwen::old → qwen::new");
     }
 
     #[test]
@@ -1056,10 +1054,10 @@ mod tests {
             ],
             false,
         );
-        assert_eq!(lines[0].to_string(), "❯ /model asd");
-        assert_eq!(lines[1].to_string(), "  ⎿  状态");
-        assert_eq!(lines[2].to_string(), "     细节");
-        assert!(lines[4].to_string().starts_with("● 未知命令"));
+        assert_eq!(lines[0].to_string(), "  󰅴 /model asd");
+        assert_eq!(lines[2].to_string(), "  状态");
+        assert_eq!(lines[3].to_string(), "  细节");
+        assert!(lines[5].to_string().starts_with("● 未知命令"));
     }
 
     #[test]

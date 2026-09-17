@@ -132,6 +132,8 @@ struct ProviderConfig {
 #[derive(Clone, Debug, Deserialize)]
 struct ModelProfile {
     id: String,
+    /// Overrides the top-level context window for this model only.
+    context_tokens: Option<usize>,
     reasoning: Option<ReasoningProfile>,
 }
 
@@ -240,6 +242,13 @@ impl FileConfig {
                         }
                     }
                 }
+                let context_tokens = model.context_tokens.unwrap_or(config.context_tokens);
+                if context_tokens < 8192 || config.max_output_tokens as usize >= context_tokens {
+                    bail!(
+                        "model {:?}: context_tokens must be at least 8192 and larger than max_output_tokens",
+                        model.id
+                    );
+                }
             }
         }
         config.command.validate().map_err(anyhow::Error::msg)?;
@@ -263,6 +272,7 @@ impl FileConfig {
                 options.push(tui::ModelOption {
                     provider: name.clone(),
                     model: model.id.clone(),
+                    context_tokens: model.context_tokens.unwrap_or(self.context_tokens),
                     default_for_provider: index == 0,
                     reasoning_efforts: reasoning
                         .map_or_else(Vec::new, |profile| profile.efforts.clone()),
@@ -290,6 +300,15 @@ impl FileConfig {
             .into_iter()
             .find(|option| option.provider == self.default_provider && option.default_for_provider)
             .ok_or_else(|| anyhow::anyhow!("default_provider is not configured"))
+    }
+
+    fn agent_config_for(&self, context_tokens: usize) -> AgentConfig {
+        AgentConfig {
+            context_tokens,
+            auto_compact: self.auto_compact,
+            max_turns: self.max_turns,
+            max_tool_calls: self.max_tool_calls,
+        }
     }
 }
 
@@ -352,9 +371,9 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
-    let context_tokens = file_config.context_tokens;
     let max_output_tokens = file_config.max_output_tokens;
     let model_name = default_model.qualified_name();
+    let context_tokens = default_model.context_tokens;
     let client = ModelClient::new(default_model.config)?;
     let session = session::SessionState::open(database, args.resume, model_name.clone()).await?;
     tui::run(
@@ -385,11 +404,12 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
 
 async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -> Result<()> {
     let file_config = FileConfig::load(&config_path)?;
-    let agent_config = file_config.agent_config();
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
     let max_output_tokens = file_config.max_output_tokens;
-    let client = ModelClient::new(file_config.default_model_option()?.config)?;
+    let default_model = file_config.default_model_option()?;
+    let agent_config = file_config.agent_config_for(default_model.context_tokens);
+    let client = ModelClient::new(default_model.config)?;
     let instructions = instructions::load_current();
     let mut messages = vec![ChatMessage::user(args.prompt)];
     instructions::inject(&mut messages, &instructions);
@@ -542,6 +562,34 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default =
         assert_eq!(
             option.config.reasoning_adapter,
             Some(ReasoningAdapter::OpenaiResponses)
+        );
+    }
+
+    #[test]
+    fn model_context_window_overrides_the_default_budget() {
+        let config: FileConfig = toml::from_str(
+            r#"default_provider = "test"
+context_tokens = 128000
+max_output_tokens = 32000
+[providers.test]
+base_url = "https://test.example/v1"
+api_key = "test-key"
+[[providers.test.models]]
+id = "small-window"
+context_tokens = 64000
+[[providers.test.models]]
+id = "default-window"
+"#,
+        )
+        .unwrap();
+        let options = config.model_options().unwrap();
+        assert_eq!(options[0].context_tokens, 64_000);
+        assert_eq!(options[1].context_tokens, 128_000);
+        assert_eq!(
+            config
+                .agent_config_for(options[0].context_tokens)
+                .context_tokens,
+            64_000
         );
     }
 

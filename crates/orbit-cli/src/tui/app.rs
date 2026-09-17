@@ -157,6 +157,10 @@ impl UiState {
 
     pub fn submit(&mut self, prompt: String) {
         self.transcript.push(TranscriptItem::User(prompt));
+        self.begin_run();
+    }
+
+    pub fn begin_run(&mut self) {
         self.status = RunStatus::Running;
         self.show_help = false;
         self.elapsed = std::time::Duration::ZERO;

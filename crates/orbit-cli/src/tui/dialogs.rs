@@ -517,6 +517,7 @@ mod tests {
                 ModelOption {
                     provider: "deepseek".into(),
                     model: "deepseek-chat".into(),
+                    context_tokens: 64_000,
                     default_for_provider: true,
                     reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
                     config: orbit_model::types::ModelConfig::default(),
@@ -524,6 +525,7 @@ mod tests {
                 ModelOption {
                     provider: "openai".into(),
                     model: "gpt-6-astra".into(),
+                    context_tokens: 128_000,
                     default_for_provider: true,
                     reasoning_efforts: vec![
                         orbit_model::types::ReasoningEffort::Medium,

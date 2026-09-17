@@ -143,7 +143,13 @@ impl SessionState {
         state.workspace = self.snapshot.session.workspace.clone();
         for run in &self.snapshot.runs {
             state.input.history.push(run.prompt.clone());
-            state.submit(run.prompt.clone());
+            if run.prompt == "/compact" {
+                state
+                    .transcript
+                    .push(TranscriptItem::Command(run.prompt.clone()));
+            } else {
+                state.submit(run.prompt.clone());
+            }
             for event in &run.events {
                 state.apply(event.clone());
             }
