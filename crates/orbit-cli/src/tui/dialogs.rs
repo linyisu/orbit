@@ -45,6 +45,7 @@ impl ModelPicker {
             .filter(|model| {
                 model.qualified_name().to_lowercase().contains(&query)
                     || model.model.to_lowercase().contains(&query)
+                    || model.provider.to_lowercase().contains(&query)
             })
             .collect()
     }
@@ -310,12 +311,28 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         );
         frame.render_widget(Paragraph::new(format!("{search}▏")), header);
         let rows = picker.matches();
-        let visible = (body.height as usize / 2).max(1);
+        let visible = body.height.saturating_sub(2) as usize;
         let first = picker.selected.saturating_sub(visible - 1);
         let mut lines = Vec::new();
+        let mut previous_provider = None;
         for (index, model) in rows.iter().enumerate().skip(first).take(visible) {
+            if previous_provider != Some(model.provider.as_str()) {
+                lines.push(Line::styled(
+                    clean(&model.provider),
+                    Style::default()
+                        .fg(Color::Rgb(218, 139, 109))
+                        .add_modifier(Modifier::BOLD),
+                ));
+                previous_provider = Some(model.provider.as_str());
+            }
             let selected = index == picker.selected;
             let current = model.qualified_name() == picker.current;
+            let ordinal = picker
+                .models
+                .iter()
+                .filter(|candidate| candidate.provider == model.provider)
+                .position(|candidate| candidate.model == model.model)
+                .map_or(1, |position| position + 1);
             let style = if selected {
                 Style::default()
                     .fg(Color::Black)
@@ -326,24 +343,18 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             };
             lines.push(Line::styled(
                 format!(
-                    "{} {}{}",
+                    "{} {}. {}{}{}",
                     if selected { "›" } else { " " },
-                    model.qualified_name(),
-                    if current { "  (当前)" } else { "" }
-                ),
-                style,
-            ));
-            lines.push(Line::styled(
-                format!(
-                    "  {}{}",
+                    ordinal,
+                    model.model,
                     if model.default_for_provider {
-                        "默认模型 · "
+                        "  (默认)"
                     } else {
                         ""
                     },
-                    model.provider
+                    if current { "  (当前)" } else { "" },
                 ),
-                Style::default().fg(Color::Rgb(170, 170, 170)),
+                style,
             ));
         }
         if lines.is_empty() {
