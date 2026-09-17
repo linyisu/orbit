@@ -434,7 +434,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         );
         let lines: Vec<Line> = if state.help_keys {
             [
-                "Enter          发送消息",
+                "Enter          发送消息；运行中提交引导",
                 "Ctrl+J / Shift+Enter  换行",
                 "Ctrl+V / Alt+V  粘贴剪贴板图片或文字",
                 "←→ + Backspace/Delete  选择或删除图片",
@@ -443,7 +443,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 "拖选 + Ctrl+C  复制选区",
                 "Ctrl+O         展开/收起视口底部的工具结果",
                 "Shift+Tab      切换 ask / auto / yolo",
-                "Esc            取消响应 / 关闭面板",
+                "Esc            立即取消响应 / 关闭面板",
                 "Ctrl+A / E     移到行首 / 行尾",
                 "Ctrl+U / K     删除到行首 / 行尾",
                 "Ctrl+C         取消响应 / 清空输入 / 空输入时退出",

@@ -27,7 +27,7 @@ use orbit_agent::{
 };
 use orbit_model::{
     client::ModelClient,
-    types::{ChatMessage, ChatRequest},
+    types::{Attachment, ChatMessage, ChatRequest},
 };
 use tokio::{select, sync::mpsc, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
@@ -40,6 +40,12 @@ use self::{
 };
 
 type RunTask = JoinHandle<Result<AgentResult, AgentError>>;
+
+struct StartedRun {
+    receiver: mpsc::Receiver<AgentEvent>,
+    cancellation: CancellationToken,
+    task: RunTask,
+}
 
 struct CommandContext<'a> {
     tools: &'a ToolRegistry,
@@ -109,6 +115,8 @@ pub async fn run(
     let mut receiver: Option<mpsc::Receiver<AgentEvent>> = None;
     let mut cancellation: Option<CancellationToken> = None;
     let mut task: Option<RunTask> = None;
+    let mut pending_guidance = Vec::new();
+    let mut active_context: Option<ChatMessage> = None;
     let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
     let mut frames = frames::Frames::default();
     let mut wheel = wheel::Wheel::default();
@@ -217,6 +225,11 @@ pub async fn run(
                             state.cancel();
                             if let Some(token) = &cancellation { token.cancel(); }
                         }
+                        Action::Steer(guidance) => {
+                            pending_guidance.push(guidance);
+                            state.cancel();
+                            if let Some(token) = &cancellation { token.cancel(); }
+                        }
                         Action::AttachPaths(paths) => {
                             if let Err(error) = attach_paths(&mut state, &session, paths) {
                                 state.transcript.push(TranscriptItem::Error(error.to_string()));
@@ -244,50 +257,28 @@ pub async fn run(
                                 state.attachment_cursor = None;
                                 std::mem::take(&mut state.attachments)
                             };
-                            session.begin(prompt.clone(), state.model.clone()).await?;
-                            let display_prompt = if attachments.is_empty() {
-                                prompt.clone()
-                            } else {
-                                let labels = attachments
-                                    .iter()
-                                    .map(|attachment| format!("[图片：{}]", attachment.name()))
-                                    .collect::<Vec<_>>()
-                                    .join(" ");
-                                if prompt.is_empty() {
-                                    labels
-                                } else {
-                                    format!("{prompt}\n{labels}")
-                                }
-                            };
-                            state.submit(display_prompt);
-                            let mut messages = history.clone();
-                            if !compacting {
-                                messages.push(ChatMessage::user_with_attachments(prompt, attachments));
-                            }
-                            state.context_used_tokens = orbit_agent::context::estimate_tokens(&messages, &tools.definitions());
-                            let mut request = ChatRequest::new(messages);
-                            request.max_tokens = Some(max_output_tokens);
-                            request.reasoning_effort = model.config().reasoning_effort;
-                            let (sender, rx) = mpsc::channel(256);
-                            receiver = Some(rx);
-                            let token = CancellationToken::new();
-                            cancellation = Some(token.clone());
-                            let tools = tools.clone();
-                            let backend = ModelClientBackend::new(model.clone());
-                            let files = orbit_agent::memory::FileActivity::from_events(session.snapshot.runs.iter().flat_map(|run| &run.events));
-                            let config = AgentConfig { context_tokens, max_turns, max_tool_calls, auto_compact };
-                            let agent = Agent::new(backend.clone(), tools.clone(), config.clone()).with_file_activity(files.clone());
-                            task = Some(tokio::spawn(async move {
-                                if compacting {
-                                    let compacted = orbit_agent::context::compact_with_files(&backend, request.messages, &tools.definitions(), context_tokens, token, &files).await?;
-                                    orbit_agent::context::check_budget(&compacted.history, &tools.definitions(), max_output_tokens as usize, context_tokens)?;
-                                    sender.send(AgentEvent::CompactionRecorded { record: compacted.record }).await.map_err(|_| AgentError::EventChannelClosed)?;
-                                    let report = format!("上下文已压缩：估算 {} → {} tokens。保留最近两轮完整对话，原始记录仍在。\n\n{}", compacted.before_tokens, compacted.after_tokens, compacted.summary);
-                                    sender.send(AgentEvent::Model(orbit_model::types::StreamEvent::TextDelta(report.clone()))).await.map_err(|_| AgentError::EventChannelClosed)?;
-                                    return Ok(AgentResult { final_message: ChatMessage::assistant(report), history: compacted.history, turns: 1, tool_calls: 0 });
-                                }
-                                agent.run_with_agent_events(request, token, sender).await
-                            }));
+                            active_context = (!compacting).then(|| {
+                                ChatMessage::user_with_attachments(prompt.clone(), attachments.clone())
+                            });
+                            let started = start_agent_run(
+                                prompt,
+                                attachments,
+                                compacting,
+                                &mut state,
+                                &mut session,
+                                &history,
+                                &model,
+                                &tools,
+                                context_tokens,
+                                auto_compact,
+                                max_output_tokens,
+                                max_turns,
+                                max_tool_calls,
+                            )
+                            .await?;
+                            receiver = Some(started.receiver);
+                            cancellation = Some(started.cancellation);
+                            task = Some(started.task);
                         }
                         Action::None => {}
                     }
@@ -346,6 +337,33 @@ pub async fn run(
                     task = None;
                     receiver = None;
                     cancellation = None;
+                    if !pending_guidance.is_empty() {
+                        let guidance = pending_guidance.join("\n\n");
+                        pending_guidance.clear();
+                        let steering_history = steering_history(&history, active_context.take());
+                        active_context = Some(ChatMessage::user(guidance.clone()));
+                        let started = start_agent_run(
+                            guidance,
+                            Vec::new(),
+                            false,
+                            &mut state,
+                            &mut session,
+                            &steering_history,
+                            &model,
+                            &tools,
+                            context_tokens,
+                            auto_compact,
+                            max_output_tokens,
+                            max_turns,
+                            max_tool_calls,
+                        )
+                        .await?;
+                        receiver = Some(started.receiver);
+                        cancellation = Some(started.cancellation);
+                        task = Some(started.task);
+                    } else {
+                        active_context = None;
+                    }
                 }
                 _ = time::sleep_until(frames.deadline()), if frames.pending() => {
                     terminal::draw_synchronized(&mut terminal, |frame| {
@@ -406,6 +424,123 @@ fn apply_live_event(event: AgentEvent, state: &mut UiState, session: &mut Sessio
 fn refresh_context_usage(state: &mut UiState, history: &[ChatMessage], tools: &ToolRegistry) {
     state.context_used_tokens =
         orbit_agent::context::estimate_tokens(history, &tools.definitions());
+}
+
+fn steering_history(
+    history: &[ChatMessage],
+    interrupted_prompt: Option<ChatMessage>,
+) -> Vec<ChatMessage> {
+    let mut history = history.to_vec();
+    if let Some(prompt) = interrupted_prompt {
+        history.push(prompt);
+    }
+    history
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_agent_run(
+    prompt: String,
+    attachments: Vec<Attachment>,
+    compacting: bool,
+    state: &mut UiState,
+    session: &mut SessionState,
+    history: &[ChatMessage],
+    model: &ModelClient,
+    tools: &ToolRegistry,
+    context_tokens: usize,
+    auto_compact: bool,
+    max_output_tokens: u32,
+    max_turns: usize,
+    max_tool_calls: usize,
+) -> Result<StartedRun> {
+    session.begin(prompt.clone(), state.model.clone()).await?;
+    let display_prompt = if attachments.is_empty() {
+        prompt.clone()
+    } else {
+        let labels = attachments
+            .iter()
+            .map(|attachment| format!("[图片：{}]", attachment.name()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if prompt.is_empty() {
+            labels
+        } else {
+            format!("{prompt}\n{labels}")
+        }
+    };
+    state.submit(display_prompt);
+    let mut messages = history.to_vec();
+    if !compacting {
+        messages.push(ChatMessage::user_with_attachments(prompt, attachments));
+    }
+    state.context_used_tokens =
+        orbit_agent::context::estimate_tokens(&messages, &tools.definitions());
+    let mut request = ChatRequest::new(messages);
+    request.max_tokens = Some(max_output_tokens);
+    request.reasoning_effort = model.config().reasoning_effort;
+    let (sender, receiver) = mpsc::channel(256);
+    let cancellation = CancellationToken::new();
+    let token = cancellation.clone();
+    let tools = tools.clone();
+    let backend = ModelClientBackend::new(model.clone());
+    let files = orbit_agent::memory::FileActivity::from_events(
+        session.snapshot.runs.iter().flat_map(|run| &run.events),
+    );
+    let config = AgentConfig {
+        context_tokens,
+        max_turns,
+        max_tool_calls,
+        auto_compact,
+    };
+    let agent =
+        Agent::new(backend.clone(), tools.clone(), config).with_file_activity(files.clone());
+    let task = tokio::spawn(async move {
+        if compacting {
+            let compacted = orbit_agent::context::compact_with_files(
+                &backend,
+                request.messages,
+                &tools.definitions(),
+                context_tokens,
+                token,
+                &files,
+            )
+            .await?;
+            orbit_agent::context::check_budget(
+                &compacted.history,
+                &tools.definitions(),
+                max_output_tokens as usize,
+                context_tokens,
+            )?;
+            sender
+                .send(AgentEvent::CompactionRecorded {
+                    record: compacted.record,
+                })
+                .await
+                .map_err(|_| AgentError::EventChannelClosed)?;
+            let report = format!(
+                "上下文已压缩：估算 {} → {} tokens。保留最近两轮完整对话，原始记录仍在。\n\n{}",
+                compacted.before_tokens, compacted.after_tokens, compacted.summary
+            );
+            sender
+                .send(AgentEvent::Model(
+                    orbit_model::types::StreamEvent::TextDelta(report.clone()),
+                ))
+                .await
+                .map_err(|_| AgentError::EventChannelClosed)?;
+            return Ok(AgentResult {
+                final_message: ChatMessage::assistant(report),
+                history: compacted.history,
+                turns: 1,
+                tool_calls: 0,
+            });
+        }
+        agent.run_with_agent_events(request, token, sender).await
+    });
+    Ok(StartedRun {
+        receiver,
+        cancellation,
+        task,
+    })
 }
 
 async fn run_command(
@@ -779,6 +914,7 @@ enum Action {
     None,
     Quit,
     Cancel,
+    Steer(String),
     Redraw,
     AttachPaths(Vec<PathBuf>),
     PasteClipboard,
@@ -951,7 +1087,11 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         {
             state.input.insert("\n")
         }
-        KeyCode::Enter if busy => {}
+        KeyCode::Enter if busy => {
+            if let Some(guidance) = state.input.take() {
+                return Action::Steer(guidance);
+            }
+        }
         KeyCode::Enter if state.input.text.ends_with('\\') => {
             state.input.backspace();
             state.input.insert("\n");
@@ -1057,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_selects_commands_and_busy_enter_preserves_draft() {
+    fn menu_selects_commands_and_busy_enter_steers_with_the_draft() {
         let mut state = UiState::new("mock");
         state.input.insert("/");
         press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
@@ -1068,13 +1208,25 @@ mod tests {
         state.input.insert("next question");
         assert_eq!(
             press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
-            Action::None
+            Action::Steer("next question".into())
         );
-        assert_eq!(state.input.text, "next question");
+        assert!(state.input.text.is_empty());
         assert_eq!(
             press(&mut state, KeyCode::Esc, KeyModifiers::NONE, true),
             Action::Cancel
         );
+    }
+
+    #[test]
+    fn steering_keeps_the_interrupted_user_task_in_the_next_request() {
+        let history = vec![ChatMessage::system("rules")];
+        let history = steering_history(&history, Some(ChatMessage::user("build the parser")));
+
+        assert_eq!(history.len(), 2);
+        assert!(matches!(
+            &history[1],
+            ChatMessage::User { content, .. } if content == "build the parser"
+        ));
     }
 
     #[test]
