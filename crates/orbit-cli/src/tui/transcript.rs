@@ -259,7 +259,11 @@ impl Entry {
                 self.code = code.clone();
             }
         }
-        if !thinking && !text.is_empty() {
+        // Every completed-looking streamed section owns exactly one trailing
+        // blank row. This keeps reasoning distinct from the following tool or
+        // final answer without relying on the next transcript entry to know
+        // what came before it.
+        if !text.is_empty() {
             self.push(Line::from(""), width);
         }
         self.observed_bytes = Some(text.len());
@@ -645,6 +649,22 @@ mod tests {
         assert!(rows[0].line.to_string().starts_with("╭─⎿ "));
         assert!(rows.iter().any(|row| row.line.to_string().contains("状态")));
         assert!(rows.iter().any(|row| row.line.to_string().starts_with("╰")));
+    }
+
+    #[test]
+    fn thinking_keeps_one_row_before_the_following_answer() {
+        let mut layout = TranscriptLayout::default();
+        layout.update(
+            &[
+                TranscriptItem::Thinking("inspect the request".into()),
+                TranscriptItem::Assistant("final answer".into()),
+            ],
+            None,
+            40,
+        );
+        let thinking = &layout.entries[0];
+        assert!(thinking.rows.last().unwrap().line.to_string().is_empty());
+        assert_eq!(layout.entries[1].rows[0].line.to_string(), "  final answer");
     }
 
     #[test]

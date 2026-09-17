@@ -559,6 +559,9 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 for (index, line) in text.lines().enumerate() {
                     lines.push(thinking_line(line, index, &mut code));
                 }
+                if !text.is_empty() {
+                    lines.push(Line::from(""));
+                }
             }
             TranscriptItem::Tool(row) => {
                 // A tool is a separate execution step. Keep one measured row
