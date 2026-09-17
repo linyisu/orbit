@@ -48,12 +48,18 @@ struct CommandContext<'a> {
     model_options: &'a [ModelOption],
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ModelOption {
-    pub alias: String,
     pub provider: String,
+    pub model: String,
     pub default_for_provider: bool,
     pub config: orbit_model::types::ModelConfig,
+}
+
+impl ModelOption {
+    pub fn qualified_name(&self) -> String {
+        format!("{}::{}", self.provider, self.model)
+    }
 }
 
 pub struct RequestBudget {
@@ -90,6 +96,10 @@ pub async fn run(
     state.context_tokens = context_tokens;
     state.auto_compact = auto_compact;
     state.max_output_tokens = max_output_tokens;
+    state.model_completions = model_options
+        .iter()
+        .map(ModelOption::qualified_name)
+        .collect();
     session.restore_ui(&mut state);
     let mut history = session.snapshot.history.clone();
     crate::instructions::inject(&mut history, &instructions);
@@ -111,7 +121,7 @@ pub async fn run(
                     let Some(event) = event else { break };
                     let event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
-                    if !state.selection.dragging() && !state.show_help && state.picker.is_none()
+                    if !state.selection.dragging() && !state.show_help && state.picker.is_none() && state.model_picker.is_none()
                         && let Some(changed) = navigation::handle(&mut state, &event) {
                         if changed { dirty = true; frames.request(time::Instant::now()); }
                         continue;
@@ -120,11 +130,14 @@ pub async fn run(
                     if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) { continue; }
                     dirty = true;
                     frames.request(time::Instant::now());
-                    if state.show_help || state.picker.is_some() {
+                    if state.show_help || state.picker.is_some() || state.model_picker.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
                             && let Err(error) = resume_session(&id, &mut state, &mut history, &mut session, &instructions).await
                             && let Some(picker) = &mut state.picker {
                             picker.error = Some(error.to_string());
+                        }
+                        if let Some(name) = state.chosen_model.take() {
+                            select_model(&name, &mut state, &mut model, &model_options);
                         }
                         continue;
                     }
@@ -496,58 +509,27 @@ async fn run_command(
             "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / write_file / edit_file / run_command · 审批：{}",
             session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
-        "/model" | "/provider" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
+        "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
         "/model" => {
             if argument.is_empty() {
-                let configured = model_options
-                    .iter()
-                    .map(|choice| format!("{}  · {} · {}", choice.alias, choice.provider, choice.config.model))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                state.transcript.push(TranscriptItem::Notice(format!("当前模型：{}\n\n已配置模型（别名 · 供应商 · 实际模型）\n{}\n\n输入 /model <别名> 切换。未配置名称仍会沿用当前供应商直接切换；/provider 查看或切换供应商默认模型。", state.model, configured)));
-            } else if let Some(choice) = model_options.iter().find(|choice| choice.alias == argument) {
-                match ModelClient::new(choice.config.clone()) {
-                    Ok(client) => {
-                        *model = client;
-                        state.model = choice.alias.clone();
-                        state.transcript.push(TranscriptItem::Notice(format!("已切换到 {} · 供应商 {} · 实际模型 {}\n下一条消息验证可用性。", choice.alias, choice.provider, choice.config.model)));
-                    }
-                    Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
-                }
+                state.model_picker = Some(dialogs::ModelPicker::new(model_options.to_vec(), state.model.clone()));
             } else {
-                let mut config = model.config().clone();
-                config.model = argument.to_owned();
-                match ModelClient::new(config) {
-                    Ok(client) => {
-                        *model = client;
-                        state.model = argument.to_owned();
-                        state.transcript.push(TranscriptItem::Notice(format!("已选择 {argument} · 下一条消息验证可用性")));
-                    }
-                    Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
+                let current_provider = model_options
+                    .iter()
+                    .find(|choice| choice.qualified_name() == state.model)
+                    .map(|choice| choice.provider.as_str());
+                let choice = if let Some((provider, name)) = argument.split_once("::") {
+                    model_options.iter().find(|choice| choice.provider == provider && choice.model == name)
+                } else {
+                    model_options.iter().find(|choice| {
+                        Some(choice.provider.as_str()) == current_provider && choice.model == argument
+                    })
+                };
+                if let Some(choice) = choice {
+                    select_model(&choice.qualified_name(), state, model, model_options);
+                } else {
+                    state.transcript.push(TranscriptItem::Error(format!("未找到模型 {argument:?}。使用 /model 打开选择器；不带供应商时只在当前供应商中查找。")));
                 }
-            }
-        }
-        "/provider" if argument.is_empty() => {
-            let configured = model_options
-                .iter()
-                .filter(|choice| choice.default_for_provider)
-                .map(|choice| format!("{}  · 默认模型 {}", choice.provider, choice.config.model))
-                .collect::<Vec<_>>()
-                .join("\n");
-            state.transcript.push(TranscriptItem::Notice(format!("已配置供应商\n{}\n\n输入 /provider <名称> 切换到该供应商的默认模型；其他模型请用 /model <别名>。", configured)));
-        }
-        "/provider" => {
-            let Some(choice) = model_options.iter().find(|choice| choice.provider == argument && choice.default_for_provider) else {
-                state.transcript.push(TranscriptItem::Error(format!("没有名为 {argument} 的供应商默认模型；输入 /provider 查看已配置供应商。")));
-                return Ok(false);
-            };
-            match ModelClient::new(choice.config.clone()) {
-                Ok(client) => {
-                    *model = client;
-                    state.model = choice.alias.clone();
-                    state.transcript.push(TranscriptItem::Notice(format!("已切换供应商 {} · 默认模型 {}\n下一条消息验证可用性。", choice.provider, choice.config.model)));
-                }
-                Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
             }
         }
         _ => state.transcript.push(TranscriptItem::Notice(format!("无法识别命令：{prompt}\n输入 / 查看可用命令。"))),
@@ -555,6 +537,36 @@ async fn run_command(
     state.follow_bottom = true;
     state.menu_dismissed = false;
     Ok(false)
+}
+
+fn select_model(
+    qualified_name: &str,
+    state: &mut UiState,
+    model: &mut ModelClient,
+    model_options: &[ModelOption],
+) {
+    let Some(choice) = model_options
+        .iter()
+        .find(|choice| choice.qualified_name() == qualified_name)
+    else {
+        state
+            .transcript
+            .push(TranscriptItem::Error("所选模型已不在当前配置中。".into()));
+        return;
+    };
+    match ModelClient::new(choice.config.clone()) {
+        Ok(client) => {
+            *model = client;
+            state.model = choice.qualified_name();
+            state.transcript.push(TranscriptItem::Notice(format!(
+                "已切换到 {}\n下一条消息验证可用性。",
+                state.model
+            )));
+        }
+        Err(error) => state
+            .transcript
+            .push(TranscriptItem::Error(error.to_string())),
+    }
 }
 
 fn attachment_path(argument: &str) -> std::path::PathBuf {
@@ -869,6 +881,38 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         state.attachment_cursor = None;
         state.show_help = false;
         state.menu_dismissed = true;
+        return Action::None;
+    }
+    if key.code == KeyCode::Tab && state.input.text.starts_with("/model ") {
+        let typed = state.input.text[7..].trim();
+        let current_provider = state.model.split_once("::").map(|(provider, _)| provider);
+        let matches = state
+            .model_completions
+            .iter()
+            .filter(|candidate| {
+                if typed.contains("::") {
+                    candidate.starts_with(typed)
+                } else {
+                    candidate.split_once("::").is_some_and(|(provider, model)| {
+                        model.starts_with(typed) && Some(provider) == current_provider
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
+        if !matches.is_empty() {
+            let index = state.model_completion_index % matches.len();
+            let completion = if typed.contains("::") {
+                matches[index].clone()
+            } else {
+                matches[index]
+                    .split_once("::")
+                    .map(|(_, model)| model)
+                    .unwrap_or(matches[index])
+                    .to_owned()
+            };
+            state.input.set(format!("/model {completion}"));
+            state.model_completion_index = state.model_completion_index.saturating_add(1);
+        }
         return Action::None;
     }
     if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::ALT) {

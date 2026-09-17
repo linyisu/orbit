@@ -6,20 +6,15 @@ default_provider = "openai"
 api_format = "openai_chat_completions"
 base_url = "https://api.openai.com/v1"
 api_key = "replace-with-openai-key"
-model = "gpt-5.6-sol"
+models = ["gpt-5.6-sol", "gpt-6-astra"]
 timeout_seconds = 600
 
 [providers.deepseek]
-api_format = "openai_chat_completions"
-base_url = "https://api.deepseek.com/v1"
+api_format = "anthropic_messages"
+base_url = "https://api.deepseek.com/anthropic"
 api_key = "replace-with-deepseek-key"
-model = "deepseek-chat"
+models = ["deepseek-chat", "deepseek-pro"]
 timeout_seconds = 600
-
-[[models]]
-alias = "deepseek-reasoner"
-provider = "deepseek"
-model = "deepseek-reasoner"
 
 # Approximate context budget including output reserve, not provider billing tokens.
 context_tokens = 128000
@@ -39,8 +34,8 @@ max_tool_calls = 0
 # Keep these token settings above [command] (they are top-level settings).
 
 # Models are declared rather than discovered remotely: provider catalog APIs vary
-# and many gateways disable them. In the TUI, /model lists aliases and /provider
-# lists provider defaults. Add more [[models]] blocks for per-provider variants.
+# and many gateways disable them. In the TUI, /model opens the selector; use
+# /model 模型名 for the current provider, or /model 供应商::模型名 across providers.
 
 [command]
 default_timeout_seconds = 120

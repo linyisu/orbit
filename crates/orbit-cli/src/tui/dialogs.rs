@@ -1,4 +1,4 @@
-use super::{app::UiState, commands::COMMANDS};
+use super::{ModelOption, app::UiState, commands::COMMANDS};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use orbit_store::types::Session;
 use ratatui::{
@@ -15,6 +15,47 @@ pub struct SessionPicker {
     query: String,
     selected: usize,
     pub error: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ModelPicker {
+    models: Vec<ModelOption>,
+    query: String,
+    selected: usize,
+    current: String,
+}
+
+impl ModelPicker {
+    pub fn new(models: Vec<ModelOption>, current: String) -> Self {
+        let selected = models
+            .iter()
+            .position(|model| model.qualified_name() == current)
+            .unwrap_or_default();
+        Self {
+            models,
+            query: String::new(),
+            selected,
+            current,
+        }
+    }
+    fn matches(&self) -> Vec<&ModelOption> {
+        let query = self.query.to_lowercase();
+        self.models
+            .iter()
+            .filter(|model| {
+                model.qualified_name().to_lowercase().contains(&query)
+                    || model.model.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+    fn move_by(&mut self, down: bool) {
+        let count = self.matches().len();
+        self.selected = if down {
+            self.selected.saturating_add(1).min(count.saturating_sub(1))
+        } else {
+            self.selected.saturating_sub(1)
+        };
+    }
 }
 impl SessionPicker {
     pub fn new(sessions: Vec<Session>) -> Self {
@@ -52,6 +93,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         {
             state.show_help = false;
             state.picker = None;
+            state.model_picker = None;
             return None;
         }
     }
@@ -76,6 +118,42 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     picker.query.pop();
                     picker.selected = 0;
                     picker.error = None;
+                }
+                _ => {}
+            },
+            Event::Paste(text) => {
+                picker
+                    .query
+                    .extend(text.chars().filter(|c| !c.is_control()));
+                picker.selected = 0;
+            }
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => picker.move_by(false),
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => picker.move_by(true),
+            _ => {}
+        }
+    } else if let Some(picker) = &mut state.model_picker {
+        match event {
+            Event::Key(key) => match key.code {
+                KeyCode::Up => picker.move_by(false),
+                KeyCode::Down => picker.move_by(true),
+                KeyCode::Enter => {
+                    state.chosen_model = picker
+                        .matches()
+                        .get(picker.selected)
+                        .map(|model| model.qualified_name());
+                    state.model_picker = None;
+                }
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    picker.query.push(c);
+                    picker.selected = 0;
+                }
+                KeyCode::Backspace => {
+                    picker.query.pop();
+                    picker.selected = 0;
                 }
                 _ => {}
             },
@@ -119,7 +197,7 @@ fn clean(text: &str) -> String {
 }
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
-    if !state.show_help && state.picker.is_none() {
+    if !state.show_help && state.picker.is_none() && state.model_picker.is_none() {
         return;
     }
     state.selection.clear();
@@ -135,6 +213,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     frame.render_widget(Clear, area);
     let title = if state.picker.is_some() {
         " 恢复会话 · 当前项目 "
+    } else if state.model_picker.is_some() {
+        " 选择模型 "
     } else {
         " Orbit 帮助 "
     };
@@ -213,6 +293,68 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             .unwrap_or_else(|| format!("{} 个会话 · 按最近更新排序", rows.len()));
         frame.render_widget(
             Paragraph::new(format!("{detail}\n↑↓ 选择 · Enter 恢复 · Esc 返回")),
+            footer,
+        );
+    } else if let Some(picker) = &mut state.model_picker {
+        let search = super::render::fit_label(
+            &format!("筛选模型：{}", clean(&picker.query)),
+            header.width.saturating_sub(1) as usize,
+            true,
+        );
+        state.ime_cursor = Some(
+            (
+                header.x + unicode_width::UnicodeWidthStr::width(search.as_str()) as u16,
+                header.y,
+            )
+                .into(),
+        );
+        frame.render_widget(Paragraph::new(format!("{search}▏")), header);
+        let rows = picker.matches();
+        let visible = (body.height as usize / 2).max(1);
+        let first = picker.selected.saturating_sub(visible - 1);
+        let mut lines = Vec::new();
+        for (index, model) in rows.iter().enumerate().skip(first).take(visible) {
+            let selected = index == picker.selected;
+            let current = model.qualified_name() == picker.current;
+            let style = if selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Rgb(218, 139, 109))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::styled(
+                format!(
+                    "{} {}{}",
+                    if selected { "›" } else { " " },
+                    model.qualified_name(),
+                    if current { "  (当前)" } else { "" }
+                ),
+                style,
+            ));
+            lines.push(Line::styled(
+                format!(
+                    "  {}{}",
+                    if model.default_for_provider {
+                        "默认模型 · "
+                    } else {
+                        ""
+                    },
+                    model.provider
+                ),
+                Style::default().fg(Color::Rgb(170, 170, 170)),
+            ));
+        }
+        if lines.is_empty() {
+            lines.push(Line::from("没有匹配的模型。"));
+        }
+        frame.render_widget(Paragraph::new(lines), body);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{} 个模型 · ↑↓ 选择 · Enter 确认 · Esc 返回",
+                rows.len()
+            )),
             footer,
         );
     } else {
@@ -304,6 +446,32 @@ mod tests {
         handle(&mut state, key(KeyCode::Esc));
         assert!(state.picker.is_none());
         assert_eq!(state.input.text, "draft");
+    }
+
+    #[test]
+    fn model_picker_filters_and_returns_a_qualified_model_name() {
+        let mut state = UiState::new("deepseek::deepseek-chat");
+        state.model_picker = Some(ModelPicker::new(
+            vec![
+                ModelOption {
+                    provider: "deepseek".into(),
+                    model: "deepseek-chat".into(),
+                    default_for_provider: true,
+                    config: orbit_model::types::ModelConfig::default(),
+                },
+                ModelOption {
+                    provider: "openai".into(),
+                    model: "gpt-6-astra".into(),
+                    default_for_provider: true,
+                    config: orbit_model::types::ModelConfig::default(),
+                },
+            ],
+            state.model.clone(),
+        ));
+        handle(&mut state, Event::Paste("astra".into()));
+        handle(&mut state, key(KeyCode::Enter));
+        assert!(state.model_picker.is_none());
+        assert_eq!(state.chosen_model.as_deref(), Some("openai::gpt-6-astra"));
     }
 
     #[test]
