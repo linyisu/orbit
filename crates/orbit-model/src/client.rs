@@ -859,6 +859,7 @@ mod tests {
             api_key: api_key.map(str::to_owned),
             model: model.to_owned(),
             timeout: Duration::from_secs(5),
+            reasoning_effort: None,
         })
         .expect("client builds")
     }

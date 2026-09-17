@@ -32,6 +32,23 @@
 
 `/` 直接显示可用命令；已移除 `/help` 命令，空输入时 `?` 仍可查看快捷键。新对话页只显示 Orbit ASCII 标志，底栏只显示模型和权限模式。
 
+## 模型与思考强度
+
+模型由配置中的每个供应商声明；Orbit 不请求远程模型目录。`/model` 的列表按供应商分组，`↑↓` 选模型，`←/→` 选该供应商声明的思考强度，Enter 同时应用。`/model 模型名` 只在当前供应商中查找，`/model 供应商::模型名` 可直接跨供应商切换。
+
+在供应商下可选地写 `reasoning_efforts`，列表首项是启动和直接切换模型时的默认值，例如：
+
+```toml
+[providers.openai]
+api_format = "openai_responses"
+base_url = "https://api.openai.com/v1"
+api_key = "replace-with-key"
+models = ["gpt-5.6-sol", "gpt-6-astra"]
+reasoning_efforts = ["low", "medium", "high"]
+```
+
+可用值为 `none`、`minimal`、`low`、`medium`、`high` 和 `xhigh`，但应只列出该供应商和模型实际接受的值。未写此项时，选择器会说明未配置，Orbit 不发送任何思考参数，避免给通用中转站增加未知字段。已配置时，Responses 使用 `reasoning.effort`，Chat Completions 使用 `reasoning_effort`；Anthropic Messages 使用 adaptive thinking 的 `thinking` 与 `output_config.effort`。模型或中转站拒绝某个显式配置的值时，Orbit 会展示服务端错误。
+
 ## 图片与文档
 
 直接把 PNG、JPEG、GIF 或 WebP 文件拖进终端或粘贴它的路径，会将图片加入下一条消息；`Ctrl+V`（部分终端使用 `Alt+V`）还能直接读取系统剪贴板中的位图。输入框上方以 `[图片 N · 文件名]` 显示待发送附件。光标位于文字开头时按 ← 可进入图片，←→ 在图片间移动，Backspace/Delete 删除选中的图片；也可以点击图片后删除。只有图片而没有文字时也能直接发送。`/attach <路径>` 保留为兼容终端和远程环境的兜底入口，`/detach` 清空待发送图片。普通文本粘贴不会被当作附件。

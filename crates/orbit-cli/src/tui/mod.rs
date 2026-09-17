@@ -53,6 +53,7 @@ pub struct ModelOption {
     pub provider: String,
     pub model: String,
     pub default_for_provider: bool,
+    pub reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
     pub config: orbit_model::types::ModelConfig,
 }
 
@@ -137,7 +138,13 @@ pub async fn run(
                             picker.error = Some(error.to_string());
                         }
                         if let Some(name) = state.chosen_model.take() {
-                            select_model(&name, &mut state, &mut model, &model_options);
+                            select_model(
+                                &name,
+                                state.chosen_effort.take(),
+                                &mut state,
+                                &mut model,
+                                &model_options,
+                            );
                         }
                         continue;
                     }
@@ -256,6 +263,7 @@ pub async fn run(
                             }
                             let mut request = ChatRequest::new(messages);
                             request.max_tokens = Some(max_output_tokens);
+                            request.reasoning_effort = model.config().reasoning_effort;
                             let (sender, rx) = mpsc::channel(256);
                             receiver = Some(rx);
                             let token = CancellationToken::new();
@@ -512,7 +520,11 @@ async fn run_command(
         "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
         "/model" => {
             if argument.is_empty() {
-                state.model_picker = Some(dialogs::ModelPicker::new(model_options.to_vec(), state.model.clone()));
+                state.model_picker = Some(dialogs::ModelPicker::new(
+                    model_options.to_vec(),
+                    state.model.clone(),
+                    model.config().reasoning_effort,
+                ));
             } else {
                 let current_provider = model_options
                     .iter()
@@ -526,7 +538,13 @@ async fn run_command(
                     })
                 };
                 if let Some(choice) = choice {
-                    select_model(&choice.qualified_name(), state, model, model_options);
+                    select_model(
+                        &choice.qualified_name(),
+                        None,
+                        state,
+                        model,
+                        model_options,
+                    );
                 } else {
                     state.transcript.push(TranscriptItem::Error(format!("未找到模型 {argument:?}。使用 /model 打开选择器；不带供应商时只在当前供应商中查找。")));
                 }
@@ -541,6 +559,7 @@ async fn run_command(
 
 fn select_model(
     qualified_name: &str,
+    selected_effort: Option<orbit_model::types::ReasoningEffort>,
     state: &mut UiState,
     model: &mut ModelClient,
     model_options: &[ModelOption],
@@ -554,13 +573,22 @@ fn select_model(
             .push(TranscriptItem::Error("所选模型已不在当前配置中。".into()));
         return;
     };
-    match ModelClient::new(choice.config.clone()) {
+    let mut config = choice.config.clone();
+    if let Some(effort) = selected_effort {
+        config.reasoning_effort = choice.reasoning_efforts.contains(&effort).then_some(effort);
+    }
+    match ModelClient::new(config) {
         Ok(client) => {
             *model = client;
             state.model = choice.qualified_name();
             state.transcript.push(TranscriptItem::Notice(format!(
-                "已切换到 {}\n下一条消息验证可用性。",
-                state.model
+                "已切换到 {}\n思考强度：{}\n下一条消息验证可用性。",
+                state.model,
+                model
+                    .config()
+                    .reasoning_effort
+                    .map(orbit_model::types::ReasoningEffort::label)
+                    .unwrap_or("未配置")
             )));
         }
         Err(error) => state

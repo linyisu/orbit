@@ -164,6 +164,7 @@ where
                         tools: self.tools.definitions(),
                         temperature: request.temperature,
                         max_tokens: request.max_tokens,
+                        reasoning_effort: request.reasoning_effort,
                     },
                     cancellation.clone(),
                     sender,
@@ -427,6 +428,7 @@ where
                 tools: self.tools.definitions(),
                 temperature: request.temperature,
                 max_tokens: request.max_tokens,
+                reasoning_effort: request.reasoning_effort,
             };
             let completion = match on_event {
                 Some(on_event) => {

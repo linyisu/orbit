@@ -23,10 +23,15 @@ pub struct ModelPicker {
     query: String,
     selected: usize,
     current: String,
+    effort: Option<orbit_model::types::ReasoningEffort>,
 }
 
 impl ModelPicker {
-    pub fn new(models: Vec<ModelOption>, current: String) -> Self {
+    pub fn new(
+        models: Vec<ModelOption>,
+        current: String,
+        effort: Option<orbit_model::types::ReasoningEffort>,
+    ) -> Self {
         let selected = models
             .iter()
             .position(|model| model.qualified_name() == current)
@@ -36,6 +41,7 @@ impl ModelPicker {
             query: String::new(),
             selected,
             current,
+            effort,
         }
     }
     fn matches(&self) -> Vec<&ModelOption> {
@@ -56,6 +62,39 @@ impl ModelPicker {
         } else {
             self.selected.saturating_sub(1)
         };
+        self.normalize_effort();
+    }
+    fn selected_efforts(&self) -> Vec<orbit_model::types::ReasoningEffort> {
+        self.matches()
+            .get(self.selected)
+            .map(|model| model.reasoning_efforts.clone())
+            .unwrap_or_default()
+    }
+    fn cycle_effort(&mut self, forward: bool) {
+        let efforts = self.selected_efforts();
+        if efforts.is_empty() {
+            self.effort = None;
+            return;
+        }
+        let index = efforts
+            .iter()
+            .position(|effort| Some(*effort) == self.effort)
+            .unwrap_or(0);
+        let next = if forward {
+            (index + 1) % efforts.len()
+        } else {
+            (index + efforts.len() - 1) % efforts.len()
+        };
+        self.effort = Some(efforts[next]);
+    }
+
+    fn normalize_effort(&mut self) {
+        let efforts = self.selected_efforts();
+        if efforts.is_empty() {
+            self.effort = None;
+        } else if !efforts.iter().any(|effort| Some(*effort) == self.effort) {
+            self.effort = Some(efforts[0]);
+        }
     }
 }
 impl SessionPicker {
@@ -137,11 +176,14 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             Event::Key(key) => match key.code {
                 KeyCode::Up => picker.move_by(false),
                 KeyCode::Down => picker.move_by(true),
+                KeyCode::Left => picker.cycle_effort(false),
+                KeyCode::Right => picker.cycle_effort(true),
                 KeyCode::Enter => {
                     state.chosen_model = picker
                         .matches()
                         .get(picker.selected)
                         .map(|model| model.qualified_name());
+                    state.chosen_effort = picker.effort;
                     state.model_picker = None;
                 }
                 KeyCode::Char(c)
@@ -151,10 +193,12 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 {
                     picker.query.push(c);
                     picker.selected = 0;
+                    picker.normalize_effort();
                 }
                 KeyCode::Backspace => {
                     picker.query.pop();
                     picker.selected = 0;
+                    picker.normalize_effort();
                 }
                 _ => {}
             },
@@ -163,6 +207,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     .query
                     .extend(text.chars().filter(|c| !c.is_control()));
                 picker.selected = 0;
+                picker.normalize_effort();
             }
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => picker.move_by(false),
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => picker.move_by(true),
@@ -361,9 +406,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             lines.push(Line::from("没有匹配的模型。"));
         }
         frame.render_widget(Paragraph::new(lines), body);
+        let effort = picker
+            .effort
+            .map(orbit_model::types::ReasoningEffort::label)
+            .unwrap_or("此模型未配置思考强度");
         frame.render_widget(
             Paragraph::new(format!(
-                "{} 个模型 · ↑↓ 选择 · Enter 确认 · Esc 返回",
+                "{} 个模型 · ←/→ 思考强度：{effort} · ↑↓ 选择 · Enter 确认 · Esc 返回",
                 rows.len()
             )),
             footer,
@@ -468,21 +517,32 @@ mod tests {
                     provider: "deepseek".into(),
                     model: "deepseek-chat".into(),
                     default_for_provider: true,
+                    reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
                     config: orbit_model::types::ModelConfig::default(),
                 },
                 ModelOption {
                     provider: "openai".into(),
                     model: "gpt-6-astra".into(),
                     default_for_provider: true,
+                    reasoning_efforts: vec![
+                        orbit_model::types::ReasoningEffort::Medium,
+                        orbit_model::types::ReasoningEffort::High,
+                    ],
                     config: orbit_model::types::ModelConfig::default(),
                 },
             ],
             state.model.clone(),
+            Some(orbit_model::types::ReasoningEffort::Low),
         ));
         handle(&mut state, Event::Paste("astra".into()));
+        handle(&mut state, key(KeyCode::Right));
         handle(&mut state, key(KeyCode::Enter));
         assert!(state.model_picker.is_none());
         assert_eq!(state.chosen_model.as_deref(), Some("openai::gpt-6-astra"));
+        assert_eq!(
+            state.chosen_effort,
+            Some(orbit_model::types::ReasoningEffort::High)
+        );
     }
 
     #[test]

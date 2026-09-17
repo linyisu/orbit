@@ -190,6 +190,32 @@ pub struct ChatRequest {
     pub tools: Vec<ToolDefinition>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+}
+
+impl ReasoningEffort {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "不思考",
+            Self::Minimal => "极低",
+            Self::Low => "低",
+            Self::Medium => "中",
+            Self::High => "高",
+            Self::Xhigh => "极高",
+        }
+    }
 }
 
 impl ChatRequest {
@@ -244,6 +270,7 @@ pub struct ModelConfig {
     pub model: String,
     #[serde(with = "duration_seconds")]
     pub timeout: Duration,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for ModelConfig {
@@ -254,6 +281,7 @@ impl Default for ModelConfig {
             api_key: None,
             model: "gpt-5.6-sol".to_owned(),
             timeout: Duration::from_secs(120),
+            reasoning_effort: None,
         }
     }
 }
@@ -267,6 +295,7 @@ impl std::fmt::Debug for ModelConfig {
             .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
             .field("model", &self.model)
             .field("timeout", &self.timeout)
+            .field("reasoning_effort", &self.reasoning_effort)
             .finish()
     }
 }

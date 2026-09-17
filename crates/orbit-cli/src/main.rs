@@ -15,7 +15,7 @@ use orbit_agent::{
 };
 use orbit_model::{
     client::{ApiFormat, ModelClient},
-    types::{ChatMessage, ChatRequest, ModelConfig, StreamEvent},
+    types::{ChatMessage, ChatRequest, ModelConfig, ReasoningEffort, StreamEvent},
 };
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -127,6 +127,8 @@ struct ProviderConfig {
     api_key: String,
     /// The first model is selected when Orbit starts with this provider.
     models: Vec<String>,
+    #[serde(default)]
+    reasoning_efforts: Vec<ReasoningEffort>,
     #[serde(default = "default_timeout_seconds")]
     timeout_seconds: u64,
 }
@@ -196,6 +198,11 @@ impl FileConfig {
                     bail!("provider {name:?} contains duplicate model {model:?}");
                 }
             }
+            for (index, effort) in provider.reasoning_efforts.iter().enumerate() {
+                if provider.reasoning_efforts[..index].contains(effort) {
+                    bail!("provider {name:?} repeats reasoning effort {effort:?}");
+                }
+            }
         }
         config.command.validate().map_err(anyhow::Error::msg)?;
         Ok(config)
@@ -218,12 +225,14 @@ impl FileConfig {
                     provider: name.clone(),
                     model: model.clone(),
                     default_for_provider: index == 0,
+                    reasoning_efforts: provider.reasoning_efforts.clone(),
                     config: ModelConfig {
                         api_format: provider.api_format,
                         base_url: provider.base_url.clone(),
                         api_key: Some(provider.api_key.clone()),
                         model: model.clone(),
                         timeout: Duration::from_secs(provider.timeout_seconds),
+                        reasoning_effort: provider.reasoning_efforts.first().copied(),
                     },
                 });
             }
@@ -325,6 +334,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
                     provider: "demo".into(),
                     model: name.clone(),
                     default_for_provider: true,
+                    reasoning_efforts: Vec::new(),
                     config: config.clone(),
                 }],
             },
@@ -382,6 +392,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     instructions::inject(&mut messages, &instructions);
     let mut request = ChatRequest::new(messages);
     request.max_tokens = Some(max_output_tokens);
+    request.reasoning_effort = client.config().reasoning_effort;
 
     let database = session::database_path(database)?;
     let agent = Agent::new(
@@ -502,6 +513,27 @@ models = ["deepseek-chat", "deepseek-reasoner"]
     }
 
     #[test]
+    fn provider_reasoning_efforts_set_the_default_request_effort() {
+        let config: FileConfig = toml::from_str(
+            r#"default_provider = "openai"
+[providers.openai]
+api_format = "openai_responses"
+base_url = "https://openai.example/v1"
+api_key = "openai-key"
+models = ["reasoning-model"]
+reasoning_efforts = ["low", "high"]
+"#,
+        )
+        .unwrap();
+        let option = config.default_model_option().unwrap();
+        assert_eq!(
+            option.reasoning_efforts,
+            vec![ReasoningEffort::Low, ReasoningEffort::High]
+        );
+        assert_eq!(option.config.reasoning_effort, Some(ReasoningEffort::Low));
+    }
+
+    #[test]
     fn models_must_be_present_and_unique_with_a_real_default_provider() {
         let duplicate = r#"default_provider = "other"
 [providers.other]
@@ -521,6 +553,19 @@ models = ["other-model", "other-model"]
 base_url = "https://other.example/v1"
 api_key = "other-key"
 models = ["other-model"]
+"#,
+        )
+        .unwrap();
+        assert!(FileConfig::load(&path).is_err());
+
+        fs::write(
+            &path,
+            r#"default_provider = "other"
+[providers.other]
+base_url = "https://other.example/v1"
+api_key = "other-key"
+models = ["other-model"]
+reasoning_efforts = ["high", "high"]
 "#,
         )
         .unwrap();

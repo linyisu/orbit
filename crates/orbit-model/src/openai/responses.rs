@@ -22,6 +22,7 @@ pub(crate) fn encode(
     request: ChatRequest,
     stream: bool,
 ) -> Result<(Value, HeaderMap), ModelError> {
+    let reasoning_effort = request.reasoning_effort;
     let instructions = request
         .messages
         .iter()
@@ -106,7 +107,7 @@ pub(crate) fn encode(
         })
         .collect::<Vec<_>>();
 
-    let body = json!({
+    let mut body = json!({
         "model": model,
         "instructions": instructions,
         "input": input,
@@ -115,6 +116,9 @@ pub(crate) fn encode(
         "max_output_tokens": request.max_tokens,
         "stream": stream,
     });
+    if let Some(effort) = reasoning_effort {
+        body["reasoning"] = json!({"effort": effort});
+    }
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -242,6 +246,14 @@ fn output_parts(output_text: Option<&str>, output: &[ResponseOutput]) -> (String
 mod input_tests {
     use super::*;
     use crate::types::Attachment;
+
+    #[test]
+    fn includes_reasoning_effort_when_configured() {
+        let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
+        request.reasoning_effort = Some(crate::types::ReasoningEffort::High);
+        let (body, _) = encode("gpt-test", request, true).unwrap();
+        assert_eq!(body["reasoning"]["effort"], "high");
+    }
 
     #[test]
     fn encodes_local_images_as_responses_input_blocks() {

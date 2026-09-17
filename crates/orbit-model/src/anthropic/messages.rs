@@ -15,6 +15,7 @@ pub(crate) fn encode(
     request: ChatRequest,
     stream: bool,
 ) -> Result<(Value, HeaderMap), ModelError> {
+    let reasoning_effort = request.reasoning_effort;
     let system = request
         .messages
         .iter()
@@ -98,7 +99,11 @@ pub(crate) fn encode(
     }
 
     let tools = request.tools.into_iter().map(|tool| json!({"name": tool.function.name, "description": tool.function.description, "input_schema": tool.function.parameters})).collect::<Vec<_>>();
-    let body = json!({"model": model, "max_tokens": request.max_tokens.unwrap_or(4096), "system": system, "messages": messages, "tools": tools, "temperature": request.temperature, "stream": stream});
+    let mut body = json!({"model": model, "max_tokens": request.max_tokens.unwrap_or(4096), "system": system, "messages": messages, "tools": tools, "temperature": request.temperature, "stream": stream});
+    if let Some(effort) = reasoning_effort {
+        body["thinking"] = json!({"type": "adaptive"});
+        body["output_config"] = json!({"effort": effort});
+    }
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -290,6 +295,15 @@ struct AnthropicDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn includes_adaptive_thinking_effort_when_configured() {
+        let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
+        request.reasoning_effort = Some(ReasoningEffort::High);
+        let (body, _) = encode("claude-test", request, true).unwrap();
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["output_config"]["effort"], "high");
+    }
 
     #[test]
     fn batches_all_tool_results_in_the_immediately_following_user_message() {
