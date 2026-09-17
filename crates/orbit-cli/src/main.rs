@@ -82,6 +82,10 @@ enum SessionCommand {
     Compactions {
         id: String,
     },
+    /// Summarize durable model, tool, cancellation, and compaction events.
+    Diagnostics {
+        id: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -420,6 +424,10 @@ async fn main() -> Result<()> {
                 SessionCommand::Compactions { id } => println!(
                     "{}",
                     serde_json::to_string_pretty(&store.compactions(&id).await?)?
+                ),
+                SessionCommand::Diagnostics { id } => println!(
+                    "{}",
+                    orbit_store::diagnostics::text(&store.diagnostics(&id).await?)
                 ),
                 SessionCommand::Show { id } => {
                     println!("{}", serde_json::to_string_pretty(&store.load(&id).await?)?)

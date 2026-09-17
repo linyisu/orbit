@@ -275,7 +275,7 @@ pub async fn run(
                                         && !commands::available_while_running(command)
                                     {
                                         state.transcript.push(TranscriptItem::CommandError(
-                                            "运行中只能使用 /status、/model、/context 或 /mode；请先按 Esc 取消当前响应。".into(),
+                                            "运行中只能使用 /status、/diagnostics、/model、/context 或 /mode；请先按 Esc 取消当前响应。".into(),
                                         ));
                                         continue;
                                     }
@@ -683,6 +683,11 @@ async fn run_command(
         }
         "/tasks" => run_tasks_command(argument, state, history, session).await?,
         "/memory" => run_memory_command(argument, state, history, session).await?,
+        "/diagnostics" if argument.is_empty() => state
+            .transcript
+            .push(TranscriptItem::CommandResult(orbit_store::diagnostics::text(
+                &session.store.diagnostics(session.id()).await?,
+            ))),
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
             state.selection = Default::default();

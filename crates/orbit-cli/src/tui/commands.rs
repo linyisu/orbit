@@ -14,6 +14,10 @@ pub const COMMANDS: &[Command] = &[
         description: "查看连接配置和会话状态",
     },
     Command {
+        name: "/diagnostics",
+        description: "查看本会话的模型、工具与失败诊断",
+    },
+    Command {
         name: "/model",
         description: "选择模型；支持 /model 供应商::模型",
     },
@@ -70,7 +74,7 @@ pub fn matching(input: &str) -> Vec<&'static Command> {
 pub fn available_while_running(name: &str) -> bool {
     matches!(
         name,
-        "/status" | "/model" | "/context" | "/mode" | "/permissions"
+        "/status" | "/diagnostics" | "/model" | "/context" | "/mode" | "/permissions"
     )
 }
 

@@ -45,7 +45,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 5,
+                version <= 6,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -115,6 +115,12 @@ impl Store {
                     );
                     CREATE INDEX project_memories_project_active ON project_memories(project_id,active,updated_at DESC,id DESC);
                     PRAGMA user_version=5;",
+                )?;
+            }
+            if version < 6 {
+                connection.execute_batch(
+                    "ALTER TABLE events ADD COLUMN created_at_ms INTEGER;
+                     PRAGMA user_version=6;",
                 )?;
             }
             connection.execute_batch("COMMIT;")?;
@@ -549,8 +555,8 @@ impl SessionWriter {
                 let transaction = conn.transaction()?;
                 for event in events {
                     transaction.execute(
-                        "INSERT INTO events(run_id,payload) VALUES(?1,?2)",
-                        params![run, serde_json::to_string(&event)?],
+                        "INSERT INTO events(run_id,payload,created_at_ms) VALUES(?1,?2,?3)",
+                        params![run, serde_json::to_string(&event)?, now_millis()],
                     )?;
                 }
                 transaction.commit()?;
@@ -586,8 +592,8 @@ impl SessionWriter {
                 let transaction = conn.transaction()?;
                 for event in events {
                     transaction.execute(
-                        "INSERT INTO events(run_id,payload) VALUES(?1,?2)",
-                        params![run, serde_json::to_string(&event)?],
+                        "INSERT INTO events(run_id,payload,created_at_ms) VALUES(?1,?2,?3)",
+                        params![run, serde_json::to_string(&event)?, now_millis()],
                     )?;
                 }
                 transaction.execute(
@@ -633,4 +639,12 @@ pub(crate) fn private_file(path: &Path) -> std::io::Result<File> {
     #[cfg(unix)]
     options.mode(0o600);
     options.open(path)
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
 }
