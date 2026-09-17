@@ -107,3 +107,21 @@ read orbit-demo.txt
 输入 `edit` 后的 JSON 支持多行文本的 `\n` 转义，以及包含空格的路径。需要审批时，批准前不会修改文件，也可以按 Esc 验证拒绝路径。
 
 拖选事件立即从屏幕快照重绘，不等待流输出刷新周期；拖选期间不重新排版聊天历史。终端原生选区与应用内选区仍是两种不同机制。
+
+## list_files 目录浏览
+
+模型可通过 `list_files` 发现工作区内的文件，不需要先运行 shell。真实 TUI 和一次性 `chat` 均注册这个只读工具，不弹出命令审批。
+
+```json
+{"path":".","depth":2,"limit":200,"offset":0,"include_hidden":false}
+```
+
+返回 `entries`（工作区相对路径及 `file` / `directory` 类型）、`has_more`、`next_offset`、`scan_truncated` 和 `skipped_entries`。有下一页时保留原参数、将 `offset` 设为返回值。各目录按名称排序，按广度优先遍历；分页期间目录变动可能使结果移动或重复，它不是文件系统快照。
+
+默认深度 1，可设 1–8；每页默认 200 条、最大 1000 条，完整 JSON 不超过 32 KiB。最多检查 20000 个目录项；扫描达到限制时 `scan_truncated=true`，应缩小 `path`，不能据此声称已列完项目。单个目录超过既有工作区枚举上限 10000 条时明确报错。默认不显示隐藏项；`include_hidden=true` 仍不会绕过配置、数据库和元数据保护。`target`、`node_modules`、`.venv`、`__pycache__` 不自动递归，但可以明确指定路径浏览。目前不应用 `.gitignore` 规则，目录浏览结果不等于 Git 跟踪文件清单。
+
+文件与目录都通过工作区文件描述符打开，拒绝路径逃逸、符号链接、受保护文件的硬链接别名和特殊文件。不读取文件正文；目录发现不会被累计文件操作记录误记为内容已读。未能打开的子项计入 `skipped_entries`，起始目录无法打开则返回错误。
+
+分页与有界结果的接口参考 [Pi 的文件发现工具](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/tools/find.ts)；Orbit 当前提供目录浏览而非 glob 查找，使用自己的工作区访问边界。
+
+真实 API 验收：`bash scripts/try-live.sh --discovery --prepare-only`，运行输出的 `start.sh` 后，让模型读取 `TASK.md`。项目要求通过目录工具分页发现中文子目录内的源码，再执行读取、局部修复和编译测试；准备过程不调用 API。

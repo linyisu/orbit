@@ -5,15 +5,21 @@ orbit_repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 orbit_prepare=false
 orbit_hard=false
 orbit_context=false
+orbit_discovery=false
 orbit_config="$orbit_repo/config.toml"
 for orbit_arg in "$@"; do
     case "$orbit_arg" in
         --prepare-only) orbit_prepare=true ;;
         --hard) orbit_hard=true ;;
+        --discovery) orbit_discovery=true ;;
         --context) orbit_hard=true; orbit_context=true ;;
-        *) echo 'Usage: bash scripts/try-live.sh [--hard | --context] [--prepare-only]' >&2; exit 2 ;;
+        *) echo 'Usage: bash scripts/try-live.sh [--hard | --context | --discovery] [--prepare-only]' >&2; exit 2 ;;
     esac
 done
+if [[ "$orbit_discovery" == true && "$orbit_hard" == true ]]; then
+    echo "--discovery cannot be combined with --hard or --context" >&2
+    exit 2
+fi
 if [[ ! -f "$orbit_repo/config.toml" ]]; then
     echo "Missing configuration: $orbit_repo/config.toml" >&2
     exit 1
@@ -69,6 +75,9 @@ price.c 有一个边界条件错误。请完成：
 
 构建副本的产物会丢弃，因此编译和测试已经组合在同一个 test.sh 中。原项目修改必须通过 edit_file。
 TASK
+fi
+if [[ "$orbit_discovery" == true ]]; then
+    python3 "$orbit_repo/scripts/prepare-discovery.py" "$orbit_trial"
 fi
 if [[ "$orbit_context" == true ]]; then
     python3 "$orbit_repo/scripts/prepare-context.py" "$orbit_trial" "$orbit_config"
