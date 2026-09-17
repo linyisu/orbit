@@ -20,7 +20,8 @@ use crate::{
 pub(crate) fn encode(
     model: &str,
     request: ChatRequest,
-    reasoning_protocol: crate::types::ReasoningProtocol,
+    reasoning_adapter: Option<crate::types::ReasoningAdapter>,
+    reasoning_extra: &Value,
     stream: bool,
 ) -> Result<(Value, HeaderMap), ModelError> {
     let reasoning_effort = request.reasoning_effort;
@@ -117,8 +118,10 @@ pub(crate) fn encode(
         "max_output_tokens": request.max_tokens,
         "stream": stream,
     });
-    if let Some(effort) = reasoning_effort {
-        crate::reasoning::apply_openai_responses(&mut body, effort, reasoning_protocol);
+    if let (Some(effort), Some(crate::types::ReasoningAdapter::OpenaiResponses)) =
+        (reasoning_effort, reasoning_adapter)
+    {
+        crate::reasoning::apply_openai_responses(&mut body, effort, reasoning_extra);
     }
 
     let mut headers = HeaderMap::new();
@@ -255,7 +258,8 @@ mod input_tests {
         let (body, _) = encode(
             "gpt-test",
             request,
-            crate::types::ReasoningProtocol::Standard,
+            Some(crate::types::ReasoningAdapter::OpenaiResponses),
+            &json!({}),
             true,
         )
         .unwrap();
@@ -277,7 +281,8 @@ mod input_tests {
                     path,
                 }],
             )]),
-            crate::types::ReasoningProtocol::Standard,
+            None,
+            &json!({}),
             true,
         )
         .unwrap();

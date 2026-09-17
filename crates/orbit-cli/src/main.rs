@@ -16,7 +16,7 @@ use orbit_agent::{
 use orbit_model::{
     client::{ApiFormat, ModelClient},
     types::{
-        ChatMessage, ChatRequest, ModelConfig, ReasoningEffort, ReasoningProtocol, StreamEvent,
+        ChatMessage, ChatRequest, ModelConfig, ReasoningAdapter, ReasoningEffort, StreamEvent,
     },
 };
 use serde::Deserialize;
@@ -128,13 +128,24 @@ struct ProviderConfig {
     base_url: String,
     api_key: String,
     /// The first model is selected when Orbit starts with this provider.
-    models: Vec<String>,
-    #[serde(default)]
-    reasoning_efforts: Vec<ReasoningEffort>,
-    #[serde(default)]
-    reasoning_protocol: ReasoningProtocol,
+    models: Vec<ModelProfile>,
     #[serde(default = "default_timeout_seconds")]
     timeout_seconds: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ModelProfile {
+    id: String,
+    reasoning: Option<ReasoningProfile>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ReasoningProfile {
+    adapter: ReasoningAdapter,
+    efforts: Vec<ReasoningEffort>,
+    default: ReasoningEffort,
+    #[serde(default)]
+    extra: toml::Table,
 }
 
 fn default_max_output_tokens() -> u32 {
@@ -178,17 +189,13 @@ impl FileConfig {
                 || provider.api_key.trim().is_empty()
                 || provider.models.is_empty()
                 || provider.timeout_seconds == 0
-                || provider.models.iter().any(|model| model.trim().is_empty())
+                || provider
+                    .models
+                    .iter()
+                    .any(|model| model.id.trim().is_empty())
             {
                 bail!(
                     "provider {name:?} must set nonempty base_url, api_key, models and a positive timeout_seconds"
-                );
-            }
-            if provider.reasoning_protocol == ReasoningProtocol::Qwen
-                && provider.api_format != ApiFormat::OpenaiChatCompletions
-            {
-                bail!(
-                    "provider {name:?}: qwen reasoning_protocol requires openai_chat_completions"
                 );
             }
         }
@@ -205,13 +212,37 @@ impl FileConfig {
         for (name, provider) in &config.providers {
             let mut models = std::collections::BTreeSet::new();
             for model in &provider.models {
-                if !models.insert(model) {
-                    bail!("provider {name:?} contains duplicate model {model:?}");
+                if !models.insert(&model.id) {
+                    bail!("provider {name:?} contains duplicate model {:?}", model.id);
                 }
-            }
-            for (index, effort) in provider.reasoning_efforts.iter().enumerate() {
-                if provider.reasoning_efforts[..index].contains(effort) {
-                    bail!("provider {name:?} repeats reasoning effort {effort:?}");
+                if let Some(reasoning) = &model.reasoning {
+                    let expected = match provider.api_format {
+                        ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
+                        ApiFormat::OpenaiResponses => ReasoningAdapter::OpenaiResponses,
+                        ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
+                    };
+                    if reasoning.adapter != expected {
+                        bail!(
+                            "model {:?}: reasoning adapter must match its provider API format",
+                            model.id
+                        );
+                    }
+                    if reasoning.efforts.is_empty()
+                        || !reasoning.efforts.contains(&reasoning.default)
+                    {
+                        bail!(
+                            "model {:?}: reasoning efforts must include its default",
+                            model.id
+                        );
+                    }
+                    for (index, effort) in reasoning.efforts.iter().enumerate() {
+                        if reasoning.efforts[..index].contains(effort) {
+                            bail!(
+                                "model {:?}: reasoning effort {effort:?} is repeated",
+                                model.id
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -232,23 +263,25 @@ impl FileConfig {
         let mut options = Vec::new();
         for (name, provider) in &self.providers {
             for (index, model) in provider.models.iter().enumerate() {
+                let reasoning = model.reasoning.as_ref();
                 options.push(tui::ModelOption {
                     provider: name.clone(),
-                    model: model.clone(),
+                    model: model.id.clone(),
                     default_for_provider: index == 0,
-                    reasoning_efforts: provider.reasoning_efforts.clone(),
+                    reasoning_efforts: reasoning
+                        .map_or_else(Vec::new, |profile| profile.efforts.clone()),
                     config: ModelConfig {
                         api_format: provider.api_format,
                         base_url: provider.base_url.clone(),
                         api_key: Some(provider.api_key.clone()),
-                        model: model.clone(),
+                        model: model.id.clone(),
                         timeout: Duration::from_secs(provider.timeout_seconds),
-                        reasoning_effort: provider
-                            .reasoning_efforts
-                            .contains(&ReasoningEffort::High)
-                            .then_some(ReasoningEffort::High)
-                            .or_else(|| provider.reasoning_efforts.first().copied()),
-                        reasoning_protocol: provider.reasoning_protocol,
+                        reasoning_effort: reasoning.map(|profile| profile.default),
+                        reasoning_adapter: reasoning.map(|profile| profile.adapter),
+                        reasoning_extra: reasoning
+                            .map(|profile| serde_json::to_value(&profile.extra))
+                            .transpose()?
+                            .unwrap_or_else(|| serde_json::json!({})),
                     },
                 });
             }
@@ -480,7 +513,8 @@ mod config_tests {
         let provider = r#"[providers.test]
 base_url = "http://localhost"
 api_key = "test"
-models = ["test"]
+[[providers.test.models]]
+id = "test"
 "#;
         let input = format!("default_provider = \"test\"\n{provider}");
         let config: FileConfig = toml::from_str(&input).unwrap();
@@ -514,7 +548,10 @@ models = ["test"]
 api_format = "openai_chat_completions"
 base_url = "https://deepseek.example/v1"
 api_key = "deepseek-key"
-models = ["deepseek-chat", "deepseek-reasoner"]
+[[providers.deepseek.models]]
+id = "deepseek-chat"
+[[providers.deepseek.models]]
+id = "deepseek-reasoner"
 "#,
         )
         .unwrap();
@@ -529,16 +566,16 @@ models = ["deepseek-chat", "deepseek-reasoner"]
     }
 
     #[test]
-    fn provider_reasoning_efforts_set_the_default_request_effort() {
+    fn model_reasoning_profile_sets_the_default_request_effort() {
         let config: FileConfig = toml::from_str(
             r#"default_provider = "openai"
 [providers.openai]
 api_format = "openai_responses"
 base_url = "https://openai.example/v1"
 api_key = "openai-key"
-models = ["reasoning-model"]
-reasoning_efforts = ["low", "high"]
-reasoning_protocol = "deepseek"
+[[providers.openai.models]]
+id = "reasoning-model"
+reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default = "high" }
 "#,
         )
         .unwrap();
@@ -549,8 +586,23 @@ reasoning_protocol = "deepseek"
         );
         assert_eq!(option.config.reasoning_effort, Some(ReasoningEffort::High));
         assert_eq!(
-            option.config.reasoning_protocol,
-            ReasoningProtocol::Deepseek
+            option.config.reasoning_adapter,
+            Some(ReasoningAdapter::OpenaiResponses)
+        );
+    }
+
+    #[test]
+    fn example_configuration_uses_valid_model_capability_profiles() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(&path, include_str!("../../../config.example.toml")).unwrap();
+        let config = FileConfig::load(&path).unwrap();
+        let models = config.model_options().unwrap();
+        assert_eq!(models.len(), 4);
+        assert!(
+            models
+                .iter()
+                .all(|model| !model.reasoning_efforts.is_empty())
         );
     }
 
@@ -560,7 +612,10 @@ reasoning_protocol = "deepseek"
 [providers.other]
 base_url = "https://other.example/v1"
 api_key = "other-key"
-models = ["other-model", "other-model"]
+[[providers.other.models]]
+id = "other-model"
+[[providers.other.models]]
+id = "other-model"
 "#;
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
@@ -573,7 +628,8 @@ models = ["other-model", "other-model"]
 [providers.other]
 base_url = "https://other.example/v1"
 api_key = "other-key"
-models = ["other-model"]
+[[providers.other.models]]
+id = "other-model"
 "#,
         )
         .unwrap();
@@ -585,8 +641,9 @@ models = ["other-model"]
 [providers.other]
 base_url = "https://other.example/v1"
 api_key = "other-key"
-models = ["other-model"]
-reasoning_efforts = ["high", "high"]
+[[providers.other.models]]
+id = "other-model"
+reasoning = { adapter = "openai_chat", efforts = ["high", "high"], default = "high" }
 "#,
         )
         .unwrap();

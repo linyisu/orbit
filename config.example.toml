@@ -3,18 +3,32 @@
 default_provider = "openai"
 
 [providers.openai]
-api_format = "openai_chat_completions"
+api_format = "openai_responses"
 base_url = "https://api.openai.com/v1"
 api_key = "replace-with-openai-key"
-models = ["gpt-5.6-sol", "gpt-6-astra"]
 timeout_seconds = 600
+
+[[providers.openai.models]]
+id = "gpt-5.6-sol"
+reasoning = { adapter = "openai_responses", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high" }
+
+[[providers.openai.models]]
+id = "gpt-6-astra"
+reasoning = { adapter = "openai_responses", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high" }
 
 [providers.deepseek]
 api_format = "anthropic_messages"
 base_url = "https://api.deepseek.com/anthropic"
 api_key = "replace-with-deepseek-key"
-models = ["deepseek-chat", "deepseek-pro"]
 timeout_seconds = 600
+
+[[providers.deepseek.models]]
+id = "deepseek-flash"
+reasoning = { adapter = "anthropic_messages", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high", extra = { thinking = { type = "enabled" } } }
+
+[[providers.deepseek.models]]
+id = "deepseek-pro"
+reasoning = { adapter = "anthropic_messages", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high", extra = { thinking = { type = "enabled" } } }
 
 # Approximate context budget including output reserve, not provider billing tokens.
 context_tokens = 128000
@@ -32,10 +46,6 @@ max_tool_calls = 0
 # Override the generic token budgets for your provider/model, e.g. current
 # DeepSeek Flash: context_tokens = 1000000, max_output_tokens = 64000.
 # Keep these token settings above [command] (they are top-level settings).
-
-# Models are declared rather than discovered remotely: provider catalog APIs vary
-# and many gateways disable them. In the TUI, /model opens the selector; use
-# /model 模型名 for the current provider, or /model 供应商::模型名 across providers.
 
 [command]
 default_timeout_seconds = 120

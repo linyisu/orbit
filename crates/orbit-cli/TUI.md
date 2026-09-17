@@ -36,20 +36,20 @@
 
 模型由配置中的每个供应商声明；Orbit 不请求远程模型目录。`/model` 的列表按供应商分组，`↑↓` 选模型，`←/→` 选该供应商声明的思考强度，Enter 同时应用。`/model 模型名` 只在当前供应商中查找，`/model 供应商::模型名` 可直接跨供应商切换。
 
-在供应商下可选地写 `reasoning_efforts`；若其中含有 `high`，启动和直接切换模型时默认选高档，否则使用列表首项，例如：
+每个模型是一份能力档案；模型选择器只显示该档案声明的思考档位，并使用它的 `default` 作为初始选择。例如：
 
 ```toml
 [providers.openai]
 api_format = "openai_responses"
 base_url = "https://api.openai.com/v1"
 api_key = "replace-with-key"
-models = ["gpt-5.6-sol", "gpt-6-astra"]
-reasoning_efforts = ["low", "medium", "high"]
-# Standard is inferred from api_format; choose a vendor adapter only when needed.
-# reasoning_protocol = "qwen" # or "deepseek"
+
+[[providers.openai.models]]
+id = "gpt-5.6-sol"
+reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
 ```
 
-可用值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`reasoning_protocol` 是供应商能力适配，而非根据模型名临时猜测：默认 `standard` 按 API 格式编码；Qwen 的 Chat Completions 使用 `enable_thinking`；DeepSeek 的 Chat Completions 使用 `thinking: { type: "enabled" }`，其 Anthropic 兼容 API 使用同一开关与 `output_config.effort`。未写 `reasoning_efforts` 时，选择器会说明未配置，Orbit 不发送任何思考参数。
+可用值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，因此网关重命名模型或新增供应商不会触发模型名判断。未写 `reasoning` 时，Orbit 不发送任何思考参数。
 
 ## 图片与文档
 

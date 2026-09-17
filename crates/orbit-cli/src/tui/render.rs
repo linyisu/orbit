@@ -117,7 +117,6 @@ pub(super) fn fit_label(text: &str, width: usize, tail: bool) -> String {
 
 fn footer(state: &UiState, width: usize) -> Line<'static> {
     let mode = state.permission_mode.label();
-    let available = width.saturating_sub(8 + mode.width());
     let model_label = if state.attachments.is_empty() {
         safe_output(&state.model)
     } else {
@@ -127,7 +126,13 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
             state.attachments.len()
         )
     };
-    let model = fit_label(&model_label, available / 2, false);
+    let effort = state
+        .reasoning_effort
+        .map(|effort| format!("思考 {}", effort.label()))
+        .unwrap_or_else(|| "思考 —".into());
+    let right = format!("{model_label} · {effort} · {mode}");
+    let available = width.saturating_sub(4);
+    let right = fit_label(&right, available.saturating_sub(8), false);
     let path = std::env::var_os("HOME")
         .and_then(|home| {
             std::path::Path::new(&state.workspace)
@@ -142,15 +147,15 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
                 })
         })
         .unwrap_or_else(|| state.workspace.clone());
-    let path = fit_label(
-        &safe_output(&path),
-        available.saturating_sub(model.width()),
-        true,
-    );
+    let path_width = available.saturating_sub(right.width());
+    let path = fit_label(&safe_output(&path), path_width, true);
+    let gap = available.saturating_sub(path.width() + right.width());
     Line::from(vec![
         Span::raw("  "),
         Span::styled(path, Style::default().fg(Color::Rgb(170, 170, 170))),
-        Span::raw(format!(" · {model} · {mode}")),
+        Span::raw(" ".repeat(gap)),
+        Span::raw(right),
+        Span::raw("  "),
     ])
 }
 
@@ -1059,8 +1064,13 @@ mod tests {
             let line = footer(&state, width);
             assert!(line.width() <= width);
             let text = line.to_string();
-            assert!(text.contains("项目"));
-            assert!(text.ends_with(state.permission_mode.label()));
+            if width >= 40 {
+                assert!(text.contains("项目"));
+            }
+            if width >= 80 {
+                assert!(text.contains("思考"));
+            }
+            assert!(text.ends_with("  "));
         }
         assert_eq!(fit_label("你好e\u{301}", 3, true), "…e\u{301}");
     }

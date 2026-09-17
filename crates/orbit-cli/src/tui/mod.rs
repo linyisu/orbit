@@ -97,6 +97,7 @@ pub async fn run(
     state.context_tokens = context_tokens;
     state.auto_compact = auto_compact;
     state.max_output_tokens = max_output_tokens;
+    state.reasoning_effort = model.config().reasoning_effort;
     state.model_completions = model_options
         .iter()
         .map(ModelOption::qualified_name)
@@ -582,6 +583,7 @@ fn select_model(
             let previous_model = state.model.clone();
             *model = client;
             state.model = choice.qualified_name();
+            state.reasoning_effort = model.config().reasoning_effort;
             if previous_model != state.model {
                 state.transcript.push(TranscriptItem::ModelChanged(format!(
                     "{previous_model} → {}",

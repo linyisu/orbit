@@ -13,7 +13,8 @@ use crate::{client::sse_stream, error::ModelError, types::*};
 pub(crate) fn encode(
     model: &str,
     request: ChatRequest,
-    reasoning_protocol: ReasoningProtocol,
+    reasoning_adapter: Option<ReasoningAdapter>,
+    reasoning_extra: &Value,
     stream: bool,
 ) -> Result<(Value, HeaderMap), ModelError> {
     let reasoning_effort = request.reasoning_effort;
@@ -101,8 +102,10 @@ pub(crate) fn encode(
 
     let tools = request.tools.into_iter().map(|tool| json!({"name": tool.function.name, "description": tool.function.description, "input_schema": tool.function.parameters})).collect::<Vec<_>>();
     let mut body = json!({"model": model, "max_tokens": request.max_tokens.unwrap_or(4096), "system": system, "messages": messages, "tools": tools, "temperature": request.temperature, "stream": stream});
-    if let Some(effort) = reasoning_effort {
-        crate::reasoning::apply_anthropic_messages(&mut body, effort, reasoning_protocol);
+    if let (Some(effort), Some(ReasoningAdapter::AnthropicMessages)) =
+        (reasoning_effort, reasoning_adapter)
+    {
+        crate::reasoning::apply_anthropic_messages(&mut body, effort, reasoning_extra);
     }
 
     let mut headers = HeaderMap::new();
@@ -300,18 +303,48 @@ mod tests {
     fn includes_adaptive_thinking_effort_when_configured() {
         let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
         request.reasoning_effort = Some(ReasoningEffort::High);
-        let (body, _) = encode("claude-test", request, ReasoningProtocol::Standard, true).unwrap();
+        let (body, _) = encode(
+            "claude-test",
+            request,
+            Some(ReasoningAdapter::AnthropicMessages),
+            &json!({}),
+            true,
+        )
+        .unwrap();
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert_eq!(body["output_config"]["effort"], "high");
     }
 
     #[test]
-    fn deepseek_protocol_uses_the_compatible_thinking_switch() {
+    fn model_profile_extra_can_override_the_adaptive_thinking_switch() {
         let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
         request.reasoning_effort = Some(ReasoningEffort::High);
-        let (body, _) = encode("gateway-name", request, ReasoningProtocol::Deepseek, true).unwrap();
+        let (body, _) = encode(
+            "gateway-name",
+            request,
+            Some(ReasoningAdapter::AnthropicMessages),
+            &json!({"thinking": {"type": "enabled"}}),
+            true,
+        )
+        .unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn model_profile_extra_merges_nested_provider_options_without_losing_effort() {
+        let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
+        request.reasoning_effort = Some(ReasoningEffort::High);
+        let (body, _) = encode(
+            "gateway-name",
+            request,
+            Some(ReasoningAdapter::AnthropicMessages),
+            &json!({"output_config": {"provider_option": true}}),
+            true,
+        )
+        .unwrap();
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert_eq!(body["output_config"]["provider_option"], true);
     }
 
     #[test]
@@ -335,7 +368,8 @@ mod tests {
                 )]),
                 ChatMessage::tool("c", "third"),
             ]),
-            ReasoningProtocol::Standard,
+            None,
+            &json!({}),
             true,
         )
         .unwrap();
@@ -366,7 +400,8 @@ mod tests {
                     path,
                 }],
             )]),
-            ReasoningProtocol::Standard,
+            None,
+            &json!({}),
             true,
         )
         .unwrap();
@@ -400,7 +435,8 @@ mod tests {
                     }],
                 ),
             ]),
-            ReasoningProtocol::Standard,
+            None,
+            &json!({}),
             true,
         )
         .unwrap();

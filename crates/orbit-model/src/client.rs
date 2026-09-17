@@ -53,6 +53,26 @@ impl ModelClient {
         if config.model.trim().is_empty() {
             return Err(ModelError::InvalidModel);
         }
+        if let Some(adapter) = config.reasoning_adapter {
+            let compatible = matches!(
+                (config.api_format, adapter),
+                (
+                    ApiFormat::OpenaiChatCompletions,
+                    ReasoningAdapter::OpenaiChat
+                ) | (
+                    ApiFormat::OpenaiResponses,
+                    ReasoningAdapter::OpenaiResponses
+                ) | (
+                    ApiFormat::AnthropicMessages,
+                    ReasoningAdapter::AnthropicMessages
+                )
+            );
+            if !compatible {
+                return Err(ModelError::Protocol(
+                    "reasoning adapter does not match the configured API format".into(),
+                ));
+            }
+        }
 
         let format = config.api_format;
         let suffix = match format {
@@ -191,19 +211,22 @@ impl ModelClient {
             ApiFormat::OpenaiChatCompletions => crate::openai::chat_completions::encode(
                 &self.config.model,
                 request,
-                self.config.reasoning_protocol,
+                self.config.reasoning_adapter,
+                &self.config.reasoning_extra,
                 stream,
             ),
             ApiFormat::OpenaiResponses => crate::openai::responses::encode(
                 &self.config.model,
                 request,
-                self.config.reasoning_protocol,
+                self.config.reasoning_adapter,
+                &self.config.reasoning_extra,
                 stream,
             ),
             ApiFormat::AnthropicMessages => crate::anthropic::messages::encode(
                 &self.config.model,
                 request,
-                self.config.reasoning_protocol,
+                self.config.reasoning_adapter,
+                &self.config.reasoning_extra,
                 stream,
             ),
         }?;
@@ -869,7 +892,8 @@ mod tests {
             model: model.to_owned(),
             timeout: Duration::from_secs(5),
             reasoning_effort: None,
-            reasoning_protocol: ReasoningProtocol::Standard,
+            reasoning_adapter: None,
+            reasoning_extra: serde_json::json!({}),
         })
         .expect("client builds")
     }
