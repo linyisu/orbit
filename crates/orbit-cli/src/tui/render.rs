@@ -441,20 +441,12 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 );
                 lines.push(Line::from(""));
             }
-            TranscriptItem::Error(text) => {
+            TranscriptItem::Error(text) | TranscriptItem::Notice(text) => {
+                let error = matches!(item, TranscriptItem::Error(_));
                 for line in text.lines() {
                     lines.push(Line::from(Span::styled(
-                        format!("× {line}"),
-                        Style::default().fg(Color::Red),
-                    )));
-                }
-                lines.push(Line::from(""));
-            }
-            TranscriptItem::Notice(text) => {
-                for line in text.lines() {
-                    lines.push(Line::from(Span::styled(
-                        line.to_owned(),
-                        Style::default().fg(MUTED),
+                        format!("{} {line}", if error { "×" } else { "›" }),
+                        Style::default().fg(if error { Color::Red } else { MUTED }),
                     )));
                 }
                 lines.push(Line::from(""));
@@ -821,14 +813,6 @@ mod tests {
         assert_eq!(lines[0].to_string(), "qwen::old → qwen::new");
         assert_eq!(lines[0].alignment, Some(Alignment::Center));
         assert!(!lines[0].to_string().starts_with('›'));
-    }
-
-    #[test]
-    fn command_notices_do_not_add_an_input_marker() {
-        let lines = transcript_lines(&[TranscriptItem::Notice("状态\n细节".into())], false);
-        assert_eq!(lines[0].to_string(), "状态");
-        assert_eq!(lines[1].to_string(), "细节");
-        assert!(!lines.iter().any(|line| line.to_string().starts_with('›')));
     }
 
     #[test]
