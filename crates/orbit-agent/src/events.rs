@@ -31,6 +31,10 @@ pub enum AgentEvent {
     ContextCompacted {
         before_tokens: usize,
         after_tokens: usize,
+        /// The provider could not produce a usable structured summary, so the
+        /// local deterministic fallback retained only the safe working set.
+        #[serde(default)]
+        fallback: bool,
     },
     CompactionFailed {
         error: String,

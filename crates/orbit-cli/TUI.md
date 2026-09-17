@@ -56,6 +56,8 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"],
 
 `context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。可用思考值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，因此网关重命名模型或新增供应商不会触发模型名判断。未写 `reasoning` 时，Orbit 不发送任何思考参数。
 
+`/compact` 优先让当前模型总结旧对话并保留最近两轮。单个摘要请求最多等待 30 秒；模型无法返回有效结构化摘要时，自动使用本地回退压缩并提示，旧对话仍在会话运行记录中。
+
 ## 图片与文档
 
 直接把 PNG、JPEG、GIF 或 WebP 文件拖进终端或粘贴它的路径，会将图片加入下一条消息；`Ctrl+V`（部分终端使用 `Alt+V`）还能直接读取系统剪贴板中的位图。输入框上方以 `[图片 N · 文件名]` 显示待发送附件。光标位于文字开头时按 ← 可进入图片，←→ 在图片间移动，Backspace/Delete 删除选中的图片；也可以点击图片后删除。只有图片而没有文字时也能直接发送。普通文本粘贴不会被当作附件。

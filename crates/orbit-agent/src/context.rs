@@ -167,23 +167,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_empty_truncated_and_expanding_summaries() {
+    async fn falls_back_when_the_model_cannot_return_a_valid_summary() {
         for (summary, reason) in [
             ("", "stop"),
             ("partial", "max_tokens"),
             ("huge summary ".repeat(2000).as_str(), "stop"),
         ] {
-            assert!(
-                compact(
-                    &model(summary, reason),
-                    history(),
-                    &[],
-                    32000,
-                    CancellationToken::new()
-                )
-                .await
-                .is_err()
-            );
+            let result = compact(
+                &model(summary, reason),
+                history(),
+                &[],
+                32000,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+            assert!(result.record.fallback);
+            assert!(result.after_tokens < result.before_tokens);
         }
     }
 

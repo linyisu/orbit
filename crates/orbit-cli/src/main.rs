@@ -451,7 +451,11 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
                 AgentEvent::ContextCompacted {
                     before_tokens,
                     after_tokens,
-                } => eprintln!("上下文已自动压缩：{before_tokens} → {after_tokens} tokens"),
+                    fallback,
+                } => eprintln!(
+                    "上下文已自动压缩：{before_tokens} → {after_tokens} tokens{}",
+                    if fallback { "（本地回退）" } else { "" }
+                ),
                 AgentEvent::CompactionFailed { error } => {
                     eprintln!("自动压缩未完成，保留原上下文：{error}")
                 }

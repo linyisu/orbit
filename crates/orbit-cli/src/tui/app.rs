@@ -199,9 +199,17 @@ impl UiState {
             AgentEvent::ContextCompacted {
                 before_tokens,
                 after_tokens,
-            } => self.transcript.push(TranscriptItem::Notice(format!(
-                "上下文已自动压缩：{before_tokens} → {after_tokens} tokens，继续执行。"
-            ))),
+                fallback,
+            } => {
+                let detail = if fallback {
+                    "模型摘要不可用，已使用本地回退压缩；旧对话仍可在会话记录中查看。"
+                } else {
+                    "继续执行。"
+                };
+                self.transcript.push(TranscriptItem::Notice(format!(
+                    "上下文已自动压缩：{before_tokens} → {after_tokens} tokens，{detail}"
+                )));
+            }
             AgentEvent::CompactionFailed { error } => self.transcript.push(TranscriptItem::Notice(
                 format!("自动压缩未完成，保留原上下文：{error}"),
             )),

@@ -141,7 +141,7 @@ async fn huge_unicode_history_is_chunked_without_oversized_summary_requests() {
 }
 
 #[tokio::test]
-async fn invalid_summary_or_cancellation_does_not_mutate_original_history() {
+async fn invalid_summary_uses_local_fallback_and_cancellation_preserves_history() {
     let history = long_task();
     let original = history.clone();
     let mut truncated = answer("partial");
@@ -157,18 +157,18 @@ async fn invalid_summary_or_cancellation_does_not_mutate_original_history() {
         answer(&"expanded ".repeat(10000)),
     ] {
         let plan = autocompact::plan(&history, &[], 1000, 8000).unwrap();
-        assert!(
-            autocompact::execute(
-                &MockModel::new([response]),
-                plan,
-                &[],
-                1000,
-                8000,
-                CancellationToken::new()
-            )
-            .await
-            .is_err()
-        );
+        let result = autocompact::execute(
+            &MockModel::new([response]),
+            plan,
+            &[],
+            1000,
+            8000,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(result.record.fallback);
+        assert!(result.after_tokens < result.before_tokens);
         assert_eq!(history, original);
     }
     let token = CancellationToken::new();
@@ -266,7 +266,7 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
 }
 
 #[tokio::test]
-async fn failed_early_compaction_continues_original_context_and_disabled_mode_skips_it() {
+async fn invalid_early_summary_uses_fallback_and_disabled_mode_skips_compaction() {
     let history = long_task();
     assert!(estimate_tokens(&history, &[]) + 1000 < 8000);
     for enabled in [false, true] {
@@ -287,9 +287,21 @@ async fn failed_early_compaction_continues_original_context_and_disabled_mode_sk
         let mut request = ChatRequest::new(history.clone());
         request.max_tokens = Some(1000);
         let result = agent.run(request, CancellationToken::new()).await.unwrap();
-        assert_eq!(result.history[..history.len()], history);
-        assert_eq!(backend.requests().last().unwrap().messages, history);
-        assert_eq!(backend.requests().len(), if enabled { 2 } else { 1 });
+        let requests = backend.requests();
+        if enabled {
+            assert_eq!(requests.len(), 2);
+            assert_ne!(requests[1].messages, history);
+            assert!(matches!(
+                requests[1].messages.get(1),
+                Some(ChatMessage::User { content, .. }) if content.contains("本地回退压缩")
+            ));
+            assert!(
+                matches!(result.history.get(1), Some(ChatMessage::User { content, .. }) if content.contains("本地回退压缩"))
+            );
+        } else {
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].messages, history);
+        }
     }
 }
 
@@ -358,10 +370,10 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
 }
 
 #[tokio::test]
-async fn failed_compaction_above_hard_limit_never_sends_an_oversized_normal_request() {
+async fn local_fallback_recovers_an_over_limit_history_without_an_oversized_request() {
     let mut history = long_task();
     history[3] = ChatMessage::tool("old", "x".repeat(30_000));
-    let backend = MockModel::new([answer("")]);
+    let backend = MockModel::new([answer(""), answer("continues after local compaction")]);
     let agent = Agent::new(
         backend.clone(),
         ToolRegistry::new(),
@@ -372,17 +384,18 @@ async fn failed_compaction_above_hard_limit_never_sends_an_oversized_normal_requ
     );
     let mut request = ChatRequest::new(history);
     request.max_tokens = Some(1000);
-    assert!(matches!(
-        agent.run(request, CancellationToken::new()).await,
-        Err(orbit_agent::error::AgentError::ContextBudget { .. })
-    ));
-    assert_eq!(backend.requests().len(), 1);
-    let request = &backend.requests()[0];
-    check_budget(
-        &request.messages,
-        &[],
-        request.max_tokens.unwrap() as usize,
-        8000,
-    )
-    .unwrap();
+    let result = agent.run(request, CancellationToken::new()).await.unwrap();
+    assert!(
+        matches!(result.history.get(1), Some(ChatMessage::User { content, .. }) if content.contains("本地回退压缩"))
+    );
+    assert_eq!(backend.requests().len(), 2);
+    for request in backend.requests() {
+        check_budget(
+            &request.messages,
+            &[],
+            request.max_tokens.unwrap() as usize,
+            8000,
+        )
+        .unwrap();
+    }
 }

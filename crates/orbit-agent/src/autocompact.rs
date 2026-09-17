@@ -1,5 +1,5 @@
 //! Client-side compaction shared by streaming and non-streaming agent loops.
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use orbit_model::types::{ChatMessage, ChatRequest, ToolDefinition};
 use tokio_util::sync::CancellationToken;
@@ -22,6 +22,11 @@ pub struct Plan {
     mode: CompactionMode,
     files: FileActivity,
 }
+
+/// Context compression is a maintenance operation.  Do not let a provider
+/// that is slow at following the summary format stall an otherwise usable
+/// session for the full normal model-request timeout.
+const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl Plan {
     pub fn with_files(mut self, files: &FileActivity) -> Self {
@@ -187,6 +192,27 @@ pub async fn execute<B: ModelBackend>(
     limit: usize,
     cancellation: CancellationToken,
 ) -> Result<CompactedContext, AgentError> {
+    match model_summary(backend, &plan, limit, cancellation.clone()).await {
+        Ok(summary) => match finish(&plan, tools, output, limit, summary, false) {
+            Ok(result) => Ok(result),
+            // A syntactically valid model summary can still be too large to
+            // help. Treat it exactly like any other unusable summary.
+            Err(_) => finish(&plan, tools, output, limit, local_fallback_summary(), true),
+        },
+        Err(AgentError::Cancelled) => return Err(AgentError::Cancelled),
+        // A compacted model context is preferable to an unusable, over-limit
+        // one. The full transcript remains in the durable run/event log; this
+        // fallback only controls what is sent to the next model request.
+        Err(_) => finish(&plan, tools, output, limit, local_fallback_summary(), true),
+    }
+}
+
+async fn model_summary<B: ModelBackend>(
+    backend: &B,
+    plan: &Plan,
+    limit: usize,
+    cancellation: CancellationToken,
+) -> Result<TaskSummary, AgentError> {
     let serialized =
         serde_json::to_string(&plan.earlier).map_err(|e| AgentError::Compaction(e.to_string()))?;
     let mut remaining = serialized.as_str();
@@ -231,7 +257,10 @@ pub async fn execute<B: ModelBackend>(
         };
         let response = tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
-            response = backend.complete(request, cancellation.clone()) => response?,
+            response = tokio::time::timeout(SUMMARY_REQUEST_TIMEOUT, backend.complete(request, cancellation.clone())) => {
+                response
+                    .map_err(|_| AgentError::Compaction("summary request timed out".into()))??
+            },
         };
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled);
@@ -262,11 +291,33 @@ pub async fn execute<B: ModelBackend>(
             .map_err(|e| AgentError::Compaction(e.to_string()))?;
         remaining = &remaining[end..];
     }
-    let structured = TaskSummary::parse(&summary)?;
+    TaskSummary::parse(&summary)
+}
+
+fn local_fallback_summary() -> TaskSummary {
+    TaskSummary {
+        goal: "历史上下文已使用本地回退压缩；保留最近两轮完整对话并继续当前任务。".into(),
+        constraints: vec!["配置的模型未能在限定时间内提供可验证的结构化摘要。".into()],
+        decisions: vec![],
+        completed: vec![],
+        remaining: vec!["如需早期细节，请从会话记录查看，或用工具重新读取相关文件。".into()],
+        verification: vec!["旧对话仍保存在会话的运行记录中，未被删除。".into()],
+        uncertainty: vec!["较早的模型回复未被重新概括为新的事实。".into()],
+    }
+}
+
+fn finish(
+    plan: &Plan,
+    tools: &[ToolDefinition],
+    output: usize,
+    limit: usize,
+    structured: TaskSummary,
+    fallback: bool,
+) -> Result<CompactedContext, AgentError> {
     let summary = structured.render();
     let files_text =
         serde_json::to_string(&plan.files).map_err(|e| AgentError::Compaction(e.to_string()))?;
-    let mut history = plan.retained;
+    let mut history = plan.retained.clone();
     let system_end = history
         .iter()
         .take_while(|m| matches!(m, ChatMessage::System { .. }))
@@ -287,14 +338,15 @@ pub async fn execute<B: ModelBackend>(
     check_budget(&history, tools, output, limit)?;
     let record = CompactionRecord {
         version: 1,
-        mode: plan.mode,
+        mode: plan.mode.clone(),
         source_messages: plan.source_messages,
         retained_from: plan.retained_from,
         pinned_user: plan.pinned_user,
         before_tokens: plan.before_tokens,
         after_tokens,
+        fallback,
         summary: structured,
-        files: plan.files,
+        files: plan.files.clone(),
     };
     Ok(CompactedContext {
         history,

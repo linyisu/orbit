@@ -261,6 +261,7 @@ where
             .await
             {
                 Ok(result) => {
+                    let fallback = result.record.fallback;
                     if let Some(sender) = sender {
                         send_agent_event(
                             sender,
@@ -273,6 +274,7 @@ where
                     let event = AgentEvent::ContextCompacted {
                         before_tokens: result.before_tokens,
                         after_tokens: result.after_tokens,
+                        fallback,
                     };
                     *history = result.history;
                     *compact_after = result

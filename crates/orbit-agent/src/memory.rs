@@ -154,6 +154,10 @@ pub struct CompactionRecord {
     pub pinned_user: Option<usize>,
     pub before_tokens: usize,
     pub after_tokens: usize,
+    /// Whether this checkpoint used the deterministic local fallback because
+    /// the configured model could not return a valid structured summary.
+    #[serde(default)]
+    pub fallback: bool,
     pub summary: TaskSummary,
     /// Cumulative, confirmed observations; not a claim about current file contents.
     pub files: FileActivity,
