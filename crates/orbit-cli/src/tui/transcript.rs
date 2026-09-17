@@ -13,9 +13,51 @@ use super::{app::TranscriptItem, render};
 #[derive(Debug)]
 struct Row {
     line: Line<'static>,
-    gutter: Option<Span<'static>>,
+    gutter: Option<Gutter>,
     start: usize,
     height: usize,
+}
+
+#[derive(Debug)]
+struct Gutter {
+    first: Line<'static>,
+    continuation: Line<'static>,
+    width: u16,
+}
+
+fn list_marker(text: &str) -> bool {
+    text == "• "
+        || text
+            .strip_suffix(". ")
+            .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
+    if line
+        .spans
+        .first()
+        .is_some_and(|span| matches!(span.content.as_ref(), "  │ " | "  ┊ "))
+    {
+        let span = line.spans.remove(0);
+        let width = span.width() as u16;
+        let gutter = Line::from(span);
+        return Some(Gutter {
+            first: gutter.clone(),
+            continuation: gutter,
+            width,
+        });
+    }
+    let marker = line
+        .spans
+        .iter()
+        .position(|span| list_marker(&span.content))?;
+    let prefix = line.spans.drain(..=marker).collect::<Vec<_>>();
+    let width = prefix.iter().map(Span::width).sum::<usize>() as u16;
+    Some(Gutter {
+        first: Line::from(prefix),
+        continuation: Line::from(" ".repeat(width as usize)),
+        width,
+    })
 }
 
 #[derive(Debug, Default)]
@@ -35,17 +77,8 @@ struct Entry {
 impl Entry {
     fn push(&mut self, mut line: Line<'static>, width: u16) {
         render::sanitize_line(&mut line);
-        let gutter = if line
-            .spans
-            .first()
-            .is_some_and(|span| matches!(span.content.as_ref(), "  │ " | "  ┊ "))
-        {
-            Some(line.spans.remove(0))
-        } else {
-            None
-        };
-        let content_width =
-            width.saturating_sub(gutter.as_ref().map_or(0, |span| span.width() as u16));
+        let gutter = take_gutter(&mut line);
+        let content_width = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
         let height = Paragraph::new(line.clone())
             .wrap(Wrap { trim: false })
             .line_count(content_width);
@@ -234,11 +267,19 @@ impl TranscriptLayout {
                 }
                 let skip = relative.saturating_sub(row.start);
                 let height = (row.height - skip).min((area.bottom() - y) as usize) as u16;
-                let gutter_width = row.gutter.as_ref().map_or(0, |span| span.width() as u16);
+                let gutter_width = row.gutter.as_ref().map_or(0, |gutter| gutter.width);
                 if let Some(gutter) = &row.gutter {
                     for dy in 0..height {
-                        Paragraph::new(Line::from(gutter.clone()).style(row.line.style))
-                            .render(Rect::new(area.x, y + dy, gutter_width, 1), buffer);
+                        let first = skip == 0 && dy == 0;
+                        Paragraph::new(
+                            if first {
+                                gutter.first.clone()
+                            } else {
+                                gutter.continuation.clone()
+                            }
+                            .style(row.line.style),
+                        )
+                        .render(Rect::new(area.x, y + dy, gutter_width, 1), buffer);
                     }
                 }
                 Paragraph::new(row.line.clone())
@@ -288,6 +329,30 @@ mod tests {
                 assert_eq!(buffer[(3, y)].symbol(), " ");
             }
         }
+    }
+
+    #[test]
+    fn wrapped_lists_keep_markers_with_content_and_use_hanging_indents() {
+        let answer = "1. **第一项很长很长**：后面的说明继续延伸到下一行。\n2. **第二项也很长**：后面的说明同样继续延伸。\n- 无序项也应保留悬挂缩进。";
+        let mut layout = TranscriptLayout::default();
+        layout.update(&[TranscriptItem::Assistant(answer.into())], None, 24);
+        let rows = &layout.entries[0].rows;
+        for (index, marker) in ["1. ", "2. ", "• "].into_iter().enumerate() {
+            let gutter = rows[index].gutter.as_ref().unwrap();
+            assert!(gutter.first.to_string().contains(marker));
+            assert_eq!(gutter.first.width(), gutter.continuation.width());
+            assert!(!rows[index].line.to_string().is_empty());
+        }
+        let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+        terminal
+            .draw(|frame| layout.draw(frame, frame.area(), 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(2, 0)].symbol(), "1");
+        assert_ne!(buffer[(5, 0)].symbol(), " ");
+        assert_eq!(buffer[(2, 1)].symbol(), " ");
+        assert_eq!(buffer[(3, 1)].symbol(), " ");
+        assert_eq!(buffer[(4, 1)].symbol(), " ");
     }
 
     #[tokio::test]
@@ -370,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn incremental_layout_matches_ratatui_for_unicode_wrapping_and_split_fences() {
+    fn incremental_layout_matches_fresh_layout_for_unicode_wrapping_and_split_fences() {
         let mut layout = TranscriptLayout::default();
         let mut items = vec![TranscriptItem::Assistant(String::new())];
         for chunk in [
@@ -390,26 +455,15 @@ mod tests {
             layout.invalidate_from(0);
             for width in [17] {
                 layout.update(&items, None, width);
-                let reference = render::transcript_lines(&items, false);
-                assert_eq!(
-                    layout.height(),
-                    Paragraph::new(reference.clone())
-                        .wrap(Wrap { trim: false })
-                        .line_count(width)
-                );
+                let mut reference = TranscriptLayout::default();
+                reference.update(&items, None, width);
+                assert_eq!(layout.height(), reference.height());
                 for offset in 0..layout.height() {
                     let mut actual = Terminal::new(TestBackend::new(width, 5)).unwrap();
                     actual.draw(|f| layout.draw(f, f.area(), offset)).unwrap();
                     let mut expected = Terminal::new(TestBackend::new(width, 5)).unwrap();
                     expected
-                        .draw(|f| {
-                            f.render_widget(
-                                Paragraph::new(reference.clone())
-                                    .wrap(Wrap { trim: false })
-                                    .scroll((offset as u16, 0)),
-                                f.area(),
-                            )
-                        })
+                        .draw(|f| reference.draw(f, f.area(), offset))
                         .unwrap();
                     assert_eq!(
                         actual.backend().buffer(),

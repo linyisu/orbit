@@ -83,6 +83,81 @@ pub(super) type Fence = Option<CodeFence>;
 const ACCENT: Color = Color::Rgb(218, 139, 109);
 const SECONDARY: Color = Color::Rgb(170, 170, 170);
 
+fn push_text_with_cjk_strong(
+    spans: &mut Vec<Span<'static>>,
+    text: &str,
+    style: Style,
+    recover: bool,
+) {
+    if !recover || !text.contains("**") {
+        spans.push(Span::styled(text.to_owned(), style));
+        return;
+    }
+    let mut rest = text;
+    while let Some(open) = rest.find("**") {
+        let after_open = &rest[open + 2..];
+        let Some(close) = after_open.find("**") else {
+            break;
+        };
+        let content = &after_open[..close];
+        if content.is_empty()
+            || content.starts_with(char::is_whitespace)
+            || content.ends_with(char::is_whitespace)
+        {
+            let split = open + 2;
+            spans.push(Span::styled(rest[..split].to_owned(), style));
+            rest = &rest[split..];
+            continue;
+        }
+        if open > 0 {
+            spans.push(Span::styled(rest[..open].to_owned(), style));
+        }
+        spans.push(Span::styled(
+            content.to_owned(),
+            style.add_modifier(Modifier::BOLD),
+        ));
+        rest = &after_open[close + 2..];
+    }
+    if !rest.is_empty() {
+        spans.push(Span::styled(rest.to_owned(), style));
+    }
+}
+
+fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: bool) {
+    if !recover {
+        return;
+    }
+    let mut open = start;
+    while open + 1 < spans.len() {
+        if spans[open].content != "*" || spans[open + 1].content != "*" {
+            open += 1;
+            continue;
+        }
+        let Some(close) = (open + 2..spans.len().saturating_sub(1))
+            .find(|&index| spans[index].content == "*" && spans[index + 1].content == "*")
+        else {
+            break;
+        };
+        let first = spans[open + 2..close]
+            .iter()
+            .find_map(|span| span.content.chars().next());
+        let last = spans[open + 2..close]
+            .iter()
+            .rev()
+            .find_map(|span| span.content.chars().next_back());
+        if first.is_none_or(char::is_whitespace) || last.is_none_or(char::is_whitespace) {
+            open += 2;
+            continue;
+        }
+        spans.drain(close..close + 2);
+        spans.drain(open..open + 2);
+        for span in &mut spans[open..close - 2] {
+            span.style = span.style.add_modifier(Modifier::BOLD);
+        }
+        open = close - 2;
+    }
+}
+
 /// Parse only a possible table at the current source position. The caller keeps
 /// an open table provisional so new rows can adjust column widths during streaming.
 pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static>>)> {
@@ -269,7 +344,7 @@ fn syntax_for_label(info: &str) -> Option<&'static SyntaxReference> {
     })
 }
 
-pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'static> {
+pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'static> {
     let trimmed = source.trim_start();
     let marker = trimmed.chars().next().unwrap_or(' ');
     let count = trimmed.chars().take_while(|c| *c == marker).count();
@@ -318,10 +393,7 @@ pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'stati
             Style::default().fg(SECONDARY),
         );
     }
-    let mut spans = vec![Span::styled(
-        if index == 0 { "● " } else { "  " },
-        Style::default().fg(ACCENT),
-    )];
+    let mut spans = vec![Span::raw("  ")];
     let indent = source.len() - trimmed.len();
     if indent > 0 {
         spans.push(Span::raw(source[..indent].to_owned()));
@@ -331,6 +403,7 @@ pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'stati
     let mut stack = Vec::new();
     let mut ordered = None;
     let mut links: Vec<(usize, String)> = Vec::new();
+    let recover_cjk_strong = !trimmed.contains(r"\**") && !trimmed.contains(r"\*\*");
     for event in Parser::new_ext(
         trimmed,
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
@@ -376,7 +449,10 @@ pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'stati
                     }
                 }
             }
-            Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
+            Event::Text(text) => {
+                push_text_with_cjk_strong(&mut spans, &text, style, recover_cjk_strong);
+            }
+            Event::Html(text) | Event::InlineHtml(text) => {
                 spans.push(Span::styled(text.into_string(), style))
             }
             Event::Code(text) => {
@@ -394,6 +470,7 @@ pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'stati
             _ => {}
         }
     }
+    recover_split_strong(&mut spans, beginning, recover_cjk_strong);
     // Reference definitions and incomplete constructs must never disappear.
     if spans.len() == beginning && !trimmed.is_empty() {
         spans.push(Span::raw(trimmed.to_owned()));
@@ -536,7 +613,26 @@ mod tests {
     }
 
     #[test]
+    fn recovers_model_style_strong_markers_next_to_cjk_text() {
+        let value =
+            render(r#"4. **图一的技术质量明显"更认真"**：但这是一张**"我拍的我的鸟"**的记录照。"#);
+        assert!(!value.to_string().contains("**"), "{value:?}");
+        assert!(value.spans.iter().any(|span| {
+            span.content == "\"我拍的我的鸟\"" && span.style.add_modifier.contains(Modifier::BOLD)
+        }));
+        let escaped = render(r"保留 \*\*字面量\*\*");
+        assert_eq!(escaped.to_string(), "  保留 **字面量**");
+        assert!(
+            escaped
+                .spans
+                .iter()
+                .all(|span| !span.style.add_modifier.contains(Modifier::BOLD))
+        );
+    }
+
+    #[test]
     fn formats_blocks_and_preserves_indentation() {
+        assert_eq!(line("普通段落", 0, &mut None).to_string(), "  普通段落");
         assert_eq!(render("## 标题").to_string(), "  标题");
         assert_eq!(render("  - **项目**").to_string(), "    • 项目");
         assert_eq!(render("3. 第三项").to_string(), "  3. 第三项");
