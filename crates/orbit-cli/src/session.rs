@@ -71,6 +71,7 @@ pub struct SessionState {
     pub store: Store,
     writer: SessionWriter,
     pub snapshot: Snapshot,
+    pub scratch: orbit_tools::run_command::ScratchDirectory,
     pending: Vec<AgentEvent>,
     active: bool,
     flushed_at: Instant,
@@ -105,7 +106,11 @@ impl SessionState {
             store.create(workspace, model, demo).await?
         };
         let snapshot = store.load(writer.id()).await?;
+        let scratch = std::sync::Arc::new(std::sync::RwLock::new(
+            store.path().with_extension("workspaces").join(writer.id()),
+        ));
         Ok(Self {
+            scratch,
             store,
             writer,
             snapshot,
@@ -232,6 +237,11 @@ impl SessionState {
         let snapshot = self.store.load(id).await?;
         self.writer = writer;
         self.snapshot = snapshot;
+        *self.scratch.write().expect("scratch lock poisoned") = self
+            .store
+            .path()
+            .with_extension("workspaces")
+            .join(self.id());
         self.pending.clear();
         self.flushed_at = Instant::now();
         Ok(())
@@ -246,6 +256,11 @@ impl SessionState {
         let snapshot = self.store.load(writer.id()).await?;
         self.writer = writer;
         self.snapshot = snapshot;
+        *self.scratch.write().expect("scratch lock poisoned") = self
+            .store
+            .path()
+            .with_extension("workspaces")
+            .join(self.id());
         Ok(())
     }
 }
@@ -262,6 +277,8 @@ mod tests {
                 .await
                 .unwrap();
         let first = state.id().to_owned();
+        let scratch = state.scratch.clone();
+        let first_scratch = scratch.read().unwrap().clone();
         let history = vec![
             ChatMessage::user("first question"),
             ChatMessage::assistant("first answer"),
@@ -281,6 +298,7 @@ mod tests {
         state.new_session("model".into(), true).await.unwrap();
         let second = state.id().to_owned();
         assert_ne!(first, second);
+        assert_ne!(*scratch.read().unwrap(), first_scratch);
         assert!(state.snapshot.history.is_empty());
         let foreign_path = tmp.path().join("foreign");
         std::fs::create_dir(&foreign_path).unwrap();
@@ -321,10 +339,21 @@ mod tests {
         assert_eq!(state.id(), second);
         drop(locked);
         state.resume(&first).await.unwrap();
+        assert_eq!(*scratch.read().unwrap(), first_scratch);
         assert_eq!(state.snapshot.history, history);
         assert_eq!(state.snapshot.runs.len(), 1);
         assert!(state.store.load(&second).await.is_ok());
         // The old lease is released after a successful switch.
         assert!(state.store.acquire(&second).await.is_ok());
+        drop(state);
+        let reopened = SessionState::open(
+            tmp.path().join("sessions.db"),
+            Some(first),
+            "model".into(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(*reopened.scratch.read().unwrap(), first_scratch);
     }
 }

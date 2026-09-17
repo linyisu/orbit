@@ -401,3 +401,43 @@ async fn configured_rust_toolchain_compiles_and_runs_without_host_home() {
     assert!(result.stdout.contains("RUST_OK=3628800"));
     assert!(!root.path().join("rust-test").exists());
 }
+
+#[tokio::test]
+#[ignore = "requires Linux user namespaces"]
+async fn scratch_persists_between_commands_and_is_separate_from_tmp_and_other_sessions() {
+    let (root, workspace) = fixture();
+    let data = tempfile::tempdir().unwrap();
+    let first = data.path().join("session-one");
+    let second = data.path().join("session-two");
+    for (directory, script) in [
+        (
+            &first,
+            "printf checkpoint > /scratch/state; printf transient > /tmp/state",
+        ),
+        (
+            &first,
+            "test ! -e /tmp/state && test \"$(cat /scratch/state)\" = checkpoint && printf continued",
+        ),
+        (&second, "test ! -e /scratch/state && test ! -e /tmp/state"),
+        (&first, "test \"$(cat /scratch/state)\" = checkpoint"),
+    ] {
+        let result = sandbox::run_with_resources(
+            workspace.clone(),
+            script.into(),
+            Duration::from_secs(10),
+            CancellationToken::new(),
+            false,
+            None,
+            Some(directory),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0), "{result:?}");
+        assert!(result.scratch.is_some());
+    }
+    assert!(!root.path().join("state").exists());
+    assert_eq!(
+        fs::read_to_string(first.join("state")).unwrap(),
+        "checkpoint"
+    );
+}

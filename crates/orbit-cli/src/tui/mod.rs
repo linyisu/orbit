@@ -354,8 +354,8 @@ async fn run_command(
         }
         "/resume" => resume_session(argument, state, history, session).await?,
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
-            "会话  {}\n数据库  {}\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / write_file / edit_file / run_command · 审批：{}",
-            session.id(), session.store.path().display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs(), state.permission_mode.label()
+            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / write_file / edit_file / run_command · 审批：{}",
+            session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
         "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
         "/model" => {

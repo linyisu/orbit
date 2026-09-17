@@ -88,3 +88,13 @@ rust_toolchain = "/absolute/path/to/.rustup/toolchains/stable-x86_64-unknown-lin
 Orbit 将该工具链目录只读挂载到 `/opt/orbit-rust`，并把其 `bin` 放到沙箱 PATH 首位，直接使用真实 rustc/cargo。不会挂载整个 home、Cargo 凭据或注册表缓存，也不会运行 rustup 自动安装。配置路径必须为绝对路径，并包含 `bin/rustc`、`bin/cargo` 和 `lib/rustlib`。默认不挂载额外工具链。
 
 无第三方依赖的 Rust 程序可直接编译；Cargo 项目仍受无网络、无宿主依赖缓存和现有沙箱容量限制。此配置不意味着所有 Cargo 项目都能构建。
+
+## 跨命令、跨重启的会话工作目录
+
+TUI 命令另有 `/scratch`：同一会话的多次调用以及退出后 `/resume` 都使用同一目录；`/new` 获得另一目录，不混用产物。实际文件存于数据库旁的 `<数据库名>.workspaces/<会话 ID>/`，默认位于用户数据目录，权限为 0700，不在项目中散落文件。首次命令调用才创建目录。`/status` 可查看宿主路径。
+
+例如先执行 `rustc /workspace/main.rs -o /scratch/main`，下一次调用 `/scratch/main`；也可将阶段结果、源码副本、构建缓存放在 `/scratch`。不要反复覆盖已有工作副本。最终应交付给用户的项目文件仍通过文件工具写回项目。
+
+`/tmp` 和 `/workspace` 副本仍按调用清理；`/scratch` 不在调用结束、取消或 `/new` 时自动删除，目前没有自动过期清理或目录总量配额，可通过命令主动删除不再需要的 scratch 文件。单文件和进程资源限制仍生效。
+
+保存文件不等于保存进程：超时、取消或本次沙箱退出仍清理后代进程。长工作可分段保存检查点后继续；后台服务、交互式终端、持续进程句柄尚未实现。

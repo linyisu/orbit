@@ -31,6 +31,7 @@ pub struct CommandResult {
     pub stdout_total_bytes: u64,
     pub stderr_total_bytes: u64,
     pub sandbox: &'static str,
+    pub scratch: Option<&'static str>,
     pub workspace_files: usize,
     pub skipped_entries: usize,
 }
@@ -132,6 +133,7 @@ fn command(
     writable_snapshot: bool,
     timeout: Duration,
     rust_toolchain: Option<&Path>,
+    scratch: Option<&Path>,
 ) -> Result<Command, ToolError> {
     use std::os::unix::fs::MetadataExt;
     let executable = PathBuf::from("/usr/bin/bwrap");
@@ -179,6 +181,22 @@ fn command(
         command.args(["--size", "134217728", "--tmpfs", "/workspace"]);
     } else {
         command.arg("--ro-bind").arg(snapshot).arg("/workspace");
+    }
+    if let Some(path) = scratch {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
+            .map_err(failed)?;
+        if std::fs::symlink_metadata(path)
+            .map_err(failed)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(failed("scratch directory must not be a symlink"));
+        }
+        command.arg("--bind").arg(path).arg("/scratch");
     }
     if let Some(path) = rust_toolchain {
         let path = path.canonicalize().map_err(failed)?;
@@ -298,6 +316,27 @@ pub async fn run_with_toolchain(
     writable_snapshot: bool,
     rust_toolchain: Option<&Path>,
 ) -> Result<CommandResult, ToolError> {
+    run_with_resources(
+        workspace,
+        script,
+        timeout,
+        token,
+        writable_snapshot,
+        rust_toolchain,
+        None,
+    )
+    .await
+}
+
+pub async fn run_with_resources(
+    workspace: Workspace,
+    script: String,
+    timeout: Duration,
+    token: CancellationToken,
+    writable_snapshot: bool,
+    rust_toolchain: Option<&Path>,
+    scratch: Option<&Path>,
+) -> Result<CommandResult, ToolError> {
     if token.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
@@ -319,6 +358,7 @@ pub async fn run_with_toolchain(
         writable_snapshot,
         timeout,
         rust_toolchain,
+        scratch,
     )?
     .spawn()
     .map_err(failed)?;
@@ -362,6 +402,7 @@ pub async fn run_with_toolchain(
         } else {
             "bubblewrap; no network; read-only filtered workspace snapshot"
         },
+        scratch: scratch.map(|_| "/scratch (persistent session files; no persistent processes)"),
         workspace_files: snapshot.files,
         skipped_entries: snapshot.skipped,
     })

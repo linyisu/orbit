@@ -1,4 +1,10 @@
-use std::time::Duration;
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
+
+pub type ScratchDirectory = Arc<RwLock<PathBuf>>;
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture};
 use orbit_model::types::{ToolCall, ToolDefinition};
@@ -17,6 +23,7 @@ pub struct RunCommand {
     workspace: Workspace,
     approvals: ApprovalSender,
     limits: CommandLimits,
+    scratch: Option<ScratchDirectory>,
 }
 
 #[derive(Deserialize)]
@@ -81,7 +88,12 @@ impl RunCommand {
             workspace,
             approvals,
             limits,
+            scratch: None,
         }
+    }
+    pub fn with_scratch(mut self, scratch: ScratchDirectory) -> Self {
+        self.scratch = Some(scratch);
+        self
     }
 }
 
@@ -89,7 +101,7 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",
-            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). All changes and build artifacts are discarded after the command; combine build and test in one command. /tmp is disposable. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Cargo dependencies are not inherited and network remains blocked. Timeout defaults and maximum are specified in the tool schema. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts; excess output is discarded, never a reason to stop execution. Timeout and cancellation still stop the process. Never automatically retry a denied command.",
+            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). Changes inside /workspace are discarded after each command; copy sources or build outputs to /scratch when they must survive subsequent commands. /tmp is disposable. In the TUI, /scratch is a private writable directory retained across commands and session resume. Save intermediate files, binaries and checkpoints there; new sessions use separate scratch directories. It does not keep background processes alive. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Cargo dependencies are not inherited and network remains blocked. Timeout defaults and maximum are specified in the tool schema. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts; excess output is discarded, never a reason to stop execution. Timeout and cancellation still stop the process. Never automatically retry a denied command.",
             json!({"type":"object","properties":{"writable_snapshot":{"type":"boolean","default":false},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":self.limits.max_timeout_seconds,"default":self.limits.default_timeout_seconds}},"required":["command"],"additionalProperties":false}),
         )
     }
@@ -135,13 +147,18 @@ impl Tool for RunCommand {
                     "user denied command; do not retry without a new user request".into(),
                 ));
             }
-            let result = sandbox::run_with_toolchain(
+            let scratch = self
+                .scratch
+                .as_ref()
+                .map(|directory| directory.read().expect("scratch lock poisoned").clone());
+            let result = sandbox::run_with_resources(
                 self.workspace.clone(),
                 args.command,
                 Duration::from_secs(timeout_seconds),
                 cancellation,
                 args.writable_snapshot,
                 self.limits.rust_toolchain.as_deref(),
+                scratch.as_deref(),
             )
             .await?;
             serde_json::to_string(&result).map_err(|e| ToolError::ExecutionFailed(e.to_string()))

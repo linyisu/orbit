@@ -198,9 +198,9 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
             let mut lines = vec![
                 Line::from(if preview.writable_snapshot {
-                    "临时可写副本 · 128 MiB · 结束后丢弃修改 · 无网络"
+                    "临时可写副本 · 128 MiB · /scratch 按会话保留 · 无网络"
                 } else {
-                    "只读项目副本 · 无网络 · 不修改原项目"
+                    "只读项目副本 · /scratch 按会话保留 · 无网络"
                 }),
                 Line::from("不含配置、数据库、.git、符号链接和依赖缓存；仅系统工具。"),
                 Line::from(""),

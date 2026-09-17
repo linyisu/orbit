@@ -13,6 +13,7 @@ pub fn workspace_tools(
     approvals: Option<ApprovalSender>,
     command_limits: orbit_tools::run_command::CommandLimits,
     web: orbit_tools::web_fetch::WebConfig,
+    scratch: Option<orbit_tools::run_command::ScratchDirectory>,
 ) -> Result<ToolRegistry> {
     let mut workspace = Workspace::new(std::env::current_dir()?)?;
     if config.exists() {
@@ -21,6 +22,7 @@ pub fn workspace_tools(
     if let Some(database) = database {
         workspace.protect(database)?;
         workspace.protect(database.with_extension("session-locks"))?;
+        workspace.protect(database.with_extension("workspaces"))?;
         for suffix in ["-wal", "-shm", "-journal"] {
             let mut sidecar = database.as_os_str().to_os_string();
             sidecar.push(suffix);
@@ -34,11 +36,12 @@ pub fn workspace_tools(
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
-        tools.register(RunCommand::with_limits(
-            workspace,
-            approvals,
-            command_limits,
-        ));
+        let command = RunCommand::with_limits(workspace, approvals, command_limits);
+        tools.register(if let Some(scratch) = scratch {
+            command.with_scratch(scratch)
+        } else {
+            command
+        });
     }
     Ok(tools)
 }

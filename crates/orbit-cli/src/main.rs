@@ -258,6 +258,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
                 Some(approvals),
                 Default::default(),
                 Default::default(),
+                Some(session.scratch.clone()),
             )?,
             session,
             approval_receiver,
@@ -291,6 +292,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             Some(approvals),
             command_limits,
             web,
+            Some(session.scratch.clone()),
         )?,
         session,
         approval_receiver,
@@ -317,7 +319,7 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
 
     let agent = Agent::new(
         ModelClientBackend::new(client),
-        runtime::workspace_tools(&config_path, None, None, command_limits, web)?,
+        runtime::workspace_tools(&config_path, None, None, command_limits, web, None)?,
         agent_config,
     );
 
