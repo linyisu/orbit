@@ -15,6 +15,7 @@ pub(super) struct Navigation {
     area: Rect,
     targets: Vec<(u16, usize, String)>,
     hovered: Option<u16>,
+    show_latest: bool,
     first: usize,
     count: usize,
 }
@@ -33,7 +34,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
     let nav = &mut state.navigation;
     let inside = nav.area.contains((mouse.column, mouse.row).into());
     let hit = inside
-        && (mouse.row == nav.area.bottom().saturating_sub(1)
+        && ((nav.show_latest && mouse.row == nav.area.bottom().saturating_sub(1))
             || nav.targets.iter().any(|(row, _, _)| *row == mouse.row));
     if mouse.kind == MouseEventKind::Moved {
         let hovered = hit.then_some(mouse.row);
@@ -48,7 +49,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) if hit => {
             state.selection.clear();
-            if mouse.row == nav.area.bottom() - 1 {
+            if nav.show_latest && mouse.row == nav.area.bottom() - 1 {
                 state.follow_bottom = true;
                 state.scroll = 0;
             } else if let Some((_, offset, _)) =
@@ -91,6 +92,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     nav.area = Rect::new(area.right().saturating_sub(2), area.y, 2, area.height);
     nav.targets.clear();
     nav.count = anchors.len();
+    nav.show_latest = offset < state.max_scroll;
     let slots = area.height.saturating_sub(2) as usize;
     if slots == 0 || anchors.is_empty() {
         nav.area = Rect::default();
@@ -133,15 +135,19 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         ));
     }
     let bottom = nav.area.bottom() - 1;
-    frame.render_widget(
-        Paragraph::new("↓").style(Style::default().fg(if nav.hovered == Some(bottom) {
-            Color::Rgb(218, 139, 109)
-        } else {
-            Color::Rgb(170, 170, 170)
-        })),
-        Rect::new(nav.area.x, bottom, 1, 1),
-    );
-    let tooltip = if nav.hovered == Some(bottom) {
+    if nav.show_latest {
+        frame.render_widget(
+            Paragraph::new("↓").style(Style::default().fg(if nav.hovered == Some(bottom) {
+                Color::Rgb(218, 139, 109)
+            } else {
+                Color::Rgb(170, 170, 170)
+            })),
+            Rect::new(nav.area.x, bottom, 1, 1),
+        );
+    } else if nav.hovered == Some(bottom) {
+        nav.hovered = None;
+    }
+    let tooltip = if nav.show_latest && nav.hovered == Some(bottom) {
         Some((bottom, "回到最新 · 继续跟随输出".to_owned()))
     } else {
         nav.targets
@@ -193,6 +199,11 @@ mod tests {
         state.input.insert("保留草稿");
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        let bottom = state.navigation.area.bottom() - 1;
+        assert_eq!(
+            terminal.backend().buffer()[(state.navigation.area.x, bottom)].symbol(),
+            " "
+        );
         let x = state.navigation.area.x;
         let (y, target, _) = state.navigation.targets[1].clone();
         let hover = mouse(MouseEventKind::Moved, x, y);
@@ -225,6 +236,7 @@ mod tests {
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
         assert_eq!(state.max_scroll - state.scroll, target);
         let bottom = state.navigation.area.bottom() - 1;
+        assert_eq!(terminal.backend().buffer()[(x, bottom)].symbol(), "↓");
         handle(
             &mut state,
             &mouse(MouseEventKind::Down(MouseButton::Left), x, bottom),
@@ -272,6 +284,19 @@ mod tests {
         for (y, offset, _) in &state.navigation.targets {
             assert!(*y < state.navigation.area.bottom() - 1);
             assert!(*offset < state.transcript_layout.height());
+        }
+    }
+
+    #[test]
+    fn output_keeps_a_blank_column_before_navigation() {
+        let mut state = UiState::new("model");
+        state.transcript.push(TranscriptItem::User("x".repeat(200)));
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+
+        let gap = state.navigation.area.x - 1;
+        for y in state.navigation.area.y..state.navigation.area.bottom() {
+            assert_eq!(terminal.backend().buffer()[(gap, y)].symbol(), " ");
         }
     }
 }

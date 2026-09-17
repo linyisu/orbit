@@ -254,7 +254,8 @@ fn welcome() -> Vec<Line<'static>> {
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     state.selection.viewport = Rect {
         x: area.x + 2,
-        width: area.width.saturating_sub(4),
+        // Keep one blank column between wrapped output and the navigation dots.
+        width: area.width.saturating_sub(5),
         ..area
     };
     if state.transcript.is_empty() {
@@ -282,7 +283,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         frame.render_widget(Paragraph::new(logo), centered);
         return;
     }
-    let width = area.width.saturating_sub(4);
+    let width = state.selection.viewport.width;
     let previous_max = state.max_scroll;
     let previous_offset = previous_max.saturating_sub(state.scroll);
     let resize_anchor = (!state.follow_bottom
