@@ -42,6 +42,20 @@ use self::{
 
 type RunTask = JoinHandle<Result<AgentResult, AgentError>>;
 
+struct CommandContext<'a> {
+    tools: &'a ToolRegistry,
+    instructions: &'a crate::instructions::Instructions,
+    model_options: &'a [ModelOption],
+}
+
+#[derive(Clone)]
+pub struct ModelOption {
+    pub alias: String,
+    pub provider: String,
+    pub default_for_provider: bool,
+    pub config: orbit_model::types::ModelConfig,
+}
+
 pub struct RequestBudget {
     pub context_tokens: usize,
     pub auto_compact: bool,
@@ -49,6 +63,7 @@ pub struct RequestBudget {
     pub max_turns: usize,
     pub max_tool_calls: usize,
     pub instructions: crate::instructions::Instructions,
+    pub model_options: Vec<ModelOption>,
 }
 
 pub async fn run(
@@ -70,6 +85,7 @@ pub async fn run(
         max_turns,
         max_tool_calls,
         instructions,
+        model_options,
     } = budget;
     state.context_tokens = context_tokens;
     state.auto_compact = auto_compact;
@@ -192,7 +208,7 @@ pub async fn run(
                         Action::Submit(prompt) => {
                             let compacting = prompt.trim() == "/compact";
                             if prompt.starts_with('/') && !compacting {
-                                match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, &tools, &instructions).await {
+                                match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, model_options: &model_options }).await {
                                     Ok(true) => break,
                                     Ok(false) => {},
                                     Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
@@ -376,9 +392,13 @@ async fn run_command(
     model: &mut ModelClient,
     history: &mut Vec<ChatMessage>,
     session: &mut SessionState,
-    tools: &ToolRegistry,
-    instructions: &crate::instructions::Instructions,
+    context: CommandContext<'_>,
 ) -> Result<bool> {
+    let CommandContext {
+        tools,
+        instructions,
+        model_options,
+    } = context;
     let (command, argument) = prompt
         .split_once(char::is_whitespace)
         .unwrap_or((prompt, ""));
@@ -476,10 +496,24 @@ async fn run_command(
             "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / write_file / edit_file / run_command · 审批：{}",
             session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
-        "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
+        "/model" | "/provider" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
         "/model" => {
             if argument.is_empty() {
-                state.transcript.push(TranscriptItem::Notice(format!("当前模型：{}\n输入 /model <名称> 切换；沿用当前 API 配置。", state.model)));
+                let configured = model_options
+                    .iter()
+                    .map(|choice| format!("{}  · {} · {}", choice.alias, choice.provider, choice.config.model))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                state.transcript.push(TranscriptItem::Notice(format!("当前模型：{}\n\n已配置模型（别名 · 供应商 · 实际模型）\n{}\n\n输入 /model <别名> 切换。未配置名称仍会沿用当前供应商直接切换；/provider 查看或切换供应商默认模型。", state.model, configured)));
+            } else if let Some(choice) = model_options.iter().find(|choice| choice.alias == argument) {
+                match ModelClient::new(choice.config.clone()) {
+                    Ok(client) => {
+                        *model = client;
+                        state.model = choice.alias.clone();
+                        state.transcript.push(TranscriptItem::Notice(format!("已切换到 {} · 供应商 {} · 实际模型 {}\n下一条消息验证可用性。", choice.alias, choice.provider, choice.config.model)));
+                    }
+                    Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
+                }
             } else {
                 let mut config = model.config().clone();
                 config.model = argument.to_owned();
@@ -491,6 +525,29 @@ async fn run_command(
                     }
                     Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
                 }
+            }
+        }
+        "/provider" if argument.is_empty() => {
+            let configured = model_options
+                .iter()
+                .filter(|choice| choice.default_for_provider)
+                .map(|choice| format!("{}  · 默认模型 {}", choice.provider, choice.config.model))
+                .collect::<Vec<_>>()
+                .join("\n");
+            state.transcript.push(TranscriptItem::Notice(format!("已配置供应商\n{}\n\n输入 /provider <名称> 切换到该供应商的默认模型；其他模型请用 /model <别名>。", configured)));
+        }
+        "/provider" => {
+            let Some(choice) = model_options.iter().find(|choice| choice.provider == argument && choice.default_for_provider) else {
+                state.transcript.push(TranscriptItem::Error(format!("没有名为 {argument} 的供应商默认模型；输入 /provider 查看已配置供应商。")));
+                return Ok(false);
+            };
+            match ModelClient::new(choice.config.clone()) {
+                Ok(client) => {
+                    *model = client;
+                    state.model = choice.alias.clone();
+                    state.transcript.push(TranscriptItem::Notice(format!("已切换供应商 {} · 默认模型 {}\n下一条消息验证可用性。", choice.provider, choice.config.model)));
+                }
+                Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
             }
         }
         _ => state.transcript.push(TranscriptItem::Notice(format!("无法识别命令：{prompt}\n输入 / 查看可用命令。"))),

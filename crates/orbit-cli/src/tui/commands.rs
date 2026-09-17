@@ -23,7 +23,11 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/model",
-        description: "查看模型；/model <名称> 切换模型",
+        description: "查看已配置模型；/model <别名> 切换",
+    },
+    Command {
+        name: "/provider",
+        description: "查看供应商；/provider <名称> 切换默认模型",
     },
     Command {
         name: "/resume",

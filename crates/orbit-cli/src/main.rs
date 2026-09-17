@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, Write},
     path::PathBuf,
@@ -121,6 +122,31 @@ struct FileConfig {
     command: orbit_tools::run_command::CommandLimits,
     #[serde(default)]
     web: orbit_tools::web_fetch::WebConfig,
+    #[serde(default)]
+    providers: BTreeMap<String, ProviderConfig>,
+    #[serde(default)]
+    models: Vec<NamedModel>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ProviderConfig {
+    #[serde(default = "default_api_format")]
+    api_format: ApiFormat,
+    base_url: String,
+    api_key: String,
+    /// Default model selected by `/provider <name>`.
+    model: String,
+    #[serde(default = "default_timeout_seconds")]
+    timeout_seconds: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamedModel {
+    alias: String,
+    provider: String,
+    /// Overrides the provider's default model for this alias.
+    model: Option<String>,
 }
 
 fn default_max_output_tokens() -> u32 {
@@ -165,6 +191,25 @@ impl FileConfig {
         if config.timeout_seconds == 0 {
             bail!("timeout_seconds must be positive");
         }
+        for (name, provider) in &config.providers {
+            if name.trim().is_empty()
+                || provider.base_url.trim().is_empty()
+                || provider.api_key.trim().is_empty()
+                || provider.model.trim().is_empty()
+                || provider.timeout_seconds == 0
+            {
+                bail!(
+                    "provider {name:?} must set nonempty base_url, api_key, model and a positive timeout_seconds"
+                );
+            }
+        }
+        let options = config.model_options()?;
+        let mut aliases = std::collections::BTreeSet::new();
+        for option in options {
+            if option.alias.trim().is_empty() || !aliases.insert(option.alias) {
+                bail!("configured model aliases must be nonempty and unique");
+            }
+        }
         config.command.validate().map_err(anyhow::Error::msg)?;
         Ok(config)
     }
@@ -178,14 +223,62 @@ impl FileConfig {
         }
     }
 
-    fn model_config(self) -> ModelConfig {
+    fn model_config(&self) -> ModelConfig {
         ModelConfig {
             api_format: self.api_format,
-            base_url: self.base_url,
-            api_key: Some(self.api_key),
-            model: self.model,
+            base_url: self.base_url.clone(),
+            api_key: Some(self.api_key.clone()),
+            model: self.model.clone(),
             timeout: Duration::from_secs(self.timeout_seconds),
         }
+    }
+
+    fn model_options(&self) -> Result<Vec<tui::ModelOption>> {
+        let mut options = vec![tui::ModelOption {
+            alias: self.model.clone(),
+            provider: "default".into(),
+            default_for_provider: true,
+            config: self.model_config(),
+        }];
+        for (name, provider) in &self.providers {
+            options.push(tui::ModelOption {
+                alias: name.clone(),
+                provider: name.clone(),
+                default_for_provider: true,
+                config: ModelConfig {
+                    api_format: provider.api_format,
+                    base_url: provider.base_url.clone(),
+                    api_key: Some(provider.api_key.clone()),
+                    model: provider.model.clone(),
+                    timeout: Duration::from_secs(provider.timeout_seconds),
+                },
+            });
+        }
+        for model in &self.models {
+            let provider = self.providers.get(&model.provider).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "model alias {:?} refers to unknown provider {:?}",
+                    model.alias,
+                    model.provider
+                )
+            })?;
+            options.push(tui::ModelOption {
+                alias: model.alias.clone(),
+                provider: model.provider.clone(),
+                default_for_provider: false,
+                config: ModelConfig {
+                    api_format: provider.api_format,
+                    base_url: provider.base_url.clone(),
+                    api_key: Some(provider.api_key.clone()),
+                    model: model
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| provider.model.clone()),
+                    timeout: Duration::from_secs(provider.timeout_seconds),
+                },
+            });
+        }
+        Ok(options)
     }
 }
 
@@ -251,8 +344,8 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         let session =
             session::SessionState::open(database, args.resume, name.clone(), true).await?;
         return tui::run(
-            ModelClient::new(config)?,
-            name,
+            ModelClient::new(config.clone())?,
+            name.clone(),
             true,
             runtime::workspace_tools(
                 &config_path,
@@ -271,11 +364,18 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
                 max_turns: 0,
                 max_tool_calls: 0,
                 instructions,
+                model_options: vec![tui::ModelOption {
+                    alias: name.clone(),
+                    provider: "demo".into(),
+                    default_for_provider: true,
+                    config: config.clone(),
+                }],
             },
         )
         .await;
     }
     let file_config = FileConfig::load(&config_path)?;
+    let model_options = file_config.model_options()?;
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
@@ -306,6 +406,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             max_turns: agent_config.max_turns,
             max_tool_calls: agent_config.max_tool_calls,
             instructions,
+            model_options,
         },
     )
     .await
@@ -414,5 +515,67 @@ model = "test"
         assert_eq!(config.context_tokens, 1000000);
         assert_eq!(config.command.max_timeout_seconds, 1800);
         assert!(config.command.validate().is_ok());
+    }
+
+    #[test]
+    fn configured_model_aliases_select_their_provider_connection() {
+        let config: FileConfig = toml::from_str(
+            r#"base_url = "https://default.example/v1"
+api_key = "default-key"
+model = "default-model"
+
+[providers.deepseek]
+api_format = "openai_chat_completions"
+base_url = "https://deepseek.example/v1"
+api_key = "deepseek-key"
+model = "deepseek-chat"
+
+[[models]]
+alias = "reasoner"
+provider = "deepseek"
+model = "deepseek-reasoner"
+"#,
+        )
+        .unwrap();
+        let options = config.model_options().unwrap();
+        assert_eq!(options.len(), 3);
+        assert_eq!(options[0].provider, "default");
+        assert!(options[0].default_for_provider);
+        assert_eq!(options[1].alias, "deepseek");
+        assert_eq!(options[1].config.model, "deepseek-chat");
+        assert_eq!(options[2].alias, "reasoner");
+        assert_eq!(options[2].config.model, "deepseek-reasoner");
+        assert_eq!(options[2].config.base_url, "https://deepseek.example/v1");
+    }
+
+    #[test]
+    fn aliases_must_target_known_providers_and_be_unique() {
+        let unknown: FileConfig = toml::from_str(
+            r#"base_url = "https://default.example/v1"
+api_key = "key"
+model = "default"
+[[models]]
+alias = "other"
+provider = "missing"
+"#,
+        )
+        .unwrap();
+        assert!(unknown.model_options().is_err());
+
+        let duplicate = r#"base_url = "https://default.example/v1"
+api_key = "key"
+model = "default"
+[providers.other]
+base_url = "https://other.example/v1"
+api_key = "other-key"
+model = "other-model"
+[[models]]
+alias = "other"
+provider = "other"
+"#;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(&path, duplicate).unwrap();
+        assert!(FileConfig::load(&path).is_err());
     }
 }

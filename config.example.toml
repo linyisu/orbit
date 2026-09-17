@@ -23,6 +23,23 @@ max_tool_calls = 0
 # DeepSeek Flash: context_tokens = 1000000, max_output_tokens = 64000.
 # Keep these token settings above [command] (they are top-level settings).
 
+# Optional additional providers and named model aliases. Models are declared rather
+# than discovered remotely: provider catalog APIs vary and many gateways disable
+# them. In the TUI, /model lists aliases and /provider lists provider defaults.
+# The top-level connection above remains the provider named "default".
+#
+# [providers.deepseek]
+# api_format = "openai_chat_completions"
+# base_url = "https://api.deepseek.com/v1"
+# api_key = "replace-me"
+# model = "deepseek-chat"
+# timeout_seconds = 600
+#
+# [[models]]
+# alias = "deepseek-reasoner"
+# provider = "deepseek"
+# model = "deepseek-reasoner"
+
 [command]
 default_timeout_seconds = 120
 max_timeout_seconds = 600
