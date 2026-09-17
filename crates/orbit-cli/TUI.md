@@ -47,7 +47,7 @@ models = ["gpt-5.6-sol", "gpt-6-astra"]
 reasoning_efforts = ["low", "medium", "high"]
 ```
 
-可用值为 `none`、`minimal`、`low`、`medium`、`high` 和 `xhigh`，但应只列出该供应商和模型实际接受的值。未写此项时，选择器会说明未配置，Orbit 不发送任何思考参数，避免给通用中转站增加未知字段。已配置时，Responses 使用 `reasoning.effort`，Chat Completions 使用 `reasoning_effort`；Anthropic Messages 使用 adaptive thinking 的 `thinking` 与 `output_config.effort`。模型或中转站拒绝某个显式配置的值时，Orbit 会展示服务端错误。
+可用值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`，但应只列出该供应商和模型实际接受的值。未写此项时，选择器会说明未配置，Orbit 不发送任何思考参数，避免给通用中转站增加未知字段。已配置时，Responses 使用 `reasoning.effort`，Chat Completions 使用 `reasoning_effort`；Anthropic Messages 使用 adaptive thinking 的 `thinking` 与 `output_config.effort`。模型或中转站拒绝某个显式配置的值时，Orbit 会展示服务端错误。
 
 ## 图片与文档
 

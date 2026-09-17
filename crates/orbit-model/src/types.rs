@@ -197,7 +197,6 @@ pub struct ChatRequest {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
-    None,
     Minimal,
     Low,
     Medium,
@@ -208,7 +207,6 @@ pub enum ReasoningEffort {
 impl ReasoningEffort {
     pub fn label(self) -> &'static str {
         match self {
-            Self::None => "不思考",
             Self::Minimal => "极低",
             Self::Low => "低",
             Self::Medium => "中",

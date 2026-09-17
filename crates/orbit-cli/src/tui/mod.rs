@@ -579,17 +579,15 @@ fn select_model(
     }
     match ModelClient::new(config) {
         Ok(client) => {
+            let previous_model = state.model.clone();
             *model = client;
             state.model = choice.qualified_name();
-            state.transcript.push(TranscriptItem::Notice(format!(
-                "已切换到 {}\n思考强度：{}\n下一条消息验证可用性。",
-                state.model,
-                model
-                    .config()
-                    .reasoning_effort
-                    .map(orbit_model::types::ReasoningEffort::label)
-                    .unwrap_or("未配置")
-            )));
+            if previous_model != state.model {
+                state.transcript.push(TranscriptItem::Notice(format!(
+                    "模型：{previous_model} → {}",
+                    state.model
+                )));
+            }
         }
         Err(error) => state
             .transcript
