@@ -60,3 +60,16 @@ impl Drop for TerminalGuard {
         restore();
     }
 }
+
+/// Keep the terminal IME anchor at the input caret without enabling cursor blink.
+/// Rendering (including frozen selection frames) can move the hardware cursor.
+pub fn anchor_cursor<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    position: Option<ratatui::layout::Position>,
+) -> Result<(), B::Error> {
+    if let Some(position) = position {
+        terminal.set_cursor_position(position)?;
+        terminal.backend_mut().flush()?;
+    }
+    Ok(())
+}

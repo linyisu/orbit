@@ -104,6 +104,7 @@ pub async fn run(
                                 state.selection.paint(frame);
                             }
                         })?;
+                        terminal::anchor_cursor(&mut terminal, state.ime_cursor)?;
                         dirty = false;
                         frames.drawn(time::Instant::now());
                         continue;
@@ -252,6 +253,7 @@ pub async fn run(
                         render::draw(frame, &mut state);
                         state.selection.paint(frame);
                     })?;
+                    terminal::anchor_cursor(&mut terminal, state.ime_cursor)?;
                     frames.drawn(time::Instant::now());
                     dirty = false;
                 }

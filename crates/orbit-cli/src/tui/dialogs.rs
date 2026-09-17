@@ -158,10 +158,19 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     );
     let footer = Rect::new(header.x, inner.bottom().saturating_sub(2), header.width, 2);
     if let Some(picker) = &mut state.picker {
-        frame.render_widget(
-            Paragraph::new(format!("搜索标题或 ID：{}▏", clean(&picker.query))),
-            header,
+        let search = super::render::fit_label(
+            &format!("搜索标题或 ID：{}", clean(&picker.query)),
+            header.width.saturating_sub(1) as usize,
+            true,
         );
+        state.ime_cursor = Some(
+            (
+                header.x + unicode_width::UnicodeWidthStr::width(search.as_str()) as u16,
+                header.y,
+            )
+                .into(),
+        );
+        frame.render_widget(Paragraph::new(format!("{search}▏")), header);
         let rows = picker.matches();
         let visible = (body.height as usize / 2).max(1);
         let first = picker.selected.saturating_sub(visible - 1);
@@ -207,6 +216,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             footer,
         );
     } else {
+        state.ime_cursor = None;
         frame.render_widget(
             Paragraph::new(if state.help_keys {
                 "命令     [快捷键]"

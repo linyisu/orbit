@@ -120,6 +120,7 @@ impl SessionState {
     }
 
     pub fn restore_ui(&self, state: &mut UiState) {
+        state.workspace = self.snapshot.session.workspace.clone();
         for run in &self.snapshot.runs {
             state.input.history.push(run.prompt.clone());
             state.submit(run.prompt.clone());

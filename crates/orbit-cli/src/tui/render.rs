@@ -6,6 +6,9 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
 };
 
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
 use super::app::{RunStatus, ToolStatus, TranscriptItem, UiState};
 
 const ACCENT: Color = Color::Rgb(218, 139, 109);
@@ -21,6 +24,7 @@ fn muted(text: impl Into<String>) -> Span<'static> {
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let area = frame.area();
     state.selection.area = Rect::default();
+    state.ime_cursor = None;
     if area.width < 24 || area.height < 10 {
         frame.render_widget(
             Paragraph::new("请放大终端\n至少 24 列 × 10 行\nCtrl+D 退出"),
@@ -72,14 +76,71 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_composer(frame, state, areas[4], input_lines, cursor);
     draw_panel(frame, state, areas[5]);
     frame.render_widget(
-        Paragraph::new(Line::from(muted(format!(
-            "  {} · {}",
-            safe_output(&state.model),
-            state.permission_mode.label()
-        )))),
+        Paragraph::new(footer(state, areas[6].width as usize)),
         areas[6],
     );
     super::dialogs::draw(frame, state);
+}
+
+/// Clip at grapheme boundaries, retaining the useful end of filesystem paths.
+pub(super) fn fit_label(text: &str, width: usize, tail: bool) -> String {
+    if text.width() <= width {
+        return text.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut parts = Vec::new();
+    let mut used = 1;
+    let graphemes: Vec<_> = text.graphemes(true).collect();
+    let iter: Box<dyn Iterator<Item = &&str>> = if tail {
+        Box::new(graphemes.iter().rev())
+    } else {
+        Box::new(graphemes.iter())
+    };
+    for part in iter {
+        if used + part.width() > width {
+            break;
+        }
+        used += part.width();
+        parts.push(*part);
+    }
+    if tail {
+        parts.reverse();
+        format!("…{}", parts.concat())
+    } else {
+        format!("{}…", parts.concat())
+    }
+}
+
+fn footer(state: &UiState, width: usize) -> Line<'static> {
+    let mode = state.permission_mode.label();
+    let available = width.saturating_sub(8 + mode.width());
+    let model = fit_label(&safe_output(&state.model), available / 2, false);
+    let path = std::env::var_os("HOME")
+        .and_then(|home| {
+            std::path::Path::new(&state.workspace)
+                .strip_prefix(home)
+                .ok()
+                .map(|suffix| {
+                    if suffix.as_os_str().is_empty() {
+                        "~".into()
+                    } else {
+                        format!("~/{}", suffix.display())
+                    }
+                })
+        })
+        .unwrap_or_else(|| state.workspace.clone());
+    let path = fit_label(
+        &safe_output(&path),
+        available.saturating_sub(model.width()),
+        true,
+    );
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(path, Style::default().fg(Color::Rgb(170, 170, 170))),
+        Span::raw(format!(" · {model} · {mode}")),
+    ])
 }
 
 fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
@@ -412,7 +473,7 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
 
 fn draw_composer(
     frame: &mut Frame<'_>,
-    state: &UiState,
+    state: &mut UiState,
     area: Rect,
     lines: Vec<String>,
     cursor: (usize, usize),
@@ -440,22 +501,20 @@ fn draw_composer(
     let scroll = cursor
         .1
         .saturating_sub(text_area.height.saturating_sub(1) as usize);
-    if state.input.text.is_empty() {
-        frame.render_widget(Paragraph::new(muted("输入消息，或 / 查看命令")), text_area);
-    } else {
-        let text = Text::from(
-            lines
-                .into_iter()
-                .skip(scroll)
-                .map(Line::from)
-                .collect::<Vec<_>>(),
-        );
-        frame.render_widget(Paragraph::new(text), text_area);
-    }
+    // IME preedit belongs to the terminal; placeholder text underneath it is misleading.
+    let text = Text::from(
+        lines
+            .into_iter()
+            .skip(scroll)
+            .map(Line::from)
+            .collect::<Vec<_>>(),
+    );
+    frame.render_widget(Paragraph::new(text), text_area);
     if text_area.width > 0 && text_area.height > 0 {
-        // A steady, rendered caret never moves the terminal hardware cursor.
+        // Draw a steady caret; restore the hidden hardware cursor after flushing.
         let x = text_area.x + (cursor.0 as u16).min(text_area.width - 1);
         let y = text_area.y + (cursor.1.saturating_sub(scroll) as u16).min(text_area.height - 1);
+        state.ime_cursor = Some((x, y).into());
         frame.buffer_mut()[(x, y)].set_style(Style::default().bg(Color::Gray).fg(Color::Black));
     }
 }
@@ -654,6 +713,63 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         assert!(!terminal.backend().cursor_visible());
         assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
+    }
+
+    #[test]
+    fn ime_anchor_tracks_unicode_input_and_stays_hidden_after_redraw() {
+        use crate::tui::terminal::anchor_cursor;
+        let mut state = UiState::new("model");
+        state.workspace = "/tmp/中文项目".into();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        for (input, column) in [("", 4), ("你好", 8), ("你e\u{301}", 7), ("第一行\n你好", 8)]
+        {
+            state.input.set(input.into());
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            anchor_cursor(&mut terminal, state.ime_cursor).unwrap();
+            let position = state.ime_cursor.unwrap();
+            assert_eq!(position.x, column);
+            terminal.backend_mut().assert_cursor_position(position);
+            assert!(!terminal.backend().cursor_visible());
+            assert_eq!(
+                terminal.backend().buffer()[(position.x, position.y)].bg,
+                Color::Gray
+            );
+            // Streaming output must not leave the IME attached to the transcript.
+            state.apply(orbit_agent::events::AgentEvent::Model(
+                orbit_model::types::StreamEvent::TextDelta("输出中".into()),
+            ));
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            anchor_cursor(&mut terminal, state.ime_cursor).unwrap();
+            terminal.backend_mut().assert_cursor_position(position);
+        }
+        state.picker = Some(crate::tui::dialogs::SessionPicker::new(Vec::new()));
+        crate::tui::dialogs::handle(
+            &mut state,
+            crossterm::event::Event::Paste("中文".repeat(80)),
+        );
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        anchor_cursor(&mut terminal, state.ime_cursor).unwrap();
+        let position = state.ime_cursor.unwrap();
+        terminal.backend_mut().assert_cursor_position(position);
+        assert_eq!(
+            terminal.backend().buffer()[(position.x, position.y)].symbol(),
+            "▏"
+        );
+        assert!(!terminal.backend().cursor_visible());
+    }
+
+    #[test]
+    fn footer_keeps_project_model_and_mode_with_unicode_paths() {
+        let mut state = UiState::new("deepseek");
+        state.workspace = format!("/tmp/{}/项目", "长目录/".repeat(40));
+        for width in [24, 40, 80] {
+            let line = footer(&state, width);
+            assert!(line.width() <= width);
+            let text = line.to_string();
+            assert!(text.contains("项目"));
+            assert!(text.ends_with(state.permission_mode.label()));
+        }
+        assert_eq!(fit_label("你好e\u{301}", 3, true), "…e\u{301}");
     }
 
     #[test]
