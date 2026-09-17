@@ -6,8 +6,8 @@ pub struct Command {
 
 pub const COMMANDS: &[Command] = &[
     Command {
-        name: "/clear",
-        description: "清空当前对话，开始新会话",
+        name: "/new",
+        description: "开始新会话；旧对话保留，可用 /resume 恢复",
     },
     Command {
         name: "/status",
@@ -36,6 +36,10 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "/mode",
         description: "ask 逐次确认 · auto 自动命令 · yolo 自动修改和命令",
+    },
+    Command {
+        name: "/clear",
+        description: "/new 的兼容别名，不删除历史会话",
     },
     Command {
         name: "/exit",

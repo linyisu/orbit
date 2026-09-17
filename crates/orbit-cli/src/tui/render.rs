@@ -696,7 +696,7 @@ mod tests {
         assert!(!screen.contains("开始一段新对话"));
         assert!(!screen.contains("/help"));
         state.input.insert("/");
-        assert!(render(&mut state, 100, 30).contains("/clear"));
+        assert!(render(&mut state, 100, 30).contains("/new"));
         assert!(render(&mut state, 20, 5).contains("请"));
     }
 

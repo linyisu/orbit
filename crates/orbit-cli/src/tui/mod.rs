@@ -318,8 +318,8 @@ async fn run_command(
     let argument = argument.trim();
     match command {
         "/exit" | "/quit" if argument.is_empty() => return Ok(true),
-        "/clear" if argument.is_empty() => {
-            session.clear(state.model.clone(), state.demo).await?;
+        "/new" | "/clear" if argument.is_empty() => {
+            session.new_session(state.model.clone(), state.demo).await?;
             history.clear();
             let input = std::mem::take(&mut state.input);
             let demo = state.demo;
@@ -342,7 +342,7 @@ async fn run_command(
                 };
                 state.permission_mode = mode;
             }
-            state.transcript.push(TranscriptItem::Notice(format!("{}\nShift+Tab 切换 · /mode ask|auto|yolo\n仅本会话有效；重启、恢复或 /clear 后回到 auto。",state.permission_mode.description())));
+            state.transcript.push(TranscriptItem::Notice(format!("{}\nShift+Tab 切换 · /mode ask|auto|yolo\n仅本会话有效；重启、恢复或 /new（/clear）后回到 auto。",state.permission_mode.description())));
         }
         "/context" if argument.is_empty() => {
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());

@@ -237,7 +237,7 @@ impl SessionState {
         Ok(())
     }
 
-    pub async fn clear(&mut self, model: String, demo: bool) -> Result<()> {
+    pub async fn new_session(&mut self, model: String, demo: bool) -> Result<()> {
         ensure!(!self.active, "cannot switch sessions during a run");
         let writer = self
             .store
@@ -278,8 +278,10 @@ mod tests {
         // Resuming the current session reloads the latest successful history.
         state.resume(&first).await.unwrap();
         assert_eq!(state.snapshot.history, history);
-        state.clear("model".into(), true).await.unwrap();
+        state.new_session("model".into(), true).await.unwrap();
         let second = state.id().to_owned();
+        assert_ne!(first, second);
+        assert!(state.snapshot.history.is_empty());
         let foreign_path = tmp.path().join("foreign");
         std::fs::create_dir(&foreign_path).unwrap();
         let foreign = state
