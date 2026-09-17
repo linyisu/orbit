@@ -27,3 +27,16 @@ tokio-util = { version = "0.7.19", features = ["rt"] }
 [profile.release]
 codegen-units = 1
 lto = "thin"
+
+# TUI development runs use the debug binary; keep regex parsing responsive there too.
+[profile.dev.package.syntect]
+opt-level = 3
+
+[profile.dev.package.fancy-regex]
+opt-level = 3
+
+[profile.dev.package.regex-automata]
+opt-level = 3
+
+[profile.dev.package.regex-syntax]
+opt-level = 3

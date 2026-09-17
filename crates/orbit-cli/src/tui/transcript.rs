@@ -217,6 +217,31 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
 
+    #[tokio::test]
+    #[ignore = "requires a disposable database copy and ORBIT_PROFILE_SESSION"]
+    async fn profile_saved_session_layout() {
+        let path = std::env::var("ORBIT_PROFILE_DATABASE").unwrap();
+        let id = std::env::var("ORBIT_PROFILE_SESSION").unwrap();
+        let start = std::time::Instant::now();
+        let session =
+            crate::session::SessionState::open(path.into(), Some(id), "profile".into(), false)
+                .await
+                .unwrap();
+        eprintln!("load: {:?}", start.elapsed());
+        let start = std::time::Instant::now();
+        let mut state = super::super::app::UiState::new("profile");
+        session.restore_ui(&mut state);
+        eprintln!(
+            "replay: {:?}, items: {}",
+            start.elapsed(),
+            state.transcript.len()
+        );
+        let mut layout = TranscriptLayout::default();
+        let start = std::time::Instant::now();
+        layout.update(&state.transcript, None, 100);
+        eprintln!("layout: {:?}, rows: {}", start.elapsed(), layout.height());
+    }
+
     #[test]
     fn streamed_tables_match_fresh_layout_through_split_delimiters_and_resize() {
         let mut text = String::new();
