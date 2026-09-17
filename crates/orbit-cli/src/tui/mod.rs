@@ -179,10 +179,30 @@ pub async fn run(
                                 }
                                 continue;
                             }
+                            let attachments = if compacting {
+                                Vec::new()
+                            } else {
+                                std::mem::take(&mut state.attachments)
+                            };
                             session.begin(prompt.clone(), state.model.clone()).await?;
-                            state.submit(prompt.clone());
+                            let display_prompt = if attachments.is_empty() {
+                                prompt.clone()
+                            } else {
+                                format!(
+                                    "{}\n{}",
+                                    prompt,
+                                    attachments
+                                        .iter()
+                                        .map(|attachment| format!("[图片：{}]", attachment.name()))
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                )
+                            };
+                            state.submit(display_prompt);
                             let mut messages = history.clone();
-                            if !compacting { messages.push(ChatMessage::user(prompt)); }
+                            if !compacting {
+                                messages.push(ChatMessage::user_with_attachments(prompt, attachments));
+                            }
                             let mut request = ChatRequest::new(messages);
                             request.max_tokens = Some(max_output_tokens);
                             let (sender, rx) = mpsc::channel(256);
@@ -355,6 +375,36 @@ async fn run_command(
             state.input = input;
             session.restore_ui(state);
         }
+        "/attach" if argument.is_empty() => state.transcript.push(TranscriptItem::Error(
+            "用法：/attach <图片路径>；支持 PNG、JPEG、GIF、WebP".into(),
+        )),
+        "/attach" => {
+            let path = attachment_path(argument);
+            let path = if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir()?.join(path)
+            };
+            let attachment = session.import_image(&path)?;
+            let name = attachment.name().to_owned();
+            if state.attachments.iter().any(|existing| existing == &attachment) {
+                state.transcript.push(TranscriptItem::Notice(format!(
+                    "图片 {name} 已在待发送列表中。"
+                )));
+            } else {
+                state.attachments.push(attachment);
+                state.transcript.push(TranscriptItem::Notice(format!(
+                    "已添加图片 {name} · 随下一条消息发送 · /detach 清空"
+                )));
+            }
+        }
+        "/detach" if argument.is_empty() => {
+            let count = state.attachments.len();
+            state.attachments.clear();
+            state.transcript.push(TranscriptItem::Notice(format!(
+                "已清空 {count} 个待发送图片。"
+            )));
+        }
         "/mode" | "/permissions" => {
             if !argument.is_empty() {
                 let Some(mode) = permissions::Mode::parse(argument) else {
@@ -375,7 +425,7 @@ async fn run_command(
         }
         "/resume" => resume_session(argument, state, history, session).await?,
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
-            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / write_file / edit_file / run_command · 审批：{}",
+            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n超时  {}s（流空闲）\n工具  read_file / read_document / web_fetch / write_file / edit_file / run_command · 审批：{}",
             session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
         "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
@@ -400,6 +450,34 @@ async fn run_command(
     state.follow_bottom = true;
     state.menu_dismissed = false;
     Ok(false)
+}
+
+fn attachment_path(argument: &str) -> std::path::PathBuf {
+    let trimmed = argument.trim();
+    let trimmed = if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
+    };
+    #[cfg(unix)]
+    let trimmed = {
+        let mut value = String::with_capacity(trimmed.len());
+        let mut chars = trimmed.chars();
+        while let Some(character) = chars.next() {
+            if character == '\\' {
+                value.push(chars.next().unwrap_or(character));
+            } else {
+                value.push(character);
+            }
+        }
+        value
+    };
+    #[cfg(not(unix))]
+    let trimmed = trimmed.to_owned();
+    trimmed.into()
 }
 
 async fn resume_session(

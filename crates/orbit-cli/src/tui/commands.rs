@@ -14,6 +14,14 @@ pub const COMMANDS: &[Command] = &[
         description: "查看连接配置和会话状态",
     },
     Command {
+        name: "/attach",
+        description: "添加待发送图片；/attach <路径>",
+    },
+    Command {
+        name: "/detach",
+        description: "清空待发送图片",
+    },
+    Command {
         name: "/model",
         description: "查看模型；/model <名称> 切换模型",
     },

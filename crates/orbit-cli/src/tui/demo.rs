@@ -13,7 +13,7 @@ fn response(request: &ChatRequest) -> ChatMessage {
     if matches!(request.messages.first(), Some(ChatMessage::System { content }) if content.starts_with(orbit_agent::context::SUMMARY_PROMPT))
     {
         let messages: Vec<ChatMessage> = match request.messages.last() {
-            Some(ChatMessage::User { content }) => {
+            Some(ChatMessage::User { content, .. }) => {
                 serde_json::from_str(content).unwrap_or_default()
             }
             _ => Vec::new(),
@@ -21,7 +21,7 @@ fn response(request: &ChatRequest) -> ChatMessage {
         let prompts: Vec<_> = messages
             .iter()
             .filter_map(|message| match message {
-                ChatMessage::User { content } => {
+                ChatMessage::User { content, .. } => {
                     Some(content.chars().take(100).collect::<String>())
                 }
                 _ => None,
@@ -71,6 +71,19 @@ fn response(request: &ChatRequest) -> ChatMessage {
                 value["written_bytes"]
             ));
         }
+        if value["source_kind"] == "local_document_markdown" {
+            return ChatMessage::assistant(format!(
+                "已通过 AnyDoc 在本地解析 {}，转换结果共 {} 个字符。\n\n{}\n{}\n\n没有在项目中写入中间文件，也没有上传文档。",
+                value["path"].as_str().unwrap_or_default(),
+                value["total_chars"],
+                value["content"].as_str().unwrap_or_default(),
+                if value["truncated"] == true {
+                    "这里只展示了当前分页。"
+                } else {
+                    "文档读取完成。"
+                },
+            ));
+        }
         return ChatMessage::assistant(format!(
             "已通过真实 read_file 工具读取 {}，文件共 {} 行。\n\n{}\n{}\n\n这段内容来自本机文件；回答由演示流程生成，没有调用模型 API。",
             value["path"].as_str().unwrap_or_default(),
@@ -83,7 +96,7 @@ fn response(request: &ChatRequest) -> ChatMessage {
             },
         ));
     }
-    if let Some(ChatMessage::User { content }) = request.messages.last()
+    if let Some(ChatMessage::User { content, .. }) = request.messages.last()
         && let Some(edit) = content.strip_prefix("edit ")
     {
         let args: serde_json::Value = match serde_json::from_str(edit) {
@@ -103,7 +116,7 @@ fn response(request: &ChatRequest) -> ChatMessage {
             )],
         };
     }
-    if let Some(ChatMessage::User { content }) = request.messages.last()
+    if let Some(ChatMessage::User { content, .. }) = request.messages.last()
         && let Some(command) = content
             .strip_prefix("run ")
             .or_else(|| content.strip_prefix("build "))
@@ -117,7 +130,7 @@ fn response(request: &ChatRequest) -> ChatMessage {
             )],
         };
     }
-    if let Some(ChatMessage::User { content }) = request.messages.last()
+    if let Some(ChatMessage::User { content, .. }) = request.messages.last()
         && let Some(write) = content.strip_prefix("write ")
         && let Some((path, content)) = write.split_once(char::is_whitespace)
     {
@@ -130,7 +143,21 @@ fn response(request: &ChatRequest) -> ChatMessage {
             )],
         };
     }
-    if let Some(ChatMessage::User { content }) = request.messages.last()
+    if let Some(ChatMessage::User { content, .. }) = request.messages.last()
+        && let Some(path) = content
+            .strip_prefix("document ")
+            .or_else(|| content.strip_prefix("文档 "))
+    {
+        return ChatMessage::Assistant {
+            content: Some("正在调用 read_document 本地解析文档。".into()),
+            tool_calls: vec![ToolCall::function(
+                format!("demo-document-{turns}"),
+                "read_document",
+                serde_json::json!({"path": path.trim(), "max_chars": 20000}),
+            )],
+        };
+    }
+    if let Some(ChatMessage::User { content, .. }) = request.messages.last()
         && let Some(path) = content
             .strip_prefix("read ")
             .or_else(|| content.strip_prefix("读取 "))

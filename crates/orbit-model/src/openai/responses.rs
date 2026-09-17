@@ -17,7 +17,11 @@ use crate::{
     },
 };
 
-pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value, HeaderMap) {
+pub(crate) fn encode(
+    model: &str,
+    request: ChatRequest,
+    stream: bool,
+) -> Result<(Value, HeaderMap), ModelError> {
     let instructions = request
         .messages
         .iter()
@@ -33,13 +37,24 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
     for message in request.messages {
         match message {
             ChatMessage::System { .. } => {}
-            ChatMessage::User { content } => {
+            ChatMessage::User {
+                content,
+                attachments,
+            } => {
+                let mut blocks = vec![json!({
+                    "type": "input_text",
+                    "text": content,
+                })];
+                for attachment in attachments {
+                    let (mime_type, data) = attachment.image()?;
+                    blocks.push(json!({
+                        "type": "input_image",
+                        "image_url": format!("data:{mime_type};base64,{data}"),
+                    }));
+                }
                 input.push(json!({
                     "role": "user",
-                    "content": [{
-                        "type": "input_text",
-                        "text": content,
-                    }],
+                    "content": blocks,
                 }));
             }
             ChatMessage::Assistant {
@@ -111,7 +126,7 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
         }),
     );
 
-    (body, headers)
+    Ok((body, headers))
 }
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {
@@ -221,6 +236,39 @@ fn output_parts(output_text: Option<&str>, output: &[ResponseOutput]) -> (String
         .collect();
 
     (text, calls)
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    use crate::types::Attachment;
+
+    #[test]
+    fn encodes_local_images_as_responses_input_blocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pixel.png");
+        std::fs::write(&path, b"image-bytes").unwrap();
+        let (body, _) = encode(
+            "vision-model",
+            ChatRequest::new(vec![ChatMessage::user_with_attachments(
+                "inspect",
+                vec![Attachment::Image {
+                    name: "pixel.png".into(),
+                    mime_type: "image/png".into(),
+                    path,
+                }],
+            )]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(body["input"][0]["content"][1]["type"], "input_image");
+        assert!(
+            body["input"][0]["content"][1]["image_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+    }
 }
 
 fn stop_reason(status: Option<&str>, details: Option<&IncompleteDetails>) -> Option<String> {

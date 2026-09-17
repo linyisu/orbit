@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use orbit_agent::events::AgentEvent;
-use orbit_model::types::{StreamEvent, ToolCall};
+use orbit_model::types::{Attachment, StreamEvent, ToolCall};
 
 use super::input::InputState;
 
@@ -57,6 +57,7 @@ pub struct UiState {
     pub auto_compact: bool,
     pub max_output_tokens: u32,
     pub model: String,
+    pub attachments: Vec<Attachment>,
     pub workspace: String,
     pub input_area: ratatui::layout::Rect,
     pub input_scroll: usize,
@@ -100,6 +101,7 @@ impl UiState {
             auto_compact: true,
             max_output_tokens: 32_000,
             model: model.into(),
+            attachments: Vec::new(),
             workspace: String::new(),
             input_area: Default::default(),
             input_scroll: 0,

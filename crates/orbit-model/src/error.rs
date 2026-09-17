@@ -32,6 +32,8 @@ pub enum ModelError {
     Decode(#[from] serde_json::Error),
     #[error("model protocol error: {0}")]
     Protocol(String),
+    #[error("could not read image attachment: {0}")]
+    Attachment(String),
     #[error("model stream ended without a complete server-sent event")]
     IncompleteSseEvent,
 }
@@ -48,6 +50,7 @@ impl ModelError {
             | Self::Decode(_)
             | Self::Upstream { .. }
             | Self::Protocol(_)
+            | Self::Attachment(_)
             | Self::IncompleteSseEvent => false,
         }
     }

@@ -1,6 +1,7 @@
 pub mod approval;
 pub mod edit_file;
 pub mod list_files;
+pub mod read_document;
 pub mod read_file;
 pub mod run_command;
 pub mod sandbox;

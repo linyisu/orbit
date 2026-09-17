@@ -17,10 +17,56 @@ use crate::{
     },
 };
 
-pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value, HeaderMap) {
+pub(crate) fn encode(
+    model: &str,
+    request: ChatRequest,
+    stream: bool,
+) -> Result<(Value, HeaderMap), ModelError> {
+    let mut messages = Vec::new();
+    for message in request.messages {
+        match message {
+            ChatMessage::System { content } => {
+                messages.push(json!({"role":"system", "content":content}));
+            }
+            ChatMessage::User {
+                content,
+                attachments,
+            } => {
+                if attachments.is_empty() {
+                    messages.push(json!({"role":"user", "content":content}));
+                } else {
+                    let mut blocks = vec![json!({"type":"text", "text":content})];
+                    for attachment in attachments {
+                        let (mime_type, data) = attachment.image()?;
+                        blocks.push(json!({
+                            "type":"image_url",
+                            "image_url":{"url":format!("data:{mime_type};base64,{data}")}
+                        }));
+                    }
+                    messages.push(json!({"role":"user", "content":blocks}));
+                }
+            }
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+            } => messages.push(json!({
+                "role":"assistant",
+                "content":content,
+                "tool_calls":tool_calls,
+            })),
+            ChatMessage::Tool {
+                tool_call_id,
+                content,
+            } => messages.push(json!({
+                "role":"tool",
+                "tool_call_id":tool_call_id,
+                "content":content,
+            })),
+        }
+    }
     let body = json!({
         "model": model,
-        "messages": request.messages,
+        "messages": messages,
         "tools": request.tools,
         "temperature": request.temperature,
         "max_tokens": request.max_tokens,
@@ -42,7 +88,7 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
         }),
     );
 
-    (body, headers)
+    Ok((body, headers))
 }
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {
@@ -180,4 +226,37 @@ struct WireToolCallDelta {
 struct WireFunctionDelta {
     name: Option<String>,
     arguments: Option<String>,
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    use crate::types::Attachment;
+
+    #[test]
+    fn encodes_local_images_as_chat_content_blocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pixel.png");
+        std::fs::write(&path, b"image-bytes").unwrap();
+        let (body, _) = encode(
+            "vision-model",
+            ChatRequest::new(vec![ChatMessage::user_with_attachments(
+                "inspect",
+                vec![Attachment::Image {
+                    name: "pixel.png".into(),
+                    mime_type: "image/png".into(),
+                    path,
+                }],
+            )]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
+        assert!(
+            body["messages"][0]["content"][1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+    }
 }

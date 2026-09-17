@@ -160,7 +160,7 @@ where
             let completion = self
                 .collect_stream_with_agent_events(
                     ChatRequest {
-                        messages: history.clone(),
+                        messages: model_messages(&history),
                         tools: self.tools.definitions(),
                         temperature: request.temperature,
                         max_tokens: request.max_tokens,
@@ -554,6 +554,39 @@ where
     }
 }
 
+/// Keep persisted history lossless, but bound binary payloads assembled for one
+/// provider request. Older images remain represented by their name in text.
+fn model_messages(history: &[ChatMessage]) -> Vec<ChatMessage> {
+    const MAX_IMAGES: usize = 4;
+    let mut remaining = MAX_IMAGES;
+    let mut messages = history.to_vec();
+    for message in messages.iter_mut().rev() {
+        let ChatMessage::User {
+            content,
+            attachments,
+        } = message
+        else {
+            continue;
+        };
+        if attachments.len() <= remaining {
+            remaining -= attachments.len();
+            continue;
+        }
+        let split = attachments.len() - remaining;
+        let omitted = attachments[..split]
+            .iter()
+            .map(|attachment| attachment.name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        content.push_str(&format!(
+            "\n\n[Earlier image attachment omitted from this request to limit context size: {omitted}]"
+        ));
+        attachments.drain(..split);
+        remaining = 0;
+    }
+    messages
+}
+
 fn check_finish_reason(reason: Option<&str>) -> Result<(), AgentError> {
     if reason.is_some_and(|r| matches!(r, "max_tokens" | "length" | "incomplete")) {
         return Err(AgentError::Model(orbit_model::error::ModelError::Protocol(
@@ -626,7 +659,7 @@ mod tests {
         model::MockModel,
         tool::{ClosureTool, ToolError},
     };
-    use orbit_model::types::{FunctionCall, ToolCall};
+    use orbit_model::types::{Attachment, FunctionCall, ToolCall};
     use serde_json::json;
 
     fn assistant_text(text: &str) -> ChatCompletion {
@@ -637,6 +670,47 @@ mod tests {
             finish_reason: Some("stop".to_owned()),
             usage: None,
         }
+    }
+
+    #[test]
+    fn provider_payload_keeps_only_the_four_most_recent_images() {
+        let history = (0..6)
+            .map(|index| {
+                ChatMessage::user_with_attachments(
+                    format!("prompt {index}"),
+                    vec![Attachment::Image {
+                        name: format!("{index}.png"),
+                        mime_type: "image/png".into(),
+                        path: format!("/stored/{index}.png").into(),
+                    }],
+                )
+            })
+            .collect::<Vec<_>>();
+        let payload = model_messages(&history);
+        let image_count = payload
+            .iter()
+            .map(|message| match message {
+                ChatMessage::User { attachments, .. } => attachments.len(),
+                _ => 0,
+            })
+            .sum::<usize>();
+        assert_eq!(image_count, 4);
+        assert!(matches!(
+            &payload[0],
+            ChatMessage::User { content, attachments }
+                if attachments.is_empty() && content.contains("0.png")
+        ));
+        assert_eq!(
+            history[0],
+            ChatMessage::user_with_attachments(
+                "prompt 0",
+                vec![Attachment::Image {
+                    name: "0.png".into(),
+                    mime_type: "image/png".into(),
+                    path: "/stored/0.png".into(),
+                }]
+            )
+        );
     }
 
     fn assistant_tool_call(id: &str, name: &str, arguments: &str) -> ChatCompletion {

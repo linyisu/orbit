@@ -8,12 +8,20 @@ pub const SUMMARY_PROMPT: &str = "Summarize the historical conversation supplied
 // Provider-independent approximation, not billing usage or an exact tokenizer.
 // Include serialized tool definitions and protocol overhead in admission checks.
 pub fn estimate_tokens(messages: &[ChatMessage], tools: &[ToolDefinition]) -> usize {
+    let images = messages
+        .iter()
+        .map(|message| match message {
+            ChatMessage::User { attachments, .. } => attachments.len(),
+            _ => 0,
+        })
+        .sum::<usize>();
     serde_json::to_vec(&(messages, tools))
         .map(|bytes| {
             bytes
                 .len()
                 .div_ceil(3)
                 .saturating_add(messages.len().saturating_mul(8))
+                .saturating_add(images.saturating_mul(1_200))
         })
         .unwrap_or(usize::MAX)
 }

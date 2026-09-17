@@ -197,7 +197,7 @@ impl ModelClient {
             ApiFormat::AnthropicMessages => {
                 crate::anthropic::messages::encode(&self.config.model, request, stream)
             }
-        };
+        }?;
 
         let mut builder = self
             .http

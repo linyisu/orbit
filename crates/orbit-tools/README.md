@@ -1,6 +1,16 @@
 # orbit-tools
 
-当前提供 `Workspace`、读取工具 `read_file`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
+当前提供 `Workspace`、文本读取工具 `read_file`、文档解析工具 `read_document`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
+
+## read_document 文档解析
+
+`read_document` 使用 AnyDoc 在本地把 PDF、Word、PowerPoint、Excel、OpenDocument、RTF、EPUB 和 CSV 转换为 Markdown。它不在用户项目中创建中间文件，单个源文档最大 32 MiB；结果按 Unicode 字符分页，默认 20000、单页最多 60000 字符。继续读取时使用返回的 `next_start_char`。
+
+```json
+{"path":"docs/report.docx","start_char":0,"max_chars":20000}
+```
+
+文本型 PDF 在本地解析。扫描或纯图片 PDF 会明确失败，目前不自动把用户文档上传到 OCR 服务。AnyDoc 是读取与结构提取能力，不保证从 Markdown 高保真重建原始 DOCX、XLSX 或 PPTX；文档生成和编辑需要各格式单独的生成器。
 
 ## 调用链
 

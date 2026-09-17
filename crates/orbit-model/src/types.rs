@@ -1,5 +1,6 @@
-use std::{pin::Pin, time::Duration};
+use std::{path::PathBuf, pin::Pin, time::Duration};
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,6 +18,8 @@ pub enum ChatMessage {
 
     User {
         content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<Attachment>,
     },
 
     Assistant {
@@ -41,6 +44,14 @@ impl ChatMessage {
     pub fn user(content: impl Into<String>) -> Self {
         Self::User {
             content: content.into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    pub fn user_with_attachments(content: impl Into<String>, attachments: Vec<Attachment>) -> Self {
+        Self::User {
+            content: content.into(),
+            attachments,
         }
     }
 
@@ -62,6 +73,47 @@ impl ChatMessage {
         Self::Tool {
             tool_call_id: tool_call_id.into(),
             content: content.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Attachment {
+    Image {
+        name: String,
+        mime_type: String,
+        path: PathBuf,
+    },
+}
+
+impl Attachment {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Image { name, .. } => name,
+        }
+    }
+
+    pub fn image(&self) -> Result<(&str, String), crate::error::ModelError> {
+        const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+        match self {
+            Self::Image {
+                mime_type, path, ..
+            } => {
+                let metadata = std::fs::metadata(path).map_err(|error| {
+                    crate::error::ModelError::Attachment(format!("{}: {error}", path.display()))
+                })?;
+                if !metadata.is_file() || metadata.len() > MAX_IMAGE_BYTES {
+                    return Err(crate::error::ModelError::Attachment(format!(
+                        "{} is not a regular image up to 20 MiB",
+                        path.display()
+                    )));
+                }
+                let bytes = std::fs::read(path).map_err(|error| {
+                    crate::error::ModelError::Attachment(format!("{}: {error}", path.display()))
+                })?;
+                Ok((mime_type, STANDARD.encode(bytes)))
+            }
         }
     }
 }

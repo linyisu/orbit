@@ -10,7 +10,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{client::sse_stream, error::ModelError, types::*};
 
-pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value, HeaderMap) {
+pub(crate) fn encode(
+    model: &str,
+    request: ChatRequest,
+    stream: bool,
+) -> Result<(Value, HeaderMap), ModelError> {
     let system = request
         .messages
         .iter()
@@ -25,8 +29,24 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
     for message in request.messages {
         match message {
             ChatMessage::System { .. } => {}
-            ChatMessage::User { content } => messages
-                .push(json!({"role": "user", "content": [{"type": "text", "text": content}]})),
+            ChatMessage::User {
+                content,
+                attachments,
+            } => {
+                let mut blocks = vec![json!({"type": "text", "text": content})];
+                for attachment in attachments {
+                    let (media_type, data) = attachment.image()?;
+                    blocks.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data,
+                        }
+                    }));
+                }
+                messages.push(json!({"role": "user", "content": blocks}));
+            }
             ChatMessage::Assistant {
                 content,
                 tool_calls,
@@ -77,7 +97,7 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
     );
     headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
 
-    (body, headers)
+    Ok((body, headers))
 }
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {
@@ -279,7 +299,8 @@ mod tests {
                 ChatMessage::tool("c", "third"),
             ]),
             true,
-        );
+        )
+        .unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 7);
         assert_eq!(messages[2]["role"], "user");
@@ -290,5 +311,30 @@ mod tests {
         assert_eq!(results[1]["content"], "tool error: not found");
         assert_eq!(messages[3]["role"], "assistant");
         assert_eq!(messages[6]["content"][0]["tool_use_id"], "c");
+    }
+
+    #[test]
+    fn encodes_local_images_as_anthropic_source_blocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pixel.png");
+        std::fs::write(&path, b"image-bytes").unwrap();
+        let (body, _) = encode(
+            "vision-model",
+            ChatRequest::new(vec![ChatMessage::user_with_attachments(
+                "inspect",
+                vec![crate::types::Attachment::Image {
+                    name: "pixel.png".into(),
+                    mime_type: "image/png".into(),
+                    path,
+                }],
+            )]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image");
+        assert_eq!(
+            body["messages"][0]["content"][1]["source"]["media_type"],
+            "image/png"
+        );
     }
 }

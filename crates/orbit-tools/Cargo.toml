@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+anydoc = "0.1.9"
 orbit-agent = { path = "../orbit-agent" }
 orbit-model = { path = "../orbit-model" }
 reqwest.workspace = true

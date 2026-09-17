@@ -118,7 +118,16 @@ pub(super) fn fit_label(text: &str, width: usize, tail: bool) -> String {
 fn footer(state: &UiState, width: usize) -> Line<'static> {
     let mode = state.permission_mode.label();
     let available = width.saturating_sub(8 + mode.width());
-    let model = fit_label(&safe_output(&state.model), available / 2, false);
+    let model_label = if state.attachments.is_empty() {
+        safe_output(&state.model)
+    } else {
+        format!(
+            "{} · 图片 {}",
+            safe_output(&state.model),
+            state.attachments.len()
+        )
+    };
+    let model = fit_label(&model_label, available / 2, false);
     let path = std::env::var_os("HOME")
         .and_then(|home| {
             std::path::Path::new(&state.workspace)
