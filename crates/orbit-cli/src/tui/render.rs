@@ -130,9 +130,26 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
         .reasoning_effort
         .map(|effort| format!("思考 {}", effort.label()))
         .unwrap_or_else(|| "思考 —".into());
-    let right = format!("{model_label} · {effort}");
     let available = width.saturating_sub(4);
-    let right = fit_label(&right, available.saturating_sub(8), false);
+    let right_budget = available.saturating_sub(8);
+    let without_context = format!("{model_label} · {effort}");
+    let used_percent = state
+        .context_used_tokens
+        .saturating_mul(100)
+        .checked_div(state.context_tokens.max(1))
+        .unwrap_or(0);
+    let context = format!(
+        "上下文 {used_percent}% · {}/{}",
+        compact_tokens(state.context_used_tokens),
+        compact_tokens(state.context_tokens)
+    );
+    let with_context = format!("{context} · {without_context}");
+    let right = if with_context.width() <= right_budget {
+        with_context
+    } else {
+        without_context
+    };
+    let right = fit_label(&right, right_budget, false);
     let path = std::env::var_os("HOME")
         .and_then(|home| {
             std::path::Path::new(&state.workspace)
@@ -163,6 +180,14 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
         Span::raw(right),
         Span::raw("  "),
     ])
+}
+
+fn compact_tokens(tokens: usize) -> String {
+    if tokens >= 1_000 {
+        format!("{}k", tokens / 1_000)
+    } else {
+        tokens.to_string()
+    }
 }
 
 fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
@@ -1087,6 +1112,7 @@ mod tests {
     fn footer_keeps_project_model_and_mode_with_unicode_paths() {
         let mut state = UiState::new("deepseek");
         state.workspace = format!("/tmp/{}/项目", "长目录/".repeat(40));
+        state.context_used_tokens = 51_200;
         for width in [24, 40, 80] {
             let line = footer(&state, width);
             assert!(line.width() <= width);
@@ -1096,11 +1122,14 @@ mod tests {
             }
             if width >= 80 {
                 assert!(text.contains("思考"));
+                assert!(text.contains("上下文 40%") && text.contains("51k/128k"));
                 assert!(text.contains(state.permission_mode.label()));
             }
             assert!(text.ends_with("  "));
         }
         assert_eq!(fit_label("你好e\u{301}", 3, true), "…e\u{301}");
+        assert_eq!(compact_tokens(999), "999");
+        assert_eq!(compact_tokens(1_999), "1k");
     }
 
     #[test]

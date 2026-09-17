@@ -55,6 +55,8 @@ pub struct UiState {
     pub permission_mode: super::permissions::Mode,
     pub selection: super::selection::Selection,
     pub context_tokens: usize,
+    /// Same approximate request-context count displayed by `/context`.
+    pub context_used_tokens: usize,
     pub auto_compact: bool,
     pub max_output_tokens: u32,
     pub model: String,
@@ -106,6 +108,7 @@ impl UiState {
             permission_mode: super::permissions::Mode::default(),
             selection: super::selection::Selection::default(),
             context_tokens: 128_000,
+            context_used_tokens: 0,
             auto_compact: true,
             max_output_tokens: 32_000,
             model: model.into(),

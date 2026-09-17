@@ -102,6 +102,7 @@ pub async fn run(
     session.restore_ui(&mut state);
     let mut history = session.snapshot.history.clone();
     crate::instructions::inject(&mut history, &instructions);
+    refresh_context_usage(&mut state, &history, &tools);
     let mut events = EventStream::new();
     let mut ticks = time::interval(Duration::from_millis(33));
     ticks.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -228,7 +229,7 @@ pub async fn run(
                             if prompt.starts_with('/') && !compacting {
                                 match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, model_options: &model_options }).await {
                                     Ok(true) => break,
-                                    Ok(false) => {},
+                                    Ok(false) => refresh_context_usage(&mut state, &history, &tools),
                                     Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
                                 }
                                 continue;
@@ -259,6 +260,7 @@ pub async fn run(
                             if !compacting {
                                 messages.push(ChatMessage::user_with_attachments(prompt, attachments));
                             }
+                            state.context_used_tokens = orbit_agent::context::estimate_tokens(&messages, &tools.definitions());
                             let mut request = ChatRequest::new(messages);
                             request.max_tokens = Some(max_output_tokens);
                             request.reasoning_effort = model.config().reasoning_effort;
@@ -335,6 +337,7 @@ pub async fn run(
                         history = saved;
                         crate::instructions::inject(&mut history, &instructions);
                     }
+                    refresh_context_usage(&mut state, &history, &tools);
                     state.apply(final_event);
                     task = None;
                     receiver = None;
@@ -394,6 +397,11 @@ fn apply_live_event(event: AgentEvent, state: &mut UiState, session: &mut Sessio
     }
     session.record(&event);
     state.apply(event);
+}
+
+fn refresh_context_usage(state: &mut UiState, history: &[ChatMessage], tools: &ToolRegistry) {
+    state.context_used_tokens =
+        orbit_agent::context::estimate_tokens(history, &tools.definitions());
 }
 
 async fn run_command(
