@@ -1,12 +1,16 @@
 use std::io::{self, Stdout, Write};
 
 use crossterm::{
+    ExecutableCommand, QueueableCommand,
     cursor::{Hide, Show},
     event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+        disable_raw_mode, enable_raw_mode,
+    },
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{Frame, Terminal, backend::CrosstermBackend};
 
 pub type AppTerminal = Terminal<CrosstermBackend<Stdout>>;
 
@@ -57,6 +61,22 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         restore();
     }
+}
+
+/// Keep clear-and-repaint frames hidden until they are complete. Terminals
+/// without synchronized-update support safely ignore these control sequences.
+pub fn draw_synchronized(
+    terminal: &mut AppTerminal,
+    render: impl FnOnce(&mut Frame<'_>),
+) -> io::Result<()> {
+    terminal.backend_mut().queue(BeginSynchronizedUpdate)?;
+    let draw = terminal.draw(render).map(drop);
+    let end = terminal
+        .backend_mut()
+        .execute(EndSynchronizedUpdate)
+        .map(drop);
+    draw?;
+    end
 }
 
 /// Keep the terminal IME anchor at the input caret without enabling cursor blink.

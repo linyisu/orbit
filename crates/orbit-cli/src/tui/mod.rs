@@ -100,7 +100,12 @@ pub async fn run(
                     // Unused pointer motion must not trigger full-frame redraws.
                     if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) { continue; }
                     dirty = true;
-                    frames.request(time::Instant::now());
+                    let now = time::Instant::now();
+                    if matches!(&event, Event::Resize(..)) {
+                        frames.request_resize(now);
+                    } else {
+                        frames.request(now);
+                    }
                     if state.show_help || state.picker.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
                             && let Err(error) = resume_session(&id, &mut state, &mut history, &mut session).await
@@ -124,7 +129,7 @@ pub async fn run(
                     }
                     if state.selection.handle(&event)? {
                         if state.selection.transcript_drag() { state.follow_bottom = false; }
-                        terminal.draw(|frame| {
+                        terminal::draw_synchronized(&mut terminal, |frame| {
                             if !state.selection.draw_frozen(frame) {
                                 render::draw(frame, &mut state);
                                 state.selection.paint(frame);
@@ -309,7 +314,7 @@ pub async fn run(
                     cancellation = None;
                 }
                 _ = time::sleep_until(frames.deadline()), if frames.pending() => {
-                    terminal.draw(|frame| {
+                    terminal::draw_synchronized(&mut terminal, |frame| {
                         render::draw(frame, &mut state);
                         state.selection.paint(frame);
                     })?;
