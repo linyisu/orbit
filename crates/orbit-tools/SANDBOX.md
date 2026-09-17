@@ -31,7 +31,7 @@
 {"command":"mkdir -p build && cc main.c -o build/main && ./build/main","writable_snapshot":true,"timeout_seconds":60}
 ```
 
-`writable_snapshot` 默认为 `false`。设为 `true` 时，将过滤副本只读挂载为 `/orbit-source`，再复制到独立的 128 MiB tmpfs `/workspace` 中执行命令。这个总容量包括源文件和所有构建产物；单文件仍受 64 MiB 限制。网络、宿主目录和环境变量的隔离保持不变。复制准备也计入命令超时，准备失败不会继续执行用户命令。
+`writable_snapshot` 默认为 `false`。设为 `true` 时，将过滤副本只读挂载为 `/orbit-source`，再复制到独立的 128 MiB tmpfs `/workspace` 中执行命令。这个总容量包括源文件和所有构建产物；单文件仍受 64 MiB 限制。网络、宿主目录和环境变量的隔离保持不变。沙箱内的复制计入命令超时；启动前在宿主准备过滤副本的时间不计入。准备失败不会继续执行用户命令。
 
 命令可以修改副本、创建构建目录和运行测试，但所有修改在进程退出后丢弃，不回写原项目，也不在下一次命令中复用。因此构建与依赖它的测试必须组合为同一条命令。审批界面会明确标记临时可写和清理行为。
 
@@ -43,9 +43,9 @@
 
 ## 限制与生命周期
 
-- 命令字符串最多 8 KiB，超时默认 120 秒，模型可选择至 600 秒；可在配置的 `[command]` 中通过 `default_timeout_seconds`、`max_timeout_seconds` 覆盖；超时从进程启动开始计算。
-- stdout / stderr 分别最多 32 KiB。达到上限后继续排空管道并终止进程，不让无限输出持续占用内存。
-- 输出保留退出码、超时、取消及截断标志，返回模型；TUI 将控制字符显示为转义文本，避免输出被终端当作控制序列执行。
+- 命令写入项目外的私有临时脚本，只读挂载给沙箱，执行后删除。没有 8 KiB 工具限制，也不把命令正文塞进操作系统 argv。超时默认 120 秒，模型可选择至 600 秒；可在配置的 `[command]` 中通过 `default_timeout_seconds`、`max_timeout_seconds` 覆盖；超时从进程启动开始计算。
+- stdout / stderr 分别保留最后 32 KiB，同时持续排空管道、统计实际总字节数。超出返回量不会终止命令；无限输出仍受执行超时和取消控制。目前被截掉的前文不保存，尚不支持完整日志回读。
+- 输出保留退出码、超时、取消、截断标志及 stdout_total_bytes / stderr_total_bytes，返回模型；TUI 将控制字符显示为转义文本，避免输出被终端当作控制序列执行。
 - 超时、取消会终止 Bubblewrap；独立 PID 命名空间与父进程死亡处理负责清理后代进程。运行结果和工具事件随会话保存，恢复不会重跑命令。
 - 每个进程限制 CPU 时间为本次命令超时向下取整加 1 秒、地址空间 4 GiB、文件大小 64 MiB、文件描述符 1024 个；NPROC 限额 1024 是按真实用户计数，可能受宿主已有线程数量影响。
 
@@ -71,3 +71,5 @@ cargo test -p orbit-tools --test sandbox --offline -- --ignored
 专项测试覆盖文件保护、宿主隔离、网络阻断、输出限制、取消、超时及后台后代进程清理。沙箱无法在当前环境启动时，这些显式测试失败，不会伪造成功结果。
 
 设计参考了本地 SztuCode `core/tools/builtin/bash.py` 的命令参数和输出限制，以及 Zed `crates/sandbox/src/linux_bubblewrap.rs` 的命名空间、只读挂载和失败关闭策略。本实现使用过滤副本，不直接沿用它们的工作区授权范围。
+
+完整限制审计及尚未解决的能力缺口见 [LIMITS.md](LIMITS.md)。
