@@ -74,17 +74,9 @@
 
 默认拒绝 `.git`、`.zcode`、`.codex`、`.env`、`.env.*` 和 `config.toml` 路径。TUI 还会显式保护实际加载的配置文件、会话数据库、数据库附属文件和会话锁目录；受保护文件的硬链接同样拒绝读取。`.orbit-write-` 前缀为工具内部临时文件保留。文件工具使用上述边界，命令工具的进程隔离详见 [SANDBOX.md](SANDBOX.md)。
 
-## 无 API 验证
+## 验证
 
-在仓库根目录运行：
-
-```bash
-cargo run -p orbit-cli -- tui --demo
-```
-
-输入 `read Cargo.toml`：演示模型生成工具调用，工具读取真实文件，再生成明确标注的演示回答。
-
-输入 `read ../outside.txt` 或 `read missing.txt` 可以观察失败路径。`Ctrl+O` 展开工具结果，鼠标滚轮浏览输出，直接拖选文本后 Ctrl+C 复制；鼠标操作不会移动输入光标。
+工具单元测试不需要模型或 API：
 
 ```bash
 cargo test -p orbit-tools --offline
@@ -95,7 +87,7 @@ cargo test -p orbit-tools --offline
 新建文件或有意整体重写时使用 `write_file`；日常修改已有文件优先使用 `edit_file`。
 
 ```json
-{"path":"orbit-demo.txt","content":"你好\n"}
+{"path":"orbit-note.txt","content":"你好\n"}
 ```
 
 - 在已有目录中创建或替换一个文件，旧内容和新内容各不超过 1 MiB，仅支持无 NUL 的 UTF-8 文本。
@@ -108,9 +100,7 @@ cargo test -p orbit-tools --offline
 
 这些检查用于防止误覆盖，不是针对恶意并发进程的完整隔离。既有文件的最终检查与 rename 之间仍有竞争窗口；原子替换保证读者不会看到半个文件，不提供跨进程内容比较交换。
 
-TUI 的真实模型和离线演示均可请求写入。一次性 `chat` 没有确认界面，因此仍只注册读取工具。
-
-离线测试：启动 `tui --demo` 后输入 `write orbit-demo.txt 你好`。这会申请**真实写入**当前工作区；允许后输入 `read orbit-demo.txt` 检查结果。再次请求写入同一路径可测试替换或拒绝。
+TUI 的模型可请求写入。一次性 `chat` 没有确认界面，因此仍只注册读取工具。
 
 实现参考了本地 SztuCode 的 `core/tools/builtin/write_file.py` 中的工作区写入权限分类，以及 Zed 的 `crates/agent/src/tools/write_file_tool.rs` 中编辑会话与取消的组织方式；Orbit 的路径检查、确认通道与文件提交逻辑由本仓库实现。
 
@@ -118,7 +108,7 @@ TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中�
 
 ## run_command
 
-按当前审批模式在 Linux Bubblewrap 中执行，原项目只读、无网络，默认 120 秒超时（模型可选择至 600 秒，也可配置）。离线演示输入 `run pwd` 即可测试。依赖与边界详见 [SANDBOX.md](SANDBOX.md)。
+按当前审批模式在 Linux Bubblewrap 中执行，原项目只读、无网络，默认 120 秒超时（模型可选择至 600 秒，也可配置）。依赖与边界详见 [SANDBOX.md](SANDBOX.md)。
 
 ## edit_file 局部编辑
 
@@ -133,14 +123,6 @@ TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中�
 - 复用 `write_file` 的内联修改预览、路径保护、拒绝/取消、冲突检查及原子提交。模型只传局部修改，磁盘提交仍通过临时文件原子替换；这避免原地写入中断造成半个文件。
 
 设计参考 [Anthropic 官方文本编辑工具](https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool) 的精确替换方式；这里使用通用函数工具协议，并自行接入 Orbit 的工作区和审批逻辑，没有依赖第三方编辑库。[OpenAI Codex 的 apply-patch](https://github.com/openai/codex/tree/main/codex-rs/apply-patch) 是另一种补丁方案，尚未接入。
-
-无 API 测试：启动 `tui --demo`，依次输入并批准：
-
-```text
-write orbit-demo.txt 你好，世界
-edit {"path":"orbit-demo.txt","old_text":"你好","new_text":"您好"}
-read orbit-demo.txt
-```
 
 输入 `edit` 后的 JSON 支持多行文本的 `\n` 转义，以及包含空格的路径。需要审批时，批准前不会修改文件，也可以按 Esc 验证拒绝路径。
 

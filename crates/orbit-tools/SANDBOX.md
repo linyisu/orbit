@@ -53,15 +53,11 @@
 
 这里没有 cgroup 总量预算、系统调用过滤或虚拟机隔离，不能声称防御所有拒绝服务和内核漏洞。系统工具和内核属于可信基础，命令遵循当前会话的审批设置。
 
-## 离线验证
+## 验证
 
-```sh
-cargo run -p orbit-cli -- tui --demo
-```
+使用真实配置启动 TUI 后，可让模型执行 `run pwd` 或 `run ls`，检查确认界面后批准。`run echo changed > Cargo.toml` 会在只读副本中失败，原文件保持不变。
 
-输入 `run pwd` 或 `run ls`，检查确认界面后批准。输入 `run echo changed > Cargo.toml` 会在只读副本中失败，原文件保持不变。
-
-输入 `build mkdir -p build && echo hello > build/result.txt && cat build/result.txt`，可测试临时可写副本。随后输入 `run test ! -e build/result.txt && echo discarded`，确认产物没有写回原项目。这里 `build` 是离线演示的输入前缀，实际工具仍为 `run_command`。
+专项测试覆盖临时可写副本及其丢弃行为，无需模拟模型。
 
 普通测试和需要命名空间的专项测试分开运行：
 

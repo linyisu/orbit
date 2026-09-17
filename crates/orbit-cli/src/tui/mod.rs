@@ -1,7 +1,6 @@
 pub mod app;
 mod approval;
 pub mod commands;
-mod demo;
 mod dialogs;
 mod frames;
 pub mod input;
@@ -76,7 +75,6 @@ pub struct RequestBudget {
 pub async fn run(
     mut model: ModelClient,
     model_name: String,
-    demo: bool,
     tools: ToolRegistry,
     mut session: SessionState,
     mut approvals: orbit_tools::approval::ApprovalReceiver,
@@ -84,7 +82,6 @@ pub async fn run(
 ) -> Result<()> {
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut state = UiState::new(model_name);
-    state.demo = demo;
     let RequestBudget {
         context_tokens,
         auto_compact,
@@ -276,23 +273,14 @@ pub async fn run(
                             let agent = Agent::new(backend.clone(), tools.clone(), config.clone()).with_file_activity(files.clone());
                             task = Some(tokio::spawn(async move {
                                 if compacting {
-                                    let compacted = if demo {
-                                        orbit_agent::context::compact_with_files(&self::demo::DemoModel, request.messages, &tools.definitions(), context_tokens, token, &files).await?
-                                    } else {
-                                        orbit_agent::context::compact_with_files(&backend, request.messages, &tools.definitions(), context_tokens, token, &files).await?
-                                    };
+                                    let compacted = orbit_agent::context::compact_with_files(&backend, request.messages, &tools.definitions(), context_tokens, token, &files).await?;
                                     orbit_agent::context::check_budget(&compacted.history, &tools.definitions(), max_output_tokens as usize, context_tokens)?;
                                     sender.send(AgentEvent::CompactionRecorded { record: compacted.record }).await.map_err(|_| AgentError::EventChannelClosed)?;
                                     let report = format!("上下文已压缩：估算 {} → {} tokens。保留最近两轮完整对话，原始记录仍在。\n\n{}", compacted.before_tokens, compacted.after_tokens, compacted.summary);
                                     sender.send(AgentEvent::Model(orbit_model::types::StreamEvent::TextDelta(report.clone()))).await.map_err(|_| AgentError::EventChannelClosed)?;
                                     return Ok(AgentResult { final_message: ChatMessage::assistant(report), history: compacted.history, turns: 1, tool_calls: 0 });
                                 }
-                                if demo {
-                                    Agent::new(self::demo::DemoModel, tools, config).with_file_activity(files)
-                                        .run_with_agent_events(request, token, sender).await
-                                } else {
-                                    agent.run_with_agent_events(request, token, sender).await
-                                }
+                                agent.run_with_agent_events(request, token, sender).await
                             }));
                         }
                         Action::None => {}
@@ -428,16 +416,14 @@ async fn run_command(
     match command {
         "/exit" | "/quit" if argument.is_empty() => return Ok(true),
         "/new" if argument.is_empty() => {
-            session.new_session(state.model.clone(), state.demo).await?;
+            session.new_session(state.model.clone()).await?;
             history.clear();
             crate::instructions::inject(history, instructions);
             let input = std::mem::take(&mut state.input);
-            let demo = state.demo;
             let context_tokens = state.context_tokens;
             let auto_compact = state.auto_compact;
             let max_output_tokens = state.max_output_tokens;
             *state = UiState::new(state.model.clone());
-            state.demo = demo;
             state.context_tokens = context_tokens;
             state.auto_compact = auto_compact;
             state.max_output_tokens = max_output_tokens;
@@ -507,7 +493,7 @@ async fn run_command(
             let tool_tokens = orbit_agent::context::estimate_tokens(&[], &tools.definitions());
             let sources = if instructions.sources.is_empty() { "未找到".to_owned() } else { format!("{} 条", instructions.sources.len()) };
             let truncation = if instructions.truncated { "（达到 32 KiB 上限，后续文件未加载）" } else { "" };
-            state.transcript.push(TranscriptItem::Notice(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；真实模式会调用模型，演示模式生成机械提要。", instructions.source_summary(), state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            state.transcript.push(TranscriptItem::Notice(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；总结会调用当前模型。", instructions.source_summary(), state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
@@ -515,10 +501,9 @@ async fn run_command(
         }
         "/resume" => resume_session(argument, state, history, session, instructions).await?,
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::Notice(format!(
-            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n模式  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / write_file / edit_file / run_command · 审批：{}",
-            session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, if state.demo { "离线演示" } else { "真实 API" }, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
+            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / write_file / edit_file / run_command · 审批：{}",
+            session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
-        "/model" if state.demo => state.transcript.push(TranscriptItem::Notice("当前为演示模式，不连接真实模型。退出后移除 --demo 即可使用配置中的 API。".into())),
         "/model" => {
             if argument.is_empty() {
                 state.model_picker = Some(dialogs::ModelPicker::new(
@@ -790,7 +775,6 @@ async fn resume_session(
     *history = session.snapshot.history.clone();
     crate::instructions::inject(history, instructions);
     let mut restored = UiState::new(state.model.clone());
-    restored.demo = state.demo;
     restored.context_tokens = state.context_tokens;
     restored.auto_compact = state.auto_compact;
     restored.max_output_tokens = state.max_output_tokens;

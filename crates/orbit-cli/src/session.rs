@@ -58,9 +58,8 @@ pub async fn list_text(store: &Store) -> Result<String> {
         .into_iter()
         .map(|s| {
             format!(
-                "{}  {}  {}  {}",
+                "{}  {}  {}",
                 s.id,
-                if s.demo { "demo" } else { "live" },
                 s.title.replace(['\n', '\r', '\t'], " "),
                 s.workspace
             )
@@ -101,12 +100,7 @@ impl SessionState {
         )
     }
 
-    pub async fn open(
-        path: PathBuf,
-        resume: Option<String>,
-        model: String,
-        demo: bool,
-    ) -> Result<Self> {
+    pub async fn open(path: PathBuf, resume: Option<String>, model: String) -> Result<Self> {
         let store = Store::open(path).await?;
         let workspace = std::env::current_dir()?
             .canonicalize()?
@@ -120,13 +114,10 @@ impl SessionState {
                 "session belongs to workspace {}",
                 saved.workspace
             );
-            ensure!(
-                saved.demo == demo,
-                "session mode differs; use --demo for a demo session"
-            );
+            ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
             store.acquire(&id).await?
         } else {
-            store.create(workspace, model, demo).await?
+            store.create(workspace, model, false).await?
         };
         let snapshot = store.load(writer.id()).await?;
         let scratch = std::sync::Arc::new(std::sync::RwLock::new(
@@ -236,7 +227,7 @@ impl SessionState {
             .into_iter()
             .filter(|saved| {
                 saved.project_id == self.snapshot.session.project_id
-                    && saved.demo == self.snapshot.session.demo
+                    && !saved.demo
                     && saved.id != self.id()
                     && !saved.title.is_empty()
             })
@@ -254,10 +245,7 @@ impl SessionState {
             saved.project_id == self.snapshot.session.project_id,
             "该会话属于其他项目，请在对应目录恢复。"
         );
-        ensure!(
-            saved.demo == self.snapshot.session.demo,
-            "演示会话和真实 API 会话不能混用。"
-        );
+        ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
         // Acquire and load the destination before replacing the current writer.
         // A missing/locked session must leave the current session fully usable.
         let writer = self.store.acquire(id).await?;
@@ -274,11 +262,11 @@ impl SessionState {
         Ok(())
     }
 
-    pub async fn new_session(&mut self, model: String, demo: bool) -> Result<()> {
+    pub async fn new_session(&mut self, model: String) -> Result<()> {
         ensure!(!self.active, "cannot switch sessions during a run");
         let writer = self
             .store
-            .create(self.snapshot.session.workspace.clone(), model, demo)
+            .create(self.snapshot.session.workspace.clone(), model, false)
             .await?;
         let snapshot = self.store.load(writer.id()).await?;
         self.writer = writer;
@@ -299,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn imports_images_into_the_orbit_asset_directory_by_content_hash() {
         let tmp = tempfile::tempdir().unwrap();
-        let state = SessionState::open(tmp.path().join("sessions.db"), None, "model".into(), true)
+        let state = SessionState::open(tmp.path().join("sessions.db"), None, "model".into())
             .await
             .unwrap();
         let source = tmp.path().join("capture.png");
@@ -332,7 +320,7 @@ mod tests {
     async fn restored_completed_run_keeps_its_persisted_elapsed_time() {
         let tmp = tempfile::tempdir().unwrap();
         let database = tmp.path().join("sessions.db");
-        let mut state = SessionState::open(database.clone(), None, "model".into(), true)
+        let mut state = SessionState::open(database.clone(), None, "model".into())
             .await
             .unwrap();
         let id = state.id().to_owned();
@@ -353,7 +341,7 @@ mod tests {
             .unwrap();
         drop(state);
 
-        let restored = SessionState::open(database, Some(id), "model".into(), true)
+        let restored = SessionState::open(database, Some(id), "model".into())
             .await
             .unwrap();
         assert!(
@@ -369,10 +357,9 @@ mod tests {
     #[tokio::test]
     async fn switching_restores_context_preserves_old_session_and_checks_scope_and_locks() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut state =
-            SessionState::open(tmp.path().join("sessions.db"), None, "model".into(), true)
-                .await
-                .unwrap();
+        let mut state = SessionState::open(tmp.path().join("sessions.db"), None, "model".into())
+            .await
+            .unwrap();
         let first = state.id().to_owned();
         let scratch = state.scratch.clone();
         let first_scratch = scratch.read().unwrap().clone();
@@ -392,7 +379,7 @@ mod tests {
         // Resuming the current session reloads the latest successful history.
         state.resume(&first).await.unwrap();
         assert_eq!(state.snapshot.history, history);
-        state.new_session("model".into(), true).await.unwrap();
+        state.new_session("model".into()).await.unwrap();
         let second = state.id().to_owned();
         assert_ne!(first, second);
         assert_ne!(*scratch.read().unwrap(), first_scratch);
@@ -408,17 +395,17 @@ mod tests {
             )
             .await
             .unwrap();
-        let live = state
+        let legacy_demo = state
             .store
             .create(
                 state.snapshot.session.workspace.clone(),
                 "model".into(),
-                false,
+                true,
             )
             .await
             .unwrap();
         assert!(state.resume(foreign.id()).await.is_err());
-        assert!(state.resume(live.id()).await.is_err());
+        assert!(state.resume(legacy_demo.id()).await.is_err());
         assert_eq!(
             state
                 .resumable()
@@ -443,14 +430,10 @@ mod tests {
         // The old lease is released after a successful switch.
         assert!(state.store.acquire(&second).await.is_ok());
         drop(state);
-        let reopened = SessionState::open(
-            tmp.path().join("sessions.db"),
-            Some(first),
-            "model".into(),
-            true,
-        )
-        .await
-        .unwrap();
+        let reopened =
+            SessionState::open(tmp.path().join("sessions.db"), Some(first), "model".into())
+                .await
+                .unwrap();
         assert_eq!(*reopened.scratch.read().unwrap(), first_scratch);
     }
 }

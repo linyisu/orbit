@@ -84,11 +84,7 @@ enum SessionCommand {
 
 #[derive(Debug, Args)]
 struct TuiArgs {
-    /// Preview the interface with a simulated model, without an API key.
-    #[arg(long)]
-    demo: bool,
-
-    /// Restore a saved session in the current workspace and mode.
+    /// Restore a saved session in the current workspace.
     #[arg(long)]
     resume: Option<String>,
 }
@@ -350,46 +346,6 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let instructions = instructions::load_current();
     let database = session::database_path(database)?;
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
-    if args.demo {
-        let config = ModelConfig {
-            model: "演示模式 · 不连接 API".into(),
-            ..ModelConfig::default()
-        };
-        let name = config.model.clone();
-        let session =
-            session::SessionState::open(database, args.resume, name.clone(), true).await?;
-        return tui::run(
-            ModelClient::new(config.clone())?,
-            name.clone(),
-            true,
-            runtime::workspace_tools(
-                &config_path,
-                Some(session.store.path()),
-                Some(approvals),
-                Default::default(),
-                Default::default(),
-                Some(session.scratch.clone()),
-            )?,
-            session,
-            approval_receiver,
-            tui::RequestBudget {
-                context_tokens: default_context_tokens(),
-                auto_compact: true,
-                max_output_tokens: default_max_output_tokens(),
-                max_turns: 0,
-                max_tool_calls: 0,
-                instructions,
-                model_options: vec![tui::ModelOption {
-                    provider: "demo".into(),
-                    model: name.clone(),
-                    default_for_provider: true,
-                    reasoning_efforts: Vec::new(),
-                    config: config.clone(),
-                }],
-            },
-        )
-        .await;
-    }
     let file_config = FileConfig::load(&config_path)?;
     let model_options = file_config.model_options()?;
     let default_model = file_config.default_model_option()?;
@@ -400,12 +356,10 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let max_output_tokens = file_config.max_output_tokens;
     let model_name = default_model.qualified_name();
     let client = ModelClient::new(default_model.config)?;
-    let session =
-        session::SessionState::open(database, args.resume, model_name.clone(), false).await?;
+    let session = session::SessionState::open(database, args.resume, model_name.clone()).await?;
     tui::run(
         client,
         model_name,
-        false,
         runtime::workspace_tools(
             &config_path,
             Some(session.store.path()),

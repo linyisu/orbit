@@ -612,10 +612,9 @@ mod tests {
         let path = std::env::var("ORBIT_PROFILE_DATABASE").unwrap();
         let id = std::env::var("ORBIT_PROFILE_SESSION").unwrap();
         let start = std::time::Instant::now();
-        let session =
-            crate::session::SessionState::open(path.into(), Some(id), "profile".into(), false)
-                .await
-                .unwrap();
+        let session = crate::session::SessionState::open(path.into(), Some(id), "profile".into())
+            .await
+            .unwrap();
         eprintln!("load: {:?}", start.elapsed());
         let start = std::time::Instant::now();
         let mut state = super::super::app::UiState::new("profile");
