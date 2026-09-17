@@ -81,6 +81,11 @@ async fn single_long_task_keeps_exact_goal_system_and_latest_tool_batch() {
             original[5].clone()
         ]
     );
+    let ChatMessage::User { content, .. } = &compacted.history[1] else {
+        panic!("compaction record must remain a user-level data message");
+    };
+    assert!(content.starts_with("BEGIN_UNTRUSTED_COMPACTION_RECORD\n"));
+    assert!(content.ends_with("END_UNTRUSTED_COMPACTION_RECORD"));
     assert_paired(&compacted.history);
     assert!(compacted.after_tokens < compacted.before_tokens);
     for request in backend.requests() {

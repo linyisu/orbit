@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use orbit_agent::{
     agent::{Agent, AgentConfig},
+    error::AgentError,
     events::AgentEvent,
     model::ModelClientBackend,
 };
@@ -481,13 +482,26 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     if args.stream {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
         let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
         let task = tokio::spawn(async move {
             agent
-                .run_with_agent_events(request, cancellation, sender)
+                .run_with_agent_events(request, task_cancellation, sender)
                 .await
         });
 
-        while let Some(event) = receiver.recv().await {
+        let mut interrupted = false;
+        loop {
+            let event = tokio::select! {
+                event = receiver.recv() => event,
+                signal = tokio::signal::ctrl_c(), if !interrupted => {
+                    signal.context("failed to listen for Ctrl+C")?;
+                    interrupted = true;
+                    cancellation.cancel();
+                    eprintln!("正在取消…");
+                    continue;
+                }
+            };
+            let Some(event) = event else { break };
             match event {
                 AgentEvent::Model(StreamEvent::TextDelta(text))
                 | AgentEvent::Model(StreamEvent::ReasoningDelta(text)) => {
@@ -516,10 +530,41 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
                 _ => {}
             }
         }
-        task.await??;
-        println!();
+        match task.await? {
+            Ok(_) => println!(),
+            Err(AgentError::Cancelled) if interrupted => eprintln!("已取消。"),
+            Err(error) => return Err(error.into()),
+        }
     } else {
-        let result = agent.run(request, CancellationToken::new()).await?;
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
+        let task = tokio::spawn(async move {
+            agent
+                .run_with_agent_events(request, task_cancellation, sender)
+                .await
+        });
+        let mut interrupted = false;
+        loop {
+            let event = tokio::select! {
+                event = receiver.recv() => event,
+                signal = tokio::signal::ctrl_c(), if !interrupted => {
+                    signal.context("failed to listen for Ctrl+C")?;
+                    interrupted = true;
+                    cancellation.cancel();
+                    eprintln!("正在取消…");
+                    continue;
+                }
+            };
+            if event.is_none() {
+                break;
+            }
+        }
+        let result = match task.await? {
+            Ok(result) => result,
+            Err(AgentError::Cancelled) if interrupted => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
 
         if let ChatMessage::Assistant { content, .. } = result.final_message {
             println!("{}", content.unwrap_or_default());

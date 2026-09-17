@@ -64,6 +64,6 @@ cargo test -p orbit-agent --offline
 
 模型返回 `max_tokens` / `length` / `incomplete` 时，Agent 明确报告输出未完成，不执行该条响应的工具，也不自动发送同样预算的回退请求。流式思考可显示，但不会加入普通回答上下文。增加预算能延长输出空间，不保证模型一定完成任务，也不能超过服务端支持的限制。
 
-`max_turns` 默认 `75`、`max_tool_calls` 默认 `500`；设为 `0` 才表示本轮任务不限次数。TUI 仍可用 Ctrl+C 取消。默认 `timeout_seconds = 600`，流式请求按无数据间隔计时，持续收到思考或输出不会因总耗时超过十分钟被截断；非流式请求按总时长计时。
+`max_turns` 默认 `75`、`max_tool_calls` 默认 `500`；设为 `0` 才表示本轮任务不限次数。TUI 和 `orbit chat` 都可用 Ctrl+C 取消。默认 `timeout_seconds = 600`，流式请求按无数据间隔计时，持续收到思考或输出不会因总耗时超过十分钟被截断；非流式请求按总时长计时。
 
 默认量级参考 [Claude Code 的输出和命令配置](https://code.claude.com/docs/en/env-vars)及[默认不限任务轮数](https://code.claude.com/docs/en/cli-reference)。通用上下文默认 128000 并不代表所有模型都支持；模型能力以服务端为准，显式配置优先。例如当前 [DeepSeek Flash](https://api-docs.deepseek.com/quick_start/pricing/) 公布 1M 上下文和最高 384K 输出，可配置 1000000 上下文、64000 输出作为实际工作预算。不会自动根据模型名称套用可能过时的上限。
