@@ -33,6 +33,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         return;
     }
     let width = area.width.saturating_sub(6) as usize;
+    state.input_width = width;
     let (input_lines, cursor) = state.input.visual_lines(width);
     let input_height = input_lines
         .len()
@@ -516,6 +517,13 @@ fn draw_composer(
         let y = text_area.y + (cursor.1.saturating_sub(scroll) as u16).min(text_area.height - 1);
         state.ime_cursor = Some((x, y).into());
         frame.buffer_mut()[(x, y)].set_style(Style::default().bg(Color::Gray).fg(Color::Black));
+        // Overwriting half of a CJK glyph with the caret can color its other
+        // half in the terminal even though that trailing buffer cell is blank.
+        // Explicitly repaint the adjacent cell after a narrow caret write.
+        if frame.buffer_mut()[(x, y)].symbol().width() == 1 && x + 1 < text_area.right() {
+            frame.buffer_mut()[(x + 1, y)]
+                .set_diff_option(ratatui::buffer::CellDiffOption::AlwaysUpdate);
+        }
     }
 }
 
@@ -756,6 +764,45 @@ mod tests {
             "▏"
         );
         assert!(!terminal.backend().cursor_visible());
+    }
+
+    #[test]
+    fn deleting_cjk_repaints_the_trailing_half_after_the_caret() {
+        let mut state = UiState::new("mock");
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        state.input.insert("你好世界中文");
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        while !state.input.text.is_empty() {
+            let previous = terminal.backend().buffer().clone();
+            state.input.backspace();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let current = terminal.backend().buffer();
+            let caret = state.ime_cursor.unwrap();
+            let updates = previous.diff(current);
+            let caret_update = updates
+                .iter()
+                .position(|(x, y, _)| (*x, *y) == (caret.x, caret.y))
+                .unwrap();
+            let clear_update = updates
+                .iter()
+                .position(|(x, y, cell)| {
+                    (*x, *y) == (caret.x + 1, caret.y)
+                        && cell.symbol() == " "
+                        && cell.bg == Color::Reset
+                })
+                .expect(
+                    "the terminal needs an explicit reset of the erased wide glyph's trailing half",
+                );
+            assert!(clear_update > caret_update);
+            assert_eq!(
+                current
+                    .content
+                    .iter()
+                    .filter(|cell| cell.bg == Color::Gray)
+                    .count(),
+                1
+            );
+        }
     }
 
     #[test]

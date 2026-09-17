@@ -8,10 +8,12 @@ pub struct InputState {
     pub history: Vec<String>,
     history_index: Option<usize>,
     draft: String,
+    preferred_column: Option<usize>,
 }
 
 impl InputState {
     pub fn insert(&mut self, text: &str) {
+        self.preferred_column = None;
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         let text: String = text
             .chars()
@@ -24,11 +26,13 @@ impl InputState {
     }
 
     pub fn set(&mut self, text: String) {
+        self.preferred_column = None;
         self.cursor = text.len();
         self.text = text;
     }
 
     pub fn clear(&mut self) {
+        self.preferred_column = None;
         self.text.clear();
         self.cursor = 0;
         self.history_index = None;
@@ -48,6 +52,7 @@ impl InputState {
     }
 
     pub fn move_left(&mut self) {
+        self.preferred_column = None;
         self.cursor = self.text[..self.cursor]
             .grapheme_indices(true)
             .next_back()
@@ -56,6 +61,7 @@ impl InputState {
     }
 
     pub fn move_right(&mut self) {
+        self.preferred_column = None;
         self.cursor = self.text[self.cursor..]
             .grapheme_indices(true)
             .nth(1)
@@ -64,6 +70,7 @@ impl InputState {
     }
 
     pub fn home(&mut self) {
+        self.preferred_column = None;
         self.cursor = self.text[..self.cursor]
             .rfind('\n')
             .map(|i| i + 1)
@@ -71,6 +78,7 @@ impl InputState {
     }
 
     pub fn end(&mut self) {
+        self.preferred_column = None;
         self.cursor = self.text[self.cursor..]
             .find('\n')
             .map(|i| self.cursor + i)
@@ -116,20 +124,50 @@ impl InputState {
         }
     }
 
+    /// Move through displayed rows before falling back to prompt history.
+    pub fn move_vertical(&mut self, down: bool, width: usize) {
+        let (_, positions) = self.layout(width);
+        let &(_, column, row) = positions.iter().find(|p| p.0 == self.cursor).unwrap();
+        let target = if down {
+            row.checked_add(1)
+        } else {
+            row.checked_sub(1)
+        };
+        let desired = self.preferred_column.unwrap_or(column);
+        if let Some(target) = target
+            && let Some(&(index, _, _)) = positions
+                .iter()
+                .filter(|p| p.2 == target)
+                .min_by_key(|p| p.1.abs_diff(desired))
+        {
+            self.cursor = index;
+            self.preferred_column = Some(desired);
+        } else if down {
+            self.history_down();
+        } else {
+            self.history_up();
+        }
+    }
+
     pub fn visual_lines(&self, width: usize) -> (Vec<String>, (usize, usize)) {
+        let (lines, positions) = self.layout(width);
+        let &(_, column, row) = positions.iter().find(|p| p.0 == self.cursor).unwrap();
+        (lines, (column, row))
+    }
+
+    // A single layout supplies both drawing and byte-safe vertical navigation.
+    fn layout(&self, width: usize) -> (Vec<String>, Vec<(usize, usize, usize)>) {
         let width = width.max(2);
         let mut lines = vec![String::new()];
+        let mut positions = Vec::new();
         let mut column = 0;
-        let mut cursor = (0, 0);
         for (index, grapheme) in self.text.grapheme_indices(true) {
             let size = grapheme.width();
             if grapheme != "\n" && column + size > width {
                 lines.push(String::new());
                 column = 0;
             }
-            if index == self.cursor {
-                cursor = (column, lines.len() - 1);
-            }
+            positions.push((index, column, lines.len() - 1));
             if grapheme == "\n" {
                 lines.push(String::new());
                 column = 0;
@@ -138,14 +176,12 @@ impl InputState {
                 column += size;
             }
         }
-        if self.cursor == self.text.len() {
-            if column == width {
-                lines.push(String::new());
-                column = 0;
-            }
-            cursor = (column, lines.len() - 1);
+        if column == width {
+            lines.push(String::new());
+            column = 0;
         }
-        (lines, cursor)
+        positions.push((self.text.len(), column, lines.len() - 1));
+        (lines, positions)
     }
 }
 
@@ -164,6 +200,45 @@ mod tests {
         input.history_up();
         input.history_down();
         assert_eq!(input.text, "draft");
+    }
+
+    #[test]
+    fn vertical_navigation_preserves_columns_and_draft_at_history_boundaries() {
+        let mut input = InputState::default();
+        input.history.push("old prompt".into());
+        input.set("你好ab\nx\n世界cd".into());
+        input.move_vertical(false, 20);
+        assert_eq!(input.visual_lines(20).1, (1, 1));
+        input.move_vertical(false, 20);
+        assert_eq!(input.visual_lines(20).1, (6, 0));
+        input.move_vertical(true, 20);
+        input.move_vertical(true, 20);
+        assert_eq!(input.visual_lines(20).1, (6, 2));
+        input.move_vertical(false, 20);
+        input.move_vertical(false, 20);
+        input.move_vertical(false, 20);
+        assert_eq!(input.text, "old prompt");
+        input.move_vertical(true, 20);
+        assert_eq!(input.text, "你好ab\nx\n世界cd");
+    }
+
+    #[test]
+    fn vertical_navigation_uses_wrapped_rows_and_grapheme_boundaries() {
+        let mut input = InputState::default();
+        input.set("你好e\u{301}👩‍💻xy".into());
+        assert_eq!(input.visual_lines(4).1, (1, 2));
+        input.move_vertical(false, 4);
+        assert_eq!(input.visual_lines(4).1, (1, 1));
+        assert_eq!(&input.text[input.cursor..], "👩‍💻xy");
+        input.move_vertical(false, 4);
+        assert_eq!(input.cursor, 0); // ties choose the preceding boundary
+        input.move_vertical(true, 4);
+        assert_eq!(input.visual_lines(4).1, (1, 1));
+        input.move_right(); // reset the preferred column after horizontal movement
+        input.move_vertical(false, 4);
+        assert_eq!(input.visual_lines(4).1, (2, 0));
+        input.backspace();
+        assert!(input.text.starts_with("好"));
     }
 
     #[test]

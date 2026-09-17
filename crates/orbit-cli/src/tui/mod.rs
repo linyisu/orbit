@@ -537,8 +537,8 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         KeyCode::Right => state.input.move_right(),
         KeyCode::Home => state.input.home(),
         KeyCode::End => state.input.end(),
-        KeyCode::Up => state.input.history_up(),
-        KeyCode::Down => state.input.history_down(),
+        KeyCode::Up => state.input.move_vertical(false, state.input_width),
+        KeyCode::Down => state.input.move_vertical(true, state.input_width),
         KeyCode::PageUp => state.scroll_up(8),
         KeyCode::PageDown => state.scroll_down(8),
         _ => {}
