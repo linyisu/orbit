@@ -307,14 +307,14 @@ mod tests {
             })
         };
         handle(&mut state, wheel(MouseEventKind::ScrollUp, 5));
-        assert_eq!(state.scroll, 5);
+        assert_eq!(state.scroll, super::super::wheel::LINES);
         assert_eq!(state.approval_scroll, 0);
         handle(&mut state, wheel(MouseEventKind::ScrollDown, 15));
-        assert_eq!(state.scroll, 5);
-        assert_eq!(state.approval_scroll, 5);
+        assert_eq!(state.scroll, super::super::wheel::LINES);
+        assert_eq!(state.approval_scroll, super::super::wheel::LINES as u16);
         handle(&mut state, wheel(MouseEventKind::ScrollDown, 5));
         assert_eq!(state.scroll, 0);
-        assert_eq!(state.approval_scroll, 5);
+        assert_eq!(state.approval_scroll, super::super::wheel::LINES as u16);
         assert_eq!(state.input.text, "draft");
     }
 
