@@ -204,6 +204,20 @@ pub enum ReasoningEffort {
     Xhigh,
 }
 
+/// Provider-specific wire shape for a configured reasoning effort. The model
+/// name never selects this: gateways commonly rename or proxy model IDs.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningProtocol {
+    /// Use the standard shape for the selected API format.
+    #[default]
+    Standard,
+    /// DeepSeek's OpenAI and Anthropic compatibility APIs.
+    Deepseek,
+    /// Qwen's OpenAI-compatible thinking controls.
+    Qwen,
+}
+
 impl ReasoningEffort {
     pub fn label(self) -> &'static str {
         match self {
@@ -269,6 +283,7 @@ pub struct ModelConfig {
     #[serde(with = "duration_seconds")]
     pub timeout: Duration,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_protocol: ReasoningProtocol,
 }
 
 impl Default for ModelConfig {
@@ -280,6 +295,7 @@ impl Default for ModelConfig {
             model: "gpt-5.6-sol".to_owned(),
             timeout: Duration::from_secs(120),
             reasoning_effort: None,
+            reasoning_protocol: ReasoningProtocol::Standard,
         }
     }
 }
@@ -294,6 +310,7 @@ impl std::fmt::Debug for ModelConfig {
             .field("model", &self.model)
             .field("timeout", &self.timeout)
             .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_protocol", &self.reasoning_protocol)
             .finish()
     }
 }

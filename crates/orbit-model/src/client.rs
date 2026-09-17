@@ -188,15 +188,24 @@ impl ModelClient {
     ) -> Result<Response, ModelError> {
         let format = self.config.api_format;
         let (body, headers) = match format {
-            ApiFormat::OpenaiChatCompletions => {
-                crate::openai::chat_completions::encode(&self.config.model, request, stream)
-            }
-            ApiFormat::OpenaiResponses => {
-                crate::openai::responses::encode(&self.config.model, request, stream)
-            }
-            ApiFormat::AnthropicMessages => {
-                crate::anthropic::messages::encode(&self.config.model, request, stream)
-            }
+            ApiFormat::OpenaiChatCompletions => crate::openai::chat_completions::encode(
+                &self.config.model,
+                request,
+                self.config.reasoning_protocol,
+                stream,
+            ),
+            ApiFormat::OpenaiResponses => crate::openai::responses::encode(
+                &self.config.model,
+                request,
+                self.config.reasoning_protocol,
+                stream,
+            ),
+            ApiFormat::AnthropicMessages => crate::anthropic::messages::encode(
+                &self.config.model,
+                request,
+                self.config.reasoning_protocol,
+                stream,
+            ),
         }?;
 
         let mut builder = self
@@ -860,6 +869,7 @@ mod tests {
             model: model.to_owned(),
             timeout: Duration::from_secs(5),
             reasoning_effort: None,
+            reasoning_protocol: ReasoningProtocol::Standard,
         })
         .expect("client builds")
     }

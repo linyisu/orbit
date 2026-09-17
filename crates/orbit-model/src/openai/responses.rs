@@ -20,6 +20,7 @@ use crate::{
 pub(crate) fn encode(
     model: &str,
     request: ChatRequest,
+    reasoning_protocol: crate::types::ReasoningProtocol,
     stream: bool,
 ) -> Result<(Value, HeaderMap), ModelError> {
     let reasoning_effort = request.reasoning_effort;
@@ -117,7 +118,7 @@ pub(crate) fn encode(
         "stream": stream,
     });
     if let Some(effort) = reasoning_effort {
-        body["reasoning"] = json!({"effort": effort});
+        crate::reasoning::apply_openai_responses(&mut body, effort, reasoning_protocol);
     }
 
     let mut headers = HeaderMap::new();
@@ -251,7 +252,13 @@ mod input_tests {
     fn includes_reasoning_effort_when_configured() {
         let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
         request.reasoning_effort = Some(crate::types::ReasoningEffort::High);
-        let (body, _) = encode("gpt-test", request, true).unwrap();
+        let (body, _) = encode(
+            "gpt-test",
+            request,
+            crate::types::ReasoningProtocol::Standard,
+            true,
+        )
+        .unwrap();
         assert_eq!(body["reasoning"]["effort"], "high");
     }
 
@@ -270,6 +277,7 @@ mod input_tests {
                     path,
                 }],
             )]),
+            crate::types::ReasoningProtocol::Standard,
             true,
         )
         .unwrap();

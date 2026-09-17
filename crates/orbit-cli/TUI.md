@@ -45,9 +45,11 @@ base_url = "https://api.openai.com/v1"
 api_key = "replace-with-key"
 models = ["gpt-5.6-sol", "gpt-6-astra"]
 reasoning_efforts = ["low", "medium", "high"]
+# Standard is inferred from api_format; choose a vendor adapter only when needed.
+# reasoning_protocol = "qwen" # or "deepseek"
 ```
 
-可用值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`，但应只列出该供应商和模型实际接受的值。未写此项时，选择器会说明未配置，Orbit 不发送任何思考参数，避免给通用中转站增加未知字段。已配置时，Responses 使用 `reasoning.effort`，Chat Completions 使用 `reasoning_effort`；Anthropic Messages 使用 adaptive thinking 的 `thinking` 与 `output_config.effort`。模型或中转站拒绝某个显式配置的值时，Orbit 会展示服务端错误。
+可用值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`reasoning_protocol` 是供应商能力适配，而非根据模型名临时猜测：默认 `standard` 按 API 格式编码；Qwen 的 Chat Completions 使用 `enable_thinking`；DeepSeek 的 Chat Completions 使用 `thinking: { type: "enabled" }`，其 Anthropic 兼容 API 使用同一开关与 `output_config.effort`。未写 `reasoning_efforts` 时，选择器会说明未配置，Orbit 不发送任何思考参数。
 
 ## 图片与文档
 

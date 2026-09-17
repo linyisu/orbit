@@ -12,14 +12,15 @@ use crate::{
     client::sse_stream,
     error::ModelError,
     types::{
-        ChatCompletion, ChatMessage, ChatRequest, ModelStream, StreamEvent, ToolCall,
-        ToolCallDelta, Usage,
+        ChatCompletion, ChatMessage, ChatRequest, ModelStream, ReasoningProtocol, StreamEvent,
+        ToolCall, ToolCallDelta, Usage,
     },
 };
 
 pub(crate) fn encode(
     model: &str,
     request: ChatRequest,
+    reasoning_protocol: ReasoningProtocol,
     stream: bool,
 ) -> Result<(Value, HeaderMap), ModelError> {
     let reasoning_effort = request.reasoning_effort;
@@ -80,9 +81,7 @@ pub(crate) fn encode(
     });
     if let Some(effort) = reasoning_effort {
         body["reasoning_effort"] = json!(effort);
-        if model.to_ascii_lowercase().starts_with("qwen") {
-            body["enable_thinking"] = json!(true);
-        }
+        crate::reasoning::apply_openai_chat(&mut body, effort, reasoning_protocol);
     }
 
     let mut headers = HeaderMap::new();
@@ -244,16 +243,25 @@ mod input_tests {
     fn includes_reasoning_effort_when_configured() {
         let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
         request.reasoning_effort = Some(crate::types::ReasoningEffort::High);
-        let (body, _) = encode("gpt-test", request, true).unwrap();
+        let (body, _) = encode("gpt-test", request, ReasoningProtocol::Standard, true).unwrap();
         assert_eq!(body["reasoning_effort"], "high");
     }
 
     #[test]
-    fn enables_thinking_for_qwen_reasoning_models() {
+    fn qwen_protocol_enables_thinking_without_model_name_detection() {
         let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
         request.reasoning_effort = Some(crate::types::ReasoningEffort::High);
-        let (body, _) = encode("qwen3.8-27b", request, true).unwrap();
+        let (body, _) =
+            encode("renamed-by-gateway", request, ReasoningProtocol::Qwen, true).unwrap();
         assert_eq!(body["enable_thinking"], true);
+    }
+
+    #[test]
+    fn deepseek_protocol_uses_the_compatible_thinking_switch() {
+        let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
+        request.reasoning_effort = Some(crate::types::ReasoningEffort::High);
+        let (body, _) = encode("gateway-name", request, ReasoningProtocol::Deepseek, true).unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
     }
 
     #[test]
@@ -271,6 +279,7 @@ mod input_tests {
                     path,
                 }],
             )]),
+            ReasoningProtocol::Standard,
             true,
         )
         .unwrap();

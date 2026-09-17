@@ -15,7 +15,9 @@ use orbit_agent::{
 };
 use orbit_model::{
     client::{ApiFormat, ModelClient},
-    types::{ChatMessage, ChatRequest, ModelConfig, ReasoningEffort, StreamEvent},
+    types::{
+        ChatMessage, ChatRequest, ModelConfig, ReasoningEffort, ReasoningProtocol, StreamEvent,
+    },
 };
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -129,6 +131,8 @@ struct ProviderConfig {
     models: Vec<String>,
     #[serde(default)]
     reasoning_efforts: Vec<ReasoningEffort>,
+    #[serde(default)]
+    reasoning_protocol: ReasoningProtocol,
     #[serde(default = "default_timeout_seconds")]
     timeout_seconds: u64,
 }
@@ -178,6 +182,13 @@ impl FileConfig {
             {
                 bail!(
                     "provider {name:?} must set nonempty base_url, api_key, models and a positive timeout_seconds"
+                );
+            }
+            if provider.reasoning_protocol == ReasoningProtocol::Qwen
+                && provider.api_format != ApiFormat::OpenaiChatCompletions
+            {
+                bail!(
+                    "provider {name:?}: qwen reasoning_protocol requires openai_chat_completions"
                 );
             }
         }
@@ -237,6 +248,7 @@ impl FileConfig {
                             .contains(&ReasoningEffort::High)
                             .then_some(ReasoningEffort::High)
                             .or_else(|| provider.reasoning_efforts.first().copied()),
+                        reasoning_protocol: provider.reasoning_protocol,
                     },
                 });
             }
@@ -526,6 +538,7 @@ base_url = "https://openai.example/v1"
 api_key = "openai-key"
 models = ["reasoning-model"]
 reasoning_efforts = ["low", "high"]
+reasoning_protocol = "deepseek"
 "#,
         )
         .unwrap();
@@ -535,6 +548,10 @@ reasoning_efforts = ["low", "high"]
             vec![ReasoningEffort::Low, ReasoningEffort::High]
         );
         assert_eq!(option.config.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            option.config.reasoning_protocol,
+            ReasoningProtocol::Deepseek
+        );
     }
 
     #[test]
