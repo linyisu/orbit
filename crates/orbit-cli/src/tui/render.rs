@@ -405,7 +405,10 @@ pub(super) fn assistant_line(
 }
 
 pub(super) fn thinking_line(line: &str) -> Line<'static> {
-    Line::from(muted(format!("  ┊ {line}")))
+    Line::styled(
+        format!("  ┊ {line}"),
+        Style::default().fg(Color::Rgb(170, 170, 170)),
+    )
 }
 
 pub(super) fn sanitize_line(line: &mut Line<'_>) {
