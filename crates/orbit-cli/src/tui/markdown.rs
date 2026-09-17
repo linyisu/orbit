@@ -9,14 +9,46 @@ use ratatui::{
 use std::sync::LazyLock;
 use syntect::{
     easy::HighlightLines,
-    highlighting::{HighlightState, ThemeSet},
+    highlighting::{
+        Color as SyntaxColor, HighlightState, StyleModifier, Theme, ThemeItem, ThemeSettings,
+    },
     parsing::{ParseState, SyntaxSet},
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_nonewlines);
-static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+// Follow bat's scope-based themes, but deliberately use only two muted accents.
+// Reference: https://github.com/sharkdp/bat/blob/master/assets/themes/ansi.tmTheme
+// Keep function names, numbers and punctuation in the readable base foreground.
+static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
+    let color = |r, g, b| SyntaxColor { r, g, b, a: 255 };
+    Theme {
+        name: Some("Orbit restrained".into()),
+        settings: ThemeSettings {
+            foreground: Some(color(222, 218, 212)),
+            ..Default::default()
+        },
+        scopes: [
+            ("keyword - keyword.operator, storage", color(184, 202, 220)),
+            ("string", color(201, 207, 180)),
+            (
+                "comment, punctuation.definition.comment",
+                color(170, 176, 184),
+            ),
+        ]
+        .into_iter()
+        .map(|(scope, foreground)| ThemeItem {
+            scope: scope.parse().expect("valid built-in syntax scope"),
+            style: StyleModifier {
+                foreground: Some(foreground),
+                ..Default::default()
+            },
+        })
+        .collect(),
+        ..Default::default()
+    }
+});
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CodeFence {
     delimiter: char,
@@ -182,11 +214,8 @@ pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'stati
             *fence = None;
             return Line::styled("  └─", Style::default().fg(SECONDARY));
         }
-        let mut highlighter = HighlightLines::from_state(
-            &THEMES.themes["base16-ocean.dark"],
-            code.state.0.clone(),
-            code.state.1.clone(),
-        );
+        let mut highlighter =
+            HighlightLines::from_state(&CODE_THEME, code.state.0.clone(), code.state.1.clone());
         let mut spans = vec![Span::styled("  │ ", Style::default().fg(SECONDARY))];
         match highlighter.highlight_line(source, &SYNTAXES) {
             Ok(tokens) => spans.extend(tokens.into_iter().map(|(style, text)| {
@@ -223,7 +252,7 @@ pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'stati
         *fence = Some(CodeFence {
             delimiter: marker,
             length: count,
-            state: HighlightLines::new(syntax, &THEMES.themes["base16-ocean.dark"]).state(),
+            state: HighlightLines::new(syntax, &CODE_THEME).state(),
         });
         return Line::styled(
             format!("  ┌─ {}", trimmed[count..].trim()),
