@@ -211,6 +211,7 @@ pub async fn run(
                     state.selection = Default::default();
                     state.approval = Some(request.preview.clone());
                     state.approval_scroll = 0;
+                    state.approval_expanded = false;
                     state.approval_shown = false;
                     state.approval_choice = 0;
                     pending = Some(request);

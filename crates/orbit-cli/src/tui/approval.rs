@@ -51,6 +51,11 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                 };
             }
             match key.code {
+                KeyCode::Tab => {
+                    state.approval_expanded = !state.approval_expanded;
+                    state.approval_scroll = 0;
+                    return Action::None;
+                }
                 KeyCode::Left | KeyCode::Right => {
                     state.approval_choice ^= 1;
                     return Action::None;
@@ -216,6 +221,28 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         }
     };
     frame.render_widget(Paragraph::new(title), areas[0]);
+    let lines = if state.approval_expanded {
+        lines
+    } else {
+        let total = lines.len();
+        let mut preview: Vec<_> = lines
+            .into_iter()
+            .take(4)
+            .map(|mut line| {
+                if line.width() > 160 {
+                    line = Line::styled(
+                        super::render::compact_preview(&line.to_string(), 160),
+                        line.style,
+                    );
+                }
+                line
+            })
+            .collect();
+        if total > 4 {
+            preview.push(Line::from(format!("… 另有 {} 行，Tab 展开查看", total - 4)));
+        }
+        preview
+    };
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL));
@@ -247,7 +274,11 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     frame.render_widget(
         Paragraph::new(vec![
             options,
-            Line::from("← → 切换 · Enter 确认 · Esc 拒绝"),
+            Line::from(if state.approval_expanded {
+                "← → 切换 · Enter 确认 · Esc 拒绝 · Tab 收起"
+            } else {
+                "← → 切换 · Enter 确认 · Esc 拒绝 · Tab 展开"
+            }),
         ]),
         areas[2],
     );
@@ -359,6 +390,16 @@ mod render_tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
         terminal.draw(|f| draw(f, &mut state)).unwrap();
         assert!(state.approval_shown);
+        assert!(!state.approval_expanded);
+        handle(
+            &mut state,
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Tab,
+                KeyModifiers::NONE,
+            )),
+        );
+        terminal.draw(|f| draw(f, &mut state)).unwrap();
+        assert!(state.approval_expanded);
         assert!(state.approval_max_scroll > 0);
         state.approval_scroll = state.approval_max_scroll;
         terminal.draw(|f| draw(f, &mut state)).unwrap();

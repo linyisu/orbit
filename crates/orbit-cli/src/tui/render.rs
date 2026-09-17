@@ -46,7 +46,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         0
     };
     let approval_height = if state.approval.is_some() {
-        (area.height / 2).min(18)
+        (area.height / 2).min(if state.approval_expanded { 18 } else { 12 })
     } else {
         0
     };
@@ -339,19 +339,19 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                     ToolStatus::Failed => ("×", Color::Red),
                 };
                 lines.push(Line::from(Span::styled(
-                    format!(
-                        "  {marker} {} {}",
-                        row.name,
-                        serde_json::from_str::<serde_json::Value>(&row.arguments)
-                            .ok()
-                            .and_then(|value| value["path"]
-                                .as_str()
-                                .or_else(|| value["command"].as_str())
-                                .map(str::to_owned))
-                            .unwrap_or_default()
-                    ),
+                    format!("  {marker} {} {}", row.name, tool_summary(&row.arguments)),
                     Style::default().fg(color),
                 )));
+                if expanded
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.arguments)
+                    && let Some(command) = value["command"].as_str()
+                {
+                    lines.extend(
+                        command
+                            .lines()
+                            .map(|line| Line::from(muted(format!("    {line}")))),
+                    );
+                }
                 let output = serde_json::from_str::<serde_json::Value>(&row.output)
                     .ok()
                     .and_then(|value| {
@@ -364,13 +364,27 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                                 value["stdout"].as_str().unwrap_or_default(),
                                 value["stderr"].as_str().unwrap_or_default()
                             ))
+                        } else if let Some(bytes) = value["written_bytes"].as_u64() {
+                            Some(format!(
+                                "已{} · {bytes} 字节",
+                                if value["created"].as_bool() == Some(true) {
+                                    "创建"
+                                } else {
+                                    "写入"
+                                }
+                            ))
                         } else {
                             value["content"].as_str().map(str::to_owned)
                         }
                     })
                     .unwrap_or_else(|| row.output.clone());
                 for line in output.lines().take(if expanded { usize::MAX } else { 2 }) {
-                    lines.push(Line::from(muted(format!("    {line}"))));
+                    let preview = if expanded {
+                        line.to_owned()
+                    } else {
+                        compact_preview(line, 160)
+                    };
+                    lines.push(Line::from(muted(format!("    {preview}"))));
                 }
                 if !expanded && output.lines().count() > 2 {
                     lines.push(Line::from(muted("    …")));
@@ -394,6 +408,40 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
         }
     }
     lines
+}
+
+// Display budgets only: original arguments/results stay intact for execution and storage.
+pub(super) fn compact_preview(text: &str, limit: usize) -> String {
+    let text = safe_output(text);
+    let mut chars = text.chars();
+    let mut result: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        result.push('…');
+    }
+    result
+}
+
+fn tool_summary(arguments: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return String::new();
+    };
+    let target = value["path"]
+        .as_str()
+        .or_else(|| value["command"].as_str())
+        .or_else(|| value["url"].as_str())
+        .unwrap_or_default();
+    let mut summary = compact_preview(target.lines().next().unwrap_or_default(), 100);
+    if target.lines().count() > 1 {
+        summary.push_str(" …");
+    }
+    if let Some(content) = value["content"].as_str() {
+        summary.push_str(&format!(
+            " · {} 行 · {} 字节",
+            content.lines().count(),
+            content.len()
+        ));
+    }
+    summary
 }
 
 pub(super) fn assistant_line(
@@ -550,6 +598,38 @@ fn draw_panel(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn tool_previews_bound_single_line_payloads_without_changing_results() {
+        use super::super::app::ToolRow;
+        let output = "中文".repeat(20000);
+        let item = TranscriptItem::Tool(ToolRow {
+            id: "write".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({"path":"report.md", "content":output}).to_string(),
+            status: ToolStatus::Finished,
+            output: output.clone(),
+        });
+        let short = transcript_lines(std::slice::from_ref(&item), false);
+        assert!(
+            short[0]
+                .to_string()
+                .contains("report.md · 1 行 · 120000 字节")
+        );
+        assert!(short[1].to_string().chars().count() < 180);
+        assert!(short[1].to_string().ends_with('…'));
+        assert!(
+            transcript_lines(&[item], true)[1]
+                .to_string()
+                .contains(&output)
+        );
+        assert!(
+            tool_summary(&serde_json::json!({"command":"x".repeat(10000)}).to_string())
+                .chars()
+                .count()
+                < 110
+        );
+    }
 
     fn render(state: &mut UiState, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
