@@ -4,7 +4,7 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    text::Line,
+    text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
 
@@ -13,6 +13,7 @@ use super::{app::TranscriptItem, render};
 #[derive(Debug)]
 struct Row {
     line: Line<'static>,
+    gutter: Option<Span<'static>>,
     start: usize,
     height: usize,
 }
@@ -34,10 +35,22 @@ struct Entry {
 impl Entry {
     fn push(&mut self, mut line: Line<'static>, width: u16) {
         render::sanitize_line(&mut line);
+        let gutter = if line
+            .spans
+            .first()
+            .is_some_and(|span| matches!(span.content.as_ref(), "  │ " | "  ┊ "))
+        {
+            Some(line.spans.remove(0))
+        } else {
+            None
+        };
+        let content_width =
+            width.saturating_sub(gutter.as_ref().map_or(0, |span| span.width() as u16));
         let height = Paragraph::new(line.clone())
             .wrap(Wrap { trim: false })
-            .line_count(width);
+            .line_count(content_width);
         self.rows.push(Row {
+            gutter,
             line,
             start: self.height,
             height,
@@ -212,11 +225,25 @@ impl TranscriptLayout {
                 }
                 let skip = relative.saturating_sub(row.start);
                 let height = (row.height - skip).min((area.bottom() - y) as usize) as u16;
+                let gutter_width = row.gutter.as_ref().map_or(0, |span| span.width() as u16);
+                if let Some(gutter) = &row.gutter {
+                    for dy in 0..height {
+                        frame.render_widget(
+                            Paragraph::new(Line::from(gutter.clone()).style(row.line.style)),
+                            Rect::new(area.x, y + dy, gutter_width, 1),
+                        );
+                    }
+                }
                 frame.render_widget(
                     Paragraph::new(row.line.clone())
                         .wrap(Wrap { trim: false })
                         .scroll((skip.min(u16::MAX as usize) as u16, 0)),
-                    Rect::new(area.x, y, area.width, height),
+                    Rect::new(
+                        area.x + gutter_width,
+                        y,
+                        area.width.saturating_sub(gutter_width),
+                        height,
+                    ),
                 );
                 y += height;
             }
@@ -228,6 +255,32 @@ impl TranscriptLayout {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn wrapped_thinking_and_code_keep_gutters_even_when_scrolled_mid_line() {
+        let text = "中文 words 👋 words ".repeat(80);
+        for (item, marker) in [
+            (TranscriptItem::Thinking(text.clone()), "┊"),
+            (
+                TranscriptItem::Assistant(format!("```rust\n// {text}\n```")),
+                "│",
+            ),
+        ] {
+            let mut layout = TranscriptLayout::default();
+            layout.update(&[item], None, 24);
+            let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
+            terminal
+                .draw(|frame| layout.draw(frame, frame.area(), 3))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            for y in 0..6 {
+                assert_eq!(buffer[(0, y)].symbol(), " ");
+                assert_eq!(buffer[(1, y)].symbol(), " ");
+                assert_eq!(buffer[(2, y)].symbol(), marker);
+                assert_eq!(buffer[(3, y)].symbol(), " ");
+            }
+        }
+    }
 
     #[tokio::test]
     #[ignore = "requires a disposable database copy and ORBIT_PROFILE_SESSION"]
@@ -364,7 +417,7 @@ mod tests {
     fn width_and_expansion_invalidate_cached_heights() {
         let items = vec![
             TranscriptItem::User("question".into()),
-            TranscriptItem::Thinking("thinking words ".repeat(80)),
+            TranscriptItem::Thinking("thinking\n".repeat(80)),
             TranscriptItem::Assistant("answer words ".repeat(80)),
         ];
         let mut layout = TranscriptLayout::default();

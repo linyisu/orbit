@@ -456,10 +456,8 @@ pub(super) fn assistant_line(
 }
 
 pub(super) fn thinking_line(line: &str) -> Line<'static> {
-    Line::styled(
-        format!("  ┊ {line}"),
-        Style::default().fg(Color::Rgb(170, 170, 170)),
-    )
+    Line::from(vec![Span::raw("  ┊ "), Span::raw(line.to_owned())])
+        .style(Style::default().fg(Color::Rgb(170, 170, 170)))
 }
 
 pub(super) fn sanitize_line(line: &mut Line<'_>) {
