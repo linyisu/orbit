@@ -80,7 +80,7 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",
-            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). All changes and build artifacts are discarded after the command; combine build and test in one command. /tmp is disposable. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. Only system tools in /usr/bin and /bin are available. Timeout defaults and maximum are specified in the tool schema. stdout/stderr each capped at 32 KiB; exceeding a cap stops the process. Never automatically retry a denied command.",
+            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). All changes and build artifacts are discarded after the command; combine build and test in one command. /tmp is disposable. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. Only system tools in /usr/bin and /bin are available. Timeout defaults and maximum are specified in the tool schema. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts; excess output is discarded, never a reason to stop execution. Timeout and cancellation still stop the process. Never automatically retry a denied command.",
             json!({"type":"object","properties":{"writable_snapshot":{"type":"boolean","default":false},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":self.limits.max_timeout_seconds,"default":self.limits.default_timeout_seconds}},"required":["command"],"additionalProperties":false}),
         )
     }
@@ -94,12 +94,11 @@ impl Tool for RunCommand {
                 .timeout_seconds
                 .unwrap_or(self.limits.default_timeout_seconds);
             if args.command.trim().is_empty()
-                || args.command.len() > 8192
                 || args.command.contains('\0')
                 || !(1..=self.limits.max_timeout_seconds).contains(&timeout_seconds)
             {
                 return Err(invalid(format!(
-                    "command must be nonempty, at most 8 KiB without NUL; timeout_seconds must be 1..{}",
+                    "command must be nonempty and contain no NUL; timeout_seconds must be 1..{}",
                     self.limits.max_timeout_seconds
                 )));
             }

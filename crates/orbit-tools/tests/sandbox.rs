@@ -167,11 +167,11 @@ async fn cancellation_stops_a_running_command() {
 
 #[tokio::test]
 #[ignore = "requires Linux user namespaces"]
-async fn output_limits_stop_infinite_producers_and_preserve_exit_codes() {
+async fn verbose_output_does_not_kill_commands_and_preserves_final_status() {
     let (_root, workspace) = fixture();
     let result = sandbox::run(
         workspace.clone(),
-        "yes output".into(),
+        r#"python3 -c 'print("x" * 100000)'; printf FINAL_OK; exit 7"#.into(),
         Duration::from_secs(5),
         CancellationToken::new(),
     )
@@ -179,6 +179,9 @@ async fn output_limits_stop_infinite_producers_and_preserve_exit_codes() {
     .unwrap();
     assert!(result.output_truncated);
     assert!(result.stdout.len() <= 32768);
+    assert_eq!(result.exit_code, Some(7));
+    assert!(result.stdout.ends_with("FINAL_OK"));
+    assert_eq!(result.stdout_total_bytes, 100009);
     let result = sandbox::run(
         workspace,
         "printf out; printf err >&2; exit 7".into(),
@@ -306,4 +309,74 @@ async fn process_limits_follow_the_command_budget() {
     .unwrap();
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "601\n4194304\n1024\n");
+}
+
+#[tokio::test]
+#[ignore = "requires Linux user namespaces"]
+async fn commands_larger_than_os_argument_limit_run_from_private_script() {
+    for writable in [false, true] {
+        let (root, workspace) = fixture();
+        let script = format!("# {}\nprintf LONG_COMMAND_OK", "中文".repeat(40_000));
+        let result = sandbox::run_with_options(
+            workspace,
+            script,
+            Duration::from_secs(10),
+            CancellationToken::new(),
+            writable,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0), "{result:?}");
+        assert_eq!(result.stdout, "LONG_COMMAND_OK");
+        assert!(!root.path().join("orbit-command.sh").exists());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Linux user namespaces"]
+async fn infinite_output_is_bounded_and_still_obeys_timeout() {
+    let (_root, workspace) = fixture();
+    let result = sandbox::run(
+        workspace,
+        "yes output".into(),
+        Duration::from_millis(200),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert!(result.timed_out);
+    assert!(result.output_truncated);
+    assert!(result.stdout.len() <= 32768);
+}
+
+#[tokio::test]
+async fn large_commands_reach_approval_without_an_arbitrary_tool_size_limit() {
+    let (_root, workspace) = fixture();
+    let (tx, mut rx) = approval::channel();
+    let tool = RunCommand::new(workspace, tx);
+    let command = format!("# {}\nprintf ok", "x".repeat(200_000));
+    let expected = command.clone();
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function("long", "run_command", json!({"command":command})),
+            CancellationToken::new(),
+        )
+        .await
+    });
+    let request = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let orbit_tools::approval::ApprovalPreview::Command(preview) = request.preview else {
+        panic!("command preview");
+    };
+    assert_eq!(preview.command, expected);
+    request.decision.send(false).unwrap();
+    assert!(
+        task.await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("denied")
+    );
 }

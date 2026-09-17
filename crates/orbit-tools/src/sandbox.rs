@@ -1,11 +1,8 @@
 use std::{
-    io::Read,
+    collections::VecDeque,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
     time::Duration,
 };
 
@@ -31,6 +28,8 @@ pub struct CommandResult {
     pub timed_out: bool,
     pub cancelled: bool,
     pub output_truncated: bool,
+    pub stdout_total_bytes: u64,
+    pub stderr_total_bytes: u64,
     pub sandbox: &'static str,
     pub workspace_files: usize,
     pub skipped_entries: usize,
@@ -129,7 +128,7 @@ impl Snapshot {
 
 fn command(
     snapshot: &Path,
-    script: &str,
+    script: &Path,
     writable_snapshot: bool,
     timeout: Duration,
 ) -> Result<Command, ToolError> {
@@ -170,6 +169,10 @@ fn command(
     if Path::new("/etc/ld.so.cache").exists() {
         command.args(["--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache"]);
     }
+    command
+        .arg("--ro-bind")
+        .arg(script)
+        .arg("/orbit-command.sh");
     if writable_snapshot {
         command.arg("--ro-bind").arg(snapshot).arg("/orbit-source");
         command.args(["--size", "134217728", "--tmpfs", "/workspace"]);
@@ -211,38 +214,43 @@ fn command(
         "--nproc=1024:1024",
         "--",
         "/bin/sh",
-        "-c",
-        if writable_snapshot {
-            "cp -R /orbit-source/. /workspace/ && exec /bin/sh -c \"$1\" orbit-command"
-        } else {
-            script
-        },
-        "orbit-command",
     ]);
     if writable_snapshot {
-        command.arg(script);
+        command.args([
+            "-c",
+            "cp -R /orbit-source/. /workspace/ && exec /bin/sh /orbit-command.sh",
+        ]);
+    } else {
+        command.arg("/orbit-command.sh");
     }
     Ok(command)
 }
 
-async fn capture(
-    mut pipe: impl AsyncRead + Unpin,
-    limit: CancellationToken,
-    truncated: Arc<AtomicBool>,
-) -> std::io::Result<Vec<u8>> {
-    let mut result = Vec::new();
+struct Captured {
+    bytes: Vec<u8>,
+    total: u64,
+}
+
+async fn capture(mut pipe: impl AsyncRead + Unpin) -> std::io::Result<Captured> {
+    let mut tail = VecDeque::with_capacity(MAX_OUTPUT);
+    let mut total = 0u64;
     let mut buffer = [0; 4096];
     loop {
         let count = pipe.read(&mut buffer).await?;
         if count == 0 {
-            return Ok(result);
+            let mut bytes: Vec<u8> = tail.into();
+            if total > MAX_OUTPUT as u64 {
+                // Do not expose a UTF-8 continuation byte as a spurious replacement
+                // character when a valid wide character crosses the retained boundary.
+                let partial = bytes.iter().take_while(|b| **b & 0xc0 == 0x80).count();
+                bytes.drain(..partial);
+            }
+            return Ok(Captured { bytes, total });
         }
-        let keep = count.min(MAX_OUTPUT.saturating_sub(result.len()));
-        result.extend_from_slice(&buffer[..keep]);
-        if keep < count {
-            truncated.store(true, Ordering::Relaxed);
-            limit.cancel();
-        }
+        total = total.saturating_add(count as u64);
+        let overflow = (tail.len() + count).saturating_sub(MAX_OUTPUT);
+        tail.drain(..overflow);
+        tail.extend(&buffer[..count]);
     }
 }
 
@@ -272,41 +280,40 @@ pub async fn run_with_options(
     if token.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
+    // Keep the script outside the project and out of argv: large here-documents
+    // otherwise hit execve's per-argument limit even after raising tool limits.
+    let mut script_file = tempfile::NamedTempFile::new().map_err(failed)?;
+    script_file.write_all(script.as_bytes()).map_err(failed)?;
+    script_file.flush().map_err(failed)?;
     let mut child = command(
         snapshot.directory.path(),
-        &script,
+        script_file.path(),
         writable_snapshot,
         timeout,
     )?
     .spawn()
     .map_err(failed)?;
-    let limit = CancellationToken::new();
-    let truncated = Arc::new(AtomicBool::new(false));
-    let stdout = capture(
-        child.stdout.take().expect("piped stdout"),
-        limit.clone(),
-        truncated.clone(),
-    );
-    let stderr = capture(
-        child.stderr.take().expect("piped stderr"),
-        limit.clone(),
-        truncated.clone(),
-    );
+    let stdout = capture(child.stdout.take().expect("piped stdout"));
+    let stderr = capture(child.stderr.take().expect("piped stderr"));
     let completion = async {
         let mut timed_out = false;
         let mut cancelled = false;
         let status = tokio::select! {
             result = child.wait() => result,
             _ = token.cancelled() => { cancelled = true; child.start_kill()?; child.wait().await },
-            _ = limit.cancelled() => { child.start_kill()?; child.wait().await },
             _ = tokio::time::sleep(timeout) => { timed_out = true; child.start_kill()?; child.wait().await },
         }?;
         Ok::<_, std::io::Error>((status, timed_out, cancelled))
     };
     let (result, stdout, stderr) = tokio::join!(completion, stdout, stderr);
     let (status, timed_out, cancelled) = result.map_err(failed)?;
-    let stdout = String::from_utf8_lossy(&stdout.map_err(failed)?).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr.map_err(failed)?).into_owned();
+    let stdout = stdout.map_err(failed)?;
+    let stderr = stderr.map_err(failed)?;
+    let stdout_total_bytes = stdout.total;
+    let stderr_total_bytes = stderr.total;
+    let output_truncated = stdout.total > MAX_OUTPUT as u64 || stderr.total > MAX_OUTPUT as u64;
+    let stdout = String::from_utf8_lossy(&stdout.bytes).into_owned();
+    let stderr = String::from_utf8_lossy(&stderr.bytes).into_owned();
     if !status.success() && stderr.starts_with("bwrap:") {
         return Err(failed(format!(
             "sandbox startup failed; refusing unsandboxed execution: {stderr}"
@@ -318,7 +325,9 @@ pub async fn run_with_options(
         stderr,
         timed_out,
         cancelled,
-        output_truncated: truncated.load(Ordering::Relaxed),
+        output_truncated,
+        stdout_total_bytes,
+        stderr_total_bytes,
         sandbox: if writable_snapshot {
             "bubblewrap; no network; disposable writable workspace snapshot (128 MiB); changes discarded"
         } else {
@@ -331,4 +340,23 @@ pub async fn run_with_options(
 
 fn failed(error: impl std::fmt::Display) -> ToolError {
     ToolError::ExecutionFailed(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn capture_keeps_bounded_unicode_tail_and_counts_all_output() {
+        let data = format!("{}FINAL", "中文".repeat(20_000));
+        let result = capture(data.as_bytes()).await.unwrap();
+        assert_eq!(result.total, data.len() as u64);
+        assert!(result.bytes.len() <= MAX_OUTPUT);
+        let tail = String::from_utf8(result.bytes).unwrap();
+        assert!(tail.ends_with("FINAL"));
+        assert!(data.ends_with(&tail));
+        let short = capture(b"small".as_slice()).await.unwrap();
+        assert_eq!(short.bytes, b"small");
+        assert_eq!(short.total, 5);
+    }
 }
