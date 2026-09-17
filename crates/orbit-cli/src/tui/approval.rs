@@ -282,7 +282,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         ]),
         areas[2],
     );
-    state.selection.area = areas[1].inner(ratatui::layout::Margin::new(1, 1));
+    state.selection.approval = areas[1].inner(ratatui::layout::Margin::new(1, 1));
     state.approval_shown = true;
 }
 

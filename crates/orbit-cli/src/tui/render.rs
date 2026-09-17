@@ -23,7 +23,10 @@ fn muted(text: impl Into<String>) -> Span<'static> {
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let area = frame.area();
-    state.selection.area = Rect::default();
+    state.selection.viewport = Rect::default();
+    state.selection.input = Rect::default();
+    state.selection.footer = Rect::default();
+    state.selection.approval = Rect::default();
     state.ime_cursor = None;
     state.selection.reset_caret();
     state.input_area = Rect::default();
@@ -69,13 +72,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_status(frame, state, areas[2]);
     if state.approval.is_some() {
         super::approval::draw_in(frame, state, areas[3]);
-        // Selection covers both the conversation and the inline proposal.
-        state.selection.area = Rect::new(
-            area.x + 2,
-            areas[1].y,
-            area.width.saturating_sub(4),
-            areas[3].bottom().saturating_sub(areas[1].y),
-        );
+        state.selection.approval = areas[3];
     }
     draw_composer(frame, state, areas[4], input_lines, cursor);
     draw_panel(frame, state, areas[5]);
@@ -83,7 +80,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         Paragraph::new(footer(state, areas[6].width as usize)),
         areas[6],
     );
-    state.selection.area = area;
+    state.selection.footer = areas[6];
     super::dialogs::draw(frame, state);
 }
 
@@ -247,15 +244,11 @@ fn welcome() -> Vec<Line<'static>> {
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
-    state.selection.area = Rect {
+    state.selection.viewport = Rect {
         x: area.x + 2,
         width: area.width.saturating_sub(4),
         ..area
     };
-    state.selection.viewport = state.selection.area;
-    if state.approval.is_none() && state.selection.restore_viewport(frame) {
-        return;
-    }
     if state.transcript.is_empty() {
         state.navigation.reset_area();
         let mut logo = welcome();
@@ -301,7 +294,9 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     } else {
         state.max_scroll.saturating_sub(state.scroll)
     };
-    state.selection.offset = offset;
+    state
+        .selection
+        .transcript_view(offset, &state.transcript_layout);
     state
         .transcript_layout
         .draw(frame, state.selection.viewport, offset);
@@ -543,6 +538,7 @@ fn draw_composer(
         .1
         .saturating_sub(text_area.height.saturating_sub(1) as usize);
     state.input_area = text_area;
+    state.selection.input = text_area;
     state.input_scroll = scroll;
     // IME preedit belongs to the terminal; placeholder text underneath it is misleading.
     let text = Text::from(

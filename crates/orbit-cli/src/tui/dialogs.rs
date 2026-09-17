@@ -122,7 +122,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     if !state.show_help && state.picker.is_none() {
         return;
     }
-    state.selection.area = Rect::default();
+    state.selection.clear();
     let full = frame.area();
     let width = full.width.saturating_sub(4).min(96);
     let height = full.height.saturating_sub(2).min(24);

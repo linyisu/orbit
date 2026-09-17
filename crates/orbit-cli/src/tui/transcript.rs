@@ -5,7 +5,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Paragraph, Widget, Wrap},
 };
 
 use super::{app::TranscriptItem, render};
@@ -211,6 +211,15 @@ impl TranscriptLayout {
     }
 
     pub fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize) {
+        self.draw_buffer(frame.buffer_mut(), area, offset);
+    }
+
+    pub(super) fn draw_buffer(
+        &self,
+        buffer: &mut ratatui::buffer::Buffer,
+        area: Rect,
+        offset: usize,
+    ) {
         let mut y = area.y;
         let first = self.entries.partition_point(|entry| entry.end <= offset);
         for entry in &self.entries[first..] {
@@ -228,23 +237,22 @@ impl TranscriptLayout {
                 let gutter_width = row.gutter.as_ref().map_or(0, |span| span.width() as u16);
                 if let Some(gutter) = &row.gutter {
                     for dy in 0..height {
-                        frame.render_widget(
-                            Paragraph::new(Line::from(gutter.clone()).style(row.line.style)),
-                            Rect::new(area.x, y + dy, gutter_width, 1),
-                        );
+                        Paragraph::new(Line::from(gutter.clone()).style(row.line.style))
+                            .render(Rect::new(area.x, y + dy, gutter_width, 1), buffer);
                     }
                 }
-                frame.render_widget(
-                    Paragraph::new(row.line.clone())
-                        .wrap(Wrap { trim: false })
-                        .scroll((skip.min(u16::MAX as usize) as u16, 0)),
-                    Rect::new(
-                        area.x + gutter_width,
-                        y,
-                        area.width.saturating_sub(gutter_width),
-                        height,
-                    ),
-                );
+                Paragraph::new(row.line.clone())
+                    .wrap(Wrap { trim: false })
+                    .scroll((skip.min(u16::MAX as usize) as u16, 0))
+                    .render(
+                        Rect::new(
+                            area.x + gutter_width,
+                            y,
+                            area.width.saturating_sub(gutter_width),
+                            height,
+                        ),
+                        buffer,
+                    );
                 y += height;
             }
         }

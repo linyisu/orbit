@@ -92,7 +92,7 @@ pub async fn run(
                     let Some(event) = event else { break };
                     let event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
-                    if !state.show_help && state.picker.is_none()
+                    if !state.selection.dragging() && !state.show_help && state.picker.is_none()
                         && let Some(changed) = navigation::handle(&mut state, &event) {
                         if changed { dirty = true; frames.request(time::Instant::now()); }
                         continue;
@@ -116,6 +116,7 @@ pub async fn run(
                             state.input_width);
                     }
                     if state.selection.handle(&event)? {
+                        if state.selection.transcript_drag() { state.follow_bottom = false; }
                         terminal.draw(|frame| {
                             if !state.selection.draw_frozen(frame) {
                                 render::draw(frame, &mut state);
@@ -128,7 +129,8 @@ pub async fn run(
                         continue;
                     }
                     if matches!(&event, Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)) {
-                        if pending.is_some() { approval::handle(&mut state, event); }
+                        if state.selection.dragging() { keyboard_action(&mut state, event, task.is_some()); }
+                        else if pending.is_some() { approval::handle(&mut state, event); }
                         else { keyboard_action(&mut state, event, task.is_some()); }
                         continue;
                     }
@@ -277,6 +279,11 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    let direction = state.selection.auto_scroll(std::time::Instant::now());
+                    if direction != 0 {
+                        if direction < 0 { state.scroll_up(2); } else { state.scroll_down(2); }
+                        dirty = true;
+                    }
                     if dirty || state.running() { frames.request(time::Instant::now()); }
                     session.flush_due().await?;
                 }
