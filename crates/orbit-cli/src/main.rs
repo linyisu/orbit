@@ -458,7 +458,6 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         &mut tools,
         session.store.clone(),
         session.snapshot.session.project_id.clone(),
-        session.id().to_owned(),
     );
     tui::run(
         client,

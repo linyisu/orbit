@@ -30,6 +30,14 @@ pub const COMMANDS: &[Command] = &[
         description: "查看上下文估算和预算",
     },
     Command {
+        name: "/tasks",
+        description: "查看或更新当前项目的任务计划",
+    },
+    Command {
+        name: "/memory",
+        description: "查看或保存当前项目的长期记忆",
+    },
+    Command {
         name: "/compact",
         description: "总结旧对话，保留最近两轮；模型不可用时本地回退",
     },

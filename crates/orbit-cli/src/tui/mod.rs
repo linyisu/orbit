@@ -116,6 +116,12 @@ pub async fn run(
     restore_model_profile(&mut state, &mut model, &model_options, &session);
     let mut history = session.snapshot.history.clone();
     crate::instructions::inject(&mut history, &instructions);
+    crate::project_state::inject(
+        &mut history,
+        &session.store,
+        &session.snapshot.session.project_id,
+    )
+    .await?;
     refresh_context_usage(&mut state, &history, &tools);
     let mut events = EventStream::new();
     let mut ticks = time::interval(Duration::from_millis(33));
@@ -362,6 +368,12 @@ pub async fn run(
                     if let Some(saved) = completed_history {
                         history = saved;
                         crate::instructions::inject(&mut history, &instructions);
+                        crate::project_state::inject(
+                            &mut history,
+                            &session.store,
+                            &session.snapshot.session.project_id,
+                        )
+                        .await?;
                     }
                     refresh_context_usage(&mut state, &history, &tools);
                     state.apply(final_event);
@@ -612,6 +624,12 @@ async fn run_command(
                 .await?;
             history.clear();
             crate::instructions::inject(history, instructions);
+            crate::project_state::inject(
+                history,
+                &session.store,
+                &session.snapshot.session.project_id,
+            )
+            .await?;
             let input = std::mem::take(&mut state.input);
             let context_tokens = state.context_tokens;
             let input_context_tokens = state.input_context_tokens;
@@ -641,7 +659,7 @@ async fn run_command(
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
             let system = history
                 .iter()
-                .filter(|message| matches!(message, ChatMessage::System { .. }) && !crate::instructions::is_orbit_instruction(message))
+                .filter(|message| matches!(message, ChatMessage::System { content } if !content.starts_with("ORBIT_PROJECT_STATE_V1\n")) && !crate::instructions::is_orbit_instruction(message))
                 .cloned()
                 .collect::<Vec<_>>();
             let project_rules = history
@@ -660,8 +678,11 @@ async fn run_command(
             let tool_tokens = orbit_agent::context::estimate_tokens(&[], &tools.definitions());
             let sources = if instructions.sources.is_empty() { "未找到".to_owned() } else { format!("{} 条", instructions.sources.len()) };
             let truncation = if instructions.truncated { "（达到 32 KiB 上限，后续文件未加载）" } else { "" };
-            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动压缩：{}（输入窗口的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；模型摘要不可用时使用本地回退。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            let project_state_tokens = history.iter().filter_map(|message| match message { ChatMessage::System { content } if content.starts_with("ORBIT_PROJECT_STATE_V1\n") => Some(orbit_agent::context::estimate_tokens(std::slice::from_ref(message), &[])), _ => None }).sum::<usize>();
+            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动压缩：{}（输入窗口的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；模型摘要不可用时使用本地回退。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
+        "/tasks" => run_tasks_command(argument, state, history, session).await?,
+        "/memory" => run_memory_command(argument, state, history, session).await?,
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
             state.selection = Default::default();
@@ -679,7 +700,7 @@ async fn run_command(
             .await?
         }
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::CommandResult(format!(
-            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / write_file / edit_file / run_command · 审批：{}",
+            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / task_list / task_update / memory_list / memory_save / memory_forget / write_file / edit_file / run_command · 审批：{}",
             session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
         "/model" => {
@@ -728,6 +749,205 @@ async fn run_command(
     state.follow_bottom = true;
     state.menu_dismissed = false;
     Ok(false)
+}
+
+async fn run_tasks_command(
+    argument: &str,
+    state: &mut UiState,
+    history: &mut Vec<ChatMessage>,
+    session: &SessionState,
+) -> Result<()> {
+    let (action, rest) = argument
+        .split_once(char::is_whitespace)
+        .unwrap_or((argument, ""));
+    let project_id = &session.snapshot.session.project_id;
+    match action {
+        "" | "list" | "all" => {
+            let tasks = session.store.tasks(project_id, action == "all").await?;
+            state
+                .transcript
+                .push(TranscriptItem::CommandResult(render_tasks(&tasks)));
+        }
+        "add" => {
+            if rest.trim().is_empty() {
+                state.transcript.push(TranscriptItem::CommandError(
+                    "用法：/tasks add <任务标题>".into(),
+                ));
+            } else {
+                let task = session
+                    .store
+                    .create_task(project_id, None, rest.trim().into(), String::new(), 0)
+                    .await?;
+                crate::project_state::inject(history, &session.store, project_id).await?;
+                state.transcript.push(TranscriptItem::CommandResult(format!(
+                    "已添加任务 #{}：{}",
+                    task.id, task.title
+                )));
+            }
+        }
+        "start" | "done" | "block" | "cancel" => {
+            let Ok(id) = rest.trim().parse::<i64>() else {
+                state.transcript.push(TranscriptItem::CommandError(
+                    "用法：/tasks start|done|block|cancel <任务编号>".into(),
+                ));
+                return Ok(());
+            };
+            let status = match action {
+                "start" => orbit_store::types::TaskStatus::InProgress,
+                "done" => orbit_store::types::TaskStatus::Completed,
+                "block" => orbit_store::types::TaskStatus::Blocked,
+                "cancel" => orbit_store::types::TaskStatus::Cancelled,
+                _ => unreachable!(),
+            };
+            let task = session
+                .store
+                .update_task(project_id, id, None, None, Some(status), None)
+                .await?;
+            crate::project_state::inject(history, &session.store, project_id).await?;
+            state.transcript.push(TranscriptItem::CommandResult(format!(
+                "任务 #{} 已标记为{}。",
+                task.id,
+                task_status_label(task.status)
+            )));
+        }
+        _ => state.transcript.push(TranscriptItem::CommandError(
+            "用法：/tasks [list|all] · /tasks add <标题> · /tasks start|done|block|cancel <编号>"
+                .into(),
+        )),
+    }
+    Ok(())
+}
+
+async fn run_memory_command(
+    argument: &str,
+    state: &mut UiState,
+    history: &mut Vec<ChatMessage>,
+    session: &SessionState,
+) -> Result<()> {
+    let (action, rest) = argument
+        .split_once(char::is_whitespace)
+        .unwrap_or((argument, ""));
+    let project_id = &session.snapshot.session.project_id;
+    match action {
+        "" | "list" | "all" => {
+            let memories = session.store.memories(project_id, action == "all").await?;
+            state
+                .transcript
+                .push(TranscriptItem::CommandResult(render_memories(&memories)));
+        }
+        "add" => {
+            let (category, content) = rest.split_once(char::is_whitespace).unwrap_or(("", ""));
+            let Some(category) = orbit_store::types::MemoryCategory::parse(category) else {
+                state.transcript.push(TranscriptItem::CommandError(
+                    "用法：/memory add constraint|decision|fact|preference <内容>".into(),
+                ));
+                return Ok(());
+            };
+            if content.trim().is_empty() {
+                state
+                    .transcript
+                    .push(TranscriptItem::CommandError("记忆内容不能为空。".into()));
+                return Ok(());
+            }
+            let title = concise_title(content.trim());
+            let memory = session
+                .store
+                .remember(
+                    project_id,
+                    category,
+                    title,
+                    content.trim().into(),
+                    Some(session.id().into()),
+                )
+                .await?;
+            crate::project_state::inject(history, &session.store, project_id).await?;
+            state.transcript.push(TranscriptItem::CommandResult(format!(
+                "已保存项目记忆 #{}。",
+                memory.id
+            )));
+        }
+        "forget" => {
+            let Ok(id) = rest.trim().parse::<i64>() else {
+                state.transcript.push(TranscriptItem::CommandError(
+                    "用法：/memory forget <记忆编号>".into(),
+                ));
+                return Ok(());
+            };
+            let memory = session
+                .store
+                .set_memory_active(project_id, id, false)
+                .await?;
+            crate::project_state::inject(history, &session.store, project_id).await?;
+            state.transcript.push(TranscriptItem::CommandResult(format!(
+                "项目记忆 #{} 已停用。",
+                memory.id
+            )));
+        }
+        _ => state.transcript.push(TranscriptItem::CommandError(
+            "用法：/memory [list|all] · /memory add <类型> <内容> · /memory forget <编号>".into(),
+        )),
+    }
+    Ok(())
+}
+
+fn render_tasks(tasks: &[orbit_store::types::ProjectTask]) -> String {
+    if tasks.is_empty() {
+        return "当前项目没有待跟踪的任务。\n\n/tasks add <标题> 可创建任务。".into();
+    }
+    let mut output = String::from("项目任务\n");
+    for task in tasks {
+        use std::fmt::Write;
+        let _ = writeln!(
+            output,
+            "{}  #{}  {}{}",
+            task_status_label(task.status),
+            task.id,
+            task.title,
+            (!task.details.is_empty())
+                .then(|| format!("\n        {}", task.details))
+                .unwrap_or_default(),
+        );
+    }
+    output
+}
+
+fn task_status_label(status: orbit_store::types::TaskStatus) -> &'static str {
+    match status {
+        orbit_store::types::TaskStatus::Pending => "○ 待办",
+        orbit_store::types::TaskStatus::InProgress => "▶ 进行中",
+        orbit_store::types::TaskStatus::Blocked => "◆ 已阻塞",
+        orbit_store::types::TaskStatus::Completed => "✓ 完成",
+        orbit_store::types::TaskStatus::Cancelled => "— 已取消",
+    }
+}
+
+fn render_memories(memories: &[orbit_store::types::ProjectMemory]) -> String {
+    if memories.is_empty() {
+        return "当前项目没有已保存的长期记忆。\n\n/memory add <类型> <内容> 可保存约束、决策、事实或偏好。".into();
+    }
+    let mut output = String::from("项目记忆\n");
+    for memory in memories {
+        use std::fmt::Write;
+        let marker = if memory.active { "●" } else { "○" };
+        let _ = writeln!(
+            output,
+            "{marker} #{} [{}] {}\n  {}",
+            memory.id,
+            memory.category.as_str(),
+            memory.title,
+            memory.content,
+        );
+    }
+    output
+}
+
+fn concise_title(content: &str) -> String {
+    const MAX_CHARS: usize = 72;
+    let mut title: String = content.chars().take(MAX_CHARS).collect();
+    if content.chars().nth(MAX_CHARS).is_some() {
+        title.push('…');
+    }
+    title
 }
 
 async fn select_model(
@@ -972,6 +1192,12 @@ async fn resume_session(
     session.resume(id).await?;
     *history = session.snapshot.history.clone();
     crate::instructions::inject(history, instructions);
+    crate::project_state::inject(
+        history,
+        &session.store,
+        &session.snapshot.session.project_id,
+    )
+    .await?;
     let mut restored = UiState::new(state.model.clone());
     restored.context_tokens = state.context_tokens;
     restored.input_context_tokens = state.input_context_tokens;
