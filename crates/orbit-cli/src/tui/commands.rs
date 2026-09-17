@@ -15,7 +15,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/attach",
-        description: "添加待发送图片；/attach <路径>",
+        description: "按路径添加待发送图片（粘贴/拖入也可）",
     },
     Command {
         name: "/detach",

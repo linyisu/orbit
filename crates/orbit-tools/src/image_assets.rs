@@ -79,6 +79,24 @@ impl ImageAssets {
             path: destination,
         })
     }
+
+    pub fn import_rgba(
+        &self,
+        name: impl Into<String>,
+        width: usize,
+        height: usize,
+        bytes: Vec<u8>,
+    ) -> Result<Attachment> {
+        let width = u32::try_from(width).context("剪贴板图片宽度过大")?;
+        let height = u32::try_from(height).context("剪贴板图片高度过大")?;
+        let image = image::RgbaImage::from_raw(width, height, bytes)
+            .context("剪贴板返回了不完整的 RGBA 图片")?;
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .context("无法编码剪贴板图片")?;
+        self.import_bytes(name, png.into_inner())
+    }
 }
 
 fn image_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {

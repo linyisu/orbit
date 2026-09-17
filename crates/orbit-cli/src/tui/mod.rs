@@ -14,7 +14,7 @@ pub mod terminal;
 mod transcript;
 mod wheel;
 
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
@@ -168,6 +168,16 @@ pub async fn run(
                         Action::Cancel => {
                             state.cancel();
                             if let Some(token) = &cancellation { token.cancel(); }
+                        }
+                        Action::AttachPaths(paths) => {
+                            if let Err(error) = attach_paths(&mut state, &session, paths) {
+                                state.transcript.push(TranscriptItem::Error(error.to_string()));
+                            }
+                        }
+                        Action::PasteClipboard => {
+                            if let Err(error) = paste_clipboard(&mut state, &session).await {
+                                state.transcript.push(TranscriptItem::Error(error.to_string()));
+                            }
                         }
                         Action::Submit(prompt) => {
                             let compacting = prompt.trim() == "/compact";
@@ -387,12 +397,11 @@ async fn run_command(
             };
             let attachment = session.import_image(&path)?;
             let name = attachment.name().to_owned();
-            if state.attachments.iter().any(|existing| existing == &attachment) {
+            if !queue_attachment(state, attachment) {
                 state.transcript.push(TranscriptItem::Notice(format!(
                     "图片 {name} 已在待发送列表中。"
                 )));
             } else {
-                state.attachments.push(attachment);
                 state.transcript.push(TranscriptItem::Notice(format!(
                     "已添加图片 {name} · 随下一条消息发送 · /detach 清空"
                 )));
@@ -462,6 +471,12 @@ fn attachment_path(argument: &str) -> std::path::PathBuf {
     } else {
         trimmed
     };
+    if let Ok(url) = url::Url::parse(trimmed)
+        && url.scheme() == "file"
+        && let Ok(path) = url.to_file_path()
+    {
+        return path;
+    }
     #[cfg(unix)]
     let trimmed = {
         let mut value = String::with_capacity(trimmed.len());
@@ -478,6 +493,125 @@ fn attachment_path(argument: &str) -> std::path::PathBuf {
     #[cfg(not(unix))]
     let trimmed = trimmed.to_owned();
     trimmed.into()
+}
+
+fn resolved_image_path(value: &str) -> Option<PathBuf> {
+    let path = attachment_path(value);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp")
+        .then_some(path)
+        .filter(|path| path.is_file())
+}
+
+fn pasted_image_paths(text: &str) -> Option<Vec<PathBuf>> {
+    if let Some(path) = resolved_image_path(text) {
+        return Some(vec![path]);
+    }
+    #[cfg(unix)]
+    {
+        let paths = shlex::split(text)?
+            .into_iter()
+            .map(|part| resolved_image_path(&part))
+            .collect::<Option<Vec<_>>>()?;
+        (!paths.is_empty()).then_some(paths)
+    }
+    #[cfg(not(unix))]
+    None
+}
+
+fn queue_attachment(state: &mut UiState, attachment: orbit_model::types::Attachment) -> bool {
+    if state
+        .attachments
+        .iter()
+        .any(|existing| existing == &attachment)
+    {
+        return false;
+    }
+    state.attachments.push(attachment);
+    true
+}
+
+fn attach_paths(state: &mut UiState, session: &SessionState, paths: Vec<PathBuf>) -> Result<()> {
+    for path in paths {
+        let attachment = session.import_image(&path)?;
+        queue_attachment(state, attachment);
+    }
+    Ok(())
+}
+
+enum ClipboardPayload {
+    Image {
+        width: usize,
+        height: usize,
+        bytes: Vec<u8>,
+    },
+    Files(Vec<PathBuf>),
+    Text(String),
+}
+
+fn read_clipboard() -> Result<ClipboardPayload> {
+    let mut clipboard = arboard::Clipboard::new()?;
+    if let Ok(image) = clipboard.get_image() {
+        return Ok(ClipboardPayload::Image {
+            width: image.width,
+            height: image.height,
+            bytes: image.bytes.into_owned(),
+        });
+    }
+    if let Ok(files) = clipboard.get().file_list()
+        && !files.is_empty()
+    {
+        return Ok(ClipboardPayload::Files(files));
+    }
+    if let Ok(text) = clipboard.get_text() {
+        return Ok(ClipboardPayload::Text(text));
+    }
+    anyhow::bail!("剪贴板中没有可用的图片、文件或文本")
+}
+
+async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<()> {
+    let payload = tokio::task::spawn_blocking(read_clipboard).await??;
+    match payload {
+        ClipboardPayload::Image {
+            width,
+            height,
+            bytes,
+        } => {
+            let attachment = session.import_clipboard_image(width, height, bytes)?;
+            queue_attachment(state, attachment);
+        }
+        ClipboardPayload::Files(files) => {
+            let images = files
+                .iter()
+                .filter_map(|path| resolved_image_path(&path.to_string_lossy()))
+                .collect::<Vec<_>>();
+            if images.len() == files.len() {
+                attach_paths(state, session, images)?;
+            } else {
+                state.input.insert(
+                    &files
+                        .iter()
+                        .map(|path| path.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            }
+        }
+        ClipboardPayload::Text(text) => {
+            if let Some(paths) = pasted_image_paths(&text) {
+                attach_paths(state, session, paths)?;
+            } else {
+                state.input.insert(&text);
+            }
+        }
+    }
+    state.menu_dismissed = false;
+    Ok(())
 }
 
 async fn resume_session(
@@ -504,6 +638,8 @@ enum Action {
     Quit,
     Cancel,
     Redraw,
+    AttachPaths(Vec<PathBuf>),
+    PasteClipboard,
     Submit(String),
 }
 
@@ -517,6 +653,12 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         return Action::None;
     }
     if let Event::Paste(text) = event {
+        if text.is_empty() {
+            return Action::PasteClipboard;
+        }
+        if let Some(paths) = pasted_image_paths(&text) {
+            return Action::AttachPaths(paths);
+        }
         state.input.insert(&text);
         state.menu_dismissed = false;
         return Action::None;
@@ -550,6 +692,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.input.cursor = start;
             }
             KeyCode::Char('l') => return Action::Redraw,
+            KeyCode::Char('v') => return Action::PasteClipboard,
             KeyCode::Char('o') => {
                 let offset = state.max_scroll.saturating_sub(state.scroll);
                 if let Some(index) = state.transcript_layout.visible_tool(
@@ -576,6 +719,9 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         state.show_help = false;
         state.menu_dismissed = true;
         return Action::None;
+    }
+    if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::ALT) {
+        return Action::PasteClipboard;
     }
     let menu = state.menu();
     if !menu.is_empty() {
@@ -719,5 +865,37 @@ mod tests {
         );
         keyboard_action(&mut state, Event::Paste("\nhello\nworld".into()), false);
         assert_eq!(state.input.text, "q\nhello\nworld");
+    }
+
+    #[test]
+    fn pasted_or_dropped_image_paths_become_attachments() {
+        let temp = tempfile::tempdir().unwrap();
+        let image = temp.path().join("screen shot.png");
+        std::fs::write(&image, b"not decoded until it is imported").unwrap();
+        let mut state = UiState::new("mock");
+
+        assert_eq!(
+            keyboard_action(
+                &mut state,
+                Event::Paste(image.to_string_lossy().into_owned()),
+                false,
+            ),
+            Action::AttachPaths(vec![image.clone()])
+        );
+        assert!(state.input.text.is_empty());
+
+        let file_url = url::Url::from_file_path(&image).unwrap().to_string();
+        assert_eq!(pasted_image_paths(&file_url), Some(vec![image]));
+    }
+
+    #[test]
+    fn clipboard_shortcuts_request_the_system_clipboard() {
+        let mut state = UiState::new("mock");
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            assert_eq!(
+                press(&mut state, KeyCode::Char('v'), modifiers, false),
+                Action::PasteClipboard
+            );
+        }
     }
 }

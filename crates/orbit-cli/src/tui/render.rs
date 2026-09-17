@@ -45,6 +45,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         .len()
         .clamp(1, 6)
         .min(area.height.saturating_sub(8) as usize) as u16;
+    let attachment_height = u16::from(!state.attachments.is_empty());
     let menu = state.menu();
     let panel_height = if !menu.is_empty() {
         menu.len() as u16 + 1
@@ -61,8 +62,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         Constraint::Min(1),
         Constraint::Length(1),
         Constraint::Length(approval_height),
-        Constraint::Length(input_height + 2),
-        Constraint::Length(panel_height.min(area.height.saturating_sub(input_height + 8))),
+        Constraint::Length(input_height + attachment_height + 2),
+        Constraint::Length(
+            panel_height.min(
+                area.height
+                    .saturating_sub(input_height + attachment_height + 8),
+            ),
+        ),
         Constraint::Length(1),
     ])
     .split(area);
@@ -534,14 +540,46 @@ fn draw_composer(
         .border_style(Style::default().fg(BORDER));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let attachment_height = u16::from(!state.attachments.is_empty());
+    if attachment_height > 0 {
+        let labels = state
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(index, attachment)| {
+                format!("[图片 {} · {}]", index + 1, safe_output(attachment.name()))
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                fit_label(&labels, inner.width.saturating_sub(2) as usize, false),
+                Style::default().fg(ACCENT),
+            )),
+            Rect {
+                x: inner.x + 2,
+                width: inner.width.saturating_sub(2),
+                height: 1,
+                ..inner
+            },
+        );
+    }
+    let prompt_area = Rect {
+        y: inner.y + attachment_height,
+        height: inner.height.saturating_sub(attachment_height),
+        ..inner
+    };
     frame.render_widget(
         Paragraph::new(Span::styled("❯", Style::default().fg(ACCENT))),
-        Rect { width: 2, ..inner },
+        Rect {
+            width: 2,
+            ..prompt_area
+        },
     );
     let text_area = Rect {
-        x: inner.x + 2,
-        width: inner.width.saturating_sub(2),
-        ..inner
+        x: prompt_area.x + 2,
+        width: prompt_area.width.saturating_sub(2),
+        ..prompt_area
     };
     let scroll = cursor
         .1
@@ -714,6 +752,24 @@ mod tests {
         state.input.insert("/");
         assert!(render(&mut state, 100, 30).contains("/new"));
         assert!(render(&mut state, 20, 5).contains("请"));
+    }
+
+    #[test]
+    fn pending_images_render_as_chips_above_the_prompt() {
+        let mut state = UiState::new("mock");
+        state
+            .attachments
+            .push(orbit_model::types::Attachment::Image {
+                name: "capture.png".into(),
+                mime_type: "image/png".into(),
+                path: "/tmp/unused.png".into(),
+            });
+        state.input.insert("describe this image");
+        let screen = render(&mut state, 80, 24);
+        assert!(screen.contains("1 · capture.png]"));
+        assert!(screen.contains("describe this image"));
+        assert!(state.input_area.y > 0);
+        assert_eq!(state.selection.input, state.input_area);
     }
 
     #[test]

@@ -200,7 +200,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         }
         if lines.is_empty() {
             lines.push(Line::from(if picker.sessions.is_empty() {
-                "暂无其他可恢复会话。/clear 后可在这里找回之前的对话。"
+                "暂无其他可恢复会话。/new 后可在这里找回之前的对话。"
             } else {
                 "没有匹配的会话。"
             }));
@@ -234,6 +234,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             [
                 "Enter          发送消息",
                 "Ctrl+J / Shift+Enter  换行",
+                "Ctrl+V / Alt+V  粘贴剪贴板图片或文字",
                 "↑ / ↓          移动输入光标，首尾切换历史",
                 "滚轮           滚动对话，不移动输入光标",
                 "拖选 + Ctrl+C  复制选区",

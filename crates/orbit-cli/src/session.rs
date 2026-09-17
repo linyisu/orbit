@@ -84,6 +84,23 @@ impl SessionState {
         orbit_tools::image_assets::ImageAssets::for_database(self.store.path()).import_path(source)
     }
 
+    pub fn import_clipboard_image(
+        &self,
+        width: usize,
+        height: usize,
+        bytes: Vec<u8>,
+    ) -> Result<Attachment> {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis();
+        orbit_tools::image_assets::ImageAssets::for_database(self.store.path()).import_rgba(
+            format!("clipboard-{timestamp}.png"),
+            width,
+            height,
+            bytes,
+        )
+    }
+
     pub async fn open(
         path: PathBuf,
         resume: Option<String>,
@@ -291,6 +308,18 @@ mod tests {
         let Attachment::Image {
             path, mime_type, ..
         } = first;
+        assert_eq!(mime_type, "image/png");
+        assert!(path.starts_with(tmp.path().join("sessions.attachments")));
+
+        let clipboard = state
+            .import_clipboard_image(1, 1, vec![10, 20, 30, 255])
+            .unwrap();
+        let Attachment::Image {
+            name,
+            path,
+            mime_type,
+        } = clipboard;
+        assert!(name.starts_with("clipboard-") && name.ends_with(".png"));
         assert_eq!(mime_type, "image/png");
         assert!(path.starts_with(tmp.path().join("sessions.attachments")));
     }
