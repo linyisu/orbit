@@ -24,6 +24,10 @@ impl Navigation {
     pub(super) fn reset_area(&mut self) {
         self.area = Rect::default();
     }
+
+    pub(super) fn clear_hover(&mut self) {
+        self.hovered = None;
+    }
 }
 
 /// None means normal input; Some(false) consumes motion without a redraw.
@@ -252,6 +256,24 @@ mod tests {
             handle(&mut state, &mouse(MouseEventKind::Moved, 6, 5)),
             Some(false)
         );
+    }
+
+    #[test]
+    fn opening_an_overlay_clears_a_navigation_preview() {
+        let mut state = UiState::new("model");
+        state.transcript.push(TranscriptItem::User("first".into()));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        let (row, _, _) = state.navigation.targets[0].clone();
+        let column = state.navigation.area.x;
+        assert_eq!(
+            handle(&mut state, &mouse(MouseEventKind::Moved, column, row)),
+            Some(true)
+        );
+        assert_eq!(state.navigation.hovered, Some(row));
+        state.show_help = true;
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        assert_eq!(state.navigation.hovered, None);
     }
 
     #[test]

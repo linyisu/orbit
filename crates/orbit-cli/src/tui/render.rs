@@ -41,6 +41,14 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         .min(area.height.saturating_sub(8) as usize) as u16;
     let attachment_height = u16::from(!state.attachments.is_empty());
     let menu = state.menu();
+    // Navigation previews belong to the transcript only. A command menu or
+    // dialog is a separate interaction surface, so it must not retain a stale
+    // tooltip from a dot the pointer hovered earlier.
+    if !menu.is_empty() || state.show_help || state.picker.is_some() || state.model_picker.is_some()
+    {
+        state.navigation.clear_hover();
+        state.context_hovered = false;
+    }
     let panel_height = if !menu.is_empty() {
         menu.len() as u16 + 1
     } else {
@@ -684,15 +692,29 @@ fn tool_summary(arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
         return String::new();
     };
+    if let Some(command) = value["command"].as_str() {
+        let lines: Vec<_> = command
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        let target = lines
+            .iter()
+            .copied()
+            .find(|line| !is_shell_preamble(line))
+            .or_else(|| lines.first().copied())
+            .unwrap_or_default();
+        let mut summary = compact_preview(target, 160);
+        if lines.len() > 1 {
+            summary.push_str(" …");
+        }
+        return summary;
+    }
     let target = value["path"]
         .as_str()
-        .or_else(|| value["command"].as_str())
         .or_else(|| value["url"].as_str())
         .unwrap_or_default();
-    let mut summary = compact_preview(target.lines().next().unwrap_or_default(), 100);
-    if target.lines().count() > 1 {
-        summary.push_str(" …");
-    }
+    let mut summary = compact_preview(target.lines().next().unwrap_or_default(), 120);
     if let Some(content) = value["content"].as_str() {
         summary.push_str(&format!(
             " · {} 行 · {} 字节",
@@ -701,6 +723,14 @@ fn tool_summary(arguments: &str) -> String {
         ));
     }
     summary
+}
+
+fn is_shell_preamble(line: &str) -> bool {
+    let compact = line.split_whitespace().collect::<String>();
+    compact.starts_with("set-")
+        && compact[4..]
+            .chars()
+            .all(|ch| ch.is_ascii_alphabetic() || ch == 'o')
 }
 
 pub(super) fn assistant_line(
@@ -979,8 +1009,20 @@ mod tests {
             tool_summary(&serde_json::json!({"command":"x".repeat(10000)}).to_string())
                 .chars()
                 .count()
-                < 110
+                < 170
         );
+    }
+
+    #[test]
+    fn command_preview_skips_a_shell_safety_preamble() {
+        let summary = tool_summary(
+            &serde_json::json!({
+                "command": "set -e\ncargo test --workspace --all-features"
+            })
+            .to_string(),
+        );
+        assert!(summary.starts_with("cargo test --workspace"), "{summary}");
+        assert!(!summary.starts_with("set -e"), "{summary}");
     }
 
     fn render(state: &mut UiState, width: u16, height: u16) -> String {
