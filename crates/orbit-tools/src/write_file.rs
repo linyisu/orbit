@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture};
+use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use rustix::fs::{
     AtFlags, Mode, OFlags, RenameFlags, fchmod, openat, renameat, renameat_with, unlinkat,
@@ -115,6 +115,7 @@ impl Tool for WriteFile {
             prepared
                 .approve_and_commit(&self.approvals, cancellation)
                 .await
+                .map(ToolOutput::text)
         })
     }
 }

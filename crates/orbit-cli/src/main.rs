@@ -193,7 +193,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Chat(args) => chat(cli.config, args).await,
+        Command::Chat(args) => chat(cli.config, cli.database, args).await,
         Command::Tui(args) => run_tui(cli.config, cli.database, args).await,
         Command::Projects { command } => {
             let store =
@@ -307,7 +307,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     .await
 }
 
-async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
+async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -> Result<()> {
     let file_config = FileConfig::load(&config_path)?;
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command.clone();
@@ -317,9 +317,17 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
     let mut request = ChatRequest::new(vec![ChatMessage::user(args.prompt)]);
     request.max_tokens = Some(max_output_tokens);
 
+    let database = session::database_path(database)?;
     let agent = Agent::new(
         ModelClientBackend::new(client),
-        runtime::workspace_tools(&config_path, None, None, command_limits, web, None)?,
+        runtime::workspace_tools(
+            &config_path,
+            Some(&database),
+            None,
+            command_limits,
+            web,
+            None,
+        )?,
         agent_config,
     );
 

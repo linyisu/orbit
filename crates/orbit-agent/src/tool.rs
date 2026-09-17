@@ -1,10 +1,40 @@
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
-use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_model::types::{Attachment, ToolCall, ToolDefinition};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + 'a>>;
+pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolOutput {
+    pub content: String,
+    pub attachments: Vec<Attachment>,
+}
+
+impl ToolOutput {
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    pub fn with_attachments(content: impl Into<String>, attachments: Vec<Attachment>) -> Self {
+        Self {
+            content: content.into(),
+            attachments,
+        }
+    }
+}
+
+impl std::ops::Deref for ToolOutput {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ToolError {
@@ -143,7 +173,11 @@ where
         let arguments = call
             .arguments_json()
             .expect("ToolRegistry validates arguments before execution");
-        Box::pin((self.execute)(arguments, cancellation))
+        Box::pin(async move {
+            (self.execute)(arguments, cancellation)
+                .await
+                .map(ToolOutput::text)
+        })
     }
 }
 
@@ -190,7 +224,7 @@ mod tests {
             .await
             .expect("tool executes");
 
-        assert_eq!(result, r#"{"value":"hello"}"#);
+        assert_eq!(result, ToolOutput::text(r#"{"value":"hello"}"#));
     }
 
     #[tokio::test]

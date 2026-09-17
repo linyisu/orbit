@@ -6,7 +6,7 @@ use std::{
 
 pub type ScratchDirectory = Arc<RwLock<PathBuf>>;
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture};
+use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use serde::Deserialize;
 use serde_json::json;
@@ -101,7 +101,7 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",
-            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). Changes inside /workspace are discarded after each command; copy sources or build outputs to /scratch when they must survive subsequent commands. /tmp is disposable. In the TUI, /scratch is a private writable directory retained across commands and session resume. Save intermediate files, binaries and checkpoints there; new sessions use separate scratch directories. It does not keep background processes alive. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Cargo dependencies are not inherited and network remains blocked. Timeout defaults and maximum are specified in the tool schema. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts; excess output is discarded, never a reason to stop execution. Timeout and cancellation still stop the process. Never automatically retry a denied command.",
+            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. Use read_image instead when the task is to view or describe an image; shell metadata, OCR, pixel dumps and generated statistics do not expose the actual picture to the vision model. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). Changes inside /workspace are discarded after each command; copy sources or build outputs to /scratch when they must survive subsequent commands. /tmp is disposable. In the TUI, /scratch is a private writable directory retained across commands and session resume. Save intermediate files, binaries and checkpoints there; new sessions use separate scratch directories. It does not keep background processes alive. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Cargo dependencies are not inherited and network remains blocked. Timeout defaults and maximum are specified in the tool schema. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts; excess output is discarded, never a reason to stop execution. Timeout and cancellation still stop the process. Never automatically retry a denied command.",
             json!({"type":"object","properties":{"writable_snapshot":{"type":"boolean","default":false},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":self.limits.max_timeout_seconds,"default":self.limits.default_timeout_seconds}},"required":["command"],"additionalProperties":false}),
         )
     }
@@ -161,7 +161,9 @@ impl Tool for RunCommand {
                 scratch.as_deref(),
             )
             .await?;
-            serde_json::to_string(&result).map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+            serde_json::to_string(&result)
+                .map(ToolOutput::text)
+                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
         })
     }
 }

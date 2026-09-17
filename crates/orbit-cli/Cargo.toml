@@ -12,7 +12,6 @@ base64 = "0.22.1"
 anyhow.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
-image = { version = "0.25.9", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 clap.workspace = true
 orbit-agent = { path = "../orbit-agent" }
 orbit-model = { path = "../orbit-model" }
@@ -22,7 +21,6 @@ serde_json.workspace = true
 ratatui.workspace = true
 pulldown-cmark = { version = "0.13.4", default-features = false }
 serde.workspace = true
-sha2 = "0.11.0"
 tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
@@ -31,6 +29,7 @@ unicode-segmentation.workspace = true
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 
 [dev-dependencies]
+image = { version = "0.25.9", default-features = false, features = ["png"] }
 tempfile = "3"
 
 [build-dependencies]

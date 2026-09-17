@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture};
+use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use reqwest::{Client, Url, header, redirect::Policy};
 use serde::Deserialize;
@@ -91,6 +91,7 @@ impl Tool for WebFetch {
                 result = tokio::time::timeout(TIMEOUT, fetch(args, url, self.proxy.as_ref())) =>
                     result.map_err(|_| failed("web request timed out after 60s"))?,
             }
+            .map(ToolOutput::text)
         })
     }
 }

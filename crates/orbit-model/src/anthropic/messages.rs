@@ -25,7 +25,7 @@ pub(crate) fn encode(
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let mut messages = Vec::new();
+    let mut messages: Vec<Value> = Vec::new();
     for message in request.messages {
         match message {
             ChatMessage::System { .. } => {}
@@ -45,7 +45,21 @@ pub(crate) fn encode(
                         }
                     }));
                 }
-                messages.push(json!({"role": "user", "content": blocks}));
+                if let Some(last) = messages.last_mut().filter(|message| {
+                    message["role"] == "user"
+                        && message["content"].as_array().is_some_and(|content| {
+                            content
+                                .first()
+                                .is_some_and(|block| block["type"] == "tool_result")
+                        })
+                }) {
+                    last["content"]
+                        .as_array_mut()
+                        .expect("user content blocks")
+                        .extend(blocks);
+                } else {
+                    messages.push(json!({"role": "user", "content": blocks}));
+                }
             }
             ChatMessage::Assistant {
                 content,
@@ -336,5 +350,38 @@ mod tests {
             body["messages"][0]["content"][1]["source"]["media_type"],
             "image/png"
         );
+    }
+
+    #[test]
+    fn loaded_image_follows_tool_result_in_the_same_user_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scene.png");
+        std::fs::write(&path, b"image-bytes").unwrap();
+        let (body, _) = encode(
+            "vision-model",
+            ChatRequest::new(vec![
+                ChatMessage::assistant_tool_calls(vec![ToolCall::function(
+                    "image-call",
+                    "read_image",
+                    json!({"path":"scene.png"}),
+                )]),
+                ChatMessage::tool("image-call", r#"{"loaded":true}"#),
+                ChatMessage::user_with_attachments(
+                    "Analyze scene.png",
+                    vec![crate::types::Attachment::Image {
+                        name: "scene.png".into(),
+                        mime_type: "image/png".into(),
+                        path,
+                    }],
+                ),
+            ]),
+            true,
+        )
+        .unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+        assert_eq!(messages[1]["content"][1]["type"], "text");
+        assert_eq!(messages[1]["content"][2]["type"], "image");
     }
 }

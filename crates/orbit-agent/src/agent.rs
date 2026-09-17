@@ -187,6 +187,7 @@ where
                 });
             }
 
+            let mut loaded_attachments = Vec::new();
             for call in calls {
                 if cancellation.is_cancelled() {
                     return Err(AgentError::Cancelled);
@@ -198,17 +199,18 @@ where
                 tool_calls += 1;
                 send_agent_event(sender, AgentEvent::ToolStarted { call: call.clone() }).await?;
                 match self.tools.execute(call.clone(), cancellation.clone()).await {
-                    Ok(content) => {
-                        files.observe(&call, &content);
+                    Ok(output) => {
+                        files.observe(&call, &output.content);
                         send_agent_event(
                             sender,
                             AgentEvent::ToolFinished {
                                 call: call.clone(),
-                                content: content.clone(),
+                                content: output.content.clone(),
                             },
                         )
                         .await?;
-                        history.push(ChatMessage::tool(call.id, content));
+                        history.push(ChatMessage::tool(call.id, output.content));
+                        loaded_attachments.extend(output.attachments);
                     }
                     Err(error) => {
                         let message = error.to_string();
@@ -224,6 +226,7 @@ where
                     }
                 }
             }
+            append_loaded_attachments(&mut history, loaded_attachments);
         }
     }
 
@@ -455,6 +458,7 @@ where
                 });
             }
 
+            let mut loaded_attachments = Vec::new();
             for call in calls {
                 if cancellation.is_cancelled() {
                     return Err(AgentError::Cancelled);
@@ -467,14 +471,16 @@ where
                 tool_calls += 1;
                 let result = self.tools.execute(call.clone(), cancellation.clone()).await;
                 let content = match result {
-                    Ok(content) => {
-                        files.observe(&call, &content);
-                        content
+                    Ok(output) => {
+                        files.observe(&call, &output.content);
+                        loaded_attachments.extend(output.attachments);
+                        output.content
                     }
                     Err(error) => format!("tool error: {error}"),
                 };
                 history.push(ChatMessage::tool(call.id, content));
             }
+            append_loaded_attachments(&mut history, loaded_attachments);
         }
     }
 
@@ -587,6 +593,26 @@ fn model_messages(history: &[ChatMessage]) -> Vec<ChatMessage> {
     messages
 }
 
+fn append_loaded_attachments(
+    history: &mut Vec<ChatMessage>,
+    attachments: Vec<orbit_model::types::Attachment>,
+) {
+    if attachments.is_empty() {
+        return;
+    }
+    let names = attachments
+        .iter()
+        .map(|attachment| attachment.name())
+        .collect::<Vec<_>>()
+        .join(", ");
+    history.push(ChatMessage::user_with_attachments(
+        format!(
+            "The read_image tool loaded the following local image into this model request: {names}. Analyze the actual image content directly."
+        ),
+        attachments,
+    ));
+}
+
 fn check_finish_reason(reason: Option<&str>) -> Result<(), AgentError> {
     if reason.is_some_and(|r| matches!(r, "max_tokens" | "length" | "incomplete")) {
         return Err(AgentError::Model(orbit_model::error::ModelError::Protocol(
@@ -657,7 +683,7 @@ mod tests {
     use super::*;
     use crate::{
         model::MockModel,
-        tool::{ClosureTool, ToolError},
+        tool::{ClosureTool, Tool, ToolError, ToolFuture, ToolOutput},
     };
     use orbit_model::types::{Attachment, FunctionCall, ToolCall};
     use serde_json::json;
@@ -735,6 +761,58 @@ mod tests {
 
     fn request() -> ChatRequest {
         ChatRequest::new(vec![ChatMessage::user("hello")])
+    }
+
+    struct ImageTool;
+
+    impl Tool for ImageTool {
+        fn definition(&self) -> orbit_model::types::ToolDefinition {
+            orbit_model::types::ToolDefinition::function("read_image", "", json!({}))
+        }
+
+        fn execute<'a>(
+            &'a self,
+            _call: ToolCall,
+            _cancellation: CancellationToken,
+        ) -> ToolFuture<'a> {
+            Box::pin(async {
+                Ok(ToolOutput::with_attachments(
+                    r#"{"loaded":true}"#,
+                    vec![Attachment::Image {
+                        name: "scene.png".into(),
+                        mime_type: "image/png".into(),
+                        path: "/global/scene.png".into(),
+                    }],
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn image_tool_output_is_added_to_the_next_model_request() {
+        let backend = MockModel::new(vec![
+            assistant_tool_call("image-call", "read_image", "{}"),
+            assistant_text("I can see it"),
+        ]);
+        let mut tools = ToolRegistry::new();
+        tools.register(ImageTool);
+        let agent = Agent::new(backend.clone(), tools, AgentConfig::default());
+        let result = agent
+            .run(request(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.turns, 2);
+        let requests = backend.requests();
+        assert_eq!(requests.len(), 2);
+        assert!(matches!(
+            requests[1].messages.last(),
+            Some(ChatMessage::User { content, attachments })
+                if content.contains("scene.png") && attachments.len() == 1
+        ));
+        assert!(matches!(
+            &requests[1].messages[2],
+            ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "image-call"
+        ));
     }
 
     #[tokio::test]

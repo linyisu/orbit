@@ -1,6 +1,6 @@
 use std::{io::Read, path::Path};
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture};
+use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use serde::Deserialize;
 use serde_json::json;
@@ -71,6 +71,7 @@ impl Tool for ReadDocument {
             tokio::task::spawn_blocking(move || convert(workspace, arguments, token))
                 .await
                 .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
+                .map(ToolOutput::text)
         })
     }
 }

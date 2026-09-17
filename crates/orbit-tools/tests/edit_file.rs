@@ -1,4 +1,4 @@
-use orbit_agent::tool::{Tool, ToolError};
+use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_model::types::ToolCall;
 use orbit_tools::{
     approval::{self, ApprovalPreview},
@@ -14,7 +14,7 @@ fn start(
     args: Value,
     token: CancellationToken,
 ) -> (
-    tokio::task::JoinHandle<Result<String, ToolError>>,
+    tokio::task::JoinHandle<Result<ToolOutput, ToolError>>,
     approval::ApprovalReceiver,
 ) {
     let (tx, rx) = approval::channel();

@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use orbit_agent::tool::{Tool, ToolError};
+use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_model::types::ToolCall;
 use orbit_tools::{
     approval::{self, ApprovalReceiver},
@@ -53,7 +53,7 @@ fn start(
     path: &str,
     content: &str,
     token: CancellationToken,
-) -> tokio::task::JoinHandle<Result<String, ToolError>> {
+) -> tokio::task::JoinHandle<Result<ToolOutput, ToolError>> {
     let call = call(path, content);
     tokio::spawn(async move { tool.execute(call, token).await })
 }

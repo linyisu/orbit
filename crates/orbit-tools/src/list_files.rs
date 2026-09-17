@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture};
+use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -80,6 +80,7 @@ impl Tool for ListFiles {
                 _ = cancellation.cancelled() => Err(ToolError::Cancelled),
                 result = task => result.map_err(failed)?,
             }
+            .map(ToolOutput::text)
         })
     }
 }

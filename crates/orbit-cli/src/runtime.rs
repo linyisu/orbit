@@ -3,9 +3,9 @@ use std::path::Path;
 use anyhow::Result;
 use orbit_agent::tool::ToolRegistry;
 use orbit_tools::{
-    approval::ApprovalSender, edit_file::EditFile, list_files::ListFiles,
-    read_document::ReadDocument, read_file::ReadFile, run_command::RunCommand,
-    workspace::Workspace, write_file::WriteFile,
+    approval::ApprovalSender, edit_file::EditFile, image_assets::ImageAssets,
+    list_files::ListFiles, read_document::ReadDocument, read_file::ReadFile, read_image::ReadImage,
+    run_command::RunCommand, workspace::Workspace, write_file::WriteFile,
 };
 
 pub fn workspace_tools(
@@ -33,6 +33,12 @@ pub fn workspace_tools(
     let mut tools = ToolRegistry::new();
     tools.register(ReadFile::new(workspace.clone()));
     tools.register(ReadDocument::new(workspace.clone()));
+    if let Some(database) = database {
+        tools.register(ReadImage::new(
+            workspace.clone(),
+            ImageAssets::for_database(database),
+        ));
+    }
     tools.register(ListFiles::new(workspace.clone()));
     tools.register(orbit_tools::web_fetch::WebFetch::new(web)?);
     if let Some(approvals) = approvals {

@@ -36,6 +36,8 @@
 
 `/attach <路径>` 将 PNG、JPEG、GIF 或 WebP 图片加入下一条消息，`/detach` 清空待发送图片。附件复制到全局数据库旁的 `orbit.attachments` 目录并按内容哈希去重，不在用户项目中创建文件；会话历史保存附件引用而不是 Base64。底栏显示待发送图片数量。OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 分别编码为各自的原生图片内容块。
 
+模型也可以调用 `read_image` 打开工作区内的图片。因此“分析 `screenshots/error.png`”这类任务不要求用户先执行 `/attach`：工具通过受限工作区句柄读取和验证图片，复制到同一全局附件目录，并把图片作为原生视觉内容加入下一次模型请求。文件列表、`read_file` 和 shell 输出都不能代替 `read_image`。如果当前模型或中转站不接受图片内容块，请求会明确失败，不能靠 OCR 或像素统计假装已经看过图片。
+
 每次发给模型最多保留最近四张历史图片；更早图片在请求副本中替换为带文件名的文字占位，持久化会话仍保留原引用。上下文估算为每张图片预留近似预算，防止大量截图绕过自动压缩。
 
 模型通过 `read_document` 读取工作区内的 PDF、Word、PowerPoint、Excel、OpenDocument、RTF、EPUB 和 CSV。AnyDoc 在本地转为 Markdown，按字符分页，不产生项目内中间文件。扫描 PDF 需要 OCR，目前明确报错，不会静默上传用户文档。

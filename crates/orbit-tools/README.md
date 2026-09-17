@@ -1,6 +1,12 @@
 # orbit-tools
 
-当前提供 `Workspace`、文本读取工具 `read_file`、文档解析工具 `read_document`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
+当前提供 `Workspace`、文本读取工具 `read_file`、图片读取工具 `read_image`、文档解析工具 `read_document`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
+
+## read_image 图片输入
+
+`read_image` 将工作区内的 PNG、JPEG、GIF 或 WebP 验证并复制到 Orbit 全局附件目录，然后作为原生视觉内容加入下一次模型请求。它接受工作区相对路径，沿用 `Workspace` 的路径保护和符号链接拒绝规则，不在项目中生成缓存。单图最大 20 MiB，最长边超过 2048 像素时缩小。
+
+工具返回文本收据和结构化附件。Agent 先把所有并行工具结果放回上下文，再附加图片，保持工具调用与结果的协议顺序。是否能够识图仍取决于所选模型和中转站是否支持对应的图片内容块；不支持时保留 API 错误，不回退到 shell 猜测像素。
 
 ## read_document 文档解析
 
