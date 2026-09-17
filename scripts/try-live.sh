@@ -4,11 +4,14 @@ set -euo pipefail
 orbit_repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 orbit_prepare=false
 orbit_hard=false
+orbit_context=false
+orbit_config="$orbit_repo/config.toml"
 for orbit_arg in "$@"; do
     case "$orbit_arg" in
         --prepare-only) orbit_prepare=true ;;
         --hard) orbit_hard=true ;;
-        *) echo 'Usage: bash scripts/try-live.sh [--hard] [--prepare-only]' >&2; exit 2 ;;
+        --context) orbit_hard=true; orbit_context=true ;;
+        *) echo 'Usage: bash scripts/try-live.sh [--hard | --context] [--prepare-only]' >&2; exit 2 ;;
     esac
 done
 if [[ ! -f "$orbit_repo/config.toml" ]]; then
@@ -67,11 +70,16 @@ price.c 有一个边界条件错误。请完成：
 构建副本的产物会丢弃，因此编译和测试已经组合在同一个 test.sh 中。原项目修改必须通过 edit_file。
 TASK
 fi
+if [[ "$orbit_context" == true ]]; then
+    python3 "$orbit_repo/scripts/prepare-context.py" "$orbit_trial" "$orbit_config"
+    orbit_config="$orbit_trial/config.toml"
+    printf '\n自动上下文验收：仅此测试使用 32000 总预算 / 12000 输出预留。\n观察自动压缩提示，并检查 evidence.json 是否保留早期资料。\n'
+fi
 cat > "$orbit_trial/start.sh" <<START
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- '$orbit_trial/project'
-exec '$orbit_repo/target/debug/orbit' --config '$orbit_repo/config.toml' --database '$orbit_trial/sessions.db' tui
+exec '$orbit_repo/target/debug/orbit' --config '$orbit_config' --database '$orbit_trial/sessions.db' tui
 START
 chmod 700 "$orbit_trial/start.sh"
 printf '\n测试项目：%s/project\n测试数据库：%s/sessions.db（独立于项目；正常启动使用用户数据目录）\n启动入口：bash %s/start.sh\n\n进入后发送：请读取 TASK.md，完成修复并实际运行测试。\n使用真实 API；修改和命令执行按界面提示批准。\n\n' "$orbit_trial" "$orbit_trial" "$orbit_trial"
