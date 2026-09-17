@@ -140,8 +140,12 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
             }
             lines.push(Line::from(spans));
         }
-        if r == 0 {
-            lines.push(border("├", "┼", "┤"));
+        if r + 1 < rows.len() {
+            let mut separator = border("├", "┼", "┤");
+            if r > 0 {
+                separator.style = Style::default().fg(Color::Rgb(115, 115, 115));
+            }
+            lines.push(separator);
         }
     }
     lines.push(border("└", "┴", "┘"));
