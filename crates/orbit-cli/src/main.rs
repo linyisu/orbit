@@ -232,7 +232,11 @@ impl FileConfig {
                         api_key: Some(provider.api_key.clone()),
                         model: model.clone(),
                         timeout: Duration::from_secs(provider.timeout_seconds),
-                        reasoning_effort: provider.reasoning_efforts.first().copied(),
+                        reasoning_effort: provider
+                            .reasoning_efforts
+                            .contains(&ReasoningEffort::High)
+                            .then_some(ReasoningEffort::High)
+                            .or_else(|| provider.reasoning_efforts.first().copied()),
                     },
                 });
             }
@@ -530,7 +534,7 @@ reasoning_efforts = ["low", "high"]
             option.reasoning_efforts,
             vec![ReasoningEffort::Low, ReasoningEffort::High]
         );
-        assert_eq!(option.config.reasoning_effort, Some(ReasoningEffort::Low));
+        assert_eq!(option.config.reasoning_effort, Some(ReasoningEffort::High));
     }
 
     #[test]

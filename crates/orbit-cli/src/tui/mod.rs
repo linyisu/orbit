@@ -583,8 +583,8 @@ fn select_model(
             *model = client;
             state.model = choice.qualified_name();
             if previous_model != state.model {
-                state.transcript.push(TranscriptItem::Notice(format!(
-                    "模型：{previous_model} → {}",
+                state.transcript.push(TranscriptItem::ModelChanged(format!(
+                    "{previous_model} → {}",
                     state.model
                 )));
             }

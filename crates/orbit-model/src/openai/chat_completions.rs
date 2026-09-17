@@ -80,6 +80,9 @@ pub(crate) fn encode(
     });
     if let Some(effort) = reasoning_effort {
         body["reasoning_effort"] = json!(effort);
+        if model.to_ascii_lowercase().starts_with("qwen") {
+            body["enable_thinking"] = json!(true);
+        }
     }
 
     let mut headers = HeaderMap::new();
@@ -243,6 +246,14 @@ mod input_tests {
         request.reasoning_effort = Some(crate::types::ReasoningEffort::High);
         let (body, _) = encode("gpt-test", request, true).unwrap();
         assert_eq!(body["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn enables_thinking_for_qwen_reasoning_models() {
+        let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
+        request.reasoning_effort = Some(crate::types::ReasoningEffort::High);
+        let (body, _) = encode("qwen3.8-27b", request, true).unwrap();
+        assert_eq!(body["enable_thinking"], true);
     }
 
     #[test]

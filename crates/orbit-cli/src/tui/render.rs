@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
@@ -16,6 +16,7 @@ const ACCENT: Color = Color::Rgb(218, 139, 109);
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
 const BORDER: Color = Color::Rgb(85, 85, 85);
+const MODEL_CHANGE: Color = Color::Rgb(145, 145, 145);
 
 fn muted(text: impl Into<String>) -> Span<'static> {
     Span::styled(text.into(), Style::default().fg(MUTED))
@@ -416,6 +417,16 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                     lines.push(Line::from(muted("    …")));
                 }
             }
+            TranscriptItem::ModelChanged(text) => {
+                lines.push(
+                    Line::from(Span::styled(
+                        text.to_owned(),
+                        Style::default().fg(MODEL_CHANGE),
+                    ))
+                    .alignment(Alignment::Center),
+                );
+                lines.push(Line::from(""));
+            }
             TranscriptItem::Error(text) | TranscriptItem::Notice(text) => {
                 let error = matches!(item, TranscriptItem::Error(_));
                 for line in text.lines() {
@@ -761,6 +772,15 @@ mod tests {
         let footer: String = (0..100).map(|x| buffer[(x, 29)].symbol()).collect();
         assert!(footer.contains("model") && footer.contains(state.permission_mode.label()));
         assert!(!footer.contains("Shift") && !footer.contains("恢复"));
+    }
+
+    #[test]
+    fn model_change_is_centered_and_has_no_notice_prefix() {
+        let item = TranscriptItem::ModelChanged("qwen::old → qwen::new".into());
+        let lines = transcript_lines(&[item], false);
+        assert_eq!(lines[0].to_string(), "qwen::old → qwen::new");
+        assert_eq!(lines[0].alignment, Some(Alignment::Center));
+        assert!(!lines[0].to_string().starts_with('›'));
     }
 
     #[test]

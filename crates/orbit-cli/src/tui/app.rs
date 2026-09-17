@@ -39,6 +39,7 @@ pub enum TranscriptItem {
     Tool(ToolRow),
     Error(String),
     Notice(String),
+    ModelChanged(String),
 }
 
 #[derive(Debug)]
