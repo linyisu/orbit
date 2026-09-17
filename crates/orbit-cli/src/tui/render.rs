@@ -78,6 +78,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_composer(frame, state, areas[4], input_lines, cursor);
     draw_panel(frame, state, areas[5]);
     let footer = footer_layout(state, areas[6].width as usize);
+    state.context_details_visible = footer.context_details_visible;
     if let Some(offset) = footer.ring_offset {
         state.context_ring_area = Rect::new(areas[6].x + offset, areas[6].y, 1, 1);
     }
@@ -121,6 +122,7 @@ pub(super) fn fit_label(text: &str, width: usize, tail: bool) -> String {
 struct FooterLayout {
     line: Line<'static>,
     ring_offset: Option<u16>,
+    context_details_visible: bool,
 }
 
 fn footer(state: &UiState, width: usize) -> Line<'static> {
@@ -145,7 +147,25 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let available = width.saturating_sub(4);
     let right_budget = available.saturating_sub(8);
     let ring = context_ring(context_percent(state));
-    let right = format!("{ring} {model_label} · {effort}");
+    let detailed_right = format!(
+        "{ring} {}%/{}  {model_label} · {effort}",
+        context_percent(state),
+        compact_tokens(input_context_budget(state)),
+    );
+    // Match Pi's direct context display only when it does not consume the
+    // project location. A compact footer is still more useful when the
+    // terminal becomes narrow.
+    let minimum_path_width = 12;
+    let context_details_visible = detailed_right
+        .width()
+        .saturating_add(mode.width() + 3)
+        .saturating_add(minimum_path_width)
+        <= available;
+    let right = if context_details_visible {
+        detailed_right
+    } else {
+        format!("{ring} {model_label} · {effort}")
+    };
     let right = fit_label(&right, right_budget, false);
     let path = std::env::var_os("HOME")
         .and_then(|home| {
@@ -193,6 +213,7 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     FooterLayout {
         line: Line::from(spans),
         ring_offset,
+        context_details_visible,
     }
 }
 
@@ -263,7 +284,8 @@ pub(super) fn handle_context_hover(
 }
 
 fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
-    if !state.context_hovered || state.context_ring_area.width == 0 {
+    if !state.context_hovered || state.context_details_visible || state.context_ring_area.width == 0
+    {
         return;
     }
     let percent = context_percent(state);
@@ -1296,7 +1318,7 @@ mod tests {
             if width >= 80 {
                 assert!(text.contains("思考"));
                 assert!(text.contains('◕'));
-                assert!(!text.contains("输入上下文"));
+                assert!(text.contains("53%/96k"));
                 assert!(text.contains(state.permission_mode.label()));
             }
             assert!(text.ends_with("  "));
@@ -1338,7 +1360,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(
-            content.contains("53%") && content.contains("51k") && content.contains("96k"),
+            content.contains("53%/96k") && !content.contains("上下文窗口（本地估算）"),
             "{content}"
         );
         let outside = Event::Mouse(MouseEvent {
