@@ -130,7 +130,7 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
         .reasoning_effort
         .map(|effort| format!("思考 {}", effort.label()))
         .unwrap_or_else(|| "思考 —".into());
-    let right = format!("{model_label} · {effort} · {mode}");
+    let right = format!("{model_label} · {effort}");
     let available = width.saturating_sub(4);
     let right = fit_label(&right, available.saturating_sub(8), false);
     let path = std::env::var_os("HOME")
@@ -147,12 +147,18 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
                 })
         })
         .unwrap_or_else(|| state.workspace.clone());
-    let path_width = available.saturating_sub(right.width());
-    let path = fit_label(&safe_output(&path), path_width, true);
-    let gap = available.saturating_sub(path.width() + right.width());
+    let left_width = available.saturating_sub(right.width());
+    let path_width = left_width.saturating_sub(mode.width() + 3);
+    let left = if path_width == 0 {
+        fit_label(mode, left_width, false)
+    } else {
+        let path = fit_label(&safe_output(&path), path_width, true);
+        format!("{path} · {mode}")
+    };
+    let gap = available.saturating_sub(left.width() + right.width());
     Line::from(vec![
         Span::raw("  "),
-        Span::styled(path, Style::default().fg(Color::Rgb(170, 170, 170))),
+        Span::styled(left, Style::default().fg(Color::Rgb(170, 170, 170))),
         Span::raw(" ".repeat(gap)),
         Span::raw(right),
         Span::raw("  "),
@@ -1069,6 +1075,7 @@ mod tests {
             }
             if width >= 80 {
                 assert!(text.contains("思考"));
+                assert!(text.contains(state.permission_mode.label()));
             }
             assert!(text.ends_with("  "));
         }
