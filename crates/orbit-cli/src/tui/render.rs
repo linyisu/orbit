@@ -30,6 +30,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.ime_cursor = None;
     state.selection.reset_caret();
     state.input_area = Rect::default();
+    state.attachment_areas.clear();
     if area.width < 24 || area.height < 10 {
         state.navigation.reset_area();
         frame.render_widget(
@@ -542,27 +543,37 @@ fn draw_composer(
     frame.render_widget(block, area);
     let attachment_height = u16::from(!state.attachments.is_empty());
     if attachment_height > 0 {
-        let labels = state
-            .attachments
-            .iter()
-            .enumerate()
-            .map(|(index, attachment)| {
-                format!("[图片 {} · {}]", index + 1, safe_output(attachment.name()))
-            })
-            .collect::<Vec<_>>()
-            .join("  ");
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                fit_label(&labels, inner.width.saturating_sub(2) as usize, false),
-                Style::default().fg(ACCENT),
-            )),
-            Rect {
-                x: inner.x + 2,
-                width: inner.width.saturating_sub(2),
-                height: 1,
-                ..inner
-            },
-        );
+        if state
+            .attachment_cursor
+            .is_some_and(|index| index >= state.attachments.len())
+        {
+            state.attachment_cursor = None;
+        }
+        let right = inner.right();
+        let mut x = inner.x + 2;
+        for (index, attachment) in state.attachments.iter().enumerate() {
+            if x >= right {
+                break;
+            }
+            let label = format!("[图片 {} · {}]", index + 1, safe_output(attachment.name()));
+            let label = fit_label(&label, (right - x) as usize, false);
+            let width = label.width().min((right - x) as usize) as u16;
+            if width == 0 {
+                break;
+            }
+            let chip = Rect::new(x, inner.y, width, 1);
+            let style = if state.attachment_cursor == Some(index) {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(ACCENT)
+            };
+            frame.render_widget(Paragraph::new(Span::styled(label, style)), chip);
+            state.attachment_areas.push(chip);
+            x = x.saturating_add(width + 2);
+        }
     }
     let prompt_area = Rect {
         y: inner.y + attachment_height,
@@ -596,7 +607,11 @@ fn draw_composer(
             .collect::<Vec<_>>(),
     );
     frame.render_widget(Paragraph::new(text), text_area);
-    if text_area.width > 0 && text_area.height > 0 && !state.selection.active() {
+    if text_area.width > 0
+        && text_area.height > 0
+        && !state.selection.active()
+        && state.attachment_cursor.is_none()
+    {
         // Draw a steady caret; restore the hidden hardware cursor after flushing.
         let x = text_area.x + (cursor.0 as u16).min(text_area.width - 1);
         let y = text_area.y + (cursor.1.saturating_sub(scroll) as u16).min(text_area.height - 1);
@@ -770,6 +785,13 @@ mod tests {
         assert!(screen.contains("describe this image"));
         assert!(state.input_area.y > 0);
         assert_eq!(state.selection.input, state.input_area);
+        assert_eq!(state.attachment_areas.len(), 1);
+        state.attachment_cursor = Some(0);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(!terminal.backend().cursor_visible());
+        let chip = state.attachment_areas[0];
+        assert_eq!(terminal.backend().buffer()[(chip.x, chip.y)].bg, ACCENT);
     }
 
     #[test]

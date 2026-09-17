@@ -235,6 +235,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 "Enter          发送消息",
                 "Ctrl+J / Shift+Enter  换行",
                 "Ctrl+V / Alt+V  粘贴剪贴板图片或文字",
+                "←→ + Backspace/Delete  选择或删除图片",
                 "↑ / ↓          移动输入光标，首尾切换历史",
                 "滚轮           滚动对话，不移动输入光标",
                 "拖选 + Ctrl+C  复制选区",

@@ -109,8 +109,15 @@ pub async fn run(
                         }
                         continue;
                     }
+                    if let Event::Mouse(mouse) = &event
+                        && mouse.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                        && focus_attachment_at(&mut state, mouse.column, mouse.row) {
+                        state.selection.clear();
+                        continue;
+                    }
                     if let Some((x, y)) = state.selection.click(&event)
                         && state.input_area.contains((x, y).into()) {
+                        state.attachment_cursor = None;
                         state.input.move_to((x - state.input_area.x) as usize,
                             (y - state.input_area.y) as usize + state.input_scroll,
                             state.input_width);
@@ -192,21 +199,23 @@ pub async fn run(
                             let attachments = if compacting {
                                 Vec::new()
                             } else {
+                                state.attachment_cursor = None;
                                 std::mem::take(&mut state.attachments)
                             };
                             session.begin(prompt.clone(), state.model.clone()).await?;
                             let display_prompt = if attachments.is_empty() {
                                 prompt.clone()
                             } else {
-                                format!(
-                                    "{}\n{}",
-                                    prompt,
-                                    attachments
-                                        .iter()
-                                        .map(|attachment| format!("[图片：{}]", attachment.name()))
-                                        .collect::<Vec<_>>()
-                                        .join(" ")
-                                )
+                                let labels = attachments
+                                    .iter()
+                                    .map(|attachment| format!("[图片：{}]", attachment.name()))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                if prompt.is_empty() {
+                                    labels
+                                } else {
+                                    format!("{prompt}\n{labels}")
+                                }
                             };
                             state.submit(display_prompt);
                             let mut messages = history.clone();
@@ -410,6 +419,7 @@ async fn run_command(
         "/detach" if argument.is_empty() => {
             let count = state.attachments.len();
             state.attachments.clear();
+            state.attachment_cursor = None;
             state.transcript.push(TranscriptItem::Notice(format!(
                 "已清空 {count} 个待发送图片。"
             )));
@@ -533,6 +543,35 @@ fn queue_attachment(state: &mut UiState, attachment: orbit_model::types::Attachm
         return false;
     }
     state.attachments.push(attachment);
+    state.attachment_cursor = None;
+    true
+}
+
+fn focus_attachment_at(state: &mut UiState, x: u16, y: u16) -> bool {
+    let Some(index) = state
+        .attachment_areas
+        .iter()
+        .position(|area| area.contains((x, y).into()))
+    else {
+        return false;
+    };
+    state.attachment_cursor = Some(index);
+    true
+}
+
+fn remove_focused_attachment(state: &mut UiState, backwards: bool) -> bool {
+    let Some(index) = state.attachment_cursor.take() else {
+        return false;
+    };
+    if index >= state.attachments.len() {
+        return false;
+    }
+    state.attachments.remove(index);
+    if backwards && index > 0 {
+        state.attachment_cursor = Some(index - 1);
+    } else if !backwards && index < state.attachments.len() {
+        state.attachment_cursor = Some(index);
+    }
     true
 }
 
@@ -653,6 +692,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         return Action::None;
     }
     if let Event::Paste(text) = event {
+        state.attachment_cursor = None;
         if text.is_empty() {
             return Action::PasteClipboard;
         }
@@ -673,13 +713,35 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
     if control {
         match key.code {
             KeyCode::Char('c') if busy => return Action::Cancel,
-            KeyCode::Char('c') if !state.input.text.is_empty() => state.input.clear(),
+            KeyCode::Char('c') if !state.input.text.is_empty() || !state.attachments.is_empty() => {
+                state.input.clear();
+                state.attachments.clear();
+                state.attachment_cursor = None;
+            }
             KeyCode::Char('c') => return Action::Quit,
-            KeyCode::Char('d') if state.input.text.is_empty() => return Action::Quit,
-            KeyCode::Char('d') => state.input.delete(),
-            KeyCode::Char('j') => state.input.insert("\n"),
+            KeyCode::Char('d') if state.input.text.is_empty() && state.attachments.is_empty() => {
+                return Action::Quit;
+            }
+            KeyCode::Char('d') => {
+                if !remove_focused_attachment(state, false) {
+                    state.input.delete();
+                }
+            }
+            KeyCode::Char('j') => {
+                if state.attachment_cursor.take().is_some() {
+                    state.input.cursor = 0;
+                }
+                state.input.insert("\n");
+            }
+            KeyCode::Char('a') if !state.attachments.is_empty() => {
+                state.input.home();
+                state.attachment_cursor = Some(0);
+            }
             KeyCode::Char('a') => state.input.home(),
-            KeyCode::Char('e') => state.input.end(),
+            KeyCode::Char('e') => {
+                state.attachment_cursor = None;
+                state.input.end();
+            }
             KeyCode::Char('u') => {
                 let end = state.input.cursor;
                 state.input.home();
@@ -716,6 +778,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         if busy {
             return Action::Cancel;
         }
+        state.attachment_cursor = None;
         state.show_help = false;
         state.menu_dismissed = true;
         return Action::None;
@@ -761,34 +824,87 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         KeyCode::Enter => {
             state.menu_index = 0;
             state.menu_dismissed = false;
-            return state
-                .input
-                .take()
-                .map(Action::Submit)
-                .unwrap_or(Action::None);
+            state.attachment_cursor = None;
+            return if let Some(prompt) = state.input.take() {
+                Action::Submit(prompt)
+            } else if !state.attachments.is_empty() {
+                Action::Submit(String::new())
+            } else {
+                Action::None
+            };
         }
-        KeyCode::Char('?') if state.input.text.is_empty() => {
+        KeyCode::Char('?') if state.input.text.is_empty() && state.attachments.is_empty() => {
             state.selection = Default::default();
             state.show_help = true;
             state.help_scroll = 0;
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) => {
+            if state.attachment_cursor.take().is_some() {
+                state.input.cursor = 0;
+            }
             state.input.insert(&c.to_string());
             state.menu_index = 0;
             state.menu_dismissed = false;
         }
         KeyCode::Backspace => {
-            state.input.backspace();
+            if !remove_focused_attachment(state, true) {
+                if state.input.cursor == 0 && !state.attachments.is_empty() {
+                    state.attachments.pop();
+                } else {
+                    state.input.backspace();
+                }
+            }
             state.menu_index = 0;
             state.menu_dismissed = false;
         }
-        KeyCode::Delete => state.input.delete(),
-        KeyCode::Left => state.input.move_left(),
-        KeyCode::Right => state.input.move_right(),
-        KeyCode::Home => state.input.home(),
-        KeyCode::End => state.input.end(),
-        KeyCode::Up => state.input.move_vertical(false, state.input_width),
-        KeyCode::Down => state.input.move_vertical(true, state.input_width),
+        KeyCode::Delete => {
+            if !remove_focused_attachment(state, false) {
+                state.input.delete();
+            }
+        }
+        KeyCode::Left => {
+            if let Some(index) = &mut state.attachment_cursor {
+                *index = index.saturating_sub(1);
+            } else if state.input.cursor == 0 && !state.attachments.is_empty() {
+                state.attachment_cursor = Some(state.attachments.len() - 1);
+            } else {
+                state.input.move_left();
+            }
+        }
+        KeyCode::Right => {
+            if let Some(index) = state.attachment_cursor {
+                if index + 1 < state.attachments.len() {
+                    state.attachment_cursor = Some(index + 1);
+                } else {
+                    state.attachment_cursor = None;
+                    state.input.cursor = 0;
+                }
+            } else {
+                state.input.move_right();
+            }
+        }
+        KeyCode::Home => {
+            state.input.home();
+            if !state.attachments.is_empty() {
+                state.attachment_cursor = Some(0);
+            }
+        }
+        KeyCode::End => {
+            state.attachment_cursor = None;
+            state.input.end();
+        }
+        KeyCode::Up => {
+            if state.attachment_cursor.is_none() {
+                state.input.move_vertical(false, state.input_width);
+            }
+        }
+        KeyCode::Down => {
+            if state.attachment_cursor.take().is_some() {
+                state.input.cursor = 0;
+            } else {
+                state.input.move_vertical(true, state.input_width);
+            }
+        }
         KeyCode::PageUp => state.scroll_up(8),
         KeyCode::PageDown => state.scroll_down(8),
         _ => {}
@@ -897,5 +1013,53 @@ mod tests {
                 Action::PasteClipboard
             );
         }
+    }
+
+    fn image(name: &str) -> orbit_model::types::Attachment {
+        orbit_model::types::Attachment::Image {
+            name: name.into(),
+            mime_type: "image/png".into(),
+            path: PathBuf::from(name),
+        }
+    }
+
+    #[test]
+    fn attachments_are_atomic_editable_input_items() {
+        let mut state = UiState::new("mock");
+        state.attachments = vec![image("first.png"), image("second.png")];
+        state.input.set("caption".into());
+        state.input.home();
+
+        press(&mut state, KeyCode::Left, KeyModifiers::NONE, false);
+        assert_eq!(state.attachment_cursor, Some(1));
+        press(&mut state, KeyCode::Left, KeyModifiers::NONE, false);
+        assert_eq!(state.attachment_cursor, Some(0));
+        press(&mut state, KeyCode::Delete, KeyModifiers::NONE, false);
+        assert_eq!(state.attachments, vec![image("second.png")]);
+        assert_eq!(state.attachment_cursor, Some(0));
+
+        press(&mut state, KeyCode::Right, KeyModifiers::NONE, false);
+        assert_eq!(state.attachment_cursor, None);
+        assert_eq!(state.input.cursor, 0);
+        press(&mut state, KeyCode::Backspace, KeyModifiers::NONE, false);
+        assert!(state.attachments.is_empty());
+        press(&mut state, KeyCode::Right, KeyModifiers::NONE, false);
+        assert_eq!(state.input.cursor, 1);
+    }
+
+    #[test]
+    fn attachment_click_focuses_it_and_image_only_messages_can_submit() {
+        let mut state = UiState::new("mock");
+        state.attachments.push(image("only.png"));
+        state
+            .attachment_areas
+            .push(ratatui::layout::Rect::new(4, 5, 20, 1));
+        assert!(focus_attachment_at(&mut state, 8, 5));
+        assert_eq!(state.attachment_cursor, Some(0));
+        assert_eq!(
+            press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
+            Action::Submit(String::new())
+        );
+        assert_eq!(state.attachment_cursor, None);
     }
 }
