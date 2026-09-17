@@ -27,37 +27,38 @@ static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(|| {
 });
 // Follow bat's scope-based themes with a restrained, readable palette.
 // Reference: https://github.com/sharkdp/bat/blob/master/assets/themes/ansi.tmTheme
-// Group related syntax roles; keep punctuation in the base foreground.
+// Keep semantic distinctions with light, low-saturation colors. Comments stay
+// readable on translucent terminals; punctuation uses the warm base foreground.
 static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
     let color = |r, g, b| SyntaxColor { r, g, b, a: 255 };
     Theme {
         name: Some("Orbit restrained".into()),
         settings: ThemeSettings {
-            foreground: Some(color(222, 218, 212)),
+            foreground: Some(color(234, 232, 227)),
             ..Default::default()
         },
         scopes: [
-            ("keyword - keyword.operator, storage", color(184, 202, 220)),
-            ("string", color(201, 207, 180)),
+            ("keyword - keyword.operator, storage", color(197, 218, 244)),
+            ("string", color(215, 229, 192)),
             (
                 "entity.name.function, support.function",
-                color(184, 211, 211),
+                color(198, 230, 230),
             ),
             (
                 "entity.name.type, entity.name.class, support.type, support.class",
-                color(210, 194, 216),
+                color(224, 211, 240),
             ),
             (
                 "constant.numeric, constant.language, constant.character",
-                color(219, 194, 161),
+                color(240, 217, 183),
             ),
             (
                 "entity.name.tag, entity.other.attribute-name",
-                color(184, 202, 220),
+                color(197, 218, 244),
             ),
             (
                 "comment, punctuation.definition.comment",
-                color(170, 176, 184),
+                color(190, 196, 205),
             ),
         ]
         .into_iter()
