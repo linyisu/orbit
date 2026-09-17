@@ -197,26 +197,41 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
 }
 
 fn compact_tokens(tokens: usize) -> String {
-    if tokens >= 1_000 {
+    if tokens >= 1_000_000 {
+        let millions = tokens as f64 / 1_000_000.0;
+        if millions.fract() == 0.0 {
+            format!("{}M", millions as usize)
+        } else {
+            format!("{millions:.1}M")
+        }
+    } else if tokens >= 1_000 {
         format!("{}k", tokens / 1_000)
     } else {
         tokens.to_string()
     }
 }
 
+fn input_context_budget(state: &UiState) -> usize {
+    state
+        .context_tokens
+        .saturating_sub(state.max_output_tokens as usize)
+        .max(1)
+}
+
 fn context_percent(state: &UiState) -> usize {
     state
         .context_used_tokens
         .saturating_mul(100)
-        .checked_div(state.context_tokens.max(1))
+        .checked_div(input_context_budget(state))
         .unwrap_or(0)
 }
 
 fn context_ring(percent: usize) -> &'static str {
     match percent {
-        0..=24 => "◔",
-        25..=49 => "◑",
-        50..=74 => "◕",
+        0 => "○",
+        1..=25 => "◔",
+        26..=50 => "◑",
+        51..=75 => "◕",
         _ => "●",
     }
 }
@@ -254,12 +269,17 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
     let percent = context_percent(state);
     let remaining = 100usize.saturating_sub(percent.min(100));
     let lines = [
-        "上下文窗口".to_owned(),
-        format!("{percent}% 已用（剩余 {remaining}%）"),
+        "上下文窗口（本地估算）".to_owned(),
+        format!("输入上下文 {percent}% 已用（剩余 {remaining}%）"),
         format!(
-            "已用 {} 标记，共 {}",
+            "估算 {} / {} tokens",
             compact_tokens(state.context_used_tokens),
-            compact_tokens(state.context_tokens)
+            compact_tokens(input_context_budget(state)),
+        ),
+        format!(
+            "输出预留 {} · 总窗口 {}",
+            compact_tokens(state.max_output_tokens as usize),
+            compact_tokens(state.context_tokens),
         ),
     ];
     let width = lines
@@ -269,7 +289,7 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         .unwrap_or(0)
         .saturating_add(4)
         .min(frame.area().width as usize) as u16;
-    let height = 5;
+    let height = 6;
     let x = state
         .context_ring_area
         .x
@@ -1275,8 +1295,8 @@ mod tests {
             }
             if width >= 80 {
                 assert!(text.contains("思考"));
-                assert!(text.contains('◑'));
-                assert!(!text.contains("上下文 40%"));
+                assert!(text.contains('◕'));
+                assert!(!text.contains("输入上下文"));
                 assert!(text.contains(state.permission_mode.label()));
             }
             assert!(text.ends_with("  "));
@@ -1284,6 +1304,12 @@ mod tests {
         assert_eq!(fit_label("你好e\u{301}", 3, true), "…e\u{301}");
         assert_eq!(compact_tokens(999), "999");
         assert_eq!(compact_tokens(1_999), "1k");
+        assert_eq!(compact_tokens(1_000_000), "1M");
+        assert_eq!(compact_tokens(1_500_000), "1.5M");
+        assert_eq!(context_ring(0), "○");
+        assert_eq!(context_ring(25), "◔");
+        assert_eq!(context_ring(26), "◑");
+        assert_eq!(context_ring(76), "●");
     }
 
     #[test]
@@ -1312,7 +1338,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(
-            content.contains("40%") && content.contains("51k"),
+            content.contains("53%") && content.contains("51k") && content.contains("96k"),
             "{content}"
         );
         let outside = Event::Mouse(MouseEvent {

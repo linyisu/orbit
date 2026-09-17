@@ -337,24 +337,38 @@ fn parse_status_entry(
     if let Some(rest) = record.strip_prefix("! ") {
         return Ok((Some(json!({"kind":"ignored","path":rest})), 0));
     }
-    let mut fields = record.splitn(9, ' ');
-    let tag = fields.next().unwrap_or_default();
+    let tag = record
+        .split_once(' ')
+        .map(|(tag, _)| tag)
+        .unwrap_or_default();
     if !matches!(tag, "1" | "2" | "u") {
         return Ok((None, 0));
     }
+    let parts = if tag == "u" { 11 } else { 9 };
+    let mut fields = record.splitn(parts, ' ');
+    debug_assert_eq!(fields.next(), Some(tag));
     let xy = fields.next().unwrap_or_default();
     let fields_to_path = match tag {
-        "1" => 6,
-        "2" => 7,
+        // After XY, ordinary records contain submodule, three modes and two
+        // object IDs. Type-2 then carries score and path together in the rest.
+        "1" | "2" => 6,
+        // Unmerged records add a worktree mode and a third object ID.
         "u" => 8,
         _ => unreachable!(),
     };
     for _ in 0..fields_to_path {
         let _ = fields.next();
     }
-    let path = fields.next().unwrap_or_default();
+    let rest = fields.next().unwrap_or_default();
+    let (score, path) = if tag == "2" {
+        let (score, path) = rest.split_once(' ').unwrap_or((rest, ""));
+        (Some(score), path)
+    } else {
+        (None, rest)
+    };
     let mut entry = json!({"kind":match tag { "1" => "changed", "2" => "renamed_or_copied", _ => "unmerged" },"xy":xy,"path":path});
     if tag == "2" {
+        entry["score"] = json!(score);
         entry["original_path"] = json!(rename_from.map(text).transpose()?);
         return Ok((Some(entry), 1));
     }
@@ -430,4 +444,31 @@ fn text(bytes: &[u8]) -> Result<String, ToolError> {
     std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
         ToolError::ExecutionFailed("Git returned a non-UTF-8 path or metadata field".into())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_rename_and_unmerged_porcelain_v2_records() {
+        let (rename, consumed) = parse_status_entry(
+            b"2 R. N... 100644 100644 100644 aaaaaaa bbbbbbb R100 new-name.rs",
+            Some(b"old-name.rs"),
+        )
+        .unwrap();
+        let rename = rename.unwrap();
+        assert_eq!(consumed, 1);
+        assert_eq!(rename["path"], "new-name.rs");
+        assert_eq!(rename["original_path"], "old-name.rs");
+        assert_eq!(rename["score"], "R100");
+
+        let (unmerged, consumed) = parse_status_entry(
+            b"u UU N... 100644 100644 100644 100644 aaaaaaa bbbbbbb ccccccc conflicted.rs",
+            None,
+        )
+        .unwrap();
+        assert_eq!(consumed, 0);
+        assert_eq!(unmerged.unwrap()["path"], "conflicted.rs");
+    }
 }

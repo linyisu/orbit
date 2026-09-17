@@ -325,8 +325,15 @@ where
                     finish_reason: reason,
                     usage: event_usage,
                 } => {
-                    finish_reason = reason;
-                    usage = event_usage;
+                    // OpenAI-compatible streams commonly send a final usage-only
+                    // chunk after the choice carrying `finish_reason`. Keep the
+                    // terminal reason while accepting the later usage payload.
+                    if reason.is_some() {
+                        finish_reason = reason;
+                    }
+                    if event_usage.is_some() {
+                        usage = event_usage;
+                    }
                 }
             }
         }
@@ -511,8 +518,12 @@ where
                     finish_reason: reason,
                     usage: event_usage,
                 } => {
-                    finish_reason = reason;
-                    usage = event_usage;
+                    if reason.is_some() {
+                        finish_reason = reason;
+                    }
+                    if event_usage.is_some() {
+                        usage = event_usage;
+                    }
                 }
             }
         }
@@ -687,7 +698,7 @@ mod tests {
         model::MockModel,
         tool::{ClosureTool, Tool, ToolError, ToolFuture, ToolOutput},
     };
-    use orbit_model::types::{Attachment, FunctionCall, ToolCall};
+    use orbit_model::types::{Attachment, FunctionCall, ToolCall, Usage};
     use serde_json::json;
 
     fn assistant_text(text: &str) -> ChatCompletion {
@@ -858,6 +869,62 @@ mod tests {
                 assert_eq!(backend.requests().len(), 1);
                 assert_eq!(backend.requests()[0].max_tokens, Some(16384));
             }
+        }
+    }
+
+    struct UsageTailModel;
+
+    impl ModelBackend for UsageTailModel {
+        fn complete<'a>(
+            &'a self,
+            _: ChatRequest,
+            _: CancellationToken,
+        ) -> crate::model::CompletionFuture<'a> {
+            Box::pin(async { panic!("a completed stream must not fall back to complete") })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _: ChatRequest,
+            _: CancellationToken,
+        ) -> crate::model::StreamFuture<'a> {
+            Box::pin(async {
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    Ok(StreamEvent::TextDelta("partial".into())),
+                    Ok(StreamEvent::Completed {
+                        finish_reason: Some("length".into()),
+                        usage: None,
+                    }),
+                    Ok(StreamEvent::Completed {
+                        finish_reason: None,
+                        usage: Some(Usage {
+                            prompt_tokens: Some(10),
+                            completion_tokens: Some(5),
+                            total_tokens: Some(15),
+                        }),
+                    }),
+                ])) as orbit_model::types::ModelStream)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_only_tail_does_not_hide_a_truncated_stream_reason() {
+        for with_agent_events in [false, true] {
+            let agent = Agent::new(UsageTailModel, ToolRegistry::new(), AgentConfig::default());
+            let error = if with_agent_events {
+                let (sender, _receiver) = mpsc::channel(16);
+                agent
+                    .run_with_agent_events(request(), CancellationToken::new(), sender)
+                    .await
+                    .unwrap_err()
+            } else {
+                agent
+                    .run_with_events(request(), CancellationToken::new(), |_| {})
+                    .await
+                    .unwrap_err()
+            };
+            assert!(error.to_string().contains("输出达到上限"));
         }
     }
 

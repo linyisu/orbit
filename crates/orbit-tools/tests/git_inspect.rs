@@ -82,6 +82,20 @@ async fn reports_branch_status_diff_and_history_without_writing() {
 }
 
 #[tokio::test]
+async fn reports_both_paths_for_a_staged_rename() {
+    let directory = repository();
+    git(directory.path(), &["mv", "tracked.txt", "renamed.txt"]);
+    let tool = GitInspect::new(Workspace::new(directory.path()).unwrap());
+
+    let status = run(&tool, json!({"view":"status"})).await;
+    let entry = &status["entries"][0];
+    assert_eq!(entry["kind"], "renamed_or_copied");
+    assert_eq!(entry["path"], "renamed.txt");
+    assert_eq!(entry["original_path"], "tracked.txt");
+    assert_eq!(entry["score"], "R100");
+}
+
+#[tokio::test]
 async fn rejects_paths_outside_workspace_and_non_root_workspaces() {
     let directory = repository();
     fs::create_dir(directory.path().join("nested")).unwrap();
