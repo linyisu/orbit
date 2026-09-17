@@ -7,6 +7,7 @@ pub mod read_file;
 pub mod read_image;
 pub mod run_command;
 pub mod sandbox;
+pub mod search_text;
 pub mod web_fetch;
 pub mod workspace;
 pub mod write_file;

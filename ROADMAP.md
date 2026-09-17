@@ -98,7 +98,7 @@ Orbit 已经是一个最小可用 Agent，而不只是聊天界面。它具备�
 
 ## 下一步实施顺序
 
-1. `search_text` 工具及真实仓库验收脚本。
+1. ✅ `search_text` 工具：`.gitignore`、`.ignore`、正则、glob、上下文、分页、取消和工作区边界测试已完成。
 2. `AGENTS.md` 分层加载、来源追踪和上下文预算展示。
 3. Git 状态/diff 与任务变更清单。
 4. 中央检查点、`/diff`、`/undo`。

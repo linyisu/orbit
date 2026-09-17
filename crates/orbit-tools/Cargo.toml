@@ -7,8 +7,11 @@ edition.workspace = true
 anydoc = "0.1.9"
 anyhow.workspace = true
 image = { version = "0.25.9", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+globset = "0.4.18"
+ignore = "0.4.33"
 orbit-agent = { path = "../orbit-agent" }
 orbit-model = { path = "../orbit-model" }
+regex = "1.13.1"
 reqwest.workspace = true
 url = "2.5"
 html2text = "0.17.1"

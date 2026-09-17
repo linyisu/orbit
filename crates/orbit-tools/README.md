@@ -1,6 +1,16 @@
 # orbit-tools
 
-当前提供 `Workspace`、文本读取工具 `read_file`、图片读取工具 `read_image`、文档解析工具 `read_document`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
+当前提供 `Workspace`、文本读取工具 `read_file`、项目检索工具 `search_text`、图片读取工具 `read_image`、文档解析工具 `read_document`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
+
+## search_text 项目检索
+
+`search_text` 在不启动 shell 的情况下搜索工作区文本。默认使用大小写不敏感的字面量匹配，并遵循 `.gitignore` 与 `.ignore`；可改用正则、限定路径或 glob。搜索仍通过 `Workspace` 打开每个候选文件，因此不会读取 `.git`、`.env`、配置文件、受保护数据库、符号链接或特殊文件。
+
+```json
+{"query":"SessionState","path":"crates","glob":"**/*.rs","context_lines":2,"limit":50}
+```
+
+结果包含相对路径、1 起始的行列号、匹配行和前后上下文。`offset` 与 `next_offset` 按匹配条目分页；单次最多返回 500 项或 32 KiB JSON。单个文件超过 2 MiB、二进制或无法读取时跳过；全次搜索最多检查 20000 个文件、读取 16 MiB 文本，达到总量时 `scan_truncated=true`。使用 `read_file` 继续查看匹配文件的完整、带行号内容。
 
 ## read_image 图片输入
 
