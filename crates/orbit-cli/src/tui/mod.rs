@@ -57,7 +57,10 @@ struct CommandContext<'a> {
 pub struct ModelOption {
     pub provider: String,
     pub model: String,
+    /// Request budget passed to the agent, including the output upper bound.
     pub context_tokens: usize,
+    /// Full usable input window shown to the user and used for compaction.
+    pub input_context_tokens: usize,
     pub default_for_provider: bool,
     pub reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
     pub config: orbit_model::types::ModelConfig,
@@ -71,6 +74,7 @@ impl ModelOption {
 
 pub struct RequestBudget {
     pub context_tokens: usize,
+    pub input_context_tokens: usize,
     pub auto_compact: bool,
     pub max_output_tokens: u32,
     pub max_turns: usize,
@@ -91,6 +95,7 @@ pub async fn run(
     let mut state = UiState::new(model_name);
     let RequestBudget {
         context_tokens,
+        input_context_tokens,
         auto_compact,
         max_output_tokens,
         max_turns,
@@ -99,6 +104,7 @@ pub async fn run(
         model_options,
     } = budget;
     state.context_tokens = context_tokens;
+    state.input_context_tokens = input_context_tokens;
     state.auto_compact = auto_compact;
     state.max_output_tokens = max_output_tokens;
     state.reasoning_effort = model.config().reasoning_effort;
@@ -608,10 +614,12 @@ async fn run_command(
             crate::instructions::inject(history, instructions);
             let input = std::mem::take(&mut state.input);
             let context_tokens = state.context_tokens;
+            let input_context_tokens = state.input_context_tokens;
             let auto_compact = state.auto_compact;
             let max_output_tokens = state.max_output_tokens;
             *state = UiState::new(state.model.clone());
             state.context_tokens = context_tokens;
+            state.input_context_tokens = input_context_tokens;
             state.auto_compact = auto_compact;
             state.max_output_tokens = max_output_tokens;
             state.input = input;
@@ -652,7 +660,7 @@ async fn run_command(
             let tool_tokens = orbit_agent::context::estimate_tokens(&[], &tools.definitions());
             let sources = if instructions.sources.is_empty() { "未找到".to_owned() } else { format!("{} 条", instructions.sources.len()) };
             let truncation = if instructions.truncated { "（达到 32 KiB 上限，后续文件未加载）" } else { "" };
-            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输出上限及预留：{} tokens · 总预算：{}\n自动压缩：{}（可用输入预算的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；模型摘要不可用时使用本地回退。", instructions.source_summary(), state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：尚未建立（0 tokens）\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动压缩：{}（输入窗口的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；模型摘要不可用时使用本地回退。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
@@ -754,6 +762,7 @@ async fn select_model(
             *model = client;
             state.model = model_name;
             state.context_tokens = choice.context_tokens;
+            state.input_context_tokens = choice.input_context_tokens;
             state.reasoning_effort = reasoning_effort;
             if previous_model != state.model {
                 state.transcript.push(TranscriptItem::CommandResult(format!(
@@ -965,6 +974,7 @@ async fn resume_session(
     crate::instructions::inject(history, instructions);
     let mut restored = UiState::new(state.model.clone());
     restored.context_tokens = state.context_tokens;
+    restored.input_context_tokens = state.input_context_tokens;
     restored.auto_compact = state.auto_compact;
     restored.max_output_tokens = state.max_output_tokens;
     restored.model_completions = state.model_completions.clone();
@@ -997,6 +1007,7 @@ fn restore_model_profile(
     *model = client;
     state.model = choice.qualified_name();
     state.context_tokens = choice.context_tokens;
+    state.input_context_tokens = choice.input_context_tokens;
     state.reasoning_effort = model.config().reasoning_effort;
 }
 

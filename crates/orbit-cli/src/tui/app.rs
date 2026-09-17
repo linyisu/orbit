@@ -56,7 +56,10 @@ pub struct UiState {
     pub approval_choice: usize,
     pub permission_mode: super::permissions::Mode,
     pub selection: super::selection::Selection,
+    /// Request budget, including output capacity where the provider counts it.
     pub context_tokens: usize,
+    /// Input-only window used for the context indicator and compaction budget.
+    pub input_context_tokens: usize,
     /// Same approximate request-context count displayed by `/context`.
     pub context_used_tokens: usize,
     pub context_ring_area: ratatui::layout::Rect,
@@ -113,6 +116,7 @@ impl UiState {
             permission_mode: super::permissions::Mode::default(),
             selection: super::selection::Selection::default(),
             context_tokens: 128_000,
+            input_context_tokens: 96_000,
             context_used_tokens: 0,
             context_ring_area: ratatui::layout::Rect::default(),
             context_hovered: false,

@@ -135,6 +135,10 @@ struct ModelProfile {
     id: String,
     /// Overrides the top-level context window for this model only.
     context_tokens: Option<usize>,
+    /// Full usable input window for providers that allow output outside this
+    /// input limit. When omitted, `context_tokens` keeps its total-budget
+    /// meaning and Orbit reserves the configured output upper bound from it.
+    input_context_tokens: Option<usize>,
     reasoning: Option<ReasoningProfile>,
 }
 
@@ -290,10 +294,15 @@ impl FileConfig {
                     }
                     validate_reasoning_extra(&model.id, provider.api_format, &reasoning.extra)?;
                 }
-                let context_tokens = model.context_tokens.unwrap_or(config.context_tokens);
-                if context_tokens < 8192 || config.max_output_tokens as usize >= context_tokens {
+                let input_context_tokens = model.input_context_tokens.unwrap_or_else(|| {
+                    model
+                        .context_tokens
+                        .unwrap_or(config.context_tokens)
+                        .saturating_sub(config.max_output_tokens as usize)
+                });
+                if input_context_tokens < 8192 {
                     bail!(
-                        "model {:?}: context_tokens must be at least 8192 and larger than max_output_tokens",
+                        "model {:?}: input context window must be at least 8192 tokens",
                         model.id
                     );
                 }
@@ -316,11 +325,22 @@ impl FileConfig {
         let mut options = Vec::new();
         for (name, provider) in &self.providers {
             for (index, model) in provider.models.iter().enumerate() {
+                let input_context_tokens = model.input_context_tokens.unwrap_or_else(|| {
+                    model
+                        .context_tokens
+                        .unwrap_or(self.context_tokens)
+                        .saturating_sub(self.max_output_tokens as usize)
+                });
+                let context_tokens = model.input_context_tokens.map_or_else(
+                    || model.context_tokens.unwrap_or(self.context_tokens),
+                    |input| input.saturating_add(self.max_output_tokens as usize),
+                );
                 let reasoning = model.reasoning.as_ref();
                 options.push(tui::ModelOption {
                     provider: name.clone(),
                     model: model.id.clone(),
-                    context_tokens: model.context_tokens.unwrap_or(self.context_tokens),
+                    context_tokens,
+                    input_context_tokens,
                     default_for_provider: index == 0,
                     reasoning_efforts: reasoning
                         .map_or_else(Vec::new, |profile| profile.efforts.clone()),
@@ -422,6 +442,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let max_output_tokens = file_config.max_output_tokens;
     let model_name = default_model.qualified_name();
     let context_tokens = default_model.context_tokens;
+    let input_context_tokens = default_model.input_context_tokens;
     let client = ModelClient::new(default_model.config)?;
     let session = session::SessionState::open(database, args.resume, model_name.clone()).await?;
     tui::run(
@@ -439,6 +460,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         approval_receiver,
         tui::RequestBudget {
             context_tokens,
+            input_context_tokens,
             max_output_tokens,
             auto_compact: agent_config.auto_compact,
             max_turns: agent_config.max_turns,
@@ -696,12 +718,19 @@ id = "small-window"
 context_tokens = 64000
 [[providers.test.models]]
 id = "default-window"
+[[providers.test.models]]
+id = "separate-input-window"
+input_context_tokens = 224000
 "#,
         )
         .unwrap();
         let options = config.model_options().unwrap();
         assert_eq!(options[0].context_tokens, 64_000);
+        assert_eq!(options[0].input_context_tokens, 32_000);
         assert_eq!(options[1].context_tokens, 128_000);
+        assert_eq!(options[1].input_context_tokens, 96_000);
+        assert_eq!(options[2].input_context_tokens, 224_000);
+        assert_eq!(options[2].context_tokens, 256_000);
         assert_eq!(
             config
                 .agent_config_for(options[0].context_tokens)

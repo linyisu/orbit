@@ -241,10 +241,7 @@ fn compact_tokens(tokens: usize) -> String {
 }
 
 fn input_context_budget(state: &UiState) -> usize {
-    state
-        .context_tokens
-        .saturating_sub(state.max_output_tokens as usize)
-        .max(1)
+    state.input_context_tokens.max(1)
 }
 
 fn context_percent(state: &UiState) -> usize {
@@ -307,7 +304,7 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
             compact_tokens(input_context_budget(state)),
         ),
         format!(
-            "输出预留 {} · 总窗口 {}",
+            "输出上限 {} · 请求预算 {}",
             compact_tokens(state.max_output_tokens as usize),
             compact_tokens(state.context_tokens),
         ),

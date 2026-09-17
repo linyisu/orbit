@@ -54,7 +54,7 @@ context_tokens = 128000
 reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
 ```
 
-`context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。可用思考值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，但不能覆盖模型、流式传输、工具、输出预算、温度或已配置的思考强度。未写 `reasoning` 时，Orbit 不发送任何思考参数。
+`context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。若供应商将输入窗口和输出上限分开计算，可在模型档案改用 `input_context_tokens`；它表示完整可用输入窗口，Orbit 不会再从中扣除 `max_output_tokens`，并将两者相加作为本地请求预算。可用思考值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，但不能覆盖模型、流式传输、工具、输出预算、温度或已配置的思考强度。未写 `reasoning` 时，Orbit 不发送任何思考参数。
 
 `/compact` 优先让当前模型总结旧对话并保留最近两轮。单个摘要请求最多等待 30 秒；手动执行时，模型无法返回有效结构化摘要或暂时不可用会使用本地回退压缩并提示。自动压缩遇到网络、限流或超时时保留原上下文并在下次需要时重试；旧对话始终保留在会话运行记录中。
 
