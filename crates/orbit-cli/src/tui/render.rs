@@ -533,10 +533,13 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(vec![
                         Span::styled(
-                            if index == 0 { "  󰅴 " } else { "    " },
+                            if index == 0 { "󰅴 " } else { "  " },
                             Style::default().fg(ACCENT),
                         ),
-                        Span::raw(line.to_owned()),
+                        Span::styled(
+                            line.to_owned(),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
                     ]));
                 }
                 lines.push(Line::from(""));
@@ -1054,7 +1057,7 @@ mod tests {
             ],
             false,
         );
-        assert_eq!(lines[0].to_string(), "  󰅴 /model asd");
+        assert_eq!(lines[0].to_string(), "󰅴 /model asd");
         assert_eq!(lines[2].to_string(), "  状态");
         assert_eq!(lines[3].to_string(), "  细节");
         assert!(lines[5].to_string().starts_with("● 未知命令"));

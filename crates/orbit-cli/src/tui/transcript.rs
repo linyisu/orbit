@@ -270,6 +270,14 @@ impl Entry {
     }
 
     fn user(&mut self, text: &str, width: u16) {
+        self.framed_input(text, width, "❯");
+    }
+
+    fn command(&mut self, text: &str, width: u16) {
+        self.framed_input(text, width, "󰅴");
+    }
+
+    fn framed_input(&mut self, text: &str, width: u16, icon: &str) {
         // A complete frame lets user turns remain visually distinct after their
         // contents wrap. Keep a plain fallback for terminals too narrow to
         // draw the two side rails without stealing all useful text width.
@@ -278,7 +286,11 @@ impl Entry {
                 self.push(
                     Line::from(vec![
                         Span::styled(
-                            if index == 0 { "❯ " } else { "  " },
+                            if index == 0 {
+                                format!("{icon} ")
+                            } else {
+                                "  ".into()
+                            },
                             ratatui::style::Style::default()
                                 .fg(ratatui::style::Color::Rgb(218, 139, 109)),
                         ),
@@ -296,7 +308,7 @@ impl Entry {
         }
 
         let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
-        let top_label = "╭─❯ ";
+        let top_label = format!("╭─{icon} ");
         self.push(
             Line::from(Span::styled(
                 format!(
@@ -418,6 +430,10 @@ impl TranscriptLayout {
                 TranscriptItem::User(text) => {
                     *entry = Entry::default();
                     entry.user(text, width);
+                }
+                TranscriptItem::Command(text) => {
+                    *entry = Entry::default();
+                    entry.command(text, width);
                 }
                 _ => {
                     *entry = Entry::default();
@@ -591,6 +607,16 @@ mod tests {
         let rows = &layout.entries[0].rows;
         assert_eq!(rows[0].line.to_string(), "  状态");
         assert_eq!(rows[1].line.to_string(), "  第二行细节");
+    }
+
+    #[test]
+    fn commands_keep_the_user_frame_with_a_code_tags_icon() {
+        let mut layout = TranscriptLayout::default();
+        layout.update(&[TranscriptItem::Command("/compact".into())], None, 32);
+        let rows = &layout.entries[0].rows;
+        assert!(rows[0].line.to_string().starts_with("╭─󰅴 "));
+        assert!(rows[1].line.to_string().contains("/compact"));
+        assert!(rows.last().unwrap().line.to_string().is_empty());
     }
 
     #[test]
