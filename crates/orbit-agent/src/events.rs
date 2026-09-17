@@ -25,6 +25,9 @@ pub enum AgentEvent {
         error: String,
     },
     CompactionStarted,
+    CompactionRecorded {
+        record: crate::memory::CompactionRecord,
+    },
     ContextCompacted {
         before_tokens: usize,
         after_tokens: usize,

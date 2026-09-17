@@ -69,7 +69,13 @@ enum ProjectCommand {
 #[derive(Debug, Subcommand)]
 enum SessionCommand {
     List,
-    Show { id: String },
+    Show {
+        id: String,
+    },
+    /// Inspect structured summaries, retained boundaries and confirmed file activity.
+    Compactions {
+        id: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -216,6 +222,10 @@ async fn main() -> Result<()> {
                 orbit_store::store::Store::open(session::database_path(cli.database)?).await?;
             match command {
                 SessionCommand::List => println!("{}", session::list_text(&store).await?),
+                SessionCommand::Compactions { id } => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&store.compactions(&id).await?)?
+                ),
                 SessionCommand::Show { id } => {
                     println!("{}", serde_json::to_string_pretty(&store.load(&id).await?)?)
                 }

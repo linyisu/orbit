@@ -13,7 +13,20 @@ fn answer(text: &str) -> ChatCompletion {
     ChatCompletion {
         id: None,
         model: None,
-        message: ChatMessage::assistant(text),
+        message: ChatMessage::assistant(if text.is_empty() {
+            String::new()
+        } else {
+            serde_json::to_string(&orbit_agent::memory::TaskSummary {
+                goal: text.into(),
+                constraints: vec![],
+                decisions: vec![],
+                completed: vec![],
+                remaining: vec![],
+                verification: vec![],
+                uncertainty: vec![],
+            })
+            .unwrap()
+        }),
         finish_reason: Some("stop".into()),
         usage: None,
     }

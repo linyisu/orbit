@@ -146,6 +146,7 @@ impl UiState {
                 self.turn = turn;
                 self.ensure_assistant_item();
             }
+            AgentEvent::CompactionRecorded { .. } => {}
             AgentEvent::CompactionStarted => self
                 .transcript
                 .push(TranscriptItem::Notice("正在自动整理上下文…".into())),

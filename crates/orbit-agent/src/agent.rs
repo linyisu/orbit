@@ -40,6 +40,7 @@ pub struct Agent<B> {
     backend: B,
     tools: ToolRegistry,
     config: AgentConfig,
+    files: crate::memory::FileActivity,
 }
 
 impl<B> Agent<B>
@@ -51,7 +52,13 @@ where
             backend,
             tools,
             config,
+            files: Default::default(),
         }
+    }
+
+    pub fn with_file_activity(mut self, files: crate::memory::FileActivity) -> Self {
+        self.files = files;
+        self
     }
 
     pub async fn run(
@@ -124,6 +131,8 @@ where
         }
 
         let mut history = request.messages;
+        let mut files = self.files.clone();
+        files.merge(&crate::memory::FileActivity::from_history(&history));
         let mut turns = 0;
         let mut tool_calls = 0;
         let mut compact_after = 0;
@@ -140,6 +149,7 @@ where
                 &mut history,
                 request.max_tokens.unwrap_or(4096) as usize,
                 &mut compact_after,
+                &files,
                 cancellation.clone(),
                 Some(sender),
             )
@@ -189,6 +199,7 @@ where
                 send_agent_event(sender, AgentEvent::ToolStarted { call: call.clone() }).await?;
                 match self.tools.execute(call.clone(), cancellation.clone()).await {
                     Ok(content) => {
+                        files.observe(&call, &content);
                         send_agent_event(
                             sender,
                             AgentEvent::ToolFinished {
@@ -221,6 +232,7 @@ where
         history: &mut Vec<ChatMessage>,
         output: usize,
         compact_after: &mut usize,
+        files: &crate::memory::FileActivity,
         cancellation: CancellationToken,
         sender: Option<&mpsc::Sender<AgentEvent>>,
     ) -> Result<(), AgentError> {
@@ -236,7 +248,7 @@ where
             }
             let event = match crate::autocompact::execute(
                 &self.backend,
-                plan,
+                plan.with_files(files),
                 &tools,
                 output,
                 self.config.context_tokens,
@@ -245,6 +257,15 @@ where
             .await
             {
                 Ok(result) => {
+                    if let Some(sender) = sender {
+                        send_agent_event(
+                            sender,
+                            AgentEvent::CompactionRecorded {
+                                record: result.record,
+                            },
+                        )
+                        .await?;
+                    }
                     let event = AgentEvent::ContextCompacted {
                         before_tokens: result.before_tokens,
                         after_tokens: result.after_tokens,
@@ -373,6 +394,8 @@ where
         }
 
         let mut history = request.messages;
+        let mut files = self.files.clone();
+        files.merge(&crate::memory::FileActivity::from_history(&history));
         let mut turns = 0;
         let mut tool_calls = 0;
         let mut compact_after = 0;
@@ -390,6 +413,7 @@ where
                 &mut history,
                 request.max_tokens.unwrap_or(4096) as usize,
                 &mut compact_after,
+                &files,
                 cancellation.clone(),
                 None,
             )
@@ -443,7 +467,10 @@ where
                 tool_calls += 1;
                 let result = self.tools.execute(call.clone(), cancellation.clone()).await;
                 let content = match result {
-                    Ok(content) => content,
+                    Ok(content) => {
+                        files.observe(&call, &content);
+                        content
+                    }
                     Err(error) => format!("tool error: {error}"),
                 };
                 history.push(ChatMessage::tool(call.id, content));

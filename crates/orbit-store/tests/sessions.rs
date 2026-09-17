@@ -301,3 +301,79 @@ async fn schema_one_migration_preserves_sessions_runs_and_context() {
         snapshot.session.project_id
     );
 }
+
+#[tokio::test]
+async fn compaction_audit_survives_failure_without_publishing_failed_context() {
+    use orbit_agent::memory::{CompactionMode, CompactionRecord, FileActivity, TaskSummary};
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let mut writer = store
+        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    writer.begin("initial".into(), "mock".into()).await.unwrap();
+    let original = vec![ChatMessage::user("initial"), ChatMessage::assistant("done")];
+    writer
+        .finish("completed", vec![], Some(original.clone()))
+        .await
+        .unwrap();
+    let record = CompactionRecord {
+        version: 1,
+        mode: CompactionMode::Automatic,
+        source_messages: 7,
+        retained_from: 4,
+        pinned_user: Some(1),
+        before_tokens: 9000,
+        after_tokens: 3000,
+        summary: TaskSummary {
+            goal: "keep the goal".into(),
+            constraints: vec![],
+            decisions: vec![],
+            completed: vec![],
+            remaining: vec!["verify".into()],
+            verification: vec![],
+            uncertainty: vec![],
+        },
+        files: FileActivity::default(),
+    };
+    writer
+        .begin("long work".into(), "mock".into())
+        .await
+        .unwrap();
+    writer
+        .append(vec![AgentEvent::CompactionRecorded {
+            record: record.clone(),
+        }])
+        .await
+        .unwrap();
+    assert_eq!(
+        store.compactions(&id).await.unwrap()[0].run_status,
+        "running"
+    );
+    writer.finish("failed", vec![], None).await.unwrap();
+    drop(writer);
+    drop(store);
+    let store = Store::open(db.path()).await.unwrap();
+    let records = store.compactions(&id).await.unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].record, record);
+    assert_eq!(records[0].run_status, "failed");
+    assert_eq!(store.load(&id).await.unwrap().history, original);
+    let mut writer = store.acquire(&id).await.unwrap();
+    writer.begin("retry".into(), "mock".into()).await.unwrap();
+    let connection = rusqlite::Connection::open(db.path()).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_history BEFORE UPDATE OF history ON sessions BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+    assert!(
+        writer
+            .finish(
+                "completed",
+                vec![AgentEvent::CompactionRecorded { record }],
+                Some(original)
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(store.compactions(&id).await.unwrap().len(), 1);
+    assert!(store.compactions("missing").await.is_err());
+}

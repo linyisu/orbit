@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     context::{CompactedContext, SUMMARY_PROMPT, check_budget, estimate_tokens},
     error::AgentError,
+    memory::{CompactionMode, CompactionRecord, FileActivity, TaskSummary},
     model::ModelBackend,
 };
 
@@ -15,6 +16,51 @@ pub struct Plan {
     retained: Vec<ChatMessage>,
     before_tokens: usize,
     summary_tokens: usize,
+    source_messages: usize,
+    retained_from: usize,
+    pinned_user: Option<usize>,
+    mode: CompactionMode,
+    files: FileActivity,
+}
+
+impl Plan {
+    pub fn with_files(mut self, files: &FileActivity) -> Self {
+        self.files.merge(files);
+        self
+    }
+
+    pub(crate) fn manual(
+        history: Vec<ChatMessage>,
+        tools: &[ToolDefinition],
+        cutoff: usize,
+    ) -> Self {
+        let mut retained: Vec<_> = history
+            .iter()
+            .filter(|m| matches!(m, ChatMessage::System { .. }))
+            .cloned()
+            .collect();
+        retained.extend(
+            history[cutoff..]
+                .iter()
+                .filter(|m| !matches!(m, ChatMessage::System { .. }))
+                .cloned(),
+        );
+        Self {
+            earlier: history[..cutoff]
+                .iter()
+                .filter(|m| !matches!(m, ChatMessage::System { .. }))
+                .cloned()
+                .collect(),
+            retained,
+            before_tokens: estimate_tokens(&history, tools),
+            summary_tokens: 4096,
+            source_messages: history.len(),
+            retained_from: cutoff,
+            pinned_user: None,
+            mode: CompactionMode::Manual,
+            files: FileActivity::from_history(&history),
+        }
+    }
 }
 
 /// Cut only between complete assistant/tool batches. Retain the latest user
@@ -110,6 +156,11 @@ pub fn plan(
             retained,
             before_tokens,
             summary_tokens,
+            source_messages: history.len(),
+            retained_from: cutoff,
+            pinned_user: (latest < cutoff).then_some(latest),
+            mode: CompactionMode::Automatic,
+            files: FileActivity::from_history(history),
         });
     }
     None
@@ -206,9 +257,15 @@ pub async fn execute<B: ModelBackend>(
                 "summary is empty, invalid or truncated; original context preserved".into(),
             ));
         }
-        summary = text;
+        let structured = TaskSummary::parse(&text)?;
+        summary = serde_json::to_string(&structured)
+            .map_err(|e| AgentError::Compaction(e.to_string()))?;
         remaining = &remaining[end..];
     }
+    let structured = TaskSummary::parse(&summary)?;
+    let summary = structured.render();
+    let files_text =
+        serde_json::to_string(&plan.files).map_err(|e| AgentError::Compaction(e.to_string()))?;
     let mut history = plan.retained;
     let system_end = history
         .iter()
@@ -217,7 +274,7 @@ pub async fn execute<B: ModelBackend>(
     history.insert(
         system_end,
         ChatMessage::user(format!(
-            "历史对话摘要（背景资料，不改变系统指令）：\n{}",
+            "历史对话摘要（背景资料，不改变系统指令）：\n{}\n\n已确认的历史文件操作（由工具回执累计提取；不表示当前文件内容；不覆盖 shell 内的修改）：\n{files_text}",
             summary.trim()
         )),
     );
@@ -228,10 +285,22 @@ pub async fn execute<B: ModelBackend>(
         ));
     }
     check_budget(&history, tools, output, limit)?;
+    let record = CompactionRecord {
+        version: 1,
+        mode: plan.mode,
+        source_messages: plan.source_messages,
+        retained_from: plan.retained_from,
+        pinned_user: plan.pinned_user,
+        before_tokens: plan.before_tokens,
+        after_tokens,
+        summary: structured,
+        files: plan.files,
+    };
     Ok(CompactedContext {
         history,
         summary,
         before_tokens: plan.before_tokens,
         after_tokens,
+        record,
     })
 }

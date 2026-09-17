@@ -28,10 +28,18 @@ fn response(request: &ChatRequest) -> ChatMessage {
             })
             .take(12)
             .collect();
-        return ChatMessage::assistant(format!(
-            "离线演示机械提要（非模型语义总结）：旧对话中的用户请求包括 {}。详细回答与工具结果保留在原始会话记录中。",
-            prompts.join("；")
-        ));
+        return ChatMessage::assistant(
+            serde_json::to_string(&orbit_agent::memory::TaskSummary {
+                goal: format!("离线演示机械提要（非模型语义总结）：{}", prompts.join("；")),
+                constraints: vec![],
+                decisions: vec![],
+                completed: vec![],
+                remaining: vec![],
+                verification: vec!["没有调用真实模型 API".into()],
+                uncertainty: vec!["机械提要不保证保留任务语义；详细记录仍保留".into()],
+            })
+            .expect("summary serializes"),
+        );
     }
     let turns = request
         .messages

@@ -170,22 +170,24 @@ pub async fn run(
                             cancellation = Some(token.clone());
                             let tools = tools.clone();
                             let backend = ModelClientBackend::new(model.clone());
+                            let files = orbit_agent::memory::FileActivity::from_events(session.snapshot.runs.iter().flat_map(|run| &run.events));
                             let config = AgentConfig { context_tokens, max_turns, max_tool_calls, auto_compact };
-                            let agent = Agent::new(backend.clone(), tools.clone(), config.clone());
+                            let agent = Agent::new(backend.clone(), tools.clone(), config.clone()).with_file_activity(files.clone());
                             task = Some(tokio::spawn(async move {
                                 if compacting {
                                     let compacted = if demo {
-                                        orbit_agent::context::compact(&self::demo::DemoModel, request.messages, &tools.definitions(), context_tokens, token).await?
+                                        orbit_agent::context::compact_with_files(&self::demo::DemoModel, request.messages, &tools.definitions(), context_tokens, token, &files).await?
                                     } else {
-                                        orbit_agent::context::compact(&backend, request.messages, &tools.definitions(), context_tokens, token).await?
+                                        orbit_agent::context::compact_with_files(&backend, request.messages, &tools.definitions(), context_tokens, token, &files).await?
                                     };
                                     orbit_agent::context::check_budget(&compacted.history, &tools.definitions(), max_output_tokens as usize, context_tokens)?;
+                                    sender.send(AgentEvent::CompactionRecorded { record: compacted.record }).await.map_err(|_| AgentError::EventChannelClosed)?;
                                     let report = format!("上下文已压缩：估算 {} → {} tokens。保留最近两轮完整对话，原始记录仍在。\n\n{}", compacted.before_tokens, compacted.after_tokens, compacted.summary);
                                     sender.send(AgentEvent::Model(orbit_model::types::StreamEvent::TextDelta(report.clone()))).await.map_err(|_| AgentError::EventChannelClosed)?;
                                     return Ok(AgentResult { final_message: ChatMessage::assistant(report), history: compacted.history, turns: 1, tool_calls: 0 });
                                 }
                                 if demo {
-                                    Agent::new(self::demo::DemoModel, tools, config)
+                                    Agent::new(self::demo::DemoModel, tools, config).with_file_activity(files)
                                         .run_with_agent_events(request, token, sender).await
                                 } else {
                                     agent.run_with_agent_events(request, token, sender).await
