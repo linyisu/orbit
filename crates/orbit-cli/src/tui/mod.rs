@@ -100,12 +100,7 @@ pub async fn run(
                     // Unused pointer motion must not trigger full-frame redraws.
                     if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) { continue; }
                     dirty = true;
-                    let now = time::Instant::now();
-                    if matches!(&event, Event::Resize(..)) {
-                        frames.request_resize(now);
-                    } else {
-                        frames.request(now);
-                    }
+                    frames.request(time::Instant::now());
                     if state.show_help || state.picker.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
                             && let Err(error) = resume_session(&id, &mut state, &mut history, &mut session).await

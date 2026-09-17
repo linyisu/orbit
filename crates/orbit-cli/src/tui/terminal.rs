@@ -7,12 +7,34 @@ use crossterm::{
     execute,
     terminal::{
         BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
-        disable_raw_mode, enable_raw_mode,
+        disable_raw_mode, enable_raw_mode, size as terminal_size,
     },
 };
-use ratatui::{Frame, Terminal, backend::CrosstermBackend};
+use ratatui::{
+    Frame, Terminal, TerminalOptions, Viewport,
+    backend::{Backend, CrosstermBackend},
+    layout::Rect,
+};
 
 pub type AppTerminal = Terminal<CrosstermBackend<Stdout>>;
+
+fn fixed_terminal(stdout: Stdout, area: Rect) -> io::Result<AppTerminal> {
+    Terminal::with_options(
+        CrosstermBackend::new(stdout),
+        TerminalOptions {
+            viewport: Viewport::Fixed(area),
+        },
+    )
+}
+
+fn prime_full_redraw<B: Backend>(terminal: &mut Terminal<B>) {
+    // Make every cell differ from the fresh drawing buffer. This clears stale
+    // cells with ordinary cell updates instead of a visible Clear(All).
+    for cell in &mut terminal.current_buffer_mut().content {
+        cell.set_bg(ratatui::style::Color::Rgb(1, 2, 3));
+    }
+    terminal.swap_buffers();
+}
 
 pub struct TerminalGuard;
 
@@ -52,7 +74,8 @@ impl TerminalGuard {
         // motion unless the hovered target changes, avoiding redraw floods.
         stdout.write_all(b"\x1b[?1002l\x1b[?1003h\x1b[?1007s\x1b[?1007l")?;
         stdout.flush()?;
-        let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+        let (width, height) = terminal_size()?;
+        let terminal = fixed_terminal(stdout, Rect::new(0, 0, width, height))?;
         Ok((guard, terminal))
     }
 }
@@ -70,7 +93,20 @@ pub fn draw_synchronized(
     render: impl FnOnce(&mut Frame<'_>),
 ) -> io::Result<()> {
     terminal.backend_mut().queue(BeginSynchronizedUpdate)?;
-    let draw = terminal.draw(render).map(drop);
+    let draw = (|| {
+        let actual: Rect = terminal.size()?.into();
+        let previous = terminal.get_frame().area();
+        if actual != previous {
+            // Fullscreen autoresize calls Clear(All). Recreate a fixed viewport
+            // at the new size so dragging remains immediate without blank frames.
+            terminal.show_cursor()?;
+            let mut replacement = fixed_terminal(io::stdout(), actual)?;
+            prime_full_redraw(&mut replacement);
+            let old = std::mem::replace(terminal, replacement);
+            drop(old);
+        }
+        terminal.draw(render).map(drop)
+    })();
     let end = terminal
         .backend_mut()
         .execute(EndSynchronizedUpdate)
@@ -90,4 +126,31 @@ pub fn anchor_cursor<B: ratatui::backend::Backend>(
         terminal.backend_mut().flush()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{
+        Terminal,
+        backend::{Backend, TestBackend},
+        buffer::Cell,
+    };
+
+    use super::prime_full_redraw;
+
+    #[test]
+    fn full_redraw_overwrites_stale_cells_without_a_terminal_clear() {
+        let mut terminal = Terminal::new(TestBackend::new(3, 2)).unwrap();
+        let mut stale = Cell::default();
+        stale.set_symbol("x");
+        terminal
+            .backend_mut()
+            .draw(std::iter::once((0, 0, &stale)))
+            .unwrap();
+
+        prime_full_redraw(&mut terminal);
+        terminal.draw(|_| {}).unwrap();
+
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), " ");
+    }
 }
