@@ -106,7 +106,7 @@ Orbit 已经是一个最小可用 Agent，而不只是聊天界面。它具备�
 
 1. ✅ `search_text` 工具：`.gitignore`、`.ignore`、正则、glob、上下文、分页、取消和工作区边界测试已完成。
 2. ✅ `AGENTS.md` 分层加载、来源追踪和上下文预算展示：读取 Orbit 用户目录及 Git 根目录到当前目录的规则，`AGENTS.override.md` 优先；`/context` 按系统提示、项目指令、历史与工具定义显示估算。项目概览仍在下一步补充。
-3. 🔶 Git 状态/diff 与任务变更清单：`git_inspect` 已提供只读 status、diff、history、分支与 HEAD 基线；任务开始前基线和 Orbit 专属变更清单仍待实现。
+3. 🔶 Git 状态/diff 与任务变更清单：`git_inspect` 已提供只读 status、diff、history、分支与 HEAD 基线；新会话会在 Orbit 中央数据库保存任务开始时的分支、HEAD 与已有工作树改动，`/status` 同时汇总实际沙箱验证的退出码、超时、取消与耗时。Git 基线与 Orbit 专属变更的逐路径三方对照仍待实现。
 4. ✅ 中央检查点、`/diff`、`/undo`：成功写入保存 Orbit 私有前后快照；`/changes` 与 `/diff` 只显示 Orbit 自己的写入；`/undo [路径]` 在审批前后核对当前全文和文件身份，拒绝覆盖后来修改，并记录已回退状态。
 5. 执行环境与验证记录升级。
 6. Web 搜索。
