@@ -71,7 +71,7 @@ impl Workspace {
                     let name_text = name.to_string_lossy();
                     if matches!(
                         name_text.as_ref(),
-                        ".git" | ".zcode" | ".codex" | ".env" | "config.toml"
+                        ".git" | ".codex" | ".env" | "config.toml"
                     ) || name_text.starts_with(".env.")
                         || name_text.starts_with(".orbit-write-")
                     {

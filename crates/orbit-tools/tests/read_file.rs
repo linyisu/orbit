@@ -78,7 +78,6 @@ async fn rejects_escape_paths_symlinks_and_private_metadata() {
         ".env",
         ".env.local",
         ".git/config",
-        ".zcode/session",
         "config.toml",
     ] {
         let result = root
@@ -87,6 +86,24 @@ async fn rejects_escape_paths_symlinks_and_private_metadata() {
             .await;
         assert!(result.is_err(), "must reject {path}");
     }
+}
+
+#[tokio::test]
+async fn permits_non_protected_hidden_metadata() {
+    let root = Fixture::new();
+    fs::create_dir_all(root.0.join(".agent-state")).unwrap();
+    fs::write(root.0.join(".agent-state/session"), "metadata").unwrap();
+
+    let output = root
+        .tool()
+        .execute(
+            call(json!({"path":".agent-state/session"})),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["content"], "1: metadata\n");
 }
 
 #[tokio::test]
