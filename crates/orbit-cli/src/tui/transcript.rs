@@ -343,7 +343,10 @@ impl Entry {
         }
 
         let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
-        let top_label = format!("╭─{icon} ");
+        // Keep the turn marker inside the top rail. A space after `❯` makes
+        // it appear detached from the frame at a glance, especially beside a
+        // bright wallpaper or a rounded terminal border.
+        let top_label = format!("╭─{icon}─");
         self.push(
             Line::from(Span::styled(
                 format!(
@@ -725,9 +728,21 @@ mod tests {
         let mut layout = TranscriptLayout::default();
         layout.update(&[TranscriptItem::Command("/compact".into())], None, 32);
         let rows = &layout.entries[0].rows;
-        assert!(rows[0].line.to_string().starts_with("╭─ "));
+        assert!(rows[0].line.to_string().starts_with("╭──"));
         assert!(rows[1].line.to_string().contains("/compact"));
         assert!(rows.last().unwrap().line.to_string().is_empty());
+    }
+
+    #[test]
+    fn user_turn_marker_is_joined_to_the_top_border() {
+        let mut layout = TranscriptLayout::default();
+        layout.update(&[TranscriptItem::User("问题".into())], None, 32);
+        assert!(
+            layout.entries[0].rows[0]
+                .line
+                .to_string()
+                .starts_with("╭─❯─")
+        );
     }
 
     #[test]
