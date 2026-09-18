@@ -25,7 +25,7 @@ pub(super) fn toggle_line(expanded: bool, width: u16) -> Line<'static> {
         Span::raw(" ".repeat(usize::from(width).min(4))),
         Span::styled(
             clipped(
-                if expanded { "[收起]" } else { "… 展开" },
+                if expanded { "[收起]" } else { "[展开]" },
                 usize::from(width).saturating_sub(4),
             ),
             Style::default().fg(ACCENT),
@@ -482,7 +482,7 @@ mod tests {
                 .to_string()
                 .contains("已保存 · 事实 · 当前会话 · #12")
         );
-        assert!(preview.last().unwrap().to_string().contains("… 展开"));
+        assert!(preview.last().unwrap().to_string().contains("[展开]"));
         for width in [0, 1, 5, 30, 80] {
             for expanded in [false, true] {
                 assert!(
