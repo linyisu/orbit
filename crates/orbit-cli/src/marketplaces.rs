@@ -130,6 +130,7 @@ impl Store {
         })
     }
 
+    #[cfg(test)]
     fn at(root: PathBuf) -> Self {
         Self {
             index: root.join("marketplaces.json"),

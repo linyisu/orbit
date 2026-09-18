@@ -54,7 +54,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/plugins",
-        description: "浏览或添加插件市场",
+        description: "管理插件市场与项目启用状态",
     },
     Command {
         name: "/tasks",

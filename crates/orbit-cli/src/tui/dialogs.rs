@@ -1,7 +1,7 @@
 use super::{ModelOption, app::UiState, commands::COMMANDS};
 use crate::marketplaces::{Marketplace, PluginPackage};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
-use orbit_store::types::Session;
+use orbit_store::types::{ProjectPlugin, Session};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -36,10 +36,26 @@ pub struct MarketplaceDialog {
     inspection: Option<Result<PluginPackage, String>>,
     selected_market: usize,
     selected_plugin: usize,
+    project_id: String,
+    enabled: std::collections::BTreeSet<(String, String)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ProjectPluginChange {
+    Enable(ProjectPlugin),
+    Disable {
+        project_id: String,
+        marketplace_source: String,
+        plugin_name: String,
+    },
 }
 
 impl MarketplaceDialog {
-    pub fn new(marketplaces: Vec<Marketplace>) -> Self {
+    pub fn new(
+        marketplaces: Vec<Marketplace>,
+        project_id: String,
+        enabled: Vec<ProjectPlugin>,
+    ) -> Self {
         Self {
             marketplaces,
             source: String::new(),
@@ -48,6 +64,11 @@ impl MarketplaceDialog {
             inspection: None,
             selected_market: 0,
             selected_plugin: 0,
+            project_id,
+            enabled: enabled
+                .into_iter()
+                .map(|plugin| (plugin.marketplace_source, plugin.plugin_name))
+                .collect(),
         }
     }
 
@@ -67,6 +88,40 @@ impl MarketplaceDialog {
 
     fn selected_market(&self) -> Option<&Marketplace> {
         self.marketplaces.get(self.selected_market)
+    }
+
+    fn selected_plugin(&self) -> Option<(&Marketplace, &crate::marketplaces::Plugin)> {
+        let market = self.selected_market()?;
+        market
+            .plugins
+            .get(self.selected_plugin)
+            .map(|plugin| (market, plugin))
+    }
+
+    fn is_enabled(&self, market: &Marketplace, plugin: &crate::marketplaces::Plugin) -> bool {
+        self.enabled
+            .contains(&(market.source.clone(), plugin.name.clone()))
+    }
+
+    fn selected_change(&self) -> Option<ProjectPluginChange> {
+        let (market, plugin) = self.selected_plugin()?;
+        if self.is_enabled(market, plugin) {
+            return Some(ProjectPluginChange::Disable {
+                project_id: self.project_id.clone(),
+                marketplace_source: market.source.clone(),
+                plugin_name: plugin.name.clone(),
+            });
+        }
+        let package = self.inspection.as_ref()?.as_ref().ok()?;
+        let package_source = plugin.source.clone()?;
+        Some(ProjectPluginChange::Enable(ProjectPlugin {
+            project_id: self.project_id.clone(),
+            marketplace_source: market.source.clone(),
+            plugin_name: plugin.name.clone(),
+            package_source,
+            version: package.version.clone(),
+            enabled_at: 0,
+        }))
     }
 
     fn inspect_selected_plugin(&mut self) {
@@ -312,6 +367,17 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
                 {
                     dialog.adding = true
+                }
+                KeyCode::Char('e')
+                    if dialog.inspection.as_ref().is_some_and(Result::is_ok)
+                        && !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    if let Some(change) = dialog.selected_change() {
+                        state.pending_project_plugin_change = Some(change);
+                        state.marketplace_dialog = None;
+                    }
                 }
                 KeyCode::Enter if dialog.viewing_plugins && dialog.inspection.is_none() => {
                     dialog.inspect_selected_plugin()
@@ -643,7 +709,17 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     frame.render_widget(
                         Paragraph::new(vec![
                             Line::styled(
-                                format!("{} · 包声明", clean(&package.name)),
+                                format!(
+                                    "{} · {}",
+                                    clean(&package.name),
+                                    if dialog.selected_plugin().is_some_and(|(market, plugin)| {
+                                        dialog.is_enabled(market, plugin)
+                                    }) {
+                                        "当前项目已启用"
+                                    } else {
+                                        "包声明"
+                                    }
+                                ),
                                 Style::default()
                                     .fg(Color::Rgb(218, 139, 109))
                                     .add_modifier(Modifier::BOLD),
@@ -696,7 +772,14 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                         ),
                         Line::from(""),
                         Line::styled(
-                            "此页只读取包声明；尚未安装或启用。",
+                            if dialog
+                                .selected_plugin()
+                                .is_some_and(|(market, plugin)| dialog.is_enabled(market, plugin))
+                            {
+                                "此包已为当前项目启用；Hook、MCP 和命令仍不会自动运行。"
+                            } else {
+                                "启用只记录当前项目的选择；Hook、MCP 和命令不会自动运行。"
+                            },
                             Style::default().fg(Color::Rgb(170, 170, 170)),
                         ),
                     ];
@@ -718,7 +801,21 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     );
                 }
             }
-            frame.render_widget(Paragraph::new("Esc 返回插件列表"), footer);
+            frame.render_widget(
+                Paragraph::new(
+                    if dialog
+                        .selected_plugin()
+                        .is_some_and(|(market, plugin)| dialog.is_enabled(market, plugin))
+                    {
+                        "E 停用 · Esc 返回插件列表"
+                    } else if matches!(inspection, Ok(_)) {
+                        "E 启用 · Esc 返回插件列表"
+                    } else {
+                        "Esc 返回插件列表"
+                    },
+                ),
+                footer,
+            );
         } else if dialog.viewing_plugins {
             state.ime_cursor = None;
             let Some(market) = dialog.selected_market() else {
@@ -754,8 +851,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 };
                 entries.push(Line::styled(
                     format!(
-                        "{} {}",
+                        "{} {}{}",
                         if selected { "›" } else { " " },
+                        if dialog.is_enabled(market, plugin) {
+                            "✓ "
+                        } else {
+                            ""
+                        },
                         clean(&plugin.name)
                     ),
                     style,
@@ -997,23 +1099,27 @@ mod tests {
     #[test]
     fn marketplace_dialog_browses_plugins_then_returns_to_market_list() {
         let mut state = UiState::new("model");
-        state.marketplace_dialog = Some(MarketplaceDialog::new(vec![Marketplace {
-            name: "official".into(),
-            source: "owner/catalog".into(),
-            directory: "/catalog".into(),
-            plugins: vec![
-                crate::marketplaces::Plugin {
-                    name: "review".into(),
-                    description: "Review pull requests".into(),
-                    source: None,
-                },
-                crate::marketplaces::Plugin {
-                    name: "docs".into(),
-                    description: "Write documentation".into(),
-                    source: None,
-                },
-            ],
-        }]));
+        state.marketplace_dialog = Some(MarketplaceDialog::new(
+            vec![Marketplace {
+                name: "official".into(),
+                source: "owner/catalog".into(),
+                directory: "/catalog".into(),
+                plugins: vec![
+                    crate::marketplaces::Plugin {
+                        name: "review".into(),
+                        description: "Review pull requests".into(),
+                        source: None,
+                    },
+                    crate::marketplaces::Plugin {
+                        name: "docs".into(),
+                        description: "Write documentation".into(),
+                        source: None,
+                    },
+                ],
+            }],
+            "project".into(),
+            Vec::new(),
+        ));
 
         handle(&mut state, key(KeyCode::Enter));
         assert!(
@@ -1042,7 +1148,11 @@ mod tests {
     #[test]
     fn marketplace_dialog_collects_source_before_starting_download() {
         let mut state = UiState::new("model");
-        state.marketplace_dialog = Some(MarketplaceDialog::new(Vec::new()));
+        state.marketplace_dialog = Some(MarketplaceDialog::new(
+            Vec::new(),
+            "project".into(),
+            Vec::new(),
+        ));
 
         handle(&mut state, key(KeyCode::Enter));
         handle(&mut state, Event::Paste("owner/catalog".into()));
@@ -1052,6 +1162,93 @@ mod tests {
         assert_eq!(
             state.pending_marketplace_source.as_deref(),
             Some("owner/catalog")
+        );
+    }
+
+    fn plugin_marketplace() -> Marketplace {
+        Marketplace {
+            name: "official".into(),
+            source: "owner/catalog".into(),
+            directory: "/catalog".into(),
+            plugins: vec![crate::marketplaces::Plugin {
+                name: "review".into(),
+                description: "Review pull requests".into(),
+                source: Some("plugins/review".into()),
+            }],
+        }
+    }
+
+    fn inspected_plugin() -> PluginPackage {
+        PluginPackage {
+            name: "review".into(),
+            version: Some("1.2.3".into()),
+            description: Some("Review pull requests".into()),
+            directory: "/catalog/plugins/review".into(),
+            skills: Vec::new(),
+            commands: Vec::new(),
+            agents: Vec::new(),
+            declares_hooks: false,
+            declares_mcp: false,
+        }
+    }
+
+    #[test]
+    fn marketplace_dialog_enables_inspected_plugin_for_current_project() {
+        let mut state = UiState::new("model");
+        state.marketplace_dialog = Some(MarketplaceDialog::new(
+            vec![plugin_marketplace()],
+            "project".into(),
+            Vec::new(),
+        ));
+        let dialog = state.marketplace_dialog.as_mut().unwrap();
+        dialog.viewing_plugins = true;
+        dialog.inspection = Some(Ok(inspected_plugin()));
+
+        handle(&mut state, key(KeyCode::Char('e')));
+
+        assert!(state.marketplace_dialog.is_none());
+        assert_eq!(
+            state.pending_project_plugin_change,
+            Some(ProjectPluginChange::Enable(ProjectPlugin {
+                project_id: "project".into(),
+                marketplace_source: "owner/catalog".into(),
+                plugin_name: "review".into(),
+                package_source: "plugins/review".into(),
+                version: Some("1.2.3".into()),
+                enabled_at: 0,
+            }))
+        );
+    }
+
+    #[test]
+    fn marketplace_dialog_disables_already_enabled_plugin() {
+        let enabled = ProjectPlugin {
+            project_id: "project".into(),
+            marketplace_source: "owner/catalog".into(),
+            plugin_name: "review".into(),
+            package_source: "plugins/review".into(),
+            version: Some("1.2.3".into()),
+            enabled_at: 1,
+        };
+        let mut state = UiState::new("model");
+        state.marketplace_dialog = Some(MarketplaceDialog::new(
+            vec![plugin_marketplace()],
+            "project".into(),
+            vec![enabled],
+        ));
+        let dialog = state.marketplace_dialog.as_mut().unwrap();
+        dialog.viewing_plugins = true;
+        dialog.inspection = Some(Ok(inspected_plugin()));
+
+        handle(&mut state, key(KeyCode::Char('e')));
+
+        assert_eq!(
+            state.pending_project_plugin_change,
+            Some(ProjectPluginChange::Disable {
+                project_id: "project".into(),
+                marketplace_source: "owner/catalog".into(),
+                plugin_name: "review".into(),
+            })
         );
     }
 

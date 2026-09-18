@@ -202,6 +202,44 @@ pub async fn run(
                             state.transcript.push(TranscriptItem::Notice("正在下载并检查插件市场…".into()));
                             marketplace_task = Some(tokio::spawn(crate::marketplaces::add_current(source)));
                         }
+                        if let Some(change) = state.pending_project_plugin_change.take() {
+                            match change {
+                                dialogs::ProjectPluginChange::Enable(plugin) => {
+                                    let name = plugin.plugin_name.clone();
+                                    match session.store.enable_project_plugin(plugin).await {
+                                        Ok(_) => state.transcript.push(TranscriptItem::CommandResult(format!(
+                                            "已为当前项目启用 {name}。插件包保存在 Orbit 数据目录；其中的 Skill、命令、Hook 与 MCP 不会自动执行。"
+                                        ))),
+                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!(
+                                            "无法启用插件：{error}"
+                                        ))),
+                                    }
+                                }
+                                dialogs::ProjectPluginChange::Disable {
+                                    project_id,
+                                    marketplace_source,
+                                    plugin_name,
+                                } => match session
+                                    .store
+                                    .disable_project_plugin(
+                                        &project_id,
+                                        &marketplace_source,
+                                        &plugin_name,
+                                    )
+                                    .await
+                                {
+                                    Ok(true) => state.transcript.push(TranscriptItem::CommandResult(format!(
+                                        "已在当前项目停用 {plugin_name}。市场缓存仍保留在 Orbit 数据目录。"
+                                    ))),
+                                    Ok(false) => state.transcript.push(TranscriptItem::CommandError(format!(
+                                        "插件 {plugin_name} 未处于启用状态。"
+                                    ))),
+                                    Err(error) => state.transcript.push(TranscriptItem::CommandError(format!(
+                                        "无法停用插件：{error}"
+                                    ))),
+                                },
+                            }
+                        }
                         continue;
                     }
                     if let Event::Mouse(mouse) = &event
@@ -897,8 +935,12 @@ async fn run_command(
                 )))
         }
         "/plugins" if argument.is_empty() => {
+            let project_id = session.snapshot.session.project_id.clone();
+            let enabled = session.store.project_plugins(&project_id).await?;
             state.marketplace_dialog = Some(dialogs::MarketplaceDialog::new(
                 crate::marketplaces::list_current()?,
+                project_id,
+                enabled,
             ));
         }
         "/skill" => {
