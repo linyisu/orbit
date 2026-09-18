@@ -724,6 +724,9 @@ pub(super) fn transcript_lines_at_width(
                     format!("  {marker} {} {summary}", row.name),
                     Style::default().fg(color),
                 )));
+                if expanded {
+                    lines.push(super::tool_display::toggle_line(true, width));
+                }
                 if expanded
                     && let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.arguments)
                     && let Some(command) = value["command"].as_str()
@@ -771,16 +774,18 @@ pub(super) fn transcript_lines_at_width(
                         }
                     })
                     .unwrap_or_else(|| row.output.clone());
+                let mut omitted = output.lines().count() > 2;
                 for line in output.lines().take(if expanded { usize::MAX } else { 2 }) {
                     let preview = if expanded {
                         line.to_owned()
                     } else {
                         compact_preview(line, 160)
                     };
+                    omitted |= preview != line;
                     lines.push(Line::from(muted(format!("    {preview}"))));
                 }
-                if !expanded && output.lines().count() > 2 {
-                    lines.push(Line::from(muted("    …")));
+                if expanded || omitted || row.arguments.contains("\"command\"") {
+                    lines.push(super::tool_display::toggle_line(expanded, width));
                 }
                 lines.push(Line::from(""));
             }
@@ -1176,7 +1181,7 @@ mod tests {
         assert!(short[1].to_string().chars().count() < 180);
         assert!(short[1].to_string().ends_with('…'));
         assert!(
-            transcript_lines(&[item], true)[1]
+            transcript_lines(&[item], true)[2]
                 .to_string()
                 .contains(&output)
         );
@@ -1305,7 +1310,16 @@ mod tests {
             let point = (0..40)
                 .find_map(|y| {
                     (0..100).find_map(|x| {
-                        (terminal.backend().buffer()[(x, y)].symbol() == "点").then_some((x, y))
+                        state
+                            .transcript_layout
+                            .tool_toggle_at(
+                                &state.transcript,
+                                state.selection.viewport,
+                                state.max_scroll.saturating_sub(state.scroll),
+                                (x, y),
+                            )
+                            .filter(|index| *index == 0)
+                            .map(|_| (x, y))
                     })
                 })
                 .expect("memory toggle is visible");
@@ -1323,10 +1337,123 @@ mod tests {
             });
             state.selection.handle(&down).unwrap();
             assert_eq!(state.selection.click(&up), Some(point));
-            assert!(super::super::toggle_memory_at(&mut state, point));
+            assert!(super::super::toggle_tool_at(&mut state, point));
             assert_eq!(state.expanded, expected);
         }
-        assert!(!super::super::toggle_memory_at(&mut state, (0, 0)));
+        assert!(!super::super::toggle_tool_at(&mut state, (0, 0)));
+    }
+
+    #[test]
+    fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
+        use super::super::app::ToolRow;
+        let cases = [
+            (
+                "read_file",
+                serde_json::json!({"start_line":1,"end_line":1,
+                "content":format!("1: {}", "中文".repeat(80))})
+                .to_string(),
+            ),
+            (
+                "search_text",
+                serde_json::json!({"matches":[{"path":"src/main.rs",
+                "line":2,"text":"hit","context":[{"line":1,"text":"context"}]}]})
+                .to_string(),
+            ),
+            (
+                "run_command",
+                serde_json::json!({"stdout":"first\nsecond\nthird\n",
+                "stderr":"", "exit_code":0})
+                .to_string(),
+            ),
+            ("mcp_external", "result ".repeat(80)),
+            ("failed_tool", "error detail\nmore\nlast".into()),
+        ];
+        for (name, output) in cases {
+            let mut state = UiState::new("model");
+            state.input.set("unfinished draft".into());
+            state.transcript.push(TranscriptItem::Tool(ToolRow {
+                id: "first".into(),
+                name: name.into(),
+                arguments: "{}".into(),
+                status: if name == "failed_tool" {
+                    ToolStatus::Failed
+                } else {
+                    ToolStatus::Finished
+                },
+                output: output.clone(),
+            }));
+            for expected in [Some(0), None] {
+                render(&mut state, 90, 32);
+                let area = state.selection.viewport;
+                let offset = state.max_scroll.saturating_sub(state.scroll);
+                let point = (area.y..area.bottom())
+                    .find_map(|y| {
+                        (area.x..area.right()).find_map(|x| {
+                            state
+                                .transcript_layout
+                                .tool_toggle_at(&state.transcript, area, offset, (x, y))
+                                .map(|_| (x, y))
+                        })
+                    })
+                    .unwrap_or_else(|| panic!("missing control for {name}"));
+                assert!(super::super::toggle_tool_at(&mut state, point));
+                assert_eq!(state.expanded, expected);
+                assert_eq!(state.input.text, "unfinished draft");
+                let TranscriptItem::Tool(row) = &state.transcript[0] else {
+                    unreachable!()
+                };
+                assert_eq!(row.output, output);
+            }
+        }
+    }
+
+    #[test]
+    fn bottom_collapse_returns_to_the_tool_and_shortcut_keeps_its_target() {
+        use super::super::app::ToolRow;
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let mut state = UiState::new("model");
+        for index in 0..3 {
+            state.transcript.push(TranscriptItem::Tool(ToolRow {
+                id: index.to_string(),
+                name: format!("tool_{index}"),
+                arguments: "{}".into(),
+                status: ToolStatus::Finished,
+                output: (0..100).map(|line| format!("detail {line}\n")).collect(),
+            }));
+        }
+        render(&mut state, 90, 24);
+        super::super::toggle_tool(&mut state, 1);
+        let after_tool = state.transcript_layout.item_offset(2).unwrap();
+        state.scroll = state.max_scroll.saturating_sub(after_tool - 5);
+        render(&mut state, 90, 24);
+        let area = state.selection.viewport;
+        let offset = state.max_scroll.saturating_sub(state.scroll);
+        let point = (area.y..area.bottom())
+            .find_map(|y| {
+                (area.x..area.right()).find_map(|x| {
+                    state
+                        .transcript_layout
+                        .tool_toggle_at(&state.transcript, area, offset, (x, y))
+                        .filter(|index| *index == 1)
+                        .map(|_| (x, y))
+                })
+            })
+            .expect("bottom collapse control is visible");
+        assert!(super::super::toggle_tool_at(&mut state, point));
+        assert_eq!(state.expanded, None);
+        assert!(render(&mut state, 90, 24).contains("tool_1"));
+        super::super::toggle_tool(&mut state, 1);
+        state.scroll = 0;
+        render(&mut state, 90, 24);
+        super::super::keyboard_action(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+            true,
+        );
+        assert_eq!(
+            state.expanded, None,
+            "must collapse tool_1 instead of expanding tool_2"
+        );
     }
 
     #[test]

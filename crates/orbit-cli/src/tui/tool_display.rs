@@ -20,6 +20,19 @@ const SECONDARY: Color = Color::Rgb(160, 160, 160);
 // Keep adjacent file previews aligned even when their lengths differ.
 const MIN_LINE_NUMBER_WIDTH: usize = 4;
 
+pub(super) fn toggle_line(expanded: bool, width: u16) -> Line<'static> {
+    Line::from(vec![
+        Span::raw(" ".repeat(usize::from(width).min(4))),
+        Span::styled(
+            clipped(
+                if expanded { "[收起]" } else { "… 展开" },
+                usize::from(width).saturating_sub(4),
+            ),
+            Style::default().fg(ACCENT),
+        ),
+    ])
+}
+
 pub(super) fn search_summary(arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(arguments) else {
         return String::new();
@@ -178,10 +191,8 @@ fn memory(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
             )));
         }
     }
-    if expanded {
-        note(&mut out, "点击收起记忆", width);
-    } else if omitted {
-        note(&mut out, "点击展开完整记忆", width);
+    if expanded || omitted {
+        out.push(toggle_line(expanded, width));
     }
     Some(out)
 }
@@ -335,6 +346,15 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
         .max()
         .unwrap_or_default()
         .max(MIN_LINE_NUMBER_WIDTH);
+    let clipped_source = files
+        .values()
+        .flat_map(|rows| rows.values())
+        .any(|(text, _)| safe_output(text).width() > usize::from(width).saturating_sub(digits + 7));
+    let has_context = matches.iter().any(|hit| {
+        hit["context"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["line"] != hit["line"]))
+    });
     let mut out = Vec::new();
     note(
         &mut out,
@@ -384,6 +404,9 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
     if value["scan_truncated"].as_bool() == Some(true) {
         note(&mut out, "搜索达到扫描上限，部分文件尚未搜索", width);
     }
+    if expanded || shown < total_rows || clipped_source || has_context {
+        out.push(toggle_line(expanded, width));
+    }
     Some(out)
 }
 
@@ -410,6 +433,14 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     }
     if !expanded && rows.len() > 4 {
         note(&mut out, &format!("… 另有 {} 行", rows.len() - 4), width);
+    }
+    if expanded
+        || rows.len() > 4
+        || rows.iter().any(|(_, text)| {
+            safe_output(text).width() > usize::from(width).saturating_sub(digits + 7)
+        })
+    {
+        out.push(toggle_line(expanded, width));
     }
     Some(out)
 }
@@ -451,13 +482,7 @@ mod tests {
                 .to_string()
                 .contains("已保存 · 事实 · 当前会话 · #12")
         );
-        assert!(
-            preview
-                .last()
-                .unwrap()
-                .to_string()
-                .contains("点击展开完整记忆")
-        );
+        assert!(preview.last().unwrap().to_string().contains("… 展开"));
         for width in [0, 1, 5, 30, 80] {
             for expanded in [false, true] {
                 assert!(
@@ -599,10 +624,10 @@ mod tests {
             }
         }
         let collapsed = lines(&row, false, 32).unwrap();
-        assert_eq!(collapsed.len(), 3);
+        assert_eq!(collapsed.len(), 4);
         assert!(collapsed[1].to_string().ends_with('…'));
         let expanded = lines(&row, true, 32).unwrap();
-        let reconstructed = expanded[1..expanded.len() - 1]
+        let reconstructed = expanded[1..expanded.len() - 2]
             .iter()
             .map(|line| {
                 let text = line.to_string();

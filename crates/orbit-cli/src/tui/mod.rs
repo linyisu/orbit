@@ -289,7 +289,7 @@ pub async fn run(
                         continue;
                     }
                     if let Some((x, y)) = state.selection.click(&event)
-                        && toggle_memory_at(&mut state, (x, y)) {
+                        && toggle_tool_at(&mut state, (x, y)) {
                         continue;
                     }
                     if let Some((x, y)) = state.selection.click(&event)
@@ -1740,9 +1740,9 @@ enum Action {
     Submit(String),
 }
 
-fn toggle_memory_at(state: &mut UiState, point: (u16, u16)) -> bool {
+fn toggle_tool_at(state: &mut UiState, point: (u16, u16)) -> bool {
     let offset = state.max_scroll.saturating_sub(state.scroll);
-    let Some(index) = state.transcript_layout.memory_toggle_at(
+    let Some(index) = state.transcript_layout.tool_toggle_at(
         &state.transcript,
         state.selection.viewport,
         offset,
@@ -1750,14 +1750,42 @@ fn toggle_memory_at(state: &mut UiState, point: (u16, u16)) -> bool {
     ) else {
         return false;
     };
-    state.expanded = if state.expanded == Some(index) {
-        None
-    } else {
-        Some(index)
-    };
+    toggle_tool(state, index);
+    true
+}
+
+fn toggle_tool(state: &mut UiState, index: usize) {
+    let offset = state.max_scroll.saturating_sub(state.scroll);
+    let anchor = state.transcript_layout.anchor_at(offset);
+    let collapsing = state.expanded == Some(index);
+    let viewport_in_collapsing_tool = state.expanded.is_some_and(|old| {
+        let start = state.transcript_layout.item_offset(old).unwrap_or(offset);
+        let end = state
+            .transcript_layout
+            .item_offset(old + 1)
+            .unwrap_or_else(|| state.transcript_layout.height());
+        (start..end).contains(&offset)
+    });
+    state.expanded = if collapsing { None } else { Some(index) };
     state.follow_bottom = false;
     state.selection.clear();
-    true
+    state.transcript_layout.update(
+        &state.transcript,
+        state.expanded,
+        state.selection.viewport.width,
+    );
+    state.max_scroll = state
+        .transcript_layout
+        .height()
+        .saturating_sub(usize::from(state.selection.viewport.height));
+    let target = if viewport_in_collapsing_tool {
+        state.transcript_layout.item_offset(index).unwrap_or(offset)
+    } else {
+        anchor
+            .and_then(|anchor| state.transcript_layout.offset_for_anchor(anchor))
+            .unwrap_or(offset)
+    };
+    state.scroll = state.max_scroll.saturating_sub(target);
 }
 
 fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
@@ -1835,17 +1863,14 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
             KeyCode::Char('v') => return Action::PasteClipboard,
             KeyCode::Char('o') => {
                 let offset = state.max_scroll.saturating_sub(state.scroll);
-                if let Some(index) = state.transcript_layout.visible_tool(
-                    &state.transcript,
-                    offset,
-                    state.selection.viewport.height as usize,
-                ) {
-                    state.expanded = if state.expanded == Some(index) {
-                        None
-                    } else {
-                        Some(index)
-                    };
-                    state.selection = Default::default();
+                if let Some(index) = state.expanded.or_else(|| {
+                    state.transcript_layout.visible_tool(
+                        &state.transcript,
+                        offset,
+                        state.selection.viewport.height as usize,
+                    )
+                }) {
+                    toggle_tool(state, index);
                 }
             }
             _ => {}

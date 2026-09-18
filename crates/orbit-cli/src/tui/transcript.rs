@@ -184,6 +184,7 @@ fn byte_at_column(text: &str, range: &Range<usize>, column: u16) -> Option<usize
 #[derive(Debug, Default)]
 struct Entry {
     rows: Vec<Row>,
+    tool_toggles: Vec<usize>,
     height: usize,
     end: usize,
     // Completed source lines never change during streaming. Only reformat the
@@ -480,11 +481,18 @@ impl TranscriptLayout {
                 }
                 _ => {
                     *entry = Entry::default();
+                    let toggle = matches!(item, TranscriptItem::Tool(_)).then(|| {
+                        super::tool_display::toggle_line(expanded == Some(first + relative), width)
+                    });
                     for line in render::transcript_lines_at_width(
                         std::slice::from_ref(item),
                         expanded == Some(first + relative),
                         width,
                     ) {
+                        // Match the generated styled control, not an ellipsis in tool data.
+                        if toggle.as_ref() == Some(&line) {
+                            entry.tool_toggles.push(entry.rows.len());
+                        }
                         entry.push(line, width);
                     }
                 }
@@ -519,7 +527,7 @@ impl TranscriptLayout {
             .map(|entry| entry.end - entry.height)
     }
 
-    pub(super) fn memory_toggle_at(
+    pub(super) fn tool_toggle_at(
         &self,
         items: &[TranscriptItem],
         area: Rect,
@@ -532,22 +540,17 @@ impl TranscriptLayout {
         let absolute = offset + usize::from(point.1 - area.y);
         let index = self.entries.partition_point(|entry| entry.end <= absolute);
         let entry = self.entries.get(index)?;
-        if !matches!(items.get(index), Some(TranscriptItem::Tool(row)) if row.name == "memory_save")
-        {
+        if !matches!(items.get(index), Some(TranscriptItem::Tool(_))) {
             return None;
         }
         let relative = absolute - (entry.end - entry.height);
         let row = entry
-            .rows
+            .tool_toggles
             .iter()
+            .filter_map(|i| entry.rows.get(*i))
             .find(|row| row.start <= relative && relative < row.start + row.height)?;
-        let text = row.line.to_string();
         let column = usize::from(point.0 - area.x);
-        ((text.trim_start().starts_with("点击展开完整记忆")
-            || text.trim_start().starts_with("点击收起记忆"))
-            && column >= 4
-            && column < row.line.width())
-        .then_some(index)
+        (column >= 4 && column < row.line.width()).then_some(index)
     }
 
     pub fn height(&self) -> usize {
