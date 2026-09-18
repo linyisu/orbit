@@ -798,11 +798,11 @@ pub(super) fn thinking_line(
     // markdown spans behind it.
     let mut has_thinking_rail = false;
     if let Some(first) = rendered.spans.first_mut() {
-        // Code lines carry their own `│` rail. In a thought this would create
-        // two gutters, wasting width and making wrapped text appear outside
-        // the thought column. Use the continuous thought rail in its place.
+        // Keep both rails for code inside a thought: `┊` identifies reasoning
+        // and `│` identifies the Markdown code block. They are one compound
+        // gutter so wrapped code lines reserve their combined width.
         if first.content == "  │ " {
-            first.content = "  ┊ ".into();
+            first.content = "  ┊ │ ".into();
             has_thinking_rail = true;
         } else if let Some(rest) = first.content.strip_prefix("  ") {
             if rest.is_empty() {
@@ -1560,7 +1560,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_code_reuses_the_single_thinking_rail() {
+    fn thinking_code_keeps_a_compound_thinking_and_code_rail() {
         let mut code = None;
         thinking_line("```markdown", 0, &mut code);
         let line = thinking_line(
@@ -1568,14 +1568,7 @@ mod tests {
             1,
             &mut code,
         );
-        assert_eq!(line.spans[0].content, "  ┊ ");
-        assert!(
-            line.spans
-                .iter()
-                .skip(1)
-                .all(|span| !span.content.starts_with("│ ")),
-            "code must not retain a second rail: {line:?}"
-        );
+        assert_eq!(line.spans[0].content, "  ┊ │ ");
     }
 
     #[test]

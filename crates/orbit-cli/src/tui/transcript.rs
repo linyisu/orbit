@@ -45,7 +45,7 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
     if line
         .spans
         .first()
-        .is_some_and(|span| matches!(span.content.as_ref(), "  │ " | "  ┊ "))
+        .is_some_and(|span| matches!(span.content.as_ref(), "  │ " | "  ┊ " | "  ┊ │ "))
     {
         let span = line.spans.remove(0);
         let width = span.width() as u16;
@@ -744,6 +744,32 @@ mod tests {
         let thinking = &layout.entries[0];
         assert!(thinking.rows.last().unwrap().line.to_string().is_empty());
         assert_eq!(layout.entries[1].rows[0].line.to_string(), "  final answer");
+    }
+
+    #[test]
+    fn thinking_code_keeps_both_rails_when_wrapped() {
+        let mut layout = TranscriptLayout::default();
+        layout.update(
+            &[TranscriptItem::Thinking(format!(
+                "```markdown\n{}\n```",
+                "long Markdown source ".repeat(4)
+            ))],
+            None,
+            22,
+        );
+        let row = &layout.entries[0].rows[1];
+        let gutter = row.gutter.as_ref().unwrap();
+        assert_eq!(gutter.first.to_string(), "  ┊ │ ");
+        assert_eq!(gutter.continuation.to_string(), "  ┊ │ ");
+        assert!(row.height > 1);
+        let mut terminal = Terminal::new(TestBackend::new(22, 5)).unwrap();
+        terminal
+            .draw(|frame| layout.draw(frame, frame.area(), 0))
+            .unwrap();
+        for y in 1..5 {
+            assert_eq!(terminal.backend().buffer()[(2, y)].symbol(), "┊");
+            assert_eq!(terminal.backend().buffer()[(4, y)].symbol(), "│");
+        }
     }
 
     #[test]
