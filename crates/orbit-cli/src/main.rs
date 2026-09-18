@@ -133,6 +133,9 @@ struct ProviderConfig {
     models: Vec<ModelProfile>,
     #[serde(default = "default_timeout_seconds")]
     timeout_seconds: u64,
+    /// Number of retries after a failed request that has not produced headers.
+    #[serde(default = "orbit_model::types::default_max_retries")]
+    max_retries: u8,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -243,13 +246,14 @@ impl FileConfig {
                 || provider.api_key.trim().is_empty()
                 || provider.models.is_empty()
                 || provider.timeout_seconds == 0
+                || provider.max_retries > 5
                 || provider
                     .models
                     .iter()
                     .any(|model| model.id.trim().is_empty())
             {
                 bail!(
-                    "provider {name:?} must set nonempty base_url, api_key, models and a positive timeout_seconds"
+                    "provider {name:?} must set nonempty base_url, api_key, models, a positive timeout_seconds, and max_retries from 0 to 5"
                 );
             }
         }
@@ -355,6 +359,7 @@ impl FileConfig {
                         api_key: Some(provider.api_key.clone()),
                         model: model.id.clone(),
                         timeout: Duration::from_secs(provider.timeout_seconds),
+                        max_retries: provider.max_retries,
                         reasoning_effort: reasoning.map(|profile| profile.default),
                         reasoning_adapter: reasoning.map(|profile| profile.adapter),
                         reasoning_extra: reasoning
@@ -634,6 +639,7 @@ id = "test"
         assert!(!disabled.agent_config().auto_compact);
         assert_eq!(config.max_output_tokens, 32000);
         assert_eq!(config.providers["test"].timeout_seconds, 600);
+        assert_eq!(config.providers["test"].max_retries, 2);
         assert_eq!(config.agent_config().max_turns, 75);
         assert_eq!(config.agent_config().max_tool_calls, 500);
         assert_eq!(config.command.default_timeout_seconds, 120);

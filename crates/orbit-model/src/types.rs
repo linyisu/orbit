@@ -298,6 +298,10 @@ pub struct ModelConfig {
     pub model: String,
     #[serde(with = "duration_seconds")]
     pub timeout: Duration,
+    /// Number of transport attempts after the initial request. Retries stop as
+    /// soon as HTTP response headers have been accepted.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u8,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub reasoning_adapter: Option<ReasoningAdapter>,
     #[serde(default)]
@@ -312,6 +316,7 @@ impl Default for ModelConfig {
             api_key: None,
             model: "gpt-5.6-sol".to_owned(),
             timeout: Duration::from_secs(120),
+            max_retries: default_max_retries(),
             reasoning_effort: None,
             reasoning_adapter: None,
             reasoning_extra: Value::Object(Default::default()),
@@ -328,10 +333,15 @@ impl std::fmt::Debug for ModelConfig {
             .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
             .field("model", &self.model)
             .field("timeout", &self.timeout)
+            .field("max_retries", &self.max_retries)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("reasoning_adapter", &self.reasoning_adapter)
             .finish()
     }
+}
+
+pub const fn default_max_retries() -> u8 {
+    2
 }
 
 mod duration_seconds {

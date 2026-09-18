@@ -53,6 +53,11 @@ impl ModelClient {
         if config.model.trim().is_empty() {
             return Err(ModelError::InvalidModel);
         }
+        if config.max_retries > 5 {
+            return Err(ModelError::Protocol(
+                "max_retries must be between 0 and 5".to_owned(),
+            ));
+        }
         if let Some(adapter) = config.reasoning_adapter {
             let compatible = matches!(
                 (config.api_format, adapter),
@@ -231,12 +236,41 @@ impl ModelClient {
             ),
         }?;
 
+        for attempt in 0..=self.config.max_retries {
+            let result = self
+                .send_once(&body, &headers, format, cancellation.clone())
+                .await;
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if error.is_retryable() && attempt < self.config.max_retries => {
+                    let delay = Duration::from_millis(250_u64 << attempt);
+                    select! {
+                        _ = cancellation.cancelled() => return Err(ModelError::Cancelled),
+                        _ = time::sleep(delay) => {}
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("retry loop returns on every final attempt")
+    }
+
+    /// Executes a single request. Callers may retry only errors produced here:
+    /// a successful response is handed to the stream decoder and is never
+    /// replayed after bytes from the provider become observable.
+    async fn send_once(
+        &self,
+        body: &serde_json::Value,
+        headers: &reqwest::header::HeaderMap,
+        format: ApiFormat,
+        cancellation: CancellationToken,
+    ) -> Result<Response, ModelError> {
         let mut builder = self
             .http
             .post(self.endpoint.clone())
-            .headers(headers)
+            .headers(headers.clone())
             .header(header::CONTENT_TYPE, "application/json")
-            .json(&body);
+            .json(body);
 
         if let Some(api_key) = &self.config.api_key {
             builder = match format {
@@ -892,6 +926,40 @@ mod tests {
         assert_eq!(text, "中文");
     }
 
+    #[tokio::test]
+    async fn retries_a_transient_http_failure_before_streaming_begins() {
+        let (base_url, requests) = test_server_responses(vec![
+            b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 10\r\n\r\ntry again!".to_vec(),
+            concat!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"},\"finish_reason\":null}]}\n\n",
+                "data: [DONE]\n\n",
+            )
+            .as_bytes()
+            .to_vec(),
+        ])
+        .await;
+        let model = ModelClient::new(ModelConfig {
+            base_url,
+            max_retries: 1,
+            ..ModelConfig::default()
+        })
+        .unwrap();
+
+        let mut stream = model
+            .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
+            .await
+            .unwrap();
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            if let StreamEvent::TextDelta(delta) = event.unwrap() {
+                text.push_str(&delta);
+            }
+        }
+        assert_eq!(text, "recovered");
+        assert_eq!(requests.await.expect("request count"), 2);
+    }
+
     fn client(base_url: &str, api_format: &str, model: &str, api_key: Option<&str>) -> ModelClient {
         ModelClient::new(ModelConfig {
             api_format: ApiFormat::parse(api_format).unwrap(),
@@ -899,6 +967,7 @@ mod tests {
             api_key: api_key.map(str::to_owned),
             model: model.to_owned(),
             timeout: Duration::from_secs(5),
+            max_retries: 0,
             reasoning_effort: None,
             reasoning_adapter: None,
             reasoning_extra: serde_json::json!({}),
@@ -916,6 +985,44 @@ mod tests {
         chunks: Vec<Vec<u8>>,
     ) -> (String, impl std::future::Future<Output = String>) {
         test_server_held(chunks, Duration::ZERO).await
+    }
+
+    async fn test_server_responses(
+        responses: Vec<Vec<u8>>,
+    ) -> (
+        String,
+        impl std::future::Future<Output = Result<usize, tokio::sync::oneshot::error::RecvError>>,
+    ) {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("local address");
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            let mut requests = 0;
+            for response in responses {
+                let (mut socket, _) = listener.accept().await.expect("accept request");
+                let mut bytes = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let count = socket.read(&mut buffer).await.expect("read request");
+                    if count == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                requests += 1;
+                socket.write_all(&response).await.expect("write response");
+                let _ = socket.shutdown().await;
+            }
+            let _ = sender.send(requests);
+        });
+
+        (format!("http://{address}"), receiver)
     }
 
     async fn test_server_held(
