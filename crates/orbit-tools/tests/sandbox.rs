@@ -180,6 +180,7 @@ async fn verbose_output_does_not_kill_commands_and_preserves_final_status() {
     assert!(result.output_truncated);
     assert!(result.stdout.len() <= 32768);
     assert_eq!(result.exit_code, Some(7));
+    assert!(result.elapsed_ms <= 5_000);
     assert!(result.stdout.ends_with("FINAL_OK"));
     assert_eq!(result.stdout_total_bytes, 100009);
     let result = sandbox::run(

@@ -29,6 +29,7 @@ static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Serialize)]
 pub struct CommandResult {
     pub exit_code: Option<i32>,
+    pub elapsed_ms: u64,
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
@@ -508,6 +509,7 @@ pub async fn run_with_resources_and_output(
     )?
     .spawn()
     .map_err(failed)?;
+    let started = std::time::Instant::now();
     let (output_id, stdout_log, stderr_log) = output_log
         .map(OutputLog::split)
         .map_or((None, None, None), |(id, stdout, stderr)| {
@@ -542,6 +544,7 @@ pub async fn run_with_resources_and_output(
     }
     Ok(CommandResult {
         exit_code: status.code(),
+        elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         stdout,
         stderr,
         timed_out,

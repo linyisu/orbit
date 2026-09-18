@@ -607,8 +607,9 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                                 .map(|id| format!(" · output {id}"))
                                 .unwrap_or_default();
                             Some(format!(
-                                "exit {} · timeout {} · truncated {}{}\n{}{}",
+                                "exit {} · {} ms · timeout {} · truncated {}{}\n{}{}",
                                 value["exit_code"],
+                                value["elapsed_ms"],
                                 value["timed_out"],
                                 value["output_truncated"],
                                 retained,
