@@ -843,6 +843,27 @@ async fn run_command(
             .await?
         }
         "/status" if argument.is_empty() => {
+            let verifications = session.store.verification_records(session.id()).await?;
+            let passed = verifications
+                .iter()
+                .filter(|record| {
+                    record.exit_code == Some(0) && !record.timed_out && !record.cancelled
+                })
+                .count();
+            let failed = verifications.len().saturating_sub(passed);
+            let verification = if let Some(last) = verifications.last() {
+                format!(
+                    "验证命令  {} 次 · 通过 {} · 未通过 {} · 最近 exit {} · {} ms",
+                    verifications.len(),
+                    passed,
+                    failed,
+                    last.exit_code
+                        .map_or_else(|| "无".to_owned(), |code| code.to_string()),
+                    last.elapsed_ms,
+                )
+            } else {
+                "验证命令  尚未执行沙箱命令".to_owned()
+            };
             let baseline = session.git_baseline.as_ref().map_or_else(
                 || "Git 基线  非 Git 工作区或无法读取".to_owned(),
                 |value| {
@@ -860,8 +881,8 @@ async fn run_command(
                 },
             );
             state.transcript.push(TranscriptItem::CommandResult(format!(
-                "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / web_search / task_list / task_update / memory_list / memory_search / memory_save / memory_forget / write_file / edit_file / run_command / read_command_output · 审批：{}",
-                session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), baseline, state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
+                "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n{}\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / web_search / task_list / task_update / memory_list / memory_search / memory_save / memory_forget / write_file / edit_file / run_command / read_command_output · 审批：{}",
+                session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), baseline, verification, state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
             )));
         }
         "/model" => {

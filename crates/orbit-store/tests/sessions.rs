@@ -40,6 +40,24 @@ fn write_receipt(path: &str, before: Option<&str>, after: &str) -> AgentEvent {
     }
 }
 
+fn command_receipt(command: &str, exit_code: i32) -> AgentEvent {
+    AgentEvent::ToolFinished {
+        call: ToolCall::function(
+            "command-1",
+            "run_command",
+            serde_json::json!({"command":command}),
+        ),
+        content: serde_json::json!({
+            "exit_code":exit_code,
+            "timed_out":false,
+            "cancelled":false,
+            "elapsed_ms":42,
+        })
+        .to_string(),
+        changes: Vec::new(),
+    }
+}
+
 #[tokio::test]
 async fn restart_preserves_event_order_and_successful_context() {
     let db = Database::new();
@@ -91,7 +109,10 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
     writer
         .finish(
             "completed",
-            vec![write_receipt("src/lib.rs", Some("old"), "new")],
+            vec![
+                write_receipt("src/lib.rs", Some("old"), "new"),
+                command_receipt("cargo test", 0),
+            ],
             Some(vec![ChatMessage::user("change")]),
         )
         .await
@@ -107,6 +128,11 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
     let baseline = serde_json::json!({"branch":{"oid":"abc"},"entries":[]});
     store.save_git_baseline(&id, &baseline).await.unwrap();
     assert_eq!(store.git_baseline(&id).await.unwrap(), Some(baseline));
+    let verification = store.verification_records(&id).await.unwrap();
+    assert_eq!(verification.len(), 1);
+    assert_eq!(verification[0].command, "cargo test");
+    assert_eq!(verification[0].exit_code, Some(0));
+    assert_eq!(verification[0].elapsed_ms, 42);
 }
 
 #[tokio::test]

@@ -14,7 +14,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::os::unix::fs::OpenOptionsExt;
 
 use crate::types::{
-    MemoryCategory, ProjectMemory, ProjectTask, Run, Session, Snapshot, TaskStatus, WorkspaceChange,
+    MemoryCategory, ProjectMemory, ProjectTask, Run, Session, Snapshot, TaskStatus,
+    VerificationRecord, WorkspaceChange,
 };
 
 #[derive(Clone)]
@@ -347,6 +348,57 @@ impl Store {
                 params![session_id, run_id, call_id, path],
             )?;
             Ok(())
+        })
+        .await
+    }
+
+    /// Reconstruct successful `run_command` invocations from durable tool
+    /// results. This deliberately excludes model prose and failed requests
+    /// that never reached the sandbox.
+    pub async fn verification_records(&self, session_id: &str) -> Result<Vec<VerificationRecord>> {
+        let session_id = session_id.to_owned();
+        self.access(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT r.id,r.status,e.payload
+                 FROM runs r JOIN events e ON e.run_id=r.id
+                 WHERE r.session_id=?1 ORDER BY r.id,e.id",
+            )?;
+            let mut records = Vec::new();
+            for row in statement.query_map([session_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })? {
+                let (run_id, run_status, payload) = row?;
+                let event: AgentEvent =
+                    serde_json::from_str(&payload).context("stored event could not be decoded")?;
+                let AgentEvent::ToolFinished { call, content, .. } = event else {
+                    continue;
+                };
+                if call.function.name != "run_command" {
+                    continue;
+                }
+                let arguments: serde_json::Value =
+                    serde_json::from_str(&call.function.arguments).unwrap_or_default();
+                let result: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+                if result.get("exit_code").is_none() {
+                    continue;
+                }
+                records.push(VerificationRecord {
+                    run_id,
+                    run_status,
+                    command: arguments["command"].as_str().unwrap_or_default().to_owned(),
+                    exit_code: result["exit_code"]
+                        .as_i64()
+                        .and_then(|code| i32::try_from(code).ok()),
+                    timed_out: result["timed_out"].as_bool().unwrap_or(false),
+                    cancelled: result["cancelled"].as_bool().unwrap_or(false),
+                    elapsed_ms: result["elapsed_ms"].as_u64().unwrap_or(0),
+                });
+            }
+            Ok(records)
         })
         .await
     }

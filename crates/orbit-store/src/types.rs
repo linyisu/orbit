@@ -49,6 +49,19 @@ pub struct WorkspaceChange {
     pub undone: bool,
 }
 
+/// An actual completed sandbox command reconstructed from the event ledger.
+/// It is evidence of execution, not a claim that the model made in prose.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerificationRecord {
+    pub run_id: i64,
+    pub run_status: String,
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub cancelled: bool,
+    pub elapsed_ms: u64,
+}
+
 /// A durable, user-visible unit of project work. Tasks live on the stable
 /// project identity rather than a single conversation so a resumed or new
 /// session can continue the same plan after a directory rename.
