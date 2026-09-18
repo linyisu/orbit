@@ -78,7 +78,6 @@ async fn rejects_escape_paths_symlinks_and_private_metadata() {
         ".env",
         ".env.local",
         ".git/config",
-        "config.toml",
     ] {
         let result = root
             .tool()
@@ -104,6 +103,23 @@ async fn permits_non_protected_hidden_metadata() {
         .unwrap();
     let value: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["content"], "1: metadata\n");
+}
+
+#[tokio::test]
+async fn permits_ordinary_configuration_filenames() {
+    let root = Fixture::new();
+    fs::write(root.0.join("config.toml"), "feature = true\n").unwrap();
+
+    let output = root
+        .tool()
+        .execute(
+            call(json!({"path":"config.toml"})),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["content"], "1: feature = true\n");
 }
 
 #[tokio::test]

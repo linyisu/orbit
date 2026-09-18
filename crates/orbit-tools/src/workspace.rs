@@ -69,7 +69,7 @@ impl Workspace {
             match component {
                 Component::Normal(name) => {
                     let name_text = name.to_string_lossy();
-                    if matches!(name_text.as_ref(), ".git" | ".env" | "config.toml")
+                    if matches!(name_text.as_ref(), ".git" | ".env")
                         || name_text.starts_with(".env.")
                         || name_text.starts_with(".orbit-write-")
                     {
