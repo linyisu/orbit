@@ -337,8 +337,9 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
     let percent = context_percent(state);
     let remaining = 100usize.saturating_sub(percent.min(100));
     let lines = [
-        "上下文窗口（本地估算）".to_owned(),
-        format!("输入上下文 {percent}% 已用（剩余 {remaining}%）"),
+        "下一次请求上下文（本地估算）".to_owned(),
+        "尚未发送请求；系统提示与工具定义已计入。".to_owned(),
+        format!("{percent}% 已用（剩余 {remaining}%）"),
         format!(
             "估算 {} / {} tokens",
             compact_tokens(state.context_used_tokens),
@@ -357,7 +358,7 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         .unwrap_or(0)
         .saturating_add(4)
         .min(frame.area().width as usize) as u16;
-    let height = 6;
+    let height = 7;
     let x = state
         .context_indicator_area
         .x
