@@ -437,6 +437,28 @@ async fn project_tasks_and_memories_survive_project_rename_without_workspace_fil
     assert!(memory.active);
     assert_eq!(store.tasks(&project.id, false).await.unwrap().len(), 2);
     assert_eq!(store.memories(&project.id, false).await.unwrap().len(), 1);
+    let preference = store
+        .remember(
+            &project.id,
+            MemoryCategory::Preference,
+            "Use concise Chinese progress updates".into(),
+            "Keep project progress messages short and in Chinese.".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    let search = store
+        .search_memories(&project.id, "Chinese progress", 8)
+        .await
+        .unwrap();
+    assert_eq!(search.first().map(|memory| memory.id), Some(preference.id));
+    assert!(
+        store
+            .search_memories(&project.id, "missing phrase", 8)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(std::fs::read_dir(&old).unwrap().count(), 1);
 
     std::fs::rename(&old, &moved).unwrap();
@@ -455,7 +477,7 @@ async fn project_tasks_and_memories_survive_project_rename_without_workspace_fil
     );
     assert_eq!(
         store.memories(&project.id, false).await.unwrap()[0].id,
-        memory.id
+        preference.id
     );
 
     let inactive = store
@@ -463,6 +485,10 @@ async fn project_tasks_and_memories_survive_project_rename_without_workspace_fil
         .await
         .unwrap();
     assert!(!inactive.active);
+    store
+        .set_memory_active(&project.id, preference.id, false)
+        .await
+        .unwrap();
     assert!(store.memories(&project.id, false).await.unwrap().is_empty());
-    assert_eq!(store.memories(&project.id, true).await.unwrap().len(), 1);
+    assert_eq!(store.memories(&project.id, true).await.unwrap().len(), 2);
 }

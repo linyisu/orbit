@@ -871,6 +871,23 @@ async fn run_memory_command(
                 memory.id
             )));
         }
+        "search" => {
+            if rest.trim().is_empty() {
+                state.transcript.push(TranscriptItem::CommandError(
+                    "用法：/memory search <关键词>".into(),
+                ));
+                return Ok(());
+            }
+            let memories = session
+                .store
+                .search_memories(project_id, rest.trim(), 8)
+                .await?;
+            state.transcript.push(TranscriptItem::CommandResult(format!(
+                "记忆搜索：{}\n{}",
+                rest.trim(),
+                render_memories(&memories)
+            )));
+        }
         "forget" => {
             let Ok(id) = rest.trim().parse::<i64>() else {
                 state.transcript.push(TranscriptItem::CommandError(
@@ -889,7 +906,7 @@ async fn run_memory_command(
             )));
         }
         _ => state.transcript.push(TranscriptItem::CommandError(
-            "用法：/memory [list|all] · /memory add <类型> <内容> · /memory forget <编号>".into(),
+            "用法：/memory [list|all] · /memory search <关键词> · /memory add <类型> <内容> · /memory forget <编号>".into(),
         )),
     }
     Ok(())

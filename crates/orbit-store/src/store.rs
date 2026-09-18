@@ -402,6 +402,67 @@ impl Store {
         }).await
     }
 
+    /// Search active project memories locally. This deliberately uses a small,
+    /// transparent lexical ranker instead of sending project facts to an
+    /// embedding service. Exact phrase matches rank first, followed by
+    /// individual query terms; ties preserve most recently updated records.
+    pub async fn search_memories(
+        &self,
+        project_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ProjectMemory>> {
+        let query = query.trim();
+        ensure!(!query.is_empty(), "memory search query must not be empty");
+        ensure!(query.len() <= 512, "memory search query exceeds 512 bytes");
+        ensure!(
+            (1..=20).contains(&limit),
+            "memory search limit must be between 1 and 20"
+        );
+
+        let phrase = query.to_lowercase();
+        let terms = phrase
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|term| term.chars().count() >= 2)
+            .collect::<Vec<_>>();
+        let mut matches = self
+            .memories(project_id, false)
+            .await?
+            .into_iter()
+            .filter_map(|memory| {
+                let title = memory.title.to_lowercase();
+                let content = memory.content.to_lowercase();
+                let mut score = 0_u32;
+                if title.contains(&phrase) {
+                    score += 100;
+                }
+                if content.contains(&phrase) {
+                    score += 60;
+                }
+                for term in &terms {
+                    if title.contains(term) {
+                        score += 10;
+                    }
+                    if content.contains(term) {
+                        score += 5;
+                    }
+                }
+                (score > 0).then_some((score, memory))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|(left_score, left), (right_score, right)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| right.updated_at.cmp(&left.updated_at))
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(matches
+            .into_iter()
+            .take(limit)
+            .map(|(_, memory)| memory)
+            .collect())
+    }
+
     pub async fn remember(
         &self,
         project_id: &str,
