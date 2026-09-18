@@ -146,6 +146,7 @@ pub async fn run(
         tokio::task::JoinHandle<Result<String, orbit_agent::tool::ToolError>>,
     > = None;
     let mut local_cancellation: Option<CancellationToken> = None;
+    let mut marketplace_task: Option<JoinHandle<Result<crate::marketplaces::Marketplace>>> = None;
     let mut pending_guidance = Vec::new();
     let mut active_context: Option<ChatMessage> = None;
     let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
@@ -166,8 +167,9 @@ pub async fn run(
                         && !state.show_help
                         && state.picker.is_none()
                         && state.model_picker.is_none()
+                        && state.marketplace_dialog.is_none()
                         && matches!(render::handle_link_hover(&mut state, &event), Some(true));
-                    if !state.selection.dragging() && !state.show_help && state.picker.is_none() && state.model_picker.is_none()
+                    if !state.selection.dragging() && !state.show_help && state.picker.is_none() && state.model_picker.is_none() && state.marketplace_dialog.is_none()
                         && let Some(changed) = navigation::handle(&mut state, &event) {
                         if changed || context_hover_changed || link_hover_changed { dirty = true; frames.request(time::Instant::now()); }
                         continue;
@@ -177,7 +179,7 @@ pub async fn run(
                     if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) { continue; }
                     dirty = true;
                     frames.request(time::Instant::now());
-                    if state.show_help || state.picker.is_some() || state.model_picker.is_some() {
+                    if state.show_help || state.picker.is_some() || state.model_picker.is_some() || state.marketplace_dialog.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
                             && let Err(error) = resume_session(&id, &mut state, &mut model, &mut history, &mut session, &instructions, &skills, &model_options).await
                             && let Some(picker) = &mut state.picker {
@@ -194,6 +196,11 @@ pub async fn run(
                             ).await {
                                 state.transcript.push(TranscriptItem::Error(error.to_string()));
                             }
+                        }
+                        if let Some(source) = state.pending_marketplace_source.take() {
+                            state.transcript.push(TranscriptItem::Command(format!("/plugins add {source}")));
+                            state.transcript.push(TranscriptItem::Notice("正在下载并检查插件市场…".into()));
+                            marketplace_task = Some(tokio::spawn(crate::marketplaces::add_current(source)));
                         }
                         continue;
                     }
@@ -518,6 +525,20 @@ pub async fn run(
                         Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("回退操作中断：{error}"))),
                     }
                 }
+                result = async { marketplace_task.as_mut().unwrap().await }, if marketplace_task.is_some() => {
+                    dirty = true;
+                    marketplace_task = None;
+                    match result {
+                        Ok(Ok(market)) => state.transcript.push(TranscriptItem::CommandResult(format!(
+                            "已添加市场 {}，发现 {} 个插件。\n{}",
+                            market.name,
+                            market.plugins.len(),
+                            market.directory.display(),
+                        ))),
+                        Ok(Err(error)) => state.transcript.push(TranscriptItem::CommandError(format!("无法添加市场：{error}"))),
+                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("市场下载任务中断：{error}"))),
+                    }
+                }
                 _ = time::sleep_until(frames.deadline()), if frames.pending() => {
                     terminal::draw_synchronized(&mut terminal, |frame| {
                         render::draw(frame, &mut state);
@@ -557,6 +578,14 @@ pub async fn run(
         let _ = task.await;
     }
     if let Some(mut task) = local_task
+        && time::timeout(Duration::from_millis(500), &mut task)
+            .await
+            .is_err()
+    {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(mut task) = marketplace_task
         && time::timeout(Duration::from_millis(500), &mut task)
             .await
             .is_err()
@@ -866,6 +895,11 @@ async fn run_command(
                 .push(TranscriptItem::CommandResult(render_mcp_status(
                     mcp_statuses,
                 )))
+        }
+        "/plugins" if argument.is_empty() => {
+            state.marketplace_dialog = Some(dialogs::MarketplaceDialog::new(
+                crate::marketplaces::list_current()?,
+            ));
         }
         "/skill" => {
             if argument.is_empty() {

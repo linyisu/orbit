@@ -1,4 +1,5 @@
 use super::{ModelOption, app::UiState, commands::COMMANDS};
+use crate::marketplaces::Marketplace;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use orbit_store::types::Session;
 use ratatui::{
@@ -24,6 +25,23 @@ pub struct ModelPicker {
     selected: usize,
     current: String,
     effort: Option<orbit_model::types::ReasoningEffort>,
+}
+
+#[derive(Debug)]
+pub struct MarketplaceDialog {
+    marketplaces: Vec<Marketplace>,
+    source: String,
+    adding: bool,
+}
+
+impl MarketplaceDialog {
+    pub fn new(marketplaces: Vec<Marketplace>) -> Self {
+        Self {
+            marketplaces,
+            source: String::new(),
+            adding: false,
+        }
+    }
 }
 
 impl ModelPicker {
@@ -134,6 +152,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             state.show_help = false;
             state.picker = None;
             state.model_picker = None;
+            state.marketplace_dialog = None;
             return None;
         }
     }
@@ -213,6 +232,43 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => picker.move_by(true),
             _ => {}
         }
+    } else if let Some(dialog) = &mut state.marketplace_dialog {
+        match event {
+            Event::Key(key) => match key.code {
+                KeyCode::Char('a')
+                    if !dialog.adding
+                        && !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    dialog.adding = true
+                }
+                KeyCode::Enter if !dialog.adding => dialog.adding = true,
+                KeyCode::Enter => {
+                    let source = dialog.source.trim();
+                    if !source.is_empty() {
+                        state.pending_marketplace_source = Some(source.into());
+                        state.marketplace_dialog = None;
+                    }
+                }
+                KeyCode::Backspace if dialog.adding => {
+                    dialog.source.pop();
+                }
+                KeyCode::Char(c)
+                    if dialog.adding
+                        && !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    dialog.source.push(c)
+                }
+                _ => {}
+            },
+            Event::Paste(text) if dialog.adding => dialog
+                .source
+                .extend(text.chars().filter(|c| !c.is_control())),
+            _ => {}
+        }
     } else if state.show_help {
         match event {
             Event::Key(key) => match key.code {
@@ -243,7 +299,11 @@ fn clean(text: &str) -> String {
 }
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
-    if !state.show_help && state.picker.is_none() && state.model_picker.is_none() {
+    if !state.show_help
+        && state.picker.is_none()
+        && state.model_picker.is_none()
+        && state.marketplace_dialog.is_none()
+    {
         return;
     }
     state.selection.clear();
@@ -261,6 +321,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         "恢复会话 · 当前项目"
     } else if state.model_picker.is_some() {
         "选择模型"
+    } else if state.marketplace_dialog.is_some() {
+        "插件市场"
     } else {
         "Orbit 帮助"
     };
@@ -438,6 +500,77 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             )),
             footer,
         );
+    } else if let Some(dialog) = &mut state.marketplace_dialog {
+        let heading = if dialog.adding {
+            "添加市场源"
+        } else {
+            "已添加的市场"
+        };
+        if dialog.adding {
+            let source = super::render::fit_label(
+                &format!("来源：{}", clean(&dialog.source)),
+                header.width.saturating_sub(1) as usize,
+                true,
+            );
+            state.ime_cursor = Some(
+                (
+                    header.x + unicode_width::UnicodeWidthStr::width(source.as_str()) as u16,
+                    header.y + 1,
+                )
+                    .into(),
+            );
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::styled(
+                        heading,
+                        Style::default()
+                            .fg(Color::Rgb(218, 139, 109))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Line::from(format!("{source}▏")),
+                ]),
+                header,
+            );
+            frame.render_widget(
+                Paragraph::new(
+                    "可输入本地目录、GitHub owner/repo 或 HTTPS Git URL。\n下载只保存到 Orbit 用户数据目录；安装插件前仍会展示其内容。",
+                )
+                .wrap(Wrap { trim: false }),
+                body,
+            );
+            frame.render_widget(Paragraph::new("Enter 下载 · Esc 取消"), footer);
+        } else {
+            state.ime_cursor = None;
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    heading,
+                    Style::default()
+                        .fg(Color::Rgb(218, 139, 109))
+                        .add_modifier(Modifier::BOLD),
+                )),
+                header,
+            );
+            let mut entries = Vec::new();
+            for market in &dialog.marketplaces {
+                entries.push(Line::styled(
+                    clean(&market.name),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                entries.push(Line::styled(
+                    format!(
+                        "  {} · {} 个插件",
+                        clean(&market.source),
+                        market.plugins.len()
+                    ),
+                    Style::default().fg(Color::Rgb(170, 170, 170)),
+                ));
+            }
+            if entries.is_empty() {
+                entries.push(Line::from("尚未添加市场。"));
+            }
+            frame.render_widget(Paragraph::new(entries).wrap(Wrap { trim: false }), body);
+            frame.render_widget(Paragraph::new("A / Enter 添加市场 · Esc 返回"), footer);
+        }
     } else {
         state.ime_cursor = None;
         frame.render_widget(
@@ -583,6 +716,22 @@ mod tests {
         assert_eq!(
             state.chosen_effort,
             Some(orbit_model::types::ReasoningEffort::High)
+        );
+    }
+
+    #[test]
+    fn marketplace_dialog_collects_source_before_starting_download() {
+        let mut state = UiState::new("model");
+        state.marketplace_dialog = Some(MarketplaceDialog::new(Vec::new()));
+
+        handle(&mut state, key(KeyCode::Enter));
+        handle(&mut state, Event::Paste("owner/catalog".into()));
+        handle(&mut state, key(KeyCode::Enter));
+
+        assert!(state.marketplace_dialog.is_none());
+        assert_eq!(
+            state.pending_marketplace_source.as_deref(),
+            Some("owner/catalog")
         );
     }
 

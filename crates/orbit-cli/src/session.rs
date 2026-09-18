@@ -20,13 +20,17 @@ pub fn database_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(std::path::absolute(path)?);
     }
-    let data = std::env::var_os("XDG_DATA_HOME")
+    let data = data_directory()?;
+    Ok(data.join("orbit/orbit.db"))
+}
+
+pub fn data_directory() -> Result<PathBuf> {
+    std::env::var_os("XDG_DATA_HOME")
         .filter(|p| !p.is_empty())
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(user_data_directory)
-        .context("set --database or a user data directory to select a session database")?;
-    Ok(data.join("orbit/orbit.db"))
+        .context("set XDG_DATA_HOME or a user data directory to store Orbit data")
 }
 
 fn user_data_directory() -> Option<PathBuf> {

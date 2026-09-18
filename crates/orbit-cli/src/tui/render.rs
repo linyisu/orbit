@@ -45,7 +45,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     // Navigation previews belong to the transcript only. A command menu or
     // dialog is a separate interaction surface, so it must not retain a stale
     // tooltip from a dot the pointer hovered earlier.
-    if !menu.is_empty() || state.show_help || state.picker.is_some() || state.model_picker.is_some()
+    if !menu.is_empty()
+        || state.show_help
+        || state.picker.is_some()
+        || state.model_picker.is_some()
+        || state.marketplace_dialog.is_some()
     {
         state.navigation.clear_hover();
         state.context_hovered = false;

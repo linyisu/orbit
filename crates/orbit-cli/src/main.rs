@@ -24,6 +24,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 mod instructions;
+mod marketplaces;
 mod project_state;
 mod runtime;
 mod session;

@@ -53,6 +53,10 @@ pub const COMMANDS: &[Command] = &[
         description: "查看 MCP server 连接状态",
     },
     Command {
+        name: "/plugins",
+        description: "浏览或添加插件市场",
+    },
+    Command {
         name: "/tasks",
         description: "查看或更新当前项目的任务计划",
     },
@@ -111,6 +115,7 @@ pub fn available_while_running(name: &str) -> bool {
             | "/context"
             | "/skills"
             | "/mcp"
+            | "/plugins"
             | "/mode"
             | "/permissions"
     )
