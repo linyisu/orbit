@@ -58,6 +58,7 @@ struct CommandContext<'a> {
     skills: &'a crate::skills::Skills,
     mcp_statuses: &'a [orbit_tools::mcp::McpServerStatus],
     model_options: &'a [ModelOption],
+    memory_scope: &'a crate::project_state::MemoryScope,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +92,7 @@ pub struct RequestBudget {
     pub plugin_skill_diagnostics: Vec<String>,
     pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
     pub model_options: Vec<ModelOption>,
+    pub memory_scope: crate::project_state::MemoryScope,
 }
 
 pub async fn run(
@@ -116,6 +118,7 @@ pub async fn run(
         plugin_skill_diagnostics,
         mcp_statuses,
         model_options,
+        memory_scope,
     } = budget;
     state.context_tokens = context_tokens;
     state.input_context_tokens = input_context_tokens;
@@ -140,6 +143,7 @@ pub async fn run(
         &mut history,
         &session.store,
         &session.snapshot.session.project_id,
+        session.id(),
     )
     .await?;
     refresh_context_usage(&mut state, &history, &tools);
@@ -188,7 +192,7 @@ pub async fn run(
                     frames.request(time::Instant::now());
                     if state.show_help || state.picker.is_some() || state.model_picker.is_some() || state.marketplace_dialog.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
-                            && let Err(error) = resume_session(&id, &mut state, &mut model, &mut history, &mut session, &instructions, &skills, &model_options).await
+                            && let Err(error) = resume_session(&id, &mut state, &mut model, &mut history, &mut session, &instructions, &skills, &model_options, &memory_scope).await
                             && let Some(picker) = &mut state.picker {
                             picker.error = Some(error.to_string());
                         }
@@ -430,7 +434,7 @@ pub async fn run(
                                         ));
                                         continue;
                                     }
-                                    match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, skills: &skills, mcp_statuses: &mcp_statuses, model_options: &model_options }).await {
+                                    match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, skills: &skills, mcp_statuses: &mcp_statuses, model_options: &model_options, memory_scope: &memory_scope }).await {
                                         Ok(true) => break,
                                         Ok(false) => refresh_context_usage(&mut state, &history, &tools),
                                         Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
@@ -524,6 +528,7 @@ pub async fn run(
                             &mut history,
                             &session.store,
                             &session.snapshot.session.project_id,
+                            session.id(),
                         )
                         .await?;
                     }
@@ -821,6 +826,7 @@ async fn run_command(
         skills,
         mcp_statuses,
         model_options,
+        memory_scope,
     } = context;
     let (command, argument) = prompt
         .split_once(char::is_whitespace)
@@ -830,6 +836,7 @@ async fn run_command(
         "/exit" | "/quit" if argument.is_empty() => return Ok(true),
         "/new" if argument.is_empty() => {
             session.new_session(state.model.clone()).await?;
+            memory_scope.set_session(session.id().into());
             session
                 .set_model_profile(state.model.clone(), state.reasoning_effort)
                 .await?;
@@ -840,6 +847,7 @@ async fn run_command(
                 history,
                 &session.store,
                 &session.snapshot.session.project_id,
+                session.id(),
             )
             .await?;
             let input = std::mem::take(&mut state.input);
@@ -1019,6 +1027,7 @@ async fn run_command(
                 instructions,
                 skills,
                 model_options,
+                memory_scope,
             )
             .await?
         }
@@ -1151,7 +1160,8 @@ async fn run_tasks_command(
                     .store
                     .create_task(project_id, None, rest.trim().into(), String::new(), 0)
                     .await?;
-                crate::project_state::inject(history, &session.store, project_id).await?;
+                crate::project_state::inject(history, &session.store, project_id, session.id())
+                    .await?;
                 state.transcript.push(TranscriptItem::CommandResult(format!(
                     "已添加任务 #{}：{}",
                     task.id, task.title
@@ -1176,7 +1186,7 @@ async fn run_tasks_command(
                 .store
                 .update_task(project_id, id, None, None, Some(status), None)
                 .await?;
-            crate::project_state::inject(history, &session.store, project_id).await?;
+            crate::project_state::inject(history, &session.store, project_id, session.id()).await?;
             state.transcript.push(TranscriptItem::CommandResult(format!(
                 "任务 #{} 已标记为{}。",
                 task.id,
@@ -1215,10 +1225,13 @@ async fn run_memory_command(
     let (action, rest) = argument
         .split_once(char::is_whitespace)
         .unwrap_or((argument, ""));
-    let project_id = &session.snapshot.session.project_id;
+    let session_id = session.id();
     match action {
         "" | "list" | "all" => {
-            let memories = session.store.memories(project_id, action == "all").await?;
+            let memories = session
+                .store
+                .session_memories(session_id, action == "all")
+                .await?;
             state
                 .transcript
                 .push(TranscriptItem::CommandResult(render_memories(&memories)));
@@ -1240,17 +1253,22 @@ async fn run_memory_command(
             let title = concise_title(content.trim());
             let memory = session
                 .store
-                .remember(
-                    project_id,
+                .remember_in_session(
+                    session_id,
                     category,
                     title,
                     content.trim().into(),
-                    Some(session.id().into()),
                 )
                 .await?;
-            crate::project_state::inject(history, &session.store, project_id).await?;
+            crate::project_state::inject(
+                history,
+                &session.store,
+                &session.snapshot.session.project_id,
+                session_id,
+            )
+            .await?;
             state.transcript.push(TranscriptItem::CommandResult(format!(
-                "已保存项目记忆 #{}。",
+                "已保存会话记忆 #{}。",
                 memory.id
             )));
         }
@@ -1263,7 +1281,7 @@ async fn run_memory_command(
             }
             let memories = session
                 .store
-                .search_memories(project_id, rest.trim(), 8)
+                .search_session_memories(session_id, rest.trim(), 8)
                 .await?;
             state.transcript.push(TranscriptItem::CommandResult(format!(
                 "记忆搜索：{}\n{}",
@@ -1280,11 +1298,17 @@ async fn run_memory_command(
             };
             let memory = session
                 .store
-                .set_memory_active(project_id, id, false)
+                .set_session_memory_active(session_id, id, false)
                 .await?;
-            crate::project_state::inject(history, &session.store, project_id).await?;
+            crate::project_state::inject(
+                history,
+                &session.store,
+                &session.snapshot.session.project_id,
+                session_id,
+            )
+            .await?;
             state.transcript.push(TranscriptItem::CommandResult(format!(
-                "项目记忆 #{} 已停用。",
+                "会话记忆 #{} 已停用。",
                 memory.id
             )));
         }
@@ -1326,11 +1350,11 @@ fn task_status_label(status: orbit_store::types::TaskStatus) -> &'static str {
     }
 }
 
-fn render_memories(memories: &[orbit_store::types::ProjectMemory]) -> String {
+fn render_memories(memories: &[orbit_store::types::SessionMemory]) -> String {
     if memories.is_empty() {
-        return "当前项目没有已保存的长期记忆。\n\n/memory add <类型> <内容> 可保存约束、决策、事实或偏好。".into();
+        return "当前会话没有已保存的长期记忆。\n\n/memory add <类型> <内容> 可保存约束、决策、事实或偏好。".into();
     }
-    let mut output = String::from("项目记忆\n");
+    let mut output = String::from("会话记忆\n");
     for memory in memories {
         use std::fmt::Write;
         let marker = if memory.active { "●" } else { "○" };
@@ -1632,8 +1656,10 @@ async fn resume_session(
     instructions: &crate::instructions::Instructions,
     skills: &crate::skills::Skills,
     model_options: &[ModelOption],
+    memory_scope: &crate::project_state::MemoryScope,
 ) -> Result<()> {
     session.resume(id).await?;
+    memory_scope.set_session(session.id().into());
     *history = session.snapshot.history.clone();
     crate::instructions::inject(history, instructions);
     skills.inject(history);
@@ -1641,6 +1667,7 @@ async fn resume_session(
         history,
         &session.store,
         &session.snapshot.session.project_id,
+        session.id(),
     )
     .await?;
     let mut restored = UiState::new(state.model.clone());

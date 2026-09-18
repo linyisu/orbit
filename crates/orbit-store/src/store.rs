@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::os::unix::fs::OpenOptionsExt;
 
 use crate::types::{
-    MemoryCategory, ProjectMemory, ProjectPlugin, ProjectTask, Run, Session, Snapshot, TaskStatus,
+    MemoryCategory, ProjectPlugin, ProjectTask, Run, Session, SessionMemory, Snapshot, TaskStatus,
     VerificationRecord, WorkspaceChange,
 };
 
@@ -47,7 +47,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 9,
+                version <= 10,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -162,6 +162,43 @@ impl Store {
                     );
                     CREATE INDEX project_plugins_project_enabled ON project_plugins(project_id,enabled_at DESC,plugin_name);
                     PRAGMA user_version=9;",
+                )?;
+            }
+            if version < 10 {
+                // Project memories from older Orbit builds were unsafe: every
+                // session for a project received them. Preserve the legacy
+                // table for auditability, but migrate only records with a
+                // known owner or exactly one possible owner. Ambiguous
+                // records must never leak into a new session.
+                connection.execute_batch(
+                    "CREATE TABLE session_memories (
+                        id INTEGER PRIMARY KEY,
+                        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                        category TEXT NOT NULL CHECK(category IN ('constraint','decision','fact','preference')),
+                        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 512),
+                        content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 8192),
+                        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+                        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                    );
+                    CREATE INDEX session_memories_session_active ON session_memories(session_id,active,updated_at DESC,id DESC);
+                    INSERT INTO session_memories(session_id,category,title,content,active,created_at,updated_at)
+                    SELECT memories.source_session_id, memories.category, memories.title, memories.content,
+                           memories.active, memories.created_at, memories.updated_at
+                    FROM project_memories AS memories
+                    JOIN sessions AS sessions
+                      ON sessions.id=memories.source_session_id
+                     AND sessions.project_id=memories.project_id
+                    WHERE memories.source_session_id IS NOT NULL
+                    UNION ALL
+                    SELECT sessions.id, memories.category, memories.title, memories.content,
+                           memories.active, memories.created_at, memories.updated_at
+                    FROM project_memories AS memories
+                    JOIN sessions AS sessions ON sessions.project_id=memories.project_id
+                    WHERE memories.source_session_id IS NULL
+                      AND 1=(SELECT count(*) FROM sessions AS scoped
+                             WHERE scoped.project_id=memories.project_id);
+                    PRAGMA user_version=10;",
                 )?;
             }
             connection.execute_batch("COMMIT;")?;
@@ -669,35 +706,36 @@ impl Store {
         .await
     }
 
-    pub async fn memories(
+    pub async fn session_memories(
         &self,
-        project_id: &str,
+        session_id: &str,
         include_inactive: bool,
-    ) -> Result<Vec<ProjectMemory>> {
-        let project_id = project_id.to_owned();
+    ) -> Result<Vec<SessionMemory>> {
+        let session_id = session_id.to_owned();
         self.access(move |conn| {
             let mut statement = conn.prepare(
-                "SELECT id,project_id,category,title,content,source_session_id,active,created_at,updated_at
-                 FROM project_memories WHERE project_id=?1 AND (?2 OR active=1)
+                "SELECT id,session_id,category,title,content,active,created_at,updated_at
+                 FROM session_memories WHERE session_id=?1 AND (?2 OR active=1)
                  ORDER BY active DESC, updated_at DESC, id DESC",
             )?;
             statement
-                .query_map(params![project_id, include_inactive], memory_row)?
+                .query_map(params![session_id, include_inactive], memory_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(Into::into)
-        }).await
+        })
+        .await
     }
 
-    /// Search active project memories locally. This deliberately uses a small,
+    /// Search active session memories locally. This deliberately uses a small,
     /// transparent lexical ranker instead of sending project facts to an
     /// embedding service. Exact phrase matches rank first, followed by
     /// individual query terms; ties preserve most recently updated records.
-    pub async fn search_memories(
+    pub async fn search_session_memories(
         &self,
-        project_id: &str,
+        session_id: &str,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<ProjectMemory>> {
+    ) -> Result<Vec<SessionMemory>> {
         let query = query.trim();
         ensure!(!query.is_empty(), "memory search query must not be empty");
         ensure!(query.len() <= 512, "memory search query exceeds 512 bytes");
@@ -712,7 +750,7 @@ impl Store {
             .filter(|term| term.chars().count() >= 2)
             .collect::<Vec<_>>();
         let mut matches = self
-            .memories(project_id, false)
+            .session_memories(session_id, false)
             .await?
             .into_iter()
             .filter_map(|memory| {
@@ -749,31 +787,30 @@ impl Store {
             .collect())
     }
 
-    pub async fn remember(
+    pub async fn remember_in_session(
         &self,
-        project_id: &str,
+        session_id: &str,
         category: MemoryCategory,
         title: String,
         content: String,
-        source_session_id: Option<String>,
-    ) -> Result<ProjectMemory> {
+    ) -> Result<SessionMemory> {
         validate_memory_fields(&title, &content)?;
-        let project_id = project_id.to_owned();
+        let session_id = session_id.to_owned();
         self.access(move |conn| {
             let transaction = conn.transaction()?;
-            let project_exists: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
-                [&project_id],
+            let session_exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)",
+                [&session_id],
                 |row| row.get(0),
             )?;
-            ensure!(project_exists, "project not found");
+            ensure!(session_exists, "session not found");
             transaction.execute(
-                "INSERT INTO project_memories(project_id,category,title,content,source_session_id) VALUES(?1,?2,?3,?4,?5)",
-                params![project_id, category.as_str(), title, content, source_session_id],
+                "INSERT INTO session_memories(session_id,category,title,content) VALUES(?1,?2,?3,?4)",
+                params![session_id, category.as_str(), title, content],
             )?;
             let id = transaction.last_insert_rowid();
             let memory = transaction.query_row(
-                "SELECT id,project_id,category,title,content,source_session_id,active,created_at,updated_at FROM project_memories WHERE id=?1",
+                "SELECT id,session_id,category,title,content,active,created_at,updated_at FROM session_memories WHERE id=?1",
                 [id],
                 memory_row,
             )?;
@@ -782,21 +819,21 @@ impl Store {
         }).await
     }
 
-    pub async fn set_memory_active(
+    pub async fn set_session_memory_active(
         &self,
-        project_id: &str,
+        session_id: &str,
         id: i64,
         active: bool,
-    ) -> Result<ProjectMemory> {
-        let project_id = project_id.to_owned();
+    ) -> Result<SessionMemory> {
+        let session_id = session_id.to_owned();
         self.access(move |conn| {
             let changed = conn.execute(
-                "UPDATE project_memories SET active=?3,updated_at=unixepoch() WHERE id=?1 AND project_id=?2",
-                params![id, project_id, active],
+                "UPDATE session_memories SET active=?3,updated_at=unixepoch() WHERE id=?1 AND session_id=?2",
+                params![id, session_id, active],
             )?;
-            ensure!(changed == 1, "memory not found in this project");
+            ensure!(changed == 1, "memory not found in this session");
             conn.query_row(
-                "SELECT id,project_id,category,title,content,source_session_id,active,created_at,updated_at FROM project_memories WHERE id=?1",
+                "SELECT id,session_id,category,title,content,active,created_at,updated_at FROM session_memories WHERE id=?1",
                 [id],
                 memory_row,
             ).map_err(Into::into)
@@ -902,18 +939,17 @@ fn project_plugin_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectPlugin
     })
 }
 
-fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectMemory> {
+fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMemory> {
     let category: String = row.get(2)?;
-    Ok(ProjectMemory {
+    Ok(SessionMemory {
         id: row.get(0)?,
-        project_id: row.get(1)?,
+        session_id: row.get(1)?,
         category: MemoryCategory::parse(&category).ok_or_else(|| rusqlite::Error::InvalidQuery)?,
         title: row.get(3)?,
         content: row.get(4)?,
-        source_session_id: row.get(5)?,
-        active: row.get(6)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        active: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
     })
 }
 

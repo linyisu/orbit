@@ -180,7 +180,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=10").unwrap();
+    connection.execute_batch("PRAGMA user_version=11").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }
@@ -433,6 +433,67 @@ async fn schema_one_migration_preserves_sessions_runs_and_context() {
 }
 
 #[tokio::test]
+async fn project_memory_migration_keeps_only_unambiguous_session_ownership() {
+    let db = Database::new();
+    std::fs::create_dir_all(&db.0).unwrap();
+    let connection = rusqlite::Connection::open(db.path()).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY);
+             CREATE TABLE sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL);
+             CREATE TABLE project_memories (
+                id INTEGER PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                source_session_id TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL DEFAULT 1,
+                updated_at INTEGER NOT NULL DEFAULT 1
+             );
+             PRAGMA user_version=9;",
+        )
+        .unwrap();
+    connection
+        .execute("INSERT INTO projects(id) VALUES('many'),('one')", [])
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO sessions(id,project_id) VALUES
+             ('first','many'),('second','many'),('only','one')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO project_memories(project_id,category,title,content,source_session_id)
+             VALUES
+             ('many','fact','Attributed','belongs to first','first'),
+             ('many','fact','Ambiguous','must remain archived',NULL),
+             ('one','fact','Single session','may migrate safely',NULL)",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = Store::open(db.path()).await.unwrap();
+    let first = store.session_memories("first", true).await.unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].title, "Attributed");
+    assert!(
+        store
+            .session_memories("second", true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let only = store.session_memories("only", true).await.unwrap();
+    assert_eq!(only.len(), 1);
+    assert_eq!(only[0].title, "Single session");
+}
+
+#[tokio::test]
 async fn compaction_audit_survives_failure_without_publishing_failed_context() {
     use orbit_agent::memory::{CompactionMode, CompactionRecord, FileActivity, TaskSummary};
     let db = Database::new();
@@ -510,7 +571,7 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
 }
 
 #[tokio::test]
-async fn project_tasks_and_memories_survive_project_rename_without_workspace_files() {
+async fn project_tasks_and_session_memories_stay_isolated_without_workspace_files() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let old = db.0.join("old");
@@ -518,6 +579,18 @@ async fn project_tasks_and_memories_survive_project_rename_without_workspace_fil
     std::fs::create_dir(&old).unwrap();
     std::fs::write(old.join("user-file.txt"), "only user content").unwrap();
     let project = store.resolve_project(&old).await.unwrap();
+    let first_writer = store
+        .create(old.to_string_lossy().into_owned(), "mock".into(), false)
+        .await
+        .unwrap();
+    let first_session = first_writer.id().to_owned();
+    let second_writer = store
+        .create(old.to_string_lossy().into_owned(), "mock".into(), false)
+        .await
+        .unwrap();
+    let second_session = second_writer.id().to_owned();
+    drop(first_writer);
+    drop(second_writer);
 
     let parent = store
         .create_task(
@@ -553,39 +626,67 @@ async fn project_tasks_and_memories_survive_project_rename_without_workspace_fil
     assert_eq!(updated.status, TaskStatus::InProgress);
 
     let memory = store
-        .remember(
-            &project.id,
+        .remember_in_session(
+            &first_session,
             MemoryCategory::Constraint,
             "No project metadata".into(),
             "Orbit must keep its own state outside the user workspace.".into(),
-            None,
         )
         .await
         .unwrap();
     assert!(memory.active);
     assert_eq!(store.tasks(&project.id, false).await.unwrap().len(), 2);
-    assert_eq!(store.memories(&project.id, false).await.unwrap().len(), 1);
+    assert_eq!(
+        store
+            .session_memories(&first_session, false)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     let preference = store
-        .remember(
-            &project.id,
+        .remember_in_session(
+            &first_session,
             MemoryCategory::Preference,
             "Use concise Chinese progress updates".into(),
             "Keep project progress messages short and in Chinese.".into(),
-            None,
+        )
+        .await
+        .unwrap();
+    store
+        .remember_in_session(
+            &second_session,
+            MemoryCategory::Fact,
+            "Other conversation".into(),
+            "This memory must not be visible to the first conversation.".into(),
         )
         .await
         .unwrap();
     let search = store
-        .search_memories(&project.id, "Chinese progress", 8)
+        .search_session_memories(&first_session, "Chinese progress", 8)
         .await
         .unwrap();
     assert_eq!(search.first().map(|memory| memory.id), Some(preference.id));
     assert!(
         store
-            .search_memories(&project.id, "missing phrase", 8)
+            .search_session_memories(&first_session, "missing phrase", 8)
             .await
             .unwrap()
             .is_empty()
+    );
+    assert_eq!(
+        store
+            .session_memories(&second_session, false)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        store
+            .set_session_memory_active(&second_session, memory.id, false)
+            .await
+            .is_err()
     );
     assert_eq!(std::fs::read_dir(&old).unwrap().count(), 1);
 
@@ -604,19 +705,40 @@ async fn project_tasks_and_memories_survive_project_rename_without_workspace_fil
         None
     );
     assert_eq!(
-        store.memories(&project.id, false).await.unwrap()[0].id,
+        store.session_memories(&first_session, false).await.unwrap()[0].id,
         preference.id
     );
 
     let inactive = store
-        .set_memory_active(&project.id, memory.id, false)
+        .set_session_memory_active(&first_session, memory.id, false)
         .await
         .unwrap();
     assert!(!inactive.active);
     store
-        .set_memory_active(&project.id, preference.id, false)
+        .set_session_memory_active(&first_session, preference.id, false)
         .await
         .unwrap();
-    assert!(store.memories(&project.id, false).await.unwrap().is_empty());
-    assert_eq!(store.memories(&project.id, true).await.unwrap().len(), 2);
+    assert!(
+        store
+            .session_memories(&first_session, false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .session_memories(&first_session, true)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .session_memories(&second_session, false)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }

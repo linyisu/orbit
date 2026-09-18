@@ -62,7 +62,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/memory",
-        description: "查看或保存当前项目的长期记忆",
+        description: "查看或保存当前会话的长期记忆",
     },
     Command {
         name: "/changes",

@@ -114,17 +114,16 @@ impl TaskStatus {
     }
 }
 
-/// A concise, project-scoped fact deliberately saved for future sessions.
-/// This is separate from conversation compression: memories are never an
-/// implicit replacement for historical messages.
+/// A concise, session-scoped fact deliberately saved for the current
+/// conversation. This is separate from conversation compression: memories
+/// are never an implicit replacement for historical messages.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProjectMemory {
+pub struct SessionMemory {
     pub id: i64,
-    pub project_id: String,
+    pub session_id: String,
     pub category: MemoryCategory,
     pub title: String,
     pub content: String,
-    pub source_session_id: Option<String>,
     pub active: bool,
     pub created_at: i64,
     pub updated_at: i64,

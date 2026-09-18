@@ -485,10 +485,12 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     )
     .await?;
     let mut tools = runtime.tools;
+    let memory_scope = project_state::MemoryScope::new(session.id().into());
     project_state::register(
         &mut tools,
         session.store.clone(),
         session.snapshot.session.project_id.clone(),
+        memory_scope.clone(),
     );
     skills.register_tool(&mut tools);
     tui::run(
@@ -510,6 +512,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             skills,
             plugin_skill_diagnostics: plugin_skill_roots.diagnostics,
             mcp_statuses: runtime.mcp_statuses,
+            memory_scope,
         },
     )
     .await
