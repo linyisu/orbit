@@ -33,7 +33,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.reset_caret();
     state.input_area = Rect::default();
     state.attachment_areas.clear();
-    let width = area.width.saturating_sub(5) as usize;
+    let width = area.width.saturating_sub(6) as usize;
     state.input_width = width;
     let (input_lines, cursor) = state.input.visual_lines(width);
     let input_height = input_lines
@@ -946,13 +946,13 @@ fn draw_composer(
     frame.render_widget(
         Paragraph::new(Span::styled("❯", Style::default().fg(ACCENT))),
         Rect {
-            width: 1,
+            width: 2,
             ..prompt_area
         },
     );
     let text_area = Rect {
-        x: prompt_area.x + 1,
-        width: prompt_area.width.saturating_sub(1),
+        x: prompt_area.x + 2,
+        width: prompt_area.width.saturating_sub(2),
         ..prompt_area
     };
     let scroll = cursor
@@ -1376,7 +1376,7 @@ mod tests {
         let mut state = UiState::new("model");
         state.workspace = "/tmp/中文项目".into();
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        for (input, column) in [("", 3), ("你好", 7), ("你e\u{301}", 6), ("第一行\n你好", 7)]
+        for (input, column) in [("", 4), ("你好", 8), ("你e\u{301}", 7), ("第一行\n你好", 8)]
         {
             state.input.set(input.into());
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
