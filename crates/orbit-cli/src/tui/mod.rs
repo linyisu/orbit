@@ -14,9 +14,9 @@ pub mod terminal;
 mod transcript;
 mod wheel;
 
-/// A single command symbol without an enclosing pictogram that shrinks its
-/// contents. Its actual glyph size is controlled by the terminal font.
-pub(crate) const COMMAND_ICON: &str = "⌘";
+/// Nerd Font nf-fa-code. Reserve a following blank cell when drawing it in a
+/// frame so terminals can render the wide pictogram without shrinking it.
+pub(crate) const COMMAND_ICON: &str = "";
 
 use std::{
     path::PathBuf,

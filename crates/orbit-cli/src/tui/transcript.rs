@@ -343,15 +343,16 @@ impl Entry {
         }
 
         let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
-        // Keep the marker joined to the top rail and measure its display width
-        // so the right corner stays aligned.
-        let top_label = format!("╭─{icon}─");
+        // Nerd Font pictograms need an empty following cell to expand into in
+        // terminals such as kitty. Include that cell in the border width.
+        let icon_padding = if icon == super::COMMAND_ICON { " " } else { "" };
+        let top_label = format!("╭─{icon}{icon_padding}─");
         let trailing = "─".repeat(usize::from(width) - top_label.width() - 1);
         self.push(
             Line::from(vec![
                 Span::styled("╭─", border),
                 Span::styled(
-                    icon.to_owned(),
+                    format!("{icon}{icon_padding}"),
                     border.add_modifier(ratatui::style::Modifier::BOLD),
                 ),
                 Span::styled(format!("─{trailing}╮"), border),
@@ -733,8 +734,9 @@ mod tests {
             rows[0]
                 .line
                 .to_string()
-                .starts_with(&format!("╭─{}─", crate::tui::COMMAND_ICON))
+                .starts_with(&format!("╭─{} ─", crate::tui::COMMAND_ICON))
         );
+        assert_eq!(rows[0].line.width(), 32);
         assert!(rows[1].line.to_string().contains("/compact"));
         assert!(rows.last().unwrap().line.to_string().is_empty());
     }
