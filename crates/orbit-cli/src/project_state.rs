@@ -34,7 +34,7 @@ impl MemoryScope {
         *self.0.write().expect("memory scope lock poisoned") = session_id;
     }
 
-    fn session_id(&self) -> String {
+    pub(crate) fn session_id(&self) -> String {
         self.0.read().expect("memory scope lock poisoned").clone()
     }
 }

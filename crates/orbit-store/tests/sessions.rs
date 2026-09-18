@@ -180,7 +180,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=11").unwrap();
+    connection.execute_batch("PRAGMA user_version=12").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }
@@ -510,6 +510,10 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
         .await
         .unwrap();
     let record = CompactionRecord {
+        strategy: Default::default(),
+        summary_requests: 0,
+        summary_input_tokens: 0,
+        archive: None,
         version: 1,
         mode: CompactionMode::Automatic,
         source_messages: 7,

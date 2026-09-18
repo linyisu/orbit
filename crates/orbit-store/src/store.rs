@@ -47,7 +47,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 10,
+                version <= 11,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -199,6 +199,23 @@ impl Store {
                       AND 1=(SELECT count(*) FROM sessions AS scoped
                              WHERE scoped.project_id=memories.project_id);
                     PRAGMA user_version=10;",
+                )?;
+            }
+            if version < 11 {
+                connection.execute_batch(
+                    "CREATE TABLE context_archives (
+                        id INTEGER PRIMARY KEY,
+                        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+                    );
+                    CREATE INDEX context_archives_session ON context_archives(session_id,id);
+                    CREATE TABLE context_archive_messages (
+                        archive_id INTEGER NOT NULL REFERENCES context_archives(id) ON DELETE CASCADE,
+                        ordinal INTEGER NOT NULL,
+                        payload TEXT NOT NULL,
+                        PRIMARY KEY(archive_id,ordinal)
+                    );
+                    PRAGMA user_version=11;",
                 )?;
             }
             connection.execute_batch("COMMIT;")?;

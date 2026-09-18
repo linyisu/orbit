@@ -144,6 +144,14 @@ pub enum CompactionMode {
     Manual,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionStrategy {
+    #[default]
+    Summary,
+    ToolPruning,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompactionRecord {
     pub version: u32,
@@ -154,6 +162,14 @@ pub struct CompactionRecord {
     pub pinned_user: Option<usize>,
     pub before_tokens: usize,
     pub after_tokens: usize,
+    #[serde(default)]
+    pub strategy: CompactionStrategy,
+    #[serde(default)]
+    pub summary_requests: usize,
+    #[serde(default)]
+    pub summary_input_tokens: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive: Option<String>,
     /// Whether this checkpoint used the deterministic local fallback because
     /// the configured model could not return a valid structured summary.
     #[serde(default)]

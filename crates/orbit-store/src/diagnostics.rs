@@ -283,6 +283,7 @@ mod tests {
                     error: "not found".into(),
                 },
                 AgentEvent::ContextCompacted {
+                    strategy: Default::default(),
                     before_tokens: 100,
                     after_tokens: 50,
                     fallback: true,

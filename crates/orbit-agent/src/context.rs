@@ -73,23 +73,50 @@ pub async fn compact_with_files<B: ModelBackend>(
     cancellation: CancellationToken,
     files: &crate::memory::FileActivity,
 ) -> Result<CompactedContext, AgentError> {
+    compact_with_archive(
+        backend,
+        history,
+        tools,
+        limit,
+        4096,
+        cancellation,
+        files,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn compact_with_archive<B: ModelBackend>(
+    backend: &B,
+    history: Vec<ChatMessage>,
+    tools: &[ToolDefinition],
+    limit: usize,
+    output: usize,
+    cancellation: CancellationToken,
+    files: &crate::memory::FileActivity,
+    archive: Option<&dyn crate::archive::ContextArchive>,
+) -> Result<CompactedContext, AgentError> {
     if cancellation.is_cancelled() {
         return Err(AgentError::Cancelled);
     }
-    let turns: Vec<_> = history
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| matches!(message, ChatMessage::User { .. }).then_some(index))
-        .collect();
-    if turns.len() <= 2 {
-        return Err(AgentError::Compaction(
-            "at least three completed user turns are needed; the latest two turns remain intact"
-                .into(),
-        ));
-    }
-    let cutoff = turns[turns.len() - 2];
-    let plan = crate::autocompact::Plan::manual(history, tools, cutoff).with_files(files);
-    crate::autocompact::execute(backend, plan, tools, 4096, limit, cancellation).await
+    let plan = crate::autocompact::plan_manual(&history, tools, output, limit)
+        .ok_or_else(|| {
+            AgentError::Compaction(
+                "no safe compaction boundary fits this context; original context preserved".into(),
+            )
+        })?
+        .with_files(files);
+    crate::autocompact::execute_with_archive(
+        backend,
+        plan,
+        tools,
+        output,
+        limit,
+        cancellation,
+        archive,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -167,7 +194,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn falls_back_when_the_model_cannot_return_a_valid_summary() {
+    async fn invalid_summary_does_not_publish_a_fallback() {
         for (summary, reason) in [
             ("", "stop"),
             ("partial", "max_tokens"),
@@ -180,10 +207,8 @@ mod tests {
                 32000,
                 CancellationToken::new(),
             )
-            .await
-            .unwrap();
-            assert!(result.record.fallback);
-            assert!(result.after_tokens < result.before_tokens);
+            .await;
+            assert!(result.is_err());
         }
     }
 

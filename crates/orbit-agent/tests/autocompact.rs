@@ -174,9 +174,10 @@ async fn large_context_uses_bounded_summary_fragments() {
         let ChatMessage::User { content, .. } = &request.messages[1] else {
             panic!("summary request must carry its fragment as user data");
         };
+        assert!(serde_json::from_str::<serde_json::Value>(content).is_ok());
         assert!(
-            content.len() < 80_000,
-            "summary request unexpectedly carried a near-window-sized fragment"
+            estimate_tokens(&request.messages, &[]) <= 32_768,
+            "summary request exceeded its token budget"
         );
         check_budget(
             &request.messages,
@@ -190,7 +191,7 @@ async fn large_context_uses_bounded_summary_fragments() {
 }
 
 #[tokio::test]
-async fn invalid_summary_uses_local_fallback_and_cancellation_preserves_history() {
+async fn invalid_summary_and_cancellation_preserve_history() {
     let history = long_task();
     let original = history.clone();
     let mut truncated = answer("partial");
@@ -214,10 +215,8 @@ async fn invalid_summary_uses_local_fallback_and_cancellation_preserves_history(
             8000,
             CancellationToken::new(),
         )
-        .await
-        .unwrap();
-        assert!(result.record.fallback);
-        assert!(result.after_tokens < result.before_tokens);
+        .await;
+        assert!(result.is_err());
         assert_eq!(history, original);
     }
     let token = CancellationToken::new();
@@ -337,7 +336,7 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
 }
 
 #[tokio::test]
-async fn invalid_early_summary_uses_fallback_and_disabled_mode_skips_compaction() {
+async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compaction() {
     let history = long_task();
     assert!(estimate_tokens(&history, &[]) + 1000 < 8000);
     for enabled in [false, true] {
@@ -361,18 +360,8 @@ async fn invalid_early_summary_uses_fallback_and_disabled_mode_skips_compaction(
         let requests = backend.requests();
         if enabled {
             assert_eq!(requests.len(), 2);
-            assert_ne!(requests[1].messages, history);
-            assert!(matches!(
-                requests[1].messages.get(1),
-                Some(ChatMessage::User { content, .. })
-                    if content.contains("BEGIN_UNTRUSTED_COMPACTION_RECORD")
-                        && content.contains("较早历史未获得结构化摘要")
-            ));
-            assert!(
-                matches!(result.history.get(1), Some(ChatMessage::User { content, .. })
-                    if content.contains("BEGIN_UNTRUSTED_COMPACTION_RECORD")
-                        && !content.contains("会话记录查看"))
-            );
+            assert_eq!(requests[1].messages, history);
+            assert_eq!(&result.history[..history.len()], history.as_slice());
         } else {
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0].messages, history);
@@ -445,7 +434,7 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
 }
 
 #[tokio::test]
-async fn local_fallback_recovers_an_over_limit_history_without_an_oversized_request() {
+async fn failed_over_limit_summary_stops_without_discarding_history() {
     let mut history = long_task();
     history[3] = ChatMessage::tool("old", "x".repeat(30_000));
     let backend = MockModel::new([answer(""), answer("continues after local compaction")]);
@@ -459,13 +448,12 @@ async fn local_fallback_recovers_an_over_limit_history_without_an_oversized_requ
     );
     let mut request = ChatRequest::new(history);
     request.max_tokens = Some(1000);
-    let result = agent.run(request, CancellationToken::new()).await.unwrap();
-    assert!(
-        matches!(result.history.get(1), Some(ChatMessage::User { content, .. })
-            if content.contains("BEGIN_UNTRUSTED_COMPACTION_RECORD")
-                && content.contains("继续处理最新用户请求"))
-    );
-    assert_eq!(backend.requests().len(), 2);
+    let result = agent.run(request, CancellationToken::new()).await;
+    assert!(matches!(
+        result,
+        Err(orbit_agent::error::AgentError::ContextBudget { .. })
+    ));
+    assert_eq!(backend.requests().len(), 1);
     for request in backend.requests() {
         check_budget(
             &request.messages,
@@ -475,4 +463,212 @@ async fn local_fallback_recovers_an_over_limit_history_without_an_oversized_requ
         )
         .unwrap();
     }
+}
+
+#[derive(Default)]
+struct Archive(std::sync::Mutex<Vec<Vec<ChatMessage>>>);
+impl orbit_agent::archive::ContextArchive for Archive {
+    fn save<'a>(&'a self, messages: &'a [ChatMessage]) -> orbit_agent::archive::ArchiveFuture<'a> {
+        Box::pin(async move {
+            self.0.lock().unwrap().push(messages.to_vec());
+            Ok("read_history archive_id=1".into())
+        })
+    }
+}
+
+fn tool_heavy_task() -> Vec<ChatMessage> {
+    let mut messages = vec![
+        ChatMessage::system("Never change the tests"),
+        ChatMessage::user("Fix the parser; preserve the public API"),
+    ];
+    for i in 0..16 {
+        messages.push(ChatMessage::assistant(format!("Inspect batch {i}")));
+        messages.push(call(&format!("call-{i}")));
+        messages.push(ChatMessage::tool(
+            format!("call-{i}"),
+            format!(
+                "{}\nerror: failure-{i}\n{}",
+                "log line\n".repeat(2250),
+                "tail line\n".repeat(2250)
+            ),
+        ));
+    }
+    messages
+}
+
+#[tokio::test]
+async fn tool_heavy_history_reclaims_over_seventy_percent_without_a_model_call() {
+    let history = tool_heavy_task();
+    let archive = Archive::default();
+    let backend = MockModel::new([]);
+    let started = std::time::Instant::now();
+    let compacted = autocompact::execute_with_archive(
+        &backend,
+        autocompact::plan(&history, &[], 1000, 224000).unwrap(),
+        &[],
+        1000,
+        224000,
+        CancellationToken::new(),
+        Some(&archive),
+    )
+    .await
+    .unwrap();
+    println!(
+        "tool-heavy replay: {} -> {} estimated tokens; {} model requests; {:?}",
+        compacted.before_tokens,
+        compacted.after_tokens,
+        backend.requests().len(),
+        started.elapsed()
+    );
+    assert!(backend.requests().is_empty());
+    assert_eq!(
+        compacted.record.strategy,
+        orbit_agent::memory::CompactionStrategy::ToolPruning
+    );
+    assert!(compacted.after_tokens < compacted.before_tokens * 3 / 10);
+    assert_eq!(archive.0.lock().unwrap()[0], history);
+    assert_paired(&compacted.history);
+    assert_eq!(compacted.history.last(), history.last());
+    for (before, after) in history.iter().zip(&compacted.history) {
+        if matches!(
+            before,
+            ChatMessage::User { .. } | ChatMessage::System { .. }
+        ) {
+            assert_eq!(before, after);
+        }
+    }
+    let shortened = serde_json::to_string(&compacted.history).unwrap();
+    assert!(shortened.contains("failure-0"));
+    assert!(shortened.contains("read_history archive_id=1"));
+}
+
+#[tokio::test]
+async fn archived_projection_reduces_summary_work_and_keeps_valid_record_json() {
+    let mut history = long_task();
+    history[3] = ChatMessage::tool("old", "huge result\n".repeat(50_000));
+    // Prose also needs summarizing, so pruning alone cannot reach the target.
+    history.insert(
+        4,
+        ChatMessage::assistant("Important chronological analysis. ".repeat(8000)),
+    );
+    let archive = Archive::default();
+    let backend = MockModel::new(
+        (0..20)
+            .map(|_| answer("Continue the exact goal; archived tool evidence can be retrieved.")),
+    );
+    let compacted = autocompact::execute_with_archive(
+        &backend,
+        autocompact::plan(&history, &[], 1000, 224000).unwrap(),
+        &[],
+        1000,
+        224000,
+        CancellationToken::new(),
+        Some(&archive),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        compacted.record.strategy,
+        orbit_agent::memory::CompactionStrategy::Summary
+    );
+    assert!(compacted.record.summary_input_tokens < 120_000);
+    for request in backend.requests() {
+        let ChatMessage::User { content, .. } = &request.messages[1] else {
+            panic!()
+        };
+        let data: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert!(data["records"].is_array());
+        for record in data["records"].as_array().unwrap() {
+            assert!(record["source_message"].is_number());
+        }
+    }
+    assert_eq!(archive.0.lock().unwrap()[0], history);
+    assert_paired(&compacted.history);
+}
+
+#[tokio::test]
+async fn archive_failure_prevents_any_lossy_projection_or_model_request() {
+    struct Broken;
+    impl orbit_agent::archive::ContextArchive for Broken {
+        fn save<'a>(&'a self, _: &'a [ChatMessage]) -> orbit_agent::archive::ArchiveFuture<'a> {
+            Box::pin(async {
+                Err(orbit_agent::error::AgentError::Compaction(
+                    "disk full".into(),
+                ))
+            })
+        }
+    }
+    let history = tool_heavy_task();
+    let backend = MockModel::new([]);
+    assert!(
+        autocompact::execute_with_archive(
+            &backend,
+            autocompact::plan(&history, &[], 1000, 224000).unwrap(),
+            &[],
+            1000,
+            224000,
+            CancellationToken::new(),
+            Some(&Broken)
+        )
+        .await
+        .is_err()
+    );
+    assert!(backend.requests().is_empty());
+}
+
+#[tokio::test]
+async fn manual_compaction_handles_a_single_long_task_with_the_same_budget() {
+    let history = long_task();
+    let compacted = orbit_agent::context::compact_with_archive(
+        &MockModel::new([answer("Continue scheduler fix")]),
+        history,
+        &[],
+        8000,
+        1000,
+        CancellationToken::new(),
+        &Default::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        compacted.record.mode,
+        orbit_agent::memory::CompactionMode::Manual
+    );
+    assert_paired(&compacted.history);
+}
+
+/// Opt-in local replay. Never calls a provider or modifies the user's database.
+#[tokio::test]
+#[ignore = "set ORBIT_REPLAY_HISTORY to a locally exported ChatMessage array"]
+async fn replay_archived_tool_pruning() {
+    let path = std::env::var("ORBIT_REPLAY_HISTORY").unwrap();
+    let history: Vec<ChatMessage> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let archive = Archive::default();
+    let backend = MockModel::new([]);
+    let started = std::time::Instant::now();
+    let compacted = autocompact::execute_with_archive(
+        &backend,
+        autocompact::plan_manual(&history, &[], 0, 224000).unwrap(),
+        &[],
+        0,
+        224000,
+        CancellationToken::new(),
+        Some(&archive),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        compacted.record.strategy,
+        orbit_agent::memory::CompactionStrategy::ToolPruning
+    );
+    assert_eq!(archive.0.lock().unwrap()[0], history);
+    assert_paired(&compacted.history);
+    println!(
+        "local replay: {} -> {} estimated tokens; {} model requests; {:?}",
+        compacted.before_tokens,
+        compacted.after_tokens,
+        backend.requests().len(),
+        started.elapsed()
+    );
 }

@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod archive;
 pub mod autocompact;
 pub mod context;
 pub mod error;

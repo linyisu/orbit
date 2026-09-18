@@ -24,6 +24,7 @@ use orbit_model::{
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+mod history;
 mod instructions;
 mod marketplaces;
 mod project_state;
@@ -184,6 +185,8 @@ enum ChatCapability {
     Write,
     /// run_command and read_command_output.
     Command,
+    /// Archived context retrieval and tool-output pruning.
+    History,
     /// task and durable-memory tools.
     #[value(name = "project-state")]
     ProjectState,
@@ -581,6 +584,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     .await?;
     let mut tools = runtime.tools;
     let memory_scope = project_state::MemoryScope::new(session.id().into());
+    history::register(&mut tools, session.store.clone(), memory_scope.clone());
     project_state::register(
         &mut tools,
         session.store.clone(),
@@ -692,6 +696,13 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     )
     .await?;
     let mut tools = runtime.tools;
+    if !capability_is_disabled(&disabled, ChatCapability::History) {
+        history::register(
+            &mut tools,
+            session.store.clone(),
+            project_state::MemoryScope::new(session.id().into()),
+        );
+    }
     if !capability_is_disabled(&disabled, ChatCapability::ProjectState) {
         let memory_scope = project_state::MemoryScope::new(session.id().into());
         project_state::register(
@@ -735,8 +746,15 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             .iter()
             .flat_map(|run| run.events.iter()),
     );
-    let agent =
+    let archive_enabled = tools.contains("read_history");
+    let mut agent =
         Agent::new(ModelClientBackend::new(client), tools, agent_config).with_file_activity(files);
+    if archive_enabled {
+        agent = agent.with_context_archive(std::sync::Arc::new(history::SessionArchive::new(
+            session.store.clone(),
+            session.id().into(),
+        )));
+    }
     session.begin(prompt, model_name.clone()).await?;
 
     let cancellation = CancellationToken::new();
@@ -869,6 +887,9 @@ fn disable_chat_capabilities(
     tools: &mut orbit_agent::tool::ToolRegistry,
     disabled: &BTreeSet<ChatCapability>,
 ) {
+    if capability_is_disabled(disabled, ChatCapability::History) {
+        tools.remove("read_history");
+    }
     if capability_is_disabled(disabled, ChatCapability::Web) {
         tools.remove("web_search");
         tools.remove("web_fetch");
@@ -937,17 +958,22 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
         AgentEvent::ContextCompacted {
             before_tokens,
             after_tokens,
+            strategy,
             fallback,
             ..
         } => eprintln!(
-            "上下文已整理：{before_tokens} → {after_tokens} tokens{}",
+            "{}：{before_tokens} → {after_tokens} tokens{}",
+            match strategy {
+                orbit_agent::memory::CompactionStrategy::ToolPruning => "旧工具输出已精简",
+                orbit_agent::memory::CompactionStrategy::Summary => "上下文已整理",
+            },
             if *fallback {
                 "；保留最近工作内容"
             } else {
                 ""
             }
         ),
-        AgentEvent::CompactionFailed { .. } => eprintln!("上下文整理未完成；继续使用当前上下文"),
+        AgentEvent::CompactionFailed { .. } => eprintln!("上下文整理未完成，原上下文已保留"),
         AgentEvent::Failed { error } => eprintln!("agent failed: {error}"),
         _ => {}
     }
@@ -969,6 +995,7 @@ mod config_tests {
             "web_fetch",
             "mcp__test__lookup",
             "task_list",
+            "read_history",
         ] {
             tools.register(ClosureTool::new(
                 name,
@@ -982,6 +1009,7 @@ mod config_tests {
             ChatCapability::Web,
             ChatCapability::Mcp,
             ChatCapability::ProjectState,
+            ChatCapability::History,
         ]
         .into_iter()
         .collect();
@@ -991,6 +1019,7 @@ mod config_tests {
         assert!(!tools.contains("web_fetch"));
         assert!(!tools.contains("mcp__test__lookup"));
         assert!(!tools.contains("task_list"));
+        assert!(!tools.contains("read_history"));
         assert!(tools.contains("write_file"));
     }
 

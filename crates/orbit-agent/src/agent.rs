@@ -47,6 +47,7 @@ pub struct Agent<B> {
     tools: ToolRegistry,
     config: AgentConfig,
     files: crate::memory::FileActivity,
+    archive: Option<std::sync::Arc<dyn crate::archive::ContextArchive>>,
 }
 
 impl<B> Agent<B>
@@ -59,11 +60,20 @@ where
             tools,
             config,
             files: Default::default(),
+            archive: None,
         }
     }
 
     pub fn with_file_activity(mut self, files: crate::memory::FileActivity) -> Self {
         self.files = files;
+        self
+    }
+
+    pub fn with_context_archive(
+        mut self,
+        archive: std::sync::Arc<dyn crate::archive::ContextArchive>,
+    ) -> Self {
+        self.archive = Some(archive);
         self
     }
 
@@ -275,24 +285,27 @@ where
                 crate::autocompact::plan(history, &tools, output, self.config.context_tokens)
         {
             emit(AgentEvent::CompactionStarted).await?;
-            let event = match crate::autocompact::execute_automatic(
+            let event = match crate::autocompact::execute_with_archive(
                 &self.backend,
                 plan.with_files(files),
                 &tools,
                 output,
                 self.config.context_tokens,
                 cancellation.clone(),
+                self.archive.as_deref(),
             )
             .await
             {
                 Ok(result) => {
                     let fallback = result.record.fallback;
                     let fallback_reason = result.record.fallback_reason.clone();
+                    let strategy = result.record.strategy.clone();
                     emit(AgentEvent::CompactionRecorded {
                         record: result.record,
                     })
                     .await?;
                     let event = AgentEvent::ContextCompacted {
+                        strategy,
                         before_tokens: result.before_tokens,
                         after_tokens: result.after_tokens,
                         fallback,

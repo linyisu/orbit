@@ -758,17 +758,24 @@ async fn start_agent_run(
         max_tool_calls,
         auto_compact,
     };
-    let agent =
-        Agent::new(backend.clone(), tools.clone(), config).with_file_activity(files.clone());
+    let archive = std::sync::Arc::new(crate::history::SessionArchive::new(
+        session.store.clone(),
+        session.id().into(),
+    ));
+    let agent = Agent::new(backend.clone(), tools.clone(), config)
+        .with_file_activity(files.clone())
+        .with_context_archive(archive.clone());
     let task = tokio::spawn(async move {
         if compacting {
-            let compacted = orbit_agent::context::compact_with_files(
+            let compacted = orbit_agent::context::compact_with_archive(
                 &backend,
                 request.messages,
                 &tools.definitions(),
                 context_tokens,
+                max_output_tokens as usize,
                 token,
                 &files,
+                Some(archive.as_ref()),
             )
             .await?;
             orbit_agent::context::check_budget(
@@ -781,6 +788,7 @@ async fn start_agent_run(
             let fallback_reason = compacted.record.fallback_reason.clone();
             let before_tokens = compacted.before_tokens;
             let after_tokens = compacted.after_tokens;
+            let strategy = compacted.record.strategy.clone();
             sender
                 .send(AgentEvent::CompactionRecorded {
                     record: compacted.record,
@@ -789,6 +797,7 @@ async fn start_agent_run(
                 .map_err(|_| AgentError::EventChannelClosed)?;
             sender
                 .send(AgentEvent::ContextCompacted {
+                    strategy,
                     before_tokens,
                     after_tokens,
                     fallback,

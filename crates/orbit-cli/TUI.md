@@ -56,7 +56,7 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"],
 
 `context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。若供应商将输入窗口和输出上限分开计算，可在模型档案改用 `input_context_tokens`；它表示完整可用输入窗口，Orbit 不会再从中扣除 `max_output_tokens`，并将两者相加作为本地请求预算。可用思考值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，但不能覆盖模型、流式传输、工具、输出预算、温度或已配置的思考强度。未写 `reasoning` 时，Orbit 不发送任何思考参数。
 
-`/compact` 优先让当前模型总结旧对话并保留最近两轮。单个摘要请求最多等待 30 秒；手动执行时，模型无法返回有效结构化摘要或暂时不可用会使用本地回退压缩并提示。自动压缩遇到网络、限流或超时时保留原上下文并在下次需要时重试；旧对话始终保留在会话运行记录中。
+`/compact` 与自动整理共用预算和安全切点，单个长任务也可整理。先把原文保存到 Orbit 中央数据库，再按预算精简旧工具输出；释放空间足够时不调用模型，否则生成增量摘要。近期工作和当前用户要求原样保留，模型可通过 `read_history` 检索归档原文。摘要失败或取消时保留原上下文，不再以固定说明替代旧历史。
 
 ## 图片与文档
 

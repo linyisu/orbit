@@ -34,6 +34,8 @@ pub enum AgentEvent {
         record: crate::memory::CompactionRecord,
     },
     ContextCompacted {
+        #[serde(default)]
+        strategy: crate::memory::CompactionStrategy,
         before_tokens: usize,
         after_tokens: usize,
         /// The provider could not produce a usable structured summary, so the

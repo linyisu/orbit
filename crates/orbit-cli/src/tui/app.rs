@@ -220,6 +220,7 @@ impl UiState {
             AgentEvent::ContextCompacted {
                 before_tokens,
                 after_tokens,
+                strategy,
                 fallback,
                 ..
             } => {
@@ -228,12 +229,16 @@ impl UiState {
                 } else {
                     ""
                 };
+                let action = match strategy {
+                    orbit_agent::memory::CompactionStrategy::ToolPruning => "旧工具输出已精简",
+                    orbit_agent::memory::CompactionStrategy::Summary => "上下文已整理",
+                };
                 self.transcript.push(TranscriptItem::Maintenance(format!(
-                    "上下文已整理  {before_tokens} → {after_tokens} tokens{detail}"
+                    "{action}  {before_tokens} → {after_tokens} tokens{detail}"
                 )));
             }
             AgentEvent::CompactionFailed { .. } => self.transcript.push(
-                TranscriptItem::Maintenance("上下文整理未完成；继续使用当前上下文".into()),
+                TranscriptItem::Maintenance("上下文整理未完成，原上下文已保留".into()),
             ),
             AgentEvent::Model(event) => self.apply_model_event(event),
             AgentEvent::ToolStarted { call } => {
@@ -405,6 +410,7 @@ mod tests {
         state.apply(AgentEvent::CompactionStarted);
         assert!(state.transcript.is_empty());
         state.apply(AgentEvent::ContextCompacted {
+            strategy: Default::default(),
             before_tokens: 195_754,
             after_tokens: 96_000,
             fallback: true,
