@@ -274,7 +274,7 @@ impl Entry {
     }
 
     fn command(&mut self, text: &str, width: u16) {
-        self.framed_input(text, width, "󰅴");
+        self.framed_input(text, width, "");
     }
 
     fn framed_input(&mut self, text: &str, width: u16, icon: &str) {
@@ -610,11 +610,11 @@ mod tests {
     }
 
     #[test]
-    fn commands_keep_the_user_frame_with_a_code_tags_icon() {
+    fn commands_keep_the_user_frame_with_a_code_icon() {
         let mut layout = TranscriptLayout::default();
         layout.update(&[TranscriptItem::Command("/compact".into())], None, 32);
         let rows = &layout.entries[0].rows;
-        assert!(rows[0].line.to_string().starts_with("╭─󰅴 "));
+        assert!(rows[0].line.to_string().starts_with("╭─ "));
         assert!(rows[1].line.to_string().contains("/compact"));
         assert!(rows.last().unwrap().line.to_string().is_empty());
     }
