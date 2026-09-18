@@ -708,8 +708,13 @@ pub(super) fn transcript_lines_at_width(
                     ToolStatus::Finished => ("✓", Color::Green),
                     ToolStatus::Failed => ("×", Color::Red),
                 };
+                let summary = if row.name == "search_text" {
+                    super::tool_display::search_summary(&row.arguments)
+                } else {
+                    tool_summary(&row.arguments)
+                };
                 lines.push(Line::from(Span::styled(
-                    format!("  {marker} {} {}", row.name, tool_summary(&row.arguments)),
+                    format!("  {marker} {} {summary}", row.name),
                     Style::default().fg(color),
                 )));
                 if expanded

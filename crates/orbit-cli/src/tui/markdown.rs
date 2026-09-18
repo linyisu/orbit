@@ -96,6 +96,10 @@ const SECONDARY: Color = Color::Rgb(170, 170, 170);
 const MARK_FOREGROUND: Color = Color::Rgb(225, 166, 126);
 const INLINE_CODE: Color = Color::Rgb(174, 211, 217);
 
+pub(super) fn mark_style(style: Style) -> Style {
+    style.fg(MARK_FOREGROUND).add_modifier(Modifier::UNDERLINED)
+}
+
 /// Byte ranges and normalized targets for visible, bare web addresses.
 /// Deliberately accept only HTTP(S) and `www.` forms; paths, e-mail addresses
 /// and prose such as `thing.example` should not unexpectedly become actions.
@@ -189,10 +193,7 @@ fn push_marked_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style, re
         if open > 0 {
             spans.push(Span::styled(rest[..open].to_owned(), style));
         }
-        spans.push(Span::styled(
-            content.to_owned(),
-            style.fg(MARK_FOREGROUND).add_modifier(Modifier::UNDERLINED),
-        ));
+        spans.push(Span::styled(content.to_owned(), mark_style(style)));
         rest = &after_open[close + 2..];
     }
     if !rest.is_empty() {

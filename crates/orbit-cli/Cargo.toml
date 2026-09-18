@@ -21,6 +21,7 @@ orbit-tools = { path = "../orbit-tools" }
 serde_json.workspace = true
 similar.workspace = true
 ratatui.workspace = true
+regex = "1"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 serde.workspace = true
 shlex = "1.3.0"

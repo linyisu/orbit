@@ -1,10 +1,11 @@
 //! Presentation-only views. Never rewrite tool results used by the model or store.
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Range};
 
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
+use regex::{Regex, RegexBuilder};
 use serde_json::Value;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -18,6 +19,76 @@ const ACCENT: Color = Color::Rgb(218, 139, 109);
 const SECONDARY: Color = Color::Rgb(160, 160, 160);
 // Keep adjacent file previews aligned even when their lengths differ.
 const MIN_LINE_NUMBER_WIDTH: usize = 4;
+
+pub(super) fn search_summary(arguments: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(arguments) else {
+        return String::new();
+    };
+    let query = super::render::compact_preview(value["query"].as_str().unwrap_or_default(), 100);
+    let path = super::render::compact_preview(value["path"].as_str().unwrap_or("."), 100);
+    format!("{} · {path}", Value::String(query))
+}
+
+// Use the search tool's literal/regex and Unicode case-folding semantics.
+fn matcher(value: &Value) -> Option<Regex> {
+    let query = value["query"].as_str()?;
+    if query.is_empty() {
+        return None;
+    }
+    let pattern = if value["regex"].as_bool() == Some(true) {
+        query.to_owned()
+    } else {
+        regex::escape(query)
+    };
+    RegexBuilder::new(&pattern)
+        .case_insensitive(value["case_sensitive"].as_bool() != Some(true))
+        .build()
+        .ok()
+}
+
+// Compute matches before escaping terminal controls. Map their offsets to the
+// displayed text so tabs, clipping and wrapped regex matches keep their styles.
+fn marked_source(text: &str, matcher: Option<&Regex>) -> (String, Vec<Range<usize>>) {
+    let Some(matcher) = matcher else {
+        return (safe_output(text), vec![]);
+    };
+    let mut rendered = String::new();
+    let mut ranges = Vec::new();
+    let mut offset = 0;
+    for hit in matcher.find_iter(text).filter(|hit| !hit.is_empty()) {
+        rendered.push_str(&safe_output(&text[offset..hit.start()]));
+        let start = rendered.len();
+        rendered.push_str(&safe_output(hit.as_str()));
+        ranges.push(start..rendered.len());
+        offset = hit.end();
+    }
+    rendered.push_str(&safe_output(&text[offset..]));
+    (rendered, ranges)
+}
+
+fn source_spans(text: &str, marks: &[Range<usize>], range: Range<usize>) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut offset = range.start;
+    for mark in marks {
+        let start = mark.start.max(range.start);
+        let end = mark.end.min(range.end);
+        if start >= end {
+            continue;
+        }
+        if offset < start {
+            spans.push(Span::raw(text[offset..start].to_owned()));
+        }
+        spans.push(Span::styled(
+            text[start..end].to_owned(),
+            super::markdown::mark_style(Style::default()),
+        ));
+        offset = end;
+    }
+    if offset < range.end {
+        spans.push(Span::raw(text[offset..range.end].to_owned()));
+    }
+    spans
+}
 
 pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     if row.status != ToolStatus::Finished {
@@ -70,60 +141,99 @@ fn source(
     number: u64,
     digits: usize,
     text: &str,
-    matched: bool,
+    matcher: Option<&Regex>,
     expanded: bool,
     width: u16,
 ) {
     let prefix = format!("    {number:>digits$} │ ");
     let available = usize::from(width).saturating_sub(prefix.width());
-    let text = safe_output(text);
+    let (text, marks) = marked_source(text, matcher);
     if available == 0 {
         note(out, &format!("{number}: {text}"), width);
         return;
     }
-    let style = Style::default().fg(if matched { ACCENT } else { SECONDARY });
-    let mut push = |text: String, continuation: bool| {
-        out.push(Line::from(vec![
-            Span::styled(
-                if continuation {
-                    format!("    {} │ ", " ".repeat(digits))
-                } else {
-                    prefix.clone()
-                },
-                style,
-            ),
-            Span::raw(text),
-        ]));
+    let style = Style::default().fg(if matcher.is_some() { ACCENT } else { SECONDARY });
+    let mut push = |range: Range<usize>, continuation: bool, leading: bool, trailing: bool| {
+        let mut spans = vec![Span::styled(
+            if continuation {
+                format!("    {} │ ", " ".repeat(digits))
+            } else {
+                prefix.clone()
+            },
+            style,
+        )];
+        if leading {
+            spans.push(Span::raw("…"));
+        }
+        spans.extend(source_spans(&text, &marks, range));
+        if trailing {
+            spans.push(Span::raw("…"));
+        }
+        out.push(Line::from(spans));
     };
     if !expanded {
-        push(clipped(&text, available), false);
+        // A search preview should show the hit, even deep inside a long line.
+        let mut start = 0;
+        if let Some(first) = marks.first()
+            && text[..first.end].width() >= available
+        {
+            let before: Vec<_> = text
+                .grapheme_indices(true)
+                .take_while(|(offset, _)| *offset <= first.start)
+                .collect();
+            let mut context_width = 0;
+            for (offset, glyph) in before.into_iter().rev() {
+                if offset < first.start {
+                    context_width += glyph.width();
+                }
+                if context_width > available / 4 {
+                    break;
+                }
+                start = offset;
+            }
+        }
+        let budget = available.saturating_sub(usize::from(start > 0));
+        let truncated = text[start..].width() > budget;
+        let preview = clipped(&text[start..], budget);
+        let end = start + preview.len()
+            - if truncated && budget > 0 {
+                '…'.len_utf8()
+            } else {
+                0
+            };
+        push(start..end, false, start > 0, truncated && budget > 0);
         return;
     }
     // Wrap by display cells, preserving indentation and keeping wide/combining
     // graphemes intact. Continuations have a blank line-number gutter.
-    let mut chunk = String::new();
+    let mut start = 0;
     let mut used = 0;
     let mut continuation = false;
-    for glyph in text.graphemes(true) {
+    for (offset, glyph) in text.grapheme_indices(true) {
         let size = glyph.width();
-        if used + size > available && !chunk.is_empty() {
-            push(std::mem::take(&mut chunk), continuation);
+        if used + size > available && offset > start {
+            push(start..offset, continuation, false, false);
+            start = offset;
             continuation = true;
             used = 0;
         }
         if size > available {
-            chunk.push('…');
-            used += 1;
+            push(offset..offset, continuation, false, true);
+            start = offset + glyph.len();
+            continuation = true;
+            used = 0;
         } else {
-            chunk.push_str(glyph);
             used += size;
         }
     }
-    push(chunk, continuation);
+    if start < text.len() || !continuation {
+        push(start..text.len(), continuation, false, false);
+    }
 }
 
 fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     let matches = value["matches"].as_array()?;
+    let matcher = matcher(value);
     // Merge overlapping context and multiple matches on the same source line.
     let mut files: BTreeMap<&str, BTreeMap<u64, (&str, bool)>> = BTreeMap::new();
     for hit in matches {
@@ -168,7 +278,15 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
             if previous.is_some_and(|last| line > last + 1) {
                 note(&mut out, "…", width);
             }
-            source(&mut out, line, digits, text, matched, expanded, width);
+            source(
+                &mut out,
+                line,
+                digits,
+                text,
+                if matched { matcher.as_ref() } else { None },
+                expanded,
+                width,
+            );
             previous = Some(line);
             shown += 1;
         }
@@ -216,7 +334,7 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     );
     let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
     for (number, text) in rows.iter().take(if expanded { usize::MAX } else { 4 }) {
-        source(&mut out, *number, digits, text, false, expanded, width);
+        source(&mut out, *number, digits, text, None, expanded, width);
     }
     if !expanded && rows.len() > 4 {
         note(&mut out, &format!("… 另有 {} 行", rows.len() - 4), width);
@@ -239,6 +357,83 @@ mod tests {
             arguments: "{}".into(),
             status: ToolStatus::Finished,
             output: output.to_string(),
+        }
+    }
+
+    fn highlighted(lines: &[Line<'static>]) -> String {
+        lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .filter(|span| span.style == super::super::markdown::mark_style(Style::default()))
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn search_title_includes_query_and_scope_even_before_results_arrive() {
+        let mut tool = row("search_text", json!({"matches":[]}));
+        tool.arguments =
+            json!({"query":"workspace snapshot", "path":"crates/orbit-tools/src"}).to_string();
+        tool.status = ToolStatus::Running;
+        let view = super::super::render::transcript_lines_at_width(
+            &[super::super::app::TranscriptItem::Tool(tool)],
+            false,
+            120,
+        );
+        assert!(
+            view[0]
+                .to_string()
+                .contains("search_text \"workspace snapshot\" · crates/orbit-tools/src")
+        );
+        assert_eq!(search_summary(r#"{"query":"foo"}"#), "\"foo\" · .");
+    }
+
+    #[test]
+    fn highlighting_follows_literal_regex_case_and_unicode_search_rules() {
+        for (config, text, expected) in [
+            (json!({"query":"a.b"}), "a.b A.B axb", "a.bA.B"),
+            (
+                json!({"query":"a.b", "case_sensitive":true}),
+                "a.b A.B axb",
+                "a.b",
+            ),
+            (
+                json!({"query":"a.b", "regex":true}),
+                "a.b A.B axb",
+                "a.bA.Baxb",
+            ),
+            (
+                json!({"query":r"中文\s+value", "regex":true}),
+                "前缀：中文\tVALUE 后缀",
+                "中文    VALUE",
+            ),
+        ] {
+            let pattern = matcher(&config).unwrap();
+            let mut view = vec![];
+            source(&mut view, 1, 4, text, Some(&pattern), true, 80);
+            assert_eq!(highlighted(&view), expected);
+        }
+        assert!(matcher(&json!({"query":"[", "regex":true})).is_none());
+    }
+
+    #[test]
+    fn highlight_survives_wrapping_and_focuses_long_line_previews() {
+        let pattern = matcher(&json!({"query":"^ABCDEFGH$", "regex":true})).unwrap();
+        let mut view = vec![];
+        source(&mut view, 123, 4, "ABCDEFGH", Some(&pattern), true, 15);
+        assert_eq!(view.len(), 2);
+        assert_eq!(highlighted(&view), "ABCDEFGH");
+        assert!(view.iter().all(|line| line.width() <= 15));
+
+        let pattern = matcher(&json!({"query":"TARGET"})).unwrap();
+        let text = format!("{} TARGET {}", "中文".repeat(50), "suffix".repeat(10));
+        for width in [11, 12, 32, 80] {
+            let mut view = vec![];
+            source(&mut view, 1, 4, &text, Some(&pattern), false, width);
+            assert!(view.iter().all(|line| line.width() <= usize::from(width)));
+            if width >= 32 {
+                assert_eq!(highlighted(&view), "TARGET");
+            }
         }
     }
 
