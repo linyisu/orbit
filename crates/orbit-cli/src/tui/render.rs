@@ -1279,6 +1279,57 @@ mod tests {
     }
 
     #[test]
+    fn clicking_memory_hint_toggles_that_memory_instead_of_the_last_tool() {
+        use super::super::app::ToolRow;
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut state = UiState::new("model");
+        state.transcript.push(TranscriptItem::Tool(ToolRow {
+            id: "memory".into(),
+            name: "memory_save".into(),
+            status: ToolStatus::Finished,
+            arguments: r#"{"title":"审查记录"}"#.into(),
+            output:
+                serde_json::json!({"memory":{"category":"fact","content":"long text ".repeat(40)}})
+                    .to_string(),
+        }));
+        state.transcript.push(TranscriptItem::Tool(ToolRow {
+            id: "later".into(),
+            name: "other_tool".into(),
+            status: ToolStatus::Finished,
+            arguments: "{}".into(),
+            output: "first\nsecond\nthird".into(),
+        }));
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        for expected in [Some(0), None] {
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let point = (0..40)
+                .find_map(|y| {
+                    (0..100).find_map(|x| {
+                        (terminal.backend().buffer()[(x, y)].symbol() == "点").then_some((x, y))
+                    })
+                })
+                .expect("memory toggle is visible");
+            let down = Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: point.0,
+                row: point.1,
+                modifiers: KeyModifiers::NONE,
+            });
+            let up = Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: point.0,
+                row: point.1,
+                modifiers: KeyModifiers::NONE,
+            });
+            state.selection.handle(&down).unwrap();
+            assert_eq!(state.selection.click(&up), Some(point));
+            assert!(super::super::toggle_memory_at(&mut state, point));
+            assert_eq!(state.expanded, expected);
+        }
+        assert!(!super::super::toggle_memory_at(&mut state, (0, 0)));
+    }
+
+    #[test]
     fn model_change_uses_the_same_result_style_as_other_commands() {
         let item = TranscriptItem::CommandResult("qwen::old → qwen::new".into());
         let lines = transcript_lines(&[item], false);

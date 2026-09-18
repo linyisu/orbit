@@ -289,6 +289,10 @@ pub async fn run(
                         continue;
                     }
                     if let Some((x, y)) = state.selection.click(&event)
+                        && toggle_memory_at(&mut state, (x, y)) {
+                        continue;
+                    }
+                    if let Some((x, y)) = state.selection.click(&event)
                         && state.input_area.contains((x, y).into()) {
                         state.attachment_cursor = None;
                         state.input.move_to((x - state.input_area.x) as usize,
@@ -1734,6 +1738,26 @@ enum Action {
     AttachPaths(Vec<PathBuf>),
     PasteClipboard,
     Submit(String),
+}
+
+fn toggle_memory_at(state: &mut UiState, point: (u16, u16)) -> bool {
+    let offset = state.max_scroll.saturating_sub(state.scroll);
+    let Some(index) = state.transcript_layout.memory_toggle_at(
+        &state.transcript,
+        state.selection.viewport,
+        offset,
+        point,
+    ) else {
+        return false;
+    };
+    state.expanded = if state.expanded == Some(index) {
+        None
+    } else {
+        Some(index)
+    };
+    state.follow_bottom = false;
+    state.selection.clear();
+    true
 }
 
 fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {

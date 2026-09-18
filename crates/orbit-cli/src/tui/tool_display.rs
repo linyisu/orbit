@@ -26,7 +26,7 @@ pub(super) fn search_summary(arguments: &str) -> String {
     };
     let query = super::render::compact_preview(value["query"].as_str().unwrap_or_default(), 100);
     let path = super::render::compact_preview(value["path"].as_str().unwrap_or("."), 100);
-    format!("{} · {path}", Value::String(query))
+    format!("{} {path}", Value::String(query))
 }
 
 pub(super) fn memory_summary(arguments: &str) -> String {
@@ -178,8 +178,10 @@ fn memory(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
             )));
         }
     }
-    if omitted && !expanded {
-        note(&mut out, "… 展开查看完整记忆", width);
+    if expanded {
+        note(&mut out, "点击收起记忆", width);
+    } else if omitted {
+        note(&mut out, "点击展开完整记忆", width);
     }
     Some(out)
 }
@@ -344,6 +346,9 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
         if !expanded && shown >= 3 {
             break;
         }
+        if shown > 0 {
+            out.push(Line::default());
+        }
         note(&mut out, path, width);
         let mut previous = None;
         for (line, (text, matched)) in rows {
@@ -351,7 +356,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
                 break;
             }
             if previous.is_some_and(|last| line > last + 1) {
-                note(&mut out, "…", width);
+                out.push(Line::default());
             }
             source(
                 &mut out,
@@ -369,7 +374,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
     if shown < total_rows {
         note(
             &mut out,
-            &format!("… 另有 {} 行匹配", total_rows - shown),
+            &format!("另有 {} 行匹配", total_rows - shown),
             width,
         );
     }
@@ -386,7 +391,6 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     let content = value["content"].as_str()?;
     let start = value["start_line"].as_u64()?;
     let end = value["end_line"].as_u64()?;
-    let total = value["total_lines"].as_u64()?;
     let rows: Vec<_> = content
         .lines()
         .map(|line| {
@@ -399,14 +403,7 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
         note(&mut out, "文件为空", width);
         return Some(out);
     }
-    note(
-        &mut out,
-        &format!(
-            "第 {start}–{end} 行 · 本次 {} 行 · 全文 {total} 行",
-            rows.len()
-        ),
-        width,
-    );
+    note(&mut out, &format!("第 {start}–{end} 行"), width);
     let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
     for (number, text) in rows.iter().take(if expanded { usize::MAX } else { 4 }) {
         source(&mut out, *number, digits, text, None, expanded, width);
@@ -459,7 +456,7 @@ mod tests {
                 .last()
                 .unwrap()
                 .to_string()
-                .contains("展开查看完整记忆")
+                .contains("点击展开完整记忆")
         );
         for width in [0, 1, 5, 30, 80] {
             for expanded in [false, true] {
@@ -472,7 +469,7 @@ mod tests {
             }
         }
         let expanded = lines(&tool, true, 60).unwrap();
-        let actual: String = expanded[1..]
+        let actual: String = expanded[1..expanded.len() - 1]
             .iter()
             .map(|line| line.to_string().strip_prefix("    ").unwrap().to_owned())
             .collect();
@@ -503,9 +500,9 @@ mod tests {
         assert!(
             view[0]
                 .to_string()
-                .contains("search_text \"workspace snapshot\" · crates/orbit-tools/src")
+                .contains("search_text \"workspace snapshot\" crates/orbit-tools/src")
         );
-        assert_eq!(search_summary(r#"{"query":"foo"}"#), "\"foo\" · .");
+        assert_eq!(search_summary(r#"{"query":"foo"}"#), "\"foo\" .");
     }
 
     #[test]

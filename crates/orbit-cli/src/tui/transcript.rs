@@ -519,6 +519,37 @@ impl TranscriptLayout {
             .map(|entry| entry.end - entry.height)
     }
 
+    pub(super) fn memory_toggle_at(
+        &self,
+        items: &[TranscriptItem],
+        area: Rect,
+        offset: usize,
+        point: (u16, u16),
+    ) -> Option<usize> {
+        if !area.contains(point.into()) {
+            return None;
+        }
+        let absolute = offset + usize::from(point.1 - area.y);
+        let index = self.entries.partition_point(|entry| entry.end <= absolute);
+        let entry = self.entries.get(index)?;
+        if !matches!(items.get(index), Some(TranscriptItem::Tool(row)) if row.name == "memory_save")
+        {
+            return None;
+        }
+        let relative = absolute - (entry.end - entry.height);
+        let row = entry
+            .rows
+            .iter()
+            .find(|row| row.start <= relative && relative < row.start + row.height)?;
+        let text = row.line.to_string();
+        let column = usize::from(point.0 - area.x);
+        ((text.trim_start().starts_with("点击展开完整记忆")
+            || text.trim_start().starts_with("点击收起记忆"))
+            && column >= 4
+            && column < row.line.width())
+        .then_some(index)
+    }
+
     pub fn height(&self) -> usize {
         self.entries.last().map_or(0, |entry| entry.end)
     }
