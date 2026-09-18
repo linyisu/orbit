@@ -155,8 +155,8 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     };
     let effort = state
         .reasoning_effort
-        .map(|effort| format!("󰔛 思考 {}", effort.label()))
-        .unwrap_or_else(|| "󰔛 思考 —".into());
+        .map(|effort| format!("󰧑 {}", effort.label()))
+        .unwrap_or_else(|| "󰧑 —".into());
     let available = width.saturating_sub(4);
     let right_budget = available.saturating_sub(8);
     let context = format!(
@@ -1453,7 +1453,8 @@ mod tests {
                 assert!(text.contains("项目"));
             }
             if width >= 80 {
-                assert!(text.contains("思考"));
+                assert!(text.contains("󰧑"));
+                assert!(!text.contains("思考"));
                 assert!(text.contains("53%/96k 输入"));
                 assert!(text.contains(state.permission_mode.label()));
                 assert!(!text.contains('·'));
