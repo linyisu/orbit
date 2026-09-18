@@ -75,6 +75,7 @@ pub struct SessionState {
     pub snapshot: Snapshot,
     pub scratch: orbit_tools::run_command::ScratchDirectory,
     pub command_output: orbit_tools::run_command::CommandOutputDirectory,
+    pub git_baseline: Option<serde_json::Value>,
     pending: Vec<AgentEvent>,
     active: bool,
     flushed_at: Instant,
@@ -109,6 +110,7 @@ impl SessionState {
             .to_string_lossy()
             .into_owned();
         let project = store.resolve_project(&workspace).await?;
+        let creating = resume.is_none();
         let writer = if let Some(id) = resume {
             let saved = store.session(&id).await?;
             ensure!(
@@ -119,7 +121,16 @@ impl SessionState {
             ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
             store.acquire(&id).await?
         } else {
-            store.create(workspace, model, false).await?
+            store.create(workspace.clone(), model, false).await?
+        };
+        let git_baseline = if creating {
+            let baseline = orbit_tools::git_inspect::capture_baseline(Path::new(&workspace));
+            if let Some(baseline) = &baseline {
+                store.save_git_baseline(writer.id(), baseline).await?;
+            }
+            baseline
+        } else {
+            store.git_baseline(writer.id()).await?
         };
         let snapshot = store.load(writer.id()).await?;
         let scratch = std::sync::Arc::new(std::sync::RwLock::new(
@@ -134,6 +145,7 @@ impl SessionState {
         Ok(Self {
             scratch,
             command_output,
+            git_baseline,
             store,
             writer,
             snapshot,
@@ -297,6 +309,7 @@ impl SessionState {
         let snapshot = self.store.load(id).await?;
         self.writer = writer;
         self.snapshot = snapshot;
+        self.git_baseline = self.store.git_baseline(self.id()).await?;
         *self.scratch.write().expect("scratch lock poisoned") = self
             .store
             .path()
@@ -324,6 +337,13 @@ impl SessionState {
         let snapshot = self.store.load(writer.id()).await?;
         self.writer = writer;
         self.snapshot = snapshot;
+        self.git_baseline = None;
+        if let Some(baseline) =
+            orbit_tools::git_inspect::capture_baseline(Path::new(&self.snapshot.session.workspace))
+        {
+            self.store.save_git_baseline(self.id(), &baseline).await?;
+            self.git_baseline = Some(baseline);
+        }
         *self.scratch.write().expect("scratch lock poisoned") = self
             .store
             .path()

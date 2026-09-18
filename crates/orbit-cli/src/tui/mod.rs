@@ -742,9 +742,9 @@ async fn run_command(
         "/mode" | "/permissions" => {
             if !argument.is_empty() {
                 let Some(mode) = permissions::Mode::parse(argument) else {
-                    state
-                        .transcript
-                        .push(TranscriptItem::CommandResult("用法：/mode ask | auto | yolo".into()));
+                    state.transcript.push(TranscriptItem::CommandResult(
+                        "用法：/mode ask | auto | yolo".into(),
+                    ));
                     return Ok(false);
                 };
                 state.permission_mode = mode;
@@ -769,37 +769,63 @@ async fn run_command(
                 .cloned()
                 .collect::<Vec<_>>();
             let system_tokens = orbit_agent::context::estimate_tokens(&system, &[]);
-            let project_instruction_tokens = orbit_agent::context::estimate_tokens(&project_rules, &[]);
+            let project_instruction_tokens =
+                orbit_agent::context::estimate_tokens(&project_rules, &[]);
             let conversation_tokens = orbit_agent::context::estimate_tokens(&conversation, &[]);
             let tool_tokens = orbit_agent::context::estimate_tokens(&[], &tools.definitions());
-            let sources = if instructions.sources.is_empty() { "未找到".to_owned() } else { format!("{} 条", instructions.sources.len()) };
-            let truncation = if instructions.truncated { "（达到 32 KiB 上限，后续文件未加载）" } else { "" };
-            let project_state_tokens = history.iter().filter_map(|message| match message { ChatMessage::System { content } if content.starts_with("ORBIT_PROJECT_STATE_V1\n") => Some(orbit_agent::context::estimate_tokens(std::slice::from_ref(message), &[])), _ => None }).sum::<usize>();
+            let sources = if instructions.sources.is_empty() {
+                "未找到".to_owned()
+            } else {
+                format!("{} 条", instructions.sources.len())
+            };
+            let truncation = if instructions.truncated {
+                "（达到 32 KiB 上限，后续文件未加载）"
+            } else {
+                ""
+            };
+            let project_state_tokens = history
+                .iter()
+                .filter_map(|message| match message {
+                    ChatMessage::System { content }
+                        if content.starts_with("ORBIT_PROJECT_STATE_V1\n") =>
+                    {
+                        Some(orbit_agent::context::estimate_tokens(
+                            std::slice::from_ref(message),
+                            &[],
+                        ))
+                    }
+                    _ => None,
+                })
+                .sum::<usize>();
             state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动压缩：{}（输入窗口的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；模型摘要不可用时使用本地回退。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
         "/tasks" => run_tasks_command(argument, state, history, session).await?,
         "/memory" => run_memory_command(argument, state, history, session).await?,
-        "/changes" if argument.is_empty() => state
-            .transcript
-            .push(TranscriptItem::CommandResult(changes::list(
-                &session.store.workspace_changes(session.id()).await?,
-            ))),
-        "/diff" if argument.trim().is_empty() => state
-            .transcript
-            .push(TranscriptItem::CommandResult(changes::list(
-                &session.store.workspace_changes(session.id()).await?,
-            ))),
+        "/changes" if argument.is_empty() => {
+            state
+                .transcript
+                .push(TranscriptItem::CommandResult(changes::list(
+                    &session.store.workspace_changes(session.id()).await?,
+                )))
+        }
+        "/diff" if argument.trim().is_empty() => {
+            state
+                .transcript
+                .push(TranscriptItem::CommandResult(changes::list(
+                    &session.store.workspace_changes(session.id()).await?,
+                )))
+        }
         "/diff" => state
             .transcript
             .push(TranscriptItem::CommandResult(changes::diff(
                 &session.store.workspace_changes(session.id()).await?,
                 argument.trim(),
             ))),
-        "/diagnostics" if argument.is_empty() => state
-            .transcript
-            .push(TranscriptItem::CommandResult(orbit_store::diagnostics::text(
-                &session.store.diagnostics(session.id()).await?,
-            ))),
+        "/diagnostics" if argument.is_empty() => {
+            state.transcript.push(TranscriptItem::CommandResult(
+                orbit_store::diagnostics::text(&session.store.diagnostics(session.id()).await?),
+            ))
+        }
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
             state.selection = Default::default();
@@ -816,10 +842,28 @@ async fn run_command(
             )
             .await?
         }
-        "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::CommandResult(format!(
-            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / web_search / task_list / task_update / memory_list / memory_search / memory_save / memory_forget / write_file / edit_file / run_command / read_command_output · 审批：{}",
-            session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
-        ))),
+        "/status" if argument.is_empty() => {
+            let baseline = session.git_baseline.as_ref().map_or_else(
+                || "Git 基线  非 Git 工作区或无法读取".to_owned(),
+                |value| {
+                    format!(
+                        "Git 基线  {} · HEAD {} · 初始改动 {} 项{}",
+                        value["branch"]["head"].as_str().unwrap_or("detached"),
+                        value["branch"]["oid"].as_str().unwrap_or("unknown"),
+                        value["entries"].as_array().map_or(0, Vec::len),
+                        if value["has_more"].as_bool() == Some(true) {
+                            "以上限截断"
+                        } else {
+                            ""
+                        },
+                    )
+                },
+            );
+            state.transcript.push(TranscriptItem::CommandResult(format!(
+                "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / web_search / task_list / task_update / memory_list / memory_search / memory_save / memory_forget / write_file / edit_file / run_command / read_command_output · 审批：{}",
+                session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), baseline, state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
+            )));
+        }
         "/model" => {
             if argument.is_empty() {
                 state.model_picker = Some(dialogs::ModelPicker::new(
@@ -833,10 +877,13 @@ async fn run_command(
                     .find(|choice| choice.qualified_name() == state.model)
                     .map(|choice| choice.provider.as_str());
                 let choice = if let Some((provider, name)) = argument.split_once("::") {
-                    model_options.iter().find(|choice| choice.provider == provider && choice.model == name)
+                    model_options
+                        .iter()
+                        .find(|choice| choice.provider == provider && choice.model == name)
                 } else {
                     model_options.iter().find(|choice| {
-                        Some(choice.provider.as_str()) == current_provider && choice.model == argument
+                        Some(choice.provider.as_str()) == current_provider
+                            && choice.model == argument
                     })
                 };
                 if let Some(choice) = choice {
@@ -850,7 +897,9 @@ async fn run_command(
                     )
                     .await?;
                 } else {
-                    state.transcript.push(TranscriptItem::CommandResult(format!("模型 {argument:?} 未找到。")));
+                    state.transcript.push(TranscriptItem::CommandResult(format!(
+                        "模型 {argument:?} 未找到。"
+                    )));
                 }
             }
         }

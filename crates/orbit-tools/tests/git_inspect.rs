@@ -2,7 +2,10 @@ use std::{fs, path::Path, process::Command};
 
 use orbit_agent::tool::{Tool, ToolError};
 use orbit_model::types::ToolCall;
-use orbit_tools::{git_inspect::GitInspect, workspace::Workspace};
+use orbit_tools::{
+    git_inspect::{GitInspect, capture_baseline},
+    workspace::Workspace,
+};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -48,6 +51,9 @@ async fn reports_branch_status_diff_and_history_without_writing() {
     let directory = repository();
     fs::write(directory.path().join("tracked.txt"), "second\n").unwrap();
     fs::write(directory.path().join("new.txt"), "new\n").unwrap();
+    let baseline = capture_baseline(directory.path()).expect("Git baseline");
+    assert_eq!(baseline["entries"].as_array().unwrap().len(), 2);
+    assert!(capture_baseline(Path::new("/tmp")).is_none());
     let tool = GitInspect::new(Workspace::new(directory.path()).unwrap());
 
     let status = run(&tool, json!({"view":"status","limit":1})).await;

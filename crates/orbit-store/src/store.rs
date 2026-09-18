@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use orbit_agent::events::AgentEvent;
 use orbit_model::types::ChatMessage;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -46,7 +46,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 7,
+                version <= 8,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -136,6 +136,16 @@ impl Store {
                     );
                     CREATE INDEX workspace_undos_session ON workspace_undos(session_id,run_id);
                     PRAGMA user_version=7;",
+                )?;
+            }
+            if version < 8 {
+                connection.execute_batch(
+                    "CREATE TABLE session_git_baselines (
+                        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                        payload TEXT NOT NULL,
+                        captured_at INTEGER NOT NULL DEFAULT (unixepoch())
+                    );
+                    PRAGMA user_version=8;",
                 )?;
             }
             connection.execute_batch("COMMIT;")?;
@@ -337,6 +347,40 @@ impl Store {
                 params![session_id, run_id, call_id, path],
             )?;
             Ok(())
+        })
+        .await
+    }
+
+    pub async fn save_git_baseline(
+        &self,
+        session_id: &str,
+        baseline: &serde_json::Value,
+    ) -> Result<()> {
+        let session_id = session_id.to_owned();
+        let payload = serde_json::to_string(baseline)?;
+        self.access(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO session_git_baselines(session_id,payload) VALUES(?1,?2)",
+                params![session_id, payload],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn git_baseline(&self, session_id: &str) -> Result<Option<serde_json::Value>> {
+        let session_id = session_id.to_owned();
+        self.access(move |conn| {
+            let payload = conn
+                .query_row(
+                    "SELECT payload FROM session_git_baselines WHERE session_id=?1",
+                    [session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            payload
+                .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+                .transpose()
         })
         .await
     }

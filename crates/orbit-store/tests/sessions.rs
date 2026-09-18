@@ -104,6 +104,9 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
     assert!(!changes[0].undone);
     store.record_workspace_undo(&id, &changes[0]).await.unwrap();
     assert!(store.workspace_changes(&id).await.unwrap()[0].undone);
+    let baseline = serde_json::json!({"branch":{"oid":"abc"},"entries":[]});
+    store.save_git_baseline(&id, &baseline).await.unwrap();
+    assert_eq!(store.git_baseline(&id).await.unwrap(), Some(baseline));
 }
 
 #[tokio::test]
@@ -151,7 +154,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=8").unwrap();
+    connection.execute_batch("PRAGMA user_version=9").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }

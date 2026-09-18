@@ -52,6 +52,28 @@ pub struct GitInspect {
     workspace: Workspace,
 }
 
+/// Capture the initial Git state for a session. This is deliberately a small,
+/// read-only snapshot: it distinguishes pre-existing worktree changes from
+/// later Orbit write receipts without writing a repository-side marker.
+pub fn capture_baseline(workspace: &Path) -> Option<Value> {
+    if !workspace.join(".git").exists() {
+        return None;
+    }
+    let workspace = Workspace::new(workspace).ok()?;
+    let cancellation = CancellationToken::new();
+    let root = repository_root(workspace.root(), &cancellation).ok()?;
+    status(
+        &root,
+        &workspace,
+        &Arguments {
+            limit: MAX_ENTRIES,
+            ..Arguments::default()
+        },
+        &cancellation,
+    )
+    .ok()
+}
+
 impl GitInspect {
     pub fn new(workspace: Workspace) -> Self {
         Self { workspace }
