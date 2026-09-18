@@ -226,6 +226,7 @@ impl UiState {
                 fallback,
                 ..
             } => {
+                self.context_used_tokens = after_tokens;
                 let detail = if fallback {
                     " · 保留最近工作内容"
                 } else {
@@ -418,6 +419,7 @@ mod tests {
             fallback: true,
             fallback_reason: Some("摘要请求超时".into()),
         });
+        assert_eq!(state.context_used_tokens, 96_000);
         assert!(matches!(
             state.transcript.as_slice(),
             [TranscriptItem::Maintenance(text)]

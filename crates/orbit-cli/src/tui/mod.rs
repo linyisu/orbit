@@ -199,7 +199,7 @@ pub async fn run(
                     frames.request(time::Instant::now());
                     if state.show_help || state.picker.is_some() || state.model_picker.is_some() || state.marketplace_dialog.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
-                            && let Err(error) = resume_session(&id, &mut state, &mut model, &mut history, &mut session, &instructions, &skills, &model_options, &memory_scope).await
+                            && let Err(error) = resume_session(&id, &mut state, &mut model, &mut history, &mut session, &instructions, &skills, &model_options, &memory_scope, &tools).await
                             && let Some(picker) = &mut state.picker {
                             picker.error = Some(error.to_string());
                         }
@@ -1047,6 +1047,7 @@ async fn run_command(
                 skills,
                 model_options,
                 memory_scope,
+                tools,
             )
             .await?
         }
@@ -1666,6 +1667,7 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn resume_session(
     id: &str,
     state: &mut UiState,
@@ -1676,6 +1678,7 @@ async fn resume_session(
     skills: &crate::skills::Skills,
     model_options: &[ModelOption],
     memory_scope: &crate::project_state::MemoryScope,
+    tools: &ToolRegistry,
 ) -> Result<()> {
     session.resume(id).await?;
     memory_scope.set_session(session.id().into());
@@ -1698,6 +1701,7 @@ async fn resume_session(
     session.restore_ui(&mut restored);
     *state = restored;
     restore_model_profile(state, model, model_options, session);
+    refresh_context_usage(state, history, tools);
     Ok(())
 }
 
@@ -2059,6 +2063,94 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
 mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
+
+    #[tokio::test]
+    async fn resuming_recomputes_usage_from_restored_history_and_current_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut session =
+            SessionState::open(tmp.path().join("sessions.db"), None, "test::model".into())
+                .await
+                .unwrap();
+        let id = session.id().to_owned();
+        session
+            .begin("question".into(), "test::model".into())
+            .await
+            .unwrap();
+        session
+            .finish(
+                "completed",
+                Some(vec![
+                    ChatMessage::user("question"),
+                    ChatMessage::assistant("answer ".repeat(5_000)),
+                ]),
+            )
+            .await
+            .unwrap();
+        session.new_session("other".into()).await.unwrap();
+        let scope = crate::project_state::MemoryScope::new(session.id().into());
+        let mut model = ModelClient::new(Default::default()).unwrap();
+        let options = vec![ModelOption {
+            provider: "test".into(),
+            model: "model".into(),
+            context_tokens: 232_000,
+            input_context_tokens: 224_000,
+            default_for_provider: true,
+            reasoning_efforts: vec![],
+            config: Default::default(),
+        }];
+        let mut tools = ToolRegistry::new();
+        tools.register(orbit_agent::tool::ClosureTool::new(
+            "test_tool",
+            "test tool description",
+            serde_json::json!({"type":"object"}),
+            |_, _| async { Ok("unused".into()) },
+        ));
+        let instructions = crate::instructions::Instructions::default();
+        let skills = crate::skills::Skills::default();
+        let mut history = Vec::new();
+        let mut state = UiState::new("other");
+        // Both the picker and `/resume <id>` call this entry point. It must
+        // produce a valid count without a later command or model request.
+        resume_session(
+            &id,
+            &mut state,
+            &mut model,
+            &mut history,
+            &mut session,
+            &instructions,
+            &skills,
+            &options,
+            &scope,
+            &tools,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.input_context_tokens, 224_000);
+        assert_eq!(state.model, "test::model");
+        assert!(state.context_used_tokens > 10_000);
+        assert_eq!(
+            state.context_used_tokens,
+            orbit_agent::context::estimate_tokens(&history, &tools.definitions())
+        );
+        assert!(state.context_used_tokens > orbit_agent::context::estimate_tokens(&history, &[]));
+        // Reopening the same saved session must not accumulate injected prompts.
+        let before = state.context_used_tokens;
+        resume_session(
+            &id,
+            &mut state,
+            &mut model,
+            &mut history,
+            &mut session,
+            &instructions,
+            &skills,
+            &options,
+            &scope,
+            &tools,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.context_used_tokens, before);
+    }
 
     fn press(state: &mut UiState, code: KeyCode, modifiers: KeyModifiers, busy: bool) -> Action {
         keyboard_action(state, Event::Key(KeyEvent::new(code, modifiers)), busy)

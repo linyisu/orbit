@@ -170,13 +170,13 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let available = width.saturating_sub(4);
     let right_budget = available.saturating_sub(8);
     let context = format!(
-        "{}%/{}",
-        context_percent(state),
+        "{}/{}",
+        context_percent_label(state),
         compact_tokens(input_context_budget(state)),
     );
     let detailed_right = format!("{context}  {model_label}  {effort}");
-    let compact_right = format!("{}% {model_label}  {effort}", context_percent(state));
-    let minimal_right = format!("{}% {model_label}", context_percent(state));
+    let compact_right = format!("{} {model_label}  {effort}", context_percent_label(state));
+    let minimal_right = format!("{} {model_label}", context_percent_label(state));
     // Match Pi's direct context display only when it does not consume the
     // project location. A compact footer is still more useful when the
     // terminal becomes narrow.
@@ -250,7 +250,7 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let context_prefix = if context_details_visible {
         context
     } else {
-        format!("{}%", context_percent(state))
+        context_percent_label(state)
     };
     let context_offset = right
         .starts_with(&context_prefix)
@@ -309,6 +309,15 @@ fn context_percent(state: &UiState) -> usize {
         .saturating_mul(100)
         .checked_div(input_context_budget(state))
         .unwrap_or(0)
+}
+
+fn context_percent_label(state: &UiState) -> String {
+    let percent = context_percent(state);
+    if percent == 0 && state.context_used_tokens > 0 {
+        "<1%".into()
+    } else {
+        format!("{percent}%")
+    }
 }
 
 fn context_indicator_color(percent: usize) -> Color {
@@ -372,11 +381,23 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         return;
     }
     let percent = context_percent(state);
-    let remaining = 100usize.saturating_sub(percent.min(100));
+    let remaining = 100usize.saturating_sub(if percent == 0 && state.context_used_tokens > 0 {
+        1
+    } else {
+        percent.min(100)
+    });
     let lines = [
         "下一次请求上下文（本地估算）".to_owned(),
-        "尚未发送请求；系统提示与工具定义已计入。".to_owned(),
-        format!("{percent}% 已用（剩余 {remaining}%）"),
+        "包含系统提示、工具定义及当前历史。".to_owned(),
+        format!(
+            "{} 已用（剩余 {}{remaining}%）",
+            context_percent_label(state),
+            if percent == 0 && state.context_used_tokens > 0 {
+                ">"
+            } else {
+                ""
+            }
+        ),
         format!(
             "估算 {} / {} tokens",
             compact_tokens(state.context_used_tokens),
@@ -1819,6 +1840,23 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(handle_context_hover(&mut state, &outside), Some(true));
+    }
+
+    #[test]
+    fn small_nonempty_context_is_not_displayed_as_zero() {
+        let mut state = UiState::new("model");
+        state.input_context_tokens = 224_000;
+        for (tokens, expected) in [
+            (0, "0%/224k"),
+            (1, "<1%/224k"),
+            (2_239, "<1%/224k"),
+            (2_240, "1%/224k"),
+            (224_000, "100%/224k"),
+            (322_560, "144%/224k"),
+        ] {
+            state.context_used_tokens = tokens;
+            assert!(footer(&state, 120).to_string().contains(expected));
+        }
     }
 
     #[test]
