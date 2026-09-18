@@ -97,8 +97,12 @@ async fn requires_approval_then_creates_and_replaces_exact_utf8_with_mode_preser
             before
         );
         approval.decision.send(true).unwrap();
-        let result: serde_json::Value =
-            serde_json::from_str(&task.await.unwrap().unwrap()).unwrap();
+        let output = task.await.unwrap().unwrap();
+        assert_eq!(output.changes.len(), 1);
+        assert_eq!(output.changes[0].path, "file");
+        assert_eq!(output.changes[0].before.as_deref(), before);
+        assert_eq!(output.changes[0].after, after);
+        let result: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(result["written_bytes"], after.len());
         assert_eq!(fs::read_to_string(root.0.join("file")).unwrap(), after);
         assert_eq!(

@@ -228,7 +228,7 @@ impl UiState {
                     output: String::new(),
                 }));
             }
-            AgentEvent::ToolFinished { call, content } => {
+            AgentEvent::ToolFinished { call, content, .. } => {
                 self.update_tool(&call, ToolStatus::Finished, content);
             }
             AgentEvent::ToolFailed { call, error } => {
@@ -351,6 +351,7 @@ mod tests {
         state.apply(AgentEvent::ToolFinished {
             call: call("one"),
             content: "done".to_owned(),
+            changes: Vec::new(),
         });
         state.apply(AgentEvent::Completed {
             turns: 1,

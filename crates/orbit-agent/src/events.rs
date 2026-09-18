@@ -1,3 +1,4 @@
+use crate::tool::FileChange;
 use orbit_model::types::{StreamEvent, ToolCall};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -12,6 +13,10 @@ pub enum AgentEvent {
     ToolFinished {
         call: ToolCall,
         content: String,
+        /// Old event records omit this field; they remain readable and simply
+        /// have no reversible workspace mutation attached.
+        #[serde(default)]
+        changes: Vec<FileChange>,
     },
     ToolFailed {
         call: ToolCall,
@@ -40,4 +45,21 @@ pub enum AgentEvent {
         error: String,
     },
     Cancelled,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_tool_events_without_changes_remain_readable() {
+        let event: AgentEvent = serde_json::from_value(serde_json::json!({
+            "ToolFinished": {
+                "call": {"id":"call-1","function":{"name":"write_file","arguments":"{}"}},
+                "content":"{\"path\":\"a.txt\"}"
+            }
+        }))
+        .unwrap();
+        assert!(matches!(event, AgentEvent::ToolFinished { changes, .. } if changes.is_empty()));
+    }
 }

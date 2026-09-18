@@ -48,18 +48,22 @@ fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() 
         AgentEvent::ToolFinished {
             call: read.clone(),
             content: r#"{"path":"source.rs","total_lines":12,"content":"1: source"}"#.into(),
+            changes: Vec::new(),
         },
         AgentEvent::ToolFinished {
             call: edit.clone(),
             content: r#"{"path":"source.rs","written_bytes":0}"#.into(),
+            changes: Vec::new(),
         },
         AgentEvent::ToolFinished {
             call: shell,
             content: r#"{"path":"shell.txt","written_bytes":99}"#.into(),
+            changes: Vec::new(),
         },
         AgentEvent::ToolFinished {
             call: call("fake", "write_file", "fake.txt"),
             content: "I wrote fake.txt".into(),
+            changes: Vec::new(),
         },
     ];
     let activity = FileActivity::from_events(&events);

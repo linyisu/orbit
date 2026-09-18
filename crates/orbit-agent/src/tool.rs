@@ -10,6 +10,18 @@ pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput, ToolErr
 pub struct ToolOutput {
     pub content: String,
     pub attachments: Vec<Attachment>,
+    /// Local audit data for a successfully committed workspace write. This is
+    /// intentionally excluded from the model-facing tool result.
+    pub changes: Vec<FileChange>,
+}
+
+/// A reversible text-file mutation reported only after the filesystem commit
+/// succeeded. `before` is `None` for a newly created file.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct FileChange {
+    pub path: String,
+    pub before: Option<String>,
+    pub after: String,
 }
 
 impl ToolOutput {
@@ -17,6 +29,7 @@ impl ToolOutput {
         Self {
             content: content.into(),
             attachments: Vec::new(),
+            changes: Vec::new(),
         }
     }
 
@@ -24,6 +37,15 @@ impl ToolOutput {
         Self {
             content: content.into(),
             attachments,
+            changes: Vec::new(),
+        }
+    }
+
+    pub fn with_changes(content: impl Into<String>, changes: Vec<FileChange>) -> Self {
+        Self {
+            content: content.into(),
+            attachments: Vec::new(),
+            changes,
         }
     }
 }

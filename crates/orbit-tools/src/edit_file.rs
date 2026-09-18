@@ -1,4 +1,4 @@
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
+use orbit_agent::tool::{Tool, ToolError, ToolFuture};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use serde::Deserialize;
 use serde_json::json;
@@ -70,7 +70,7 @@ impl Tool for EditFile {
                     return Err(ToolError::ExecutionFailed("edited file would exceed 1 MiB".into()));
                 }
                 Ok(before.replace(&args.old_text, &args.new_text))
-            }, cancellation).await.map(ToolOutput::text)
+            }, cancellation).await
         })
     }
 }

@@ -62,7 +62,12 @@ async fn replaces_inserts_deletes_and_explicitly_replaces_all_without_normalizin
             before
         );
         request.decision.send(true).unwrap();
-        let result: Value = serde_json::from_str(&task.await.unwrap().unwrap()).unwrap();
+        let output = task.await.unwrap().unwrap();
+        assert_eq!(output.changes.len(), 1);
+        assert_eq!(output.changes[0].path, "file");
+        assert_eq!(output.changes[0].before.as_deref(), Some(before));
+        assert_eq!(output.changes[0].after, after);
+        let result: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(result["created"], false);
         assert_eq!(fs::read_to_string(root.path().join("file")).unwrap(), after);
     }

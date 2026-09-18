@@ -210,6 +210,7 @@ where
                             AgentEvent::ToolFinished {
                                 call: call.clone(),
                                 content: output.content.clone(),
+                                changes: output.changes.clone(),
                             },
                         )
                         .await?;

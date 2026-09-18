@@ -72,7 +72,7 @@ impl FileActivity {
         let mut files = Self::default();
         for event in events {
             match event {
-                AgentEvent::ToolFinished { call, content } => files.observe(call, content),
+                AgentEvent::ToolFinished { call, content, .. } => files.observe(call, content),
                 AgentEvent::CompactionRecorded { record } => files.merge(&record.files),
                 _ => {}
             }

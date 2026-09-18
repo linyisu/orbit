@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
+use orbit_agent::tool::{FileChange, Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use rustix::fs::{
     AtFlags, Mode, OFlags, RenameFlags, fchmod, openat, renameat, renameat_with, unlinkat,
@@ -48,7 +48,7 @@ impl WriteFile {
         path: String,
         transform: impl FnOnce(&str) -> Result<String, ToolError> + Send + 'static,
         cancellation: CancellationToken,
-    ) -> Result<String, ToolError> {
+    ) -> Result<ToolOutput, ToolError> {
         check_cancelled(&cancellation)?;
         let workspace = self.workspace.clone();
         let prepared = tokio::task::spawn_blocking(move || {
@@ -115,7 +115,6 @@ impl Tool for WriteFile {
             prepared
                 .approve_and_commit(&self.approvals, cancellation)
                 .await
-                .map(ToolOutput::text)
         })
     }
 }
@@ -170,7 +169,7 @@ impl Prepared {
         self,
         approvals: &ApprovalSender,
         cancellation: CancellationToken,
-    ) -> Result<String, ToolError> {
+    ) -> Result<ToolOutput, ToolError> {
         let prepared = self;
         check_cancelled(&cancellation)?;
         let (sender, receiver) = oneshot::channel();
@@ -196,9 +195,15 @@ impl Prepared {
         check_cancelled(&cancellation)?;
         // Once the blocking commit starts, await its actual result rather than report
         // cancellation while a detached write may still be completing.
+        let change = FileChange {
+            path: prepared.preview.path.clone(),
+            before: prepared.preview.before.clone(),
+            after: prepared.preview.after.clone(),
+        };
         tokio::task::spawn_blocking(move || prepared.commit(cancellation))
             .await
             .map_err(failed)?
+            .map(|receipt| ToolOutput::with_changes(receipt, vec![change]))
     }
 
     fn commit(self, cancellation: CancellationToken) -> Result<String, ToolError> {
