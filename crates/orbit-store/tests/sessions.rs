@@ -2,7 +2,7 @@ use orbit_agent::events::AgentEvent;
 use orbit_agent::tool::FileChange;
 use orbit_model::types::{ChatMessage, StreamEvent, ToolCall};
 use orbit_store::store::Store;
-use orbit_store::types::{MemoryCategory, TaskStatus};
+use orbit_store::types::{MemoryCategory, ProjectPlugin, TaskStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -180,7 +180,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=9").unwrap();
+    connection.execute_batch("PRAGMA user_version=10").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }
@@ -276,6 +276,64 @@ async fn project_rename_preserves_history_without_markers_and_copy_is_separate()
     assert_eq!(store.resolve_project(&moved).await.unwrap().id, project.id);
     assert_eq!(store.load(&session).await.unwrap().runs[0].events.len(), 1);
     assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn project_plugins_are_central_stable_and_independent_from_market_cache() {
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let original = db.0.join("plugin-project");
+    let renamed = db.0.join("renamed-plugin-project");
+    std::fs::create_dir(&original).unwrap();
+    let project = store.resolve_project(&original).await.unwrap();
+    let enabled = store
+        .enable_project_plugin(ProjectPlugin {
+            project_id: project.id.clone(),
+            marketplace_source: "https://github.com/example/marketplace.git".into(),
+            plugin_name: "reviewer".into(),
+            package_source: "plugins/reviewer".into(),
+            version: Some("1.2.3".into()),
+            enabled_at: 0,
+        })
+        .await
+        .unwrap();
+    assert!(enabled.enabled_at > 0);
+    assert_eq!(store.project_plugins(&project.id).await.unwrap().len(), 1);
+    assert_eq!(std::fs::read_dir(&original).unwrap().count(), 0);
+
+    std::fs::rename(&original, &renamed).unwrap();
+    let same_project = store.resolve_project(&renamed).await.unwrap();
+    assert_eq!(same_project.id, project.id);
+    let plugins = store.project_plugins(&same_project.id).await.unwrap();
+    assert_eq!(plugins[0].plugin_name, "reviewer");
+    assert_eq!(plugins[0].package_source, "plugins/reviewer");
+    assert!(
+        store
+            .disable_project_plugin(
+                &same_project.id,
+                "https://github.com/example/marketplace.git",
+                "reviewer",
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .project_plugins(&same_project.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !store
+            .disable_project_plugin(
+                &same_project.id,
+                "https://github.com/example/marketplace.git",
+                "reviewer",
+            )
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]

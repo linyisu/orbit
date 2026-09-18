@@ -130,6 +130,20 @@ pub struct ProjectMemory {
     pub updated_at: i64,
 }
 
+/// A plugin package deliberately enabled for a stable project. Package files
+/// remain in Orbit's private data directory; this record never writes markers
+/// into the user's workspace. A session snapshot will later pin an exact
+/// package revision before tools or hooks can run.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectPlugin {
+    pub project_id: String,
+    pub marketplace_source: String,
+    pub plugin_name: String,
+    pub package_source: String,
+    pub version: Option<String>,
+    pub enabled_at: i64,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryCategory {

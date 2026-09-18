@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::os::unix::fs::OpenOptionsExt;
 
 use crate::types::{
-    MemoryCategory, ProjectMemory, ProjectTask, Run, Session, Snapshot, TaskStatus,
+    MemoryCategory, ProjectMemory, ProjectPlugin, ProjectTask, Run, Session, Snapshot, TaskStatus,
     VerificationRecord, WorkspaceChange,
 };
 
@@ -47,7 +47,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 8,
+                version <= 9,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -147,6 +147,21 @@ impl Store {
                         captured_at INTEGER NOT NULL DEFAULT (unixepoch())
                     );
                     PRAGMA user_version=8;",
+                )?;
+            }
+            if version < 9 {
+                connection.execute_batch(
+                    "CREATE TABLE project_plugins (
+                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        marketplace_source TEXT NOT NULL CHECK(length(marketplace_source) BETWEEN 1 AND 4096),
+                        plugin_name TEXT NOT NULL CHECK(length(plugin_name) BETWEEN 1 AND 256),
+                        package_source TEXT NOT NULL CHECK(length(package_source) BETWEEN 1 AND 4096),
+                        version TEXT CHECK(version IS NULL OR length(version) BETWEEN 1 AND 256),
+                        enabled_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                        PRIMARY KEY(project_id, marketplace_source, plugin_name)
+                    );
+                    CREATE INDEX project_plugins_project_enabled ON project_plugins(project_id,enabled_at DESC,plugin_name);
+                    PRAGMA user_version=9;",
                 )?;
             }
             connection.execute_batch("COMMIT;")?;
@@ -575,6 +590,85 @@ impl Store {
         }).await
     }
 
+    /// Return packages enabled for a stable project. Enabling a package only
+    /// records intent here; package declarations still require an explicit
+    /// runtime integration before any command, hook, or MCP server can run.
+    pub async fn project_plugins(&self, project_id: &str) -> Result<Vec<ProjectPlugin>> {
+        let project_id = project_id.to_owned();
+        self.access(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT project_id,marketplace_source,plugin_name,package_source,version,enabled_at
+                 FROM project_plugins WHERE project_id=?1
+                 ORDER BY enabled_at DESC, plugin_name, marketplace_source",
+            )?;
+            statement
+                .query_map([project_id], project_plugin_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+        .await
+    }
+
+    /// Persist the user's decision to enable a catalog package for this stable
+    /// project. Re-enabling the same package refreshes its package metadata.
+    pub async fn enable_project_plugin(&self, plugin: ProjectPlugin) -> Result<ProjectPlugin> {
+        validate_project_plugin(&plugin)?;
+        self.access(move |conn| {
+            let transaction = conn.transaction()?;
+            let project_exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+                [&plugin.project_id],
+                |row| row.get(0),
+            )?;
+            ensure!(project_exists, "project not found");
+            transaction.execute(
+                "INSERT INTO project_plugins(project_id,marketplace_source,plugin_name,package_source,version)
+                 VALUES(?1,?2,?3,?4,?5)
+                 ON CONFLICT(project_id,marketplace_source,plugin_name) DO UPDATE SET
+                    package_source=excluded.package_source,
+                    version=excluded.version,
+                    enabled_at=unixepoch()",
+                params![
+                    plugin.project_id,
+                    plugin.marketplace_source,
+                    plugin.plugin_name,
+                    plugin.package_source,
+                    plugin.version,
+                ],
+            )?;
+            let saved = transaction.query_row(
+                "SELECT project_id,marketplace_source,plugin_name,package_source,version,enabled_at
+                 FROM project_plugins WHERE project_id=?1 AND marketplace_source=?2 AND plugin_name=?3",
+                params![plugin.project_id, plugin.marketplace_source, plugin.plugin_name],
+                project_plugin_row,
+            )?;
+            transaction.commit()?;
+            Ok(saved)
+        })
+        .await
+    }
+
+    /// Disable a package for a project without removing its central marketplace
+    /// cache. Returning false means this package was not enabled.
+    pub async fn disable_project_plugin(
+        &self,
+        project_id: &str,
+        marketplace_source: &str,
+        plugin_name: &str,
+    ) -> Result<bool> {
+        validate_project_plugin_key(project_id, marketplace_source, plugin_name)?;
+        let project_id = project_id.to_owned();
+        let marketplace_source = marketplace_source.to_owned();
+        let plugin_name = plugin_name.to_owned();
+        self.access(move |conn| {
+            Ok(conn.execute(
+                "DELETE FROM project_plugins WHERE project_id=?1 AND marketplace_source=?2 AND plugin_name=?3",
+                params![project_id, marketplace_source, plugin_name],
+            )? == 1)
+        })
+        .await
+    }
+
     pub async fn memories(
         &self,
         project_id: &str,
@@ -721,6 +815,56 @@ fn validate_task_fields(title: &str, details: &str, priority: i64) -> Result<()>
     Ok(())
 }
 
+fn validate_project_plugin(plugin: &ProjectPlugin) -> Result<()> {
+    validate_project_plugin_key(
+        &plugin.project_id,
+        &plugin.marketplace_source,
+        &plugin.plugin_name,
+    )?;
+    ensure!(
+        !plugin.package_source.trim().is_empty(),
+        "plugin package source must not be empty"
+    );
+    ensure!(
+        plugin.package_source.len() <= 4096,
+        "plugin package source exceeds 4096 bytes"
+    );
+    if let Some(version) = &plugin.version {
+        ensure!(
+            !version.trim().is_empty(),
+            "plugin version must not be empty"
+        );
+        ensure!(version.len() <= 256, "plugin version exceeds 256 bytes");
+    }
+    Ok(())
+}
+
+fn validate_project_plugin_key(
+    project_id: &str,
+    marketplace_source: &str,
+    plugin_name: &str,
+) -> Result<()> {
+    ensure!(
+        !project_id.trim().is_empty(),
+        "project id must not be empty"
+    );
+    ensure!(project_id.len() <= 256, "project id exceeds 256 bytes");
+    ensure!(
+        !marketplace_source.trim().is_empty(),
+        "marketplace source must not be empty"
+    );
+    ensure!(
+        marketplace_source.len() <= 4096,
+        "marketplace source exceeds 4096 bytes"
+    );
+    ensure!(
+        !plugin_name.trim().is_empty(),
+        "plugin name must not be empty"
+    );
+    ensure!(plugin_name.len() <= 256, "plugin name exceeds 256 bytes");
+    Ok(())
+}
+
 fn validate_memory_fields(title: &str, content: &str) -> Result<()> {
     ensure!(!title.trim().is_empty(), "memory title must not be empty");
     ensure!(title.len() <= 512, "memory title exceeds 512 bytes");
@@ -744,6 +888,17 @@ fn task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectTask> {
         priority: row.get(6)?,
         created_at: row.get(7)?,
         updated_at: row.get(8)?,
+    })
+}
+
+fn project_plugin_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectPlugin> {
+    Ok(ProjectPlugin {
+        project_id: row.get(0)?,
+        marketplace_source: row.get(1)?,
+        plugin_name: row.get(2)?,
+        package_source: row.get(3)?,
+        version: row.get(4)?,
+        enabled_at: row.get(5)?,
     })
 }
 
