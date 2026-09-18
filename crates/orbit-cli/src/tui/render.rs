@@ -194,11 +194,19 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         .unwrap_or_else(|| state.workspace.clone());
     let left_width = available.saturating_sub(right.width());
     let path_width = left_width.saturating_sub(mode.width() + 3);
-    let left = if path_width == 0 {
-        fit_label(mode, left_width, false)
+    let (left, left_spans) = if path_width == 0 {
+        let mode = fit_label(mode, left_width, false);
+        (mode.clone(), vec![Span::raw(mode)])
     } else {
         let path = fit_label(&safe_output(&path), path_width, true);
-        format!("{path} · {mode}")
+        (
+            format!("{path} · {mode}"),
+            vec![
+                Span::styled(path, Style::default().fg(Color::Rgb(170, 170, 170))),
+                Span::raw(" · "),
+                Span::raw(mode),
+            ],
+        )
     };
     let gap = available.saturating_sub(left.width() + right.width());
     let right_start = 2 + left.width() + gap;
@@ -226,11 +234,9 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     } else {
         vec![Span::raw(right)]
     };
-    let mut spans = vec![
-        Span::raw("  "),
-        Span::styled(left, Style::default().fg(Color::Rgb(170, 170, 170))),
-        Span::raw(" ".repeat(gap)),
-    ];
+    let mut spans = vec![Span::raw("  ")];
+    spans.extend(left_spans);
+    spans.push(Span::raw(" ".repeat(gap)));
     spans.extend(right_spans);
     spans.push(Span::raw("  "));
     FooterLayout {
@@ -270,7 +276,7 @@ fn context_percent(state: &UiState) -> usize {
 
 fn context_indicator_color(percent: usize) -> Color {
     match percent {
-        0..=74 => Color::Rgb(175, 175, 175),
+        0..=74 => Color::Reset,
         75..=89 => ACCENT,
         _ => Color::Rgb(220, 100, 88),
     }
