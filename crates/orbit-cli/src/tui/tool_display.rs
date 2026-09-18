@@ -339,9 +339,6 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     if !expanded && rows.len() > 4 {
         note(&mut out, &format!("… 另有 {} 行", rows.len() - 4), width);
     }
-    if value["truncated"].as_bool() == Some(true) {
-        note(&mut out, "本次读取未返回完整文件", width);
-    }
     Some(out)
 }
 
