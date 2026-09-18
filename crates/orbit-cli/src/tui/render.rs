@@ -142,6 +142,8 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
 
 fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let mode = state.permission_mode.label();
+    let folder_prefix = "󰉋 ";
+    let mode_label = format!("󰒃 {mode}");
     let model_label = if state.attachments.is_empty() {
         format!("󰚩 {}", safe_output(&state.model))
     } else {
@@ -163,19 +165,31 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         compact_tokens(input_context_budget(state)),
     );
     let detailed_right = format!("{context}  {model_label}  {effort}");
+    let compact_right = format!("{}% {model_label}  {effort}", context_percent(state));
+    let minimal_right = format!("{}% {model_label}", context_percent(state));
     // Match Pi's direct context display only when it does not consume the
     // project location. A compact footer is still more useful when the
     // terminal becomes narrow.
-    let minimum_path_width = 12;
+    let footer_left_overhead = folder_prefix.width() + mode_label.width() + 2;
+    // Four columns let a narrow terminal retain a useful project name rather
+    // than spending the same space on a truncated absolute-path prefix.
+    let minimum_path_width = 4;
     let context_details_visible = detailed_right
         .width()
-        .saturating_add(mode.width() + 3)
+        .saturating_add(footer_left_overhead)
         .saturating_add(minimum_path_width)
         <= available;
     let right = if context_details_visible {
         detailed_right
+    } else if compact_right
+        .width()
+        .saturating_add(footer_left_overhead)
+        .saturating_add(minimum_path_width)
+        <= available
+    {
+        compact_right
     } else {
-        format!("{}% {model_label}  {effort}", context_percent(state))
+        minimal_right
     };
     let right = fit_label(&right, right_budget, false);
     let path = std::env::var_os("HOME")
@@ -193,14 +207,22 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         })
         .unwrap_or_else(|| state.workspace.clone());
     let left_width = available.saturating_sub(right.width());
-    let folder_prefix = "󰉋 ";
-    let mode_label = format!("󰒃 {mode}");
     let path_width = left_width.saturating_sub(folder_prefix.width() + mode_label.width() + 2);
     let (left, left_spans) = if path_width == 0 {
         let mode = fit_label(&mode_label, left_width, false);
         (mode.clone(), vec![Span::raw(mode)])
     } else {
-        let path = fit_label(&safe_output(&path), path_width, true);
+        let full_path = safe_output(&path);
+        let project_name = std::path::Path::new(&state.workspace)
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| std::ffi::OsStr::new(&path))
+            .to_string_lossy();
+        let path = if full_path.width() <= path_width {
+            full_path
+        } else {
+            fit_label(&safe_output(&project_name), path_width, false)
+        };
         (
             format!("{folder_prefix}{path}  {mode_label}"),
             vec![
@@ -1427,8 +1449,10 @@ mod tests {
             let line = footer(&state, width);
             assert!(line.width() <= width);
             let text = line.to_string();
-            if width >= 80 {
+            if width >= 40 {
                 assert!(text.contains("项目"));
+            }
+            if width >= 80 {
                 assert!(text.contains("思考"));
                 assert!(text.contains("53%/96k 输入"));
                 assert!(text.contains(state.permission_mode.label()));
