@@ -91,8 +91,10 @@ pub(super) struct LinkTarget {
 }
 const ACCENT: Color = Color::Rgb(218, 139, 109);
 const SECONDARY: Color = Color::Rgb(170, 170, 170);
-const MARK_BACKGROUND: Color = Color::Rgb(103, 83, 45);
-const MARK_FOREGROUND: Color = Color::Rgb(246, 232, 193);
+// Inline syntax follows the terminal's text-first hierarchy. Avoid opaque
+// background chips: they fight the translucent wallpaper and code-block rails.
+const MARK_FOREGROUND: Color = Color::Rgb(225, 166, 126);
+const INLINE_CODE: Color = Color::Rgb(174, 211, 217);
 
 fn push_marked_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style, recover: bool) {
     if !recover || !text.contains("==") {
@@ -121,7 +123,7 @@ fn push_marked_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style, re
         }
         spans.push(Span::styled(
             content.to_owned(),
-            style.bg(MARK_BACKGROUND).fg(MARK_FOREGROUND),
+            style.fg(MARK_FOREGROUND).add_modifier(Modifier::UNDERLINED),
         ));
         rest = &after_open[close + 2..];
     }
@@ -598,9 +600,10 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             Event::Html(text) | Event::InlineHtml(text) => {
                 spans.push(Span::styled(text.into_string(), style))
             }
-            Event::Code(text) => {
-                spans.push(Span::styled(text.into_string(), style.fg(Color::LightCyan)))
-            }
+            Event::Code(text) => spans.push(Span::styled(
+                text.into_string(),
+                style.fg(INLINE_CODE).add_modifier(Modifier::BOLD),
+            )),
             Event::Rule => spans.push(Span::styled(
                 "────────────────────────",
                 Style::default().fg(SECONDARY),
@@ -771,8 +774,13 @@ mod tests {
         assert_eq!(value.to_string(), "  正常 重点 与 ==代码==");
         assert!(value.spans.iter().any(|span| {
             span.content == "重点"
-                && span.style.bg == Some(MARK_BACKGROUND)
                 && span.style.fg == Some(MARK_FOREGROUND)
+                && span.style.add_modifier.contains(Modifier::UNDERLINED)
+        }));
+        assert!(value.spans.iter().any(|span| {
+            span.content == "==代码=="
+                && span.style.fg == Some(INLINE_CODE)
+                && span.style.add_modifier.contains(Modifier::BOLD)
         }));
         assert_eq!(render(r"保留 \==字面量==").to_string(), "  保留 ==字面量==");
     }

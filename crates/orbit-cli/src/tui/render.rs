@@ -1550,7 +1550,7 @@ mod tests {
             line.spans
                 .iter()
                 .any(|span| span.content == "code"
-                    && span.style.fg == Some(Color::Rgb(135, 199, 201)))
+                    && span.style.fg == Some(Color::Rgb(174, 203, 208)))
         );
         assert_eq!(line.style.fg, None);
         assert_eq!(
