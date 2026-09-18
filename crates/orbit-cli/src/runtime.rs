@@ -4,9 +4,9 @@ use anyhow::Result;
 use orbit_agent::tool::ToolRegistry;
 use orbit_tools::{
     approval::ApprovalSender, edit_file::EditFile, git_inspect::GitInspect,
-    image_assets::ImageAssets, list_files::ListFiles, read_document::ReadDocument,
-    read_file::ReadFile, read_image::ReadImage, run_command::RunCommand, search_text::SearchText,
-    workspace::Workspace, write_file::WriteFile,
+    image_assets::ImageAssets, list_files::ListFiles, read_command_output::ReadCommandOutput,
+    read_document::ReadDocument, read_file::ReadFile, read_image::ReadImage,
+    run_command::RunCommand, search_text::SearchText, workspace::Workspace, write_file::WriteFile,
 };
 
 pub fn workspace_tools(
@@ -16,6 +16,7 @@ pub fn workspace_tools(
     command_limits: orbit_tools::run_command::CommandLimits,
     web: orbit_tools::web_fetch::WebConfig,
     scratch: Option<orbit_tools::run_command::ScratchDirectory>,
+    command_output: Option<orbit_tools::run_command::CommandOutputDirectory>,
 ) -> Result<ToolRegistry> {
     let mut workspace = Workspace::new(std::env::current_dir()?)?;
     if config.exists() {
@@ -25,6 +26,7 @@ pub fn workspace_tools(
         workspace.protect(database)?;
         workspace.protect(database.with_extension("session-locks"))?;
         workspace.protect(database.with_extension("workspaces"))?;
+        workspace.protect(database.with_extension("command-output"))?;
         for suffix in ["-wal", "-shm", "-journal"] {
             let mut sidecar = database.as_os_str().to_os_string();
             sidecar.push(suffix);
@@ -49,11 +51,17 @@ pub fn workspace_tools(
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
         let command = RunCommand::with_limits(workspace, approvals, command_limits);
-        tools.register(if let Some(scratch) = scratch {
+        let command = if let Some(scratch) = scratch {
             command.with_scratch(scratch)
         } else {
             command
-        });
+        };
+        if let Some(command_output) = command_output {
+            tools.register(ReadCommandOutput::new(command_output.clone()));
+            tools.register(command.with_output_directory(command_output));
+        } else {
+            tools.register(command);
+        }
     }
     Ok(tools)
 }

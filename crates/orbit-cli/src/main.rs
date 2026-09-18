@@ -466,6 +466,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         command_limits,
         web,
         Some(session.scratch.clone()),
+        Some(session.command_output.clone()),
     )?;
     project_state::register(
         &mut tools,
@@ -516,6 +517,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             None,
             command_limits,
             web,
+            None,
             None,
         )?,
         agent_config,

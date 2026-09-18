@@ -3,6 +3,7 @@ pub mod edit_file;
 pub mod git_inspect;
 pub mod image_assets;
 pub mod list_files;
+pub mod read_command_output;
 pub mod read_document;
 pub mod read_file;
 pub mod read_image;

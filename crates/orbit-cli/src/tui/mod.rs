@@ -722,8 +722,8 @@ async fn run_command(
             .await?
         }
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::CommandResult(format!(
-            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / web_search / task_list / task_update / memory_list / memory_search / memory_save / memory_forget / write_file / edit_file / run_command · 审批：{}",
-            session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
+            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / web_search / task_list / task_update / memory_list / memory_search / memory_save / memory_forget / write_file / edit_file / run_command / read_command_output · 审批：{}",
+            session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
         "/model" => {
             if argument.is_empty() {

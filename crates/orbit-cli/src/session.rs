@@ -74,6 +74,7 @@ pub struct SessionState {
     writer: SessionWriter,
     pub snapshot: Snapshot,
     pub scratch: orbit_tools::run_command::ScratchDirectory,
+    pub command_output: orbit_tools::run_command::CommandOutputDirectory,
     pending: Vec<AgentEvent>,
     active: bool,
     flushed_at: Instant,
@@ -124,8 +125,15 @@ impl SessionState {
         let scratch = std::sync::Arc::new(std::sync::RwLock::new(
             store.path().with_extension("workspaces").join(writer.id()),
         ));
+        let command_output = std::sync::Arc::new(std::sync::RwLock::new(
+            store
+                .path()
+                .with_extension("command-output")
+                .join(writer.id()),
+        ));
         Ok(Self {
             scratch,
+            command_output,
             store,
             writer,
             snapshot,
@@ -294,6 +302,14 @@ impl SessionState {
             .path()
             .with_extension("workspaces")
             .join(self.id());
+        *self
+            .command_output
+            .write()
+            .expect("command output lock poisoned") = self
+            .store
+            .path()
+            .with_extension("command-output")
+            .join(self.id());
         self.pending.clear();
         self.flushed_at = Instant::now();
         Ok(())
@@ -312,6 +328,14 @@ impl SessionState {
             .store
             .path()
             .with_extension("workspaces")
+            .join(self.id());
+        *self
+            .command_output
+            .write()
+            .expect("command output lock poisoned") = self
+            .store
+            .path()
+            .with_extension("command-output")
             .join(self.id());
         Ok(())
     }
@@ -423,6 +447,8 @@ mod tests {
         let first = state.id().to_owned();
         let scratch = state.scratch.clone();
         let first_scratch = scratch.read().unwrap().clone();
+        let command_output = state.command_output.clone();
+        let first_command_output = command_output.read().unwrap().clone();
         let history = vec![
             ChatMessage::user("first question"),
             ChatMessage::assistant("first answer"),
@@ -443,6 +469,7 @@ mod tests {
         let second = state.id().to_owned();
         assert_ne!(first, second);
         assert_ne!(*scratch.read().unwrap(), first_scratch);
+        assert_ne!(*command_output.read().unwrap(), first_command_output);
         assert!(state.snapshot.history.is_empty());
         let foreign_path = tmp.path().join("foreign");
         std::fs::create_dir(&foreign_path).unwrap();
@@ -484,6 +511,7 @@ mod tests {
         drop(locked);
         state.resume(&first).await.unwrap();
         assert_eq!(*scratch.read().unwrap(), first_scratch);
+        assert_eq!(*command_output.read().unwrap(), first_command_output);
         assert_eq!(state.snapshot.history, history);
         assert_eq!(state.snapshot.runs.len(), 1);
         assert!(state.store.load(&second).await.is_ok());
@@ -495,5 +523,9 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(*reopened.scratch.read().unwrap(), first_scratch);
+        assert_eq!(
+            *reopened.command_output.read().unwrap(),
+            first_command_output
+        );
     }
 }

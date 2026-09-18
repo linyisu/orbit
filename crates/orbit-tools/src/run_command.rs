@@ -5,6 +5,7 @@ use std::{
 };
 
 pub type ScratchDirectory = Arc<RwLock<PathBuf>>;
+pub type CommandOutputDirectory = crate::read_command_output::CommandOutputDirectory;
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
@@ -24,6 +25,7 @@ pub struct RunCommand {
     approvals: ApprovalSender,
     limits: CommandLimits,
     scratch: Option<ScratchDirectory>,
+    output_directory: Option<CommandOutputDirectory>,
 }
 
 #[derive(Deserialize)]
@@ -89,10 +91,15 @@ impl RunCommand {
             approvals,
             limits,
             scratch: None,
+            output_directory: None,
         }
     }
     pub fn with_scratch(mut self, scratch: ScratchDirectory) -> Self {
         self.scratch = Some(scratch);
+        self
+    }
+    pub fn with_output_directory(mut self, output_directory: CommandOutputDirectory) -> Self {
+        self.output_directory = Some(output_directory);
         self
     }
 }
@@ -101,7 +108,7 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",
-            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. Use read_image instead when the task is to view or describe an image; shell metadata, OCR, pixel dumps and generated statistics do not expose the actual picture to the vision model. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). Changes inside /workspace are discarded after each command; copy sources or build outputs to /scratch when they must survive subsequent commands. /tmp is disposable. In the TUI, /scratch is a private writable directory retained across commands and session resume. Save intermediate files, binaries and checkpoints there; new sessions use separate scratch directories. It does not keep background processes alive. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Cargo dependencies are not inherited and network remains blocked. Timeout defaults and maximum are specified in the tool schema. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts; excess output is discarded, never a reason to stop execution. Timeout and cancellation still stop the process. Never automatically retry a denied command.",
+            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. Use read_image instead when the task is to view or describe an image; shell metadata, OCR, pixel dumps and generated statistics do not expose the actual picture to the vision model. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). Changes inside /workspace are discarded after each command; copy sources or build outputs to /scratch when they must survive subsequent commands. /tmp is disposable. In the TUI, /scratch is a private writable directory retained across commands and session resume. Save intermediate files, binaries and checkpoints there; new sessions use separate scratch directories. It does not keep background processes alive. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Cargo dependencies are not inherited and network remains blocked. Timeout defaults and maximum are specified in the tool schema. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts. In the TUI, full output is privately retained by session and returns an output_id for read_command_output pagination; it is capped at 16 MiB per stream and 128 MiB per session. Timeout and cancellation still stop the process. Never automatically retry a denied command.",
             json!({"type":"object","properties":{"writable_snapshot":{"type":"boolean","default":false},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":self.limits.max_timeout_seconds,"default":self.limits.default_timeout_seconds}},"required":["command"],"additionalProperties":false}),
         )
     }
@@ -151,7 +158,17 @@ impl Tool for RunCommand {
                 .scratch
                 .as_ref()
                 .map(|directory| directory.read().expect("scratch lock poisoned").clone());
-            let result = sandbox::run_with_resources(
+            let output_log = match &self.output_directory {
+                Some(directory) => {
+                    let directory = directory
+                        .read()
+                        .expect("command output lock poisoned")
+                        .clone();
+                    Some(sandbox::OutputLog::create(&directory).await?)
+                }
+                None => None,
+            };
+            let result = sandbox::run_with_resources_and_output(
                 self.workspace.clone(),
                 args.command,
                 Duration::from_secs(timeout_seconds),
@@ -159,6 +176,7 @@ impl Tool for RunCommand {
                 args.writable_snapshot,
                 self.limits.rust_toolchain.as_deref(),
                 scratch.as_deref(),
+                output_log,
             )
             .await?;
             serde_json::to_string(&result)

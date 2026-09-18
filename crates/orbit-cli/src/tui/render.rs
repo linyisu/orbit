@@ -602,11 +602,16 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                     .ok()
                     .and_then(|value| {
                         if value.get("stdout").is_some() {
+                            let retained = value["output_id"]
+                                .as_str()
+                                .map(|id| format!(" · output {id}"))
+                                .unwrap_or_default();
                             Some(format!(
-                                "exit {} · timeout {} · truncated {}\n{}{}",
+                                "exit {} · timeout {} · truncated {}{}\n{}{}",
                                 value["exit_code"],
                                 value["timed_out"],
                                 value["output_truncated"],
+                                retained,
                                 value["stdout"].as_str().unwrap_or_default(),
                                 value["stderr"].as_str().unwrap_or_default()
                             ))
