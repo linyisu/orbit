@@ -32,6 +32,9 @@ pub struct MarketplaceDialog {
     marketplaces: Vec<Marketplace>,
     source: String,
     adding: bool,
+    viewing_plugins: bool,
+    selected_market: usize,
+    selected_plugin: usize,
 }
 
 impl MarketplaceDialog {
@@ -40,7 +43,38 @@ impl MarketplaceDialog {
             marketplaces,
             source: String::new(),
             adding: false,
+            viewing_plugins: false,
+            selected_market: 0,
+            selected_plugin: 0,
         }
+    }
+
+    fn move_market(&mut self, down: bool) {
+        self.selected_market = move_selection(self.selected_market, self.marketplaces.len(), down);
+        self.selected_plugin = 0;
+    }
+
+    fn move_plugin(&mut self, down: bool) {
+        let count = self
+            .marketplaces
+            .get(self.selected_market)
+            .map(|market| market.plugins.len())
+            .unwrap_or_default();
+        self.selected_plugin = move_selection(self.selected_plugin, count, down);
+    }
+
+    fn selected_market(&self) -> Option<&Marketplace> {
+        self.marketplaces.get(self.selected_market)
+    }
+}
+
+fn move_selection(selected: usize, count: usize, down: bool) -> usize {
+    if count == 0 {
+        0
+    } else if down {
+        (selected + 1).min(count - 1)
+    } else {
+        selected.saturating_sub(1)
     }
 }
 
@@ -147,6 +181,18 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             return None;
         }
         if key.code == KeyCode::Esc
+            && state
+                .marketplace_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.viewing_plugins)
+        {
+            if let Some(dialog) = &mut state.marketplace_dialog {
+                dialog.viewing_plugins = false;
+                dialog.selected_plugin = 0;
+            }
+            return None;
+        }
+        if key.code == KeyCode::Esc
             || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
         {
             state.show_help = false;
@@ -235,6 +281,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
     } else if let Some(dialog) = &mut state.marketplace_dialog {
         match event {
             Event::Key(key) => match key.code {
+                KeyCode::Up if dialog.viewing_plugins => dialog.move_plugin(false),
+                KeyCode::Down if dialog.viewing_plugins => dialog.move_plugin(true),
+                KeyCode::Up if !dialog.adding => dialog.move_market(false),
+                KeyCode::Down if !dialog.adding => dialog.move_market(true),
                 KeyCode::Char('a')
                     if !dialog.adding
                         && !key
@@ -242,6 +292,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
                 {
                     dialog.adding = true
+                }
+                KeyCode::Enter if dialog.viewing_plugins => {}
+                KeyCode::Enter if !dialog.adding && dialog.selected_market().is_some() => {
+                    dialog.viewing_plugins = true
                 }
                 KeyCode::Enter if !dialog.adding => dialog.adding = true,
                 KeyCode::Enter => {
@@ -267,6 +321,22 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             Event::Paste(text) if dialog.adding => dialog
                 .source
                 .extend(text.chars().filter(|c| !c.is_control())),
+            Event::Mouse(mouse)
+                if mouse.kind == MouseEventKind::ScrollUp && dialog.viewing_plugins =>
+            {
+                dialog.move_plugin(false)
+            }
+            Event::Mouse(mouse)
+                if mouse.kind == MouseEventKind::ScrollDown && dialog.viewing_plugins =>
+            {
+                dialog.move_plugin(true)
+            }
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp && !dialog.adding => {
+                dialog.move_market(false)
+            }
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown && !dialog.adding => {
+                dialog.move_market(true)
+            }
             _ => {}
         }
     } else if state.show_help {
@@ -501,11 +571,6 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             footer,
         );
     } else if let Some(dialog) = &mut state.marketplace_dialog {
-        let heading = if dialog.adding {
-            "添加市场源"
-        } else {
-            "已添加的市场"
-        };
         if dialog.adding {
             let source = super::render::fit_label(
                 &format!("来源：{}", clean(&dialog.source)),
@@ -522,7 +587,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             frame.render_widget(
                 Paragraph::new(vec![
                     Line::styled(
-                        heading,
+                        "添加市场源",
                         Style::default()
                             .fg(Color::Rgb(218, 139, 109))
                             .add_modifier(Modifier::BOLD),
@@ -539,27 +604,116 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 body,
             );
             frame.render_widget(Paragraph::new("Enter 下载 · Esc 取消"), footer);
+        } else if dialog.viewing_plugins {
+            state.ime_cursor = None;
+            let Some(market) = dialog.selected_market() else {
+                return;
+            };
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::styled(
+                        format!("{} · 插件", clean(&market.name)),
+                        Style::default()
+                            .fg(Color::Rgb(218, 139, 109))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Line::styled(
+                        clean(&market.source),
+                        Style::default().fg(Color::Rgb(170, 170, 170)),
+                    ),
+                ]),
+                header,
+            );
+            let visible = (body.height as usize / 2).max(1);
+            let first = dialog.selected_plugin.saturating_sub(visible - 1);
+            let mut entries = Vec::new();
+            for (index, plugin) in market.plugins.iter().enumerate().skip(first).take(visible) {
+                let selected = index == dialog.selected_plugin;
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Rgb(218, 139, 109))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                };
+                entries.push(Line::styled(
+                    format!(
+                        "{} {}",
+                        if selected { "›" } else { " " },
+                        clean(&plugin.name)
+                    ),
+                    style,
+                ));
+                entries.push(Line::styled(
+                    format!(
+                        "  {}",
+                        super::render::fit_label(
+                            &clean(&plugin.description),
+                            body.width.saturating_sub(2) as usize,
+                            true,
+                        )
+                    ),
+                    Style::default().fg(Color::Rgb(170, 170, 170)),
+                ));
+            }
+            if entries.is_empty() {
+                entries.push(Line::from("这个市场没有声明插件。"));
+            }
+            frame.render_widget(Paragraph::new(entries), body);
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{} 个插件 · ↑↓ 浏览 · Esc 返回市场列表",
+                    market.plugins.len()
+                )),
+                footer,
+            );
         } else {
             state.ime_cursor = None;
             frame.render_widget(
                 Paragraph::new(Line::styled(
-                    heading,
+                    "已添加的市场",
                     Style::default()
                         .fg(Color::Rgb(218, 139, 109))
                         .add_modifier(Modifier::BOLD),
                 )),
                 header,
             );
+            let visible = (body.height as usize / 2).max(1);
+            let first = dialog.selected_market.saturating_sub(visible - 1);
             let mut entries = Vec::new();
-            for market in &dialog.marketplaces {
+            for (index, market) in dialog
+                .marketplaces
+                .iter()
+                .enumerate()
+                .skip(first)
+                .take(visible)
+            {
+                let selected = index == dialog.selected_market;
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Rgb(218, 139, 109))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                };
                 entries.push(Line::styled(
-                    clean(&market.name),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    format!(
+                        "{} {}",
+                        if selected { "›" } else { " " },
+                        clean(&market.name)
+                    ),
+                    style,
                 ));
                 entries.push(Line::styled(
                     format!(
                         "  {} · {} 个插件",
-                        clean(&market.source),
+                        super::render::fit_label(
+                            &clean(&market.source),
+                            body.width.saturating_sub(12) as usize,
+                            true,
+                        ),
                         market.plugins.len()
                     ),
                     Style::default().fg(Color::Rgb(170, 170, 170)),
@@ -568,8 +722,14 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             if entries.is_empty() {
                 entries.push(Line::from("尚未添加市场。"));
             }
-            frame.render_widget(Paragraph::new(entries).wrap(Wrap { trim: false }), body);
-            frame.render_widget(Paragraph::new("A / Enter 添加市场 · Esc 返回"), footer);
+            frame.render_widget(Paragraph::new(entries), body);
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{} 个市场 · ↑↓ 选择 · Enter 查看插件 · A 添加市场 · Esc 返回",
+                    dialog.marketplaces.len()
+                )),
+                footer,
+            );
         }
     } else {
         state.ime_cursor = None;
@@ -716,6 +876,49 @@ mod tests {
         assert_eq!(
             state.chosen_effort,
             Some(orbit_model::types::ReasoningEffort::High)
+        );
+    }
+
+    #[test]
+    fn marketplace_dialog_browses_plugins_then_returns_to_market_list() {
+        let mut state = UiState::new("model");
+        state.marketplace_dialog = Some(MarketplaceDialog::new(vec![Marketplace {
+            name: "official".into(),
+            source: "owner/catalog".into(),
+            directory: "/catalog".into(),
+            plugins: vec![
+                crate::marketplaces::Plugin {
+                    name: "review".into(),
+                    description: "Review pull requests".into(),
+                },
+                crate::marketplaces::Plugin {
+                    name: "docs".into(),
+                    description: "Write documentation".into(),
+                },
+            ],
+        }]));
+
+        handle(&mut state, key(KeyCode::Enter));
+        assert!(
+            state
+                .marketplace_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.viewing_plugins)
+        );
+        handle(&mut state, key(KeyCode::Down));
+        assert_eq!(
+            state
+                .marketplace_dialog
+                .as_ref()
+                .map(|dialog| dialog.selected_plugin),
+            Some(1)
+        );
+        handle(&mut state, key(KeyCode::Esc));
+        assert!(
+            state
+                .marketplace_dialog
+                .as_ref()
+                .is_some_and(|dialog| !dialog.viewing_plugins && dialog.selected_plugin == 0)
         );
     }
 
