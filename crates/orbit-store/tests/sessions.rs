@@ -1,5 +1,6 @@
 use orbit_agent::events::AgentEvent;
-use orbit_model::types::{ChatMessage, StreamEvent};
+use orbit_agent::tool::FileChange;
+use orbit_model::types::{ChatMessage, StreamEvent, ToolCall};
 use orbit_store::store::Store;
 use orbit_store::types::{MemoryCategory, TaskStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,6 +26,18 @@ impl Drop for Database {
 }
 fn text(value: &str) -> AgentEvent {
     AgentEvent::Model(StreamEvent::TextDelta(value.into()))
+}
+
+fn write_receipt(path: &str, before: Option<&str>, after: &str) -> AgentEvent {
+    AgentEvent::ToolFinished {
+        call: ToolCall::function("write-1", "write_file", serde_json::json!({})),
+        content: format!(r#"{{"path":"{path}"}}"#),
+        changes: vec![FileChange {
+            path: path.into(),
+            before: before.map(str::to_owned),
+            after: after.into(),
+        }],
+    }
 }
 
 #[tokio::test]
@@ -63,6 +76,31 @@ async fn restart_preserves_event_order_and_successful_context() {
     assert_eq!(snapshot.runs[1].status, "cancelled");
     assert!(snapshot.runs.iter().all(|run| run.elapsed_ms.is_some()));
     assert_eq!(store.list().await.unwrap()[0].title, "你好");
+}
+
+#[tokio::test]
+async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let mut writer = store
+        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    writer.begin("change".into(), "mock".into()).await.unwrap();
+    writer
+        .finish(
+            "completed",
+            vec![write_receipt("src/lib.rs", Some("old"), "new")],
+            Some(vec![ChatMessage::user("change")]),
+        )
+        .await
+        .unwrap();
+    let changes = store.workspace_changes(&id).await.unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].tool, "write_file");
+    assert_eq!(changes[0].change.before.as_deref(), Some("old"));
+    assert_eq!(changes[0].change.after, "new");
 }
 
 #[tokio::test]

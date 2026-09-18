@@ -13,7 +13,7 @@ use rusqlite::{Connection, params};
 use std::os::unix::fs::OpenOptionsExt;
 
 use crate::types::{
-    MemoryCategory, ProjectMemory, ProjectTask, Run, Session, Snapshot, TaskStatus,
+    MemoryCategory, ProjectMemory, ProjectTask, Run, Session, Snapshot, TaskStatus, WorkspaceChange,
 };
 
 #[derive(Clone)]
@@ -241,6 +241,50 @@ impl Store {
                 history: serde_json::from_str(&history)?,
                 runs,
             })
+        })
+        .await
+    }
+
+    /// Return only actual successful `write_file` / `edit_file` commits. This
+    /// reads the central event ledger rather than Git, so it remains useful in
+    /// non-Git directories and does not mix in pre-existing user changes.
+    pub async fn workspace_changes(&self, session_id: &str) -> Result<Vec<WorkspaceChange>> {
+        let session_id = session_id.to_owned();
+        self.access(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT r.id,r.status,e.payload
+                 FROM runs r JOIN events e ON e.run_id=r.id
+                 WHERE r.session_id=?1 ORDER BY r.id,e.id",
+            )?;
+            let mut changes = Vec::new();
+            for row in statement.query_map([session_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })? {
+                let (run_id, run_status, payload) = row?;
+                let event: AgentEvent =
+                    serde_json::from_str(&payload).context("stored event could not be decoded")?;
+                if let AgentEvent::ToolFinished {
+                    call,
+                    changes: receipts,
+                    ..
+                } = event
+                {
+                    for change in receipts {
+                        changes.push(WorkspaceChange {
+                            run_id,
+                            run_status: run_status.clone(),
+                            call_id: call.id.clone(),
+                            tool: call.function.name.clone(),
+                            change,
+                        });
+                    }
+                }
+            }
+            Ok(changes)
         })
         .await
     }

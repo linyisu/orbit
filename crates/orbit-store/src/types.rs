@@ -1,4 +1,5 @@
 use orbit_agent::events::AgentEvent;
+use orbit_agent::tool::FileChange;
 use orbit_model::types::ChatMessage;
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,18 @@ pub struct Snapshot {
     pub session: Session,
     pub history: Vec<ChatMessage>,
     pub runs: Vec<Run>,
+}
+
+/// A successfully committed workspace edit reconstructed from the durable
+/// event stream. The source text is held in Orbit's private central database,
+/// never in a project-side checkpoint file.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceChange {
+    pub run_id: i64,
+    pub run_status: String,
+    pub call_id: String,
+    pub tool: String,
+    pub change: FileChange,
 }
 
 /// A durable, user-visible unit of project work. Tasks live on the stable

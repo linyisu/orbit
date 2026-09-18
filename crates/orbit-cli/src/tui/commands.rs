@@ -42,6 +42,14 @@ pub const COMMANDS: &[Command] = &[
         description: "查看或保存当前项目的长期记忆",
     },
     Command {
+        name: "/changes",
+        description: "列出当前会话中 Orbit 成功写入的文件",
+    },
+    Command {
+        name: "/diff",
+        description: "查看 Orbit 最近一次写入的检查点差异",
+    },
+    Command {
         name: "/compact",
         description: "总结旧对话，保留最近两轮；模型不可用时本地回退",
     },

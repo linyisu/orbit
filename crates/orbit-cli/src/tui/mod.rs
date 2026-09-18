@@ -1,5 +1,6 @@
 pub mod app;
 mod approval;
+mod changes;
 pub mod commands;
 mod dialogs;
 mod frames;
@@ -683,6 +684,22 @@ async fn run_command(
         }
         "/tasks" => run_tasks_command(argument, state, history, session).await?,
         "/memory" => run_memory_command(argument, state, history, session).await?,
+        "/changes" if argument.is_empty() => state
+            .transcript
+            .push(TranscriptItem::CommandResult(changes::list(
+                &session.store.workspace_changes(session.id()).await?,
+            ))),
+        "/diff" if argument.trim().is_empty() => state
+            .transcript
+            .push(TranscriptItem::CommandResult(changes::list(
+                &session.store.workspace_changes(session.id()).await?,
+            ))),
+        "/diff" => state
+            .transcript
+            .push(TranscriptItem::CommandResult(changes::diff(
+                &session.store.workspace_changes(session.id()).await?,
+                argument.trim(),
+            ))),
         "/diagnostics" if argument.is_empty() => state
             .transcript
             .push(TranscriptItem::CommandResult(orbit_store::diagnostics::text(
@@ -705,7 +722,7 @@ async fn run_command(
             .await?
         }
         "/status" if argument.is_empty() => state.transcript.push(TranscriptItem::CommandResult(format!(
-            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / task_list / task_update / memory_list / memory_save / memory_forget / write_file / edit_file / run_command · 审批：{}",
+            "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / web_search / task_list / task_update / memory_list / memory_search / memory_save / memory_forget / write_file / edit_file / run_command · 审批：{}",
             session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
         ))),
         "/model" => {
