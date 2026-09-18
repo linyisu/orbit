@@ -309,7 +309,7 @@ impl Entry {
     }
 
     fn command(&mut self, text: &str, width: u16) {
-        self.framed_input(text, width, "");
+        self.framed_input(text, width, super::COMMAND_ICON);
     }
 
     fn framed_input(&mut self, text: &str, width: u16, icon: &str) {
@@ -343,9 +343,8 @@ impl Entry {
         }
 
         let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
-        // Keep the turn marker inside the top rail. Render it separately and
-        // bold so single-cell Nerd Font glyphs retain the visual weight they
-        // had before the joined-border treatment.
+        // Keep the turn marker inside the top rail. The code icon is a
+        // full-height Nerd Font terminal glyph rather than the narrow ``.
         let top_label = format!("╭─{icon}─");
         let trailing = "─".repeat(usize::from(width) - top_label.width() - 1);
         self.push(
@@ -730,7 +729,12 @@ mod tests {
         let mut layout = TranscriptLayout::default();
         layout.update(&[TranscriptItem::Command("/compact".into())], None, 32);
         let rows = &layout.entries[0].rows;
-        assert!(rows[0].line.to_string().starts_with("╭──"));
+        assert!(
+            rows[0]
+                .line
+                .to_string()
+                .starts_with(&format!("╭─{}─", crate::tui::COMMAND_ICON))
+        );
         assert!(rows[1].line.to_string().contains("/compact"));
         assert!(rows.last().unwrap().line.to_string().is_empty());
     }

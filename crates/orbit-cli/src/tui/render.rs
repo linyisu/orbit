@@ -650,7 +650,11 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(vec![
                         Span::styled(
-                            if index == 0 { " " } else { "  " },
+                            if index == 0 {
+                                format!("{} ", super::COMMAND_ICON)
+                            } else {
+                                "  ".into()
+                            },
                             Style::default().fg(ACCENT),
                         ),
                         Span::styled(
@@ -1257,7 +1261,10 @@ mod tests {
             ],
             false,
         );
-        assert_eq!(lines[0].to_string(), " /model asd");
+        assert_eq!(
+            lines[0].to_string(),
+            format!("{} /model asd", crate::tui::COMMAND_ICON)
+        );
         assert_eq!(lines[2].to_string(), "  状态");
         assert_eq!(lines[3].to_string(), "  细节");
         assert!(lines[5].to_string().starts_with("● 未知命令"));
