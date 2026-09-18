@@ -77,6 +77,8 @@ static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
 pub(super) struct CodeFence {
     delimiter: char,
     length: usize,
+    markdown_source: bool,
+    nested_fences: Vec<(char, usize)>,
     state: (HighlightState, ParseState),
 }
 pub(super) type Fence = Option<CodeFence>;
@@ -89,21 +91,19 @@ pub(super) struct LinkTarget {
 }
 const ACCENT: Color = Color::Rgb(218, 139, 109);
 const SECONDARY: Color = Color::Rgb(170, 170, 170);
+const MARK_BACKGROUND: Color = Color::Rgb(103, 83, 45);
+const MARK_FOREGROUND: Color = Color::Rgb(246, 232, 193);
 
-fn push_text_with_cjk_strong(
-    spans: &mut Vec<Span<'static>>,
-    text: &str,
-    style: Style,
-    recover: bool,
-) {
-    if !recover || !text.contains("**") {
+fn push_marked_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style, recover: bool) {
+    if !recover || !text.contains("==") {
         spans.push(Span::styled(text.to_owned(), style));
         return;
     }
+
     let mut rest = text;
-    while let Some(open) = rest.find("**") {
+    while let Some(open) = rest.find("==") {
         let after_open = &rest[open + 2..];
-        let Some(close) = after_open.find("**") else {
+        let Some(close) = after_open.find("==") else {
             break;
         };
         let content = &after_open[..close];
@@ -121,12 +121,55 @@ fn push_text_with_cjk_strong(
         }
         spans.push(Span::styled(
             content.to_owned(),
-            style.add_modifier(Modifier::BOLD),
+            style.bg(MARK_BACKGROUND).fg(MARK_FOREGROUND),
         ));
         rest = &after_open[close + 2..];
     }
     if !rest.is_empty() {
         spans.push(Span::styled(rest.to_owned(), style));
+    }
+}
+
+fn push_text_with_cjk_strong(
+    spans: &mut Vec<Span<'static>>,
+    text: &str,
+    style: Style,
+    recover: bool,
+    recover_mark: bool,
+) {
+    if !recover || !text.contains("**") {
+        push_marked_text(spans, text, style, recover_mark);
+        return;
+    }
+    let mut rest = text;
+    while let Some(open) = rest.find("**") {
+        let after_open = &rest[open + 2..];
+        let Some(close) = after_open.find("**") else {
+            break;
+        };
+        let content = &after_open[..close];
+        if content.is_empty()
+            || content.starts_with(char::is_whitespace)
+            || content.ends_with(char::is_whitespace)
+        {
+            let split = open + 2;
+            push_marked_text(spans, &rest[..split], style, recover_mark);
+            rest = &rest[split..];
+            continue;
+        }
+        if open > 0 {
+            push_marked_text(spans, &rest[..open], style, recover_mark);
+        }
+        push_marked_text(
+            spans,
+            content,
+            style.add_modifier(Modifier::BOLD),
+            recover_mark,
+        );
+        rest = &after_open[close + 2..];
+    }
+    if !rest.is_empty() {
+        push_marked_text(spans, rest, style, recover_mark);
     }
 }
 
@@ -393,14 +436,56 @@ fn syntax_for_label(info: &str) -> Option<&'static SyntaxReference> {
     })
 }
 
+fn is_markdown_label(info: &str) -> bool {
+    matches!(
+        info.trim()
+            .trim_matches(|c| c == '{' || c == '}')
+            .trim_start_matches('.')
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "markdown" | "md" | "mdx" | "commonmark" | "gfm"
+    )
+}
+
+fn is_fence_opening(marker: char, count: usize, trimmed: &str) -> bool {
+    matches!(marker, '`' | '~')
+        && count >= 3
+        && !(marker == '`' && trimmed[count..].contains('`'))
+        && !trimmed[count..].trim().is_empty()
+}
+
 pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'static> {
     let trimmed = source.trim_start();
     let marker = trimmed.chars().next().unwrap_or(' ');
     let count = trimmed.chars().take_while(|c| *c == marker).count();
     if let Some(code) = fence {
-        if marker == code.delimiter && count >= code.length && trimmed[count..].trim().is_empty() {
-            *fence = None;
-            return Line::styled("  └─", Style::default().fg(SECONDARY));
+        // Models frequently show a Markdown document inside a Markdown fence,
+        // using ordinary triple fences rather than a longer outer delimiter.
+        // Preserve those nested fences as source so their closing marker cannot
+        // accidentally terminate the surrounding example.
+        let mut closed_nested_fence = false;
+        if code.markdown_source {
+            if let Some(&(delimiter, length)) = code.nested_fences.last() {
+                if marker == delimiter && count >= length && trimmed[count..].trim().is_empty() {
+                    code.nested_fences.pop();
+                    closed_nested_fence = true;
+                }
+            } else if is_fence_opening(marker, count, trimmed) {
+                code.nested_fences.push((marker, count));
+            }
+        }
+        if !closed_nested_fence
+            && marker == code.delimiter
+            && count >= code.length
+            && trimmed[count..].trim().is_empty()
+        {
+            if code.nested_fences.is_empty() {
+                *fence = None;
+                return Line::styled("  └─", Style::default().fg(SECONDARY));
+            }
         }
         let mut highlighter =
             HighlightLines::from_state(&CODE_THEME, code.state.0.clone(), code.state.1.clone());
@@ -428,6 +513,8 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
         *fence = Some(CodeFence {
             delimiter: marker,
             length: count,
+            markdown_source: is_markdown_label(label),
+            nested_fences: Vec::new(),
             state: HighlightLines::new(syntax, &CODE_THEME).state(),
         });
         return Line::styled(
@@ -453,6 +540,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
     let mut ordered = None;
     let mut links: Vec<(usize, String)> = Vec::new();
     let recover_cjk_strong = !trimmed.contains(r"\**") && !trimmed.contains(r"\*\*");
+    let recover_mark = !trimmed.contains(r"\==");
     for event in Parser::new_ext(
         trimmed,
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
@@ -499,7 +587,13 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                 }
             }
             Event::Text(text) => {
-                push_text_with_cjk_strong(&mut spans, &text, style, recover_cjk_strong);
+                push_text_with_cjk_strong(
+                    &mut spans,
+                    &text,
+                    style,
+                    recover_cjk_strong,
+                    recover_mark,
+                );
             }
             Event::Html(text) | Event::InlineHtml(text) => {
                 spans.push(Span::styled(text.into_string(), style))
@@ -672,6 +766,18 @@ mod tests {
     }
 
     #[test]
+    fn renders_mark_extension_without_touching_code_or_escaped_source() {
+        let value = render("正常 ==重点== 与 `==代码==`");
+        assert_eq!(value.to_string(), "  正常 重点 与 ==代码==");
+        assert!(value.spans.iter().any(|span| {
+            span.content == "重点"
+                && span.style.bg == Some(MARK_BACKGROUND)
+                && span.style.fg == Some(MARK_FOREGROUND)
+        }));
+        assert_eq!(render(r"保留 \==字面量==").to_string(), "  保留 ==字面量==");
+    }
+
+    #[test]
     fn task_list_replaces_the_list_bullet_with_its_checkbox() {
         assert_eq!(render("- [x] 已完成任务").to_string(), "  ☑ 已完成任务");
         assert_eq!(render("- [ ] 未完成任务").to_string(), "  ☐ 未完成任务");
@@ -742,6 +848,31 @@ mod tests {
         assert_eq!(line("```", 4, &mut fence).to_string(), "  │ ```");
         assert!(fence.is_some());
         assert_eq!(line("````", 5, &mut fence).to_string(), "  └─");
+        assert!(fence.is_none());
+    }
+
+    #[test]
+    fn markdown_examples_recover_nested_triple_fences() {
+        let mut fence = None;
+        line("```markdown", 0, &mut fence);
+        assert_eq!(
+            line("```python", 1, &mut fence).to_string(),
+            "  │ ```python"
+        );
+        assert_eq!(
+            line("print('raw')", 2, &mut fence).to_string(),
+            "  │ print('raw')"
+        );
+        assert_eq!(line("```", 3, &mut fence).to_string(), "  │ ```");
+        assert!(
+            fence.is_some(),
+            "inner close must not end outer Markdown example"
+        );
+        assert_eq!(
+            line("# still source", 4, &mut fence).to_string(),
+            "  │ # still source"
+        );
+        assert_eq!(line("```", 5, &mut fence).to_string(), "  └─");
         assert!(fence.is_none());
     }
 }

@@ -796,13 +796,20 @@ pub(super) fn thinking_line(
     // `markdown::line` reserves two columns for ordinary transcript content.
     // Replace that indentation with a muted thinking rail while retaining the
     // markdown spans behind it.
-    if let Some(first) = rendered.spans.first_mut()
-        && let Some(rest) = first.content.strip_prefix("  ")
-    {
-        if rest.is_empty() {
-            rendered.spans.remove(0);
-        } else {
-            first.content = rest.to_owned().into();
+    let mut has_thinking_rail = false;
+    if let Some(first) = rendered.spans.first_mut() {
+        // Code lines carry their own `│` rail. In a thought this would create
+        // two gutters, wasting width and making wrapped text appear outside
+        // the thought column. Use the continuous thought rail in its place.
+        if first.content == "  │ " {
+            first.content = "  ┊ ".into();
+            has_thinking_rail = true;
+        } else if let Some(rest) = first.content.strip_prefix("  ") {
+            if rest.is_empty() {
+                rendered.spans.remove(0);
+            } else {
+                first.content = rest.to_owned().into();
+            }
         }
     }
     // Markdown still contributes structure and semantic color. Apply only a
@@ -810,10 +817,12 @@ pub(super) fn thinking_line(
     for span in &mut rendered.spans {
         span.style = span.style.fg(desaturate_for_thinking(span.style.fg));
     }
-    rendered.spans.insert(
-        0,
-        Span::styled("  ┊ ", Style::default().fg(Color::Rgb(145, 145, 145))),
-    );
+    if !has_thinking_rail {
+        rendered.spans.insert(
+            0,
+            Span::styled("  ┊ ", Style::default().fg(Color::Rgb(145, 145, 145))),
+        );
+    }
     rendered
 }
 
@@ -1547,6 +1556,25 @@ mod tests {
         assert_eq!(
             desaturate_for_thinking(Some(ACCENT)),
             Color::Rgb(224, 142, 108)
+        );
+    }
+
+    #[test]
+    fn thinking_code_reuses_the_single_thinking_rail() {
+        let mut code = None;
+        thinking_line("```markdown", 0, &mut code);
+        let line = thinking_line(
+            "  nested source that should wrap inside the thought",
+            1,
+            &mut code,
+        );
+        assert_eq!(line.spans[0].content, "  ┊ ");
+        assert!(
+            line.spans
+                .iter()
+                .skip(1)
+                .all(|span| !span.content.starts_with("│ ")),
+            "code must not retain a second rail: {line:?}"
         );
     }
 
