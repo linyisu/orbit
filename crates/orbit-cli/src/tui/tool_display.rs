@@ -29,6 +29,17 @@ pub(super) fn search_summary(arguments: &str) -> String {
     format!("{} · {path}", Value::String(query))
 }
 
+pub(super) fn memory_summary(arguments: &str) -> String {
+    serde_json::from_str::<Value>(arguments)
+        .ok()
+        .and_then(|value| {
+            value["title"]
+                .as_str()
+                .map(|title| super::render::compact_preview(title, 100))
+        })
+        .unwrap_or_default()
+}
+
 // Use the search tool's literal/regex and Unicode case-folding semantics.
 fn matcher(value: &Value) -> Option<Regex> {
     let query = value["query"].as_str()?;
@@ -105,8 +116,72 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
             expanded,
             width,
         ),
+        "memory_save" => memory(
+            &serde_json::from_str::<Value>(&row.output).ok()?,
+            expanded,
+            width,
+        ),
         _ => None,
     }
+}
+
+fn memory(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    let memory = &value["memory"];
+    let category = match memory["category"].as_str()? {
+        "fact" => "事实",
+        "decision" => "决策",
+        "constraint" => "约束",
+        "preference" => "偏好",
+        category => category,
+    };
+    let content = memory["content"].as_str()?;
+    let mut out = Vec::new();
+    let id = memory["id"]
+        .as_u64()
+        .map(|id| format!(" · #{id}"))
+        .unwrap_or_default();
+    note(
+        &mut out,
+        &format!("已保存 · {category} · 当前会话{id}"),
+        width,
+    );
+    let mut omitted = false;
+    for (index, line) in content.lines().enumerate() {
+        if !expanded && index >= 3 {
+            omitted = true;
+            break;
+        }
+        let text = safe_output(line);
+        let available = usize::from(width).saturating_sub(4);
+        if expanded && available > 0 {
+            let mut chunk = String::new();
+            let mut used = 0;
+            for glyph in text.graphemes(true) {
+                if used + glyph.width() > available && !chunk.is_empty() {
+                    out.push(Line::from(format!("    {}", std::mem::take(&mut chunk))));
+                    used = 0;
+                }
+                if glyph.width() > available {
+                    chunk.push('…');
+                    used += 1;
+                } else {
+                    chunk.push_str(glyph);
+                    used += glyph.width();
+                }
+            }
+            out.push(Line::from(format!("    {chunk}")));
+        } else {
+            omitted |= text.width() > available;
+            out.push(Line::from(clipped(
+                &format!("    {text}"),
+                usize::from(width),
+            )));
+        }
+    }
+    if omitted && !expanded {
+        note(&mut out, "… 展开查看完整记忆", width);
+    }
+    Some(out)
 }
 
 fn clipped(text: &str, width: usize) -> String {
@@ -355,6 +430,54 @@ mod tests {
             status: ToolStatus::Finished,
             output: output.to_string(),
         }
+    }
+
+    #[test]
+    fn memory_save_shows_title_and_scoped_preview_without_changing_the_result() {
+        let content = format!(
+            "审查结果：{}\n第二行\n第三行\n第四行",
+            "中文内容".repeat(50)
+        );
+        let mut tool = row(
+            "memory_save",
+            json!({"memory":{
+            "id":12,"active":true,"category":"fact","title":"审查记录","content":content
+        },"source_kind":"session_memory"}),
+        );
+        tool.arguments =
+            json!({"title":"审查记录","category":"fact","content":content}).to_string();
+        let original = tool.output.clone();
+        assert_eq!(memory_summary(&tool.arguments), "审查记录");
+        let preview = lines(&tool, false, 60).unwrap();
+        assert!(
+            preview[0]
+                .to_string()
+                .contains("已保存 · 事实 · 当前会话 · #12")
+        );
+        assert!(
+            preview
+                .last()
+                .unwrap()
+                .to_string()
+                .contains("展开查看完整记忆")
+        );
+        for width in [0, 1, 5, 30, 80] {
+            for expanded in [false, true] {
+                assert!(
+                    lines(&tool, expanded, width)
+                        .unwrap()
+                        .iter()
+                        .all(|line| line.width() <= width as usize)
+                );
+            }
+        }
+        let expanded = lines(&tool, true, 60).unwrap();
+        let actual: String = expanded[1..]
+            .iter()
+            .map(|line| line.to_string().strip_prefix("    ").unwrap().to_owned())
+            .collect();
+        assert_eq!(actual, content.lines().collect::<String>());
+        assert_eq!(tool.output, original);
     }
 
     fn highlighted(lines: &[Line<'static>]) -> String {

@@ -155,7 +155,10 @@ fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
     ranges
 }
 
-fn wrap_line(line: &Line<'static>, width: u16) -> (Vec<Line<'static>>, Vec<Range<usize>>) {
+pub(super) fn wrap_line(
+    line: &Line<'static>,
+    width: u16,
+) -> (Vec<Line<'static>>, Vec<Range<usize>>) {
     let text = line.to_string();
     let ranges = wrap_ranges(&text, width);
     let lines = ranges

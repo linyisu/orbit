@@ -50,6 +50,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         || state.picker.is_some()
         || state.model_picker.is_some()
         || state.marketplace_dialog.is_some()
+        || state.approval.is_some()
     {
         state.navigation.clear_hover();
         state.context_hovered = false;
@@ -60,7 +61,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         0
     };
-    let approval_height = if state.approval.is_some() {
+    let file_modal = super::approval::file_modal(state);
+    let approval_height = if state.approval.is_some() && !file_modal {
         (area.height / 2).min(if state.approval_expanded { 18 } else { 12 })
     } else {
         0
@@ -84,7 +86,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_header(frame, state, areas[0]);
     draw_transcript(frame, state, areas[1]);
     draw_status(frame, state, areas[2]);
-    if state.approval.is_some() {
+    if state.approval.is_some() && !file_modal {
         super::approval::draw_in(frame, state, areas[3]);
         state.selection.approval = areas[3];
     }
@@ -100,6 +102,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.footer = areas[6];
     draw_context_tooltip(frame, state);
     super::dialogs::draw(frame, state);
+    if file_modal {
+        super::approval::draw_file_modal(frame, state);
+    }
 }
 
 /// Clip at grapheme boundaries, retaining the useful end of filesystem paths.
@@ -710,6 +715,8 @@ pub(super) fn transcript_lines_at_width(
                 };
                 let summary = if row.name == "search_text" {
                     super::tool_display::search_summary(&row.arguments)
+                } else if row.name == "memory_save" {
+                    super::tool_display::memory_summary(&row.arguments)
                 } else {
                     tool_summary(&row.arguments)
                 };
@@ -917,7 +924,7 @@ pub(super) fn thinking_line(
         }
     }
     // Markdown still contributes structure and semantic color. Apply only a
-    // light neutral wash so thinking stays distinct without becoming dim.
+    // uniform 30% neutral wash across prose, Markdown and syntax colors.
     for span in &mut rendered.spans {
         span.style = span.style.fg(desaturate_for_thinking(span.style.fg));
     }
@@ -932,10 +939,6 @@ pub(super) fn thinking_line(
 
 fn desaturate_for_thinking(color: Option<Color>) -> Color {
     let (red, green, blue) = match color.unwrap_or(Color::Rgb(218, 218, 212)) {
-        // Warm structural Markdown accents need to stay legible over the
-        // wallpaper. Cool syntax colors already retain enough contrast after
-        // the neutral wash below.
-        Color::Rgb(218, 139, 109) => return Color::Rgb(224, 142, 108),
         Color::Rgb(red, green, blue) => (red, green, blue),
         Color::Black => (0, 0, 0),
         Color::Red | Color::LightRed => (220, 110, 104),
@@ -948,7 +951,7 @@ fn desaturate_for_thinking(color: Option<Color>) -> Color {
         Color::White => (232, 232, 228),
         Color::Indexed(_) | Color::Reset => (190, 190, 188),
     };
-    let blend = |channel| ((u16::from(channel) * 4 + 175) / 5) as u8;
+    let blend = |channel| ((u16::from(channel) * 7 + 175 * 3) / 10) as u8;
     Color::Rgb(blend(red), blend(green), blend(blue))
 }
 
@@ -1342,7 +1345,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_stays_below_conversation_and_keeps_the_draft_visible() {
+    fn file_approval_overlays_conversation_and_preserves_the_draft() {
         let mut state = UiState::new("mock");
         state.transcript.push(TranscriptItem::Assistant(
             "Conversation remains visible".into(),
@@ -1364,11 +1367,16 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(text.contains("Conversation remains visible"));
-        assert!(text.contains("my draft"));
+        assert!(!text.contains("Conversation remains visible"));
+        assert_eq!(state.input.text, "my draft");
+        assert_eq!(state.selection.viewport, Rect::default());
+        assert_eq!(state.input_area, Rect::default());
+        assert_eq!(state.ime_cursor, None);
         assert!(text.contains("price.c"));
-        assert!(text.contains("- return subtotal > 10000;"));
-        assert!(text.contains("+ return subtotal >= 10000;"));
+        assert!(text.replace(' ', "").contains("修改前"));
+        assert!(text.replace(' ', "").contains("修改后"));
+        assert!(text.contains("-   1 │ return subtotal > 10000;"));
+        assert!(text.contains("+   1 │ return subtotal >= 10000;"));
         assert!(text.replace(' ', "").contains("Enter确认"), "{text}");
         assert!(state.approval_shown);
     }
@@ -1715,12 +1723,12 @@ mod tests {
             line.spans
                 .iter()
                 .any(|span| span.content == "code"
-                    && span.style.fg == Some(Color::Rgb(174, 203, 208)))
+                    && span.style.fg == Some(Color::Rgb(174, 200, 204)))
         );
         assert_eq!(line.style.fg, None);
         assert_eq!(
             desaturate_for_thinking(Some(ACCENT)),
-            Color::Rgb(224, 142, 108)
+            Color::Rgb(205, 149, 128)
         );
     }
 

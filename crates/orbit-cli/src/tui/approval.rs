@@ -1,10 +1,10 @@
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Style},
     text::Line,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 
 use super::app::UiState;
@@ -17,18 +17,31 @@ pub enum Action {
     None,
 }
 
+pub(super) fn file_modal(state: &UiState) -> bool {
+    matches!(
+        state.approval,
+        Some(
+            orbit_tools::approval::ApprovalPreview::Write(_)
+                | orbit_tools::approval::ApprovalPreview::Delete(_)
+        )
+    )
+}
+
 pub fn handle(state: &mut UiState, event: Event) -> Action {
     let amount = match event {
         Event::Mouse(mouse) => {
             let amount = match mouse.kind {
-                MouseEventKind::ScrollUp => -(super::wheel::LINES as i16),
-                MouseEventKind::ScrollDown => super::wheel::LINES as i16,
+                MouseEventKind::ScrollUp => -(super::wheel::LINES as isize),
+                MouseEventKind::ScrollDown => super::wheel::LINES as isize,
                 _ => 0,
             };
             if !state
                 .approval_area
                 .contains((mouse.column, mouse.row).into())
             {
+                if file_modal(state) {
+                    return Action::None;
+                }
                 if mouse.row < state.approval_area.y {
                     if amount < 0 {
                         state.scroll_up(super::wheel::LINES);
@@ -106,68 +119,16 @@ fn visible(text: &str) -> String {
         .collect()
 }
 
-fn write_diff(preview: &orbit_tools::approval::WritePreview) -> Vec<Line<'static>> {
-    let before: Vec<_> = preview
-        .before
-        .as_deref()
-        .unwrap_or("")
-        .split_inclusive('\n')
-        .collect();
-    let after: Vec<_> = preview.after.split_inclusive('\n').collect();
-    let prefix = before
-        .iter()
-        .zip(&after)
-        .take_while(|(a, b)| a == b)
-        .count();
-    let suffix = before[prefix..]
-        .iter()
-        .rev()
-        .zip(after[prefix..].iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let start = prefix.saturating_sub(3);
-    let mut lines = Vec::new();
-    if start > 0 {
-        lines.push(Line::from(format!("  … 前 {start} 行未改动")));
-    }
-    let mut add = |text: &str, marker: &str, color: Color| {
-        lines.push(Line::styled(
-            format!(
-                "{marker}{}",
-                visible(text.strip_suffix('\n').unwrap_or(text))
-            ),
-            Style::default().fg(color),
-        ));
-    };
-    for text in &before[start..prefix] {
-        add(text, "  ", Color::Reset);
-    }
-    for text in &before[prefix..before.len() - suffix] {
-        add(text, "- ", Color::Red);
-    }
-    for text in &after[prefix..after.len() - suffix] {
-        add(text, "+ ", Color::Green);
-    }
-    for text in after[after.len() - suffix..].iter().take(3) {
-        add(text, "  ", Color::Reset);
-    }
-    if suffix > 3 {
-        lines.push(Line::from(format!("  … 后 {} 行未改动", suffix - 3)));
-    }
-    lines.push(Line::from(if preview.after.ends_with('\n') {
-        "[修改后末尾有换行]"
-    } else {
-        "[修改后末尾无换行]"
-    }));
-    lines
-}
-
 #[cfg(test)]
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_in(frame, state, frame.area());
 }
 
 pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    if file_modal(state) {
+        draw_file_modal(frame, state);
+        return;
+    }
     state.approval_area = area;
     let proposal = state
         .approval
@@ -180,33 +141,9 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     ])
     .split(area);
     let (title, lines) = match proposal {
-        orbit_tools::approval::ApprovalPreview::Write(preview) => {
-            let title = format!(
-                "写入确认 · {}\n{} · {} 字节 → {} 字节",
-                visible(&preview.path),
-                if preview.before.is_some() {
-                    "替换文件"
-                } else {
-                    "创建文件"
-                },
-                preview.before.as_ref().map_or(0, String::len),
-                preview.after.len()
-            );
-            let lines = write_diff(preview);
-            (title, lines)
-        }
-        orbit_tools::approval::ApprovalPreview::Delete(preview) => {
-            let title = format!(
-                "删除确认 · {}\n移除由 Orbit 创建且仍与检查点一致的文件 · {} 字节",
-                visible(&preview.path),
-                preview.before.len(),
-            );
-            let lines = write_diff(&orbit_tools::approval::WritePreview {
-                path: preview.path.clone(),
-                before: Some(preview.before.clone()),
-                after: String::new(),
-            });
-            (title, lines)
+        orbit_tools::approval::ApprovalPreview::Write(_)
+        | orbit_tools::approval::ApprovalPreview::Delete(_) => {
+            return draw_file_modal(frame, state);
         }
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
             let mut lines = vec![
@@ -279,9 +216,27 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     state.approval_max_scroll = paragraph
         .line_count(areas[1].width.saturating_sub(2))
         .saturating_sub(areas[1].height.saturating_sub(2) as usize)
-        .min(u16::MAX as usize) as u16;
+        .min(u16::MAX as usize);
     state.approval_scroll = state.approval_scroll.min(state.approval_max_scroll);
-    frame.render_widget(paragraph.scroll((state.approval_scroll, 0)), areas[1]);
+    frame.render_widget(
+        paragraph.scroll((state.approval_scroll as u16, 0)),
+        areas[1],
+    );
+    draw_options(
+        frame,
+        state,
+        areas[2],
+        if state.approval_expanded {
+            "← → 切换 · Enter 确认 · Esc 拒绝 · Tab 收起"
+        } else {
+            "← → 切换 · Enter 确认 · Esc 拒绝 · Tab 展开"
+        },
+    );
+    state.selection.approval = areas[1].inner(ratatui::layout::Margin::new(1, 1));
+    state.approval_shown = true;
+}
+
+fn draw_options(frame: &mut Frame<'_>, state: &UiState, area: Rect, hint: &str) {
     let options = Line::from(vec![
         ratatui::text::Span::styled(
             "  允许  ",
@@ -301,18 +256,115 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             },
         ),
     ]);
+    frame.render_widget(Paragraph::new(vec![options, Line::from(hint)]), area);
+}
+
+pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
+    let (path, before, after, operation) = match state.approval.as_ref() {
+        Some(orbit_tools::approval::ApprovalPreview::Write(preview)) => (
+            preview.path.as_str(),
+            preview.before.as_deref().unwrap_or_default(),
+            preview.after.as_str(),
+            if preview.before.is_some() {
+                "修改文件"
+            } else {
+                "新建文件"
+            },
+        ),
+        Some(orbit_tools::approval::ApprovalPreview::Delete(preview)) => (
+            preview.path.as_str(),
+            preview.before.as_str(),
+            "",
+            "删除文件",
+        ),
+        _ => return,
+    };
+    let screen = frame.area();
+    let area = screen.inner(Margin::new(
+        if screen.width >= 40 { 2 } else { 0 },
+        if screen.height >= 16 { 1 } else { 0 },
+    ));
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Rgb(218, 139, 109)))
+        .title(" 文件变更确认 ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let sections = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .split(inner);
+    let title = super::render::fit_label(
+        &format!("{operation} · {}", visible(path)),
+        sections[0].width as usize,
+        true,
+    );
     frame.render_widget(
         Paragraph::new(vec![
-            options,
-            Line::from(if state.approval_expanded {
-                "← → 切换 · Enter 确认 · Esc 拒绝 · Tab 收起"
-            } else {
-                "← → 切换 · Enter 确认 · Esc 拒绝 · Tab 展开"
-            }),
+            Line::from(title),
+            Line::from(format!("{} 字节 → {} 字节", before.len(), after.len())),
         ]),
-        areas[2],
+        sections[0],
     );
-    state.selection.approval = areas[1].inner(ratatui::layout::Margin::new(1, 1));
+    let panes = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(sections[1]);
+    let left_block = Block::default().borders(Borders::ALL).title(" 修改前 ");
+    let right_block = Block::default().borders(Borders::ALL).title(" 修改后 ");
+    let left = left_block.inner(panes[0]);
+    let right = right_block.inner(panes[1]);
+    let widths = (left.width, right.width);
+    if state
+        .approval_diff
+        .as_ref()
+        .is_none_or(|cache| !cache.matches(before, after, widths, state.approval_expanded))
+    {
+        state.approval_diff = Some(super::approval_diff::Cache::new(
+            before,
+            after,
+            widths,
+            state.approval_expanded,
+        ));
+    }
+    let cache = state.approval_diff.as_ref().unwrap();
+    let height = usize::from(left.height.min(right.height));
+    state.approval_max_scroll = cache.left.len().saturating_sub(height);
+    state.approval_scroll = state.approval_scroll.min(state.approval_max_scroll);
+    frame.render_widget(left_block, panes[0]);
+    frame.render_widget(right_block, panes[1]);
+    // Both panes consume exactly the same aligned physical-row offset.
+    for (rows, pane) in [(&cache.left, left), (&cache.right, right)] {
+        let visible: Vec<_> = rows
+            .iter()
+            .skip(state.approval_scroll)
+            .take(height)
+            .cloned()
+            .collect();
+        frame.render_widget(Paragraph::new(visible), pane);
+    }
+    let hint = format!(
+        "←→ 选择 · Enter 确认 · Esc 拒绝 · 滚轮同步 · Tab {}",
+        if state.approval_expanded {
+            "仅看改动"
+        } else {
+            "显示全文"
+        }
+    );
+    draw_options(frame, state, sections[2], &hint);
+    state.approval_area = area;
+    state.selection.approval = sections[1];
+    // The modal owns pointer interaction; no links or composer clicks below it.
+    state.selection.viewport = Rect::default();
+    state.selection.input = Rect::default();
+    state.selection.footer = Rect::default();
+    state.selection.reset_caret();
+    state.input_area = Rect::default();
+    state.attachment_areas.clear();
+    state.context_indicator_area = Rect::default();
+    state.ime_cursor = None;
     state.approval_shown = true;
 }
 
@@ -341,10 +393,10 @@ mod tests {
         assert_eq!(state.approval_scroll, 0);
         handle(&mut state, wheel(MouseEventKind::ScrollDown, 15));
         assert_eq!(state.scroll, super::super::wheel::LINES);
-        assert_eq!(state.approval_scroll, super::super::wheel::LINES as u16);
+        assert_eq!(state.approval_scroll, super::super::wheel::LINES);
         handle(&mut state, wheel(MouseEventKind::ScrollDown, 5));
         assert_eq!(state.scroll, 0);
-        assert_eq!(state.approval_scroll, super::super::wheel::LINES as u16);
+        assert_eq!(state.approval_scroll, super::super::wheel::LINES);
         assert_eq!(state.input.text, "draft");
     }
 
@@ -403,6 +455,62 @@ mod render_tests {
     use super::*;
     use orbit_tools::approval::WritePreview;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn modal_wheels_in_either_pane_share_the_scroll_and_do_not_move_the_chat() {
+        let mut state = UiState::new("mock");
+        state.max_scroll = 100;
+        state.input.insert("draft");
+        state.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
+            WritePreview {
+                path: "src/main.rs".into(),
+                before: Some("old\n".repeat(100)),
+                after: "new\n".repeat(100),
+            },
+        ));
+        let mut terminal = Terminal::new(TestBackend::new(100, 25)).unwrap();
+        terminal.draw(|f| draw_file_modal(f, &mut state)).unwrap();
+        let cached_rows = state.approval_diff.as_ref().unwrap().left.as_ptr();
+        for x in [10, 70] {
+            handle(
+                &mut state,
+                Event::Mouse(crossterm::event::MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: x,
+                    row: 10,
+                    modifiers: KeyModifiers::NONE,
+                }),
+            );
+        }
+        assert_eq!(state.approval_scroll, super::super::wheel::LINES * 2);
+        handle(
+            &mut state,
+            Event::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            }),
+        );
+        assert_eq!(state.scroll, 0);
+        assert_eq!(state.approval_scroll, super::super::wheel::LINES * 2);
+        terminal.draw(|f| draw_file_modal(f, &mut state)).unwrap();
+        assert_eq!(
+            cached_rows,
+            state.approval_diff.as_ref().unwrap().left.as_ptr()
+        );
+        let row_text: String = (0..100)
+            .map(|x| terminal.backend().buffer()[(x, 5)].symbol())
+            .collect();
+        assert!(row_text.contains("-  17 │ old"), "{row_text}");
+        assert!(row_text.contains("+  17 │ new"), "{row_text}");
+        assert_eq!(state.input.text, "draft");
+        for (width, height) in [(24, 10), (10, 5), (1, 1), (140, 40)] {
+            terminal.backend_mut().resize(width, height);
+            terminal.resize(Rect::new(0, 0, width, height)).unwrap();
+            terminal.draw(|f| draw_file_modal(f, &mut state)).unwrap();
+        }
+    }
 
     #[test]
     fn full_preview_scrolls_to_end_and_escapes_terminal_controls() {

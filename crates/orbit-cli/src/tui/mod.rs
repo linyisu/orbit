@@ -1,5 +1,6 @@
 pub mod app;
 mod approval;
+mod approval_diff;
 mod changes;
 pub mod commands;
 mod dialogs;
@@ -180,12 +181,13 @@ pub async fn run(
                     let context_hover_changed = !state.selection.dragging()
                         && matches!(render::handle_context_hover(&mut state, &event), Some(true));
                     let link_hover_changed = !state.selection.dragging()
+                        && !approval::file_modal(&state)
                         && !state.show_help
                         && state.picker.is_none()
                         && state.model_picker.is_none()
                         && state.marketplace_dialog.is_none()
                         && matches!(render::handle_link_hover(&mut state, &event), Some(true));
-                    if !state.selection.dragging() && !state.show_help && state.picker.is_none() && state.model_picker.is_none() && state.marketplace_dialog.is_none()
+                    if !state.selection.dragging() && !approval::file_modal(&state) && !state.show_help && state.picker.is_none() && state.model_picker.is_none() && state.marketplace_dialog.is_none()
                         && let Some(changed) = navigation::handle(&mut state, &event) {
                         if changed || context_hover_changed || link_hover_changed { dirty = true; frames.request(time::Instant::now()); }
                         continue;
@@ -492,6 +494,7 @@ pub async fn run(
                     state.approval_expanded = false;
                     state.approval_shown = false;
                     state.approval_choice = 0;
+                    state.approval_diff = None;
                     pending = Some(request);
                     dirty = true;
                 }
