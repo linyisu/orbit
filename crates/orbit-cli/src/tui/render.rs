@@ -49,6 +49,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     {
         state.navigation.clear_hover();
         state.context_hovered = false;
+        state.link_hovered = None;
     }
     let panel_height = if !menu.is_empty() {
         (menu.len().min(MAX_COMMAND_MENU_ITEMS) + 1) as u16
@@ -327,6 +328,33 @@ pub(super) fn handle_context_hover(
     Some(changed)
 }
 
+/// Track a link under the pointer independently from selection and navigation.
+/// The link target itself stays in the transcript layout so streamed output and
+/// resize rebuilds never leave a stale hit target behind.
+pub(super) fn handle_link_hover(
+    state: &mut UiState,
+    event: &crossterm::event::Event,
+) -> Option<bool> {
+    let crossterm::event::Event::Mouse(mouse) = event else {
+        return None;
+    };
+    if mouse.kind != crossterm::event::MouseEventKind::Moved {
+        return None;
+    }
+    let offset = if state.follow_bottom {
+        state.max_scroll
+    } else {
+        state.max_scroll.saturating_sub(state.scroll)
+    };
+    let hovered = state
+        .transcript_layout
+        .link_at(state.selection.viewport, offset, (mouse.column, mouse.row))
+        .map(|_| (mouse.column, mouse.row));
+    let changed = state.link_hovered != hovered;
+    state.link_hovered = hovered;
+    Some(changed)
+}
+
 fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
     if !state.context_hovered
         || state.context_details_visible
@@ -382,6 +410,41 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         ),
         inner,
     );
+}
+
+fn clear_previous_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
+    if state.link_tooltip_area.width != 0 && state.link_tooltip_area.height != 0 {
+        frame.render_widget(Clear, state.link_tooltip_area);
+    }
+    state.link_tooltip_area = Rect::default();
+}
+
+fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
+    let Some((anchor_x, anchor_y)) = state.link_hovered else {
+        return;
+    };
+    let text = "Ctrl + Click 跳转";
+    let width = (text.width() as u16 + 2).min(state.selection.viewport.width);
+    if width == 0 {
+        return;
+    }
+    let x = anchor_x.min(state.selection.viewport.right().saturating_sub(width));
+    let y = if anchor_y + 1 < state.selection.viewport.bottom() {
+        anchor_y + 1
+    } else {
+        anchor_y.saturating_sub(1)
+    };
+    let area = Rect::new(x, y, width, 1);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(fit_label(text, width as usize, false)).style(
+            Style::default()
+                .fg(Color::Rgb(222, 218, 212))
+                .bg(Color::Rgb(48, 48, 52)),
+        ),
+        area,
+    );
+    state.link_tooltip_area = area;
 }
 
 fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
@@ -484,6 +547,7 @@ fn welcome() -> Vec<Line<'static>> {
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     super::navigation::clear_previous_tooltip(frame, state);
+    clear_previous_link_tooltip(frame, state);
     state.selection.viewport = Rect {
         x: area.x + 2,
         // Keep one blank column between wrapped output and the navigation dots.
@@ -556,6 +620,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .transcript_layout
         .draw(frame, state.selection.viewport, offset);
     super::navigation::draw(frame, state, area, offset);
+    draw_link_tooltip(frame, state);
 }
 
 pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<Line<'static>> {
@@ -1525,6 +1590,63 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(handle_context_hover(&mut state, &outside), Some(true));
+    }
+
+    #[test]
+    fn link_hover_shows_and_clears_its_ctrl_click_hint() {
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        let mut state = UiState::new("model");
+        state.transcript.push(TranscriptItem::Assistant(
+            "打开 https://example.com/docs 查看文档。".into(),
+        ));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let offset = state.max_scroll;
+        let target =
+            (state.selection.viewport.y..state.selection.viewport.bottom()).find_map(|y| {
+                (state.selection.viewport.x..state.selection.viewport.right()).find_map(|x| {
+                    state
+                        .transcript_layout
+                        .link_at(state.selection.viewport, offset, (x, y))
+                        .map(|_| (x, y))
+                })
+            });
+        let (x, y) = target.expect("bare URL has a hit target");
+        let hover = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(handle_link_hover(&mut state, &hover), Some(true));
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let shown: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(shown.replace(' ', "").contains("Ctrl+Click跳转"), "{shown}");
+        let leave = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(handle_link_hover(&mut state, &leave), Some(true));
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let hidden: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            !hidden.replace(' ', "").contains("Ctrl+Click跳转"),
+            "{hidden}"
+        );
     }
 
     #[test]

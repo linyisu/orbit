@@ -66,6 +66,10 @@ pub struct UiState {
     pub context_indicator_area: ratatui::layout::Rect,
     pub context_hovered: bool,
     pub context_details_visible: bool,
+    /// Pointer position while it rests on a clickable transcript link.
+    pub link_hovered: Option<(u16, u16)>,
+    /// Last drawn link hint; it must be cleared before the transcript redraws.
+    pub link_tooltip_area: ratatui::layout::Rect,
     pub auto_compact: bool,
     pub max_output_tokens: u32,
     pub model: String,
@@ -122,6 +126,8 @@ impl UiState {
             context_indicator_area: ratatui::layout::Rect::default(),
             context_hovered: false,
             context_details_visible: false,
+            link_hovered: None,
+            link_tooltip_area: ratatui::layout::Rect::default(),
             auto_compact: true,
             max_output_tokens: 32_000,
             model: model.into(),

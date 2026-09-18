@@ -96,6 +96,74 @@ const SECONDARY: Color = Color::Rgb(170, 170, 170);
 const MARK_FOREGROUND: Color = Color::Rgb(225, 166, 126);
 const INLINE_CODE: Color = Color::Rgb(174, 211, 217);
 
+/// Byte ranges and normalized targets for visible, bare web addresses.
+/// Deliberately accept only HTTP(S) and `www.` forms; paths, e-mail addresses
+/// and prose such as `thing.example` should not unexpectedly become actions.
+fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+    let mut found: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    for (start, _) in text.match_indices("http").chain(text.match_indices("www.")) {
+        if start > 0
+            && text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+        {
+            continue;
+        }
+        let remainder = &text[start..];
+        let prefixed = remainder.starts_with("www.");
+        if !remainder.starts_with("http://") && !remainder.starts_with("https://") && !prefixed {
+            continue;
+        }
+        let mut end = start
+            + remainder
+                .find(|ch: char| {
+                    ch.is_whitespace()
+                        || matches!(
+                            ch,
+                            '<' | '>' | '"' | '\'' | '，' | '。' | '！' | '？' | '；' | '：'
+                        )
+                })
+                .unwrap_or(remainder.len());
+        while text[..end].chars().next_back().is_some_and(|ch| {
+            matches!(
+                ch,
+                '.' | ',' | ';' | ':' | '!' | '?' | '，' | '。' | '！' | '？' | '；' | '：'
+            )
+        }) {
+            end -= text[..end].chars().next_back().unwrap().len_utf8();
+        }
+        while text[..end].ends_with(')')
+            && text[start..end].chars().filter(|&ch| ch == ')').count()
+                > text[start..end].chars().filter(|&ch| ch == '(').count()
+        {
+            end -= 1;
+        }
+        let visible = &text[start..end];
+        let target = if prefixed {
+            format!("https://{visible}")
+        } else {
+            visible.to_owned()
+        };
+        if url::Url::parse(&target).is_ok_and(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+        }) {
+            if !found
+                .iter()
+                .any(|(range, _)| range.start <= start && start < range.end)
+            {
+                found.push((start..end, target));
+            }
+        }
+    }
+    found.sort_by_key(|(range, _)| range.start);
+    found.dedup_by(|left, right| left.0 == right.0);
+    found
+}
+
 fn push_marked_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style, recover: bool) {
     if !recover || !text.contains("==") {
         spans.push(Span::styled(text.to_owned(), style));
@@ -132,6 +200,29 @@ fn push_marked_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style, re
     }
 }
 
+fn push_text_with_bare_links(
+    spans: &mut Vec<Span<'static>>,
+    text: &str,
+    style: Style,
+    recover_mark: bool,
+) {
+    let mut cursor = 0;
+    for (range, _) in bare_urls(text) {
+        if range.start < cursor {
+            continue;
+        }
+        push_marked_text(spans, &text[cursor..range.start], style, recover_mark);
+        spans.push(Span::styled(
+            text[range.clone()].to_owned(),
+            style
+                .fg(Color::LightBlue)
+                .add_modifier(Modifier::UNDERLINED),
+        ));
+        cursor = range.end;
+    }
+    push_marked_text(spans, &text[cursor..], style, recover_mark);
+}
+
 fn push_text_with_cjk_strong(
     spans: &mut Vec<Span<'static>>,
     text: &str,
@@ -140,7 +231,7 @@ fn push_text_with_cjk_strong(
     recover_mark: bool,
 ) {
     if !recover || !text.contains("**") {
-        push_marked_text(spans, text, style, recover_mark);
+        push_text_with_bare_links(spans, text, style, recover_mark);
         return;
     }
     let mut rest = text;
@@ -155,14 +246,14 @@ fn push_text_with_cjk_strong(
             || content.ends_with(char::is_whitespace)
         {
             let split = open + 2;
-            push_marked_text(spans, &rest[..split], style, recover_mark);
+            push_text_with_bare_links(spans, &rest[..split], style, recover_mark);
             rest = &rest[split..];
             continue;
         }
         if open > 0 {
-            push_marked_text(spans, &rest[..open], style, recover_mark);
+            push_text_with_bare_links(spans, &rest[..open], style, recover_mark);
         }
-        push_marked_text(
+        push_text_with_bare_links(
             spans,
             content,
             style.add_modifier(Modifier::BOLD),
@@ -171,7 +262,7 @@ fn push_text_with_cjk_strong(
         rest = &after_open[close + 2..];
     }
     if !rest.is_empty() {
-        push_marked_text(spans, rest, style, recover_mark);
+        push_text_with_bare_links(spans, rest, style, recover_mark);
     }
 }
 
@@ -226,6 +317,13 @@ pub(super) fn links(source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
             }
             Event::Text(text) | Event::Code(text) if active.is_some() => {
                 active.as_mut().unwrap().1.push_str(&text);
+            }
+            Event::Text(text) => {
+                parsed.extend(
+                    bare_urls(&text)
+                        .into_iter()
+                        .map(|(range, url)| (text[range].to_owned(), url)),
+                );
             }
             Event::End(pulldown_cmark::TagEnd::Link | pulldown_cmark::TagEnd::Image) => {
                 if let Some((url, label)) = active.take()
@@ -783,6 +881,30 @@ mod tests {
                 && span.style.add_modifier.contains(Modifier::BOLD)
         }));
         assert_eq!(render(r"保留 \==字面量==").to_string(), "  保留 ==字面量==");
+    }
+
+    #[test]
+    fn recognizes_and_styles_bare_safe_web_links() {
+        let source = "访问 https://example.com/docs?from=orbit，或 www.rust-lang.org/learn。`https://code.invalid`";
+        let rendered = render(source);
+        assert_eq!(
+            rendered
+                .spans
+                .iter()
+                .filter(|span| span.style.fg == Some(Color::LightBlue))
+                .count(),
+            2
+        );
+        assert_eq!(
+            links(source, &rendered)
+                .into_iter()
+                .map(|target| target.url)
+                .collect::<Vec<_>>(),
+            vec![
+                "https://example.com/docs?from=orbit".to_owned(),
+                "https://www.rust-lang.org/learn".to_owned(),
+            ]
+        );
     }
 
     #[test]

@@ -155,12 +155,17 @@ pub async fn run(
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
                     let context_hover_changed = !state.selection.dragging()
                         && matches!(render::handle_context_hover(&mut state, &event), Some(true));
+                    let link_hover_changed = !state.selection.dragging()
+                        && !state.show_help
+                        && state.picker.is_none()
+                        && state.model_picker.is_none()
+                        && matches!(render::handle_link_hover(&mut state, &event), Some(true));
                     if !state.selection.dragging() && !state.show_help && state.picker.is_none() && state.model_picker.is_none()
                         && let Some(changed) = navigation::handle(&mut state, &event) {
-                        if changed || context_hover_changed { dirty = true; frames.request(time::Instant::now()); }
+                        if changed || context_hover_changed || link_hover_changed { dirty = true; frames.request(time::Instant::now()); }
                         continue;
                     }
-                    if context_hover_changed { dirty = true; frames.request(time::Instant::now()); continue; }
+                    if context_hover_changed || link_hover_changed { dirty = true; frames.request(time::Instant::now()); continue; }
                     // Unused pointer motion must not trigger full-frame redraws.
                     if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) { continue; }
                     dirty = true;
