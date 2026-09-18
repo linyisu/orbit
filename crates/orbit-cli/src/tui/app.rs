@@ -62,7 +62,8 @@ pub struct UiState {
     pub input_context_tokens: usize,
     /// Same approximate request-context count displayed by `/context`.
     pub context_used_tokens: usize,
-    pub context_ring_area: ratatui::layout::Rect,
+    /// Footer area that exposes the current context budget on hover.
+    pub context_indicator_area: ratatui::layout::Rect,
     pub context_hovered: bool,
     pub context_details_visible: bool,
     pub auto_compact: bool,
@@ -118,7 +119,7 @@ impl UiState {
             context_tokens: 128_000,
             input_context_tokens: 96_000,
             context_used_tokens: 0,
-            context_ring_area: ratatui::layout::Rect::default(),
+            context_indicator_area: ratatui::layout::Rect::default(),
             context_hovered: false,
             context_details_visible: false,
             auto_compact: true,

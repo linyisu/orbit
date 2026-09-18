@@ -27,7 +27,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.input = Rect::default();
     state.selection.footer = Rect::default();
     state.selection.approval = Rect::default();
-    state.context_ring_area = Rect::default();
+    state.context_indicator_area = Rect::default();
     state.ime_cursor = None;
     state.selection.reset_caret();
     state.input_area = Rect::default();
@@ -86,8 +86,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_panel(frame, state, areas[5]);
     let footer = footer_layout(state, areas[6].width as usize);
     state.context_details_visible = footer.context_details_visible;
-    if let Some(offset) = footer.ring_offset {
-        state.context_ring_area = Rect::new(areas[6].x + offset, areas[6].y, 1, 1);
+    if let Some(offset) = footer.context_offset {
+        state.context_indicator_area =
+            Rect::new(areas[6].x + offset, areas[6].y, footer.context_width, 1);
     }
     frame.render_widget(Paragraph::new(footer.line), areas[6]);
     state.selection.footer = areas[6];
@@ -128,7 +129,8 @@ pub(super) fn fit_label(text: &str, width: usize, tail: bool) -> String {
 
 struct FooterLayout {
     line: Line<'static>,
-    ring_offset: Option<u16>,
+    context_offset: Option<u16>,
+    context_width: u16,
     context_details_visible: bool,
 }
 
@@ -154,12 +156,12 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         .unwrap_or_else(|| "思考 —".into());
     let available = width.saturating_sub(4);
     let right_budget = available.saturating_sub(8);
-    let ring = context_ring(context_percent(state));
-    let detailed_right = format!(
-        "{ring} {}%/{} 输入  {model_label} · {effort}",
+    let context = format!(
+        "{}%/{} 输入",
         context_percent(state),
         compact_tokens(input_context_budget(state)),
     );
+    let detailed_right = format!("{context}  {model_label} · {effort}");
     // Match Pi's direct context display only when it does not consume the
     // project location. A compact footer is still more useful when the
     // terminal becomes narrow.
@@ -172,7 +174,7 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let right = if context_details_visible {
         detailed_right
     } else {
-        format!("{ring} {model_label} · {effort}")
+        format!("{}% {model_label} · {effort}", context_percent(state))
     };
     let right = fit_label(&right, right_budget, false);
     let path = std::env::var_os("HOME")
@@ -199,12 +201,24 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     };
     let gap = available.saturating_sub(left.width() + right.width());
     let right_start = 2 + left.width() + gap;
-    let ring_offset = right.starts_with(ring).then_some(right_start as u16);
-    let right_spans = if let Some(rest) = right.strip_prefix(ring) {
+    let context_prefix = if context_details_visible {
+        context
+    } else {
+        format!("{}%", context_percent(state))
+    };
+    let context_offset = right
+        .starts_with(&context_prefix)
+        .then_some(right_start as u16);
+    let context_width = if context_offset.is_some() {
+        context_prefix.width() as u16
+    } else {
+        0
+    };
+    let right_spans = if let Some(rest) = right.strip_prefix(&context_prefix) {
         vec![
             Span::styled(
-                ring,
-                Style::default().fg(context_ring_color(context_percent(state))),
+                context_prefix,
+                Style::default().fg(context_indicator_color(context_percent(state))),
             ),
             Span::raw(rest.to_owned()),
         ]
@@ -220,7 +234,8 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     spans.push(Span::raw("  "));
     FooterLayout {
         line: Line::from(spans),
-        ring_offset,
+        context_offset,
+        context_width,
         context_details_visible,
     }
 }
@@ -252,17 +267,7 @@ fn context_percent(state: &UiState) -> usize {
         .unwrap_or(0)
 }
 
-fn context_ring(percent: usize) -> &'static str {
-    match percent {
-        0 => "○",
-        1..=25 => "◔",
-        26..=50 => "◑",
-        51..=75 => "◕",
-        _ => "●",
-    }
-}
-
-fn context_ring_color(percent: usize) -> Color {
+fn context_indicator_color(percent: usize) -> Color {
     match percent {
         0..=74 => Color::Rgb(175, 175, 175),
         75..=89 => ACCENT,
@@ -281,7 +286,7 @@ pub(super) fn handle_context_hover(
         return None;
     }
     let hovered = state
-        .context_ring_area
+        .context_indicator_area
         .contains((mouse.column, mouse.row).into());
     let changed = state.context_hovered != hovered;
     state.context_hovered = hovered;
@@ -289,7 +294,9 @@ pub(super) fn handle_context_hover(
 }
 
 fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
-    if !state.context_hovered || state.context_details_visible || state.context_ring_area.width == 0
+    if !state.context_hovered
+        || state.context_details_visible
+        || state.context_indicator_area.width == 0
     {
         return;
     }
@@ -318,11 +325,11 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         .min(frame.area().width as usize) as u16;
     let height = 6;
     let x = state
-        .context_ring_area
+        .context_indicator_area
         .x
         .saturating_sub(width.saturating_sub(1))
         .min(frame.area().right().saturating_sub(width));
-    let y = state.context_ring_area.y.saturating_sub(height);
+    let y = state.context_indicator_area.y.saturating_sub(height);
     let area = Rect::new(x, y, width, height);
     frame.render_widget(Clear, area);
     let block = Block::default()
@@ -1394,7 +1401,6 @@ mod tests {
             }
             if width >= 80 {
                 assert!(text.contains("思考"));
-                assert!(text.contains('◕'));
                 assert!(text.contains("53%/96k 输入"));
                 assert!(text.contains(state.permission_mode.label()));
             }
@@ -1405,26 +1411,22 @@ mod tests {
         assert_eq!(compact_tokens(1_999), "1k");
         assert_eq!(compact_tokens(1_000_000), "1M");
         assert_eq!(compact_tokens(1_500_000), "1.5M");
-        assert_eq!(context_ring(0), "○");
-        assert_eq!(context_ring(25), "◔");
-        assert_eq!(context_ring(26), "◑");
-        assert_eq!(context_ring(76), "●");
     }
 
     #[test]
-    fn context_ring_reveals_its_budget_on_hover() {
+    fn context_indicator_reveals_its_budget_on_hover() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
 
         let mut state = UiState::new("model");
         state.context_used_tokens = 51_200;
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-        let ring = state.context_ring_area;
-        assert_eq!(ring.width, 1);
+        let indicator = state.context_indicator_area;
+        assert_eq!(indicator.width, 12);
         let hover = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Moved,
-            column: ring.x,
-            row: ring.y,
+            column: indicator.x,
+            row: indicator.y,
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(handle_context_hover(&mut state, &hover), Some(true));
