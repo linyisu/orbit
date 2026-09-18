@@ -387,7 +387,7 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
 fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "  ◇ Orbit",
+            "  󰀘 Orbit",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ))),
         area,
