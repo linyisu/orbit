@@ -1,17 +1,18 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::{self, Write},
-    path::PathBuf,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
     time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use orbit_agent::{
     agent::{Agent, AgentConfig},
     error::AgentError,
     events::AgentEvent,
+    memory::FileActivity,
     model::ModelClientBackend,
 };
 use orbit_model::{
@@ -20,7 +21,7 @@ use orbit_model::{
         ChatMessage, ChatRequest, ModelConfig, ReasoningAdapter, ReasoningEffort, StreamEvent,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 mod instructions;
@@ -99,10 +100,66 @@ struct TuiArgs {
 
 #[derive(Debug, Args)]
 struct ChatArgs {
+    /// Stream model text and lifecycle diagnostics while the run is active.
     #[arg(long, short)]
     stream: bool,
 
-    prompt: String,
+    /// Read the prompt from a UTF-8 file. Use - to read standard input.
+    #[arg(long, value_name = "FILE", conflicts_with = "prompt")]
+    prompt_file: Option<PathBuf>,
+
+    /// Select a configured model. Use provider::model when names overlap.
+    #[arg(long, value_name = "PROVIDER::MODEL")]
+    model: Option<String>,
+
+    /// Execution permission policy. auto runs sandbox commands; yolo also permits workspace edits.
+    #[arg(long, value_enum, default_value_t = ChatMode::Auto)]
+    mode: ChatMode,
+
+    /// Restore a saved session in the current workspace.
+    #[arg(long)]
+    resume: Option<String>,
+
+    /// Attach an image to this user message. May be supplied more than once.
+    #[arg(long = "image", value_name = "PATH")]
+    images: Vec<PathBuf>,
+
+    /// Emit one SWE-bench prediction JSON object for this instance instead of prose.
+    #[arg(long, value_name = "INSTANCE_ID", conflicts_with = "stream")]
+    swe_instance_id: Option<String>,
+
+    /// The task prompt. Omit it only when --prompt-file is supplied.
+    prompt: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum ChatMode {
+    /// Register only read-only tools.
+    #[value(name = "read-only")]
+    ReadOnly,
+    /// Automatically run sandbox commands; reject workspace edits.
+    #[default]
+    Auto,
+    /// Automatically run sandbox commands and permit workspace edits.
+    #[value(alias = "YOLO")]
+    Yolo,
+}
+
+impl ChatMode {
+    fn allows(self, preview: &orbit_tools::approval::ApprovalPreview) -> bool {
+        match self {
+            Self::ReadOnly => false,
+            Self::Auto => matches!(preview, orbit_tools::approval::ApprovalPreview::Command(_)),
+            Self::Yolo => true,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SwePrediction<'a> {
+    instance_id: &'a str,
+    model_name_or_path: &'a str,
+    model_patch: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -519,131 +576,269 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
 }
 
 async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -> Result<()> {
+    let prompt = read_chat_prompt(&args)?;
     let file_config = FileConfig::load(&config_path)?;
-    let command_limits = file_config.command.clone();
-    let web = file_config.web.clone();
-    let mcp = file_config.mcp.clone();
-    let max_output_tokens = file_config.max_output_tokens;
-    let default_model = file_config.default_model_option()?;
-    let agent_config = file_config.agent_config_for(default_model.context_tokens);
-    let client = ModelClient::new(default_model.config)?;
-    let instructions = instructions::load_current();
-    let skills = skills::Skills::discover_current();
-    let mut messages = vec![ChatMessage::user(args.prompt)];
-    instructions::inject(&mut messages, &instructions);
-    skills.inject(&mut messages);
-    let mut request = ChatRequest::new(messages);
-    request.max_tokens = Some(max_output_tokens);
-    request.reasoning_effort = client.config().reasoning_effort;
-
     let database = session::database_path(database)?;
+
+    // Open the persistent conversation before choosing a resumed model. A new
+    // run starts with the configured default, while a resumed run keeps its
+    // prior configured provider/model unless the caller explicitly overrides it.
+    let default_model = file_config.default_model_option()?;
+    let mut session = session::SessionState::open(
+        database,
+        args.resume.clone(),
+        default_model.qualified_name(),
+    )
+    .await?;
+    let saved_model = args
+        .resume
+        .as_ref()
+        .map(|_| session.snapshot.session.model.clone());
+    let selected_model = select_chat_model(
+        &file_config,
+        args.model.as_deref().or(saved_model.as_deref()),
+    )?;
+    let model_name = selected_model.qualified_name();
+    let agent_config = file_config.agent_config_for(selected_model.context_tokens);
+    let client = ModelClient::new(selected_model.config.clone())?;
+    session
+        .set_model_profile(model_name.clone(), client.config().reasoning_effort)
+        .await?;
+
+    let enabled_plugins = session
+        .store
+        .project_plugins(&session.snapshot.session.project_id)
+        .await?;
+    let plugin_skill_roots = marketplaces::enabled_skill_roots(&enabled_plugins);
+    let skills = skills::Skills::discover_current_with_plugin_roots(plugin_skill_roots.roots);
+    let instructions = instructions::load_current();
+    let attachments = args
+        .images
+        .iter()
+        .map(|path| session.import_image(path))
+        .collect::<Result<Vec<_>>>()?;
+
+    let (approvals, approval_task) = match args.mode {
+        ChatMode::ReadOnly => (None, None),
+        mode => {
+            let (sender, mut receiver) = orbit_tools::approval::channel();
+            let task = tokio::spawn(async move {
+                while let Some(request) = receiver.recv().await {
+                    let _ = request.decision.send(mode.allows(&request.preview));
+                }
+            });
+            (Some(sender), Some(task))
+        }
+    };
     let runtime = runtime::workspace_tools(
         &config_path,
-        Some(&database),
-        None,
-        command_limits,
-        web,
-        mcp,
-        None,
-        None,
+        Some(session.store.path()),
+        approvals,
+        file_config.command.clone(),
+        file_config.web.clone(),
+        file_config.mcp.clone(),
+        Some(session.scratch.clone()),
+        Some(session.command_output.clone()),
     )
     .await?;
     let mut tools = runtime.tools;
+    let memory_scope = project_state::MemoryScope::new(session.id().into());
+    project_state::register(
+        &mut tools,
+        session.store.clone(),
+        session.snapshot.session.project_id.clone(),
+        memory_scope,
+    );
     skills.register_tool(&mut tools);
-    let agent = Agent::new(ModelClientBackend::new(client), tools, agent_config);
 
-    if args.stream {
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
-        let cancellation = CancellationToken::new();
-        let task_cancellation = cancellation.clone();
-        let task = tokio::spawn(async move {
-            agent
-                .run_with_agent_events(request, task_cancellation, sender)
-                .await
-        });
+    let mut messages = session.snapshot.history.clone();
+    instructions::inject(&mut messages, &instructions);
+    skills.inject(&mut messages);
+    project_state::inject(
+        &mut messages,
+        &session.store,
+        &session.snapshot.session.project_id,
+        session.id(),
+    )
+    .await?;
+    messages.push(ChatMessage::user_with_attachments(
+        prompt.clone(),
+        attachments,
+    ));
+    let mut request = ChatRequest::new(messages);
+    request.max_tokens = Some(file_config.max_output_tokens);
+    request.reasoning_effort = client.config().reasoning_effort;
 
-        let mut interrupted = false;
-        loop {
-            let event = tokio::select! {
-                event = receiver.recv() => event,
-                signal = tokio::signal::ctrl_c(), if !interrupted => {
-                    signal.context("failed to listen for Ctrl+C")?;
-                    interrupted = true;
-                    cancellation.cancel();
-                    eprintln!("正在取消…");
-                    continue;
-                }
-            };
-            let Some(event) = event else { break };
-            match event {
-                AgentEvent::Model(StreamEvent::TextDelta(text))
-                | AgentEvent::Model(StreamEvent::ReasoningDelta(text)) => {
-                    print!("{text}");
-                    io::stdout().flush()?;
-                }
-                AgentEvent::CompactionStarted => eprintln!("正在自动整理上下文…"),
-                AgentEvent::ContextCompacted {
-                    before_tokens,
-                    after_tokens,
-                    fallback,
-                } => eprintln!(
-                    "上下文已自动压缩：{before_tokens} → {after_tokens} tokens{}",
-                    if fallback { "（本地回退）" } else { "" }
-                ),
-                AgentEvent::CompactionFailed { error } => {
-                    eprintln!("自动压缩未完成，保留原上下文：{error}")
-                }
-                AgentEvent::Failed { error } => eprintln!("agent failed: {error}"),
-                AgentEvent::ToolStarted { call } => {
-                    eprintln!("tool started: {}", call.function.name)
-                }
-                AgentEvent::ToolFailed { call, error } => {
-                    eprintln!("tool failed: {}: {error}", call.function.name)
-                }
-                _ => {}
+    let files = FileActivity::from_events(
+        session
+            .snapshot
+            .runs
+            .iter()
+            .flat_map(|run| run.events.iter()),
+    );
+    let agent =
+        Agent::new(ModelClientBackend::new(client), tools, agent_config).with_file_activity(files);
+    session.begin(prompt, model_name.clone()).await?;
+
+    let cancellation = CancellationToken::new();
+    let task_cancellation = cancellation.clone();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
+    let task = tokio::spawn(async move {
+        agent
+            .run_with_agent_events(request, task_cancellation, sender)
+            .await
+    });
+
+    let mut interrupted = false;
+    loop {
+        let event = tokio::select! {
+            event = receiver.recv() => event,
+            signal = tokio::signal::ctrl_c(), if !interrupted => {
+                signal.context("failed to listen for Ctrl+C")?;
+                interrupted = true;
+                cancellation.cancel();
+                eprintln!("正在取消…");
+                continue;
             }
-        }
-        match task.await? {
-            Ok(_) => println!(),
-            Err(AgentError::Cancelled) if interrupted => eprintln!("已取消。"),
-            Err(error) => return Err(error.into()),
-        }
-    } else {
-        let cancellation = CancellationToken::new();
-        let task_cancellation = cancellation.clone();
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
-        let task = tokio::spawn(async move {
-            agent
-                .run_with_agent_events(request, task_cancellation, sender)
-                .await
-        });
-        let mut interrupted = false;
-        loop {
-            let event = tokio::select! {
-                event = receiver.recv() => event,
-                signal = tokio::signal::ctrl_c(), if !interrupted => {
-                    signal.context("failed to listen for Ctrl+C")?;
-                    interrupted = true;
-                    cancellation.cancel();
-                    eprintln!("正在取消…");
-                    continue;
-                }
-            };
-            if event.is_none() {
-                break;
-            }
-        }
-        let result = match task.await? {
-            Ok(result) => result,
-            Err(AgentError::Cancelled) if interrupted => return Ok(()),
-            Err(error) => return Err(error.into()),
         };
-
-        if let ChatMessage::Assistant { content, .. } = result.final_message {
-            println!("{}", content.unwrap_or_default());
-        }
+        let Some(event) = event else { break };
+        session.record(&event);
+        session.flush_due().await?;
+        report_chat_event(&event, args.stream)?;
     }
 
+    let outcome = match task.await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            if let Some(task) = approval_task {
+                task.abort();
+            }
+            session.finish("failed", None).await?;
+            return Err(error.into());
+        }
+    };
+    if let Some(task) = approval_task {
+        task.abort();
+    }
+    let result = match outcome {
+        Ok(result) => result,
+        Err(AgentError::Cancelled) if interrupted => {
+            session.finish("cancelled", None).await?;
+            eprintln!("已取消。");
+            return Ok(());
+        }
+        Err(error) => {
+            session.finish("failed", None).await?;
+            return Err(error.into());
+        }
+    };
+    let answer = match &result.final_message {
+        ChatMessage::Assistant { content, .. } => content.clone().unwrap_or_default(),
+        _ => String::new(),
+    };
+    session.finish("completed", Some(result.history)).await?;
+
+    if let Some(instance_id) = &args.swe_instance_id {
+        let patch = orbit_tools::git_inspect::working_tree_patch(Path::new(
+            &session.snapshot.session.workspace,
+        ))?;
+        println!(
+            "{}",
+            serde_json::to_string(&SwePrediction {
+                instance_id,
+                model_name_or_path: &model_name,
+                model_patch: patch,
+            })?
+        );
+    } else if args.stream {
+        println!();
+    } else {
+        println!("{answer}");
+    }
+
+    Ok(())
+}
+
+fn read_chat_prompt(args: &ChatArgs) -> Result<String> {
+    let prompt = match (&args.prompt, &args.prompt_file) {
+        (Some(_), Some(_)) => bail!("provide either a prompt or --prompt-file, not both"),
+        (Some(prompt), None) => prompt.clone(),
+        (None, Some(path)) if path == Path::new("-") => {
+            let mut prompt = String::new();
+            io::stdin()
+                .read_to_string(&mut prompt)
+                .context("failed to read prompt from standard input")?;
+            prompt
+        }
+        (None, Some(path)) => fs::read_to_string(path)
+            .with_context(|| format!("failed to read prompt file {}", path.display()))?,
+        (None, None) => bail!("provide a prompt or --prompt-file"),
+    };
+    if prompt.trim().is_empty() {
+        bail!("prompt must not be empty");
+    }
+    Ok(prompt)
+}
+
+fn select_chat_model(config: &FileConfig, requested: Option<&str>) -> Result<tui::ModelOption> {
+    let Some(requested) = requested else {
+        return config.default_model_option();
+    };
+    let requested = requested.trim();
+    if requested.is_empty() {
+        bail!("model must not be empty");
+    }
+    let options = config.model_options()?;
+    if requested.contains("::") {
+        return options
+            .into_iter()
+            .find(|option| option.qualified_name() == requested)
+            .ok_or_else(|| anyhow::anyhow!("model {requested:?} is not configured"));
+    }
+    let matches = options
+        .into_iter()
+        .filter(|option| option.model == requested)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [option] => Ok(option.clone()),
+        [] => bail!("model {requested:?} is not configured"),
+        _ => bail!("model {requested:?} is configured by multiple providers; use provider::model"),
+    }
+}
+
+fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
+    if stream {
+        match event {
+            AgentEvent::Model(StreamEvent::TextDelta(text))
+            | AgentEvent::Model(StreamEvent::ReasoningDelta(text)) => {
+                print!("{text}");
+                io::stdout().flush()?;
+            }
+            AgentEvent::ToolStarted { call } => {
+                eprintln!("tool started: {}", call.function.name)
+            }
+            AgentEvent::ToolFailed { call, error } => {
+                eprintln!("tool failed: {}: {error}", call.function.name)
+            }
+            _ => {}
+        }
+    }
+    match event {
+        AgentEvent::CompactionStarted => eprintln!("正在自动整理上下文…"),
+        AgentEvent::ContextCompacted {
+            before_tokens,
+            after_tokens,
+            fallback,
+        } => eprintln!(
+            "上下文已自动压缩：{before_tokens} → {after_tokens} tokens{}",
+            if *fallback { "（本地回退）" } else { "" }
+        ),
+        AgentEvent::CompactionFailed { error } => {
+            eprintln!("自动压缩未完成，保留原上下文：{error}")
+        }
+        AgentEvent::Failed { error } => eprintln!("agent failed: {error}"),
+        _ => {}
+    }
     Ok(())
 }
 
@@ -707,6 +902,41 @@ id = "deepseek-reasoner"
         assert_eq!(options[1].model, "deepseek-reasoner");
         assert_eq!(options[1].config.model, "deepseek-reasoner");
         assert_eq!(options[1].config.base_url, "https://deepseek.example/v1");
+    }
+
+    #[test]
+    fn batch_model_selection_accepts_qualified_names_and_rejects_ambiguity() {
+        let config: FileConfig = toml::from_str(
+            r#"default_provider = "one"
+[providers.one]
+base_url = "https://one.example/v1"
+api_key = "one-key"
+[[providers.one.models]]
+id = "shared"
+[[providers.one.models]]
+id = "one-only"
+
+[providers.two]
+base_url = "https://two.example/v1"
+api_key = "two-key"
+[[providers.two.models]]
+id = "shared"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            select_chat_model(&config, Some("two::shared"))
+                .unwrap()
+                .qualified_name(),
+            "two::shared"
+        );
+        assert_eq!(
+            select_chat_model(&config, Some("one-only"))
+                .unwrap()
+                .qualified_name(),
+            "one::one-only"
+        );
+        assert!(select_chat_model(&config, Some("shared")).is_err());
     }
 
     #[test]

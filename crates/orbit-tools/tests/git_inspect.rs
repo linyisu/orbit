@@ -3,7 +3,7 @@ use std::{fs, path::Path, process::Command};
 use orbit_agent::tool::{Tool, ToolError};
 use orbit_model::types::ToolCall;
 use orbit_tools::{
-    git_inspect::{GitInspect, capture_baseline},
+    git_inspect::{GitInspect, capture_baseline, working_tree_patch},
     workspace::Workspace,
 };
 use serde_json::{Value, json};
@@ -44,6 +44,20 @@ fn repository() -> tempfile::TempDir {
     git(directory.path(), &["add", "tracked.txt"]);
     git(directory.path(), &["commit", "-qm", "initial commit"]);
     directory
+}
+
+#[test]
+fn exports_complete_patch_for_tracked_and_untracked_files() {
+    let directory = repository();
+    fs::write(directory.path().join("tracked.txt"), "second\n").unwrap();
+    fs::write(directory.path().join("new.txt"), "new\n").unwrap();
+
+    let patch = working_tree_patch(directory.path()).unwrap();
+    assert!(patch.contains("diff --git a/tracked.txt b/tracked.txt"));
+    assert!(patch.contains("-first"));
+    assert!(patch.contains("+second"));
+    assert!(patch.contains("diff --git a/new.txt b/new.txt"));
+    assert!(patch.contains("+new"));
 }
 
 #[tokio::test]

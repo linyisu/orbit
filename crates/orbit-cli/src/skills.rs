@@ -56,10 +56,6 @@ pub(crate) struct Skills {
 }
 
 impl Skills {
-    pub(crate) fn discover_current() -> Self {
-        Self::discover_current_with_plugin_roots(Vec::new())
-    }
-
     pub(crate) fn discover_current_with_plugin_roots(plugin_roots: Vec<PathBuf>) -> Self {
         let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self::discover_with_plugin_roots(&cwd, env::var_os("HOME").map(PathBuf::from), plugin_roots)

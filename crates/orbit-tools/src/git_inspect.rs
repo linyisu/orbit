@@ -15,6 +15,9 @@ use tokio_util::sync::CancellationToken;
 use crate::workspace::Workspace;
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
+/// A SWE prediction must contain the complete patch. Refuse a larger patch
+/// instead of silently truncating it as the interactive inspection tool does.
+const MAX_PATCH_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ENTRIES: usize = 500;
 const MAX_OFFSET: usize = 20_000;
 
@@ -72,6 +75,77 @@ pub fn capture_baseline(workspace: &Path) -> Option<Value> {
         &cancellation,
     )
     .ok()
+}
+
+/// Export the complete patch from the repository baseline to the current
+/// working tree. This is intentionally separate from the bounded
+/// `git_inspect` tool response: benchmark runners must never receive a
+/// truncated prediction. Untracked regular files are included as additions,
+/// which is required for fixes that introduce a new source or test file.
+pub fn working_tree_patch(workspace: &Path) -> Result<String, ToolError> {
+    let workspace = Workspace::new(workspace).map_err(failed)?;
+    let cancellation = CancellationToken::new();
+    let root = repository_root(workspace.root(), &cancellation)?;
+    let mut patch = git_export(
+        &root,
+        vec![
+            "diff".into(),
+            "--binary".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            "--no-renames".into(),
+            "HEAD".into(),
+        ],
+        &cancellation,
+        false,
+    )?;
+    let untracked = git_export(
+        &root,
+        vec![
+            "ls-files".into(),
+            "--others".into(),
+            "--exclude-standard".into(),
+            "-z".into(),
+        ],
+        &cancellation,
+        false,
+    )?;
+    for path in untracked
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        let path = text(path)?;
+        let relative = workspace
+            .checked_relative(Path::new(&path))
+            .map_err(failed)?
+            .to_string_lossy()
+            .into_owned();
+        let addition = git_export(
+            &root,
+            vec![
+                "diff".into(),
+                "--no-index".into(),
+                "--binary".into(),
+                "--no-ext-diff".into(),
+                "--no-textconv".into(),
+                "--".into(),
+                "/dev/null".into(),
+                relative,
+            ],
+            &cancellation,
+            true,
+        )?;
+        if patch.len().saturating_add(addition.len()) > MAX_PATCH_BYTES {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Git patch exceeds the {} MiB export limit",
+                MAX_PATCH_BYTES / (1024 * 1024)
+            )));
+        }
+        patch.extend(addition);
+    }
+    String::from_utf8(patch).map_err(|_| {
+        ToolError::ExecutionFailed("Git patch contains non-UTF-8 paths or content".into())
+    })
 }
 
 impl GitInspect {
@@ -414,6 +488,33 @@ fn git_owned(
     args: Vec<String>,
     cancellation: &CancellationToken,
 ) -> Result<Vec<u8>, ToolError> {
+    git_with_limit(root, args, cancellation, MAX_OUTPUT_BYTES, true, false)
+}
+
+fn git_export(
+    root: &Path,
+    args: Vec<String>,
+    cancellation: &CancellationToken,
+    allows_difference_status: bool,
+) -> Result<Vec<u8>, ToolError> {
+    git_with_limit(
+        root,
+        args,
+        cancellation,
+        MAX_PATCH_BYTES,
+        false,
+        allows_difference_status,
+    )
+}
+
+fn git_with_limit(
+    root: &Path,
+    args: Vec<String>,
+    cancellation: &CancellationToken,
+    limit: usize,
+    truncate: bool,
+    allows_difference_status: bool,
+) -> Result<Vec<u8>, ToolError> {
     if cancellation.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
@@ -448,16 +549,22 @@ fn git_owned(
     let mut child = command.spawn().map_err(failed)?;
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut output = Vec::new();
-    let mut limited = (&mut stdout).take((MAX_OUTPUT_BYTES + 1) as u64);
+    let mut limited = (&mut stdout).take((limit + 1) as u64);
     limited.read_to_end(&mut output).map_err(failed)?;
-    if output.len() > MAX_OUTPUT_BYTES {
+    if output.len() > limit {
         let _ = child.kill();
         let _ = child.wait();
-        output.truncate(MAX_OUTPUT_BYTES);
-        return Ok(output);
+        if truncate {
+            output.truncate(limit);
+            return Ok(output);
+        }
+        return Err(ToolError::ExecutionFailed(format!(
+            "Git output exceeds the {} MiB export limit",
+            limit / (1024 * 1024)
+        )));
     }
     let status = child.wait().map_err(failed)?;
-    if !status.success() {
+    if !status.success() && !(allows_difference_status && status.code() == Some(1)) {
         return Err(ToolError::ExecutionFailed(
             "Git inspection failed; the workspace may not be a Git repository".into(),
         ));
