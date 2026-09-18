@@ -208,7 +208,10 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     }
     note(
         &mut out,
-        &format!("第 {start}–{end} 行 · 共 {total} 行"),
+        &format!(
+            "第 {start}–{end} 行 · 本次 {} 行 · 全文 {total} 行",
+            rows.len()
+        ),
         width,
     );
     let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
