@@ -518,6 +518,7 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
         before_tokens: 9000,
         after_tokens: 3000,
         fallback: false,
+        fallback_reason: None,
         summary: TaskSummary {
             goal: "keep the goal".into(),
             constraints: vec![],

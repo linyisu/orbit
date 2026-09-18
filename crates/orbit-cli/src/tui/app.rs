@@ -40,6 +40,9 @@ pub enum TranscriptItem {
     Tool(ToolRow),
     Error(String),
     Notice(String),
+    /// Low-priority lifecycle information rendered as an unobtrusive divider
+    /// instead of pretending to be an assistant or command response.
+    Maintenance(String),
     CommandResult(String),
     CommandError(String),
 }
@@ -210,26 +213,28 @@ impl UiState {
                 self.ensure_assistant_item();
             }
             AgentEvent::CompactionRecorded { .. } => {}
-            AgentEvent::CompactionStarted => self
-                .transcript
-                .push(TranscriptItem::Notice("正在自动整理上下文…".into())),
+            // Compaction is an implementation detail while it runs. Showing a
+            // second transcript row for it made every automatic checkpoint
+            // look like a noisy command result.
+            AgentEvent::CompactionStarted => {}
             AgentEvent::ContextCompacted {
                 before_tokens,
                 after_tokens,
                 fallback,
+                ..
             } => {
                 let detail = if fallback {
-                    "模型摘要不可用，已使用本地回退压缩；旧对话仍可在会话记录中查看。"
+                    " · 保留最近工作内容"
                 } else {
-                    "继续执行。"
+                    ""
                 };
-                self.transcript.push(TranscriptItem::Notice(format!(
-                    "上下文已自动压缩：{before_tokens} → {after_tokens} tokens，{detail}"
+                self.transcript.push(TranscriptItem::Maintenance(format!(
+                    "上下文已整理  {before_tokens} → {after_tokens} tokens{detail}"
                 )));
             }
-            AgentEvent::CompactionFailed { error } => self.transcript.push(TranscriptItem::Notice(
-                format!("自动压缩未完成，保留原上下文：{error}"),
-            )),
+            AgentEvent::CompactionFailed { .. } => self.transcript.push(
+                TranscriptItem::Maintenance("上下文整理未完成；继续使用当前上下文".into()),
+            ),
             AgentEvent::Model(event) => self.apply_model_event(event),
             AgentEvent::ToolStarted { call } => {
                 self.tool_calls += 1;
@@ -392,5 +397,23 @@ mod tests {
         assert!(commands.iter().any(|command| command.name == "/status"));
         assert!(!commands.iter().any(|command| command.name == "/new"));
         assert!(!commands.iter().any(|command| command.name == "/compact"));
+    }
+
+    #[test]
+    fn compaction_uses_one_quiet_maintenance_row() {
+        let mut state = UiState::new("mock");
+        state.apply(AgentEvent::CompactionStarted);
+        assert!(state.transcript.is_empty());
+        state.apply(AgentEvent::ContextCompacted {
+            before_tokens: 195_754,
+            after_tokens: 96_000,
+            fallback: true,
+            fallback_reason: Some("摘要请求超时".into()),
+        });
+        assert!(matches!(
+            state.transcript.as_slice(),
+            [TranscriptItem::Maintenance(text)]
+                if text.contains("195754 → 96000") && text.contains("保留最近工作内容")
+        ));
     }
 }

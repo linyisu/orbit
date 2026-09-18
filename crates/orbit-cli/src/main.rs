@@ -933,18 +933,21 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
         }
     }
     match event {
-        AgentEvent::CompactionStarted => eprintln!("正在自动整理上下文…"),
+        AgentEvent::CompactionStarted => {}
         AgentEvent::ContextCompacted {
             before_tokens,
             after_tokens,
             fallback,
+            ..
         } => eprintln!(
-            "上下文已自动压缩：{before_tokens} → {after_tokens} tokens{}",
-            if *fallback { "（本地回退）" } else { "" }
+            "上下文已整理：{before_tokens} → {after_tokens} tokens{}",
+            if *fallback {
+                "；保留最近工作内容"
+            } else {
+                ""
+            }
         ),
-        AgentEvent::CompactionFailed { error } => {
-            eprintln!("自动压缩未完成，保留原上下文：{error}")
-        }
+        AgentEvent::CompactionFailed { .. } => eprintln!("上下文整理未完成；继续使用当前上下文"),
         AgentEvent::Failed { error } => eprintln!("agent failed: {error}"),
         _ => {}
     }

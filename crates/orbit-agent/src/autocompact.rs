@@ -1,5 +1,8 @@
 //! Client-side compaction shared by streaming and non-streaming agent loops.
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use orbit_model::types::{ChatMessage, ChatRequest, ToolDefinition};
 use tokio_util::sync::CancellationToken;
@@ -23,10 +26,23 @@ pub struct Plan {
     files: FileActivity,
 }
 
-/// Context compression is a maintenance operation.  Do not let a provider
-/// that is slow at following the summary format stall an otherwise usable
-/// session for the full normal model-request timeout.
-const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// A summary only needs to retain durable facts, not reproduce a conversation.
+/// A modest output cap makes structured responses substantially more reliable
+/// with local reasoning models.
+const SUMMARY_OUTPUT_TOKENS: usize = 2_048;
+/// Never ask a model to summarize an almost-full context in one request. Apart
+/// from slow prefill, providers commonly time out or truncate a response for a
+/// 100k+ token JSON blob. The running summary is carried into the next chunk.
+const SUMMARY_CHUNK_TOKENS: usize = 32_768;
+/// One slow fragment should not monopolize an agent turn forever.
+const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
+/// A complete checkpoint can need several fragments. This is deliberately
+/// longer than one request while still giving automatic compaction a bound.
+const SUMMARY_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
+/// Leave half the input window free after automatic maintenance. This gives a
+/// tool-heavy coding turn enough room to continue without compacting again on
+/// its very next request.
+const AUTO_COMPACTION_TARGET_PERCENT: usize = 50;
 
 impl Plan {
     pub fn with_files(mut self, files: &FileActivity) -> Self {
@@ -58,7 +74,7 @@ impl Plan {
                 .collect(),
             retained,
             before_tokens: estimate_tokens(&history, tools),
-            summary_tokens: 4096,
+            summary_tokens: SUMMARY_OUTPUT_TOKENS,
             source_messages: history.len(),
             retained_from: cutoff,
             pinned_user: None,
@@ -81,8 +97,9 @@ pub fn plan(
     if before_tokens < available.saturating_mul(85) / 100 {
         return None;
     }
-    let summary_tokens = (available / 8).clamp(256, 4096);
-    let target = (available.saturating_mul(60) / 100).saturating_sub(summary_tokens);
+    let summary_tokens = (available / 16).clamp(256, SUMMARY_OUTPUT_TOKENS);
+    let target = (available.saturating_mul(AUTO_COMPACTION_TARGET_PERCENT) / 100)
+        .saturating_sub(summary_tokens);
     let users: Vec<_> = history
         .iter()
         .enumerate()
@@ -244,20 +261,48 @@ async fn execute_with_policy<B: ModelBackend>(
     policy: FallbackPolicy,
 ) -> Result<CompactedContext, AgentError> {
     match model_summary(backend, &plan, limit, cancellation.clone()).await {
-        Ok(summary) => match finish(&plan, tools, output, limit, summary, false) {
+        Ok(summary) => match finish(&plan, tools, output, limit, summary, false, None) {
             Ok(result) => Ok(result),
             // A syntactically valid model summary can still be too large to
             // help. Treat it exactly like any other unusable summary.
-            Err(_) => finish(&plan, tools, output, limit, local_fallback_summary(), true),
+            Err(_) => finish(
+                &plan,
+                tools,
+                output,
+                limit,
+                local_fallback_summary(),
+                true,
+                Some("结构化摘要超出整理预算".into()),
+            ),
         },
         Err(AgentError::Cancelled) => Err(AgentError::Cancelled),
         // A compacted model context is preferable to an unusable, over-limit
         // one. The full transcript remains in the durable run/event log; this
         // fallback only controls what is sent to the next model request.
-        Err(error) if fallback_allowed(&error, policy) => {
-            finish(&plan, tools, output, limit, local_fallback_summary(), true)
-        }
+        Err(error) if fallback_allowed(&error, policy) => finish(
+            &plan,
+            tools,
+            output,
+            limit,
+            local_fallback_summary(),
+            true,
+            Some(fallback_reason(&error)),
+        ),
         Err(error) => Err(error),
+    }
+}
+
+/// Preserve an actionable diagnostic in the compaction record without storing
+/// opaque provider bodies, which may contain request details.
+fn fallback_reason(error: &AgentError) -> String {
+    match error {
+        AgentError::Compaction(message) if message.contains("timed out") => "摘要请求超时".into(),
+        AgentError::Compaction(message) if message.contains("format") => {
+            "摘要响应不符合结构化格式".into()
+        }
+        AgentError::Compaction(_) => "摘要响应不可用".into(),
+        AgentError::Model(_) => "摘要模型请求失败".into(),
+        _ => "摘要请求不可用".into(),
     }
 }
 
@@ -308,6 +353,7 @@ async fn model_summary<B: ModelBackend>(
         serde_json::to_string(&plan.earlier).map_err(|e| AgentError::Compaction(e.to_string()))?;
     let mut remaining = serialized.as_str();
     let mut summary = String::new();
+    let deadline = Instant::now() + SUMMARY_TOTAL_TIMEOUT;
     while !remaining.is_empty() {
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled);
@@ -321,7 +367,8 @@ async fn model_summary<B: ModelBackend>(
         let capacity = limit
             .saturating_sub(plan.summary_tokens)
             .saturating_sub(overhead)
-            .saturating_sub(128);
+            .saturating_sub(128)
+            .min(SUMMARY_CHUNK_TOKENS);
         let mut end = remaining.len().min(capacity.saturating_mul(2));
         while !remaining.is_char_boundary(end) {
             end -= 1;
@@ -346,9 +393,15 @@ async fn model_summary<B: ModelBackend>(
                 ));
             }
         };
+        let remaining_time = deadline.saturating_duration_since(Instant::now());
+        if remaining_time.is_zero() {
+            return Err(AgentError::Compaction(
+                "summary time budget exceeded".into(),
+            ));
+        }
         let response = tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
-            response = tokio::time::timeout(SUMMARY_REQUEST_TIMEOUT, backend.complete(request, cancellation.clone())) => {
+            response = tokio::time::timeout(remaining_time.min(SUMMARY_REQUEST_TIMEOUT), backend.complete(request, cancellation.clone())) => {
                 response
                     .map_err(|_| AgentError::Compaction("summary request timed out".into()))??
             },
@@ -387,13 +440,13 @@ async fn model_summary<B: ModelBackend>(
 
 fn local_fallback_summary() -> TaskSummary {
     TaskSummary {
-        goal: "历史上下文已使用本地回退压缩；保留最近两轮完整对话并继续当前任务。".into(),
-        constraints: vec!["配置的模型未能在限定时间内提供可验证的结构化摘要。".into()],
+        goal: "继续处理最新用户请求。".into(),
+        constraints: vec!["较早历史未获得结构化摘要；不得将其中细节视为已知。".into()],
         decisions: vec![],
         completed: vec![],
-        remaining: vec!["如需早期细节，请从会话记录查看，或用工具重新读取相关文件。".into()],
-        verification: vec!["旧对话仍保存在会话的运行记录中，未被删除。".into()],
-        uncertainty: vec!["较早的模型回复未被重新概括为新的事实。".into()],
+        remaining: vec![],
+        verification: vec![],
+        uncertainty: vec!["如需较早细节，应重新读取相关文件或向用户确认。".into()],
     }
 }
 
@@ -404,6 +457,7 @@ fn finish(
     limit: usize,
     structured: TaskSummary,
     fallback: bool,
+    fallback_reason: Option<String>,
 ) -> Result<CompactedContext, AgentError> {
     let summary = structured.render();
     let files_text =
@@ -436,6 +490,7 @@ fn finish(
         before_tokens: plan.before_tokens,
         after_tokens,
         fallback,
+        fallback_reason,
         summary: structured,
         files: plan.files.clone(),
     };

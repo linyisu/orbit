@@ -147,6 +147,49 @@ async fn huge_unicode_history_is_chunked_without_oversized_summary_requests() {
 }
 
 #[tokio::test]
+async fn large_context_uses_bounded_summary_fragments() {
+    // The original context is deliberately much larger than a single summary
+    // fragment but still fits its configured 128k-token input window.
+    let mut history = long_task();
+    history[3] = ChatMessage::tool("old", "evidence ".repeat(42_000));
+    let plan = autocompact::plan(&history, &[], 1_000, 128_000).unwrap();
+    let backend =
+        MockModel::new((0..16).map(|_| answer("Preserve the current goal and recent evidence.")));
+    let compacted = autocompact::execute(
+        &backend,
+        plan,
+        &[],
+        1_000,
+        128_000,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let requests = backend.requests();
+    assert!(
+        requests.len() > 1,
+        "large context should use several fragments"
+    );
+    for request in requests {
+        let ChatMessage::User { content, .. } = &request.messages[1] else {
+            panic!("summary request must carry its fragment as user data");
+        };
+        assert!(
+            content.len() < 80_000,
+            "summary request unexpectedly carried a near-window-sized fragment"
+        );
+        check_budget(
+            &request.messages,
+            &[],
+            request.max_tokens.unwrap() as usize,
+            128_000,
+        )
+        .unwrap();
+    }
+    assert!(compacted.after_tokens < compacted.before_tokens);
+}
+
+#[tokio::test]
 async fn invalid_summary_uses_local_fallback_and_cancellation_preserves_history() {
     let history = long_task();
     let original = history.clone();
@@ -321,10 +364,14 @@ async fn invalid_early_summary_uses_fallback_and_disabled_mode_skips_compaction(
             assert_ne!(requests[1].messages, history);
             assert!(matches!(
                 requests[1].messages.get(1),
-                Some(ChatMessage::User { content, .. }) if content.contains("本地回退压缩")
+                Some(ChatMessage::User { content, .. })
+                    if content.contains("BEGIN_UNTRUSTED_COMPACTION_RECORD")
+                        && content.contains("较早历史未获得结构化摘要")
             ));
             assert!(
-                matches!(result.history.get(1), Some(ChatMessage::User { content, .. }) if content.contains("本地回退压缩"))
+                matches!(result.history.get(1), Some(ChatMessage::User { content, .. })
+                    if content.contains("BEGIN_UNTRUSTED_COMPACTION_RECORD")
+                        && !content.contains("会话记录查看"))
             );
         } else {
             assert_eq!(requests.len(), 1);
@@ -414,7 +461,9 @@ async fn local_fallback_recovers_an_over_limit_history_without_an_oversized_requ
     request.max_tokens = Some(1000);
     let result = agent.run(request, CancellationToken::new()).await.unwrap();
     assert!(
-        matches!(result.history.get(1), Some(ChatMessage::User { content, .. }) if content.contains("本地回退压缩"))
+        matches!(result.history.get(1), Some(ChatMessage::User { content, .. })
+            if content.contains("BEGIN_UNTRUSTED_COMPACTION_RECORD")
+                && content.contains("继续处理最新用户请求"))
     );
     assert_eq!(backend.requests().len(), 2);
     for request in backend.requests() {

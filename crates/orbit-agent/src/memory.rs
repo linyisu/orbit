@@ -158,6 +158,11 @@ pub struct CompactionRecord {
     /// the configured model could not return a valid structured summary.
     #[serde(default)]
     pub fallback: bool,
+    /// A short, sanitized reason for a local fallback. Older records did not
+    /// persist this field, so absence means the cause is unknown rather than
+    /// a successful model summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
     pub summary: TaskSummary,
     /// Cumulative, confirmed observations; not a claim about current file contents.
     pub files: FileActivity,

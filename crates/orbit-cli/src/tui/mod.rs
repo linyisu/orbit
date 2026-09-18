@@ -778,31 +778,29 @@ async fn start_agent_run(
                 context_tokens,
             )?;
             let fallback = compacted.record.fallback;
+            let fallback_reason = compacted.record.fallback_reason.clone();
+            let before_tokens = compacted.before_tokens;
+            let after_tokens = compacted.after_tokens;
             sender
                 .send(AgentEvent::CompactionRecorded {
                     record: compacted.record,
                 })
                 .await
                 .map_err(|_| AgentError::EventChannelClosed)?;
-            let report = if fallback {
-                format!(
-                    "上下文压缩已完成。估算用量：{} → {} tokens。模型摘要不可用，已采用本地回退。",
-                    compacted.before_tokens, compacted.after_tokens,
-                )
-            } else {
-                format!(
-                    "上下文压缩已完成。估算用量：{} → {} tokens。",
-                    compacted.before_tokens, compacted.after_tokens,
-                )
-            };
             sender
-                .send(AgentEvent::Model(
-                    orbit_model::types::StreamEvent::TextDelta(report.clone()),
-                ))
+                .send(AgentEvent::ContextCompacted {
+                    before_tokens,
+                    after_tokens,
+                    fallback,
+                    fallback_reason,
+                })
                 .await
                 .map_err(|_| AgentError::EventChannelClosed)?;
             return Ok(AgentResult {
-                final_message: ChatMessage::assistant(report),
+                // The compacted history is already durable. The nonempty
+                // sentinel keeps the common run-finalization path from
+                // mistaking this maintenance command for an empty model reply.
+                final_message: ChatMessage::assistant("context compacted"),
                 history: compacted.history,
                 turns: 1,
                 tool_calls: 0,
@@ -942,7 +940,7 @@ async fn run_command(
                     _ => None,
                 })
                 .sum::<usize>();
-            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动压缩：{}（输入窗口的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；模型摘要不可用时使用本地回退。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动整理：{}（输入窗口的 85% 触发，目标约 50%）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n自动整理优先生成结构化摘要；摘要不可用时保留最新工作和文件活动，较早记录不再发送给模型。\n/compact 手动整理旧对话并保留最近两轮。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
         "/skills" if argument.is_empty() => state
             .transcript

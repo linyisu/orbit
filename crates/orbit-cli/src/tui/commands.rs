@@ -78,7 +78,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/compact",
-        description: "总结旧对话，保留最近两轮；模型不可用时本地回退",
+        description: "手动整理旧对话，保留最近两轮",
     },
     Command {
         name: "/mode",

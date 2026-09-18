@@ -33,6 +33,10 @@ pub struct RunDiagnostic {
     pub tool_failed: usize,
     pub compactions: usize,
     pub compaction_failures: usize,
+    /// Why the latest successful compaction in this run used its local
+    /// checkpoint instead of a model-authored summary, when the event format
+    /// recorded a sanitized reason.
+    pub compaction_fallback: Option<String>,
     pub event_decode_failures: usize,
     pub usage: Option<Usage>,
     pub failure: Option<String>,
@@ -100,10 +104,13 @@ fn summarize(
         tool_failed: 0,
         compactions: 0,
         compaction_failures: 0,
+        compaction_fallback: None,
         event_decode_failures: 0,
         usage: None,
         failure: None,
     };
+    let mut compaction_records = 0;
+    let mut compaction_statuses = 0;
     for (payload, timestamp) in events {
         if let Some(timestamp) = timestamp {
             result.first_event_at_ms.get_or_insert(timestamp);
@@ -136,8 +143,24 @@ fn summarize(
                 result.tool_failed += 1;
                 result.failure = Some(error);
             }
-            AgentEvent::CompactionRecorded { .. } | AgentEvent::ContextCompacted { .. } => {
-                result.compactions += 1
+            AgentEvent::CompactionRecorded { record } => {
+                compaction_records += 1;
+                if record.fallback {
+                    result.compaction_fallback = record
+                        .fallback_reason
+                        .or_else(|| Some("旧记录未保存回退原因".into()));
+                }
+            }
+            AgentEvent::ContextCompacted {
+                fallback,
+                fallback_reason,
+                ..
+            } => {
+                compaction_statuses += 1;
+                if fallback {
+                    result.compaction_fallback =
+                        fallback_reason.or_else(|| Some("旧记录未保存回退原因".into()));
+                }
             }
             AgentEvent::CompactionFailed { error } => {
                 result.compaction_failures += 1;
@@ -149,6 +172,10 @@ fn summarize(
             | AgentEvent::Cancelled => {}
         }
     }
+    // A successful compaction emits both an audit record and a UI-status
+    // event. They describe one operation, not two. Keep support for older
+    // sessions that have only the status event.
+    result.compactions = compaction_records.max(compaction_statuses);
     result
 }
 
@@ -201,6 +228,9 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
         if let Some(error) = &run.failure {
             let _ = writeln!(output, "  最后异常：{error}");
         }
+        if let Some(reason) = &run.compaction_fallback {
+            let _ = writeln!(output, "  最近整理回退：{reason}");
+        }
         if run.event_decode_failures > 0 {
             let _ = writeln!(
                 output,
@@ -252,6 +282,12 @@ mod tests {
                     call,
                     error: "not found".into(),
                 },
+                AgentEvent::ContextCompacted {
+                    before_tokens: 100,
+                    after_tokens: 50,
+                    fallback: true,
+                    fallback_reason: Some("摘要请求超时".into()),
+                },
             ])
             .await
             .unwrap();
@@ -271,6 +307,8 @@ mod tests {
         assert_eq!(run.reasoning_characters, 3);
         assert_eq!(run.tool_started, 1);
         assert_eq!(run.tool_failed, 1);
+        assert_eq!(run.compactions, 1);
+        assert_eq!(run.compaction_fallback.as_deref(), Some("摘要请求超时"));
         assert_eq!(run.failure.as_deref(), Some("not found"));
         assert!(run.first_event_at_ms.is_some());
         assert!(text(&store.diagnostics(&id).await.unwrap()).contains("最后异常：not found"));

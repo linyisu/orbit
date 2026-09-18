@@ -40,6 +40,11 @@ pub enum AgentEvent {
         /// local deterministic fallback retained only the safe working set.
         #[serde(default)]
         fallback: bool,
+        /// Sanitized persistence-only detail for diagnostics. It is omitted
+        /// from normal TUI status text so maintenance failures do not drown
+        /// out the conversation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback_reason: Option<String>,
     },
     CompactionFailed {
         error: String,

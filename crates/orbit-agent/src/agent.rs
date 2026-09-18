@@ -287,6 +287,7 @@ where
             {
                 Ok(result) => {
                     let fallback = result.record.fallback;
+                    let fallback_reason = result.record.fallback_reason.clone();
                     emit(AgentEvent::CompactionRecorded {
                         record: result.record,
                     })
@@ -295,6 +296,7 @@ where
                         before_tokens: result.before_tokens,
                         after_tokens: result.after_tokens,
                         fallback,
+                        fallback_reason,
                     };
                     *history = result.history;
                     *compact_after = result

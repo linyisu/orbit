@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
@@ -773,6 +773,18 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                         format!("{}{}", if index == 0 { "● " } else { "  " }, line),
                         Style::default().fg(ACCENT),
                     )));
+                }
+                lines.push(Line::from(""));
+            }
+            TranscriptItem::Maintenance(text) => {
+                for line in text.lines() {
+                    lines.push(
+                        Line::from(Span::styled(
+                            format!("── {line} ──"),
+                            Style::default().fg(Color::Rgb(155, 155, 155)),
+                        ))
+                        .alignment(Alignment::Center),
+                    );
                 }
                 lines.push(Line::from(""));
             }
