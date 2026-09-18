@@ -290,7 +290,7 @@ async fn fetch(
             .get(url.clone())
             .header(
                 header::ACCEPT,
-                "text/html, text/plain, text/markdown, application/json",
+                "text/html, text/plain, text/markdown, application/json, application/xml, text/xml, application/rss+xml, application/atom+xml",
             )
             .header(header::ACCEPT_ENCODING, "identity")
             .send()
@@ -326,16 +326,9 @@ async fn fetch(
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        if !matches!(
-            kind.as_str(),
-            "text/html"
-                | "application/xhtml+xml"
-                | "text/plain"
-                | "text/markdown"
-                | "application/json"
-        ) {
+        if !readable_content_type(&kind) {
             return Err(failed(
-                "unsupported Content-Type: only HTML, plain text, Markdown and JSON are supported",
+                "unsupported Content-Type: only HTML, plain text, Markdown, JSON and XML/RSS are supported",
             ));
         }
         if response
@@ -348,8 +341,8 @@ async fn fetch(
             ));
         }
         let body = read_body(response).await?;
-        let html = matches!(kind.as_str(), "text/html" | "application/xhtml+xml");
-        let text = tokio::task::spawn_blocking(move || decode(&body, html))
+        let markup = markup_content_type(&kind);
+        let text = tokio::task::spawn_blocking(move || decode(&body, markup))
             .await
             .map_err(failed)??;
         return page(
@@ -362,6 +355,33 @@ async fn fetch(
         );
     }
     unreachable!()
+}
+
+fn readable_content_type(kind: &str) -> bool {
+    matches!(
+        kind,
+        "text/html"
+            | "application/xhtml+xml"
+            | "text/plain"
+            | "text/markdown"
+            | "application/json"
+            | "application/xml"
+            | "text/xml"
+            | "application/rss+xml"
+            | "application/atom+xml"
+    )
+}
+
+fn markup_content_type(kind: &str) -> bool {
+    matches!(
+        kind,
+        "text/html"
+            | "application/xhtml+xml"
+            | "application/xml"
+            | "text/xml"
+            | "application/rss+xml"
+            | "application/atom+xml"
+    )
 }
 
 async fn search(
@@ -650,6 +670,25 @@ mod tests {
         assert!(page("x", "x", "text/plain", "你好".into(), 3, 2).is_err());
         assert!(decode(&[0xff], false).is_err());
         assert!(decode(b"abc\0", false).is_err());
+    }
+
+    #[test]
+    fn accepts_xml_feeds_and_extracts_their_text() {
+        for content_type in [
+            "application/xml",
+            "text/xml",
+            "application/rss+xml",
+            "application/atom+xml",
+        ] {
+            assert!(readable_content_type(content_type));
+            assert!(markup_content_type(content_type));
+        }
+        assert!(!readable_content_type("application/pdf"));
+        let rss = b"<rss><channel><title>News</title><item><title>Orbit update</title><link>https://example.com/orbit</link><description><![CDATA[<p>Useful summary</p>]]></description></item></channel></rss>";
+        let text = decode(rss, true).unwrap();
+        assert!(text.contains("Orbit update"), "{text}");
+        assert!(text.contains("https://example.com/orbit"), "{text}");
+        assert!(text.contains("Useful summary"), "{text}");
     }
 
     #[tokio::test]

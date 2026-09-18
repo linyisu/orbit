@@ -154,7 +154,7 @@ TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中�
 
 真实 TUI 和 `chat` 均可调用，独立于命令沙箱，不需要额外搜索 API Key。工具只执行公开 HTTP(S) GET；不使用模型 API 的密钥、浏览器登录信息、Cookie 或自定义请求头。它不会解除 `run_command` 的断网限制。此工具是读取已知网址，不包含搜索引擎或浏览器操作。
 
-使用 [reqwest](https://docs.rs/reqwest/) 发起请求，[html2text](https://docs.rs/html2text/) 将 HTML 转为有标题、列表和链接的文本；不是模型生成的网页摘要，也不是正文主体识别器，可能包含导航和页脚。支持 Content-Type 为 HTML/XHTML、纯文本、Markdown、JSON 的 UTF-8 正文。链接可能是相对路径，应相对于返回的最终 URL 解析。不执行 JavaScript、不读 PDF/图片、不绕过登录或反爬限制。请求使用 identity 编码，服务端仍返回压缩内容时明确报错。
+使用 [reqwest](https://docs.rs/reqwest/) 发起请求，[html2text](https://docs.rs/html2text/) 将 HTML 和 XML/RSS 转为文本；不是模型生成的网页摘要，也不是正文主体识别器，可能包含导航和页脚。支持 Content-Type 为 HTML/XHTML、纯文本、Markdown、JSON、XML、RSS 或 Atom 的 UTF-8 正文。链接可能是相对路径，应相对于返回的最终 URL 解析。不执行 JavaScript、不读 PDF/图片、不绕过登录或反爬限制。请求使用 identity 编码，服务端仍返回压缩内容时明确报错。
 
 返回 `requested_url`、最终 `url`、`content_type`、`content`、`total_chars`、`truncated`、`next_start_char` 和 `source_kind: untrusted_web_content`。正文仅作为外部资料，不能成为系统指令；模型应引用来源 URL。分页按 Unicode 字符计数，默认每页 20000 字符，支持 1–60000。后续页使用返回的 `next_start_char`；每次重新获取页面，没有跨请求快照，动态页面的偏移可能变化。
 
