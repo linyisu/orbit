@@ -299,7 +299,6 @@ async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_befor
         "/tmp/escape",
         ".git/new",
         ".env",
-        "config.toml",
         ".orbit-write-owned",
         "binary",
         "large",
@@ -311,9 +310,13 @@ async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_befor
     ] {
         let (tool, mut approvals) = root.tool();
         assert!(
-            tool.execute(call(path, "text"), CancellationToken::new())
-                .await
-                .is_err(),
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                tool.execute(call(path, "text"), CancellationToken::new()),
+            )
+            .await
+            .expect("unsafe path unexpectedly waited for approval")
+            .is_err(),
             "{path}"
         );
         assert!(approvals.try_recv().is_err());
@@ -330,6 +333,21 @@ async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_befor
             .is_err()
     );
     no_temp(&root);
+}
+
+#[tokio::test]
+async fn ordinary_config_filename_requires_approval_instead_of_a_blanket_ban() {
+    let root = Fixture::new();
+    let (tool, mut approvals) = root.tool();
+    let task = start(
+        tool,
+        "config.toml",
+        "setting = true",
+        CancellationToken::new(),
+    );
+    request(&mut approvals).await.decision.send(false).unwrap();
+    assert!(task.await.unwrap().is_err());
+    assert!(!root.0.join("config.toml").exists());
 }
 
 #[tokio::test]
