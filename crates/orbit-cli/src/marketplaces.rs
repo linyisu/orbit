@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
+use orbit_store::types::ProjectPlugin;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
@@ -62,6 +63,79 @@ pub(crate) fn list_current() -> Result<Vec<Marketplace>> {
 
 pub(crate) async fn add_current(source: String) -> Result<Marketplace> {
     Store::current()?.add(source).await
+}
+
+/// Validated skill roots from plugins enabled for the current project.
+///
+/// A stale or altered package is skipped rather than made executable. The
+/// diagnostic is intended for the TUI transcript so the user can inspect or
+/// disable it in `/plugins`.
+pub(crate) struct EnabledSkillRoots {
+    pub roots: Vec<PathBuf>,
+    pub diagnostics: Vec<String>,
+}
+
+pub(crate) fn enabled_skill_roots(enabled: &[ProjectPlugin]) -> EnabledSkillRoots {
+    let markets = match Store::current().and_then(|store| store.list()) {
+        Ok(markets) => markets,
+        Err(error) => {
+            return EnabledSkillRoots {
+                roots: Vec::new(),
+                diagnostics: vec![format!("无法读取插件市场缓存：{error}")],
+            };
+        }
+    };
+    enabled_skill_roots_from_markets(enabled, &markets)
+}
+
+fn enabled_skill_roots_from_markets(
+    enabled: &[ProjectPlugin],
+    markets: &[Marketplace],
+) -> EnabledSkillRoots {
+    let mut roots = Vec::new();
+    let mut diagnostics = Vec::new();
+    for configured in enabled {
+        let result = (|| -> Result<PathBuf> {
+            let market = markets
+                .iter()
+                .find(|market| market.source == configured.marketplace_source)
+                .with_context(|| {
+                    format!("市场 {} 已不在本地缓存中", configured.marketplace_source)
+                })?;
+            let plugin = market
+                .plugins
+                .iter()
+                .find(|plugin| {
+                    plugin.name == configured.plugin_name
+                        && plugin.source.as_deref() == Some(configured.package_source.as_str())
+                })
+                .with_context(|| {
+                    format!(
+                        "市场 {} 不再提供插件 {} 的已启用版本",
+                        configured.marketplace_source, configured.plugin_name
+                    )
+                })?;
+            let package = inspect_plugin(market, plugin)?;
+            ensure!(
+                package.version == configured.version,
+                "插件 {} 的版本已从 {} 变为 {}；请重新检查后启用",
+                configured.plugin_name,
+                configured.version.as_deref().unwrap_or("未声明"),
+                package.version.as_deref().unwrap_or("未声明")
+            );
+            Ok(package.directory.join("skills"))
+        })();
+        match result {
+            Ok(root) if root.is_dir() => roots.push(root),
+            Ok(_) => {}
+            Err(error) => {
+                diagnostics.push(format!("已跳过插件 {}：{error}", configured.plugin_name))
+            }
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    EnabledSkillRoots { roots, diagnostics }
 }
 
 pub(crate) fn inspect_plugin(market: &Marketplace, plugin: &Plugin) -> Result<PluginPackage> {
@@ -491,6 +565,51 @@ mod tests {
         assert_eq!(inspected.agents, ["reviewer.md"]);
         assert!(inspected.declares_hooks);
         assert!(inspected.declares_mcp);
+    }
+
+    #[test]
+    fn enabled_plugin_skills_require_the_checked_package_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let market_root = temp.path().join("market");
+        let package = market_root.join("plugins/review");
+        fs::create_dir_all(package.join(".claude-plugin")).unwrap();
+        fs::create_dir_all(package.join("skills/check")).unwrap();
+        fs::write(
+            package.join(".claude-plugin/plugin.json"),
+            r#"{"name":"review","version":"1.2.3"}"#,
+        )
+        .unwrap();
+        fs::write(package.join("skills/check/SKILL.md"), "# check").unwrap();
+        let market = Marketplace {
+            name: "market".into(),
+            source: "owner/market".into(),
+            directory: market_root,
+            plugins: vec![Plugin {
+                name: "review".into(),
+                description: "Review".into(),
+                source: Some("plugins/review".into()),
+            }],
+        };
+        let enabled = ProjectPlugin {
+            project_id: "project".into(),
+            marketplace_source: "owner/market".into(),
+            plugin_name: "review".into(),
+            package_source: "plugins/review".into(),
+            version: Some("1.2.3".into()),
+            enabled_at: 0,
+        };
+
+        let roots = enabled_skill_roots_from_markets(&[enabled.clone()], &[market.clone()]);
+        assert_eq!(roots.roots, vec![package.join("skills")]);
+        assert!(roots.diagnostics.is_empty());
+
+        let stale = ProjectPlugin {
+            version: Some("1.0.0".into()),
+            ..enabled
+        };
+        let stale_roots = enabled_skill_roots_from_markets(&[stale], &[market]);
+        assert!(stale_roots.roots.is_empty());
+        assert!(stale_roots.diagnostics[0].contains("重新检查后启用"));
     }
 
     #[test]

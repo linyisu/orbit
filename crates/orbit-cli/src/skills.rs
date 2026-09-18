@@ -35,6 +35,7 @@ pub(crate) enum SkillSource {
     ClaudeUser,
     OrbitProject,
     ClaudeProject,
+    MarketplacePlugin,
 }
 
 impl SkillSource {
@@ -44,6 +45,7 @@ impl SkillSource {
             Self::ClaudeUser => "Claude 用户目录",
             Self::OrbitProject => "Orbit 项目目录",
             Self::ClaudeProject => "Claude 项目目录",
+            Self::MarketplacePlugin => "当前项目已启用插件",
         }
     }
 }
@@ -55,11 +57,24 @@ pub(crate) struct Skills {
 
 impl Skills {
     pub(crate) fn discover_current() -> Self {
-        let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        Self::discover(&cwd, env::var_os("HOME").map(PathBuf::from))
+        Self::discover_current_with_plugin_roots(Vec::new())
     }
 
+    pub(crate) fn discover_current_with_plugin_roots(plugin_roots: Vec<PathBuf>) -> Self {
+        let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::discover_with_plugin_roots(&cwd, env::var_os("HOME").map(PathBuf::from), plugin_roots)
+    }
+
+    #[cfg(test)]
     fn discover(cwd: &Path, home: Option<PathBuf>) -> Self {
+        Self::discover_with_plugin_roots(cwd, home, Vec::new())
+    }
+
+    fn discover_with_plugin_roots(
+        cwd: &Path,
+        home: Option<PathBuf>,
+        mut plugin_roots: Vec<PathBuf>,
+    ) -> Self {
         // Later roots override earlier ones. The native Orbit location wins
         // over the compatibility locations at the same scope.
         let mut roots = Vec::new();
@@ -70,6 +85,10 @@ impl Skills {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".config"));
             roots.push((orbit_home.join("orbit/skills"), SkillSource::OrbitUser));
+        }
+        plugin_roots.sort();
+        for root in plugin_roots {
+            roots.push((root, SkillSource::MarketplacePlugin));
         }
         if let Some(root) = project_root(cwd) {
             roots.push((root.join(".claude/skills"), SkillSource::ClaudeProject));
@@ -302,6 +321,28 @@ mod tests {
                 .unwrap()
                 .contains("Read the diff first")
         );
+    }
+
+    #[test]
+    fn project_skill_overrides_an_enabled_plugin_skill_with_the_same_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        let plugin = temp.path().join("plugin/skills/review/SKILL.md");
+        let project = repo.join(".orbit/skills/review/SKILL.md");
+        fs::create_dir_all(plugin.parent().unwrap()).unwrap();
+        fs::create_dir_all(project.parent().unwrap()).unwrap();
+        fs::create_dir(repo.join(".git")).unwrap();
+        fs::write(&plugin, "---\ndescription: Plugin version\n---\nPlugin").unwrap();
+        fs::write(&project, "---\ndescription: Project version\n---\nProject").unwrap();
+
+        let skills = Skills::discover_with_plugin_roots(
+            &repo,
+            None,
+            vec![plugin.parent().unwrap().parent().unwrap().to_path_buf()],
+        );
+        assert_eq!(skills.entries.len(), 1);
+        assert_eq!(skills.entries[0].description, "Project version");
+        assert_eq!(skills.entries[0].source, SkillSource::OrbitProject);
     }
 
     #[test]

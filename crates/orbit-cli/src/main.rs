@@ -450,7 +450,6 @@ async fn main() -> Result<()> {
 
 async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs) -> Result<()> {
     let instructions = instructions::load_current();
-    let skills = skills::Skills::discover_current();
     let database = session::database_path(database)?;
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
     let file_config = FileConfig::load(&config_path)?;
@@ -466,6 +465,12 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let input_context_tokens = default_model.input_context_tokens;
     let client = ModelClient::new(default_model.config)?;
     let session = session::SessionState::open(database, args.resume, model_name.clone()).await?;
+    let enabled_plugins = session
+        .store
+        .project_plugins(&session.snapshot.session.project_id)
+        .await?;
+    let plugin_skill_roots = crate::marketplaces::enabled_skill_roots(&enabled_plugins);
+    let skills = skills::Skills::discover_current_with_plugin_roots(plugin_skill_roots.roots);
     let undo_writer =
         runtime::workspace_writer(&config_path, session.store.path(), approvals.clone())?;
     let runtime = runtime::workspace_tools(
@@ -503,6 +508,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             instructions,
             model_options,
             skills,
+            plugin_skill_diagnostics: plugin_skill_roots.diagnostics,
             mcp_statuses: runtime.mcp_statuses,
         },
     )

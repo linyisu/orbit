@@ -88,6 +88,7 @@ pub struct RequestBudget {
     pub max_tool_calls: usize,
     pub instructions: crate::instructions::Instructions,
     pub skills: crate::skills::Skills,
+    pub plugin_skill_diagnostics: Vec<String>,
     pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
     pub model_options: Vec<ModelOption>,
 }
@@ -112,6 +113,7 @@ pub async fn run(
         max_tool_calls,
         instructions,
         skills,
+        plugin_skill_diagnostics,
         mcp_statuses,
         model_options,
     } = budget;
@@ -125,6 +127,11 @@ pub async fn run(
         .map(ModelOption::qualified_name)
         .collect();
     session.restore_ui(&mut state);
+    for diagnostic in plugin_skill_diagnostics {
+        state.transcript.push(TranscriptItem::Notice(format!(
+            "插件 Skill 未载入：{diagnostic}"
+        )));
+    }
     restore_model_profile(&mut state, &mut model, &model_options, &session);
     let mut history = session.snapshot.history.clone();
     crate::instructions::inject(&mut history, &instructions);
@@ -208,7 +215,7 @@ pub async fn run(
                                     let name = plugin.plugin_name.clone();
                                     match session.store.enable_project_plugin(plugin).await {
                                         Ok(_) => state.transcript.push(TranscriptItem::CommandResult(format!(
-                                            "已为当前项目启用 {name}。插件包保存在 Orbit 数据目录；其中的 Skill、命令、Hook 与 MCP 不会自动执行。"
+                                            "已为当前项目启用 {name}。插件包保存在 Orbit 数据目录；通过校验的 Skill 会在下次启动时按需可用，命令、Hook 与 MCP 不会自动执行。"
                                         ))),
                                         Err(error) => state.transcript.push(TranscriptItem::CommandError(format!(
                                             "无法启用插件：{error}"
