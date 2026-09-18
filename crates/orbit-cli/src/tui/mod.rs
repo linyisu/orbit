@@ -1203,7 +1203,7 @@ async fn run_tasks_command(
 
 fn render_mcp_status(statuses: &[orbit_tools::mcp::McpServerStatus]) -> String {
     if statuses.is_empty() {
-        return "没有配置 MCP server。可在 config.toml 中添加 [mcp.servers.<名称>]，指定 command 和 args。当前仅支持本地 stdio server。".into();
+        return "没有配置 MCP server。可在 config.toml 中添加 [mcp.servers.<名称>]，指定 command、args 和 enabled = true。当前仅支持本地 stdio server。".into();
     }
     let mut output = String::from("MCP servers\n");
     for status in statuses {

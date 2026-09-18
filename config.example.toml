@@ -64,9 +64,11 @@ max_timeout_seconds = 600
 # its own: configuring a process here is an explicit user authorization.
 #
 # [mcp.servers.files]
+# enabled = true # Explicit opt-in; omitted servers do not start.
 # command = "npx"
 # args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
 # timeout_seconds = 120
 # # Empty means every advertised server tool. Set a list to expose only these.
 # tools = ["read_file", "list_directory"]
+# # The server receives a clean environment. Pass only variables it needs.
 # # env = { API_TOKEN = "replace-with-token" }

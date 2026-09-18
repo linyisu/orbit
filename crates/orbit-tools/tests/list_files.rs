@@ -93,6 +93,10 @@ async fn excludes_protected_aliases_symlinks_and_special_files() {
     )
     .unwrap();
     let mut workspace = Workspace::new(dir.path()).unwrap();
+    // Orbit protects its explicitly supplied config path at runtime. This is
+    // not a filename blacklist: an ordinary project config remains visible
+    // unless the caller registers it as protected.
+    workspace.protect(dir.path().join("config.toml")).unwrap();
     workspace
         .protect(dir.path().join("credentials.json"))
         .unwrap();

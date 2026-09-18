@@ -236,7 +236,7 @@ fn command(
     snapshot: &Path,
     script: &Path,
     writable_snapshot: bool,
-    timeout: Duration,
+    _timeout: Duration,
     rust_toolchain: Option<&Path>,
     scratch: Option<&Path>,
 ) -> Result<Command, ToolError> {
@@ -347,7 +347,6 @@ fn command(
         "C.UTF-8",
         "--",
         "/usr/bin/prlimit",
-        &format!("--cpu={0}:{0}", timeout.as_secs().saturating_add(1)),
         "--as=4294967296:4294967296",
         "--fsize=67108864:67108864",
         "--nofile=1024:1024",
@@ -537,11 +536,6 @@ pub async fn run_with_resources_and_output(
     let retained_output_truncated = stdout.retained_truncated || stderr.retained_truncated;
     let stdout = String::from_utf8_lossy(&stdout.bytes).into_owned();
     let stderr = String::from_utf8_lossy(&stderr.bytes).into_owned();
-    if !status.success() && stderr.starts_with("bwrap:") {
-        return Err(failed(format!(
-            "sandbox startup failed; refusing unsandboxed execution: {stderr}"
-        )));
-    }
     Ok(CommandResult {
         exit_code: status.code(),
         elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,

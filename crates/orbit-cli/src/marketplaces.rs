@@ -264,9 +264,19 @@ impl Store {
         if temporary.exists() {
             fs::remove_dir_all(&temporary)?;
         }
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        command
+            // Marketplace acquisition must not execute a user's Git aliases,
+            // credential helpers, proxy configuration or interactive prompts.
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("LANG", "C.UTF-8")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
             .args(["clone", "--depth", "1", "--", &url])
-            .arg(&temporary)
+            .arg(&temporary);
+        let output = command
             .output()
             .await
             .context("failed to start git while downloading marketplace")?;

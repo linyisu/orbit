@@ -20,11 +20,22 @@ pub struct CommandPreview {
     pub timeout_seconds: u64,
 }
 
+/// An MCP server is an external program with capabilities Orbit cannot
+/// reliably infer from its advertised schema. Keep every invocation behind
+/// the same explicit approval boundary as other side-effecting tools.
+#[derive(Clone, Debug)]
+pub struct McpPreview {
+    pub server: String,
+    pub tool: String,
+    pub arguments: String,
+}
+
 #[derive(Clone, Debug)]
 pub enum ApprovalPreview {
     Write(WritePreview),
     Delete(DeletePreview),
     Command(CommandPreview),
+    Mcp(McpPreview),
 }
 
 pub struct ApprovalRequest {

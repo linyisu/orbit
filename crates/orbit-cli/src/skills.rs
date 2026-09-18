@@ -186,6 +186,12 @@ impl Skills {
 }
 
 fn discover_directory(directory: &Path, source: SkillSource) -> Vec<Skill> {
+    let Ok(metadata) = fs::symlink_metadata(directory) else {
+        return Vec::new();
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Vec::new();
+    }
     let Ok(children) = fs::read_dir(directory) else {
         return Vec::new();
     };
@@ -193,6 +199,10 @@ fn discover_directory(directory: &Path, source: SkillSource) -> Vec<Skill> {
     children
         .filter_map(Result::ok)
         .filter_map(|entry| {
+            let entry_type = entry.file_type().ok()?;
+            if !entry_type.is_dir() || entry_type.is_symlink() {
+                return None;
+            }
             let command = entry.file_name().to_string_lossy().trim().to_owned();
             if !valid_name(&command) || !seen.insert(command.clone()) {
                 return None;
@@ -223,10 +233,12 @@ fn discover_directory(directory: &Path, source: SkillSource) -> Vec<Skill> {
 }
 
 fn read_skill(path: &Path) -> Result<String, String> {
-    let metadata = fs::metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    if !metadata.is_file() || metadata.len() > MAX_SKILL_BYTES {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_SKILL_BYTES
+    {
         return Err(format!(
-            "{} must be a regular file up to 64 KiB",
+            "{} must be a regular non-symlink file up to 64 KiB",
             path.display()
         ));
     }
@@ -317,6 +329,24 @@ mod tests {
                 .unwrap()
                 .contains("Read the diff first")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignores_symlinked_skill_files() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        let skill = repo.join(".claude/skills/review/SKILL.md");
+        let outside = temp.path().join("outside.md");
+        fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        fs::create_dir(repo.join(".git")).unwrap();
+        fs::write(&outside, "description: outside content").unwrap();
+        symlink(&outside, &skill).unwrap();
+
+        assert!(Skills::discover(&repo, None).entries.is_empty());
+        assert!(read_skill(&skill).is_err());
     }
 
     #[test]

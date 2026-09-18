@@ -20,10 +20,12 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
-    sync::Mutex,
+    sync::{Mutex, oneshot},
     time,
 };
 use tokio_util::sync::CancellationToken;
+
+use crate::approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, McpPreview};
 
 const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const PROTOCOL_VERSION: &str = "2025-11-25";
@@ -62,7 +64,7 @@ fn default_timeout_seconds() -> u64 {
 }
 
 fn default_enabled() -> bool {
-    true
+    false
 }
 
 impl McpConfig {
@@ -107,6 +109,7 @@ pub async fn register(
     registry: &mut ToolRegistry,
     config: &McpConfig,
     workspace: &Path,
+    approvals: Option<ApprovalSender>,
 ) -> Vec<McpServerStatus> {
     let mut statuses = Vec::new();
     for (name, config) in &config.servers {
@@ -119,6 +122,15 @@ pub async fn register(
             });
             continue;
         }
+        let Some(approvals) = approvals.clone() else {
+            statuses.push(McpServerStatus {
+                name: name.clone(),
+                detail: "需要审批通道；未启动".into(),
+                tool_count: 0,
+                connected: false,
+            });
+            continue;
+        };
         match StdioClient::start(name, config, workspace).await {
             Ok((client, definitions)) => {
                 let filtered = definitions
@@ -139,6 +151,7 @@ pub async fn register(
                         server: name.clone(),
                         definition,
                         client: client.clone(),
+                        approvals: approvals.clone(),
                     });
                 }
                 statuses.push(McpServerStatus {
@@ -175,6 +188,7 @@ struct McpTool {
     server: String,
     definition: RemoteTool,
     client: Arc<Mutex<StdioClient>>,
+    approvals: ApprovalSender,
 }
 
 impl Tool for McpTool {
@@ -182,7 +196,7 @@ impl Tool for McpTool {
         ToolDefinition::function(
             self.exposed_name.clone(),
             format!(
-                "MCP server {} · {}",
+                "MCP server {} · {} External process: each invocation is subject to the selected approval mode; inspect arguments before allowing it.",
                 self.server,
                 self.definition.description.trim()
             ),
@@ -201,6 +215,30 @@ impl Tool for McpTool {
                     tool: self.exposed_name.clone(),
                     message: error.to_string(),
                 })?;
+            let (sender, receiver) = oneshot::channel();
+            let request = ApprovalRequest {
+                preview: ApprovalPreview::Mcp(McpPreview {
+                    server: self.server.clone(),
+                    tool: self.definition.name.clone(),
+                    arguments: arguments.to_string(),
+                }),
+                decision: sender,
+            };
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+                result = self.approvals.send(request) => result.map_err(|_| ToolError::ExecutionFailed("MCP approval unavailable".into()))?,
+            }
+            let approved = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+                answer = receiver => answer.unwrap_or(false),
+            };
+            if !approved {
+                return Err(ToolError::ExecutionFailed(
+                    "MCP tool call was not approved; do not retry automatically".into(),
+                ));
+            }
             let mut client = self.client.lock().await;
             let result = client
                 .call_tool(&self.definition.name, arguments, cancellation)
@@ -232,6 +270,12 @@ impl StdioClient {
         command
             .args(&config.args)
             .current_dir(workspace)
+            // MCP servers are arbitrary local programs. Do not pass through
+            // host credentials, proxy settings, Git configuration, or HOME;
+            // a user may explicitly grant a value in the server's `env` map.
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("LANG", "C.UTF-8")
             .env("ORBIT_PROJECT_DIR", workspace)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -420,6 +464,7 @@ fn file_uri(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approval::ApprovalPreview;
     use orbit_model::types::ToolCall;
 
     #[test]
@@ -434,6 +479,7 @@ mod tests {
         )
         .unwrap();
         config.validate().unwrap();
+        assert!(!config.servers["files"].enabled);
         assert_eq!(exposed_name("files", "read_file"), "mcp__files__read_file");
     }
 
@@ -494,7 +540,17 @@ done
             )]),
         };
         let mut registry = ToolRegistry::new();
-        let statuses = register(&mut registry, &config, directory.path()).await;
+        let (approvals, mut receiver) = crate::approval::channel();
+        let approval = tokio::spawn(async move {
+            let request = receiver.recv().await.expect("MCP call requests approval");
+            let ApprovalPreview::Mcp(preview) = request.preview else {
+                panic!("expected MCP approval");
+            };
+            assert_eq!(preview.server, "fixture");
+            assert_eq!(preview.tool, "echo");
+            request.decision.send(true).unwrap();
+        });
+        let statuses = register(&mut registry, &config, directory.path(), Some(approvals)).await;
         assert_eq!(statuses[0].tool_count, 1, "{statuses:?}");
         let output = registry
             .execute(
@@ -503,6 +559,23 @@ done
             )
             .await
             .unwrap();
+        approval.await.unwrap();
         assert!(output.content.contains("\"text\":\"ok\""));
+    }
+
+    #[tokio::test]
+    async fn does_not_start_enabled_servers_without_an_approval_channel() {
+        let config: McpConfig = toml::from_str(
+            r#"
+            [servers.files]
+            command = "definitely-not-a-real-mcp-server"
+            enabled = true
+            "#,
+        )
+        .unwrap();
+        let mut registry = ToolRegistry::new();
+        let statuses = register(&mut registry, &config, Path::new("/tmp"), None).await;
+        assert_eq!(statuses[0].detail, "需要审批通道；未启动");
+        assert!(registry.definitions().is_empty());
     }
 }

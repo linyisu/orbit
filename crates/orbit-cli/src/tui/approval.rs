@@ -232,6 +232,23 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 lines,
             )
         }
+        orbit_tools::approval::ApprovalPreview::Mcp(preview) => {
+            let mut lines = vec![
+                Line::from("MCP 是外部进程；Orbit 无法从工具声明判断其是否会读取、写入或联网。"),
+                Line::from("请仅在信任该服务器及本次参数时允许。"),
+                Line::from(""),
+            ];
+            lines.extend(
+                preview
+                    .arguments
+                    .split('\n')
+                    .map(|line| Line::styled(visible(line), Style::default().fg(Color::Cyan))),
+            );
+            (
+                format!("MCP 调用确认 · {}::{}", preview.server, preview.tool),
+                lines,
+            )
+        }
     };
     frame.render_widget(Paragraph::new(title), areas[0]);
     let lines = if state.approval_expanded {

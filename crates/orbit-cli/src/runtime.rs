@@ -39,6 +39,7 @@ pub async fn workspace_tools(
     tools.register(GitInspect::new(workspace.clone()));
     tools.register(orbit_tools::web_fetch::WebFetch::new(web.clone())?);
     tools.register(orbit_tools::web_fetch::WebSearch::new(web)?);
+    let mcp_approvals = approvals.clone();
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
@@ -55,7 +56,8 @@ pub async fn workspace_tools(
             tools.register(command);
         }
     }
-    let mcp_statuses = orbit_tools::mcp::register(&mut tools, &mcp, workspace.root()).await;
+    let mcp_statuses =
+        orbit_tools::mcp::register(&mut tools, &mcp, workspace.root(), mcp_approvals).await;
     Ok(WorkspaceRuntime {
         tools,
         mcp_statuses,

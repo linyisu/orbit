@@ -300,18 +300,34 @@ async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
 
 #[tokio::test]
 #[ignore = "requires Linux user namespaces"]
-async fn process_limits_follow_the_command_budget() {
+async fn process_limits_keep_memory_and_descriptor_bounds() {
     let (_root, workspace) = fixture();
     let result = sandbox::run(
         workspace,
-        "ulimit -t; ulimit -v; ulimit -n".into(),
+        "ulimit -v; ulimit -n".into(),
         Duration::from_secs(600),
         CancellationToken::new(),
     )
     .await
     .unwrap();
     assert_eq!(result.exit_code, Some(0), "{result:?}");
-    assert_eq!(result.stdout, "601\n4194304\n1024\n");
+    assert_eq!(result.stdout, "4194304\n1024\n");
+}
+
+#[tokio::test]
+#[ignore = "requires Linux user namespaces"]
+async fn command_stderr_with_a_bwrap_prefix_is_a_normal_program_failure() {
+    let (_root, workspace) = fixture();
+    let result = sandbox::run(
+        workspace,
+        "printf 'bwrap: ordinary program error\\n' >&2; exit 7".into(),
+        Duration::from_secs(10),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.exit_code, Some(7));
+    assert_eq!(result.stderr, "bwrap: ordinary program error\n");
 }
 
 #[tokio::test]
