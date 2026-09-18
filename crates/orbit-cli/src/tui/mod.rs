@@ -14,9 +14,9 @@ pub mod terminal;
 mod transcript;
 mod wheel;
 
-/// Use the same chevron family as the user marker. Private-use code/terminal
-/// pictograms can render very small in Nerd Fonts; bold cannot enlarge them.
-pub(crate) const COMMAND_ICON: &str = "❮/❯";
+/// A single command symbol without an enclosing pictogram that shrinks its
+/// contents. Its actual glyph size is controlled by the terminal font.
+pub(crate) const COMMAND_ICON: &str = "⌘";
 
 use std::{
     path::PathBuf,
