@@ -368,44 +368,67 @@ async fn search(
     args: SearchArguments,
     proxy: Option<&reqwest::Proxy>,
 ) -> Result<String, ToolError> {
-    let mut url = Url::parse(SEARCH_ENDPOINT).expect("constant search endpoint is valid");
+    search_at(args, proxy, SEARCH_ENDPOINT).await
+}
+
+async fn search_at(
+    args: SearchArguments,
+    proxy: Option<&reqwest::Proxy>,
+    endpoint: &str,
+) -> Result<String, ToolError> {
+    let mut url = Url::parse(endpoint).map_err(|_| failed("invalid search provider endpoint"))?;
     url.query_pairs_mut().append_pair("q", args.query.trim());
-    let response = client(&url, proxy)
-        .await?
-        .get(url.clone())
-        .header(
-            header::ACCEPT,
-            "application/rss+xml, application/xml, text/xml",
-        )
-        .header(header::ACCEPT_ENCODING, "identity")
-        .send()
-        .await
-        .map_err(|error| failed(error.without_url()))?;
-    if !response.status().is_success() {
-        return Err(failed(format!(
-            "web search provider returned HTTP {}",
-            response.status().as_u16()
-        )));
+    for hop in 0..=5 {
+        let response = client(&url, proxy)
+            .await?
+            .get(url.clone())
+            .header(
+                header::ACCEPT,
+                "application/rss+xml, application/xml, text/xml",
+            )
+            .header(header::ACCEPT_ENCODING, "identity")
+            .send()
+            .await
+            .map_err(|error| failed(error.without_url()))?;
+        if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+            if hop == 5 {
+                return Err(failed("too many redirects (maximum 5)"));
+            }
+            let location = response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| failed("redirect has no valid Location header"))?;
+            url = redirect_target(&url, location)?;
+            continue;
+        }
+        if !response.status().is_success() {
+            return Err(failed(format!(
+                "web search provider returned HTTP {}",
+                response.status().as_u16()
+            )));
+        }
+        if response
+            .headers()
+            .get(header::CONTENT_ENCODING)
+            .is_some_and(|value| value != "identity")
+        {
+            return Err(failed(
+                "search provider ignored identity encoding; compressed response unsupported",
+            ));
+        }
+        let body = read_body(response).await?;
+        let body = std::str::from_utf8(&body).map_err(|_| failed("search result is not UTF-8"))?;
+        let results = parse_rss_results(body, args.max_results);
+        return Ok(json!({
+            "query": args.query,
+            "provider": "Bing RSS",
+            "results": results,
+            "source_kind": "untrusted_web_search_results",
+        })
+        .to_string());
     }
-    if response
-        .headers()
-        .get(header::CONTENT_ENCODING)
-        .is_some_and(|value| value != "identity")
-    {
-        return Err(failed(
-            "search provider ignored identity encoding; compressed response unsupported",
-        ));
-    }
-    let body = read_body(response).await?;
-    let body = std::str::from_utf8(&body).map_err(|_| failed("search result is not UTF-8"))?;
-    let results = parse_rss_results(body, args.max_results);
-    Ok(json!({
-        "query": args.query,
-        "provider": "Bing RSS",
-        "results": results,
-        "source_kind": "untrusted_web_search_results",
-    })
-    .to_string())
+    unreachable!()
 }
 
 #[derive(serde::Serialize, PartialEq, Eq, Debug)]
@@ -752,6 +775,58 @@ mod tests {
         assert!(!public_ip("198.18.0.41".parse().unwrap()));
         assert!(fake_ip("198.18.0.41".parse().unwrap()));
         assert!(checked_url("https://198.18.0.41").is_err());
+    }
+
+    #[tokio::test]
+    async fn search_follows_public_redirects_before_parsing_rss() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let responses = [
+                (
+                    "GET http://1.1.1.1/search?format=rss&q=Orbit HTTP/1.1",
+                    "HTTP/1.1 302 Found\r\nLocation: http://1.1.1.1/result?format=rss&q=Orbit\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_owned(),
+                ),
+                (
+                    "GET http://1.1.1.1/result?format=rss&q=Orbit HTTP/1.1",
+                    {
+                        let body = "<rss><channel><item><title>Orbit</title><link>https://example.com/orbit</link><description>Found</description></item></channel></rss>";
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/rss+xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    },
+                ),
+            ];
+            for (expected, response) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 4096];
+                let count = socket.read(&mut request).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..count]).starts_with(expected),
+                    "{}",
+                    String::from_utf8_lossy(&request[..count])
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let proxy = reqwest::Proxy::all(format!("http://{address}")).unwrap();
+        let output = search_at(
+            SearchArguments {
+                query: "Orbit".into(),
+                max_results: 1,
+            },
+            Some(&proxy),
+            "http://1.1.1.1/search?format=rss",
+        )
+        .await
+        .unwrap();
+        let result: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(result["results"][0]["url"], "https://example.com/orbit");
+        server.await.unwrap();
     }
 
     #[test]
