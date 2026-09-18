@@ -160,7 +160,7 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let available = width.saturating_sub(4);
     let right_budget = available.saturating_sub(8);
     let context = format!(
-        "{}%/{} 输入",
+        "{}%/{}",
         context_percent(state),
         compact_tokens(input_context_budget(state)),
     );
@@ -1455,7 +1455,7 @@ mod tests {
             if width >= 80 {
                 assert!(text.contains("󰧑"));
                 assert!(!text.contains("思考"));
-                assert!(text.contains("53%/96k 输入"));
+                assert!(text.contains("53%/96k"));
                 assert!(text.contains(state.permission_mode.label()));
                 assert!(!text.contains('·'));
             }
@@ -1477,7 +1477,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         let indicator = state.context_indicator_area;
-        assert_eq!(indicator.width, 12);
+        assert_eq!(indicator.width, 7);
         let hover = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Moved,
             column: indicator.x,
