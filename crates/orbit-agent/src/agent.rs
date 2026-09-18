@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    future::Future,
+};
 
 use futures_util::StreamExt;
 use orbit_model::types::{
@@ -64,14 +67,22 @@ where
         self
     }
 
+    /// Run the one Agent execution loop while delivering every lifecycle event
+    /// to an adapter. `run`, `run_with_events`, and the TUI channel API all
+    /// delegate here so they cannot develop different tool or recovery rules.
     pub async fn run(
         &self,
         request: ChatRequest,
         cancellation: CancellationToken,
     ) -> Result<AgentResult, AgentError> {
-        self.run_internal(request, cancellation, None).await
+        self.run_core(request, cancellation, |_| {
+            std::future::ready(Ok::<(), AgentError>(()))
+        })
+        .await
     }
 
+    /// Compatibility adapter for consumers interested only in raw model
+    /// streaming events. Agent lifecycle events still drive the shared core.
     pub async fn run_with_events<F>(
         &self,
         request: ChatRequest,
@@ -81,54 +92,68 @@ where
     where
         F: Fn(StreamEvent) + Send + Sync,
     {
-        self.run_internal(request, cancellation, Some(&on_event))
-            .await
+        self.run_core(request, cancellation, |event| {
+            if let AgentEvent::Model(event) = event {
+                on_event(event);
+            }
+            std::future::ready(Ok::<(), AgentError>(()))
+        })
+        .await
     }
 
+    /// Run the Agent with the canonical lifecycle event stream used by the TUI
+    /// and CLI. A closed receiver aborts with `EventChannelClosed`, preserving
+    /// the previous channel contract.
     pub async fn run_with_agent_events(
         &self,
         request: ChatRequest,
         cancellation: CancellationToken,
         sender: mpsc::Sender<AgentEvent>,
     ) -> Result<AgentResult, AgentError> {
-        let result = self
-            .run_agent_events(request, cancellation.clone(), &sender)
-            .await;
-
-        match &result {
-            Ok(agent_result) => {
-                send_agent_event(
-                    &sender,
-                    AgentEvent::Completed {
-                        turns: agent_result.turns,
-                        tool_calls: agent_result.tool_calls,
-                    },
-                )
-                .await?;
-            }
-            Err(AgentError::Cancelled) => {
-                send_agent_event(&sender, AgentEvent::Cancelled).await?;
-            }
-            Err(error) => {
-                send_agent_event(
-                    &sender,
-                    AgentEvent::Failed {
-                        error: error.to_string(),
-                    },
-                )
-                .await?;
-            }
-        }
-
-        result
+        self.run_core(request, cancellation, move |event| {
+            let sender = sender.clone();
+            async move { send_agent_event(&sender, event).await }
+        })
+        .await
     }
 
-    async fn run_agent_events(
+    async fn run_core<F, Fut>(
         &self,
         request: ChatRequest,
         cancellation: CancellationToken,
-        sender: &mpsc::Sender<AgentEvent>,
-    ) -> Result<AgentResult, AgentError> {
+        mut emit: F,
+    ) -> Result<AgentResult, AgentError>
+    where
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: Future<Output = Result<(), AgentError>>,
+    {
+        let result = self
+            .execute_core(request, cancellation.clone(), &mut emit)
+            .await;
+        let terminal = match &result {
+            Ok(agent_result) => AgentEvent::Completed {
+                turns: agent_result.turns,
+                tool_calls: agent_result.tool_calls,
+            },
+            Err(AgentError::Cancelled) => AgentEvent::Cancelled,
+            Err(error) => AgentEvent::Failed {
+                error: error.to_string(),
+            },
+        };
+        emit(terminal).await?;
+        result
+    }
+
+    async fn execute_core<F, Fut>(
+        &self,
+        request: ChatRequest,
+        cancellation: CancellationToken,
+        emit: &mut F,
+    ) -> Result<AgentResult, AgentError>
+    where
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: Future<Output = Result<(), AgentError>>,
+    {
         if request.messages.is_empty() {
             return Err(AgentError::InvalidInitialRequest);
         }
@@ -154,14 +179,14 @@ where
                 &mut compact_after,
                 &files,
                 cancellation.clone(),
-                Some(sender),
+                emit,
             )
             .await?;
             turns += 1;
-            send_agent_event(sender, AgentEvent::TurnStarted { turn: turns }).await?;
+            emit(AgentEvent::TurnStarted { turn: turns }).await?;
 
             let completion = self
-                .collect_stream_with_agent_events(
+                .collect_stream(
                     ChatRequest {
                         messages: model_messages(&history),
                         tools: self.tools.definitions(),
@@ -170,7 +195,7 @@ where
                         reasoning_effort: request.reasoning_effort,
                     },
                     cancellation.clone(),
-                    sender,
+                    emit,
                 )
                 .await?;
             check_finish_reason(completion.finish_reason.as_deref())?;
@@ -201,31 +226,25 @@ where
                 }
 
                 tool_calls += 1;
-                send_agent_event(sender, AgentEvent::ToolStarted { call: call.clone() }).await?;
+                emit(AgentEvent::ToolStarted { call: call.clone() }).await?;
                 match self.tools.execute(call.clone(), cancellation.clone()).await {
                     Ok(output) => {
                         files.observe(&call, &output.content);
-                        send_agent_event(
-                            sender,
-                            AgentEvent::ToolFinished {
-                                call: call.clone(),
-                                content: output.content.clone(),
-                                changes: output.changes.clone(),
-                            },
-                        )
+                        emit(AgentEvent::ToolFinished {
+                            call: call.clone(),
+                            content: output.content.clone(),
+                            changes: output.changes.clone(),
+                        })
                         .await?;
                         history.push(ChatMessage::tool(call.id, output.content));
                         loaded_attachments.extend(output.attachments);
                     }
                     Err(error) => {
                         let message = error.to_string();
-                        send_agent_event(
-                            sender,
-                            AgentEvent::ToolFailed {
-                                call: call.clone(),
-                                error: message.clone(),
-                            },
-                        )
+                        emit(AgentEvent::ToolFailed {
+                            call: call.clone(),
+                            error: message.clone(),
+                        })
                         .await?;
                         history.push(ChatMessage::tool(call.id, format!("tool error: {message}")));
                     }
@@ -235,15 +254,19 @@ where
         }
     }
 
-    async fn prepare_context(
+    async fn prepare_context<F, Fut>(
         &self,
         history: &mut Vec<ChatMessage>,
         output: usize,
         compact_after: &mut usize,
         files: &crate::memory::FileActivity,
         cancellation: CancellationToken,
-        sender: Option<&mpsc::Sender<AgentEvent>>,
-    ) -> Result<(), AgentError> {
+        emit: &mut F,
+    ) -> Result<(), AgentError>
+    where
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: Future<Output = Result<(), AgentError>>,
+    {
         let tools = self.tools.definitions();
         let estimated = crate::context::estimate_tokens(history, &tools);
         if self.config.auto_compact
@@ -251,9 +274,7 @@ where
             && let Some(plan) =
                 crate::autocompact::plan(history, &tools, output, self.config.context_tokens)
         {
-            if let Some(sender) = sender {
-                send_agent_event(sender, AgentEvent::CompactionStarted).await?;
-            }
+            emit(AgentEvent::CompactionStarted).await?;
             let event = match crate::autocompact::execute_automatic(
                 &self.backend,
                 plan.with_files(files),
@@ -266,15 +287,10 @@ where
             {
                 Ok(result) => {
                     let fallback = result.record.fallback;
-                    if let Some(sender) = sender {
-                        send_agent_event(
-                            sender,
-                            AgentEvent::CompactionRecorded {
-                                record: result.record,
-                            },
-                        )
-                        .await?;
-                    }
+                    emit(AgentEvent::CompactionRecorded {
+                        record: result.record,
+                    })
+                    .await?;
                     let event = AgentEvent::ContextCompacted {
                         before_tokens: result.before_tokens,
                         after_tokens: result.after_tokens,
@@ -297,9 +313,7 @@ where
                     }
                 }
             };
-            if let Some(sender) = sender {
-                send_agent_event(sender, event).await?;
-            }
+            emit(event).await?;
         }
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled);
@@ -307,12 +321,16 @@ where
         crate::context::check_budget(history, &tools, output, self.config.context_tokens)
     }
 
-    async fn collect_stream_with_agent_events(
+    async fn collect_stream<F, Fut>(
         &self,
         request: ChatRequest,
         cancellation: CancellationToken,
-        sender: &mpsc::Sender<AgentEvent>,
-    ) -> Result<ChatCompletion, AgentError> {
+        emit: &mut F,
+    ) -> Result<ChatCompletion, AgentError>
+    where
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: Future<Output = Result<(), AgentError>>,
+    {
         let fallback_request = request.clone();
         let mut stream = self.backend.stream(request, cancellation.clone()).await?;
         let mut text = String::new();
@@ -322,7 +340,7 @@ where
 
         while let Some(event) = stream.next().await {
             let event = event.map_err(AgentError::Model)?;
-            send_agent_event(sender, AgentEvent::Model(event.clone())).await?;
+            emit(AgentEvent::Model(event.clone())).await?;
             match event {
                 StreamEvent::TextDelta(delta) => text.push_str(&delta),
                 StreamEvent::ReasoningDelta(_) => {}
@@ -355,208 +373,24 @@ where
             } = &completion.message
             {
                 if let Some(content) = content {
-                    send_agent_event(
-                        sender,
-                        AgentEvent::Model(StreamEvent::TextDelta(content.clone())),
-                    )
-                    .await?;
+                    emit(AgentEvent::Model(StreamEvent::TextDelta(content.clone()))).await?;
                 }
                 for (index, call) in tool_calls.iter().enumerate() {
-                    send_agent_event(
-                        sender,
-                        AgentEvent::Model(StreamEvent::ToolCallDelta(ToolCallDelta {
+                    emit(AgentEvent::Model(StreamEvent::ToolCallDelta(
+                        ToolCallDelta {
                             index,
                             id: Some(call.id.clone()),
                             name: Some(call.function.name.clone()),
                             arguments: call.function.arguments.clone(),
-                        })),
-                    )
+                        },
+                    )))
                     .await?;
                 }
-                send_agent_event(
-                    sender,
-                    AgentEvent::Model(StreamEvent::Completed {
-                        finish_reason: completion.finish_reason.clone(),
-                        usage: completion.usage.clone(),
-                    }),
-                )
-                .await?;
-            }
-
-            return Ok(completion);
-        }
-
-        Ok(ChatCompletion {
-            id: None,
-            model: None,
-            message: ChatMessage::Assistant {
-                content: (!text.is_empty()).then_some(text),
-                tool_calls: calls.into_values().collect(),
-            },
-            finish_reason,
-            usage,
-        })
-    }
-
-    async fn run_internal(
-        &self,
-        request: ChatRequest,
-        cancellation: CancellationToken,
-        on_event: Option<&dyn Fn(StreamEvent)>,
-    ) -> Result<AgentResult, AgentError> {
-        if request.messages.is_empty() {
-            return Err(AgentError::InvalidInitialRequest);
-        }
-
-        let mut history = request.messages;
-        let mut files = self.files.clone();
-        files.merge(&crate::memory::FileActivity::from_history(&history));
-        let mut turns = 0;
-        let mut tool_calls = 0;
-        let mut compact_after = 0;
-
-        loop {
-            if cancellation.is_cancelled() {
-                return Err(AgentError::Cancelled);
-            }
-
-            if self.config.max_turns > 0 && turns >= self.config.max_turns {
-                return Err(AgentError::MaxTurns);
-            }
-
-            self.prepare_context(
-                &mut history,
-                request.max_tokens.unwrap_or(4096) as usize,
-                &mut compact_after,
-                &files,
-                cancellation.clone(),
-                None,
-            )
-            .await?;
-            turns += 1;
-            let model_request = ChatRequest {
-                messages: history.clone(),
-                tools: self.tools.definitions(),
-                temperature: request.temperature,
-                max_tokens: request.max_tokens,
-                reasoning_effort: request.reasoning_effort,
-            };
-            let completion = match on_event {
-                Some(on_event) => {
-                    self.collect_stream(model_request, cancellation.clone(), on_event)
-                        .await?
-                }
-                None => {
-                    self.backend
-                        .complete(model_request, cancellation.clone())
-                        .await?
-                }
-            };
-
-            check_finish_reason(completion.finish_reason.as_deref())?;
-            let assistant = completion.message.clone();
-            let calls = match &assistant {
-                ChatMessage::Assistant { tool_calls, .. } => tool_calls.clone(),
-                _ => Vec::new(),
-            };
-            validate_tool_ids(&calls)?;
-            history.push(assistant.clone());
-
-            if calls.is_empty() {
-                return Ok(AgentResult {
-                    final_message: assistant,
-                    history,
-                    turns,
-                    tool_calls,
-                });
-            }
-
-            let mut loaded_attachments = Vec::new();
-            for call in calls {
-                if cancellation.is_cancelled() {
-                    return Err(AgentError::Cancelled);
-                }
-
-                if self.config.max_tool_calls > 0 && tool_calls >= self.config.max_tool_calls {
-                    return Err(AgentError::MaxToolCalls);
-                }
-
-                tool_calls += 1;
-                let result = self.tools.execute(call.clone(), cancellation.clone()).await;
-                let content = match result {
-                    Ok(output) => {
-                        files.observe(&call, &output.content);
-                        loaded_attachments.extend(output.attachments);
-                        output.content
-                    }
-                    Err(error) => format!("tool error: {error}"),
-                };
-                history.push(ChatMessage::tool(call.id, content));
-            }
-            append_loaded_attachments(&mut history, loaded_attachments);
-        }
-    }
-
-    async fn collect_stream(
-        &self,
-        request: ChatRequest,
-        cancellation: CancellationToken,
-        on_event: &dyn Fn(StreamEvent),
-    ) -> Result<ChatCompletion, AgentError> {
-        let fallback_request = request.clone();
-        let mut stream = self.backend.stream(request, cancellation.clone()).await?;
-        let mut text = String::new();
-        let mut calls = BTreeMap::new();
-        let mut finish_reason = None;
-        let mut usage = None;
-
-        while let Some(event) = stream.next().await {
-            let event = event.map_err(AgentError::Model)?;
-            on_event(event.clone());
-
-            match event {
-                StreamEvent::TextDelta(delta) => text.push_str(&delta),
-                StreamEvent::ReasoningDelta(_) => {}
-                StreamEvent::ToolCallDelta(delta) => merge_tool_call(&mut calls, delta),
-                StreamEvent::Completed {
-                    finish_reason: reason,
-                    usage: event_usage,
-                } => {
-                    if reason.is_some() {
-                        finish_reason = reason;
-                    }
-                    merge_usage(&mut usage, event_usage);
-                }
-            }
-        }
-
-        check_finish_reason(finish_reason.as_deref())?;
-        if text.is_empty() && calls.is_empty() && finish_reason.is_none() {
-            let completion = self
-                .backend
-                .complete(fallback_request, cancellation)
-                .await?;
-
-            if let ChatMessage::Assistant {
-                content,
-                tool_calls,
-            } = &completion.message
-            {
-                if let Some(content) = content {
-                    on_event(StreamEvent::TextDelta(content.clone()));
-                }
-                for (index, call) in tool_calls.iter().enumerate() {
-                    on_event(StreamEvent::ToolCallDelta(ToolCallDelta {
-                        index,
-                        id: Some(call.id.clone()),
-                        name: Some(call.function.name.clone()),
-                        arguments: call.function.arguments.clone(),
-                    }));
-                }
-                on_event(StreamEvent::Completed {
+                emit(AgentEvent::Model(StreamEvent::Completed {
                     finish_reason: completion.finish_reason.clone(),
                     usage: completion.usage.clone(),
-                });
+                }))
+                .await?;
             }
 
             return Ok(completion);
@@ -1139,6 +973,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.final_message, ChatMessage::assistant("answer"));
+    }
+
+    struct StreamOnlyModel;
+
+    impl ModelBackend for StreamOnlyModel {
+        fn complete<'a>(
+            &'a self,
+            _: ChatRequest,
+            _: CancellationToken,
+        ) -> crate::model::CompletionFuture<'a> {
+            Box::pin(async { panic!("the canonical execution loop must use stream") })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _: ChatRequest,
+            _: CancellationToken,
+        ) -> crate::model::StreamFuture<'a> {
+            Box::pin(async {
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    Ok(StreamEvent::TextDelta("streamed answer".into())),
+                    Ok(StreamEvent::Completed {
+                        finish_reason: Some("stop".into()),
+                        usage: None,
+                    }),
+                ])) as orbit_model::types::ModelStream)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn non_event_run_uses_the_same_streaming_core() {
+        let agent = Agent::new(StreamOnlyModel, ToolRegistry::new(), AgentConfig::default());
+        let result = agent
+            .run(request(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            result.final_message,
+            ChatMessage::assistant("streamed answer")
+        );
     }
 
     #[tokio::test]
