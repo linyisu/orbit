@@ -195,6 +195,19 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             let lines = write_diff(preview);
             (title, lines)
         }
+        orbit_tools::approval::ApprovalPreview::Delete(preview) => {
+            let title = format!(
+                "删除确认 · {}\n移除由 Orbit 创建且仍与检查点一致的文件 · {} 字节",
+                visible(&preview.path),
+                preview.before.len(),
+            );
+            let lines = write_diff(&orbit_tools::approval::WritePreview {
+                path: preview.path.clone(),
+                before: Some(preview.before.clone()),
+                after: String::new(),
+            });
+            (title, lines)
+        }
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
             let mut lines = vec![
                 Line::from(if preview.writable_snapshot {

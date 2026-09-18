@@ -50,7 +50,7 @@ impl Mode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbit_tools::approval::{CommandPreview, WritePreview};
+    use orbit_tools::approval::{CommandPreview, DeletePreview, WritePreview};
     #[test]
     fn policy_matrix_and_cycle() {
         let command = ApprovalPreview::Command(CommandPreview {
@@ -63,12 +63,18 @@ mod tests {
             before: None,
             after: "text".into(),
         });
+        let delete = ApprovalPreview::Delete(DeletePreview {
+            path: "file".into(),
+            before: "text".into(),
+        });
         assert!(!Mode::Ask.allows(&command));
         assert!(!Mode::Ask.allows(&write));
         assert!(Mode::Auto.allows(&command));
         assert!(!Mode::Auto.allows(&write));
+        assert!(!Mode::Auto.allows(&delete));
         assert!(Mode::Yolo.allows(&command));
         assert!(Mode::Yolo.allows(&write));
+        assert!(Mode::Yolo.allows(&delete));
         assert_eq!(Mode::default(), Mode::Auto);
         assert_eq!(Mode::Auto.next().next().next(), Mode::Auto);
         assert_eq!(Mode::parse("yolo"), Some(Mode::Yolo));

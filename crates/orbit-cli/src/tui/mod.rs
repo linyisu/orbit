@@ -89,6 +89,7 @@ pub async fn run(
     model_name: String,
     tools: ToolRegistry,
     mut session: SessionState,
+    undo_writer: orbit_tools::write_file::WriteFile,
     mut approvals: orbit_tools::approval::ApprovalReceiver,
     budget: RequestBudget,
 ) -> Result<()> {
@@ -130,6 +131,10 @@ pub async fn run(
     let mut receiver: Option<mpsc::Receiver<AgentEvent>> = None;
     let mut cancellation: Option<CancellationToken> = None;
     let mut task: Option<RunTask> = None;
+    let mut local_task: Option<
+        tokio::task::JoinHandle<Result<String, orbit_agent::tool::ToolError>>,
+    > = None;
+    let mut local_cancellation: Option<CancellationToken> = None;
     let mut pending_guidance = Vec::new();
     let mut active_context: Option<ChatMessage> = None;
     let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
@@ -203,9 +208,9 @@ pub async fn run(
                         continue;
                     }
                     if matches!(&event, Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)) {
-                        if state.selection.dragging() { keyboard_action(&mut state, event, task.is_some()); }
+                        if state.selection.dragging() { keyboard_action(&mut state, event, task.is_some() || local_task.is_some()); }
                         else if pending.is_some() { approval::handle(&mut state, event); }
-                        else { keyboard_action(&mut state, event, task.is_some()); }
+                        else { keyboard_action(&mut state, event, task.is_some() || local_task.is_some()); }
                         continue;
                     }
                     if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release) {
@@ -227,23 +232,31 @@ pub async fn run(
                                 state.approval = None;
                             }
                             approval::Action::Cancel => {
-                                pending = None;
+                                if let Some(request) = pending.take() { let _ = request.decision.send(false); }
                                 state.approval = None;
                                 state.cancel();
                                 if let Some(token) = &cancellation { token.cancel(); }
+                                if let Some(token) = &local_cancellation { token.cancel(); }
                             }
                             approval::Action::None => {}
                         }
                         continue;
                     }
-                    match keyboard_action(&mut state, event, task.is_some()) {
+                    match keyboard_action(&mut state, event, task.is_some() || local_task.is_some()) {
                         Action::Quit => break,
                         Action::Redraw => terminal.clear()?,
                         Action::Cancel => {
                             state.cancel();
                             if let Some(token) = &cancellation { token.cancel(); }
+                            if let Some(token) = &local_cancellation { token.cancel(); }
                         }
                         Action::Steer(guidance) => {
+                            if local_task.is_some() {
+                                state.transcript.push(TranscriptItem::CommandError(
+                                    "正在等待回退操作完成或取消。".into(),
+                                ));
+                                continue;
+                            }
                             pending_guidance.push(guidance);
                             state.cancel();
                             if let Some(token) = &cancellation { token.cancel(); }
@@ -259,12 +272,59 @@ pub async fn run(
                             }
                         }
                         Action::Submit(prompt) => {
+                            if local_task.is_some() {
+                                state.transcript.push(TranscriptItem::Command(prompt));
+                                state.transcript.push(TranscriptItem::CommandError(
+                                    "正在等待回退操作完成或取消。".into(),
+                                ));
+                                continue;
+                            }
                             let compacting = prompt.trim() == "/compact";
                             if prompt.starts_with('/') {
                                 let command = prompt
                                     .split_once(char::is_whitespace)
                                     .map_or(prompt.as_str(), |(command, _)| command);
                                 state.transcript.push(TranscriptItem::Command(prompt.clone()));
+                                if command == "/undo" {
+                                    let argument = prompt
+                                        .split_once(char::is_whitespace)
+                                        .map_or("", |(_, argument)| argument.trim());
+                                    let changes = session.store.workspace_changes(session.id()).await?;
+                                    let change = changes
+                                        .iter()
+                                        .rev()
+                                        .find(|record| {
+                                            !record.undone
+                                                && (argument.is_empty()
+                                                    || record.change.path == argument)
+                                        })
+                                        .cloned();
+                                    let Some(change) = change else {
+                                        state.transcript.push(TranscriptItem::CommandError(if argument.is_empty() {
+                                            "当前会话没有可回退的 Orbit 文件写入。".into()
+                                        } else {
+                                            format!("当前会话没有 {argument} 的 Orbit 写入检查点。")
+                                        }));
+                                        continue;
+                                    };
+                                    let token = CancellationToken::new();
+                                    let writer = undo_writer.clone();
+                                    let task_token = token.clone();
+                                    let store = session.store.clone();
+                                    let session_id = session.id().to_owned();
+                                    local_task = Some(tokio::spawn(async move {
+                                        let result = writer.restore(change.change.clone(), task_token).await?;
+                                        store
+                                            .record_workspace_undo(&session_id, &change)
+                                            .await
+                                            .map_err(|error| orbit_agent::tool::ToolError::ExecutionFailed(format!(
+                                                "undo completed but its audit record could not be saved: {error}"
+                                            )))?;
+                                        Ok(result)
+                                    }));
+                                    local_cancellation = Some(token);
+                                    continue;
+                                }
                                 if compacting && task.is_some() {
                                     state.transcript.push(TranscriptItem::CommandError(
                                         "运行中不能压缩上下文；请先按 Esc 取消当前响应。".into(),
@@ -409,6 +469,16 @@ pub async fn run(
                         active_context = None;
                     }
                 }
+                result = async { local_task.as_mut().unwrap().await }, if local_task.is_some() => {
+                    dirty = true;
+                    local_task = None;
+                    local_cancellation = None;
+                    match result {
+                        Ok(Ok(result)) => state.transcript.push(TranscriptItem::CommandResult(format_undo_result(&result))),
+                        Ok(Err(error)) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
+                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("回退操作中断：{error}"))),
+                    }
+                }
                 _ = time::sleep_until(frames.deadline()), if frames.pending() => {
                     terminal::draw_synchronized(&mut terminal, |frame| {
                         render::draw(frame, &mut state);
@@ -436,7 +506,18 @@ pub async fn run(
     if let Some(token) = cancellation {
         token.cancel();
     }
+    if let Some(token) = local_cancellation {
+        token.cancel();
+    }
     if let Some(mut task) = task
+        && time::timeout(Duration::from_millis(500), &mut task)
+            .await
+            .is_err()
+    {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(mut task) = local_task
         && time::timeout(Duration::from_millis(500), &mut task)
             .await
             .is_err()
@@ -468,6 +549,20 @@ fn apply_live_event(event: AgentEvent, state: &mut UiState, session: &mut Sessio
 fn refresh_context_usage(state: &mut UiState, history: &[ChatMessage], tools: &ToolRegistry) {
     state.context_used_tokens =
         orbit_agent::context::estimate_tokens(history, &tools.definitions());
+}
+
+fn format_undo_result(result: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(result) else {
+        return result.into();
+    };
+    let path = value["path"].as_str().unwrap_or("文件");
+    if value["created_file_removed"].as_bool() == Some(true) {
+        format!("已回退 {path}：已删除由 Orbit 创建的文件。")
+    } else if value["restored"].as_bool() == Some(true) {
+        format!("已回退 {path}：已恢复到 Orbit 写入前的内容。")
+    } else {
+        result.into()
+    }
 }
 
 fn steering_history(

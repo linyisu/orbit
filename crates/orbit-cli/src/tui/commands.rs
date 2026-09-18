@@ -50,6 +50,10 @@ pub const COMMANDS: &[Command] = &[
         description: "查看 Orbit 最近一次写入的检查点差异",
     },
     Command {
+        name: "/undo",
+        description: "回退最近一次 Orbit 写入；可指定 /undo <路径>",
+    },
+    Command {
         name: "/compact",
         description: "总结旧对话，保留最近两轮；模型不可用时本地回退",
     },

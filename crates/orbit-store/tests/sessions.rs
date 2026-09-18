@@ -101,6 +101,9 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
     assert_eq!(changes[0].tool, "write_file");
     assert_eq!(changes[0].change.before.as_deref(), Some("old"));
     assert_eq!(changes[0].change.after, "new");
+    assert!(!changes[0].undone);
+    store.record_workspace_undo(&id, &changes[0]).await.unwrap();
+    assert!(store.workspace_changes(&id).await.unwrap()[0].undone);
 }
 
 #[tokio::test]
@@ -148,7 +151,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=7").unwrap();
+    connection.execute_batch("PRAGMA user_version=8").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }

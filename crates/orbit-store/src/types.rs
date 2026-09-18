@@ -44,6 +44,9 @@ pub struct WorkspaceChange {
     pub call_id: String,
     pub tool: String,
     pub change: FileChange,
+    /// A local `/undo` restored this exact checkpoint. The original audit
+    /// receipt remains visible, but it is no longer eligible for another undo.
+    pub undone: bool,
 }
 
 /// A durable, user-visible unit of project work. Tasks live on the stable

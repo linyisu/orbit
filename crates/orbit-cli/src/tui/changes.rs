@@ -16,7 +16,9 @@ pub fn list(changes: &[WorkspaceChange]) -> String {
     let mut output = String::from("Orbit 变更\n");
     for (index, record) in changes.iter().enumerate() {
         use std::fmt::Write;
-        let kind = if record.change.before.is_some() {
+        let kind = if record.undone {
+            "已回退"
+        } else if record.change.before.is_some() {
             "修改"
         } else {
             "新建"
@@ -32,7 +34,9 @@ pub fn list(changes: &[WorkspaceChange]) -> String {
             record.run_status
         );
     }
-    output.push_str("\n/diff <路径> 可查看最近一次该路径写入的检查点差异。\n");
+    output.push_str(
+        "\n/diff <路径> 可查看最近一次该路径写入的检查点差异；/undo [路径] 可在确认后回退。\n",
+    );
     output
 }
 
@@ -55,9 +59,10 @@ pub fn diff(changes: &[WorkspaceChange], path: &str) -> String {
         )
         .to_string();
     let (text, truncated) = truncate_chars(text, MAX_DIFF_CHARS);
+    let status = if record.undone { " · 已回退" } else { "" };
     let mut output = format!(
-        "检查点：{} · {} · run {} {}\n{}",
-        record.change.path, record.tool, record.run_id, record.run_status, text
+        "检查点：{} · {} · run {} {}{}\n{}",
+        record.change.path, record.tool, record.run_id, record.run_status, status, text
     );
     if truncated {
         output.push_str("\n… 差异显示已截断；检查点全文仍在本地会话数据库中。\n");
@@ -90,6 +95,7 @@ mod tests {
                 before: before.map(str::to_owned),
                 after: after.into(),
             },
+            undone: false,
         }
     }
 

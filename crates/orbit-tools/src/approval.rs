@@ -8,6 +8,12 @@ pub struct WritePreview {
 }
 
 #[derive(Clone, Debug)]
+pub struct DeletePreview {
+    pub path: String,
+    pub before: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct CommandPreview {
     pub writable_snapshot: bool,
     pub command: String,
@@ -17,6 +23,7 @@ pub struct CommandPreview {
 #[derive(Clone, Debug)]
 pub enum ApprovalPreview {
     Write(WritePreview),
+    Delete(DeletePreview),
     Command(CommandPreview),
 }
 

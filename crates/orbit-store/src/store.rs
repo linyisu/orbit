@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -45,7 +46,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 6,
+                version <= 7,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -121,6 +122,20 @@ impl Store {
                 connection.execute_batch(
                     "ALTER TABLE events ADD COLUMN created_at_ms INTEGER;
                      PRAGMA user_version=6;",
+                )?;
+            }
+            if version < 7 {
+                connection.execute_batch(
+                    "CREATE TABLE workspace_undos (
+                        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                        call_id TEXT NOT NULL,
+                        path TEXT NOT NULL,
+                        undone_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                        PRIMARY KEY(session_id,run_id,call_id,path)
+                    );
+                    CREATE INDEX workspace_undos_session ON workspace_undos(session_id,run_id);
+                    PRAGMA user_version=7;",
                 )?;
             }
             connection.execute_batch("COMMIT;")?;
@@ -251,6 +266,16 @@ impl Store {
     pub async fn workspace_changes(&self, session_id: &str) -> Result<Vec<WorkspaceChange>> {
         let session_id = session_id.to_owned();
         self.access(move |conn| {
+            let undone = conn
+                .prepare("SELECT run_id,call_id,path FROM workspace_undos WHERE session_id=?1")?
+                .query_map([&session_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<HashSet<_>>>()?;
             let mut statement = conn.prepare(
                 "SELECT r.id,r.status,e.payload
                  FROM runs r JOIN events e ON e.run_id=r.id
@@ -279,12 +304,39 @@ impl Store {
                             run_status: run_status.clone(),
                             call_id: call.id.clone(),
                             tool: call.function.name.clone(),
+                            undone: undone.contains(&(
+                                run_id,
+                                call.id.clone(),
+                                change.path.clone(),
+                            )),
                             change,
                         });
                     }
                 }
             }
             Ok(changes)
+        })
+        .await
+    }
+
+    /// Mark an exact write receipt as restored after `/undo` commits. This is
+    /// kept separate from agent events because local commands are not model
+    /// turns, while preserving the original append-only write audit.
+    pub async fn record_workspace_undo(
+        &self,
+        session_id: &str,
+        change: &WorkspaceChange,
+    ) -> Result<()> {
+        let session_id = session_id.to_owned();
+        let run_id = change.run_id;
+        let call_id = change.call_id.clone();
+        let path = change.change.path.clone();
+        self.access(move |conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO workspace_undos(session_id,run_id,call_id,path) VALUES(?1,?2,?3,?4)",
+                params![session_id, run_id, call_id, path],
+            )?;
+            Ok(())
         })
         .await
     }

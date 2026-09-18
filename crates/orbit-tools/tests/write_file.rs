@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use orbit_agent::tool::{Tool, ToolError, ToolOutput};
+use orbit_agent::tool::{FileChange, Tool, ToolError, ToolOutput};
 use orbit_model::types::ToolCall;
 use orbit_tools::{
     approval::{self, ApprovalReceiver},
@@ -147,6 +147,109 @@ async fn deny_cancel_and_closed_ui_never_write() {
             .is_err()
     );
     assert!(!root.0.join("new").exists());
+}
+
+#[tokio::test]
+async fn restore_requires_a_matching_checkpoint_and_can_remove_created_files() {
+    let root = Fixture::new();
+    let (tool, mut approvals) = root.tool();
+    fs::write(root.0.join("existing"), "Orbit version").unwrap();
+    let task = tokio::spawn({
+        let tool = tool.clone();
+        async move {
+            tool.restore(
+                FileChange {
+                    path: "existing".into(),
+                    before: Some("original".into()),
+                    after: "Orbit version".into(),
+                },
+                CancellationToken::new(),
+            )
+            .await
+        }
+    });
+    let approval = request(&mut approvals).await;
+    let approval::ApprovalPreview::Write(preview) = &approval.preview else {
+        panic!("expected restore write preview")
+    };
+    assert_eq!(preview.before.as_deref(), Some("Orbit version"));
+    assert_eq!(preview.after, "original");
+    approval.decision.send(true).unwrap();
+    assert!(task.await.unwrap().unwrap().contains("\"restored\":true"));
+    assert_eq!(
+        fs::read_to_string(root.0.join("existing")).unwrap(),
+        "original"
+    );
+
+    fs::write(root.0.join("created"), "created by Orbit").unwrap();
+    let task = tokio::spawn({
+        let tool = tool.clone();
+        async move {
+            tool.restore(
+                FileChange {
+                    path: "created".into(),
+                    before: None,
+                    after: "created by Orbit".into(),
+                },
+                CancellationToken::new(),
+            )
+            .await
+        }
+    });
+    let approval = request(&mut approvals).await;
+    assert!(matches!(
+        &approval.preview,
+        approval::ApprovalPreview::Delete(_)
+    ));
+    approval.decision.send(true).unwrap();
+    assert!(
+        task.await
+            .unwrap()
+            .unwrap()
+            .contains("\"created_file_removed\":true")
+    );
+    assert!(!root.0.join("created").exists());
+
+    fs::write(root.0.join("external"), "human version").unwrap();
+    assert!(
+        tool.restore(
+            FileChange {
+                path: "external".into(),
+                before: Some("original".into()),
+                after: "Orbit version".into(),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .is_err()
+    );
+    assert!(approvals.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn restore_refuses_a_file_changed_after_its_preview() {
+    let root = Fixture::new();
+    let (tool, mut approvals) = root.tool();
+    fs::write(root.0.join("created"), "created by Orbit").unwrap();
+    let task = tokio::spawn(async move {
+        tool.restore(
+            FileChange {
+                path: "created".into(),
+                before: None,
+                after: "created by Orbit".into(),
+            },
+            CancellationToken::new(),
+        )
+        .await
+    });
+    let approval = request(&mut approvals).await;
+    fs::write(root.0.join("created"), "human changed it").unwrap();
+    approval.decision.send(true).unwrap();
+    assert!(task.await.unwrap().is_err());
+    assert_eq!(
+        fs::read_to_string(root.0.join("created")).unwrap(),
+        "human changed it"
+    );
 }
 
 #[tokio::test]

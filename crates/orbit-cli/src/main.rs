@@ -459,6 +459,8 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let input_context_tokens = default_model.input_context_tokens;
     let client = ModelClient::new(default_model.config)?;
     let session = session::SessionState::open(database, args.resume, model_name.clone()).await?;
+    let undo_writer =
+        runtime::workspace_writer(&config_path, session.store.path(), approvals.clone())?;
     let mut tools = runtime::workspace_tools(
         &config_path,
         Some(session.store.path()),
@@ -478,6 +480,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         model_name,
         tools,
         session,
+        undo_writer,
         approval_receiver,
         tui::RequestBudget {
             context_tokens,
