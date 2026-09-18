@@ -14,7 +14,11 @@ pub mod terminal;
 mod transcript;
 mod wheel;
 
-use std::{path::PathBuf, process::Command, time::Duration};
+use std::{
+    path::PathBuf,
+    process::{Command, Stdio},
+    time::Duration,
+};
 
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
@@ -1354,7 +1358,15 @@ fn open_link_in_browser(value: &str) -> Result<()> {
     };
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     anyhow::bail!("当前系统不支持打开默认浏览器");
-    command.arg(url.as_str()).spawn()?;
+    // `xdg-open` may hand off to an already-running Chromium process. Keep
+    // every descriptor detached from the alternate screen; otherwise browser
+    // diagnostics can be printed through the active TUI and corrupt its frame.
+    command
+        .arg(url.as_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
     Ok(())
 }
 

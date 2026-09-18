@@ -258,15 +258,14 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     );
     frame.render_widget(Clear, area);
     let title = if state.picker.is_some() {
-        " 恢复会话 · 当前项目 "
+        "恢复会话 · 当前项目"
     } else if state.model_picker.is_some() {
-        " 选择模型 "
+        "选择模型"
     } else {
-        " Orbit 帮助 "
+        "Orbit 帮助"
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(title)
         .border_style(Style::default().fg(Color::Rgb(218, 139, 109)));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -292,11 +291,22 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor = Some(
             (
                 header.x + unicode_width::UnicodeWidthStr::width(search.as_str()) as u16,
-                header.y,
+                header.y + 1,
             )
                 .into(),
         );
-        frame.render_widget(Paragraph::new(format!("{search}▏")), header);
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::styled(
+                    title,
+                    Style::default()
+                        .fg(Color::Rgb(218, 139, 109))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::from(format!("{search}▏")),
+            ]),
+            header,
+        );
         let rows = picker.matches();
         let visible = (body.height as usize / 2).max(1);
         let first = picker.selected.saturating_sub(visible - 1);
@@ -350,11 +360,22 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor = Some(
             (
                 header.x + unicode_width::UnicodeWidthStr::width(search.as_str()) as u16,
-                header.y,
+                header.y + 1,
             )
                 .into(),
         );
-        frame.render_widget(Paragraph::new(format!("{search}▏")), header);
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::styled(
+                    title,
+                    Style::default()
+                        .fg(Color::Rgb(218, 139, 109))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::from(format!("{search}▏")),
+            ]),
+            header,
+        );
         let rows = picker.matches();
         let visible = body.height.saturating_sub(2) as usize;
         let first = picker.selected.saturating_sub(visible - 1);
@@ -420,16 +441,24 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         state.ime_cursor = None;
         frame.render_widget(
-            Paragraph::new(if state.help_keys {
-                "命令     [快捷键]"
-            } else {
-                "[命令]     快捷键"
-            })
-            .style(
-                Style::default()
-                    .fg(Color::Rgb(218, 139, 109))
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Paragraph::new(vec![
+                Line::styled(
+                    title,
+                    Style::default()
+                        .fg(Color::Rgb(218, 139, 109))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::styled(
+                    if state.help_keys {
+                        "命令     [快捷键]"
+                    } else {
+                        "[命令]     快捷键"
+                    },
+                    Style::default()
+                        .fg(Color::Rgb(218, 139, 109))
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
             header,
         );
         let lines: Vec<Line> = if state.help_keys {
@@ -591,5 +620,25 @@ mod tests {
         assert!(!text.contains("/help"));
         handle(&mut state, key(KeyCode::Esc));
         assert!(!state.show_help);
+    }
+
+    #[test]
+    fn panel_title_uses_the_inner_header_not_the_border() {
+        let mut state = UiState::new("model");
+        state.picker = Some(SessionPicker::new(vec![session("abc", "a session")]));
+        let width = 80;
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text_at = |row: u16| {
+            (0..width)
+                .map(|column| {
+                    buffer.content()[(row as usize * width as usize) + column as usize].symbol()
+                })
+                .collect::<String>()
+        };
+        assert!(!text_at(1).contains('恢'));
+        assert!(text_at(2).contains('恢'), "{}", text_at(2));
+        assert!(text_at(1).contains('─'));
     }
 }
