@@ -14,10 +14,9 @@ pub mod terminal;
 mod transcript;
 mod wheel;
 
-/// A full-height terminal/code glyph. `` is a narrow Font Awesome pictogram
-/// in common Nerd Font variants, which makes command turns look lighter than the
-/// user marker even though both occupy one terminal cell.
-pub(crate) const COMMAND_ICON: &str = "󰆍";
+/// Use the same chevron family as the user marker. Private-use code/terminal
+/// pictograms can render very small in Nerd Fonts; bold cannot enlarge them.
+pub(crate) const COMMAND_ICON: &str = "❮/❯";
 
 use std::{
     path::PathBuf,

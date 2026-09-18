@@ -343,8 +343,8 @@ impl Entry {
         }
 
         let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
-        // Keep the turn marker inside the top rail. The code icon is a
-        // full-height Nerd Font terminal glyph rather than the narrow ``.
+        // Keep the marker joined to the top rail and measure its display width
+        // so the multi-cell command marker leaves the right corner aligned.
         let top_label = format!("╭─{icon}─");
         let trailing = "─".repeat(usize::from(width) - top_label.width() - 1);
         self.push(
