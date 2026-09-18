@@ -627,7 +627,16 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     draw_link_tooltip(frame, state);
 }
 
+#[cfg(test)]
 pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<Line<'static>> {
+    transcript_lines_at_width(items, expanded, u16::MAX)
+}
+
+pub(super) fn transcript_lines_at_width(
+    items: &[TranscriptItem],
+    expanded: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for item in items {
         match item {
@@ -712,6 +721,11 @@ pub(super) fn transcript_lines(items: &[TranscriptItem], expanded: bool) -> Vec<
                             .lines()
                             .map(|line| Line::from(muted(format!("    {line}")))),
                     );
+                }
+                if let Some(output) = super::tool_display::lines(row, expanded, width) {
+                    lines.extend(output);
+                    lines.push(Line::from(""));
+                    continue;
                 }
                 let output = serde_json::from_str::<serde_json::Value>(&row.output)
                     .ok()

@@ -11,6 +11,7 @@ mod permissions;
 pub mod render;
 mod selection;
 pub mod terminal;
+mod tool_display;
 mod transcript;
 mod wheel;
 

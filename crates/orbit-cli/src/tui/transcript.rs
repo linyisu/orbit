@@ -477,9 +477,10 @@ impl TranscriptLayout {
                 }
                 _ => {
                     *entry = Entry::default();
-                    for line in render::transcript_lines(
+                    for line in render::transcript_lines_at_width(
                         std::slice::from_ref(item),
                         expanded == Some(first + relative),
+                        width,
                     ) {
                         entry.push(line, width);
                     }
