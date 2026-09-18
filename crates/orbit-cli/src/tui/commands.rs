@@ -41,6 +41,18 @@ pub const COMMANDS: &[Command] = &[
         description: "查看上下文估算和预算",
     },
     Command {
+        name: "/skills",
+        description: "查看已发现的 Skills",
+    },
+    Command {
+        name: "/skill",
+        description: "载入 Skill；用法 /skill <名称>",
+    },
+    Command {
+        name: "/mcp",
+        description: "查看 MCP server 连接状态",
+    },
+    Command {
         name: "/tasks",
         description: "查看或更新当前项目的任务计划",
     },
@@ -93,7 +105,14 @@ pub fn matching(input: &str) -> Vec<&'static Command> {
 pub fn available_while_running(name: &str) -> bool {
     matches!(
         name,
-        "/status" | "/diagnostics" | "/model" | "/context" | "/mode" | "/permissions"
+        "/status"
+            | "/diagnostics"
+            | "/model"
+            | "/context"
+            | "/skills"
+            | "/mcp"
+            | "/mode"
+            | "/permissions"
     )
 }
 

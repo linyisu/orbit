@@ -1165,7 +1165,8 @@ mod tests {
         let first_page = render(&mut state, 100, 20);
         assert!(first_page.contains("/new"));
         assert!(!first_page.contains("/tasks"));
-        assert!(first_page.contains("1/16"));
+        let count = crate::tui::commands::COMMANDS.len();
+        assert!(first_page.contains(&format!("1/{count}")));
 
         state.menu_index = 5;
         let middle_page = render(&mut state, 100, 20);
@@ -1176,7 +1177,7 @@ mod tests {
         let last_page = render(&mut state, 100, 20);
         assert!(last_page.contains("/exit"));
         assert!(!last_page.contains("/new"));
-        assert!(last_page.contains("16/16"));
+        assert!(last_page.contains(&format!("{count}/{count}")));
     }
 
     fn render(state: &mut UiState, width: u16, height: u16) -> String {

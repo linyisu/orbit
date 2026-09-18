@@ -9,15 +9,21 @@ use orbit_tools::{
     run_command::RunCommand, search_text::SearchText, workspace::Workspace, write_file::WriteFile,
 };
 
-pub fn workspace_tools(
+pub struct WorkspaceRuntime {
+    pub tools: ToolRegistry,
+    pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
+}
+
+pub async fn workspace_tools(
     config: &Path,
     database: Option<&Path>,
     approvals: Option<ApprovalSender>,
     command_limits: orbit_tools::run_command::CommandLimits,
     web: orbit_tools::web_fetch::WebConfig,
+    mcp: orbit_tools::mcp::McpConfig,
     scratch: Option<orbit_tools::run_command::ScratchDirectory>,
     command_output: Option<orbit_tools::run_command::CommandOutputDirectory>,
-) -> Result<ToolRegistry> {
+) -> Result<WorkspaceRuntime> {
     let workspace = protected_workspace(config, database)?;
     let mut tools = ToolRegistry::new();
     tools.register(ReadFile::new(workspace.clone()));
@@ -36,7 +42,7 @@ pub fn workspace_tools(
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
-        let command = RunCommand::with_limits(workspace, approvals, command_limits);
+        let command = RunCommand::with_limits(workspace.clone(), approvals, command_limits);
         let command = if let Some(scratch) = scratch {
             command.with_scratch(scratch)
         } else {
@@ -49,7 +55,11 @@ pub fn workspace_tools(
             tools.register(command);
         }
     }
-    Ok(tools)
+    let mcp_statuses = orbit_tools::mcp::register(&mut tools, &mcp, workspace.root()).await;
+    Ok(WorkspaceRuntime {
+        tools,
+        mcp_statuses,
+    })
 }
 
 pub fn workspace_writer(

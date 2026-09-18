@@ -55,6 +55,8 @@ struct StartedRun {
 struct CommandContext<'a> {
     tools: &'a ToolRegistry,
     instructions: &'a crate::instructions::Instructions,
+    skills: &'a crate::skills::Skills,
+    mcp_statuses: &'a [orbit_tools::mcp::McpServerStatus],
     model_options: &'a [ModelOption],
 }
 
@@ -85,6 +87,8 @@ pub struct RequestBudget {
     pub max_turns: usize,
     pub max_tool_calls: usize,
     pub instructions: crate::instructions::Instructions,
+    pub skills: crate::skills::Skills,
+    pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
     pub model_options: Vec<ModelOption>,
 }
 
@@ -107,6 +111,8 @@ pub async fn run(
         max_turns,
         max_tool_calls,
         instructions,
+        skills,
+        mcp_statuses,
         model_options,
     } = budget;
     state.context_tokens = context_tokens;
@@ -122,6 +128,7 @@ pub async fn run(
     restore_model_profile(&mut state, &mut model, &model_options, &session);
     let mut history = session.snapshot.history.clone();
     crate::instructions::inject(&mut history, &instructions);
+    skills.inject(&mut history);
     crate::project_state::inject(
         &mut history,
         &session.store,
@@ -172,7 +179,7 @@ pub async fn run(
                     frames.request(time::Instant::now());
                     if state.show_help || state.picker.is_some() || state.model_picker.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event)
-                            && let Err(error) = resume_session(&id, &mut state, &mut model, &mut history, &mut session, &instructions, &model_options).await
+                            && let Err(error) = resume_session(&id, &mut state, &mut model, &mut history, &mut session, &instructions, &skills, &model_options).await
                             && let Some(picker) = &mut state.picker {
                             picker.error = Some(error.to_string());
                         }
@@ -371,7 +378,7 @@ pub async fn run(
                                         ));
                                         continue;
                                     }
-                                    match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, model_options: &model_options }).await {
+                                    match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, skills: &skills, mcp_statuses: &mcp_statuses, model_options: &model_options }).await {
                                         Ok(true) => break,
                                         Ok(false) => refresh_context_usage(&mut state, &history, &tools),
                                         Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
@@ -460,6 +467,7 @@ pub async fn run(
                     if let Some(saved) = completed_history {
                         history = saved;
                         crate::instructions::inject(&mut history, &instructions);
+                        skills.inject(&mut history);
                         crate::project_state::inject(
                             &mut history,
                             &session.store,
@@ -736,6 +744,8 @@ async fn run_command(
     let CommandContext {
         tools,
         instructions,
+        skills,
+        mcp_statuses,
         model_options,
     } = context;
     let (command, argument) = prompt
@@ -751,6 +761,7 @@ async fn run_command(
                 .await?;
             history.clear();
             crate::instructions::inject(history, instructions);
+            skills.inject(history);
             crate::project_state::inject(
                 history,
                 &session.store,
@@ -846,6 +857,44 @@ async fn run_command(
                 .sum::<usize>();
             state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动压缩：{}（输入窗口的 85% 触发）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n/compact 总结旧对话并保留最近两轮；模型摘要不可用时使用本地回退。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
+        "/skills" if argument.is_empty() => state
+            .transcript
+            .push(TranscriptItem::CommandResult(skills.render())),
+        "/mcp" if argument.is_empty() => {
+            state
+                .transcript
+                .push(TranscriptItem::CommandResult(render_mcp_status(
+                    mcp_statuses,
+                )))
+        }
+        "/skill" => {
+            if argument.is_empty() {
+                state.transcript.push(TranscriptItem::CommandError(
+                    "用法：/skill <名称>。输入 /skills 查看已发现的 Skills。".into(),
+                ));
+            } else if let Some(skill) = skills.get(argument) {
+                match std::fs::read_to_string(&skill.path) {
+                    Ok(content) => {
+                        history.push(ChatMessage::user(format!(
+                            "请在后续工作中使用已载入的 Skill /{}：\n{}",
+                            skill.command, content
+                        )));
+                        state.transcript.push(TranscriptItem::CommandResult(format!(
+                            "已载入 /{}。",
+                            skill.command
+                        )));
+                    }
+                    Err(error) => state.transcript.push(TranscriptItem::CommandError(format!(
+                        "无法读取 Skill /{}：{error}",
+                        skill.command
+                    ))),
+                }
+            } else {
+                state.transcript.push(TranscriptItem::CommandError(format!(
+                    "未找到 Skill {argument:?}。输入 /skills 查看已发现的 Skills。"
+                )));
+            }
+        }
         "/tasks" => run_tasks_command(argument, state, history, session).await?,
         "/memory" => run_memory_command(argument, state, history, session).await?,
         "/changes" if argument.is_empty() => {
@@ -885,6 +934,7 @@ async fn run_command(
                 history,
                 session,
                 instructions,
+                skills,
                 model_options,
             )
             .await?
@@ -927,9 +977,15 @@ async fn run_command(
                     )
                 },
             );
+            let tool_names = tools
+                .definitions()
+                .iter()
+                .map(|definition| definition.function.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ");
             state.transcript.push(TranscriptItem::CommandResult(format!(
-                "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n{}\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\n超时  {}s（流空闲）\n工具  read_file / read_image / read_document / search_text / list_files / git_inspect / web_fetch / web_search / task_list / task_update / memory_list / memory_search / memory_save / memory_forget / write_file / edit_file / run_command / read_command_output · 审批：{}",
-                session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), baseline, verification, state.model, history.len(), instructions.sources.len(), model.config().timeout.as_secs(), state.permission_mode.label()
+                "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n{}\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\nSkills  {} 个\nMCP  {} 个 server，输入 /mcp 查看状态\n超时  {}s（流空闲）\n工具  {} · 审批：{}",
+                session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), baseline, verification, state.model, history.len(), instructions.sources.len(), skills.len(), mcp_statuses.len(), model.config().timeout.as_secs(), tool_names, state.permission_mode.label()
             )));
         }
         "/model" => {
@@ -1050,6 +1106,21 @@ async fn run_tasks_command(
         )),
     }
     Ok(())
+}
+
+fn render_mcp_status(statuses: &[orbit_tools::mcp::McpServerStatus]) -> String {
+    if statuses.is_empty() {
+        return "没有配置 MCP server。可在 config.toml 中添加 [mcp.servers.<名称>]，指定 command 和 args。当前仅支持本地 stdio server。".into();
+    }
+    let mut output = String::from("MCP servers\n");
+    for status in statuses {
+        let marker = if status.connected { "✓" } else { "×" };
+        output.push_str(&format!(
+            "{marker} {}  {} · {} 个工具\n",
+            status.name, status.detail, status.tool_count
+        ));
+    }
+    output
 }
 
 async fn run_memory_command(
@@ -1476,11 +1547,13 @@ async fn resume_session(
     history: &mut Vec<ChatMessage>,
     session: &mut SessionState,
     instructions: &crate::instructions::Instructions,
+    skills: &crate::skills::Skills,
     model_options: &[ModelOption],
 ) -> Result<()> {
     session.resume(id).await?;
     *history = session.snapshot.history.clone();
     crate::instructions::inject(history, instructions);
+    skills.inject(history);
     crate::project_state::inject(
         history,
         &session.store,

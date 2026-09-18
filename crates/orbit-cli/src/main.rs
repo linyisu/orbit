@@ -27,6 +27,7 @@ mod instructions;
 mod project_state;
 mod runtime;
 mod session;
+mod skills;
 mod tui;
 
 #[derive(Debug, Parser)]
@@ -120,6 +121,8 @@ struct FileConfig {
     command: orbit_tools::run_command::CommandLimits,
     #[serde(default)]
     web: orbit_tools::web_fetch::WebConfig,
+    #[serde(default)]
+    mcp: orbit_tools::mcp::McpConfig,
     providers: BTreeMap<String, ProviderConfig>,
 }
 
@@ -318,6 +321,7 @@ impl FileConfig {
             }
         }
         config.command.validate().map_err(anyhow::Error::msg)?;
+        config.mcp.validate()?;
         Ok(config)
     }
 
@@ -445,6 +449,7 @@ async fn main() -> Result<()> {
 
 async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs) -> Result<()> {
     let instructions = instructions::load_current();
+    let skills = skills::Skills::discover_current();
     let database = session::database_path(database)?;
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
     let file_config = FileConfig::load(&config_path)?;
@@ -453,6 +458,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
+    let mcp = file_config.mcp.clone();
     let max_output_tokens = file_config.max_output_tokens;
     let model_name = default_model.qualified_name();
     let context_tokens = default_model.context_tokens;
@@ -461,20 +467,24 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let session = session::SessionState::open(database, args.resume, model_name.clone()).await?;
     let undo_writer =
         runtime::workspace_writer(&config_path, session.store.path(), approvals.clone())?;
-    let mut tools = runtime::workspace_tools(
+    let runtime = runtime::workspace_tools(
         &config_path,
         Some(session.store.path()),
         Some(approvals),
         command_limits,
         web,
+        mcp,
         Some(session.scratch.clone()),
         Some(session.command_output.clone()),
-    )?;
+    )
+    .await?;
+    let mut tools = runtime.tools;
     project_state::register(
         &mut tools,
         session.store.clone(),
         session.snapshot.session.project_id.clone(),
     );
+    skills.register_tool(&mut tools);
     tui::run(
         client,
         model_name,
@@ -491,6 +501,8 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             max_tool_calls: agent_config.max_tool_calls,
             instructions,
             model_options,
+            skills,
+            mcp_statuses: runtime.mcp_statuses,
         },
     )
     .await
@@ -500,31 +512,35 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     let file_config = FileConfig::load(&config_path)?;
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
+    let mcp = file_config.mcp.clone();
     let max_output_tokens = file_config.max_output_tokens;
     let default_model = file_config.default_model_option()?;
     let agent_config = file_config.agent_config_for(default_model.context_tokens);
     let client = ModelClient::new(default_model.config)?;
     let instructions = instructions::load_current();
+    let skills = skills::Skills::discover_current();
     let mut messages = vec![ChatMessage::user(args.prompt)];
     instructions::inject(&mut messages, &instructions);
+    skills.inject(&mut messages);
     let mut request = ChatRequest::new(messages);
     request.max_tokens = Some(max_output_tokens);
     request.reasoning_effort = client.config().reasoning_effort;
 
     let database = session::database_path(database)?;
-    let agent = Agent::new(
-        ModelClientBackend::new(client),
-        runtime::workspace_tools(
-            &config_path,
-            Some(&database),
-            None,
-            command_limits,
-            web,
-            None,
-            None,
-        )?,
-        agent_config,
-    );
+    let runtime = runtime::workspace_tools(
+        &config_path,
+        Some(&database),
+        None,
+        command_limits,
+        web,
+        mcp,
+        None,
+        None,
+    )
+    .await?;
+    let mut tools = runtime.tools;
+    skills.register_tool(&mut tools);
+    let agent = Agent::new(ModelClientBackend::new(client), tools, agent_config);
 
     if args.stream {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
