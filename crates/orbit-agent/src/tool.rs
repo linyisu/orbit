@@ -100,6 +100,30 @@ impl ToolRegistry {
         self.tools = Arc::new(tools);
     }
 
+    /// Remove one registered tool before the agent sees its definitions.
+    /// This lets an adapter expose a deliberate capability subset instead of
+    /// advertising tools that will fail later at execution time.
+    pub fn remove(&mut self, name: &str) -> bool {
+        let mut tools = (*self.tools).clone();
+        let removed = tools.remove(name).is_some();
+        if removed {
+            self.tools = Arc::new(tools);
+        }
+        removed
+    }
+
+    /// Remove all tools in a namespaced integration, such as one MCP server.
+    pub fn remove_prefix(&mut self, prefix: &str) -> usize {
+        let mut tools = (*self.tools).clone();
+        let before = tools.len();
+        tools.retain(|name, _| !name.starts_with(prefix));
+        let removed = before.saturating_sub(tools.len());
+        if removed != 0 {
+            self.tools = Arc::new(tools);
+        }
+        removed
+    }
+
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         let mut definitions = self
             .tools
@@ -257,6 +281,27 @@ mod tests {
             .expect_err("unknown tools must fail");
 
         assert_eq!(error, ToolError::UnknownTool("missing".to_owned()));
+    }
+
+    #[test]
+    fn removes_named_and_namespaced_tools_from_definitions() {
+        let mut registry = registry();
+        registry.register(ClosureTool::new(
+            "mcp__files__search",
+            "search",
+            json!({}),
+            |_, _| async { Ok("ok".into()) },
+        ));
+        registry.register(ClosureTool::new(
+            "mcp__files__read",
+            "read",
+            json!({}),
+            |_, _| async { Ok("ok".into()) },
+        ));
+        assert!(registry.remove("echo"));
+        assert!(!registry.contains("echo"));
+        assert_eq!(registry.remove_prefix("mcp__files__"), 2);
+        assert!(registry.definitions().is_empty());
     }
 
     #[tokio::test]

@@ -204,10 +204,10 @@ pub async fn execute<B: ModelBackend>(
     .await
 }
 
-/// Automatic compaction must not replace a usable working context merely
-/// because the provider had a transient transport failure. It will surface the
-/// failure and try again on a later request; an explicit `/compact` continues
-/// to use the local fallback for models that cannot summarize at all.
+/// Automatic compaction preserves a usable working context when the provider
+/// reports a retryable transport failure. Its own bounded summary deadline is
+/// different: after that deadline, a deterministic local checkpoint is safer
+/// than repeatedly sending an increasingly over-budget conversation.
 pub async fn execute_automatic<B: ModelBackend>(
     backend: &B,
     plan: Plan,
@@ -266,11 +266,35 @@ fn fallback_allowed(error: &AgentError, policy: FallbackPolicy) -> bool {
         FallbackPolicy::Always => true,
         FallbackPolicy::PreserveOnTransientFailure => match error {
             AgentError::Model(error) => !error.is_retryable(),
-            // This is the compaction-specific deadline above, independent of
-            // the provider's own timeout type.
-            AgentError::Compaction(message) => message != "summary request timed out",
+            // A compaction deadline has already bounded the maintenance work.
+            // Continue with the deterministic record rather than reporting a
+            // failed compaction and eventually exceeding the request budget.
+            AgentError::Compaction(_) => true,
             _ => true,
         },
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+    use orbit_model::error::ModelError;
+
+    #[test]
+    fn automatic_compaction_falls_back_after_its_own_deadline() {
+        assert!(fallback_allowed(
+            &AgentError::Compaction("summary request timed out".into()),
+            FallbackPolicy::PreserveOnTransientFailure,
+        ));
+        assert!(!fallback_allowed(
+            &AgentError::Model(ModelError::Http {
+                status: 429,
+                request_id: String::new(),
+                body: "rate limited".into(),
+                retryable: true,
+            }),
+            FallbackPolicy::PreserveOnTransientFailure,
+        ));
     }
 }
 

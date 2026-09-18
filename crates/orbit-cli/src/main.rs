@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -124,6 +124,10 @@ struct ChatArgs {
     #[arg(long = "image", value_name = "PATH")]
     images: Vec<PathBuf>,
 
+    /// Hide one capability category from this run. May be supplied more than once.
+    #[arg(long = "disable", value_enum, value_name = "CAPABILITY")]
+    disabled: Vec<ChatCapability>,
+
     /// Emit one SWE-bench prediction JSON object for this instance instead of prose.
     #[arg(long, value_name = "INSTANCE_ID", conflicts_with = "stream")]
     swe_instance_id: Option<String>,
@@ -153,6 +157,40 @@ impl ChatMode {
             Self::Yolo => true,
         }
     }
+}
+
+/// A capability group that can be removed before Orbit creates the model
+/// request. Names are intentionally broad, so a CI caller can make a simple,
+/// auditable policy without needing to track individual tool names.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
+enum ChatCapability {
+    /// Every optional tool group below.
+    All,
+    /// web_search and web_fetch.
+    Web,
+    /// Configured local MCP processes and their tools.
+    Mcp,
+    /// Installed skill catalogue and load_skill.
+    Skills,
+    /// Native image attachments and read_image.
+    Image,
+    /// read_document.
+    Document,
+    /// read_file, list_files and search_text.
+    Files,
+    /// git_inspect.
+    Git,
+    /// write_file and edit_file.
+    Write,
+    /// run_command and read_command_output.
+    Command,
+    /// task and durable-memory tools.
+    #[value(name = "project-state")]
+    ProjectState,
+}
+
+fn capability_is_disabled(disabled: &BTreeSet<ChatCapability>, capability: ChatCapability) -> bool {
+    disabled.contains(&ChatCapability::All) || disabled.contains(&capability)
 }
 
 #[derive(Serialize)]
@@ -577,6 +615,10 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
 
 async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -> Result<()> {
     let prompt = read_chat_prompt(&args)?;
+    let disabled = args.disabled.iter().copied().collect::<BTreeSet<_>>();
+    if capability_is_disabled(&disabled, ChatCapability::Image) && !args.images.is_empty() {
+        bail!("--image cannot be used when the image capability is disabled");
+    }
     let file_config = FileConfig::load(&config_path)?;
     let database = session::database_path(database)?;
 
@@ -605,12 +647,16 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         .set_model_profile(model_name.clone(), client.config().reasoning_effort)
         .await?;
 
-    let enabled_plugins = session
-        .store
-        .project_plugins(&session.snapshot.session.project_id)
-        .await?;
-    let plugin_skill_roots = marketplaces::enabled_skill_roots(&enabled_plugins);
-    let skills = skills::Skills::discover_current_with_plugin_roots(plugin_skill_roots.roots);
+    let skills = if capability_is_disabled(&disabled, ChatCapability::Skills) {
+        skills::Skills::default()
+    } else {
+        let enabled_plugins = session
+            .store
+            .project_plugins(&session.snapshot.session.project_id)
+            .await?;
+        let plugin_skill_roots = marketplaces::enabled_skill_roots(&enabled_plugins);
+        skills::Skills::discover_current_with_plugin_roots(plugin_skill_roots.roots)
+    };
     let instructions = instructions::load_current();
     let attachments = args
         .images
@@ -636,31 +682,44 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         approvals,
         file_config.command.clone(),
         file_config.web.clone(),
-        file_config.mcp.clone(),
+        if capability_is_disabled(&disabled, ChatCapability::Mcp) {
+            orbit_tools::mcp::McpConfig::default()
+        } else {
+            file_config.mcp.clone()
+        },
         Some(session.scratch.clone()),
         Some(session.command_output.clone()),
     )
     .await?;
     let mut tools = runtime.tools;
-    let memory_scope = project_state::MemoryScope::new(session.id().into());
-    project_state::register(
-        &mut tools,
-        session.store.clone(),
-        session.snapshot.session.project_id.clone(),
-        memory_scope,
-    );
-    skills.register_tool(&mut tools);
+    if !capability_is_disabled(&disabled, ChatCapability::ProjectState) {
+        let memory_scope = project_state::MemoryScope::new(session.id().into());
+        project_state::register(
+            &mut tools,
+            session.store.clone(),
+            session.snapshot.session.project_id.clone(),
+            memory_scope,
+        );
+    }
+    if !capability_is_disabled(&disabled, ChatCapability::Skills) {
+        skills.register_tool(&mut tools);
+    }
+    disable_chat_capabilities(&mut tools, &disabled);
 
     let mut messages = session.snapshot.history.clone();
     instructions::inject(&mut messages, &instructions);
-    skills.inject(&mut messages);
-    project_state::inject(
-        &mut messages,
-        &session.store,
-        &session.snapshot.session.project_id,
-        session.id(),
-    )
-    .await?;
+    if !capability_is_disabled(&disabled, ChatCapability::Skills) {
+        skills.inject(&mut messages);
+    }
+    if !capability_is_disabled(&disabled, ChatCapability::ProjectState) {
+        project_state::inject(
+            &mut messages,
+            &session.store,
+            &session.snapshot.session.project_id,
+            session.id(),
+        )
+        .await?;
+    }
     messages.push(ChatMessage::user_with_attachments(
         prompt.clone(),
         attachments,
@@ -806,6 +865,56 @@ fn select_chat_model(config: &FileConfig, requested: Option<&str>) -> Result<tui
     }
 }
 
+fn disable_chat_capabilities(
+    tools: &mut orbit_agent::tool::ToolRegistry,
+    disabled: &BTreeSet<ChatCapability>,
+) {
+    if capability_is_disabled(disabled, ChatCapability::Web) {
+        tools.remove("web_search");
+        tools.remove("web_fetch");
+    }
+    if capability_is_disabled(disabled, ChatCapability::Mcp) {
+        tools.remove_prefix("mcp__");
+    }
+    if capability_is_disabled(disabled, ChatCapability::Skills) {
+        tools.remove("load_skill");
+    }
+    if capability_is_disabled(disabled, ChatCapability::Image) {
+        tools.remove("read_image");
+    }
+    if capability_is_disabled(disabled, ChatCapability::Document) {
+        tools.remove("read_document");
+    }
+    if capability_is_disabled(disabled, ChatCapability::Files) {
+        for name in ["read_file", "list_files", "search_text"] {
+            tools.remove(name);
+        }
+    }
+    if capability_is_disabled(disabled, ChatCapability::Git) {
+        tools.remove("git_inspect");
+    }
+    if capability_is_disabled(disabled, ChatCapability::Write) {
+        tools.remove("write_file");
+        tools.remove("edit_file");
+    }
+    if capability_is_disabled(disabled, ChatCapability::Command) {
+        tools.remove("run_command");
+        tools.remove("read_command_output");
+    }
+    if capability_is_disabled(disabled, ChatCapability::ProjectState) {
+        for name in [
+            "task_list",
+            "task_update",
+            "memory_list",
+            "memory_search",
+            "memory_save",
+            "memory_forget",
+        ] {
+            tools.remove(name);
+        }
+    }
+}
+
 fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
     if stream {
         match event {
@@ -845,6 +954,42 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
 #[cfg(test)]
 mod config_tests {
     use super::*;
+    use orbit_agent::tool::{ClosureTool, ToolRegistry};
+
+    #[test]
+    fn chat_capability_filter_removes_groups_before_request_assembly() {
+        let mut tools = ToolRegistry::new();
+        for name in [
+            "read_file",
+            "write_file",
+            "web_search",
+            "web_fetch",
+            "mcp__test__lookup",
+            "task_list",
+        ] {
+            tools.register(ClosureTool::new(
+                name,
+                "test",
+                serde_json::json!({}),
+                |_, _| async { Ok::<_, orbit_agent::tool::ToolError>("ok".into()) },
+            ));
+        }
+        let disabled = [
+            ChatCapability::Files,
+            ChatCapability::Web,
+            ChatCapability::Mcp,
+            ChatCapability::ProjectState,
+        ]
+        .into_iter()
+        .collect();
+        disable_chat_capabilities(&mut tools, &disabled);
+        assert!(!tools.contains("read_file"));
+        assert!(!tools.contains("web_search"));
+        assert!(!tools.contains("web_fetch"));
+        assert!(!tools.contains("mcp__test__lookup"));
+        assert!(!tools.contains("task_list"));
+        assert!(tools.contains("write_file"));
+    }
 
     #[test]
     fn omitted_limits_use_working_defaults_and_explicit_limits_survive() {

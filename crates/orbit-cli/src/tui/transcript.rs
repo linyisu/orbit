@@ -343,18 +343,20 @@ impl Entry {
         }
 
         let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
-        // Keep the turn marker inside the top rail. A space after `❯` makes
-        // it appear detached from the frame at a glance, especially beside a
-        // bright wallpaper or a rounded terminal border.
+        // Keep the turn marker inside the top rail. Render it separately and
+        // bold so single-cell Nerd Font glyphs retain the visual weight they
+        // had before the joined-border treatment.
         let top_label = format!("╭─{icon}─");
+        let trailing = "─".repeat(usize::from(width) - top_label.width() - 1);
         self.push(
-            Line::from(Span::styled(
-                format!(
-                    "{top_label}{}╮",
-                    "─".repeat(usize::from(width) - top_label.width() - 1)
+            Line::from(vec![
+                Span::styled("╭─", border),
+                Span::styled(
+                    icon.to_owned(),
+                    border.add_modifier(ratatui::style::Modifier::BOLD),
                 ),
-                border,
-            )),
+                Span::styled(format!("─{trailing}╮"), border),
+            ]),
             width,
         );
         let inner_width = width - 4;
