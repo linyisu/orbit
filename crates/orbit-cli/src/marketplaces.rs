@@ -2,18 +2,20 @@
 //!
 //! Marketplaces are never stored in a project directory. Adding one is an
 //! explicit user action; Git sources are cloned into Orbit's private data
-//! directory, where their catalogue can be inspected before any plugin is
-//! installed or executable component enabled.
+//! directory, where their catalogue and package declarations can be inspected
+//! before any plugin is installed or executable component enabled.
 
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
+
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct Marketplace {
@@ -27,6 +29,26 @@ pub(crate) struct Marketplace {
 pub(crate) struct Plugin {
     pub name: String,
     pub description: String,
+    /// Relative package path declared by the marketplace. Older stored
+    /// catalogues may not have it, so it remains optional until refreshed.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// Read-only summary of one plugin package. The contents are deliberately
+/// limited to declarations: this never runs hooks, starts MCP servers, or
+/// interprets a plugin's instructions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PluginPackage {
+    pub name: String,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub directory: PathBuf,
+    pub skills: Vec<String>,
+    pub commands: Vec<String>,
+    pub agents: Vec<String>,
+    pub declares_hooks: bool,
+    pub declares_mcp: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -40,6 +62,58 @@ pub(crate) fn list_current() -> Result<Vec<Marketplace>> {
 
 pub(crate) async fn add_current(source: String) -> Result<Marketplace> {
     Store::current()?.add(source).await
+}
+
+pub(crate) fn inspect_plugin(market: &Marketplace, plugin: &Plugin) -> Result<PluginPackage> {
+    let source = plugin.source.as_deref().context(
+        "this marketplace entry does not declare a local package source; refresh the marketplace or inspect it outside Orbit",
+    )?;
+    let market_root = market.directory.canonicalize().with_context(|| {
+        format!(
+            "cannot open marketplace directory {}",
+            market.directory.display()
+        )
+    })?;
+    let package = resolve_package_path(&market_root, source)?;
+    let manifest_path = package.join(".claude-plugin/plugin.json");
+    let metadata = fs::metadata(&manifest_path)
+        .with_context(|| format!("plugin manifest is missing: {}", manifest_path.display()))?;
+    ensure!(
+        metadata.is_file() && metadata.len() <= MAX_MANIFEST_BYTES,
+        "plugin manifest must be a regular file up to 64 KiB"
+    );
+    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)
+        .with_context(|| format!("invalid plugin JSON in {}", manifest_path.display()))?;
+    let name = manifest
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .context("plugin manifest has no name")?;
+    ensure!(valid_name(name), "plugin manifest name is invalid");
+    ensure!(
+        name == plugin.name,
+        "plugin manifest name {name:?} does not match marketplace entry {:?}",
+        plugin.name
+    );
+    let description = optional_text(&manifest, "description", "plugin manifest")?;
+    let version = optional_text(&manifest, "version", "plugin manifest")?;
+    let skills = declared_markdown_files(&package.join("skills"), "SKILL.md")?;
+    let commands = declared_markdown_files(&package.join("commands"), ".md")?;
+    let agents = declared_markdown_files(&package.join("agents"), ".md")?;
+    let declares_hooks =
+        package.join("hooks/hooks.json").is_file() || manifest.get("hooks").is_some();
+    let declares_mcp = package.join(".mcp.json").is_file() || manifest.get("mcpServers").is_some();
+    Ok(PluginPackage {
+        name: name.into(),
+        version,
+        description,
+        directory: package,
+        skills,
+        commands,
+        agents,
+        declares_hooks,
+        declares_mcp,
+    })
 }
 
 struct Store {
@@ -232,9 +306,22 @@ fn parse_catalog(directory: &Path) -> Result<Marketplace> {
                 .with_context(|| format!("plugin {plugin_name} has a non-text description"))?,
             None => "未提供说明",
         };
+        let source = match object.get("source") {
+            Some(value) => {
+                let source = value
+                    .as_str()
+                    .map(str::trim)
+                    .with_context(|| format!("plugin {plugin_name} has a non-text source"))?;
+                validate_relative_package_source(source)
+                    .with_context(|| format!("plugin {plugin_name} has an unsafe source"))?;
+                Some(source.to_owned())
+            }
+            None => None,
+        };
         plugins.push(Plugin {
             name: plugin_name.into(),
             description: description.trim().chars().take(240).collect(),
+            source,
         });
     }
     Ok(Marketplace {
@@ -243,6 +330,81 @@ fn parse_catalog(directory: &Path) -> Result<Marketplace> {
         directory: directory.to_path_buf(),
         plugins,
     })
+}
+
+fn resolve_package_path(market_root: &Path, source: &str) -> Result<PathBuf> {
+    validate_relative_package_source(source)?;
+    let package = market_root.join(source).canonicalize().with_context(|| {
+        format!(
+            "plugin package source {source:?} cannot be opened below {}",
+            market_root.display()
+        )
+    })?;
+    ensure!(
+        package.starts_with(market_root),
+        "plugin package source escapes its marketplace directory"
+    );
+    ensure!(
+        package.is_dir(),
+        "plugin package source must be a directory"
+    );
+    Ok(package)
+}
+
+fn validate_relative_package_source(source: &str) -> Result<()> {
+    ensure!(!source.is_empty(), "source cannot be empty");
+    let path = Path::new(source);
+    ensure!(
+        !path.is_absolute(),
+        "source must be a relative directory path"
+    );
+    ensure!(
+        path.components()
+            .all(|component| matches!(component, Component::CurDir | Component::Normal(_))),
+        "source cannot contain parent, root, or platform prefix components"
+    );
+    Ok(())
+}
+
+fn optional_text(value: &serde_json::Value, key: &str, location: &str) -> Result<Option<String>> {
+    match value.get(key) {
+        Some(value) => Ok(Some(
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .with_context(|| format!("{location} has a non-text {key}"))?
+                .chars()
+                .take(240)
+                .collect(),
+        )),
+        None => Ok(None),
+    }
+}
+
+fn declared_markdown_files(directory: &Path, required_file: &str) -> Result<Vec<String>> {
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    ensure!(
+        directory.is_dir(),
+        "{} must be a directory",
+        directory.display()
+    );
+    let mut names = fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if required_file == ".md" {
+                (path.is_file() && name.ends_with(".md")).then_some(name)
+            } else {
+                (path.is_dir() && path.join(required_file).is_file()).then_some(name)
+            }
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    Ok(names)
 }
 
 fn valid_name(value: &str) -> bool {
@@ -272,7 +434,7 @@ mod tests {
             market.join(".claude-plugin/marketplace.json"),
             r#"{
           "name":"team-tools",
-          "plugins":[{"name":"review","description":"Review code"}]
+          "plugins":[{"name":"review","description":"Review code","source":"./plugins/review"}]
         }"#,
         )
         .unwrap();
@@ -283,7 +445,51 @@ mod tests {
             .unwrap();
         assert_eq!(registered.name, "team-tools");
         assert_eq!(registered.plugins[0].name, "review");
+        assert_eq!(
+            registered.plugins[0].source.as_deref(),
+            Some("./plugins/review")
+        );
         assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn inspects_declarations_without_executing_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let market = temp.path();
+        fs::create_dir_all(market.join(".claude-plugin")).unwrap();
+        let package = market.join("plugins/review");
+        fs::create_dir_all(package.join(".claude-plugin")).unwrap();
+        fs::create_dir_all(package.join("skills/check")).unwrap();
+        fs::create_dir_all(package.join("commands")).unwrap();
+        fs::create_dir_all(package.join("agents")).unwrap();
+        fs::create_dir_all(package.join("hooks")).unwrap();
+        fs::write(
+            package.join(".claude-plugin/plugin.json"),
+            r#"{"name":"review","version":"1.2.3","description":"Review safely","mcpServers":{"docs":{}}}"#,
+        )
+        .unwrap();
+        fs::write(package.join("skills/check/SKILL.md"), "# check").unwrap();
+        fs::write(package.join("commands/review.md"), "# review").unwrap();
+        fs::write(package.join("agents/reviewer.md"), "# reviewer").unwrap();
+        fs::write(package.join("hooks/hooks.json"), "{}").unwrap();
+        let market = Marketplace {
+            name: "market".into(),
+            source: "local".into(),
+            directory: market.to_path_buf(),
+            plugins: vec![],
+        };
+        let plugin = Plugin {
+            name: "review".into(),
+            description: "Review".into(),
+            source: Some("./plugins/review".into()),
+        };
+        let inspected = inspect_plugin(&market, &plugin).unwrap();
+        assert_eq!(inspected.version.as_deref(), Some("1.2.3"));
+        assert_eq!(inspected.skills, ["check"]);
+        assert_eq!(inspected.commands, ["review.md"]);
+        assert_eq!(inspected.agents, ["reviewer.md"]);
+        assert!(inspected.declares_hooks);
+        assert!(inspected.declares_mcp);
     }
 
     #[test]
@@ -303,6 +509,19 @@ mod tests {
         )
         .unwrap();
         assert!(parse_catalog(temp.path()).is_err());
+
+        fs::write(
+            temp.path().join(".claude-plugin/marketplace.json"),
+            r#"{"name":"market","plugins":[{"name":"safe","source":"../escape"}]}"#,
+        )
+        .unwrap();
+        assert!(parse_catalog(temp.path()).is_err());
+    }
+
+    #[test]
+    fn rejects_packages_outside_the_marketplace() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(resolve_package_path(temp.path(), "../outside").is_err());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use super::{ModelOption, app::UiState, commands::COMMANDS};
-use crate::marketplaces::Marketplace;
+use crate::marketplaces::{Marketplace, PluginPackage};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use orbit_store::types::Session;
 use ratatui::{
@@ -33,6 +33,7 @@ pub struct MarketplaceDialog {
     source: String,
     adding: bool,
     viewing_plugins: bool,
+    inspection: Option<Result<PluginPackage, String>>,
     selected_market: usize,
     selected_plugin: usize,
 }
@@ -44,6 +45,7 @@ impl MarketplaceDialog {
             source: String::new(),
             adding: false,
             viewing_plugins: false,
+            inspection: None,
             selected_market: 0,
             selected_plugin: 0,
         }
@@ -65,6 +67,20 @@ impl MarketplaceDialog {
 
     fn selected_market(&self) -> Option<&Marketplace> {
         self.marketplaces.get(self.selected_market)
+    }
+
+    fn inspect_selected_plugin(&mut self) {
+        let selected = self.selected_market().and_then(|market| {
+            market
+                .plugins
+                .get(self.selected_plugin)
+                .map(|plugin| (market.clone(), plugin.clone()))
+        });
+        self.inspection = Some(match selected {
+            Some((market, plugin)) => crate::marketplaces::inspect_plugin(&market, &plugin)
+                .map_err(|error| error.to_string()),
+            None => Err("没有可检查的插件。".into()),
+        });
     }
 }
 
@@ -180,17 +196,17 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         if key.kind == KeyEventKind::Release {
             return None;
         }
-        if key.code == KeyCode::Esc
-            && state
-                .marketplace_dialog
-                .as_ref()
-                .is_some_and(|dialog| dialog.viewing_plugins)
-        {
+        if key.code == KeyCode::Esc {
             if let Some(dialog) = &mut state.marketplace_dialog {
-                dialog.viewing_plugins = false;
-                dialog.selected_plugin = 0;
+                if dialog.inspection.take().is_some() {
+                    return None;
+                }
+                if dialog.viewing_plugins {
+                    dialog.viewing_plugins = false;
+                    dialog.selected_plugin = 0;
+                    return None;
+                }
             }
-            return None;
         }
         if key.code == KeyCode::Esc
             || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
@@ -281,8 +297,12 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
     } else if let Some(dialog) = &mut state.marketplace_dialog {
         match event {
             Event::Key(key) => match key.code {
-                KeyCode::Up if dialog.viewing_plugins => dialog.move_plugin(false),
-                KeyCode::Down if dialog.viewing_plugins => dialog.move_plugin(true),
+                KeyCode::Up if dialog.inspection.is_none() && dialog.viewing_plugins => {
+                    dialog.move_plugin(false)
+                }
+                KeyCode::Down if dialog.inspection.is_none() && dialog.viewing_plugins => {
+                    dialog.move_plugin(true)
+                }
                 KeyCode::Up if !dialog.adding => dialog.move_market(false),
                 KeyCode::Down if !dialog.adding => dialog.move_market(true),
                 KeyCode::Char('a')
@@ -293,7 +313,9 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 {
                     dialog.adding = true
                 }
-                KeyCode::Enter if dialog.viewing_plugins => {}
+                KeyCode::Enter if dialog.viewing_plugins && dialog.inspection.is_none() => {
+                    dialog.inspect_selected_plugin()
+                }
                 KeyCode::Enter if !dialog.adding && dialog.selected_market().is_some() => {
                     dialog.viewing_plugins = true
                 }
@@ -322,12 +344,16 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 .source
                 .extend(text.chars().filter(|c| !c.is_control())),
             Event::Mouse(mouse)
-                if mouse.kind == MouseEventKind::ScrollUp && dialog.viewing_plugins =>
+                if mouse.kind == MouseEventKind::ScrollUp
+                    && dialog.inspection.is_none()
+                    && dialog.viewing_plugins =>
             {
                 dialog.move_plugin(false)
             }
             Event::Mouse(mouse)
-                if mouse.kind == MouseEventKind::ScrollDown && dialog.viewing_plugins =>
+                if mouse.kind == MouseEventKind::ScrollDown
+                    && dialog.inspection.is_none()
+                    && dialog.viewing_plugins =>
             {
                 dialog.move_plugin(true)
             }
@@ -604,6 +630,95 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 body,
             );
             frame.render_widget(Paragraph::new("Enter 下载 · Esc 取消"), footer);
+        } else if let Some(inspection) = &dialog.inspection {
+            state.ime_cursor = None;
+            match inspection {
+                Ok(package) => {
+                    let version = package
+                        .version
+                        .as_deref()
+                        .map(|value| format!("版本 {value}"))
+                        .unwrap_or_else(|| "未声明版本".into());
+                    let description = package.description.as_deref().unwrap_or("未声明描述");
+                    frame.render_widget(
+                        Paragraph::new(vec![
+                            Line::styled(
+                                format!("{} · 包声明", clean(&package.name)),
+                                Style::default()
+                                    .fg(Color::Rgb(218, 139, 109))
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Line::styled(
+                                super::render::fit_label(
+                                    &format!("{version} · {description}"),
+                                    header.width as usize,
+                                    true,
+                                ),
+                                Style::default().fg(Color::Rgb(170, 170, 170)),
+                            ),
+                        ]),
+                        header,
+                    );
+                    let list = |items: &[String]| {
+                        if items.is_empty() {
+                            "无".into()
+                        } else {
+                            items.join("、")
+                        }
+                    };
+                    let lines = vec![
+                        Line::from(format!("技能：{}", list(&package.skills))),
+                        Line::from(format!("命令：{}", list(&package.commands))),
+                        Line::from(format!("Agent：{}", list(&package.agents))),
+                        Line::from(format!(
+                            "Hook：{}",
+                            if package.declares_hooks {
+                                "已声明，未执行"
+                            } else {
+                                "未声明"
+                            }
+                        )),
+                        Line::from(format!(
+                            "MCP：{}",
+                            if package.declares_mcp {
+                                "已声明，未启动"
+                            } else {
+                                "未声明"
+                            }
+                        )),
+                        Line::styled(
+                            super::render::fit_label(
+                                &format!("位置：{}", package.directory.display()),
+                                body.width as usize,
+                                true,
+                            ),
+                            Style::default().fg(Color::Rgb(170, 170, 170)),
+                        ),
+                        Line::from(""),
+                        Line::styled(
+                            "此页只读取包声明；尚未安装或启用。",
+                            Style::default().fg(Color::Rgb(170, 170, 170)),
+                        ),
+                    ];
+                    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+                }
+                Err(error) => {
+                    frame.render_widget(
+                        Paragraph::new(Line::styled(
+                            "无法检查插件包",
+                            Style::default()
+                                .fg(Color::Rgb(218, 139, 109))
+                                .add_modifier(Modifier::BOLD),
+                        )),
+                        header,
+                    );
+                    frame.render_widget(
+                        Paragraph::new(clean(error)).wrap(Wrap { trim: false }),
+                        body,
+                    );
+                }
+            }
+            frame.render_widget(Paragraph::new("Esc 返回插件列表"), footer);
         } else if dialog.viewing_plugins {
             state.ime_cursor = None;
             let Some(market) = dialog.selected_market() else {
@@ -663,7 +778,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             frame.render_widget(Paragraph::new(entries), body);
             frame.render_widget(
                 Paragraph::new(format!(
-                    "{} 个插件 · ↑↓ 浏览 · Esc 返回市场列表",
+                    "{} 个插件 · ↑↓ 浏览 · Enter 检查包 · Esc 返回市场列表",
                     market.plugins.len()
                 )),
                 footer,
@@ -890,10 +1005,12 @@ mod tests {
                 crate::marketplaces::Plugin {
                     name: "review".into(),
                     description: "Review pull requests".into(),
+                    source: None,
                 },
                 crate::marketplaces::Plugin {
                     name: "docs".into(),
                     description: "Write documentation".into(),
+                    source: None,
                 },
             ],
         }]));
