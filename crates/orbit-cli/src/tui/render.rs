@@ -1014,7 +1014,10 @@ fn draw_panel(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
                         ),
                         Style::default().fg(if selected { ACCENT } else { MUTED }),
                     ),
-                    muted(command.description),
+                    Span::styled(
+                        command.description,
+                        Style::default().fg(if selected { ACCENT } else { MUTED }),
+                    ),
                 ])
             })
             .chain(std::iter::once(Line::from(muted(format!(
