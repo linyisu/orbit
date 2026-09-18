@@ -16,6 +16,8 @@ use super::{
 
 const ACCENT: Color = Color::Rgb(218, 139, 109);
 const SECONDARY: Color = Color::Rgb(160, 160, 160);
+// Keep adjacent file previews aligned even when their lengths differ.
+const MIN_LINE_NUMBER_WIDTH: usize = 4;
 
 pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     if row.status != ToolStatus::Finished {
@@ -138,6 +140,14 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
         }
     }
     let total_rows: usize = files.values().map(BTreeMap::len).sum();
+    // Share one gutter across all files in the result, including large lines.
+    let digits = files
+        .values()
+        .filter_map(|rows| rows.last_key_value())
+        .map(|(line, _)| line.to_string().len())
+        .max()
+        .unwrap_or_default()
+        .max(MIN_LINE_NUMBER_WIDTH);
     let mut out = Vec::new();
     note(
         &mut out,
@@ -150,7 +160,6 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
             break;
         }
         note(&mut out, path, width);
-        let digits = rows.last_key_value()?.0.to_string().len();
         let mut previous = None;
         for (line, (text, matched)) in rows {
             if !expanded && shown >= 3 {
@@ -202,7 +211,7 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
         &format!("第 {start}–{end} 行 · 共 {total} 行"),
         width,
     );
-    let digits = end.to_string().len();
+    let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
     for (number, text) in rows.iter().take(if expanded { usize::MAX } else { 4 }) {
         source(&mut out, *number, digits, text, false, expanded, width);
     }
@@ -282,11 +291,24 @@ mod tests {
             .iter()
             .map(|line| {
                 let text = line.to_string();
-                assert!(text.starts_with("    744 │ ") || text.starts_with("        │ "));
+                assert!(text.starts_with("     744 │ ") || text.starts_with("         │ "));
                 text.split_once("│ ").unwrap().1.to_owned()
             })
             .collect::<String>();
         assert_eq!(reconstructed, safe_output(&source));
+        // File length must not shift the rail between adjacent tool previews.
+        for end in [4, 92, 168, 1024] {
+            let file = self::row(
+                "read_file",
+                json!({
+                    "content":"1: first\n2: second\n", "start_line":1,
+                    "end_line":end, "total_lines":end, "truncated":false
+                }),
+            );
+            let view = lines(&file, false, 80).unwrap();
+            assert_eq!(view[1].to_string(), "       1 │ first");
+            assert_eq!(view[2].to_string(), "       2 │ second");
+        }
     }
 
     #[test]
