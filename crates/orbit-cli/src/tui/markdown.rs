@@ -659,4 +659,26 @@ mod tests {
         line("~~~~", 5, &mut fence);
         assert_eq!(fence, None);
     }
+
+    #[test]
+    fn outer_fence_keeps_nested_markdown_as_source() {
+        let mut fence = None;
+        assert_eq!(
+            line("````markdown", 0, &mut fence).to_string(),
+            "  ┌─ markdown"
+        );
+        assert_eq!(line("# 标题", 1, &mut fence).to_string(), "  │ # 标题");
+        assert_eq!(
+            line("```python", 2, &mut fence).to_string(),
+            "  │ ```python"
+        );
+        assert_eq!(
+            line("**不应加粗**", 3, &mut fence).to_string(),
+            "  │ **不应加粗**"
+        );
+        assert_eq!(line("```", 4, &mut fence).to_string(), "  │ ```");
+        assert!(fence.is_some());
+        assert_eq!(line("````", 5, &mut fence).to_string(), "  └─");
+        assert!(fence.is_none());
+    }
 }
