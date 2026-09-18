@@ -80,6 +80,13 @@ pub(super) struct CodeFence {
     state: (HighlightState, ParseState),
 }
 pub(super) type Fence = Option<CodeFence>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LinkTarget {
+    pub start: usize,
+    pub end: usize,
+    pub url: String,
+}
 const ACCENT: Color = Color::Rgb(218, 139, 109);
 const SECONDARY: Color = Color::Rgb(170, 170, 170);
 
@@ -156,6 +163,46 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
         }
         open = close - 2;
     }
+}
+
+/// Return the visible byte ranges of Markdown link labels. The renderer keeps
+/// link destinations beside their labels for terminals, while this sidecar lets
+/// Ctrl-click open the label itself without treating ordinary text as a URL.
+pub(super) fn links(source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
+    let mut active: Option<(String, String)> = None;
+    let mut parsed = Vec::new();
+    for event in Parser::new_ext(
+        source,
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
+    ) {
+        match event {
+            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
+                active = Some((dest_url.into_string(), String::new()));
+            }
+            Event::Text(text) | Event::Code(text) if active.is_some() => {
+                active.as_mut().unwrap().1.push_str(&text);
+            }
+            Event::End(pulldown_cmark::TagEnd::Link | pulldown_cmark::TagEnd::Image) => {
+                if let Some((url, label)) = active.take()
+                    && !label.is_empty()
+                {
+                    parsed.push((label, url));
+                }
+            }
+            _ => {}
+        }
+    }
+    let text = rendered.to_string();
+    let mut cursor = 0;
+    parsed
+        .into_iter()
+        .filter_map(|(label, url)| {
+            let start = text[cursor..].find(&label)? + cursor;
+            let end = start + label.len();
+            cursor = end;
+            Some(LinkTarget { start, end, url })
+        })
+        .collect()
 }
 
 /// Parse only a possible table at the current source position. The caller keeps
@@ -464,10 +511,20 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                 "────────────────────────",
                 Style::default().fg(SECONDARY),
             )),
-            Event::TaskListMarker(done) => spans.push(Span::styled(
-                if done { "☑ " } else { "☐ " },
-                style.fg(ACCENT),
-            )),
+            Event::TaskListMarker(done) => {
+                let checkbox = if done { "☑ " } else { "☐ " };
+                if let Some(marker) = spans.iter_mut().rev().find(|span| {
+                    span.content == "• "
+                        || span.content.strip_suffix(". ").is_some_and(|number| {
+                            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+                        })
+                }) {
+                    marker.content = checkbox.into();
+                    marker.style = style.fg(ACCENT);
+                } else {
+                    spans.push(Span::styled(checkbox, style.fg(ACCENT)));
+                }
+            }
             Event::SoftBreak | Event::HardBreak => {}
             _ => {}
         }
@@ -612,6 +669,12 @@ mod tests {
                 .to_string()
                 .contains("https://example.com")
         );
+    }
+
+    #[test]
+    fn task_list_replaces_the_list_bullet_with_its_checkbox() {
+        assert_eq!(render("- [x] 已完成任务").to_string(), "  ☑ 已完成任务");
+        assert_eq!(render("- [ ] 未完成任务").to_string(), "  ☐ 未完成任务");
     }
 
     #[test]

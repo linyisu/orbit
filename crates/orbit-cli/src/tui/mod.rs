@@ -14,7 +14,7 @@ pub mod terminal;
 mod transcript;
 mod wheel;
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, process::Command, time::Duration};
 
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
@@ -180,6 +180,28 @@ pub async fn run(
                             }
                         }
                         continue;
+                    }
+                    if let Event::Mouse(mouse) = &event
+                        && mouse.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                        && mouse.modifiers.contains(KeyModifiers::CONTROL) {
+                        let offset = if state.follow_bottom {
+                            state.max_scroll
+                        } else {
+                            state.max_scroll.saturating_sub(state.scroll)
+                        };
+                        if let Some(url) = state
+                            .transcript_layout
+                            .link_at(state.selection.viewport, offset, (mouse.column, mouse.row))
+                            .map(str::to_owned)
+                        {
+                            state.selection.clear();
+                            if let Err(error) = open_link_in_browser(&url) {
+                                state.transcript.push(TranscriptItem::Error(format!(
+                                    "无法打开链接：{error}"
+                                )));
+                            }
+                            continue;
+                        }
                     }
                     if let Event::Mouse(mouse) = &event
                         && mouse.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
@@ -1306,6 +1328,36 @@ fn focus_attachment_at(state: &mut UiState, x: u16, y: u16) -> bool {
     true
 }
 
+fn browser_url(value: &str) -> Result<url::Url> {
+    let url = url::Url::parse(value)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        anyhow::bail!("仅能在浏览器中打开不含凭据的 HTTP(S) 链接");
+    }
+    Ok(url)
+}
+
+fn open_link_in_browser(value: &str) -> Result<()> {
+    let url = browser_url(value)?;
+    #[cfg(target_os = "linux")]
+    let mut command = Command::new("xdg-open");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    anyhow::bail!("当前系统不支持打开默认浏览器");
+    command.arg(url.as_str()).spawn()?;
+    Ok(())
+}
+
 fn remove_focused_attachment(state: &mut UiState, backwards: bool) -> bool {
     let Some(index) = state.attachment_cursor.take() else {
         return false;
@@ -1746,6 +1798,23 @@ mod tests {
 
     fn press(state: &mut UiState, code: KeyCode, modifiers: KeyModifiers, busy: bool) -> Action {
         keyboard_action(state, Event::Key(KeyEvent::new(code, modifiers)), busy)
+    }
+
+    #[test]
+    fn browser_links_require_safe_http_urls() {
+        assert_eq!(
+            browser_url("https://example.com/docs?from=orbit")
+                .unwrap()
+                .as_str(),
+            "https://example.com/docs?from=orbit"
+        );
+        for value in [
+            "file:///tmp/report.html",
+            "mailto:person@example.com",
+            "https://user:secret@example.com/",
+        ] {
+            assert!(browser_url(value).is_err(), "{value}");
+        }
     }
 
     #[test]

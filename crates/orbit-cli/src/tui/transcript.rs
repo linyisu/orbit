@@ -21,6 +21,7 @@ struct Row {
     line: Line<'static>,
     wrapped: Vec<Line<'static>>,
     ranges: Vec<Range<usize>>,
+    links: Vec<super::markdown::LinkTarget>,
     gutter: Option<Gutter>,
     start: usize,
     height: usize,
@@ -34,7 +35,7 @@ struct Gutter {
 }
 
 fn list_marker(text: &str) -> bool {
-    text == "• "
+    matches!(text, "• " | "☑ " | "☐ ")
         || text
             .strip_suffix(". ")
             .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
@@ -165,6 +166,18 @@ fn wrap_line(line: &Line<'static>, width: u16) -> (Vec<Line<'static>>, Vec<Range
     (lines, ranges)
 }
 
+fn byte_at_column(text: &str, range: &Range<usize>, column: u16) -> Option<usize> {
+    let mut used = 0;
+    for (relative, grapheme) in text.get(range.clone())?.grapheme_indices(true) {
+        let width = grapheme.width() as u16;
+        if column < used + width {
+            return Some(range.start + relative);
+        }
+        used += width;
+    }
+    None
+}
+
 #[derive(Debug, Default)]
 struct Entry {
     rows: Vec<Row>,
@@ -180,9 +193,28 @@ struct Entry {
 }
 
 impl Entry {
-    fn push(&mut self, mut line: Line<'static>, width: u16) {
+    fn push(&mut self, line: Line<'static>, width: u16) {
+        self.push_with_links(line, width, Vec::new());
+    }
+
+    fn push_with_links(
+        &mut self,
+        mut line: Line<'static>,
+        width: u16,
+        mut links: Vec<super::markdown::LinkTarget>,
+    ) {
         render::sanitize_line(&mut line);
+        let original = line.to_string();
         let gutter = take_gutter(&mut line);
+        let removed = original.len().saturating_sub(line.to_string().len());
+        links.retain_mut(|link| {
+            if link.end <= removed {
+                return false;
+            }
+            link.start = link.start.saturating_sub(removed);
+            link.end = link.end.saturating_sub(removed);
+            true
+        });
         let content_width = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
         let (wrapped, ranges) = wrap_line(&line, content_width);
         let height = wrapped.len();
@@ -191,6 +223,7 @@ impl Entry {
             line,
             wrapped,
             ranges,
+            links,
             start: self.height,
             height,
         });
@@ -242,14 +275,16 @@ impl Entry {
             } else {
                 part
             };
-            self.push(
-                if thinking {
-                    render::thinking_line(line, index, &mut code)
-                } else {
-                    render::assistant_line(line, index, &mut code)
-                },
-                width,
-            );
+            let was_code = code.is_some();
+            let rendered = if thinking {
+                render::thinking_line(line, index, &mut code)
+            } else {
+                render::assistant_line(line, index, &mut code)
+            };
+            let links = (!was_code)
+                .then(|| super::markdown::links(line, &rendered))
+                .unwrap_or_default();
+            self.push_with_links(rendered, width, links);
             index += 1;
             consumed += part.len();
             if complete && (thinking || code.is_some() || !line.contains('|')) {
@@ -479,6 +514,28 @@ impl TranscriptLayout {
         self.entries.last().map_or(0, |entry| entry.end)
     }
 
+    pub(super) fn link_at(&self, area: Rect, offset: usize, point: (u16, u16)) -> Option<&str> {
+        if !area.contains(point.into()) {
+            return None;
+        }
+        let absolute_row = offset + (point.1 - area.y) as usize;
+        let entry = self.entries.iter().find(|entry| entry.end > absolute_row)?;
+        let entry_start = entry.end - entry.height;
+        let row = entry.rows.iter().find(|row| {
+            let start = entry_start + row.start;
+            absolute_row >= start && absolute_row < start + row.height
+        })?;
+        let gutter_width = row.gutter.as_ref().map_or(0, |gutter| gutter.width);
+        let column = point.0.checked_sub(area.x + gutter_width)?;
+        let wrapped = absolute_row - entry_start - row.start;
+        let range = row.ranges.get(wrapped)?;
+        let byte = byte_at_column(&row.line.to_string(), range, column)?;
+        row.links
+            .iter()
+            .find(|link| link.start <= byte && byte < link.end)
+            .map(|link| link.url.as_str())
+    }
+
     pub fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize) {
         self.draw_buffer(frame.buffer_mut(), area, offset);
     }
@@ -594,6 +651,60 @@ mod tests {
         assert_eq!(buffer[(2, 1)].symbol(), " ");
         assert_eq!(buffer[(3, 1)].symbol(), " ");
         assert_eq!(buffer[(4, 1)].symbol(), " ");
+    }
+
+    #[test]
+    fn task_list_checkbox_keeps_a_hanging_indent() {
+        let mut layout = TranscriptLayout::default();
+        layout.update(
+            &[TranscriptItem::Assistant(
+                "- [ ] 这是一个会换行的待完成任务，用于验证复选框不会再和项目符号重复显示。".into(),
+            )],
+            None,
+            20,
+        );
+        let row = &layout.entries[0].rows[0];
+        assert_eq!(row.gutter.as_ref().unwrap().first.to_string(), "  ☐ ");
+        assert_eq!(
+            row.gutter.as_ref().unwrap().first.width(),
+            row.gutter.as_ref().unwrap().continuation.width()
+        );
+    }
+
+    #[test]
+    fn ctrl_click_targets_link_labels_but_not_code_source() {
+        let mut layout = TranscriptLayout::default();
+        let area = Rect::new(0, 0, 18, 8);
+        layout.update(
+            &[TranscriptItem::Assistant(
+                "阅读 [Orbit 文档](https://example.com/orbit) 获取详情。".into(),
+            )],
+            None,
+            area.width,
+        );
+        let target = (area.y..area.bottom()).find_map(|y| {
+            (area.x..area.right()).find_map(|x| {
+                layout
+                    .link_at(area, 0, (x, y))
+                    .map(|url| (x, y, url.to_owned()))
+            })
+        });
+        assert_eq!(
+            target.as_ref().map(|(_, _, url)| url.as_str()),
+            Some("https://example.com/orbit")
+        );
+
+        let mut code_layout = TranscriptLayout::default();
+        code_layout.update(
+            &[TranscriptItem::Assistant(
+                "```markdown\n[不是链接](https://example.com/no)\n```".into(),
+            )],
+            None,
+            area.width,
+        );
+        assert!((area.y..area.bottom()).all(|y| {
+            (area.x..area.right()).all(|x| code_layout.link_at(area, 0, (x, y)).is_none())
+        }));
     }
 
     #[test]
