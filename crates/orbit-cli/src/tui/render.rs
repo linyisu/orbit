@@ -996,7 +996,10 @@ fn draw_composer(
 fn draw_panel(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
     let menu = state.menu();
     let visible = area.height.saturating_sub(1).max(1) as usize;
-    let first = state.menu_index.saturating_sub(visible - 1);
+    // Keep keyboard focus near the middle while moving through a long menu.
+    // At the first and last page the list naturally rests against its edge.
+    let max_first = menu.len().saturating_sub(visible);
+    let first = state.menu_index.saturating_sub(visible / 2).min(max_first);
     let lines = if !menu.is_empty() {
         menu.iter()
             .enumerate()
@@ -1089,6 +1092,11 @@ mod tests {
         assert!(first_page.contains("/new"));
         assert!(!first_page.contains("/tasks"));
         assert!(first_page.contains("1/16"));
+
+        state.menu_index = 5;
+        let middle_page = render(&mut state, 100, 20);
+        assert!(middle_page.contains("› /resume"));
+        assert!(!middle_page.contains("/new"));
 
         state.menu_index = state.menu().len() - 1;
         let last_page = render(&mut state, 100, 20);
