@@ -442,7 +442,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 "滚轮           滚动对话，不移动输入光标",
                 "拖选 + Ctrl+C  复制选区",
                 "Ctrl+O         展开/收起视口底部的工具结果",
-                "Shift+Tab      切换 ask / auto / yolo",
+                "Shift+Tab      切换 ask / auto / YOLO",
                 "Esc            立即取消响应 / 关闭面板",
                 "Ctrl+A / E     移到行首 / 行尾",
                 "Ctrl+U / K     删除到行首 / 行尾",
@@ -456,7 +456,14 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         } else {
             COMMANDS
                 .iter()
-                .map(|c| Line::from(format!("{:<12} {}", c.name, c.description)))
+                .map(|c| {
+                    Line::from(format!(
+                        "{:<width$} {}",
+                        c.name,
+                        c.description,
+                        width = super::commands::COMMAND_NAME_WIDTH
+                    ))
+                })
                 .collect()
         };
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });

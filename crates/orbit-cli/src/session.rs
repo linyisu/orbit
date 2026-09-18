@@ -235,6 +235,12 @@ impl SessionState {
         Ok(())
     }
 
+    pub async fn rename(&mut self, title: String) -> Result<()> {
+        self.writer.set_title(title.clone()).await?;
+        self.snapshot.session.title = title;
+        Ok(())
+    }
+
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
         self.writer.begin(prompt, model).await?;
         self.active = true;
@@ -456,6 +462,25 @@ mod tests {
             restored.saved_model_profile(),
             ("deepseek::flash", Some(ReasoningEffort::High))
         );
+    }
+
+    #[tokio::test]
+    async fn renamed_session_keeps_its_identity_and_title_after_resume() {
+        let tmp = tempfile::tempdir().unwrap();
+        let database = tmp.path().join("sessions.db");
+        let mut state = SessionState::open(database.clone(), None, "model".into())
+            .await
+            .unwrap();
+        let id = state.id().to_owned();
+        state.rename("解析器重构".into()).await.unwrap();
+        assert_eq!(state.snapshot.session.title, "解析器重构");
+        drop(state);
+
+        let restored = SessionState::open(database, Some(id.clone()), "model".into())
+            .await
+            .unwrap();
+        assert_eq!(restored.id(), id);
+        assert_eq!(restored.snapshot.session.title, "解析器重构");
     }
 
     #[tokio::test]

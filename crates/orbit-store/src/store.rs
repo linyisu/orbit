@@ -784,6 +784,26 @@ impl SessionWriter {
             .await
     }
 
+    /// Change only the user-visible label. The event log and stable session ID
+    /// remain untouched, so `/resume` and project association keep working.
+    pub async fn set_title(&self, title: String) -> Result<()> {
+        ensure!(!title.trim().is_empty(), "session title must not be empty");
+        ensure!(
+            title.chars().count() <= 120,
+            "session title exceeds 120 characters"
+        );
+        let id = self.id.clone();
+        self.store
+            .access(move |conn| {
+                conn.execute(
+                    "UPDATE sessions SET title=?2, updated_at=unixepoch() WHERE id=?1",
+                    params![id, title],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
         ensure!(self.active_run.is_none(), "a run is already active");
         let id = self.id.clone();

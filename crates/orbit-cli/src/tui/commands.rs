@@ -4,10 +4,17 @@ pub struct Command {
     pub description: &'static str,
 }
 
+/// Keep command descriptions aligned even for the longest built-in name.
+pub const COMMAND_NAME_WIDTH: usize = 14;
+
 pub const COMMANDS: &[Command] = &[
     Command {
         name: "/new",
         description: "开始新会话；旧对话保留，可用 /resume 恢复",
+    },
+    Command {
+        name: "/rename",
+        description: "修改当前会话的标题",
     },
     Command {
         name: "/status",
@@ -59,7 +66,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/mode",
-        description: "ask 逐次确认 · auto 自动命令 · yolo 自动修改和命令",
+        description: "ask 逐次确认 · auto 自动命令 · YOLO 自动修改和命令",
     },
     Command {
         name: "/exit",
@@ -146,5 +153,10 @@ mod tests {
             Some("/model")
         );
         assert!(suggestion("/unrelated").is_none());
+        assert!(
+            matching("/r")
+                .iter()
+                .any(|command| command.name == "/rename")
+        );
     }
 }

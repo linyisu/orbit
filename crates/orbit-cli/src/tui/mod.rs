@@ -739,17 +739,33 @@ async fn run_command(
             state.input = input;
             session.restore_ui(state);
         }
+        "/rename" => {
+            if argument.is_empty() {
+                state.transcript.push(TranscriptItem::CommandError(
+                    "用法：/rename <会话标题>".into(),
+                ));
+            } else if argument.chars().count() > 120 {
+                state.transcript.push(TranscriptItem::CommandError(
+                    "会话标题不能超过 120 个字符。".into(),
+                ));
+            } else {
+                session.rename(argument.into()).await?;
+                state.transcript.push(TranscriptItem::CommandResult(format!(
+                    "会话标题已改为：{argument}"
+                )));
+            }
+        }
         "/mode" | "/permissions" => {
             if !argument.is_empty() {
                 let Some(mode) = permissions::Mode::parse(argument) else {
                     state.transcript.push(TranscriptItem::CommandResult(
-                        "用法：/mode ask | auto | yolo".into(),
+                        "用法：/mode ask | auto | YOLO".into(),
                     ));
                     return Ok(false);
                 };
                 state.permission_mode = mode;
             }
-            state.transcript.push(TranscriptItem::CommandResult(format!("{}\nShift+Tab 切换 · /mode ask|auto|yolo\n仅本会话有效；重启、恢复或 /new 后回到 auto。",state.permission_mode.description())));
+            state.transcript.push(TranscriptItem::CommandResult(format!("{}\nShift+Tab 切换 · /mode ask|auto|YOLO\n仅本会话有效；重启、恢复或 /new 后回到 auto。",state.permission_mode.description())));
         }
         "/context" if argument.is_empty() => {
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
@@ -1739,7 +1755,7 @@ mod tests {
         press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
         assert_eq!(
             press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
-            Action::Submit("/status".into())
+            Action::Submit("/rename".into())
         );
         state.input.insert("next question");
         assert_eq!(

@@ -10,7 +10,7 @@ pub enum Mode {
 
 impl Mode {
     pub fn parse(text: &str) -> Option<Self> {
-        match text {
+        match text.to_ascii_lowercase().as_str() {
             "ask" => Some(Self::Ask),
             "auto" => Some(Self::Auto),
             "yolo" => Some(Self::Yolo),
@@ -21,7 +21,7 @@ impl Mode {
         match self {
             Self::Ask => "ask",
             Self::Auto => "auto",
-            Self::Yolo => "yolo",
+            Self::Yolo => "YOLO",
         }
     }
     pub fn next(self) -> Self {
@@ -42,7 +42,7 @@ impl Mode {
         match self {
             Self::Ask => "ask：文件修改和沙箱命令逐次确认",
             Self::Auto => "auto：沙箱命令自动执行，文件修改确认",
-            Self::Yolo => "yolo：文件修改和沙箱命令自动执行（沙箱限制不变）",
+            Self::Yolo => "YOLO：文件修改和沙箱命令自动执行（沙箱限制不变）",
         }
     }
 }
@@ -78,6 +78,7 @@ mod tests {
         assert_eq!(Mode::default(), Mode::Auto);
         assert_eq!(Mode::Auto.next().next().next(), Mode::Auto);
         assert_eq!(Mode::parse("yolo"), Some(Mode::Yolo));
+        assert_eq!(Mode::parse("YOLO"), Some(Mode::Yolo));
         assert_eq!(Mode::parse("unknown"), None);
     }
 }

@@ -16,6 +16,7 @@ const ACCENT: Color = Color::Rgb(218, 139, 109);
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
 const BORDER: Color = Color::Rgb(85, 85, 85);
+const MAX_COMMAND_MENU_ITEMS: usize = 8;
 
 fn muted(text: impl Into<String>) -> Span<'static> {
     Span::styled(text.into(), Style::default().fg(MUTED))
@@ -50,7 +51,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.context_hovered = false;
     }
     let panel_height = if !menu.is_empty() {
-        menu.len() as u16 + 1
+        (menu.len().min(MAX_COMMAND_MENU_ITEMS) + 1) as u16
     } else {
         0
     };
@@ -972,18 +973,21 @@ fn draw_panel(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
                 Line::from(vec![
                     Span::styled(
                         format!(
-                            "  {} {:<10}",
+                            "  {} {:<width$}",
                             if selected { "›" } else { " " },
-                            command.name
+                            command.name,
+                            width = super::commands::COMMAND_NAME_WIDTH,
                         ),
                         Style::default().fg(if selected { ACCENT } else { MUTED }),
                     ),
                     muted(command.description),
                 ])
             })
-            .chain(std::iter::once(Line::from(muted(
-                "    ↑↓ 选择 · tab 补全 · enter 执行 · esc 关闭",
-            ))))
+            .chain(std::iter::once(Line::from(muted(format!(
+                "    ↑↓ 选择 · Tab 补全 · Enter 执行 · Esc 关闭 · {}/{}",
+                state.menu_index.min(menu.len() - 1) + 1,
+                menu.len(),
+            )))))
             .collect::<Vec<_>>()
     } else {
         Vec::new()
@@ -1038,6 +1042,22 @@ mod tests {
         );
         assert!(summary.starts_with("cargo test --workspace"), "{summary}");
         assert!(!summary.starts_with("set -e"), "{summary}");
+    }
+
+    #[test]
+    fn command_menu_limits_visible_items_and_tracks_selection() {
+        let mut state = UiState::new("model");
+        state.input.set("/".into());
+        let first_page = render(&mut state, 100, 20);
+        assert!(first_page.contains("/new"));
+        assert!(!first_page.contains("/tasks"));
+        assert!(first_page.contains("1/16"));
+
+        state.menu_index = state.menu().len() - 1;
+        let last_page = render(&mut state, 100, 20);
+        assert!(last_page.contains("/exit"));
+        assert!(!last_page.contains("/new"));
+        assert!(last_page.contains("16/16"));
     }
 
     fn render(state: &mut UiState, width: u16, height: u16) -> String {
