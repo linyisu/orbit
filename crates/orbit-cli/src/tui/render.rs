@@ -387,7 +387,7 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
 fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "  󰀘 Orbit",
+            "   Orbit",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ))),
         area,
@@ -1177,7 +1177,7 @@ mod tests {
     fn welcome_commands_and_small_terminal_render() {
         let mut state = UiState::new("mock-model");
         let screen = render(&mut state, 100, 30);
-        assert!(screen.contains("Orbit"));
+        assert!(screen.contains(" Orbit"));
         assert!(screen.contains("mock-model"));
         assert!(!screen.contains("开始一段新对话"));
         assert!(!screen.contains("/help"));
