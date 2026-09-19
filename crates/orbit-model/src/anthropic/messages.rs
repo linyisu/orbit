@@ -269,13 +269,30 @@ struct AnthropicBlock {
 #[derive(Deserialize)]
 struct AnthropicUsage {
     input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
     output_tokens: Option<u64>,
 }
 
 impl From<AnthropicUsage> for Usage {
     fn from(value: AnthropicUsage) -> Self {
         Self {
-            prompt_tokens: value.input_tokens,
+            // Anthropic counts uncached input separately from cache reads and
+            // writes. Context occupancy is their sum, not just billed new input.
+            prompt_tokens: if value.input_tokens.is_some()
+                || value.cache_read_input_tokens.is_some()
+                || value.cache_creation_input_tokens.is_some()
+            {
+                Some(
+                    value
+                        .input_tokens
+                        .unwrap_or(0)
+                        .saturating_add(value.cache_read_input_tokens.unwrap_or(0))
+                        .saturating_add(value.cache_creation_input_tokens.unwrap_or(0)),
+                )
+            } else {
+                None
+            },
             completion_tokens: value.output_tokens,
             total_tokens: None,
         }
@@ -459,5 +476,20 @@ mod tests {
         assert_eq!(messages[1]["content"][0]["type"], "tool_result");
         assert_eq!(messages[1]["content"][1]["type"], "text");
         assert_eq!(messages[1]["content"][2]["type"], "image");
+    }
+}
+
+#[cfg(test)]
+mod cache_usage_tests {
+    use super::*;
+    #[test]
+    fn context_usage_includes_cache_reads_and_writes_but_missing_input_stays_unknown() {
+        let usage:Usage=serde_json::from_value::<AnthropicUsage>(serde_json::json!({"input_tokens":12,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"output_tokens":9})).unwrap().into();
+        assert_eq!(usage.prompt_tokens, Some(1212));
+        let tail: Usage =
+            serde_json::from_value::<AnthropicUsage>(serde_json::json!({"output_tokens":10}))
+                .unwrap()
+                .into();
+        assert_eq!(tail.prompt_tokens, None);
     }
 }

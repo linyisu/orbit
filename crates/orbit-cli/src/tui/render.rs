@@ -387,7 +387,14 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         percent.min(100)
     });
     let lines = [
-        "下一次请求上下文（本地估算）".to_owned(),
+        if state.calibration().samples() > 0 {
+            format!(
+                "下一次请求上下文（{} 个样本校准）",
+                state.calibration().samples()
+            )
+        } else {
+            "下一次请求上下文（本地估算）".to_owned()
+        },
         "包含系统提示、工具定义及当前历史。".to_owned(),
         format!(
             "{} 已用（剩余 {}{remaining}%）",

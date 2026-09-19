@@ -15,3 +15,5 @@ pub mod search_text;
 pub mod web_fetch;
 pub mod workspace;
 pub mod write_file;
+
+pub mod export_artifact;

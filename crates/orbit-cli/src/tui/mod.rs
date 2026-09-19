@@ -680,7 +680,12 @@ fn apply_live_event(event: AgentEvent, state: &mut UiState, session: &mut Sessio
 
 fn refresh_context_usage(state: &mut UiState, history: &[ChatMessage], tools: &ToolRegistry) {
     state.context_used_tokens =
-        orbit_agent::context::estimate_tokens(history, &tools.definitions());
+        state
+            .calibration()
+            .estimate(orbit_agent::context::estimate_tokens(
+                history,
+                &tools.definitions(),
+            ));
 }
 
 fn tool_context_tokens(history: &[ChatMessage], name: &str) -> usize {
@@ -769,7 +774,12 @@ async fn start_agent_run(
         messages.push(ChatMessage::user_with_attachments(prompt, attachments));
     }
     state.context_used_tokens =
-        orbit_agent::context::estimate_tokens(&messages, &tools.definitions());
+        state
+            .calibration()
+            .estimate(orbit_agent::context::estimate_tokens(
+                &messages,
+                &tools.definitions(),
+            ));
     let mut request = ChatRequest::new(messages);
     request.max_tokens = Some(max_output_tokens);
     request.reasoning_effort = model.config().reasoning_effort;
@@ -791,7 +801,11 @@ async fn start_agent_run(
         session.store.clone(),
         session.id().into(),
     ));
+    let local_limit = state
+        .calibration()
+        .local_limit(context_tokens, max_output_tokens as usize);
     let mut agent = Agent::new(backend.clone(), tools.clone(), config)
+        .with_calibration(state.model.clone(), state.calibration())
         .with_file_activity(files.clone())
         .with_context_archive(archive.clone());
     if !compacting {
@@ -803,7 +817,7 @@ async fn start_agent_run(
                 &backend,
                 request.messages,
                 &tools.definitions(),
-                context_tokens,
+                local_limit,
                 max_output_tokens as usize,
                 token,
                 &files,
@@ -814,7 +828,7 @@ async fn start_agent_run(
                 &compacted.history,
                 &tools.definitions(),
                 max_output_tokens as usize,
-                context_tokens,
+                local_limit,
             )?;
             let fallback = compacted.record.fallback;
             let fallback_reason = compacted.record.fallback_reason.clone();
@@ -982,7 +996,14 @@ async fn run_command(
                     _ => None,
                 })
                 .sum::<usize>();
-            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n代码概览工具结果：约 {overview_tokens} tokens\n任务与会话记忆：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动整理：{}（输入窗口的 85% 触发，目标约 50%）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n自动整理优先生成结构化摘要；摘要不可用时保留最新工作和文件活动，较早记录不再发送给模型。\n/compact 手动整理旧对话并保留最近两轮。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            state.transcript.push(TranscriptItem::CommandResult(format!("原始上下文估算：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n代码概览工具结果：约 {overview_tokens} tokens\n任务与会话记忆：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动整理：{}（按校准后的输入窗口触发，目标按近期工作预算确定）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n工具原文先归档再精简；需要摘要时调用模型，摘要失败保留原上下文。\n/compact 按预算整理旧对话，保留完整工具配对和近期工作；归档内容可通过 read_history 回读。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            let calibration = state.calibration();
+            state.transcript.push(TranscriptItem::CommandResult(format!(
+                "校准后总计：约 {} tokens · {} 个服务端样本 · 系数 {:.3}",
+                calibration.estimate(estimated),
+                calibration.samples(),
+                calibration.factor()
+            )));
         }
         "/skills" if argument.is_empty() => state
             .transcript
@@ -1088,7 +1109,7 @@ async fn run_command(
             let failed = verifications.len().saturating_sub(passed);
             let verification = if let Some(last) = verifications.last() {
                 format!(
-                    "验证命令  {} 次 · 通过 {} · 未通过 {} · 最近 exit {} · {} ms",
+                    "命令执行  {} 次 · 成功退出 {} · 异常结束 {} · 最近 exit {} · {} ms",
                     verifications.len(),
                     passed,
                     failed,
@@ -1097,7 +1118,7 @@ async fn run_command(
                     last.elapsed_ms,
                 )
             } else {
-                "验证命令  尚未执行沙箱命令".to_owned()
+                "命令执行  尚未执行沙箱命令".to_owned()
             };
             let verification = format!(
                 "{}\n{}",

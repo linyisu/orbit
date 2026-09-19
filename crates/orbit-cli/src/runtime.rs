@@ -12,6 +12,7 @@ use orbit_tools::{
 pub struct WorkspaceRuntime {
     pub tools: ToolRegistry,
     pub workspace: Workspace,
+    pub command_limits: orbit_tools::run_command::CommandLimits,
     pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
 }
 
@@ -47,8 +48,14 @@ pub async fn workspace_tools(
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
-        let command = RunCommand::with_limits(workspace.clone(), approvals, command_limits);
+        let command = RunCommand::with_limits(workspace.clone(), approvals, command_limits.clone());
         let command = if let Some(scratch) = scratch {
+            if let Some(database) = database {
+                tools.register(orbit_tools::export_artifact::ExportArtifact::new(
+                    scratch.clone(),
+                    database.with_extension("artifacts"),
+                ));
+            }
             command.with_scratch(scratch)
         } else {
             command
@@ -64,6 +71,7 @@ pub async fn workspace_tools(
         orbit_tools::mcp::register(&mut tools, &mcp, workspace.root(), mcp_approvals).await;
     Ok(WorkspaceRuntime {
         workspace,
+        command_limits,
         tools,
         mcp_statuses,
     })
@@ -90,6 +98,7 @@ fn protected_workspace(config: &Path, database: Option<&Path>) -> Result<Workspa
         workspace.protect(database.with_extension("session-locks"))?;
         workspace.protect(database.with_extension("workspaces"))?;
         workspace.protect(database.with_extension("command-output"))?;
+        workspace.protect(database.with_extension("artifacts"))?;
         for suffix in ["-wal", "-shm", "-journal"] {
             let mut sidecar = database.as_os_str().to_os_string();
             sidecar.push(suffix);

@@ -672,3 +672,62 @@ async fn replay_archived_tool_pruning() {
         started.elapsed()
     );
 }
+
+#[tokio::test]
+async fn repeated_compaction_carries_prior_constraints_errors_and_verification_as_source() {
+    use orbit_agent::memory::TaskSummary;
+    let summary = TaskSummary {
+        goal: "fix parser".into(),
+        constraints: vec!["keep API parse_v2 unchanged".into()],
+        decisions: vec!["use borrowed tokens".into()],
+        completed: vec![],
+        remaining: vec!["empty input panic unresolved".into()],
+        verification: vec!["cargo test parser failed exit 101".into()],
+        uncertainty: vec!["full suite not run".into()],
+    };
+    let response = ChatCompletion {
+        id: None,
+        model: None,
+        message: ChatMessage::assistant(serde_json::to_string(&summary).unwrap()),
+        finish_reason: Some("stop".into()),
+        usage: None,
+    };
+    let backend = MockModel::new(vec![response.clone(); 8]);
+    let original = vec![
+        ChatMessage::system("Never change user files without task authorization"),
+        ChatMessage::user("fix parser, preserve parse_v2"),
+        ChatMessage::assistant("investigation ".repeat(8000)),
+        ChatMessage::user("continue"),
+        ChatMessage::assistant("recent"),
+    ];
+    let plan = autocompact::plan_manual(&original, &[], 4096, 64000).unwrap();
+    let first = autocompact::execute(&backend, plan, &[], 4096, 64000, CancellationToken::new())
+        .await
+        .unwrap();
+    let previous_requests = backend.requests().len();
+    let mut history = first.history;
+    history.push(ChatMessage::user("continue and validate"));
+    history.push(ChatMessage::assistant("new investigation ".repeat(8000)));
+    history.push(ChatMessage::user("finish"));
+    history.push(ChatMessage::assistant("working"));
+    let plan = autocompact::plan_manual(&history, &[], 4096, 64000).unwrap();
+    let second = autocompact::execute(&backend, plan, &[], 4096, 64000, CancellationToken::new())
+        .await
+        .unwrap();
+    for fact in [
+        &summary.constraints[0],
+        &summary.remaining[0],
+        &summary.verification[0],
+    ] {
+        assert!(
+            backend.requests()[previous_requests..]
+                .iter()
+                .any(|r| serde_json::to_string(&r.messages).unwrap().contains(fact))
+        );
+        assert!(second.summary.contains(fact));
+    }
+    assert_paired(&second.history);
+    assert!(
+        matches!(&second.history[0],ChatMessage::System {content} if content.contains("Never change"))
+    );
+}

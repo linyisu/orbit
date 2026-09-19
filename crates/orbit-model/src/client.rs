@@ -139,7 +139,7 @@ impl ModelClient {
         request: ChatRequest,
         cancellation: CancellationToken,
     ) -> Result<ChatCompletion, ModelError> {
-        let response = self.send(request, false, cancellation.clone()).await?;
+        let (response, _) = self.send(request, false, cancellation.clone()).await?;
         let decode = async {
             match self.config.api_format {
                 ApiFormat::OpenaiChatCompletions => {
@@ -172,7 +172,17 @@ impl ModelClient {
         request: ChatRequest,
         cancellation: CancellationToken,
     ) -> Result<ModelStream, ModelError> {
-        let response = self.send(request, true, cancellation.clone()).await?;
+        self.stream_with_retries(request, cancellation)
+            .await
+            .map(|(stream, _)| stream)
+    }
+
+    pub async fn stream_with_retries(
+        &self,
+        request: ChatRequest,
+        cancellation: CancellationToken,
+    ) -> Result<(ModelStream, u32), ModelError> {
+        let (response, retries) = self.send(request, true, cancellation.clone()).await?;
         let content_type = response
             .headers()
             .get(header::CONTENT_TYPE)
@@ -186,23 +196,18 @@ impl ModelClient {
             ));
         }
 
-        match self.config.api_format {
-            ApiFormat::OpenaiChatCompletions => Ok(crate::openai::chat_completions::stream(
-                response,
-                self.config.timeout,
-                cancellation,
-            )),
-            ApiFormat::OpenaiResponses => Ok(crate::openai::responses::stream(
-                response,
-                self.config.timeout,
-                cancellation,
-            )),
-            ApiFormat::AnthropicMessages => Ok(crate::anthropic::messages::stream(
-                response,
-                self.config.timeout,
-                cancellation,
-            )),
-        }
+        let stream = match self.config.api_format {
+            ApiFormat::OpenaiChatCompletions => {
+                crate::openai::chat_completions::stream(response, self.config.timeout, cancellation)
+            }
+            ApiFormat::OpenaiResponses => {
+                crate::openai::responses::stream(response, self.config.timeout, cancellation)
+            }
+            ApiFormat::AnthropicMessages => {
+                crate::anthropic::messages::stream(response, self.config.timeout, cancellation)
+            }
+        };
+        Ok((stream, retries))
     }
 
     async fn send(
@@ -210,7 +215,7 @@ impl ModelClient {
         request: ChatRequest,
         stream: bool,
         cancellation: CancellationToken,
-    ) -> Result<Response, ModelError> {
+    ) -> Result<(Response, u32), ModelError> {
         let format = self.config.api_format;
         let (body, headers) = match format {
             ApiFormat::OpenaiChatCompletions => crate::openai::chat_completions::encode(
@@ -241,7 +246,7 @@ impl ModelClient {
                 .send_once(&body, &headers, format, cancellation.clone())
                 .await;
             match result {
-                Ok(response) => return Ok(response),
+                Ok(response) => return Ok((response, u32::from(attempt))),
                 Err(error) if error.is_retryable() && attempt < self.config.max_retries => {
                     let delay = Duration::from_millis(250_u64 << attempt);
                     select! {
@@ -946,10 +951,14 @@ mod tests {
         })
         .unwrap();
 
-        let mut stream = model
-            .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
+        let (mut stream, retries) = model
+            .stream_with_retries(
+                ChatRequest::new(vec![ChatMessage::user("hello")]),
+                CancellationToken::new(),
+            )
             .await
             .unwrap();
+        assert_eq!(retries, 1);
         let mut text = String::new();
         while let Some(event) = stream.next().await {
             if let StreamEvent::TextDelta(delta) = event.unwrap() {

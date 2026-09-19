@@ -912,6 +912,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         rust_toolchain: None,
         writable_snapshot: false,
         persistent_scratch: true,
+        dependency_caches: Vec::new(),
     };
     writer
         .finish(

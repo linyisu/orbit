@@ -39,6 +39,10 @@ pub struct RunDiagnostic {
     pub compaction_fallback: Option<String>,
     pub event_decode_failures: usize,
     pub usage: Option<Usage>,
+    pub requests: usize,
+    pub known_retries: u64,
+    pub model_elapsed_ms: u64,
+    pub latest_estimated_input: Option<usize>,
     pub failure: Option<String>,
 }
 
@@ -107,6 +111,10 @@ fn summarize(
         compaction_fallback: None,
         event_decode_failures: 0,
         usage: None,
+        requests: 0,
+        known_retries: 0,
+        model_elapsed_ms: 0,
+        latest_estimated_input: None,
         failure: None,
     };
     let mut compaction_records = 0;
@@ -167,6 +175,23 @@ fn summarize(
                 result.failure = Some(error);
             }
             AgentEvent::Failed { error } => result.failure = Some(error),
+            AgentEvent::RequestMetrics {
+                estimated_input,
+                retries,
+                usage,
+                elapsed_ms,
+                ..
+            } => {
+                result.requests += 1;
+                result.known_retries = result
+                    .known_retries
+                    .saturating_add(u64::from(retries.unwrap_or(0)));
+                result.model_elapsed_ms = result.model_elapsed_ms.saturating_add(elapsed_ms);
+                result.latest_estimated_input = Some(estimated_input);
+                if usage.is_some() {
+                    result.usage = usage;
+                }
+            }
             AgentEvent::VerificationRecorded { .. }
             | AgentEvent::Completed { .. }
             | AgentEvent::CompactionStarted
@@ -211,6 +236,16 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
                 String::new()
             },
         );
+        if run.requests > 0 {
+            let _ = writeln!(
+                output,
+                "  模型请求 {} · 已记录重试 {} · 累计 {} ms · 最近本地估算 {} tokens",
+                run.requests,
+                run.known_retries,
+                run.model_elapsed_ms,
+                run.latest_estimated_input.unwrap_or(0)
+            );
+        }
         if let Some(usage) = &run.usage {
             let _ = writeln!(
                 output,

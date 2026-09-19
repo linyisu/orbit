@@ -42,14 +42,31 @@ struct Arguments {
 #[serde(default, deny_unknown_fields)]
 pub struct CommandLimits {
     pub rust_toolchain: Option<std::path::PathBuf>,
+    pub snapshot_mib: usize,
+    pub snapshot_entries: usize,
+    pub writable_snapshot_mib: usize,
+    pub dependency_caches: Vec<DependencyCache>,
+    pub verification_commands: std::collections::BTreeMap<String, String>,
     pub default_timeout_seconds: u64,
     pub max_timeout_seconds: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyCache {
+    pub name: String,
+    pub path: PathBuf,
 }
 
 impl Default for CommandLimits {
     fn default() -> Self {
         Self {
             rust_toolchain: None,
+            snapshot_mib: 64,
+            snapshot_entries: 10_000,
+            writable_snapshot_mib: 256,
+            dependency_caches: Vec::new(),
+            verification_commands: Default::default(),
             default_timeout_seconds: 120,
             max_timeout_seconds: 600,
         }
@@ -71,6 +88,45 @@ impl CommandLimits {
             .is_some_and(|path| !path.is_absolute())
         {
             return Err("command.rust_toolchain must be an absolute toolchain directory");
+        }
+        if !(1..=1024).contains(&self.snapshot_mib)
+            || !(1..=100_000).contains(&self.snapshot_entries)
+            || self.writable_snapshot_mib < self.snapshot_mib
+            || self.writable_snapshot_mib > 2048
+        {
+            return Err(
+                "snapshot_mib must be 1..1024, snapshot_entries 1..100000 and writable_snapshot_mib between snapshot_mib and 2048",
+            );
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for cache in &self.dependency_caches {
+            if cache.name.is_empty()
+                || cache.name.len() > 48
+                || !cache
+                    .name
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+                || !cache.path.is_absolute()
+                || !names.insert(&cache.name)
+            {
+                return Err(
+                    "dependency cache names must be unique ASCII letters/digits/-/_ up to 48 bytes, with absolute directory paths",
+                );
+            }
+        }
+        if self.dependency_caches.len() > 16
+            || self.verification_commands.len() > 16
+            || self.verification_commands.iter().any(|(name, cmd)| {
+                name.is_empty()
+                    || name.len() > 64
+                    || cmd.trim().is_empty()
+                    || cmd.len() > 4096
+                    || cmd.contains('\0')
+            })
+        {
+            return Err(
+                "at most 16 caches and 16 named verification commands; commands must be nonempty and at most 4096 bytes",
+            );
         }
         Ok(())
     }
@@ -108,7 +164,22 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",
-            "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. Use read_image instead when the task is to view or describe an image; shell metadata, OCR, pixel dumps and generated statistics do not expose the actual picture to the vision model. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy (128 MiB total including source). Changes inside /workspace are discarded after each command; copy sources or build outputs to /scratch when they must survive subsequent commands. /tmp is a disposable 64 MiB tmpfs and each produced file is limited to 64 MiB. In the TUI, /scratch is a private writable directory retained across commands and session resume. Save intermediate files, binaries and checkpoints there; new sessions use separate scratch directories. It does not keep background processes alive. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. Snapshot limit 64 MiB/10000 entries. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Cargo dependencies are not inherited and network remains blocked. Timeout defaults and maximum are specified in the tool schema; timeout and cancellation stop the sandbox process, while CPU time has no separate limit. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts. In the TUI, full output is privately retained by session and returns an output_id for read_command_output pagination; it is capped at 16 MiB per stream and 128 MiB per session. Never automatically retry a denied command.",
+            format!(
+                "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. Use read_image instead when the task is to view or describe an image; shell metadata, OCR, pixel dumps and generated statistics do not expose the actual picture to the vision model. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy with host-configured capacity. Changes inside /workspace are discarded after each command; copy sources or build outputs to /scratch when they must survive subsequent commands. /tmp is a disposable 64 MiB tmpfs and each produced file is limited to 64 MiB. In the TUI, /scratch is a private writable directory retained across commands and session resume. Save intermediate files, binaries and checkpoints there; new sessions use separate scratch directories. It does not keep background processes alive. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Only explicitly configured dependency caches are mounted; network remains blocked. Timeout defaults and maximum are specified in the tool schema; timeout and cancellation stop the sandbox process, while CPU time has no separate limit. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts. In the TUI, full output is privately retained by session and returns an output_id for read_command_output pagination; it is capped at 16 MiB per stream and 128 MiB per session. Never automatically retry a denied command. Configured source limits: {} MiB / {} entries, disposable writable capacity {} MiB. Read-only cache mounts: {}. Host-configured verification commands, not yet executed: {}.",
+                self.limits.snapshot_mib,
+                self.limits.snapshot_entries,
+                self.limits.writable_snapshot_mib,
+                serde_json::to_string(
+                    &self
+                        .limits
+                        .dependency_caches
+                        .iter()
+                        .map(|c| format!("/opt/orbit-cache/{}", c.name))
+                        .collect::<Vec<_>>()
+                )
+                .unwrap_or_default(),
+                serde_json::to_string(&self.limits.verification_commands).unwrap_or_default()
+            ),
             json!({"type":"object","properties":{"writable_snapshot":{"type":"boolean","default":false},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":self.limits.max_timeout_seconds,"default":self.limits.default_timeout_seconds}},"required":["command"],"additionalProperties":false}),
         )
     }
@@ -168,13 +239,13 @@ impl Tool for RunCommand {
                 }
                 None => None,
             };
-            let mut result = sandbox::run_with_resources_and_output(
+            let mut result = sandbox::run_configured(
                 self.workspace.clone(),
                 args.command,
                 Duration::from_secs(timeout_seconds),
                 cancellation,
                 args.writable_snapshot,
-                self.limits.rust_toolchain.as_deref(),
+                &self.limits,
                 scratch.as_deref(),
                 output_log,
             )
@@ -195,5 +266,27 @@ fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::InvalidArguments {
         tool: "run_command".into(),
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+    #[test]
+    fn configurable_environment_rejects_ambiguous_mounts_and_invalid_budgets() {
+        let limits:CommandLimits=toml::from_str("snapshot_mib=128\nsnapshot_entries=20000\nwritable_snapshot_mib=512\ndependency_caches=[{name='cargo',path='/offline/cargo'}]\n[verification_commands]\ntest='cargo test --offline'\n").unwrap();
+        assert!(limits.validate().is_ok());
+        let mut bad = limits.clone();
+        bad.writable_snapshot_mib = 127;
+        assert!(bad.validate().is_err());
+        let mut bad = limits.clone();
+        bad.dependency_caches.push(bad.dependency_caches[0].clone());
+        assert!(bad.validate().is_err());
+        let mut bad = limits.clone();
+        bad.dependency_caches[0].name = "../escape".into();
+        assert!(bad.validate().is_err());
+        let mut bad = limits;
+        bad.dependency_caches[0].path = "relative".into();
+        assert!(bad.validate().is_err());
     }
 }

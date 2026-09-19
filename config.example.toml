@@ -52,6 +52,11 @@ reasoning = { adapter = "anthropic_messages", efforts = ["minimal", "low", "medi
 [command]
 default_timeout_seconds = 120
 max_timeout_seconds = 600
+snapshot_mib = 64
+snapshot_entries = 10000
+writable_snapshot_mib = 256
+dependency_caches = []
+verification_commands = {}
 
 # Optional trusted HTTP(S) proxy for web_fetch only. Never set by the model.
 # The proxy resolves destination domains and must enforce its own egress policy.

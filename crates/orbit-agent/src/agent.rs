@@ -48,6 +48,8 @@ pub struct Agent<B> {
     config: AgentConfig,
     files: crate::memory::FileActivity,
     archive: Option<std::sync::Arc<dyn crate::archive::ContextArchive>>,
+    calibration: crate::calibration::TokenCalibration,
+    observation_profile: String,
     journal: Option<std::sync::Arc<dyn crate::checkpoint::ExecutionJournal>>,
 }
 
@@ -63,7 +65,19 @@ where
             files: Default::default(),
             archive: None,
             journal: None,
+            calibration: Default::default(),
+            observation_profile: String::new(),
         }
+    }
+
+    pub fn with_calibration(
+        mut self,
+        profile: String,
+        calibration: crate::calibration::TokenCalibration,
+    ) -> Self {
+        self.observation_profile = profile;
+        self.calibration = calibration;
+        self
     }
 
     pub fn with_file_activity(mut self, files: crate::memory::FileActivity) -> Self {
@@ -236,6 +250,7 @@ where
         let mut turns = 0;
         let mut tool_calls = 0;
         let mut compact_after = 0;
+        let mut calibration = self.calibration.clone();
         self.checkpoint(&history, turns, tool_calls, None, &[], None)
             .await?;
 
@@ -247,33 +262,67 @@ where
                 return Err(AgentError::MaxTurns);
             }
 
-            self.prepare_context(
-                &mut history,
-                request.max_tokens.unwrap_or(4096) as usize,
-                &mut compact_after,
-                &files,
-                cancellation.clone(),
-                emit,
-            )
-            .await?;
+            let output = request.max_tokens.unwrap_or(4096) as usize;
+            let local_limit = calibration.local_limit(self.config.context_tokens, output);
+            let prepared = self
+                .prepare_context(
+                    &mut history,
+                    (output, local_limit),
+                    &mut compact_after,
+                    &files,
+                    cancellation.clone(),
+                    emit,
+                )
+                .await
+                .map_err(|error| match error {
+                    AgentError::ContextBudget { estimated, .. } => AgentError::ContextBudget {
+                        estimated: calibration
+                            .estimate(estimated.saturating_sub(output))
+                            .saturating_add(output),
+                        limit: self.config.context_tokens,
+                    },
+                    other => other,
+                });
+            // A successful compaction may be followed immediately by cancellation
+            // or a closed UI channel. Persist its effective history together with
+            // the queued compaction events before returning that terminal error.
+            if prepared.is_err() {
+                self.checkpoint(&history, turns, tool_calls, None, &[], None)
+                    .await?;
+            }
+            prepared?;
             turns += 1;
             self.checkpoint(&history, turns, tool_calls, None, &[], None)
                 .await?;
             emit(AgentEvent::TurnStarted { turn: turns }).await?;
 
-            let completion = self
-                .collect_stream(
-                    ChatRequest {
-                        messages: model_messages(&history),
-                        tools: self.tools.definitions(),
-                        temperature: request.temperature,
-                        max_tokens: request.max_tokens,
-                        reasoning_effort: request.reasoning_effort,
-                    },
-                    cancellation.clone(),
-                    emit,
-                )
-                .await?;
+            let model_request = ChatRequest {
+                messages: model_messages(&history),
+                tools: self.tools.definitions(),
+                temperature: request.temperature,
+                max_tokens: request.max_tokens,
+                reasoning_effort: request.reasoning_effort,
+            };
+            let estimated_input =
+                crate::context::estimate_tokens(&model_request.messages, &model_request.tools);
+            let started = std::time::Instant::now();
+            let response = self
+                .collect_stream(model_request, cancellation.clone(), emit)
+                .await;
+            let usage = response.as_ref().ok().and_then(|(c, _)| c.usage.clone());
+            calibration.observe(
+                estimated_input,
+                usage.as_ref().and_then(|u| u.prompt_tokens),
+            );
+            emit(AgentEvent::RequestMetrics {
+                profile: self.observation_profile.clone(),
+                retries: response.as_ref().ok().and_then(|(_, retries)| *retries),
+                estimated_input,
+                usage,
+                elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            })
+            .await?;
+            let (completion, _) = response?;
             check_finish_reason(completion.finish_reason.as_deref())?;
             let assistant = completion.message.clone();
             let calls = match &assistant {
@@ -372,7 +421,7 @@ where
     async fn prepare_context<F, Fut>(
         &self,
         history: &mut Vec<ChatMessage>,
-        output: usize,
+        (output, local_limit): (usize, usize),
         compact_after: &mut usize,
         files: &crate::memory::FileActivity,
         cancellation: CancellationToken,
@@ -386,8 +435,7 @@ where
         let estimated = crate::context::estimate_tokens(history, &tools);
         if self.config.auto_compact
             && estimated >= *compact_after
-            && let Some(plan) =
-                crate::autocompact::plan(history, &tools, output, self.config.context_tokens)
+            && let Some(plan) = crate::autocompact::plan(history, &tools, output, local_limit)
         {
             emit(AgentEvent::CompactionStarted).await?;
             let event = match crate::autocompact::execute_with_archive(
@@ -395,7 +443,7 @@ where
                 plan.with_files(files),
                 &tools,
                 output,
-                self.config.context_tokens,
+                local_limit,
                 cancellation.clone(),
                 self.archive.as_deref(),
             )
@@ -419,15 +467,15 @@ where
                     *history = result.history;
                     *compact_after = result
                         .after_tokens
-                        .saturating_add(self.config.context_tokens.saturating_sub(output) / 10);
+                        .saturating_add(local_limit.saturating_sub(output) / 10);
                     event
                 }
                 Err(AgentError::Cancelled) => return Err(AgentError::Cancelled),
                 Err(error) => {
                     // A failed early attempt must not cause a summary request on
                     // every tool call. Retry only after substantial input growth.
-                    *compact_after = estimated
-                        .saturating_add(self.config.context_tokens.saturating_sub(output) / 10);
+                    *compact_after =
+                        estimated.saturating_add(local_limit.saturating_sub(output) / 10);
                     AgentEvent::CompactionFailed {
                         error: error.to_string(),
                     }
@@ -438,7 +486,7 @@ where
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled);
         }
-        crate::context::check_budget(history, &tools, output, self.config.context_tokens)
+        crate::context::check_budget(history, &tools, output, local_limit)
     }
 
     async fn collect_stream<F, Fut>(
@@ -446,13 +494,16 @@ where
         request: ChatRequest,
         cancellation: CancellationToken,
         emit: &mut F,
-    ) -> Result<ChatCompletion, AgentError>
+    ) -> Result<(ChatCompletion, Option<u32>), AgentError>
     where
         F: FnMut(AgentEvent) -> Fut,
         Fut: Future<Output = Result<(), AgentError>>,
     {
         let fallback_request = request.clone();
-        let mut stream = self.backend.stream(request, cancellation.clone()).await?;
+        let (mut stream, retries) = self
+            .backend
+            .stream_with_retries(request, cancellation.clone())
+            .await?;
         let mut text = String::new();
         let mut calls = BTreeMap::new();
         let mut finish_reason = None;
@@ -480,7 +531,6 @@ where
             }
         }
 
-        check_finish_reason(finish_reason.as_deref())?;
         if text.is_empty() && calls.is_empty() && finish_reason.is_none() {
             let completion = self
                 .backend
@@ -513,19 +563,22 @@ where
                 .await?;
             }
 
-            return Ok(completion);
+            return Ok((completion, None));
         }
 
-        Ok(ChatCompletion {
-            id: None,
-            model: None,
-            message: ChatMessage::Assistant {
-                content: (!text.is_empty()).then_some(text),
-                tool_calls: calls.into_values().collect(),
+        Ok((
+            ChatCompletion {
+                id: None,
+                model: None,
+                message: ChatMessage::Assistant {
+                    content: (!text.is_empty()).then_some(text),
+                    tool_calls: calls.into_values().collect(),
+                },
+                finish_reason,
+                usage,
             },
-            finish_reason,
-            usage,
-        })
+            retries,
+        ))
     }
 }
 
@@ -680,7 +733,30 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn calibrated_budget_stops_request_and_reports_real_configured_limit() {
+        let backend = MockModel::new(vec![]);
+        let mut calibration = crate::calibration::TokenCalibration::default();
+        calibration.observe(1, Some(10000));
+        let agent = Agent::new(
+            backend.clone(),
+            ToolRegistry::new(),
+            AgentConfig {
+                context_tokens: 8192,
+                auto_compact: false,
+                ..Default::default()
+            },
+        )
+        .with_calibration("provider::model".into(), calibration);
+        let result = agent.run(request(), CancellationToken::new()).await;
+        assert!(
+            matches!(result,Err(AgentError::ContextBudget {estimated,limit:8192}) if estimated>8192)
+        );
+        assert!(backend.requests().is_empty());
+    }
+
     struct FailingJournal {
+        checkpoints: std::sync::Mutex<Vec<crate::checkpoint::ExecutionCheckpoint>>,
         fail_start: bool,
         fail_receipt: bool,
     }
@@ -691,7 +767,7 @@ mod tests {
         }
         fn save<'a>(
             &'a self,
-            _: crate::checkpoint::ExecutionCheckpoint,
+            checkpoint: crate::checkpoint::ExecutionCheckpoint,
             event: Option<AgentEvent>,
         ) -> crate::checkpoint::CheckpointFuture<'a> {
             Box::pin(async move {
@@ -700,10 +776,58 @@ mod tests {
                 {
                     Err(AgentError::Checkpoint("disk unavailable".into()))
                 } else {
+                    self.checkpoints.lock().unwrap().push(checkpoint);
                     Ok(())
                 }
             })
         }
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_compaction_saves_the_published_context() {
+        use std::sync::Arc;
+        let response=assistant_text(&serde_json::json!({"goal":"fix parser","constraints":["preserve API"],"decisions":[],"completed":[],"remaining":["test empty input"],"verification":[],"uncertainty":[]}).to_string());
+        let history = vec![
+            ChatMessage::system("coding rules"),
+            ChatMessage::user("fix parser, preserve API"),
+            ChatMessage::assistant("investigation ".repeat(4000)),
+            ChatMessage::user("continue"),
+        ];
+        let journal = Arc::new(FailingJournal {
+            fail_start: false,
+            fail_receipt: false,
+            checkpoints: Default::default(),
+        });
+        let agent = Agent::new(
+            MockModel::new(vec![response; 16]),
+            ToolRegistry::new(),
+            AgentConfig {
+                context_tokens: 16000,
+                ..Default::default()
+            },
+        )
+        .with_execution_journal(journal.clone());
+        let token = CancellationToken::new();
+        let result = agent
+            .run_core(ChatRequest::new(history.clone()), token.clone(), |event| {
+                if matches!(event, AgentEvent::ContextCompacted { .. }) {
+                    token.cancel();
+                }
+                std::future::ready(Ok(()))
+            })
+            .await;
+        assert!(matches!(result, Err(AgentError::Cancelled)));
+        let checkpoints = journal.checkpoints.lock().unwrap();
+        let restored = &checkpoints.last().unwrap().history;
+        assert!(
+            crate::context::estimate_tokens(restored, &[])
+                < crate::context::estimate_tokens(&history, &[]) / 2
+        );
+        assert!(
+            serde_json::to_string(restored)
+                .unwrap()
+                .contains("preserve API")
+        );
     }
 
     #[tokio::test]
@@ -734,6 +858,7 @@ mod tests {
                 .with_execution_journal(Arc::new(FailingJournal {
                     fail_start,
                     fail_receipt: !fail_start,
+                    checkpoints: Default::default(),
                 }));
                 let result = match adapter {
                     0 => agent.run(request(), CancellationToken::new()).await,

@@ -7,6 +7,14 @@ pub enum AgentEvent {
         turn: usize,
     },
     Model(StreamEvent),
+    RequestMetrics {
+        profile: String,
+        estimated_input: usize,
+        #[serde(default)]
+        retries: Option<u32>,
+        usage: Option<orbit_model::types::Usage>,
+        elapsed_ms: u64,
+    },
     ToolStarted {
         call: ToolCall,
     },

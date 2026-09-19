@@ -19,7 +19,21 @@ pub type CompletionFuture<'a> =
 pub type StreamFuture<'a> =
     Pin<Box<dyn Future<Output = Result<ModelStream, ModelError>> + Send + 'a>>;
 
+pub type ObservedStreamFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<(ModelStream, Option<u32>), ModelError>> + Send + 'a>>;
+
 pub trait ModelBackend: Send + Sync {
+    fn stream_with_retries<'a>(
+        &'a self,
+        request: ChatRequest,
+        cancellation: CancellationToken,
+    ) -> ObservedStreamFuture<'a> {
+        Box::pin(async move {
+            self.stream(request, cancellation)
+                .await
+                .map(|stream| (stream, None))
+        })
+    }
     fn complete<'a>(
         &'a self,
         request: ChatRequest,
@@ -45,6 +59,19 @@ impl ModelClientBackend {
 }
 
 impl ModelBackend for ModelClientBackend {
+    fn stream_with_retries<'a>(
+        &'a self,
+        request: ChatRequest,
+        cancellation: CancellationToken,
+    ) -> ObservedStreamFuture<'a> {
+        Box::pin(async move {
+            self.client
+                .stream_with_retries(request, cancellation)
+                .await
+                .map(|(stream, count)| (stream, Some(count)))
+        })
+    }
+
     fn complete<'a>(
         &'a self,
         request: ChatRequest,

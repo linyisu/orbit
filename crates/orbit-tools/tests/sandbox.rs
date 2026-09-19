@@ -236,9 +236,9 @@ async fn writable_snapshot_builds_without_changing_host_and_discards_outputs() {
 #[ignore = "requires Linux user namespaces"]
 async fn writable_workspace_has_a_total_size_limit() {
     let (_root, workspace) = fixture();
-    let result = sandbox::run_with_options(workspace,
-        "dd if=/dev/zero of=one bs=1M count=48 2>/dev/null; dd if=/dev/zero of=two bs=1M count=48 2>/dev/null; dd if=/dev/zero of=three bs=1M count=48".into(),
-        Duration::from_secs(15), CancellationToken::new(), true).await.unwrap();
+    let result = sandbox::run_configured(workspace,
+        "dd if=/dev/zero of=one bs=1M count=1 2>/dev/null; dd if=/dev/zero of=two bs=1M count=1 2>/dev/null; dd if=/dev/zero of=three bs=1M count=1".into(),
+        Duration::from_secs(15), CancellationToken::new(), true, &orbit_tools::run_command::CommandLimits {snapshot_mib:1,writable_snapshot_mib:2,..Default::default()},None,None).await.unwrap();
     assert_ne!(result.exit_code, Some(0));
     assert!(
         result.stderr.contains("No space left on device"),
@@ -259,6 +259,7 @@ async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
             rust_toolchain: None,
             default_timeout_seconds: 300,
             max_timeout_seconds: 1800,
+            ..Default::default()
         },
     );
     assert!(
@@ -291,7 +292,8 @@ async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
         CommandLimits {
             rust_toolchain: None,
             default_timeout_seconds: 601,
-            max_timeout_seconds: 600
+            max_timeout_seconds: 600,
+            ..Default::default()
         }
         .validate()
         .is_err()
@@ -457,4 +459,40 @@ async fn scratch_persists_between_commands_and_is_separate_from_tmp_and_other_se
         fs::read_to_string(first.join("state")).unwrap(),
         "checkpoint"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires Linux user namespaces"]
+async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
+    use orbit_tools::run_command::{CommandLimits, DependencyCache};
+    let (root, workspace) = fixture();
+    let cache = tempfile::tempdir().unwrap();
+    fs::write(cache.path().join("package.txt"), "offline dependency").unwrap();
+    let limits = CommandLimits {
+        snapshot_mib: 1,
+        writable_snapshot_mib: 2,
+        dependency_caches: vec![DependencyCache {
+            name: "packages".into(),
+            path: cache.path().into(),
+        }],
+        ..Default::default()
+    };
+    let result=sandbox::run_configured(workspace.clone(),"cat /opt/orbit-cache/packages/package.txt; test ! -w /opt/orbit-cache/packages/package.txt && test ! -e /tmp/home/.ssh".into(),Duration::from_secs(10),CancellationToken::new(),true,&limits,None,None).await.unwrap();
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert!(result.stdout.contains("offline dependency"));
+    assert_eq!(result.verification.unwrap().dependency_caches.len(), 1);
+    fs::write(root.path().join("large.bin"), vec![0; 1024 * 1024 + 1]).unwrap();
+    let error = sandbox::run_configured(
+        workspace,
+        "touch /scratch/must-not-run".into(),
+        Duration::from_secs(10),
+        CancellationToken::new(),
+        true,
+        &limits,
+        None,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("exceeds 1 MiB"));
 }

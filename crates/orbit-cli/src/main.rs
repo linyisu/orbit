@@ -184,7 +184,7 @@ enum ChatCapability {
     Git,
     /// write_file and edit_file.
     Write,
-    /// run_command and read_command_output.
+    /// run_command, read_command_output, verification_status and export_artifact.
     Command,
     /// Archived context retrieval and tool-output pruning.
     History,
@@ -584,7 +584,9 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         Some(session.command_output.clone()),
     )
     .await?;
-    session.initialize_audit(runtime.workspace.clone()).await?;
+    session
+        .initialize_audit(runtime.workspace.clone(), runtime.command_limits.clone())
+        .await?;
     let audit_workspace = runtime.workspace;
     let mut tools = runtime.tools;
     let memory_scope = project_state::MemoryScope::new(session.id().into());
@@ -593,6 +595,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         session.store.clone(),
         memory_scope.clone(),
         audit_workspace,
+        runtime.command_limits,
     );
     history::register(&mut tools, session.store.clone(), memory_scope.clone());
     project_state::register(
@@ -708,7 +711,9 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     if !capability_is_disabled(&disabled, ChatCapability::Files)
         && !capability_is_disabled(&disabled, ChatCapability::Command)
     {
-        session.initialize_audit(runtime.workspace.clone()).await?;
+        session
+            .initialize_audit(runtime.workspace.clone(), runtime.command_limits.clone())
+            .await?;
     }
     let audit_workspace = runtime.workspace;
     let mut tools = runtime.tools;
@@ -717,6 +722,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         session.store.clone(),
         project_state::MemoryScope::new(session.id().into()),
         audit_workspace,
+        runtime.command_limits,
     );
     if !capability_is_disabled(&disabled, ChatCapability::History) {
         history::register(
@@ -781,7 +787,9 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         )));
     }
     session.begin(prompt, model_name.clone()).await?;
-    agent = agent.with_execution_journal(session.execution_journal()?);
+    agent = agent
+        .with_calibration(model_name.clone(), session.calibration(&model_name))
+        .with_execution_journal(session.execution_journal()?);
 
     let cancellation = CancellationToken::new();
     let task_cancellation = cancellation.clone();
@@ -953,6 +961,7 @@ fn disable_chat_capabilities(
     if capability_is_disabled(disabled, ChatCapability::Command) {
         tools.remove("run_command");
         tools.remove("read_command_output");
+        tools.remove("export_artifact");
         tools.remove("verification_status");
     }
     if capability_is_disabled(disabled, ChatCapability::ProjectState) {
@@ -1056,6 +1065,26 @@ mod config_tests {
         assert!(!tools.contains("task_list"));
         assert!(!tools.contains("read_history"));
         assert!(tools.contains("write_file"));
+    }
+
+    #[test]
+    fn disabled_commands_hide_audit_and_export_tools() {
+        let mut tools = ToolRegistry::new();
+        for name in [
+            "run_command",
+            "read_command_output",
+            "verification_status",
+            "export_artifact",
+        ] {
+            tools.register(ClosureTool::new(
+                name,
+                "",
+                serde_json::json!({}),
+                |_, _| async { Ok::<_, orbit_agent::tool::ToolError>("unused".into()) },
+            ));
+        }
+        disable_chat_capabilities(&mut tools, &[ChatCapability::Command].into_iter().collect());
+        assert!(tools.definitions().is_empty());
     }
 
     #[test]

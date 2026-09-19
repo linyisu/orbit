@@ -66,6 +66,8 @@ pub struct UiState {
     pub input_context_tokens: usize,
     /// Same approximate request-context count displayed by `/context`.
     pub context_used_tokens: usize,
+    pub calibrations:
+        std::collections::BTreeMap<String, orbit_agent::calibration::TokenCalibration>,
     /// Footer area that exposes the current context budget on hover.
     pub context_indicator_area: ratatui::layout::Rect,
     pub context_hovered: bool,
@@ -115,6 +117,13 @@ pub struct UiState {
 }
 
 impl UiState {
+    pub fn calibration(&self) -> orbit_agent::calibration::TokenCalibration {
+        self.calibrations
+            .get(&self.model)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             navigation: Default::default(),
@@ -131,6 +140,7 @@ impl UiState {
             context_tokens: 128_000,
             input_context_tokens: 96_000,
             context_used_tokens: 0,
+            calibrations: Default::default(),
             context_indicator_area: ratatui::layout::Rect::default(),
             context_hovered: false,
             context_details_visible: false,
@@ -214,6 +224,17 @@ impl UiState {
                 self.turn = turn;
                 self.ensure_assistant_item();
             }
+            AgentEvent::RequestMetrics {
+                profile,
+                estimated_input,
+                usage,
+                ..
+            } => {
+                self.calibrations.entry(profile).or_default().observe(
+                    estimated_input,
+                    usage.as_ref().and_then(|u| u.prompt_tokens),
+                );
+            }
             AgentEvent::CompactionRecorded { .. } | AgentEvent::VerificationRecorded { .. } => {}
             // Compaction is an implementation detail while it runs. Showing a
             // second transcript row for it made every automatic checkpoint
@@ -226,7 +247,7 @@ impl UiState {
                 fallback,
                 ..
             } => {
-                self.context_used_tokens = after_tokens;
+                self.context_used_tokens = self.calibration().estimate(after_tokens);
                 let detail = if fallback {
                     " · 保留最近工作内容"
                 } else {

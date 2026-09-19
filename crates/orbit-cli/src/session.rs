@@ -81,6 +81,7 @@ pub struct SessionState {
     pub command_output: orbit_tools::run_command::CommandOutputDirectory,
     pub git_baseline: Option<serde_json::Value>,
     pub audit_workspace: Option<orbit_tools::workspace::Workspace>,
+    pub audit_limits: orbit_tools::run_command::CommandLimits,
     pending: Vec<AgentEvent>,
     active: bool,
     journaled: bool,
@@ -156,6 +157,7 @@ impl SessionState {
             writer,
             snapshot,
             audit_workspace: None,
+            audit_limits: Default::default(),
             pending: Vec::new(),
             active: false,
             journaled: false,
@@ -166,24 +168,46 @@ impl SessionState {
     pub async fn initialize_audit(
         &mut self,
         workspace: orbit_tools::workspace::Workspace,
+        limits: orbit_tools::run_command::CommandLimits,
     ) -> Result<()> {
+        self.audit_limits = limits.clone();
         self.audit_workspace = Some(workspace.clone());
         // Never label the current state of an old session as its starting state.
         if self.snapshot.runs.is_empty()
             && self.store.workspace_baseline(self.id()).await?.is_none()
-        {
-            if let Ok(baseline) = orbit_tools::sandbox::fingerprint(
+            && let Ok(baseline) = orbit_tools::sandbox::fingerprint_configured(
                 workspace,
                 tokio_util::sync::CancellationToken::new(),
+                limits,
             )
             .await
-            {
-                self.store
-                    .save_workspace_baseline(self.id(), &baseline)
-                    .await?;
-            }
+        {
+            self.store
+                .save_workspace_baseline(self.id(), &baseline)
+                .await?;
         }
         Ok(())
+    }
+
+    pub fn calibration(&self, profile: &str) -> orbit_agent::calibration::TokenCalibration {
+        let mut result = orbit_agent::calibration::TokenCalibration::default();
+        for event in self.snapshot.runs.iter().flat_map(|r| &r.events) {
+            if let AgentEvent::RequestMetrics {
+                profile: key,
+                estimated_input,
+                usage,
+                ..
+            } = event
+            {
+                if key == profile {
+                    result.observe(
+                        *estimated_input,
+                        usage.as_ref().and_then(|u| u.prompt_tokens),
+                    );
+                }
+            }
+        }
+        result
     }
 
     pub fn id(&self) -> &str {
@@ -414,7 +438,8 @@ impl SessionState {
             .with_extension("command-output")
             .join(self.id());
         if let Some(workspace) = self.audit_workspace.clone() {
-            self.initialize_audit(workspace).await?;
+            self.initialize_audit(workspace, self.audit_limits.clone())
+                .await?;
         }
         Ok(())
     }
@@ -625,5 +650,55 @@ mod tests {
             *reopened.command_output.read().unwrap(),
             first_command_output
         );
+    }
+    #[tokio::test]
+    async fn calibration_restores_per_profile_without_cross_provider_contamination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut session =
+            SessionState::open(tmp.path().join("sessions.db"), None, "a::model".into())
+                .await
+                .unwrap();
+        let id = session.id().to_owned();
+        session
+            .begin("hello".into(), "a::model".into())
+            .await
+            .unwrap();
+        for (profile, actual) in [("a::model", 200), ("b::model", 500)] {
+            session.record(&AgentEvent::RequestMetrics {
+                profile: profile.into(),
+                estimated_input: 100,
+                retries: Some(0),
+                elapsed_ms: 10,
+                usage: Some(orbit_model::types::Usage {
+                    prompt_tokens: Some(actual),
+                    completion_tokens: Some(1),
+                    total_tokens: None,
+                }),
+            });
+        }
+        session
+            .finish(
+                "completed",
+                Some(vec![
+                    ChatMessage::user("hello"),
+                    ChatMessage::assistant("hi"),
+                ]),
+            )
+            .await
+            .unwrap();
+        drop(session);
+        let session =
+            SessionState::open(tmp.path().join("sessions.db"), Some(id), "a::model".into())
+                .await
+                .unwrap();
+        assert_eq!(session.calibration("a::model").estimate(100), 200);
+        assert_eq!(session.calibration("b::model").estimate(100), 500);
+        let mut ui = UiState::new("a::model");
+        session.restore_ui(&mut ui);
+        assert_eq!(ui.calibration().estimate(100), 200);
+        ui.model = "b::model".into();
+        assert_eq!(ui.calibration().estimate(100), 500);
+        ui.model = "new::model".into();
+        assert_eq!(ui.calibration().estimate(100), 100);
     }
 }

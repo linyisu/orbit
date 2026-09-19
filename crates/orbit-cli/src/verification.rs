@@ -11,19 +11,25 @@ use orbit_store::{
     types::{VerificationRecord, WorkspaceChange},
 };
 use orbit_tools::{
-    sandbox::{content_hash, fingerprint},
+    sandbox::{content_hash, fingerprint_configured},
     workspace::Workspace,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-pub fn register(tools: &mut ToolRegistry, store: Store, scope: MemoryScope, workspace: Workspace) {
+pub fn register(
+    tools: &mut ToolRegistry,
+    store: Store,
+    scope: MemoryScope,
+    workspace: Workspace,
+    limits: orbit_tools::run_command::CommandLimits,
+) {
     tools.register(ClosureTool::new("verification_status",
         "Inspect this session's actual command evidence and compare input file fingerprints with the current filtered workspace. Call after final edits before reporting verification. A zero exit code is not proof of tests; input_unchanged only compares source inputs, not mutable system tools/caches/scratch or modifications made inside a writable sandbox. Also classifies per-path changes against the session baseline and Orbit receipts. Old sessions without evidence remain unknown. Does not execute commands or change files.",
         json!({"type":"object","properties":{},"additionalProperties":false}),move |args,token| {
-            let store=store.clone();let id=scope.session_id();let workspace=workspace.clone();
+            let store=store.clone();let id=scope.session_id();let workspace=workspace.clone();let limits=limits.clone();
             async move {if !args.as_object().is_some_and(|a|a.is_empty()) {return Err(ToolError::InvalidArguments{tool:"verification_status".into(),message:"no arguments expected".into()});}
-                report(&store,&id,workspace,token).await.map(|r|r.to_string()).map_err(|e|ToolError::ExecutionFailed(e.to_string()))
+                report(&store,&id,workspace,token,limits).await.map(|r|r.to_string()).map_err(|e|ToolError::ExecutionFailed(e.to_string()))
             }
         }));
 }
@@ -32,8 +38,9 @@ pub async fn report(
     id: &str,
     workspace: Workspace,
     token: CancellationToken,
+    limits: orbit_tools::run_command::CommandLimits,
 ) -> Result<Value> {
-    let current = fingerprint(workspace, token).await?;
+    let current = fingerprint_configured(workspace, token, limits).await?;
     let (baseline, changes, commands) = tokio::try_join!(
         store.workspace_baseline(id),
         store.workspace_changes(id),
@@ -71,7 +78,7 @@ fn compare(
         let input_state=match &record.evidence {None=>"unknown",Some(e) if e.input.digest==current.digest=>"input_unchanged",Some(_)=>"stale"};
         json!({"run":record.run_id,"command":record.command.chars().take(512).collect::<String>(),"command_truncated":record.command.chars().count()>512,"exit_code":record.exit_code,"timed_out":record.timed_out,"cancelled":record.cancelled,"elapsed_ms":record.elapsed_ms,
             "input_state":input_state,"snapshot_id":record.evidence.as_ref().map(|e|&e.input.digest),
-            "environment":record.evidence.as_ref().map(|e|json!({"platform":e.platform,"isolation":e.isolation,"rust_toolchain":e.rust_toolchain,"writable_snapshot":e.writable_snapshot,"persistent_scratch":e.persistent_scratch}))})
+            "environment":record.evidence.as_ref().map(|e|json!({"platform":e.platform,"isolation":e.isolation,"rust_toolchain":e.rust_toolchain,"writable_snapshot":e.writable_snapshot,"persistent_scratch":e.persistent_scratch,"dependency_caches":e.dependency_caches}))})
     }).collect();
     let mut paths = std::collections::BTreeSet::new();
     for c in changes {
@@ -93,7 +100,7 @@ fn compare(
         let first_before=first.and_then(|c|c.change.before.as_ref().map(|s|content_hash(s.as_bytes())));
         let last_expected=last.and_then(|c| if c.undone {c.change.before.as_ref().map(|s|content_hash(s.as_bytes()))} else {Some(content_hash(c.change.after.as_bytes()))});
         let origin=if last.is_some() && current_hash==last_expected {"content_matches_orbit_receipt"} else if last.is_some() {"content_modified_after_orbit"} else {"external_change"};
-        json!({"path":path,"origin":origin,"baseline_available":baseline.is_some(),"changed_from_baseline":baseline.map(|_|baseline_hash!=current_hash),"external_before_first_orbit_write":baseline.and(first).map(|_|baseline_hash!=first_before),"baseline_sha256":baseline_hash,"first_orbit_before_sha256":first_before,"last_orbit_expected_sha256":last_expected,"current_sha256":current_hash})
+        json!({"path":path,"origin":origin,"baseline_available":baseline.is_some(),"changed_from_baseline":baseline.map(|b|b.files.get(&path)!=current.files.get(&path)),"executable_changed":baseline.map(|b|b.files.get(&path).map(|f|f.executable)!=current.files.get(&path).map(|f|f.executable)),"external_before_first_orbit_write":baseline.and(first).map(|_|baseline_hash!=first_before),"baseline_sha256":baseline_hash,"first_orbit_before_sha256":first_before,"last_orbit_expected_sha256":last_expected,"current_sha256":current_hash})
     }).collect();
     json!({"snapshot_id":current.digest,"baseline_available":baseline.is_some(),"command_count":commands.len(),"commands":records,"commands_omitted":commands.len().saturating_sub(20),"changes":paths,"changes_omitted":total.saturating_sub(100),"limitations":"Source fingerprints cover the same filtered snapshot as run_command, not ignored runtime directories or external system state. Commands may mutate disposable copies and scratch. Inspect the command and its output before claiming tests passed; stale or unknown evidence does not verify current edits."})
 }
@@ -106,6 +113,7 @@ pub async fn summary(session: &crate::session::SessionState) -> String {
         session.id(),
         workspace,
         CancellationToken::new(),
+        session.audit_limits.clone(),
     )
     .await
     {
@@ -140,6 +148,7 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
         session.id(),
         workspace,
         CancellationToken::new(),
+        session.audit_limits.clone(),
     )
     .await
     {
@@ -228,6 +237,7 @@ mod tests {
                 rust_toolchain: None,
                 writable_snapshot: true,
                 persistent_scratch: true,
+                dependency_caches: Vec::new(),
             }),
         };
         let same = compare(

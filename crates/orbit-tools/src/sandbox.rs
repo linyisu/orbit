@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use crate::workspace::{Workspace, WorkspaceError};
 
 const MAX_OUTPUT: usize = 32 * 1024;
-const MAX_SNAPSHOT: usize = 64 * 1024 * 1024;
+const MIB: usize = 1024 * 1024;
 /// A single command may retain enough output for a large compiler or test log,
 /// without making a runaway process capable of filling the user's disk.
 pub const MAX_RETAINED_OUTPUT_PER_STREAM: u64 = 16 * 1024 * 1024;
@@ -148,6 +148,7 @@ fn prune_output_directory(directory: &Path) -> Result<(), ToolError> {
 struct Snapshot {
     directory: Option<TempDir>,
     fingerprint: WorkspaceFingerprint,
+    limits: crate::run_command::CommandLimits,
     files: usize,
     skipped: usize,
     bytes: usize,
@@ -155,6 +156,7 @@ struct Snapshot {
 }
 
 impl Snapshot {
+    #[cfg(test)]
     fn create(workspace: Workspace, cancellation: CancellationToken) -> Result<Self, ToolError> {
         Self::scan(workspace, cancellation, true)
     }
@@ -163,6 +165,20 @@ impl Snapshot {
         cancellation: CancellationToken,
         copy: bool,
     ) -> Result<Self, ToolError> {
+        Self::scan_configured(
+            workspace,
+            cancellation,
+            copy,
+            crate::run_command::CommandLimits::default(),
+        )
+    }
+    fn scan_configured(
+        workspace: Workspace,
+        cancellation: CancellationToken,
+        copy: bool,
+        limits: crate::run_command::CommandLimits,
+    ) -> Result<Self, ToolError> {
+        limits.validate().map_err(failed)?;
         let directory = if copy {
             Some(
                 tempfile::Builder::new()
@@ -175,6 +191,7 @@ impl Snapshot {
         };
         let mut snapshot = Self {
             fingerprint: WorkspaceFingerprint::default(),
+            limits,
             directory,
             files: 0,
             skipped: 0,
@@ -209,8 +226,11 @@ impl Snapshot {
         }
         for name in workspace.directory_entries(relative).map_err(failed)? {
             self.visited += 1;
-            if self.visited > 10_000 {
-                return Err(failed("workspace snapshot exceeds 10000 entries"));
+            if self.visited > self.limits.snapshot_entries {
+                return Err(failed(format!(
+                    "workspace snapshot exceeds {} entries",
+                    self.limits.snapshot_entries
+                )));
             }
             if token.is_cancelled() {
                 return Err(ToolError::Cancelled);
@@ -231,19 +251,20 @@ impl Snapshot {
                     use std::os::unix::fs::PermissionsExt;
                     let executable =
                         file.metadata().map_err(failed)?.permissions().mode() & 0o111 != 0;
-                    let available = MAX_SNAPSHOT.saturating_sub(self.bytes);
+                    let available = (self.limits.snapshot_mib * MIB).saturating_sub(self.bytes);
                     let mut content = Vec::new();
                     file.take(available as u64 + 1)
                         .read_to_end(&mut content)
                         .map_err(failed)?;
                     if content.len() > available {
-                        return Err(failed(
-                            "workspace snapshot exceeds 64 MiB; no command was started",
-                        ));
+                        return Err(failed(format!(
+                            "workspace snapshot exceeds {} MiB; no command was started",
+                            self.limits.snapshot_mib
+                        )));
                     }
                     self.bytes += content.len();
                     self.fingerprint.files.insert(
-                        path.to_string_lossy().into_owned(),
+                        path.to_str().ok_or_else(||failed("workspace snapshot paths must be valid UTF-8; no command was started"))?.to_owned(),
                         FileFingerprint {
                             sha256: content_hash(&content),
                             executable,
@@ -265,7 +286,7 @@ impl Snapshot {
                     if workspace.directory_entries(&path).is_ok() {
                         self.fingerprint
                             .directories
-                            .push(path.to_string_lossy().into_owned());
+                            .push(path.to_str().ok_or_else(||failed("workspace snapshot paths must be valid UTF-8; no command was started"))?.to_owned());
                         if let Some(destination) = destination {
                             std::fs::create_dir(destination).map_err(failed)?;
                         }
@@ -300,14 +321,27 @@ pub async fn fingerprint(
     .map_err(failed)?
 }
 
+pub async fn fingerprint_configured(
+    workspace: Workspace,
+    cancellation: CancellationToken,
+    limits: crate::run_command::CommandLimits,
+) -> Result<WorkspaceFingerprint, ToolError> {
+    tokio::task::spawn_blocking(move || {
+        Snapshot::scan_configured(workspace, cancellation, false, limits).map(|s| s.fingerprint)
+    })
+    .await
+    .map_err(failed)?
+}
+
 fn command(
     snapshot: &Path,
     script: &Path,
     writable_snapshot: bool,
     _timeout: Duration,
-    rust_toolchain: Option<&Path>,
+    limits: &crate::run_command::CommandLimits,
     scratch: Option<&Path>,
 ) -> Result<Command, ToolError> {
+    let rust_toolchain = limits.rust_toolchain.as_deref();
     use std::os::unix::fs::MetadataExt;
     let executable = PathBuf::from("/usr/bin/bwrap");
     let metadata = executable.metadata().map_err(|_| failed("sandbox unavailable: install Bubblewrap at /usr/bin/bwrap; refusing unsandboxed execution"))?;
@@ -351,7 +385,12 @@ fn command(
         .arg("/orbit-command.sh");
     if writable_snapshot {
         command.arg("--ro-bind").arg(snapshot).arg("/orbit-source");
-        command.args(["--size", "134217728", "--tmpfs", "/workspace"]);
+        command.args([
+            "--size",
+            &(limits.writable_snapshot_mib * MIB).to_string(),
+            "--tmpfs",
+            "/workspace",
+        ]);
     } else {
         command.arg("--ro-bind").arg(snapshot).arg("/workspace");
     }
@@ -382,6 +421,16 @@ fn command(
             ));
         }
         command.arg("--ro-bind").arg(path).arg("/opt/orbit-rust");
+    }
+    for cache in &limits.dependency_caches {
+        let path = cache.path.canonicalize().map_err(failed)?;
+        if !path.is_dir() {
+            return Err(failed("configured dependency cache must be a directory"));
+        }
+        command
+            .arg("--ro-bind")
+            .arg(path)
+            .arg(format!("/opt/orbit-cache/{}", cache.name));
     }
     command.args([
         "--proc",
@@ -551,13 +600,46 @@ pub async fn run_with_resources_and_output(
     scratch: Option<&Path>,
     output_log: Option<OutputLog>,
 ) -> Result<CommandResult, ToolError> {
+    let limits = crate::run_command::CommandLimits {
+        rust_toolchain: rust_toolchain.map(Path::to_path_buf),
+        ..Default::default()
+    };
+    run_configured(
+        workspace,
+        script,
+        timeout,
+        token,
+        writable_snapshot,
+        &limits,
+        scratch,
+        output_log,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_configured(
+    workspace: Workspace,
+    script: String,
+    timeout: Duration,
+    token: CancellationToken,
+    writable_snapshot: bool,
+    limits: &crate::run_command::CommandLimits,
+    scratch: Option<&Path>,
+    output_log: Option<OutputLog>,
+) -> Result<CommandResult, ToolError> {
+    limits.validate().map_err(failed)?;
+    let rust_toolchain = limits.rust_toolchain.as_deref();
     if token.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
     let copy_token = token.clone();
-    let snapshot = tokio::task::spawn_blocking(move || Snapshot::create(workspace, copy_token))
-        .await
-        .map_err(failed)??;
+    let snapshot_limits = limits.clone();
+    let snapshot = tokio::task::spawn_blocking(move || {
+        Snapshot::scan_configured(workspace, copy_token, true, snapshot_limits)
+    })
+    .await
+    .map_err(failed)??;
     if token.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
@@ -571,7 +653,7 @@ pub async fn run_with_resources_and_output(
         script_file.path(),
         writable_snapshot,
         timeout,
-        rust_toolchain,
+        limits,
         scratch,
     )?
     .spawn()
@@ -617,7 +699,7 @@ pub async fn run_with_resources_and_output(
         output_id,
         retained_output_truncated,
         sandbox: if writable_snapshot {
-            "bubblewrap; no network; disposable writable workspace snapshot (128 MiB); changes discarded"
+            "bubblewrap; no network; disposable writable workspace snapshot; changes discarded"
         } else {
             "bubblewrap; no network; read-only filtered workspace snapshot"
         },
@@ -631,6 +713,11 @@ pub async fn run_with_resources_and_output(
             rust_toolchain: rust_toolchain.map(|p| p.display().to_string()),
             writable_snapshot,
             persistent_scratch: scratch.is_some(),
+            dependency_caches: limits
+                .dependency_caches
+                .iter()
+                .map(|c| format!("{}: {}", c.name, c.path.display()))
+                .collect(),
         }),
     })
 }

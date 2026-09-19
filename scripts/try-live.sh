@@ -3,6 +3,7 @@
 set -euo pipefail
 orbit_repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 orbit_prepare=false
+orbit_chat=false
 orbit_hard=false
 orbit_context=false
 orbit_discovery=false
@@ -12,12 +13,13 @@ orbit_config="$orbit_repo/config.toml"
 for orbit_arg in "$@"; do
     case "$orbit_arg" in
         --prepare-only) orbit_prepare=true ;;
+        --chat) orbit_chat=true ;;
         --hard) orbit_hard=true ;;
         --web) orbit_web=true ;;
         --limits) orbit_limits=true ;;
         --discovery) orbit_discovery=true ;;
         --context) orbit_hard=true; orbit_context=true ;;
-        *) echo 'Usage: bash scripts/try-live.sh [--hard | --context | --discovery | --web | --limits] [--prepare-only]' >&2; exit 2 ;;
+        *) echo 'Usage: bash scripts/try-live.sh [--hard | --context | --discovery | --web | --limits] [--prepare-only] [--chat]' >&2; exit 2 ;;
     esac
 done
 if [[ "$orbit_limits" == true && ( "$orbit_hard" == true || "$orbit_discovery" == true || "$orbit_web" == true ) ]]; then
@@ -108,6 +110,10 @@ exec '$orbit_repo/target/debug/orbit' --config '$orbit_config' --database '$orbi
 START
 chmod 700 "$orbit_trial/start.sh"
 printf '\n测试项目：%s/project\n测试数据库：%s/sessions.db（独立于项目；正常启动使用用户数据目录）\n启动入口：bash %s/start.sh\n\n进入后发送：请读取 TASK.md，完成修复并实际运行测试。\n使用真实 API；修改和命令执行按界面提示批准。\n\n' "$orbit_trial" "$orbit_trial" "$orbit_trial"
+if [[ "$orbit_prepare" == false && "$orbit_chat" == true ]]; then
+    cd -- "$orbit_trial/project"
+    exec "$orbit_repo/target/debug/orbit" --config "$orbit_config" --database "$orbit_trial/sessions.db" chat --mode yolo --disable web --disable mcp --disable skills --disable image --disable document --prompt-file TASK.md
+fi
 if [[ "$orbit_prepare" == false ]]; then
     exec bash "$orbit_trial/start.sh"
 fi

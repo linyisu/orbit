@@ -22,4 +22,6 @@ pub struct VerificationEvidence {
     pub rust_toolchain: Option<String>,
     pub writable_snapshot: bool,
     pub persistent_scratch: bool,
+    #[serde(default)]
+    pub dependency_caches: Vec<String>,
 }
