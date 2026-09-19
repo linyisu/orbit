@@ -64,11 +64,25 @@ impl Tool for SearchText {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "search_text",
-            "Search UTF-8 text files in the workspace without running a shell. Uses .gitignore and .ignore rules, never follows symlinks, and excludes protected metadata such as .git and .env. Query is a case-insensitive literal by default; set regex=true for a Rust regular expression. Optionally narrow with a workspace-relative path or glob such as **/*.rs. Results have path, 1-based line/column, text and surrounding lines. Paginate matches with offset/next_offset. Large, binary and unreadable files are skipped; use read_file for full content after locating a match.",
+            concat!(
+                "Search UTF-8 text files in the workspace without running a shell. ",
+                "IMPORTANT: regex defaults to false. With regex=false or omitted, the entire query is literal: ",
+                "a|b searches for the actual text a|b, NOT either a or b. ",
+                "To search alternatives, send {\"query\":\"a|b\",\"regex\":true}; ",
+                "to find the literal pipe expression, send {\"query\":\"a|b\",\"regex\":false}. ",
+                "Set regex=true explicitly whenever using alternation, character classes, anchors or other regex syntax. ",
+                "Regex uses Rust regex syntax and matches one line at a time; lookaround and backreferences are unsupported. ",
+                "Both modes are case-insensitive unless case_sensitive=true. ",
+                "If a query returns no matches, check the returned regex mode and query before concluding the text is absent. ",
+                "Uses .gitignore and .ignore rules, never follows symlinks, and excludes protected metadata such as .git and .env. ",
+                "Optionally narrow with a workspace-relative path or glob such as **/*.rs. ",
+                "Results have path, 1-based line/column, text and surrounding lines. Paginate matches with offset/next_offset. ",
+                "Large, binary and unreadable files are skipped; use read_file for full content after locating a match."
+            ),
             json!({"type":"object","properties":{
-                "query":{"type":"string","description":"Literal text, or a regular expression when regex is true"},
+                "query":{"type":"string","description":"Search text. Literal unless regex=true: a|b means the literal pipe expression by default. For either term, use query=a|b AND regex=true. Do not add shell quotes or /regex/ delimiters."},
                 "path":{"type":"string","default":".","description":"Workspace-relative directory or file"},
-                "regex":{"type":"boolean","default":false},
+                "regex":{"type":"boolean","default":false,"description":"false or omitted: exact literal substring matching, including | . * [ ] ^ $. true: interpret query as a Rust regular expression. REQUIRED for alternatives such as foo|bar; never inferred from query content."},
                 "case_sensitive":{"type":"boolean","default":false},
                 "glob":{"type":"string","description":"Optional glob filter, for example **/*.rs"},
                 "context_lines":{"type":"integer","minimum":0,"maximum":10,"default":0},
