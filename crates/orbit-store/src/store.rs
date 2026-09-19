@@ -43,11 +43,11 @@ impl Store {
             private_file(&path)?;
             let connection = Connection::open(&path)?;
             connection.busy_timeout(Duration::from_secs(3))?;
-            connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+            connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous=FULL;")?;
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 11,
+                version <= 12,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -218,6 +218,9 @@ impl Store {
                     PRAGMA user_version=11;",
                 )?;
             }
+            if version < 12 {
+                connection.execute_batch("CREATE TABLE execution_checkpoints(run_id INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, payload TEXT NOT NULL); PRAGMA user_version=12;")?;
+            }
             connection.execute_batch("COMMIT;")?;
             Ok(Self {
                 connection: Arc::new(Mutex::new(connection)),
@@ -331,10 +334,20 @@ impl Store {
                         .collect::<serde_json::Result<_>>()?,
                 });
             }
+            let checkpoint: Option<String> = transaction.query_row(
+                "SELECT c.payload FROM runs r JOIN execution_checkpoints c ON c.run_id=r.id WHERE r.session_id=?1 AND r.id>COALESCE((SELECT max(id) FROM runs WHERE session_id=?1 AND status='completed'),0) AND r.status!='completed' ORDER BY r.id DESC LIMIT 1",[&id],|r|r.get(0)).optional()?;
+            let mut effective_history = serde_json::from_str(&history)?;
+            let recovery = if let Some(payload) = checkpoint {
+                let checkpoint: orbit_agent::checkpoint::ExecutionCheckpoint = serde_json::from_str(&payload)?;
+                let (restored, unresolved_tools) = checkpoint.recovered_history();
+                effective_history = restored;
+                Some(crate::types::RecoveryInfo {turns:checkpoint.turns,tool_calls:checkpoint.tool_calls,unresolved_tools})
+            } else { None };
             Ok(Snapshot {
                 session,
-                history: serde_json::from_str(&history)?,
+                history: effective_history,
                 runs,
+                recovery,
             })
         })
         .await
@@ -1044,6 +1057,15 @@ impl SessionWriter {
                 Ok(())
             })
             .await
+    }
+
+    pub fn execution_journal(&self) -> Result<Arc<dyn orbit_agent::checkpoint::ExecutionJournal>> {
+        Ok(Arc::new(crate::execution::Journal {
+            store: self.store.clone(),
+            run: self.active_run.context("no active run")?,
+            session: self.id.clone(),
+            pending: Mutex::new(Vec::new()),
+        }))
     }
 
     pub async fn finish(

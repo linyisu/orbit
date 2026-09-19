@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod archive;
 pub mod autocompact;
+pub mod checkpoint;
 pub mod context;
 pub mod error;
 pub mod events;

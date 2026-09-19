@@ -48,6 +48,7 @@ pub struct Agent<B> {
     config: AgentConfig,
     files: crate::memory::FileActivity,
     archive: Option<std::sync::Arc<dyn crate::archive::ContextArchive>>,
+    journal: Option<std::sync::Arc<dyn crate::checkpoint::ExecutionJournal>>,
 }
 
 impl<B> Agent<B>
@@ -61,12 +62,47 @@ where
             config,
             files: Default::default(),
             archive: None,
+            journal: None,
         }
     }
 
     pub fn with_file_activity(mut self, files: crate::memory::FileActivity) -> Self {
         self.files = files;
         self
+    }
+
+    pub fn with_execution_journal(
+        mut self,
+        journal: std::sync::Arc<dyn crate::checkpoint::ExecutionJournal>,
+    ) -> Self {
+        self.journal = Some(journal);
+        self
+    }
+
+    async fn checkpoint(
+        &self,
+        history: &[ChatMessage],
+        turns: usize,
+        tool_calls: usize,
+        in_flight: Option<String>,
+        attachments: &[orbit_model::types::Attachment],
+        event: Option<AgentEvent>,
+    ) -> Result<(), AgentError> {
+        if let Some(journal) = &self.journal {
+            journal
+                .save(
+                    crate::checkpoint::ExecutionCheckpoint {
+                        history: history.to_vec(),
+                        turns,
+                        tool_calls,
+                        in_flight,
+                        attachments: attachments.to_vec(),
+                    },
+                    event,
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     pub fn with_context_archive(
@@ -137,8 +173,30 @@ where
         F: FnMut(AgentEvent) -> Fut,
         Fut: Future<Output = Result<(), AgentError>>,
     {
+        let mut pending_events = 0usize;
+        let mut flushed_at = std::time::Instant::now();
+        let mut journaled_emit = |event: AgentEvent| {
+            let journal = self.journal.clone();
+            if let Some(journal) = &journal {
+                journal.record(event.clone());
+            }
+            pending_events += 1;
+            let flush = pending_events >= 256
+                || flushed_at.elapsed() >= std::time::Duration::from_millis(250);
+            if flush {
+                pending_events = 0;
+                flushed_at = std::time::Instant::now();
+            }
+            let emitted = emit(event);
+            async move {
+                if flush && let Some(journal) = journal {
+                    journal.flush().await?;
+                }
+                emitted.await
+            }
+        };
         let result = self
-            .execute_core(request, cancellation.clone(), &mut emit)
+            .execute_core(request, cancellation.clone(), &mut journaled_emit)
             .await;
         let terminal = match &result {
             Ok(agent_result) => AgentEvent::Completed {
@@ -150,7 +208,11 @@ where
                 error: error.to_string(),
             },
         };
-        emit(terminal).await?;
+        let emitted = journaled_emit(terminal).await;
+        if let Some(journal) = &self.journal {
+            journal.flush().await?;
+        }
+        emitted?;
         result
     }
 
@@ -174,6 +236,8 @@ where
         let mut turns = 0;
         let mut tool_calls = 0;
         let mut compact_after = 0;
+        self.checkpoint(&history, turns, tool_calls, None, &[], None)
+            .await?;
 
         loop {
             if cancellation.is_cancelled() {
@@ -193,6 +257,8 @@ where
             )
             .await?;
             turns += 1;
+            self.checkpoint(&history, turns, tool_calls, None, &[], None)
+                .await?;
             emit(AgentEvent::TurnStarted { turn: turns }).await?;
 
             let completion = self
@@ -216,6 +282,8 @@ where
             };
             validate_tool_ids(&calls)?;
             history.push(assistant);
+            self.checkpoint(&history, turns, tool_calls, None, &[], None)
+                .await?;
 
             if calls.is_empty() {
                 return Ok(AgentResult {
@@ -236,31 +304,61 @@ where
                 }
 
                 tool_calls += 1;
-                emit(AgentEvent::ToolStarted { call: call.clone() }).await?;
+                let event = AgentEvent::ToolStarted { call: call.clone() };
+                self.checkpoint(
+                    &history,
+                    turns,
+                    tool_calls,
+                    Some(call.id.clone()),
+                    &loaded_attachments,
+                    Some(event.clone()),
+                )
+                .await?;
+                emit(event).await?;
                 match self.tools.execute(call.clone(), cancellation.clone()).await {
                     Ok(output) => {
                         files.observe(&call, &output.content);
-                        emit(AgentEvent::ToolFinished {
+                        let event = AgentEvent::ToolFinished {
                             call: call.clone(),
                             content: output.content.clone(),
                             changes: output.changes.clone(),
-                        })
-                        .await?;
+                        };
                         history.push(ChatMessage::tool(call.id, output.content));
                         loaded_attachments.extend(output.attachments);
+                        self.checkpoint(
+                            &history,
+                            turns,
+                            tool_calls,
+                            None,
+                            &loaded_attachments,
+                            Some(event.clone()),
+                        )
+                        .await?;
+                        emit(event).await?;
                     }
                     Err(error) => {
                         let message = error.to_string();
-                        emit(AgentEvent::ToolFailed {
+                        let event = AgentEvent::ToolFailed {
                             call: call.clone(),
                             error: message.clone(),
-                        })
-                        .await?;
+                        };
                         history.push(ChatMessage::tool(call.id, format!("tool error: {message}")));
+                        self.checkpoint(
+                            &history,
+                            turns,
+                            tool_calls,
+                            None,
+                            &loaded_attachments,
+                            Some(event.clone()),
+                        )
+                        .await?;
+                        emit(event).await?;
                     }
                 }
             }
             append_loaded_attachments(&mut history, loaded_attachments);
+            self.checkpoint(&history, turns, tool_calls, None, &[], None)
+                .await?;
         }
     }
 
@@ -572,6 +670,81 @@ mod tests {
             message: ChatMessage::assistant(text),
             finish_reason: Some("stop".to_owned()),
             usage: None,
+        }
+    }
+
+    struct FailingJournal {
+        fail_start: bool,
+        fail_receipt: bool,
+    }
+    impl crate::checkpoint::ExecutionJournal for FailingJournal {
+        fn record(&self, _: AgentEvent) {}
+        fn flush(&self) -> crate::checkpoint::CheckpointFuture<'_> {
+            Box::pin(async { Ok(()) })
+        }
+        fn save<'a>(
+            &'a self,
+            _: crate::checkpoint::ExecutionCheckpoint,
+            event: Option<AgentEvent>,
+        ) -> crate::checkpoint::CheckpointFuture<'a> {
+            Box::pin(async move {
+                if (self.fail_start && matches!(event, Some(AgentEvent::ToolStarted { .. })))
+                    || (self.fail_receipt && matches!(event, Some(AgentEvent::ToolFinished { .. })))
+                {
+                    Err(AgentError::Checkpoint("disk unavailable".into()))
+                } else {
+                    Ok(())
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn durability_failure_stops_before_next_side_effect_on_all_adapters() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        for fail_start in [true, false] {
+            for adapter in 0..3 {
+                let count = Arc::new(AtomicUsize::new(0));
+                let effects = count.clone();
+                let mut tools = ToolRegistry::new();
+                tools.register(ClosureTool::new("write", "", json!({}), move |_, _| {
+                    effects.fetch_add(1, Ordering::SeqCst);
+                    async { Ok("saved".into()) }
+                }));
+                let mut completion = assistant_tool_call("a", "write", "{}");
+                completion.message = ChatMessage::assistant_tool_calls(vec![
+                    ToolCall::function("a", "write", json!({})),
+                    ToolCall::function("b", "write", json!({})),
+                ]);
+                let agent = Agent::new(
+                    MockModel::new(vec![completion]),
+                    tools,
+                    AgentConfig::default(),
+                )
+                .with_execution_journal(Arc::new(FailingJournal {
+                    fail_start,
+                    fail_receipt: !fail_start,
+                }));
+                let result = match adapter {
+                    0 => agent.run(request(), CancellationToken::new()).await,
+                    1 => {
+                        agent
+                            .run_with_events(request(), CancellationToken::new(), |_| {})
+                            .await
+                    }
+                    _ => {
+                        let (tx, _rx) = mpsc::channel(128);
+                        agent
+                            .run_with_agent_events(request(), CancellationToken::new(), tx)
+                            .await
+                    }
+                };
+                assert!(matches!(result, Err(AgentError::Checkpoint(_))));
+                assert_eq!(count.load(Ordering::SeqCst), usize::from(!fail_start));
+            }
         }
     }
 

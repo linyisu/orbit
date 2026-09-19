@@ -756,6 +756,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         )));
     }
     session.begin(prompt, model_name.clone()).await?;
+    agent = agent.with_execution_journal(session.execution_journal()?);
 
     let cancellation = CancellationToken::new();
     let task_cancellation = cancellation.clone();

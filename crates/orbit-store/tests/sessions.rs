@@ -180,7 +180,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=12").unwrap();
+    connection.execute_batch("PRAGMA user_version=13").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }
@@ -746,4 +746,120 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
+    use orbit_agent::checkpoint::ExecutionCheckpoint;
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let mut writer = store
+        .create(db.0.display().to_string(), "mock".into(), false)
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    writer.begin("repair".into(), "mock".into()).await.unwrap();
+    let journal = writer.execution_journal().unwrap();
+    let calls: Vec<_> = (0..3)
+        .map(|i| ToolCall::function(i.to_string(), "write_file", serde_json::json!({})))
+        .collect();
+    let history = vec![
+        ChatMessage::user("repair"),
+        ChatMessage::Assistant {
+            content: None,
+            tool_calls: calls.clone(),
+        },
+        ChatMessage::tool("0", "saved first file"),
+    ];
+    journal.record(text("plan"));
+    journal
+        .save(
+            ExecutionCheckpoint {
+                history: history.clone(),
+                turns: 1,
+                tool_calls: 1,
+                in_flight: None,
+                attachments: vec![],
+            },
+            Some(AgentEvent::ToolFinished {
+                call: calls[0].clone(),
+                content: "saved first file".into(),
+                changes: vec![],
+            }),
+        )
+        .await
+        .unwrap();
+    journal
+        .save(
+            ExecutionCheckpoint {
+                history: history.clone(),
+                turns: 1,
+                tool_calls: 2,
+                in_flight: Some("1".into()),
+                attachments: vec![],
+            },
+            Some(AgentEvent::ToolStarted {
+                call: calls[1].clone(),
+            }),
+        )
+        .await
+        .unwrap();
+    drop(journal);
+    drop(writer);
+    drop(store);
+    let store = Store::open(db.path()).await.unwrap();
+    let mut writer = store.acquire(&id).await.unwrap();
+    let restored = store.load(&id).await.unwrap();
+    assert_eq!(&restored.history[..3], &history);
+    assert!(
+        matches!(&restored.history[3], ChatMessage::Tool {content,..} if content.contains("UNKNOWN"))
+    );
+    assert!(
+        matches!(&restored.history[4], ChatMessage::Tool {content,..} if content.contains("NOT executed"))
+    );
+    assert_eq!(restored.recovery.unwrap().unresolved_tools, 2);
+    assert_eq!(restored.runs[0].events.len(), 3);
+    assert!(matches!(restored.runs[0].events[0], AgentEvent::Model(_)));
+    assert!(matches!(
+        restored.runs[0].events[1],
+        AgentEvent::ToolFinished { .. }
+    ));
+    // A restart before the next initial checkpoint must not discard recovery.
+    writer
+        .begin("continue".into(), "mock".into())
+        .await
+        .unwrap();
+    writer.finish("cancelled", vec![], None).await.unwrap();
+    assert_eq!(store.load(&id).await.unwrap().history, restored.history);
+    writer
+        .begin("continue".into(), "mock".into())
+        .await
+        .unwrap();
+    let old_journal = writer.execution_journal().unwrap();
+    let complete = vec![
+        ChatMessage::user("done"),
+        ChatMessage::assistant("verified"),
+    ];
+    writer
+        .finish("completed", vec![], Some(complete.clone()))
+        .await
+        .unwrap();
+    assert_eq!(store.load(&id).await.unwrap().history, complete);
+    assert!(store.load(&id).await.unwrap().recovery.is_none());
+    assert!(
+        old_journal
+            .save(
+                ExecutionCheckpoint {
+                    history,
+                    turns: 1,
+                    tool_calls: 2,
+                    in_flight: None,
+                    attachments: vec![]
+                },
+                None
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(store.load(&id).await.unwrap().history, complete);
 }

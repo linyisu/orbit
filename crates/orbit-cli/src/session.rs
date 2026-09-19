@@ -82,6 +82,7 @@ pub struct SessionState {
     pub git_baseline: Option<serde_json::Value>,
     pending: Vec<AgentEvent>,
     active: bool,
+    journaled: bool,
     flushed_at: Instant,
 }
 
@@ -155,6 +156,7 @@ impl SessionState {
             snapshot,
             pending: Vec::new(),
             active: false,
+            journaled: false,
             flushed_at: Instant::now(),
         })
     }
@@ -165,7 +167,7 @@ impl SessionState {
 
     pub fn restore_ui(&self, state: &mut UiState) {
         state.workspace = self.snapshot.session.workspace.clone();
-        for run in &self.snapshot.runs {
+        for (index, run) in self.snapshot.runs.iter().enumerate() {
             state.input.history.push(run.prompt.clone());
             if run.prompt == "/compact" {
                 state
@@ -183,6 +185,12 @@ impl SessionState {
                     tool_calls: state.tool_calls,
                 }),
                 "cancelled" => state.apply(AgentEvent::Cancelled),
+                "interrupted" | "running" | "failed"
+                    if index + 1 == self.snapshot.runs.len()
+                        && self.snapshot.recovery.is_some() =>
+                {
+                    state.fail("上次运行未完成；已恢复保存的执行进度，不会自动重放工具。");
+                }
                 "interrupted" | "running" => state
                     .fail("上次运行被中断；已恢复到最后一次成功完成的模型上下文，未重新执行工具。"),
                 _ => state.fail("上次运行失败；模型上下文保留在上一轮成功状态。"),
@@ -248,12 +256,24 @@ impl SessionState {
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
         self.writer.begin(prompt, model).await?;
         self.active = true;
+        self.journaled = false;
         self.flushed_at = Instant::now();
         Ok(())
     }
 
     pub fn record(&mut self, event: &AgentEvent) {
+        if self.journaled {
+            return;
+        }
         self.pending.push(event.clone());
+    }
+
+    pub fn execution_journal(
+        &mut self,
+    ) -> Result<std::sync::Arc<dyn orbit_agent::checkpoint::ExecutionJournal>> {
+        let journal = self.writer.execution_journal()?;
+        self.journaled = true;
+        Ok(journal)
     }
 
     pub async fn flush_due(&mut self) -> Result<()> {
@@ -275,6 +295,7 @@ impl SessionState {
             .await?;
         self.pending.clear();
         self.active = false;
+        self.snapshot = self.store.load(self.id()).await?;
         Ok(())
     }
 

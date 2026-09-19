@@ -32,6 +32,15 @@ pub struct Snapshot {
     pub session: Session,
     pub history: Vec<ChatMessage>,
     pub runs: Vec<Run>,
+    #[serde(default)]
+    pub recovery: Option<RecoveryInfo>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecoveryInfo {
+    pub turns: usize,
+    pub tool_calls: usize,
+    pub unresolved_tools: usize,
 }
 
 /// A successfully committed workspace edit reconstructed from the durable

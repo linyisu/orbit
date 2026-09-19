@@ -533,8 +533,9 @@ pub async fn run(
                     };
                     session.record(&final_event);
                     session.finish(status, completed_history.clone()).await?;
-                    if let Some(saved) = completed_history {
-                        history = saved;
+                    if completed_history.is_some() || session.snapshot.recovery.is_some() {
+                        history = session.snapshot.history.clone();
+                        active_context = None;
                         crate::instructions::inject(&mut history, &instructions);
                         skills.inject(&mut history);
                         crate::project_state::inject(
@@ -790,9 +791,12 @@ async fn start_agent_run(
         session.store.clone(),
         session.id().into(),
     ));
-    let agent = Agent::new(backend.clone(), tools.clone(), config)
+    let mut agent = Agent::new(backend.clone(), tools.clone(), config)
         .with_file_activity(files.clone())
         .with_context_archive(archive.clone());
+    if !compacting {
+        agent = agent.with_execution_journal(session.execution_journal()?);
+    }
     let task = tokio::spawn(async move {
         if compacting {
             let compacted = orbit_agent::context::compact_with_archive(
