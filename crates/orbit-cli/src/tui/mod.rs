@@ -8,6 +8,7 @@ mod frames;
 pub mod input;
 mod markdown;
 mod navigation;
+mod overlay;
 mod permissions;
 pub mod render;
 mod selection;

@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Style},
     text::Line,
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
 use super::app::UiState;
@@ -284,7 +284,7 @@ pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
         if screen.width >= 40 { 2 } else { 0 },
         if screen.height >= 16 { 1 } else { 0 },
     ));
-    frame.render_widget(Clear, area);
+    super::overlay::clear(frame, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)

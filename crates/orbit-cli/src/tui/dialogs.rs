@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 
 #[derive(Debug)]
@@ -478,7 +478,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         width,
         height,
     );
-    frame.render_widget(Clear, area);
+    super::overlay::clear(frame, area);
     let title = if state.picker.is_some() {
         "恢复会话 · 当前项目"
     } else if state.model_picker.is_some() {
@@ -1306,5 +1306,72 @@ mod tests {
         assert!(!text_at(1).contains('恢'));
         assert!(text_at(2).contains('恢'), "{}", text_at(2));
         assert!(text_at(1).contains('─'));
+    }
+
+    #[test]
+    fn dialog_borders_survive_wide_background_text_and_restore_on_close() {
+        for width in [80, 81, 120, 121] {
+            for glyph in ["中", "👩‍💻", "a\u{301}"] {
+                for indent in ["", " "] {
+                    let mut state = UiState::new("model");
+                    let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+                    let background =
+                        Paragraph::new(vec![
+                            Line::from(format!("{indent}{}", glyph.repeat(150)));
+                            30
+                        ]);
+                    terminal
+                        .draw(|frame| frame.render_widget(background.clone(), frame.area()))
+                        .unwrap();
+                    let original = terminal.backend().buffer().clone();
+                    let area = Rect::new(
+                        (width - width.saturating_sub(4).min(96)) / 2,
+                        3,
+                        width.saturating_sub(4).min(96),
+                        24,
+                    );
+                    for query in ["", "中文"] {
+                        let mut picker = SessionPicker::new(vec![session("abc", "中文会话")]);
+                        picker.query = query.into();
+                        state.picker = Some(picker);
+                        terminal
+                            .draw(|frame| {
+                                frame.render_widget(background.clone(), frame.area());
+                                draw(frame, &mut state);
+                            })
+                            .unwrap();
+                        let buffer = terminal.backend().buffer();
+                        for y in area.y + 1..area.bottom() - 1 {
+                            for x in [area.x, area.right() - 1] {
+                                assert_eq!(
+                                    buffer[(x, y)].symbol(),
+                                    "│",
+                                    "width={width}, glyph={glyph}, indent={indent:?}, point=({x},{y})"
+                                );
+                            }
+                        }
+                    }
+                    state.picker = None;
+                    terminal
+                        .draw(|frame| {
+                            frame.render_widget(background.clone(), frame.area());
+                            draw(frame, &mut state);
+                        })
+                        .unwrap();
+                    use ratatui::buffer::CellWidth;
+                    for y in 0..30 {
+                        let mut x = 0;
+                        while x < width {
+                            assert_eq!(
+                                terminal.backend().buffer()[(x, y)],
+                                original[(x, y)],
+                                "restored visible cell at ({x},{y})"
+                            );
+                            x += original[(x, y)].cell_width().max(1);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

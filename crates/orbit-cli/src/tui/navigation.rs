@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
-    widgets::{Clear, Paragraph},
+    widgets::Paragraph,
 };
 
 #[derive(Debug, Default)]
@@ -37,7 +37,7 @@ impl Navigation {
 pub(super) fn clear_previous_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     let area = state.navigation.tooltip_area;
     if area.width != 0 && area.height != 0 {
-        frame.render_widget(Clear, area);
+        super::overlay::clear(frame, area);
     }
     state.navigation.tooltip_area = Rect::default();
 }
@@ -174,7 +174,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     if let Some((y, text)) = tooltip {
         let width = area.width.saturating_sub(5).min(52);
         let tooltip_area = Rect::new(nav.area.x.saturating_sub(width + 1), y, width, 1);
-        frame.render_widget(Clear, tooltip_area);
+        super::overlay::clear(frame, tooltip_area);
         frame.render_widget(
             Paragraph::new(render::fit_label(&text, width as usize, false)).style(
                 Style::default()

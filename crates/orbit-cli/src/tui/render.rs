@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph},
 };
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -424,7 +424,7 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         .min(frame.area().right().saturating_sub(width));
     let y = state.context_indicator_area.y.saturating_sub(height);
     let area = Rect::new(x, y, width, height);
-    frame.render_widget(Clear, area);
+    super::overlay::clear(frame, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -444,7 +444,7 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
 
 fn clear_previous_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     if state.link_tooltip_area.width != 0 && state.link_tooltip_area.height != 0 {
-        frame.render_widget(Clear, state.link_tooltip_area);
+        super::overlay::clear(frame, state.link_tooltip_area);
     }
     state.link_tooltip_area = Rect::default();
 }
@@ -465,7 +465,7 @@ fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
         anchor_y.saturating_sub(1)
     };
     let area = Rect::new(x, y, width, 1);
-    frame.render_widget(Clear, area);
+    super::overlay::clear(frame, area);
     frame.render_widget(
         Paragraph::new(fit_label(text, width as usize, false)).style(
             Style::default()
