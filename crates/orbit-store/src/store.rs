@@ -570,8 +570,14 @@ impl Store {
         let lock = tokio::task::spawn_blocking(move || -> Result<File> {
             std::fs::create_dir_all(&lock_dir)?;
             let file = private_file(&lock_dir.join(lock_id))?;
-            file.try_lock()
-                .context("session is already open in another process")?;
+            file.try_lock().map_err(|error| match error {
+                std::fs::TryLockError::WouldBlock => {
+                    anyhow::anyhow!("该会话已在其他 Orbit 窗口或进程中打开，请先关闭后再恢复。")
+                }
+                std::fs::TryLockError::Error(error) => {
+                    anyhow::Error::new(error).context("无法获取会话锁")
+                }
+            })?;
             Ok(file)
         })
         .await??;

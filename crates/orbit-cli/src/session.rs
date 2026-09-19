@@ -88,6 +88,117 @@ pub struct SessionState {
     flushed_at: Instant,
 }
 
+pub struct PreparedResume {
+    writer: SessionWriter,
+    pub snapshot: Snapshot,
+    git_baseline: Option<serde_json::Value>,
+}
+
+/// Replay saved events in bounded batches. This is local display work, not
+/// another agent run; it never invokes a tool or appends a stored event.
+#[derive(Default)]
+pub struct HistoryReplay {
+    run: usize,
+    event: usize,
+    run_start: Option<usize>,
+    done: bool,
+}
+impl HistoryReplay {
+    pub fn completed_runs(&self) -> usize {
+        self.run
+    }
+
+    pub fn advance(
+        &mut self,
+        snapshot: &Snapshot,
+        state: &mut UiState,
+        max_events: usize,
+        budget: Duration,
+    ) -> bool {
+        if self.done {
+            return true;
+        }
+        let started = Instant::now();
+        let mut processed = 0;
+        state.workspace = snapshot.session.workspace.clone();
+        while self.run < snapshot.runs.len() && processed < max_events && started.elapsed() < budget
+        {
+            let run = &snapshot.runs[self.run];
+            if self.run_start.is_none() {
+                self.run_start = Some(state.transcript.len());
+                state.input.history.push(run.prompt.clone());
+                if run.prompt == "/compact" {
+                    state
+                        .transcript
+                        .push(TranscriptItem::Command(run.prompt.clone()));
+                } else {
+                    // Do not reset the reader's scroll position between runs.
+                    let (scroll, follow) = (state.scroll, state.follow_bottom);
+                    state.submit(run.prompt.clone());
+                    state.scroll = scroll;
+                    state.follow_bottom = follow;
+                }
+            }
+            if let Some(event) = run.events.get(self.event) {
+                // Receipt fingerprints and archived summaries can be large;
+                // the transcript has no presentation for these metadata events.
+                if !matches!(
+                    event,
+                    AgentEvent::CompactionRecorded { .. } | AgentEvent::VerificationRecorded { .. }
+                ) {
+                    state.apply(event.clone());
+                }
+                self.event += 1;
+                processed += 1;
+                continue;
+            }
+            match run.status.as_str() {
+                "completed" => state.apply(AgentEvent::Completed {
+                    turns: state.turn,
+                    tool_calls: state.tool_calls,
+                }),
+                "cancelled" => state.apply(AgentEvent::Cancelled),
+                "interrupted" | "running" | "failed"
+                    if self.run + 1 == snapshot.runs.len() && snapshot.recovery.is_some() =>
+                {
+                    state.fail("上次运行未完成；已恢复保存的执行进度，不会自动重放工具。");
+                }
+                "interrupted" | "running" => state
+                    .fail("上次运行被中断；已恢复到最后一次成功完成的模型上下文，未重新执行工具。"),
+                _ => state.fail("上次运行失败；模型上下文保留在上一轮成功状态。"),
+            }
+            if let Some(elapsed_ms) = run.elapsed_ms {
+                state.elapsed = Duration::from_millis(elapsed_ms);
+                state.started_at = None;
+            }
+            // Only scan the just-finished run, rather than all preceding runs.
+            let first = self.run_start.take().unwrap_or_default();
+            for item in &mut state.transcript[first..] {
+                if let TranscriptItem::Tool(tool) = item
+                    && tool.status == ToolStatus::Running
+                {
+                    tool.status = ToolStatus::Failed;
+                    tool.output = "运行已结束或中断，未保存工具结果；不会自动重试。".into();
+                }
+            }
+            state.invalidate_transcript(first);
+            self.run += 1;
+            self.event = 0;
+            processed += 1;
+        }
+        if self.run == snapshot.runs.len() {
+            if !snapshot.runs.is_empty() {
+                state.transcript.push(TranscriptItem::Notice(format!(
+                    "会话 {} · 自动保存",
+                    snapshot.session.id
+                )));
+            }
+            self.done = true;
+        }
+        self.done
+    }
+}
+
 impl SessionState {
     pub fn import_image(&self, source: &Path) -> Result<Attachment> {
         orbit_tools::image_assets::ImageAssets::for_database(self.store.path()).import_path(source)
@@ -215,54 +326,8 @@ impl SessionState {
     }
 
     pub fn restore_ui(&self, state: &mut UiState) {
-        state.workspace = self.snapshot.session.workspace.clone();
-        for (index, run) in self.snapshot.runs.iter().enumerate() {
-            state.input.history.push(run.prompt.clone());
-            if run.prompt == "/compact" {
-                state
-                    .transcript
-                    .push(TranscriptItem::Command(run.prompt.clone()));
-            } else {
-                state.submit(run.prompt.clone());
-            }
-            for event in &run.events {
-                state.apply(event.clone());
-            }
-            match run.status.as_str() {
-                "completed" => state.apply(AgentEvent::Completed {
-                    turns: state.turn,
-                    tool_calls: state.tool_calls,
-                }),
-                "cancelled" => state.apply(AgentEvent::Cancelled),
-                "interrupted" | "running" | "failed"
-                    if index + 1 == self.snapshot.runs.len()
-                        && self.snapshot.recovery.is_some() =>
-                {
-                    state.fail("上次运行未完成；已恢复保存的执行进度，不会自动重放工具。");
-                }
-                "interrupted" | "running" => state
-                    .fail("上次运行被中断；已恢复到最后一次成功完成的模型上下文，未重新执行工具。"),
-                _ => state.fail("上次运行失败；模型上下文保留在上一轮成功状态。"),
-            }
-            if let Some(elapsed_ms) = run.elapsed_ms {
-                state.elapsed = Duration::from_millis(elapsed_ms);
-                state.started_at = None;
-            }
-            for item in &mut state.transcript {
-                if let TranscriptItem::Tool(tool) = item
-                    && tool.status == ToolStatus::Running
-                {
-                    tool.status = ToolStatus::Failed;
-                    tool.output = "运行已结束或中断，未保存工具结果；不会自动重试。".into();
-                }
-            }
-        }
-        if !self.snapshot.runs.is_empty() {
-            state.transcript.push(TranscriptItem::Notice(format!(
-                "会话 {} · 自动保存",
-                self.id(),
-            )));
-        }
+        let mut replay = HistoryReplay::default();
+        while !replay.advance(&self.snapshot, state, usize::MAX, Duration::MAX) {}
     }
 
     pub fn saved_model_profile(&self) -> (&str, Option<ReasoningEffort>) {
@@ -371,25 +436,49 @@ impl SessionState {
             .collect())
     }
 
+    #[cfg(test)]
     pub async fn resume(&mut self, id: &str) -> Result<()> {
         ensure!(!self.active, "请先取消当前响应，再恢复会话。");
         if id == self.id() {
-            self.snapshot = self.store.load(id).await?;
             return Ok(());
         }
-        let saved = self.store.session(id).await?;
+        let prepared = Self::prepare_resume(
+            self.store.clone(),
+            self.snapshot.session.project_id.clone(),
+            id.to_owned(),
+        )
+        .await?;
+        self.install_resume(prepared);
+        Ok(())
+    }
+
+    /// Load under the destination lease without releasing or changing the
+    /// current session. Safe to cancel before install_resume.
+    pub async fn prepare_resume(
+        store: Store,
+        project: String,
+        id: String,
+    ) -> Result<PreparedResume> {
+        let saved = store.session(&id).await?;
         ensure!(
-            saved.project_id == self.snapshot.session.project_id,
+            saved.project_id == project,
             "该会话属于其他项目，请在对应目录恢复。"
         );
         ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
-        // Acquire and load the destination before replacing the current writer.
-        // A missing/locked session must leave the current session fully usable.
-        let writer = self.store.acquire(id).await?;
-        let snapshot = self.store.load(id).await?;
-        self.writer = writer;
-        self.snapshot = snapshot;
-        self.git_baseline = self.store.git_baseline(self.id()).await?;
+        let writer = store.acquire(&id).await?;
+        let snapshot = store.load(&id).await?;
+        let git_baseline = store.git_baseline(&id).await?;
+        Ok(PreparedResume {
+            writer,
+            snapshot,
+            git_baseline,
+        })
+    }
+
+    pub fn install_resume(&mut self, prepared: PreparedResume) {
+        self.writer = prepared.writer;
+        self.snapshot = prepared.snapshot;
+        self.git_baseline = prepared.git_baseline;
         *self.scratch.write().expect("scratch lock poisoned") = self
             .store
             .path()
@@ -405,7 +494,6 @@ impl SessionState {
             .join(self.id());
         self.pending.clear();
         self.flushed_at = Instant::now();
-        Ok(())
     }
 
     pub async fn new_session(&mut self, model: String) -> Result<()> {
@@ -448,6 +536,149 @@ impl SessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn prepared_resume_is_atomic_and_releases_lease_when_cancelled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut current = SessionState::open(tmp.path().join("sessions.db"), None, "model".into())
+            .await
+            .unwrap();
+        let target = current.id().to_owned();
+        current.new_session("model".into()).await.unwrap();
+        let original = current.id().to_owned();
+        let lease = current.store.acquire(&target).await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            SessionState::prepare_resume(
+                current.store.clone(),
+                current.snapshot.session.project_id.clone(),
+                target.clone(),
+            ),
+        )
+        .await
+        .unwrap();
+        let error = match result {
+            Err(e) => e,
+            Ok(_) => panic!("locked session was opened"),
+        };
+        assert!(error.to_string().contains("已在其他 Orbit"));
+        assert_eq!(current.id(), original);
+        drop(lease);
+        let prepared = SessionState::prepare_resume(
+            current.store.clone(),
+            current.snapshot.session.project_id.clone(),
+            target.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(current.id(), original);
+        assert!(current.store.acquire(&target).await.is_err());
+        drop(prepared);
+        // Cancelling a prepared switch releases the destination without
+        // releasing the writer for the conversation still visible in the UI.
+        assert!(current.store.acquire(&target).await.is_ok());
+        assert!(current.store.acquire(&original).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn replay_is_incremental_exact_and_preserves_scroll_and_saved_elapsed_time() {
+        use orbit_model::types::{StreamEvent, ToolCall};
+        let tmp = tempfile::tempdir().unwrap();
+        let session = SessionState::open(tmp.path().join("sessions.db"), None, "model".into())
+            .await
+            .unwrap();
+        let mut snapshot = session.snapshot.clone();
+        snapshot.runs = (0..3)
+            .map(|index| {
+                let call = ToolCall::function(
+                    format!("tool-{index}"),
+                    "read_file",
+                    serde_json::json!({"path":"test"}),
+                );
+                let mut events = vec![AgentEvent::TurnStarted { turn: 1 }];
+                events.extend(
+                    (0..40).map(|_| AgentEvent::Model(StreamEvent::TextDelta("中文".into()))),
+                );
+                events.push(AgentEvent::ToolStarted { call: call.clone() });
+                if index != 1 {
+                    events.push(AgentEvent::ToolFinished {
+                        call,
+                        content: "result".into(),
+                        changes: vec![],
+                    });
+                }
+                orbit_store::types::Run {
+                    prompt: format!("prompt-{index}"),
+                    status: "completed".into(),
+                    elapsed_ms: Some(12345),
+                    events,
+                }
+            })
+            .collect();
+        let mut ui = UiState::new("model");
+        ui.input.insert("draft");
+        ui.scroll = 5;
+        ui.follow_bottom = false;
+        let mut replay = HistoryReplay::default();
+        assert!(!replay.advance(&snapshot, &mut ui, 2, Duration::MAX));
+        assert_eq!(ui.input.history.len(), 1);
+        assert!(matches!(ui.transcript.last(), Some(TranscriptItem::Assistant(s)) if s == "中文"));
+        let mut batches = 1;
+        while !replay.advance(&snapshot, &mut ui, 7, Duration::MAX) {
+            batches += 1;
+        }
+        assert!(batches > 10);
+        assert_eq!(ui.input.history, vec!["prompt-0", "prompt-1", "prompt-2"]);
+        assert_eq!(ui.input.text, "draft");
+        assert_eq!(ui.scroll, 5);
+        assert!(!ui.follow_bottom);
+        assert_eq!(ui.elapsed, Duration::from_millis(12345));
+        assert!(ui.started_at.is_none());
+        let texts: Vec<_> = ui
+            .transcript
+            .iter()
+            .filter_map(|item| {
+                if let TranscriptItem::Assistant(s) = item {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(texts.len(), 3);
+        assert!(texts.iter().all(|s| **s == "中文".repeat(40)));
+        let statuses: Vec<_> = ui
+            .transcript
+            .iter()
+            .filter_map(|item| {
+                if let TranscriptItem::Tool(t) = item {
+                    Some(t.status.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![
+                ToolStatus::Finished,
+                ToolStatus::Failed,
+                ToolStatus::Finished
+            ]
+        );
+        let count = ui.transcript.len();
+        assert!(replay.advance(&snapshot, &mut ui, 7, Duration::MAX));
+        assert_eq!(ui.transcript.len(), count);
+        assert!(
+            session
+                .store
+                .load(session.id())
+                .await
+                .unwrap()
+                .runs
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn imports_images_into_the_orbit_asset_directory_by_content_hash() {

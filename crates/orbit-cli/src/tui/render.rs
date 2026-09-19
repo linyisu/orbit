@@ -51,6 +51,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         || state.model_picker.is_some()
         || state.marketplace_dialog.is_some()
         || state.approval.is_some()
+        || state.resume_loading.is_some()
     {
         state.navigation.clear_hover();
         state.context_hovered = false;
@@ -312,6 +313,9 @@ fn context_percent(state: &UiState) -> usize {
 }
 
 fn context_percent_label(state: &UiState) -> String {
+    if state.resume_loading.is_some() {
+        return "—".into();
+    }
     let percent = context_percent(state);
     if percent == 0 && state.context_used_tokens > 0 {
         "<1%".into()
@@ -593,6 +597,9 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     };
     if state.transcript.is_empty() {
         state.navigation.reset_area();
+        if state.resume_loading.is_some() {
+            return;
+        }
         let mut logo = welcome();
         let mut width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
         if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
@@ -1011,6 +1018,16 @@ pub(super) fn safe_output(text: &str) -> String {
 }
 
 fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
+    if let Some(message) = &state.resume_loading {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("  {message}"),
+                Style::default().fg(ACCENT),
+            ))),
+            area,
+        );
+        return;
+    }
     let elapsed = state
         .started_at
         .map(|time| time.elapsed())

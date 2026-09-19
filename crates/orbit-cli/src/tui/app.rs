@@ -94,6 +94,8 @@ pub struct UiState {
     pub help_keys: bool,
     pub help_scroll: usize,
     pub picker: Option<super::dialogs::SessionPicker>,
+    pub resume_request: Option<String>,
+    pub resume_loading: Option<String>,
     pub model_picker: Option<super::dialogs::ModelPicker>,
     pub marketplace_dialog: Option<super::dialogs::MarketplaceDialog>,
     pub pending_marketplace_source: Option<String>,
@@ -117,6 +119,10 @@ pub struct UiState {
 }
 
 impl UiState {
+    pub fn invalidate_transcript(&mut self, first: usize) {
+        self.transcript_layout.invalidate_from(first);
+    }
+
     pub fn calibration(&self) -> orbit_agent::calibration::TokenCalibration {
         self.calibrations
             .get(&self.model)
@@ -164,6 +170,8 @@ impl UiState {
             help_keys: false,
             help_scroll: 0,
             picker: None,
+            resume_request: None,
+            resume_loading: None,
             model_picker: None,
             marketplace_dialog: None,
             pending_marketplace_source: None,
@@ -314,7 +322,7 @@ impl UiState {
     }
 
     pub fn menu(&self) -> Vec<&'static super::commands::Command> {
-        if self.menu_dismissed {
+        if self.menu_dismissed || self.resume_loading.is_some() {
             Vec::new()
         } else {
             super::commands::matching(&self.input.text)

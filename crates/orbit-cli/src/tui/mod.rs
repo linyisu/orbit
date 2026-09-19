@@ -52,6 +52,7 @@ use self::{
 };
 
 type RunTask = JoinHandle<Result<AgentResult, AgentError>>;
+type ResumeTask = JoinHandle<Result<(crate::session::PreparedResume, Vec<ChatMessage>)>>;
 
 struct StartedRun {
     receiver: mpsc::Receiver<AgentEvent>,
@@ -136,7 +137,12 @@ pub async fn run(
         .iter()
         .map(ModelOption::qualified_name)
         .collect();
-    session.restore_ui(&mut state);
+    let mut history_replay =
+        (!session.snapshot.runs.is_empty()).then(crate::session::HistoryReplay::default);
+    if history_replay.is_some() {
+        state.resume_loading = Some("正在显示会话历史…".into());
+    }
+    state.workspace = session.snapshot.session.workspace.clone();
     for diagnostic in plugin_skill_diagnostics {
         state.transcript.push(TranscriptItem::Notice(format!(
             "插件 Skill 未载入：{diagnostic}"
@@ -164,6 +170,7 @@ pub async fn run(
         tokio::task::JoinHandle<Result<String, orbit_agent::tool::ToolError>>,
     > = None;
     let mut local_cancellation: Option<CancellationToken> = None;
+    let mut resume_task: Option<ResumeTask> = None;
     let mut marketplace_task: Option<JoinHandle<Result<crate::marketplaces::Marketplace>>> = None;
     let mut pending_guidance = Vec::new();
     let mut active_context: Option<ChatMessage> = None;
@@ -174,11 +181,45 @@ pub async fn run(
     let result: Result<()> = async {
         let mut dirty = true;
         loop {
+            if let Some(id) = state.resume_request.take() {
+                if id == session.id() {
+                    state.transcript.push(TranscriptItem::CommandResult("当前已是该会话。".into()));
+                    state.picker = None;
+                } else {
+                    state.resume_loading = Some("正在读取会话…  Esc 取消".into());
+                    if let Some(picker) = &mut state.picker { picker.error = None; }
+                    let store = session.store.clone();
+                    let project = session.snapshot.session.project_id.clone();
+                    let instructions = instructions.clone();
+                    let skills = skills.clone();
+                    resume_task = Some(tokio::spawn(load_resume(store, project, id, instructions, skills)));
+                }
+                dirty = true;
+                frames.request(time::Instant::now());
+            }
             select! {
                 event = events.next() => {
                     let Some(event) = event else { break };
                     let event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+                    if resume_task.is_some() || history_replay.is_some() {
+                        match &event {
+                            Event::Key(key) if key.kind != KeyEventKind::Release && key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                            Event::Key(key) if key.kind != KeyEventKind::Release && key.code == KeyCode::Esc && resume_task.is_some() => {
+                                if let Some(task) = resume_task.take() { task.abort(); }
+                                state.resume_loading = None;
+                            }
+                            Event::Key(key) if key.code == KeyCode::PageUp => state.scroll_up(10),
+                            Event::Key(key) if key.code == KeyCode::PageDown => state.scroll_down(10),
+                            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => state.scroll_up(3),
+                            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => state.scroll_down(3),
+                            Event::Resize(_, _) => {},
+                            _ => continue,
+                        }
+                        dirty = true;
+                        frames.request(time::Instant::now());
+                        continue;
+                    }
                     let context_hover_changed = !state.selection.dragging()
                         && matches!(render::handle_context_hover(&mut state, &event), Some(true));
                     let link_hover_changed = !state.selection.dragging()
@@ -199,10 +240,8 @@ pub async fn run(
                     dirty = true;
                     frames.request(time::Instant::now());
                     if state.show_help || state.picker.is_some() || state.model_picker.is_some() || state.marketplace_dialog.is_some() {
-                        if let Some(id) = dialogs::handle(&mut state, event)
-                            && let Err(error) = resume_session(&id, &mut state, &mut model, &mut history, &mut session, &instructions, &skills, &model_options, &memory_scope, &tools).await
-                            && let Some(picker) = &mut state.picker {
-                            picker.error = Some(error.to_string());
+                        if let Some(id) = dialogs::handle(&mut state, event) {
+                            state.resume_request = Some(id);
                         }
                         if let Some(name) = state.chosen_model.take() {
                             if let Err(error) = select_model(
@@ -579,6 +618,30 @@ pub async fn run(
                         active_context = None;
                     }
                 }
+                result = async { resume_task.as_mut().unwrap().await }, if resume_task.is_some() => {
+                    resume_task = None;
+                    state.resume_loading = None;
+                    match result {
+                        Ok(Ok((prepared, loaded_history))) => {
+                            session.install_resume(prepared);
+                            memory_scope.set_session(session.id().into());
+                            history = loaded_history;
+                            let mut restored = resume_ui_shell(&state);
+                            restored.workspace = session.snapshot.session.workspace.clone();
+                            restored.resume_loading = Some("正在显示会话历史…".into());
+                            state = restored;
+                            restore_model_profile(&mut state, &mut model, &model_options, &session);
+                            history_replay = Some(crate::session::HistoryReplay::default());
+                        }
+                        result => {
+                            let message = match result { Ok(Err(error)) => error.to_string(), Err(error) => format!("恢复会话失败：{error}"), _ => unreachable!() };
+                            if let Some(picker) = &mut state.picker { picker.error = Some(message); }
+                            else { state.transcript.push(TranscriptItem::CommandError(message)); }
+                        }
+                    }
+                    dirty = true;
+                    frames.request(time::Instant::now());
+                }
                 result = async { local_task.as_mut().unwrap().await }, if local_task.is_some() => {
                     dirty = true;
                     local_task = None;
@@ -613,6 +676,17 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    if let Some(replay) = &mut history_replay {
+                        let done = replay.advance(&session.snapshot, &mut state, 2048, Duration::from_millis(4));
+                        if done {
+                            history_replay = None;
+                            state.resume_loading = None;
+                            refresh_context_usage(&mut state, &history, &tools);
+                        } else {
+                            state.resume_loading = Some(format!("正在显示会话历史…  {}/{} 轮", replay.completed_runs(), session.snapshot.runs.len()));
+                        }
+                        dirty = true;
+                    }
                     let direction = state.selection.auto_scroll(std::time::Instant::now());
                     if direction != 0 {
                         if direction < 0 { state.scroll_up(2); } else { state.scroll_down(2); }
@@ -626,6 +700,9 @@ pub async fn run(
         Ok(())
     }.await;
 
+    if let Some(task) = resume_task {
+        task.abort();
+    }
     drop(pending);
     if let Some(token) = cancellation {
         token.cancel();
@@ -1084,19 +1161,7 @@ async fn run_command(
             state.selection = Default::default();
         }
         "/resume" => {
-            resume_session(
-                argument,
-                state,
-                model,
-                history,
-                session,
-                instructions,
-                skills,
-                model_options,
-                memory_scope,
-                tools,
-            )
-            .await?
+            state.resume_request = Some(argument.to_owned());
         }
         "/status" if argument.is_empty() => {
             let verifications = session.store.verification_records(session.id()).await?;
@@ -1719,6 +1784,28 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
     Ok(())
 }
 
+async fn load_resume(
+    store: orbit_store::store::Store,
+    project: String,
+    id: String,
+    instructions: crate::instructions::Instructions,
+    skills: crate::skills::Skills,
+) -> Result<(crate::session::PreparedResume, Vec<ChatMessage>)> {
+    let prepared = SessionState::prepare_resume(store.clone(), project, id).await?;
+    let mut history = prepared.snapshot.history.clone();
+    crate::instructions::inject(&mut history, &instructions);
+    skills.inject(&mut history);
+    crate::project_state::inject(
+        &mut history,
+        &store,
+        &prepared.snapshot.session.project_id,
+        &prepared.snapshot.session.id,
+    )
+    .await?;
+    Ok((prepared, history))
+}
+
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 async fn resume_session(
     id: &str,
@@ -1732,29 +1819,40 @@ async fn resume_session(
     memory_scope: &crate::project_state::MemoryScope,
     tools: &ToolRegistry,
 ) -> Result<()> {
-    session.resume(id).await?;
-    memory_scope.set_session(session.id().into());
-    *history = session.snapshot.history.clone();
-    crate::instructions::inject(history, instructions);
-    skills.inject(history);
-    crate::project_state::inject(
-        history,
-        &session.store,
-        &session.snapshot.session.project_id,
-        session.id(),
+    if id == session.id() {
+        state
+            .transcript
+            .push(TranscriptItem::CommandResult("当前已是该会话。".into()));
+        return Ok(());
+    }
+    let (prepared, loaded_history) = load_resume(
+        session.store.clone(),
+        session.snapshot.session.project_id.clone(),
+        id.into(),
+        instructions.clone(),
+        skills.clone(),
     )
     .await?;
+    session.install_resume(prepared);
+    memory_scope.set_session(session.id().into());
+    *history = loaded_history;
+    let mut restored = resume_ui_shell(state);
+    session.restore_ui(&mut restored);
+    *state = restored;
+    restore_model_profile(state, model, model_options, session);
+    refresh_context_usage(state, history, tools);
+    Ok(())
+}
+
+fn resume_ui_shell(state: &UiState) -> UiState {
     let mut restored = UiState::new(state.model.clone());
     restored.context_tokens = state.context_tokens;
     restored.input_context_tokens = state.input_context_tokens;
     restored.auto_compact = state.auto_compact;
     restored.max_output_tokens = state.max_output_tokens;
     restored.model_completions = state.model_completions.clone();
-    session.restore_ui(&mut restored);
-    *state = restored;
-    restore_model_profile(state, model, model_options, session);
-    refresh_context_usage(state, history, tools);
-    Ok(())
+    restored.permission_mode = state.permission_mode;
+    restored
 }
 
 fn restore_model_profile(

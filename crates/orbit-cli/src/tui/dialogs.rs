@@ -507,6 +507,22 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     );
     let footer = Rect::new(header.x, inner.bottom().saturating_sub(2), header.width, 2);
     if let Some(picker) = &mut state.picker {
+        let feedback = picker.error.as_deref().or(state.resume_loading.as_deref());
+        let feedback_rows = feedback.map_or(0, |text| {
+            unicode_width::UnicodeWidthStr::width(clean(text).as_str())
+                .div_ceil(usize::from(header.width).max(1))
+                .clamp(1, 3) as u16
+        });
+        let header = Rect {
+            height: (2 + feedback_rows).min(inner.height.saturating_sub(2)),
+            ..header
+        };
+        let body = Rect::new(
+            header.x,
+            header.bottom(),
+            header.width,
+            footer.y.saturating_sub(header.bottom()),
+        );
         let search = super::render::fit_label(
             &format!("搜索标题或 ID：{}", clean(&picker.query)),
             header.width.saturating_sub(1) as usize,
@@ -519,18 +535,26 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             )
                 .into(),
         );
-        frame.render_widget(
-            Paragraph::new(vec![
-                Line::styled(
-                    title,
-                    Style::default()
-                        .fg(Color::Rgb(218, 139, 109))
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Line::from(format!("{search}▏")),
-            ]),
-            header,
-        );
+        let mut heading = vec![
+            Line::styled(
+                title,
+                Style::default()
+                    .fg(Color::Rgb(218, 139, 109))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Line::from(format!("{search}▏")),
+        ];
+        if let Some(feedback) = feedback {
+            heading.push(Line::styled(
+                clean(feedback),
+                Style::default().fg(if picker.error.is_some() {
+                    Color::Rgb(235, 135, 135)
+                } else {
+                    Color::Rgb(218, 139, 109)
+                }),
+            ));
+        }
+        frame.render_widget(Paragraph::new(heading).wrap(Wrap { trim: false }), header);
         let rows = picker.matches();
         let visible = (body.height as usize / 2).max(1);
         let first = picker.selected.saturating_sub(visible - 1);
@@ -566,11 +590,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             }));
         }
         frame.render_widget(Paragraph::new(lines), body);
-        let detail = picker
-            .error
-            .as_deref()
-            .map(clean)
-            .unwrap_or_else(|| format!("{} 个会话 · 按最近更新排序", rows.len()));
+        let detail = format!("{} 个会话 · 按最近更新排序", rows.len());
         frame.render_widget(
             Paragraph::new(format!("{detail}\n↑↓ 选择 · Enter 恢复 · Esc 返回")),
             footer,
@@ -1286,6 +1306,35 @@ mod tests {
         assert!(!text.contains("/help"));
         handle(&mut state, key(KeyCode::Esc));
         assert!(!state.show_help);
+    }
+
+    #[test]
+    fn locked_session_error_is_visible_above_the_list_in_error_color() {
+        let mut state = UiState::new("model");
+        let mut picker = SessionPicker::new(vec![session("abc", "目标会话")]);
+        picker.error = Some("该会话已在其他 Orbit 窗口或进程中打开，请先关闭后再恢复。".into());
+        state.picker = Some(picker);
+        for width in [40, 80, 120] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let error_cells: Vec<_> = buffer
+                .content()
+                .iter()
+                .enumerate()
+                .filter(|(_, cell)| {
+                    cell.fg == Color::Rgb(235, 135, 135) && !cell.symbol().trim().is_empty()
+                })
+                .collect();
+            assert!(!error_cells.is_empty());
+            assert!(error_cells.iter().all(|(i, _)| i / usize::from(width) < 8));
+            let text = error_cells
+                .iter()
+                .map(|(_, cell)| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("已在其他Orbit"), "{text}");
+            assert!(state.picker.is_some());
+        }
     }
 
     #[test]
