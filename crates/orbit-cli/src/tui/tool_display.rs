@@ -198,6 +198,21 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 text.push(format!("{label}  {}", file.as_str().unwrap_or_default()));
             }
         }
+        for (key, label) in [("relevant_files", "任务相关"), ("references", "引用候选")] {
+            if let Some(items) = value[key].as_array() {
+                for item in items {
+                    let location = if let Some(line) = item.get("line") {
+                        format!(":{line}  {}", item["name"].as_str().unwrap_or_default())
+                    } else {
+                        String::new()
+                    };
+                    text.push(format!(
+                        "{label}  {}{location}",
+                        item["path"].as_str().unwrap_or_default()
+                    ));
+                }
+            }
+        }
         for symbol in value["symbols"].as_array()? {
             text.push(format!(
                 "符号候选  {}:{}  {}",
