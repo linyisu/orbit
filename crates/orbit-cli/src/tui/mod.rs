@@ -682,6 +682,26 @@ fn refresh_context_usage(state: &mut UiState, history: &[ChatMessage], tools: &T
         orbit_agent::context::estimate_tokens(history, &tools.definitions());
 }
 
+fn tool_context_tokens(history: &[ChatMessage], name: &str) -> usize {
+    let ids: std::collections::HashSet<_> = history
+        .iter()
+        .flat_map(|message| match message {
+            ChatMessage::Assistant { tool_calls, .. } => tool_calls.as_slice(),
+            _ => &[],
+        })
+        .filter(|call| call.function.name == name)
+        .map(|call| call.id.as_str())
+        .collect();
+    let messages: Vec<_> = history.iter().filter(|message| {
+        matches!(message, ChatMessage::Tool { tool_call_id, .. } if ids.contains(tool_call_id.as_str()))
+    }).cloned().collect();
+    if messages.is_empty() {
+        0
+    } else {
+        orbit_agent::context::estimate_tokens(&messages, &[])
+    }
+}
+
 fn format_undo_result(result: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(result) else {
         return result.into();
@@ -913,6 +933,7 @@ async fn run_command(
         }
         "/context" if argument.is_empty() => {
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
+            let overview_tokens = tool_context_tokens(history, "project_overview");
             let system = history
                 .iter()
                 .filter(|message| matches!(message, ChatMessage::System { content } if !content.starts_with("ORBIT_PROJECT_STATE_V1\n")) && !crate::instructions::is_orbit_instruction(message))
@@ -957,7 +978,7 @@ async fn run_command(
                     _ => None,
                 })
                 .sum::<usize>();
-            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n项目概览：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动整理：{}（输入窗口的 85% 触发，目标约 50%）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n自动整理优先生成结构化摘要；摘要不可用时保留最新工作和文件活动，较早记录不再发送给模型。\n/compact 手动整理旧对话并保留最近两轮。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            state.transcript.push(TranscriptItem::CommandResult(format!("上下文总计：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n代码概览工具结果：约 {overview_tokens} tokens\n任务与会话记忆：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动整理：{}（输入窗口的 85% 触发，目标约 50%）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n自动整理优先生成结构化摘要；摘要不可用时保留最新工作和文件活动，较早记录不再发送给模型。\n/compact 手动整理旧对话并保留最近两轮。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
         }
         "/skills" if argument.is_empty() => state
             .transcript
@@ -2064,6 +2085,25 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
 mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
+
+    #[test]
+    fn overview_budget_counts_only_matching_tool_results_in_effective_history() {
+        use orbit_model::types::ToolCall;
+        let call = ToolCall::function("map", "project_overview", serde_json::json!({}));
+        let output = ChatMessage::tool("map", "repository map");
+        let messages = vec![
+            ChatMessage::user("project_overview"),
+            ChatMessage::assistant_tool_calls(vec![call]),
+            output.clone(),
+            ChatMessage::tool("other", "unrelated output"),
+        ];
+        assert_eq!(
+            tool_context_tokens(&messages, "project_overview"),
+            orbit_agent::context::estimate_tokens(&[output], &[])
+        );
+        assert_eq!(tool_context_tokens(&[], "project_overview"), 0);
+        assert_eq!(tool_context_tokens(&messages, "missing"), 0);
+    }
 
     #[tokio::test]
     async fn resuming_recomputes_usage_from_restored_history_and_current_tools() {

@@ -36,6 +36,9 @@ pub async fn workspace_tools(
     }
     tools.register(ListFiles::new(workspace.clone()));
     tools.register(SearchText::new(workspace.clone()));
+    tools.register(orbit_tools::project_overview::ProjectOverview::new(
+        workspace.clone(),
+    ));
     tools.register(GitInspect::new(workspace.clone()));
     tools.register(orbit_tools::web_fetch::WebFetch::new(web.clone())?);
     tools.register(orbit_tools::web_fetch::WebSearch::new(web)?);

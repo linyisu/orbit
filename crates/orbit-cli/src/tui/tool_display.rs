@@ -119,6 +119,11 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
         return None;
     }
     match row.name.as_str() {
+        "project_overview" => overview(
+            &serde_json::from_str::<Value>(&row.output).ok()?,
+            expanded,
+            width,
+        ),
         "search_text" => search(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
@@ -136,6 +141,91 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
         ),
         _ => None,
     }
+}
+
+fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    let inventory = value["inventory"].as_object()?;
+    let languages = inventory["languages"]
+        .as_object()?
+        .iter()
+        .map(|(name, count)| format!("{name} {count}"))
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let mut text = vec![format!("{} 个文件  {languages}", inventory["files"])];
+    let manifests = value["manifests"].as_array()?;
+    for manifest in manifests.iter().take(if expanded { usize::MAX } else { 3 }) {
+        text.push(format!(
+            "{}{}",
+            manifest["path"].as_str().unwrap_or_default(),
+            manifest["package"]
+                .as_str()
+                .map(|name| format!("  {name}"))
+                .unwrap_or_default()
+        ));
+        if expanded {
+            for (key, label) in [
+                ("declared_scripts", "声明的脚本"),
+                ("verification_candidates", "待验证入口"),
+                ("dependencies", "依赖"),
+                ("workspace_members", "工作区成员"),
+                ("workspaces", "工作区配置"),
+                ("package_manager", "包管理器"),
+                ("build_system", "构建后端"),
+                ("configured_tools", "工具配置"),
+            ] {
+                if let Some(detail) = manifest.get(key).filter(|v| !v.is_null()) {
+                    text.push(format!("  {label}：{detail}"));
+                }
+            }
+            if manifest["parsed"] == false {
+                text.push("  未解析构建配置，请读取原文件确认。".into());
+            }
+            if manifest["truncated"] == true {
+                text.push("  部分配置已省略，请读取原文件。".into());
+            }
+        }
+    }
+    if expanded {
+        for directory in value["inventory"]["directories"].as_array()? {
+            text.push(format!(
+                "目录  {}  {} 个文件",
+                directory["path"].as_str().unwrap_or_default(),
+                directory["files"]
+            ));
+        }
+        for (key, label) in [("test_files", "测试"), ("instruction_files", "项目规则")] {
+            for file in value[key].as_array()? {
+                text.push(format!("{label}  {}", file.as_str().unwrap_or_default()));
+            }
+        }
+        for symbol in value["symbols"].as_array()? {
+            text.push(format!(
+                "符号候选  {}:{}  {}",
+                symbol["path"].as_str().unwrap_or_default(),
+                symbol["line"],
+                symbol["name"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+    if value["truncated"].as_object()?.values().any(|v| v == true) {
+        text.push("部分内容未纳入概览，可缩小目录范围继续查看。".into());
+    }
+    let mut out = Vec::new();
+    for line in text {
+        if expanded && width > 4 {
+            let (wrapped, _) =
+                super::transcript::wrap_line(&Line::from(safe_output(&line)), width - 4);
+            out.extend(
+                wrapped
+                    .into_iter()
+                    .map(|line| Line::from(format!("    {line}"))),
+            );
+        } else {
+            note(&mut out, &line, width);
+        }
+    }
+    out.push(toggle_line(expanded, width));
+    Some(out)
 }
 
 fn memory(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
@@ -449,6 +539,44 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn overview_preview_has_readable_evidence_and_expand_controls() {
+        let value = json!({"inventory":{"files":3,"languages":{"Rust":2},"directories":[{"path":"src","files":2}]},
+            "manifests":[{"path":"Cargo.toml","package":"example","parsed":true,
+                "verification_candidates":[{"argv":["cargo","test"]}]}],
+            "test_files":["tests/check.rs"],"instruction_files":[],
+            "symbols":[{"path":"src/lib.rs","line":3,"name":"parse"}],
+            "truncated":{"scan":false,"content":false,"output":false}});
+        let tool = row("project_overview", value);
+        for width in [1, 20, 80] {
+            for expanded in [false, true] {
+                assert!(
+                    lines(&tool, expanded, width)
+                        .unwrap()
+                        .iter()
+                        .all(|line| line.width() <= usize::from(width))
+                );
+            }
+        }
+        let expanded = lines(&tool, true, 80)
+            .unwrap()
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(expanded.contains("待验证入口"));
+        assert!(expanded.contains("src/lib.rs:3  parse"));
+        assert!(expanded.contains("[收起]"));
+        assert!(
+            lines(&tool, false, 80)
+                .unwrap()
+                .last()
+                .unwrap()
+                .to_string()
+                .contains("[展开]")
+        );
+    }
 
     fn row(name: &str, output: Value) -> ToolRow {
         ToolRow {

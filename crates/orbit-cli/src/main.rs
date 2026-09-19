@@ -177,7 +177,7 @@ enum ChatCapability {
     Image,
     /// read_document.
     Document,
-    /// read_file, list_files and search_text.
+    /// read_file, list_files, search_text and project_overview.
     Files,
     /// git_inspect.
     Git,
@@ -907,7 +907,7 @@ fn disable_chat_capabilities(
         tools.remove("read_document");
     }
     if capability_is_disabled(disabled, ChatCapability::Files) {
-        for name in ["read_file", "list_files", "search_text"] {
+        for name in ["read_file", "list_files", "search_text", "project_overview"] {
             tools.remove(name);
         }
     }
@@ -990,6 +990,7 @@ mod config_tests {
         let mut tools = ToolRegistry::new();
         for name in [
             "read_file",
+            "project_overview",
             "write_file",
             "web_search",
             "web_fetch",
@@ -1015,6 +1016,7 @@ mod config_tests {
         .collect();
         disable_chat_capabilities(&mut tools, &disabled);
         assert!(!tools.contains("read_file"));
+        assert!(!tools.contains("project_overview"));
         assert!(!tools.contains("web_search"));
         assert!(!tools.contains("web_fetch"));
         assert!(!tools.contains("mcp__test__lookup"));
