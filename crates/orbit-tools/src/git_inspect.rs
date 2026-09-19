@@ -354,12 +354,16 @@ fn history(
             "log".into(),
             format!("--max-count={count}"),
             format!("--skip={}", args.offset),
-            "--format=%H%x00%h%x00%aI%x00%an%x00%s%x00".into(),
+            // -z supplies the final field/record terminator. An extra %x00
+            // here would shift every commit after the first by one field.
+            "--format=%H%x00%h%x00%aI%x00%an%x00%s".into(),
             "-z".into(),
         ],
         cancellation,
     )?;
-    let fields = output.split(|byte| *byte == 0).collect::<Vec<_>>();
+    let mut fields = output.split(|byte| *byte == 0).collect::<Vec<_>>();
+    // Only consume terminated fields, never a partial record at the byte cap.
+    fields.pop();
     let mut commits = Vec::new();
     let (records, _) = fields.as_chunks::<5>();
     for chunk in records.iter().take(args.limit) {

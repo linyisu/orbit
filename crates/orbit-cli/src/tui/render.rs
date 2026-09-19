@@ -745,6 +745,8 @@ pub(super) fn transcript_lines_at_width(
                     super::tool_display::search_summary(&row.arguments)
                 } else if row.name == "memory_save" {
                     super::tool_display::memory_summary(&row.arguments)
+                } else if row.name == "git_inspect" {
+                    super::tool_display::git_summary(&row.arguments)
                 } else {
                     tool_summary(&row.arguments)
                 };

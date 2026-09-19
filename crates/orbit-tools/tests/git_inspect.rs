@@ -140,3 +140,60 @@ async fn rejects_paths_outside_workspace_and_non_root_workspaces() {
         Err(ToolError::ExecutionFailed(_))
     ));
 }
+
+#[tokio::test]
+async fn history_keeps_commit_fields_aligned_across_records_and_pages() {
+    let directory = repository();
+    for subject in ["第二条提交", "", "fourth"] {
+        git(
+            directory.path(),
+            &[
+                "commit",
+                "--allow-empty",
+                "--allow-empty-message",
+                "-qm",
+                subject,
+            ],
+        );
+    }
+    let tool = GitInspect::new(Workspace::new(directory.path()).unwrap());
+    let first = run(&tool, json!({"view":"history", "limit":2})).await;
+    assert_eq!(first["has_more"], true);
+    assert_eq!(first["next_offset"], 2);
+    let second = run(&tool, json!({"view":"history", "offset":2, "limit":2})).await;
+    assert_eq!(second["has_more"], false);
+    assert_eq!(second["next_offset"], Value::Null);
+    let commits: Vec<_> = first["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(second["commits"].as_array().unwrap())
+        .collect();
+    assert_eq!(commits.len(), 4);
+    for (commit, subject) in commits
+        .iter()
+        .zip(["fourth", "", "第二条提交", "initial commit"])
+    {
+        assert_eq!(commit["subject"], subject);
+        assert_eq!(commit["author"], "Orbit test");
+        let id = commit["id"].as_str().unwrap();
+        assert_eq!(id.len(), 40);
+        assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(id.starts_with(commit["short_id"].as_str().unwrap()));
+        assert!(commit["authored_at"].as_str().unwrap().contains('T'));
+        let actual = Command::new("git")
+            .arg("-C")
+            .arg(directory.path())
+            .args(["show", "-s", "--format=%H%n%aI%n%an%n%s", id])
+            .output()
+            .unwrap();
+        let expected = format!(
+            "{}\n{}\n{}\n{}\n",
+            id,
+            commit["authored_at"].as_str().unwrap(),
+            "Orbit test",
+            subject
+        );
+        assert_eq!(String::from_utf8(actual.stdout).unwrap(), expected);
+    }
+}

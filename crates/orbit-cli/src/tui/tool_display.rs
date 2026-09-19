@@ -1,4 +1,5 @@
 //! Presentation-only views. Never rewrite tool results used by the model or store.
+mod structured;
 use std::{collections::BTreeMap, ops::Range};
 
 use ratatui::{
@@ -51,6 +52,10 @@ pub(super) fn memory_summary(arguments: &str) -> String {
                 .map(|title| super::render::compact_preview(title, 100))
         })
         .unwrap_or_default()
+}
+
+pub(super) fn git_summary(arguments: &str) -> String {
+    structured::summary(arguments)
 }
 
 // Use the search tool's literal/regex and Unicode case-folding semantics.
@@ -119,6 +124,8 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
         return None;
     }
     match row.name.as_str() {
+        "list_files" => structured::files(row, expanded, width),
+        "git_inspect" => structured::git(row, expanded, width),
         "project_overview" => overview(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
@@ -139,7 +146,7 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
             expanded,
             width,
         ),
-        _ => None,
+        _ => structured::fallback(row, expanded, width),
     }
 }
 
