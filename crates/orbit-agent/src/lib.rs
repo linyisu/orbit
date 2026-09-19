@@ -8,3 +8,5 @@ pub mod events;
 pub mod memory;
 pub mod model;
 pub mod tool;
+
+pub mod verification;

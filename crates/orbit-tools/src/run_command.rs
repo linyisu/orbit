@@ -168,7 +168,7 @@ impl Tool for RunCommand {
                 }
                 None => None,
             };
-            let result = sandbox::run_with_resources_and_output(
+            let mut result = sandbox::run_with_resources_and_output(
                 self.workspace.clone(),
                 args.command,
                 Duration::from_secs(timeout_seconds),
@@ -179,8 +179,13 @@ impl Tool for RunCommand {
                 output_log,
             )
             .await?;
+            let evidence = result.verification.take();
             serde_json::to_string(&result)
-                .map(ToolOutput::text)
+                .map(|content| {
+                    let mut output = ToolOutput::text(content);
+                    output.verification = evidence;
+                    output
+                })
                 .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
         })
     }

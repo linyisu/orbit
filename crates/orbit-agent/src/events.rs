@@ -18,6 +18,10 @@ pub enum AgentEvent {
         #[serde(default)]
         changes: Vec<FileChange>,
     },
+    VerificationRecorded {
+        call_id: String,
+        evidence: crate::verification::VerificationEvidence,
+    },
     ToolFailed {
         call: ToolCall,
         error: String,

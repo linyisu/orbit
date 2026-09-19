@@ -180,7 +180,7 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=13").unwrap();
+    connection.execute_batch("PRAGMA user_version=14").unwrap();
     drop(connection);
     assert!(Store::open(db.path()).await.is_err());
 }
@@ -862,4 +862,79 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
             .is_err()
     );
     assert_eq!(store.load(&id).await.unwrap().history, complete);
+}
+
+#[tokio::test]
+async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped() {
+    use orbit_agent::verification::{VerificationEvidence, WorkspaceFingerprint};
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let mut writer = store
+        .create(db.0.display().to_string(), "mock".into(), false)
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    let baseline = WorkspaceFingerprint {
+        digest: "first".into(),
+        ..Default::default()
+    };
+    store.save_workspace_baseline(&id, &baseline).await.unwrap();
+    store
+        .save_workspace_baseline(
+            &id,
+            &WorkspaceFingerprint {
+                digest: "do not replace".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.workspace_baseline(&id).await.unwrap().unwrap(),
+        baseline
+    );
+    let other = store
+        .create(db.0.display().to_string(), "mock".into(), false)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .workspace_baseline(other.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    writer.begin("verify".into(), "mock".into()).await.unwrap();
+    let evidence = VerificationEvidence {
+        input: baseline,
+        platform: "linux-x86_64".into(),
+        isolation: "bubblewrap".into(),
+        rust_toolchain: None,
+        writable_snapshot: false,
+        persistent_scratch: true,
+    };
+    writer
+        .finish(
+            "failed",
+            vec![
+                AgentEvent::VerificationRecorded {
+                    call_id: "command-1".into(),
+                    evidence: evidence.clone(),
+                },
+                command_receipt("cargo test", 1),
+            ],
+            None,
+        )
+        .await
+        .unwrap();
+    let records = store.verification_records(&id).await.unwrap();
+    assert_eq!(records[0].evidence, Some(evidence));
+    assert_eq!(records[0].exit_code, Some(1));
+    assert!(
+        store
+            .verification_records(other.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

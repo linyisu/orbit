@@ -47,7 +47,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 12,
+                version <= 13,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -220,6 +220,9 @@ impl Store {
             }
             if version < 12 {
                 connection.execute_batch("CREATE TABLE execution_checkpoints(run_id INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, payload TEXT NOT NULL); PRAGMA user_version=12;")?;
+            }
+            if version < 13 {
+                connection.execute_batch("CREATE TABLE session_workspace_baselines(session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,payload TEXT NOT NULL); PRAGMA user_version=13;")?;
             }
             connection.execute_batch("COMMIT;")?;
             Ok(Self {
@@ -446,6 +449,7 @@ impl Store {
                  WHERE r.session_id=?1 ORDER BY r.id,e.id",
             )?;
             let mut records = Vec::new();
+            let mut evidence_by_call = std::collections::HashMap::new();
             for row in statement.query_map([session_id], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -456,6 +460,10 @@ impl Store {
                 let (run_id, run_status, payload) = row?;
                 let event: AgentEvent =
                     serde_json::from_str(&payload).context("stored event could not be decoded")?;
+                if let AgentEvent::VerificationRecorded { call_id, evidence } = event {
+                    evidence_by_call.insert((run_id, call_id), evidence);
+                    continue;
+                }
                 let AgentEvent::ToolFinished { call, content, .. } = event else {
                     continue;
                 };
@@ -478,9 +486,40 @@ impl Store {
                     timed_out: result["timed_out"].as_bool().unwrap_or(false),
                     cancelled: result["cancelled"].as_bool().unwrap_or(false),
                     elapsed_ms: result["elapsed_ms"].as_u64().unwrap_or(0),
+                    evidence: evidence_by_call.remove(&(run_id, call.id)),
                 });
             }
             Ok(records)
+        })
+        .await
+    }
+
+    pub async fn save_workspace_baseline(
+        &self,
+        session_id: &str,
+        baseline: &orbit_agent::verification::WorkspaceFingerprint,
+    ) -> Result<()> {
+        let id = session_id.to_owned();
+        let payload = serde_json::to_string(baseline)?;
+        self.access(move |conn| {conn.execute("INSERT OR IGNORE INTO session_workspace_baselines(session_id,payload) VALUES(?1,?2)",params![id,payload])?;Ok(())}).await
+    }
+    pub async fn workspace_baseline(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<orbit_agent::verification::WorkspaceFingerprint>> {
+        let id = session_id.to_owned();
+        self.access(move |conn| {
+            let payload: Option<String> = conn
+                .query_row(
+                    "SELECT payload FROM session_workspace_baselines WHERE session_id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            payload
+                .map(|s| serde_json::from_str(&s))
+                .transpose()
+                .map_err(Into::into)
         })
         .await
     }

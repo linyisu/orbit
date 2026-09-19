@@ -318,6 +318,13 @@ where
                 match self.tools.execute(call.clone(), cancellation.clone()).await {
                     Ok(output) => {
                         files.observe(&call, &output.content);
+                        if let Some(evidence) = output.verification {
+                            emit(AgentEvent::VerificationRecorded {
+                                call_id: call.id.clone(),
+                                evidence,
+                            })
+                            .await?;
+                        }
                         let event = AgentEvent::ToolFinished {
                             call: call.clone(),
                             content: output.content.clone(),

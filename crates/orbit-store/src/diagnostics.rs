@@ -167,7 +167,8 @@ fn summarize(
                 result.failure = Some(error);
             }
             AgentEvent::Failed { error } => result.failure = Some(error),
-            AgentEvent::Completed { .. }
+            AgentEvent::VerificationRecorded { .. }
+            | AgentEvent::Completed { .. }
             | AgentEvent::CompactionStarted
             | AgentEvent::Cancelled => {}
         }

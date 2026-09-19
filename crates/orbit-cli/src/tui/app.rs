@@ -214,7 +214,7 @@ impl UiState {
                 self.turn = turn;
                 self.ensure_assistant_item();
             }
-            AgentEvent::CompactionRecorded { .. } => {}
+            AgentEvent::CompactionRecorded { .. } | AgentEvent::VerificationRecorded { .. } => {}
             // Compaction is an implementation detail while it runs. Showing a
             // second transcript row for it made every automatic checkpoint
             // look like a noisy command result.

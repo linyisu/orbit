@@ -8,7 +8,9 @@ use std::{
 };
 
 use orbit_agent::tool::ToolError;
+use orbit_agent::verification::{FileFingerprint, VerificationEvidence, WorkspaceFingerprint};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -44,6 +46,8 @@ pub struct CommandResult {
     pub scratch: Option<&'static str>,
     pub workspace_files: usize,
     pub skipped_entries: usize,
+    #[serde(skip)]
+    pub verification: Option<VerificationEvidence>,
 }
 
 /// Private, host-side files used for command output. They are deliberately not
@@ -142,7 +146,8 @@ fn prune_output_directory(directory: &Path) -> Result<(), ToolError> {
 }
 
 struct Snapshot {
-    directory: TempDir,
+    directory: Option<TempDir>,
+    fingerprint: WorkspaceFingerprint,
     files: usize,
     skipped: usize,
     bytes: usize,
@@ -151,11 +156,25 @@ struct Snapshot {
 
 impl Snapshot {
     fn create(workspace: Workspace, cancellation: CancellationToken) -> Result<Self, ToolError> {
-        let directory = tempfile::Builder::new()
-            .prefix("orbit-sandbox-")
-            .tempdir()
-            .map_err(failed)?;
+        Self::scan(workspace, cancellation, true)
+    }
+    fn scan(
+        workspace: Workspace,
+        cancellation: CancellationToken,
+        copy: bool,
+    ) -> Result<Self, ToolError> {
+        let directory = if copy {
+            Some(
+                tempfile::Builder::new()
+                    .prefix("orbit-sandbox-")
+                    .tempdir()
+                    .map_err(failed)?,
+            )
+        } else {
+            None
+        };
         let mut snapshot = Self {
+            fingerprint: WorkspaceFingerprint::default(),
             directory,
             files: 0,
             skipped: 0,
@@ -163,6 +182,15 @@ impl Snapshot {
             visited: 0,
         };
         snapshot.copy_directory(&workspace, Path::new(""), &cancellation, 0)?;
+        snapshot.fingerprint.directories.sort();
+        snapshot.fingerprint.skipped_entries = snapshot.skipped;
+        snapshot.fingerprint.digest = content_hash(
+            &serde_json::to_vec(&(
+                &snapshot.fingerprint.files,
+                &snapshot.fingerprint.directories,
+            ))
+            .map_err(failed)?,
+        );
         Ok(snapshot)
     }
 
@@ -195,11 +223,14 @@ impl Snapshot {
                 continue;
             }
             let path = relative.join(name);
-            let destination = self.directory.path().join(&path);
+            let destination = self.directory.as_ref().map(|d| d.path().join(&path));
             // All opens use the workspace's directory descriptors and protection
             // policy. No source symlinks or protected hard-link aliases are copied.
             match workspace.open_read(&path) {
                 Ok(file) => {
+                    use std::os::unix::fs::PermissionsExt;
+                    let executable =
+                        file.metadata().map_err(failed)?.permissions().mode() & 0o111 != 0;
                     let available = MAX_SNAPSHOT.saturating_sub(self.bytes);
                     let mut content = Vec::new();
                     file.take(available as u64 + 1)
@@ -211,14 +242,33 @@ impl Snapshot {
                         ));
                     }
                     self.bytes += content.len();
-                    std::fs::write(destination, content).map_err(failed)?;
+                    self.fingerprint.files.insert(
+                        path.to_string_lossy().into_owned(),
+                        FileFingerprint {
+                            sha256: content_hash(&content),
+                            executable,
+                        },
+                    );
+                    if let Some(destination) = destination {
+                        std::fs::write(&destination, content).map_err(failed)?;
+                        std::fs::set_permissions(
+                            destination,
+                            std::fs::Permissions::from_mode(if executable { 0o700 } else { 0o600 }),
+                        )
+                        .map_err(failed)?;
+                    }
                     self.files += 1;
                 }
                 Err(WorkspaceError::NotFile) => {
                     // Only recurse when a no-follow directory open succeeds; FIFOs,
                     // sockets and devices are deliberately absent from the snapshot.
                     if workspace.directory_entries(&path).is_ok() {
-                        std::fs::create_dir(&destination).map_err(failed)?;
+                        self.fingerprint
+                            .directories
+                            .push(path.to_string_lossy().into_owned());
+                        if let Some(destination) = destination {
+                            std::fs::create_dir(destination).map_err(failed)?;
+                        }
                         self.copy_directory(workspace, &path, token, depth + 1)?;
                     } else {
                         self.skipped += 1;
@@ -230,6 +280,24 @@ impl Snapshot {
         }
         Ok(())
     }
+}
+
+pub fn content_hash(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+pub async fn fingerprint(
+    workspace: Workspace,
+    cancellation: CancellationToken,
+) -> Result<WorkspaceFingerprint, ToolError> {
+    tokio::task::spawn_blocking(move || {
+        Snapshot::scan(workspace, cancellation, false).map(|s| s.fingerprint)
+    })
+    .await
+    .map_err(failed)?
 }
 
 fn command(
@@ -499,7 +567,7 @@ pub async fn run_with_resources_and_output(
     script_file.write_all(script.as_bytes()).map_err(failed)?;
     script_file.flush().map_err(failed)?;
     let mut child = command(
-        snapshot.directory.path(),
+        snapshot.directory.as_ref().expect("copied snapshot").path(),
         script_file.path(),
         writable_snapshot,
         timeout,
@@ -556,6 +624,14 @@ pub async fn run_with_resources_and_output(
         scratch: scratch.map(|_| "/scratch (persistent session files; no persistent processes)"),
         workspace_files: snapshot.files,
         skipped_entries: snapshot.skipped,
+        verification: Some(VerificationEvidence {
+            input: snapshot.fingerprint,
+            platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+            isolation: "bubblewrap; no network; filtered source snapshot".into(),
+            rust_toolchain: rust_toolchain.map(|p| p.display().to_string()),
+            writable_snapshot,
+            persistent_scratch: scratch.is_some(),
+        }),
     })
 }
 
@@ -596,5 +672,61 @@ mod tests {
             std::fs::read_to_string(directory.path().join(format!("{id}.stdout"))).unwrap(),
             "first\nsecond\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::*;
+    #[test]
+    fn evidence_matches_copied_bytes_and_detects_content_names_modes_and_additions() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::write(root.join("run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+        std::fs::set_permissions(root.join("run.sh"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::write(root.join(".env"), "PRIVATE").unwrap();
+        symlink(root.join(".env"), root.join("alias")).unwrap();
+        let workspace = Workspace::new(root).unwrap();
+        let copied = Snapshot::create(workspace.clone(), CancellationToken::new()).unwrap();
+        let observed = Snapshot::scan(workspace.clone(), CancellationToken::new(), false).unwrap();
+        assert_eq!(observed.fingerprint, copied.fingerprint);
+        assert_eq!(copied.fingerprint.files.len(), 1);
+        let copied_path = copied.directory.as_ref().unwrap().path().join("run.sh");
+        assert_ne!(
+            std::fs::metadata(&copied_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o111,
+            0
+        );
+        assert_eq!(
+            content_hash(&std::fs::read(copied_path).unwrap()),
+            copied.fingerprint.files["run.sh"].sha256
+        );
+        let original = observed.fingerprint.digest;
+        std::fs::set_permissions(root.join("run.sh"), std::fs::Permissions::from_mode(0o600))
+            .unwrap();
+        assert_ne!(
+            Snapshot::scan(workspace.clone(), CancellationToken::new(), false)
+                .unwrap()
+                .fingerprint
+                .digest,
+            original
+        );
+        std::fs::rename(root.join("run.sh"), root.join("other.sh")).unwrap();
+        assert_ne!(
+            Snapshot::scan(workspace.clone(), CancellationToken::new(), false)
+                .unwrap()
+                .fingerprint
+                .digest,
+            original
+        );
+        std::fs::write(root.join("new.rs"), "fn main(){}\n").unwrap();
+        let new = Snapshot::scan(workspace, CancellationToken::new(), false).unwrap();
+        assert_eq!(new.fingerprint.files.len(), 2);
+        assert_ne!(new.fingerprint.digest, original);
     }
 }

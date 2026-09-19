@@ -32,6 +32,7 @@ mod runtime;
 mod session;
 mod skills;
 mod tui;
+mod verification;
 
 #[derive(Debug, Parser)]
 #[command(name = "orbit")]
@@ -562,7 +563,8 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let context_tokens = default_model.context_tokens;
     let input_context_tokens = default_model.input_context_tokens;
     let client = ModelClient::new(default_model.config)?;
-    let session = session::SessionState::open(database, args.resume, model_name.clone()).await?;
+    let mut session =
+        session::SessionState::open(database, args.resume, model_name.clone()).await?;
     let enabled_plugins = session
         .store
         .project_plugins(&session.snapshot.session.project_id)
@@ -582,8 +584,16 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         Some(session.command_output.clone()),
     )
     .await?;
+    session.initialize_audit(runtime.workspace.clone()).await?;
+    let audit_workspace = runtime.workspace;
     let mut tools = runtime.tools;
     let memory_scope = project_state::MemoryScope::new(session.id().into());
+    verification::register(
+        &mut tools,
+        session.store.clone(),
+        memory_scope.clone(),
+        audit_workspace,
+    );
     history::register(&mut tools, session.store.clone(), memory_scope.clone());
     project_state::register(
         &mut tools,
@@ -695,7 +705,19 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         Some(session.command_output.clone()),
     )
     .await?;
+    if !capability_is_disabled(&disabled, ChatCapability::Files)
+        && !capability_is_disabled(&disabled, ChatCapability::Command)
+    {
+        session.initialize_audit(runtime.workspace.clone()).await?;
+    }
+    let audit_workspace = runtime.workspace;
     let mut tools = runtime.tools;
+    verification::register(
+        &mut tools,
+        session.store.clone(),
+        project_state::MemoryScope::new(session.id().into()),
+        audit_workspace,
+    );
     if !capability_is_disabled(&disabled, ChatCapability::History) {
         history::register(
             &mut tools,
@@ -716,6 +738,9 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         skills.register_tool(&mut tools);
     }
     disable_chat_capabilities(&mut tools, &disabled);
+    if capability_is_disabled(&disabled, ChatCapability::Files) {
+        tools.remove("verification_status");
+    }
 
     let mut messages = session.snapshot.history.clone();
     instructions::inject(&mut messages, &instructions);
@@ -908,7 +933,13 @@ fn disable_chat_capabilities(
         tools.remove("read_document");
     }
     if capability_is_disabled(disabled, ChatCapability::Files) {
-        for name in ["read_file", "list_files", "search_text", "project_overview"] {
+        for name in [
+            "read_file",
+            "list_files",
+            "search_text",
+            "project_overview",
+            "verification_status",
+        ] {
             tools.remove(name);
         }
     }
@@ -922,6 +953,7 @@ fn disable_chat_capabilities(
     if capability_is_disabled(disabled, ChatCapability::Command) {
         tools.remove("run_command");
         tools.remove("read_command_output");
+        tools.remove("verification_status");
     }
     if capability_is_disabled(disabled, ChatCapability::ProjectState) {
         for name in [

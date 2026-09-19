@@ -80,6 +80,7 @@ pub struct SessionState {
     pub scratch: orbit_tools::run_command::ScratchDirectory,
     pub command_output: orbit_tools::run_command::CommandOutputDirectory,
     pub git_baseline: Option<serde_json::Value>,
+    pub audit_workspace: Option<orbit_tools::workspace::Workspace>,
     pending: Vec<AgentEvent>,
     active: bool,
     journaled: bool,
@@ -154,11 +155,35 @@ impl SessionState {
             store,
             writer,
             snapshot,
+            audit_workspace: None,
             pending: Vec::new(),
             active: false,
             journaled: false,
             flushed_at: Instant::now(),
         })
+    }
+
+    pub async fn initialize_audit(
+        &mut self,
+        workspace: orbit_tools::workspace::Workspace,
+    ) -> Result<()> {
+        self.audit_workspace = Some(workspace.clone());
+        // Never label the current state of an old session as its starting state.
+        if self.snapshot.runs.is_empty()
+            && self.store.workspace_baseline(self.id()).await?.is_none()
+        {
+            if let Ok(baseline) = orbit_tools::sandbox::fingerprint(
+                workspace,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            {
+                self.store
+                    .save_workspace_baseline(self.id(), &baseline)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     pub fn id(&self) -> &str {
@@ -388,6 +413,9 @@ impl SessionState {
             .path()
             .with_extension("command-output")
             .join(self.id());
+        if let Some(workspace) = self.audit_workspace.clone() {
+            self.initialize_audit(workspace).await?;
+        }
         Ok(())
     }
 }

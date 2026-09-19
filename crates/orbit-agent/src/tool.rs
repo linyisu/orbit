@@ -13,6 +13,7 @@ pub struct ToolOutput {
     /// Local audit data for a successfully committed workspace write. This is
     /// intentionally excluded from the model-facing tool result.
     pub changes: Vec<FileChange>,
+    pub verification: Option<crate::verification::VerificationEvidence>,
 }
 
 /// A reversible text-file mutation reported only after the filesystem commit
@@ -30,6 +31,7 @@ impl ToolOutput {
             content: content.into(),
             attachments: Vec::new(),
             changes: Vec::new(),
+            verification: None,
         }
     }
 
@@ -38,6 +40,7 @@ impl ToolOutput {
             content: content.into(),
             attachments,
             changes: Vec::new(),
+            verification: None,
         }
     }
 
@@ -46,6 +49,7 @@ impl ToolOutput {
             content: content.into(),
             attachments: Vec::new(),
             changes,
+            verification: None,
         }
     }
 }

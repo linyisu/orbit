@@ -11,6 +11,7 @@ use orbit_tools::{
 
 pub struct WorkspaceRuntime {
     pub tools: ToolRegistry,
+    pub workspace: Workspace,
     pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
 }
 
@@ -62,6 +63,7 @@ pub async fn workspace_tools(
     let mcp_statuses =
         orbit_tools::mcp::register(&mut tools, &mcp, workspace.root(), mcp_approvals).await;
     Ok(WorkspaceRuntime {
+        workspace,
         tools,
         mcp_statuses,
     })

@@ -1034,11 +1034,11 @@ async fn run_command(
         "/tasks" => run_tasks_command(argument, state, history, session).await?,
         "/memory" => run_memory_command(argument, state, history, session).await?,
         "/changes" if argument.is_empty() => {
-            state
-                .transcript
-                .push(TranscriptItem::CommandResult(changes::list(
-                    &session.store.workspace_changes(session.id()).await?,
-                )))
+            let listing = changes::list(&session.store.workspace_changes(session.id()).await?);
+            let comparison = crate::verification::changes_text(session).await;
+            state.transcript.push(TranscriptItem::CommandResult(format!(
+                "{listing}{comparison}"
+            )));
         }
         "/diff" if argument.trim().is_empty() => {
             state
@@ -1099,6 +1099,11 @@ async fn run_command(
             } else {
                 "验证命令  尚未执行沙箱命令".to_owned()
             };
+            let verification = format!(
+                "{}\n{}",
+                verification,
+                crate::verification::summary(session).await
+            );
             let baseline = session.git_baseline.as_ref().map_or_else(
                 || "Git 基线  非 Git 工作区或无法读取".to_owned(),
                 |value| {
