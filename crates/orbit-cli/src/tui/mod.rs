@@ -100,6 +100,7 @@ pub struct RequestBudget {
     pub plugin_skill_diagnostics: Vec<String>,
     pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
     pub model_options: Vec<ModelOption>,
+    pub compaction: orbit_agent::compaction::CompactionRuntime,
     pub memory_scope: crate::project_state::MemoryScope,
 }
 
@@ -127,6 +128,7 @@ pub async fn run(
         mcp_statuses,
         model_options,
         memory_scope,
+        compaction,
     } = budget;
     state.context_tokens = context_tokens;
     state.input_context_tokens = input_context_tokens;
@@ -181,6 +183,23 @@ pub async fn run(
     let result: Result<()> = async {
         let mut dirty = true;
         loop {
+            if state.compact_after_model_switch && task.is_none() && local_task.is_none() && resume_task.is_none() && history_replay.is_none() {
+                state.compact_after_model_switch = false;
+                refresh_context_usage(&mut state, &history, &tools);
+                if needs_model_switch_compaction(&state) {
+                    let target_context = state.context_tokens;
+                    let started = start_agent_run("/compact".into(), Vec::new(), true,
+                        &mut state, &mut session, &history, &model, &tools,
+                        target_context,
+                        auto_compact, max_output_tokens, max_turns, max_tool_calls, &compaction).await;
+                    match started {
+                        Ok(started) => { receiver=Some(started.receiver); cancellation=Some(started.cancellation); task=Some(started.task); }
+                        Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
+                    }
+                    dirty = true;
+                    frames.request(time::Instant::now());
+                }
+            }
             if let Some(id) = state.resume_request.take() {
                 if id == session.id() {
                     state.transcript.push(TranscriptItem::CommandResult("当前已是该会话。".into()));
@@ -481,7 +500,7 @@ pub async fn run(
                                         && !commands::available_while_running(command)
                                     {
                                         state.transcript.push(TranscriptItem::CommandError(
-                                            "运行中只能使用 /status、/diagnostics、/model、/context 或 /mode；请先按 Esc 取消当前响应。".into(),
+                                            "运行中只能使用 /status、/diagnostics、/model、/context、/skills、/mcp、/plugins、/mode 或 /permissions；请先按 Esc 取消当前响应。".into(),
                                         ));
                                         continue;
                                     }
@@ -517,6 +536,7 @@ pub async fn run(
                                 max_output_tokens,
                                 max_turns,
                                 max_tool_calls,
+                                &compaction,
                             )
                             .await?;
                             receiver = Some(started.receiver);
@@ -595,6 +615,8 @@ pub async fn run(
                         pending_guidance.clear();
                         let steering_history = steering_history(&history, active_context.take());
                         active_context = Some(ChatMessage::user(guidance.clone()));
+
+                        let context_tokens = state.context_tokens;
                         let started = start_agent_run(
                             guidance,
                             Vec::new(),
@@ -609,6 +631,7 @@ pub async fn run(
                             max_output_tokens,
                             max_turns,
                             max_tool_calls,
+                            &compaction,
                         )
                         .await?;
                         receiver = Some(started.receiver);
@@ -825,6 +848,7 @@ async fn start_agent_run(
     max_output_tokens: u32,
     max_turns: usize,
     max_tool_calls: usize,
+    compaction: &orbit_agent::compaction::CompactionRuntime,
 ) -> Result<StartedRun> {
     session.begin(prompt.clone(), state.model.clone()).await?;
     let display_prompt = if attachments.is_empty() {
@@ -883,14 +907,17 @@ async fn start_agent_run(
         .local_limit(context_tokens, max_output_tokens as usize);
     let mut agent = Agent::new(backend.clone(), tools.clone(), config)
         .with_calibration(state.model.clone(), state.calibration())
+        .with_compaction(compaction.clone())
         .with_file_activity(files.clone())
         .with_context_archive(archive.clone());
     if !compacting {
         agent = agent.with_execution_journal(session.execution_journal()?);
     }
+    let summary_runtime =
+        compaction.for_input_window(local_limit.saturating_sub(max_output_tokens as usize));
     let task = tokio::spawn(async move {
         if compacting {
-            let compacted = orbit_agent::context::compact_with_archive(
+            let compacted = orbit_agent::context::compact_configured(
                 &backend,
                 request.messages,
                 &tools.definitions(),
@@ -899,6 +926,7 @@ async fn start_agent_run(
                 token,
                 &files,
                 Some(archive.as_ref()),
+                &summary_runtime,
             )
             .await?;
             orbit_agent::context::check_budget(
@@ -1516,6 +1544,11 @@ fn concise_title(content: &str) -> String {
     title
 }
 
+fn needs_model_switch_compaction(state: &UiState) -> bool {
+    state.auto_compact
+        && state.context_used_tokens >= state.input_context_tokens.saturating_mul(85) / 100
+}
+
 async fn select_model(
     qualified_name: &str,
     selected_effort: Option<orbit_model::types::ReasoningEffort>,
@@ -1547,6 +1580,8 @@ async fn select_model(
                 .await?;
             *model = client;
             state.model = model_name;
+            state.compact_after_model_switch |=
+                state.auto_compact && choice.input_context_tokens < state.input_context_tokens;
             state.context_tokens = choice.context_tokens;
             state.input_context_tokens = choice.input_context_tokens;
             state.reasoning_effort = reasoning_effort;

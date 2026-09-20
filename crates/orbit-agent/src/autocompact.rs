@@ -8,6 +8,14 @@ use orbit_model::types::{ChatMessage, ChatRequest, ToolDefinition};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+use crate::compaction::CompactionFailureKind as Failure;
+fn failure(kind: Failure, message: impl Into<String>) -> AgentError {
+    AgentError::CompactionFailed {
+        kind,
+        message: message.into(),
+    }
+}
+
 use crate::{
     archive::ContextArchive,
     context::{CompactedContext, SUMMARY_PROMPT, check_budget, estimate_tokens},
@@ -17,9 +25,6 @@ use crate::{
 };
 
 const SUMMARY_OUTPUT_TOKENS: usize = 8_192;
-const SUMMARY_CHUNK_TOKENS: usize = 32_768;
-const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
-const SUMMARY_TOTAL_TIMEOUT: Duration = Duration::from_secs(240);
 const RECENT_TOKENS: usize = 32_000;
 const TOOL_EXCERPT_BYTES: usize = 2_048;
 const RECORD_PREFIX: &str = "BEGIN_UNTRUSTED_COMPACTION_RECORD\n";
@@ -54,7 +59,14 @@ pub fn plan(
     if estimate_tokens(history, tools) < limit.checked_sub(output)?.saturating_mul(85) / 100 {
         return None;
     }
-    plan_for(history, tools, output, limit, CompactionMode::Automatic)
+    plan_for(
+        history,
+        tools,
+        output,
+        limit,
+        CompactionMode::Automatic,
+        SUMMARY_OUTPUT_TOKENS,
+    )
 }
 
 pub fn plan_manual(
@@ -63,7 +75,37 @@ pub fn plan_manual(
     output: usize,
     limit: usize,
 ) -> Option<Plan> {
-    plan_for(history, tools, output, limit, CompactionMode::Manual)
+    plan_for(
+        history,
+        tools,
+        output,
+        limit,
+        CompactionMode::Manual,
+        SUMMARY_OUTPUT_TOKENS,
+    )
+}
+
+pub fn plan_configured(
+    history: &[ChatMessage],
+    tools: &[ToolDefinition],
+    output: usize,
+    limit: usize,
+    mode: CompactionMode,
+    settings: &crate::compaction::CompactionSettings,
+) -> Option<Plan> {
+    if mode == CompactionMode::Automatic
+        && estimate_tokens(history, tools) < limit.checked_sub(output)?.saturating_mul(85) / 100
+    {
+        return None;
+    }
+    plan_for(
+        history,
+        tools,
+        output,
+        limit,
+        mode,
+        settings.max_output_tokens,
+    )
 }
 
 fn is_summary(message: &ChatMessage) -> bool {
@@ -76,10 +118,11 @@ fn plan_for(
     output: usize,
     limit: usize,
     mode: CompactionMode,
+    summary_cap: usize,
 ) -> Option<Plan> {
     let available = limit.checked_sub(output)?;
     let before_tokens = estimate_tokens(history, tools);
-    let summary_tokens = (available / 8).clamp(256, SUMMARY_OUTPUT_TOKENS);
+    let summary_tokens = (available / 8).clamp(256, summary_cap.max(256));
     let systems: Vec<_> = history
         .iter()
         .filter(|m| matches!(m, ChatMessage::System { .. }))
@@ -224,13 +267,45 @@ pub async fn execute_with_archive<B: ModelBackend>(
     cancellation: CancellationToken,
     archive: Option<&dyn ContextArchive>,
 ) -> Result<CompactedContext, AgentError> {
+    let settings = crate::compaction::CompactionSettings {
+        max_input_tokens: limit.saturating_sub(output).min(32768),
+        ..Default::default()
+    };
+    execute_configured(
+        backend,
+        plan,
+        tools,
+        output,
+        limit,
+        cancellation,
+        archive,
+        &settings,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_configured(
+    backend: &dyn ModelBackend,
+    mut plan: Plan,
+    tools: &[ToolDefinition],
+    output: usize,
+    limit: usize,
+    cancellation: CancellationToken,
+    archive: Option<&dyn ContextArchive>,
+    settings: &crate::compaction::CompactionSettings,
+) -> Result<CompactedContext, AgentError> {
+    settings
+        .validate()
+        .map_err(|e| AgentError::Compaction(e.into()))?;
+    plan.summary_tokens = plan.summary_tokens.min(settings.max_output_tokens);
     if cancellation.is_cancelled() {
         return Err(AgentError::Cancelled);
     }
     let archived = if let Some(archive) = archive {
         Some(tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
-            result = archive.save(&plan.original) => result?,
+            result = archive.save(&plan.original) => result.map_err(|e| failure(crate::compaction::CompactionFailureKind::Archive, e.to_string()))?,
         })
     } else {
         None
@@ -299,9 +374,10 @@ pub async fn execute_with_archive<B: ModelBackend>(
         backend,
         &plan,
         &projected,
-        limit
-            .saturating_sub(output)
+        settings
+            .max_input_tokens
             .saturating_add(plan.summary_tokens),
+        settings,
         cancellation.clone(),
     )
     .await?;
@@ -400,16 +476,17 @@ fn records(messages: &[ChatMessage], pinned: Option<usize>) -> (String, Vec<Valu
     (previous, records)
 }
 
-async fn model_summary<B: ModelBackend>(
-    backend: &B,
+async fn model_summary(
+    backend: &dyn ModelBackend,
     plan: &Plan,
     projected: &[ChatMessage],
     limit: usize,
+    settings: &crate::compaction::CompactionSettings,
     cancellation: CancellationToken,
 ) -> Result<(TaskSummary, usize, usize), AgentError> {
     let (mut summary, source) = records(&projected[..plan.retained_from], plan.pinned_user);
     let mut remaining: std::collections::VecDeque<_> = source.into();
-    let deadline = Instant::now() + SUMMARY_TOTAL_TIMEOUT;
+    let deadline = Instant::now() + Duration::from_secs(settings.total_timeout_seconds);
     let mut requests = 0;
     let mut input_tokens = 0;
     while !remaining.is_empty() {
@@ -418,10 +495,19 @@ async fn model_summary<B: ModelBackend>(
         }
         let mut batch = Vec::new();
         while let Some(record) = remaining.pop_front() {
+            if cancellation.is_cancelled() {
+                return Err(AgentError::Cancelled);
+            }
+            if Instant::now() >= deadline {
+                return Err(failure(
+                    Failure::TotalTimeout,
+                    "summary total deadline exceeded; original context preserved",
+                ));
+            }
             batch.push(record);
             let request = summary_request(&summary, &batch, plan.summary_tokens);
             let tokens = estimate_tokens(&request.messages, &[]);
-            if tokens + plan.summary_tokens <= limit && tokens <= SUMMARY_CHUNK_TOKENS {
+            if tokens + plan.summary_tokens <= limit && tokens <= settings.max_input_tokens {
                 continue;
             }
             let record = batch.pop().unwrap();
@@ -437,8 +523,9 @@ async fn model_summary<B: ModelBackend>(
                 midpoint -= 1;
             }
             if midpoint == 0 {
-                return Err(AgentError::Compaction(
-                    "summary record cannot fit the input budget; original context preserved".into(),
+                return Err(failure(
+                    Failure::InputBudget,
+                    "summary record cannot fit the input budget; original context preserved",
                 ));
             }
             let mut head = record.clone();
@@ -454,20 +541,23 @@ async fn model_summary<B: ModelBackend>(
             remaining.push_front(head);
         }
         let request = summary_request(&summary, &batch, plan.summary_tokens);
-        check_budget(&request.messages, &[], plan.summary_tokens, limit)?;
+        check_budget(&request.messages, &[], plan.summary_tokens, limit)
+            .map_err(|e| failure(Failure::InputBudget, e.to_string()))?;
         input_tokens += estimate_tokens(&request.messages, &[]);
         let time = deadline.saturating_duration_since(Instant::now());
         if time.is_zero() {
-            return Err(AgentError::Compaction(
-                "summary total deadline exceeded; original context preserved".into(),
+            return Err(failure(
+                Failure::TotalTimeout,
+                "summary total deadline exceeded; original context preserved",
             ));
         }
         let request_cancel = cancellation.child_token();
         let _cancel_request_on_exit = request_cancel.clone().drop_guard();
         let response = tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
-            result = tokio::time::timeout(time.min(SUMMARY_REQUEST_TIMEOUT), backend.complete(request, request_cancel)) => {
-                result.map_err(|_| AgentError::Compaction("summary request timed out; original context preserved".into()))??
+            result = tokio::time::timeout(time.min(Duration::from_secs(settings.request_timeout_seconds)), backend.complete(request, request_cancel)) => {
+                result.map_err(|_| failure(if Instant::now() >= deadline { Failure::TotalTimeout } else { Failure::RequestTimeout }, "summary request timed out; original context preserved"))?
+                    .map_err(|e| if matches!(e, orbit_model::error::ModelError::Cancelled) { AgentError::Cancelled } else { failure(Failure::Upstream, e.to_string()) })?
             }
         };
         requests += 1;
@@ -476,8 +566,9 @@ async fn model_summary<B: ModelBackend>(
             tool_calls,
         } = response.message
         else {
-            return Err(AgentError::Compaction(
-                "summary response contains no text; original context preserved".into(),
+            return Err(failure(
+                Failure::InvalidSummary,
+                "summary response contains no text; original context preserved",
             ));
         };
         if text.trim().is_empty()
@@ -488,11 +579,13 @@ async fn model_summary<B: ModelBackend>(
                 .as_deref()
                 .is_some_and(|r| matches!(r, "length" | "max_tokens" | "incomplete"))
         {
-            return Err(AgentError::Compaction(
-                "summary is empty, invalid or truncated; original context preserved".into(),
+            return Err(failure(
+                Failure::InvalidSummary,
+                "summary is empty, invalid or truncated; original context preserved",
             ));
         }
-        let structured = TaskSummary::parse(&text)?;
+        let structured = TaskSummary::parse(&text)
+            .map_err(|e| failure(Failure::InvalidSummary, e.to_string()))?;
         summary = serde_json::to_string(&structured)
             .map_err(|e| AgentError::Compaction(e.to_string()))?;
     }
@@ -520,8 +613,9 @@ fn finish(
         plan.target_tokens
     };
     if after_tokens > plan.before_tokens.saturating_mul(3) / 4 || after_tokens > target {
-        return Err(AgentError::Compaction(
-            "compaction did not free enough context; original context preserved".into(),
+        return Err(failure(
+            Failure::InsufficientReduction,
+            "compaction did not free enough context; original context preserved",
         ));
     }
     check_budget(&history, tools, output, limit)?;

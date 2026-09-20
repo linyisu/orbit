@@ -21,10 +21,24 @@ pub enum AgentError {
     ContextBudget { estimated: usize, limit: usize },
     #[error("context compaction failed: {0}")]
     Compaction(String),
+    #[error("context compaction failed: {message}")]
+    CompactionFailed {
+        kind: crate::compaction::CompactionFailureKind,
+        message: String,
+    },
     #[error("agent was cancelled")]
     Cancelled,
     #[error("initial request must contain at least one message")]
     InvalidInitialRequest,
     #[error("agent event channel is closed")]
     EventChannelClosed,
+}
+
+impl AgentError {
+    pub fn compaction_kind(&self) -> Option<crate::compaction::CompactionFailureKind> {
+        match self {
+            Self::CompactionFailed { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
 }

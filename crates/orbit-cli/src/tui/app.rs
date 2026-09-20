@@ -95,6 +95,7 @@ pub struct UiState {
     pub help_scroll: usize,
     pub picker: Option<super::dialogs::SessionPicker>,
     pub resume_request: Option<String>,
+    pub compact_after_model_switch: bool,
     pub resume_loading: Option<String>,
     pub model_picker: Option<super::dialogs::ModelPicker>,
     pub marketplace_dialog: Option<super::dialogs::MarketplaceDialog>,
@@ -171,6 +172,7 @@ impl UiState {
             help_scroll: 0,
             picker: None,
             resume_request: None,
+            compact_after_model_switch: false,
             resume_loading: None,
             model_picker: None,
             marketplace_dialog: None,
@@ -269,9 +271,15 @@ impl UiState {
                     "{action}  {before_tokens} → {after_tokens} tokens{detail}"
                 )));
             }
-            AgentEvent::CompactionFailed { .. } => self.transcript.push(
-                TranscriptItem::Maintenance("上下文整理未完成，原上下文已保留".into()),
-            ),
+            AgentEvent::CompactionFailed { kind, .. } => {
+                self.transcript
+                    .push(TranscriptItem::Maintenance(match kind {
+                        Some(kind) => {
+                            format!("上下文整理未完成：{}。原上下文已保留。", kind.label())
+                        }
+                        None => "上下文整理未完成，原上下文已保留".into(),
+                    }))
+            }
             AgentEvent::Model(event) => self.apply_model_event(event),
             AgentEvent::ToolStarted { call } => {
                 self.tool_calls += 1;

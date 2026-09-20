@@ -247,7 +247,10 @@ async fn automatic_compaction_preserves_history_after_a_retryable_summary_failur
             .await;
     assert!(matches!(
         result,
-        Err(orbit_agent::error::AgentError::Model(_))
+        Err(orbit_agent::error::AgentError::CompactionFailed {
+            kind: orbit_agent::compaction::CompactionFailureKind::Upstream,
+            ..
+        })
     ));
     assert_eq!(history, original);
     assert_eq!(backend.requests().len(), 1);

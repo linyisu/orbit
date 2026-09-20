@@ -542,6 +542,7 @@ fn git_with_limit(
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")

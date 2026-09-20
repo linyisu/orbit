@@ -61,6 +61,8 @@ pub enum AgentEvent {
         fallback_reason: Option<String>,
     },
     CompactionFailed {
+        #[serde(default)]
+        kind: Option<crate::compaction::CompactionFailureKind>,
         error: String,
     },
     Cancelled,

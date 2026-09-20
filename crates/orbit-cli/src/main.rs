@@ -220,6 +220,8 @@ struct FileConfig {
     #[serde(default)]
     command: orbit_tools::run_command::CommandLimits,
     #[serde(default)]
+    compaction: orbit_agent::compaction::CompactionSettings,
+    #[serde(default)]
     web: orbit_tools::web_fetch::WebConfig,
     #[serde(default)]
     mcp: orbit_tools::mcp::McpConfig,
@@ -420,9 +422,51 @@ impl FileConfig {
                 }
             }
         }
+        config.compaction.validate().map_err(anyhow::Error::msg)?;
+        if let Some(name) = &config.compaction.model {
+            anyhow::ensure!(
+                config
+                    .model_options()?
+                    .iter()
+                    .any(|m| &m.qualified_name() == name),
+                "compaction.model must name a configured provider::model"
+            );
+        }
         config.command.validate().map_err(anyhow::Error::msg)?;
         config.mcp.validate()?;
         Ok(config)
+    }
+
+    fn compaction_runtime(&self) -> Result<orbit_agent::compaction::CompactionRuntime> {
+        let mut runtime = orbit_agent::compaction::CompactionRuntime {
+            settings: self.compaction.clone(),
+            backend: None,
+        };
+        if let Some(name) = &self.compaction.model {
+            let choice = self
+                .model_options()?
+                .into_iter()
+                .find(|m| &m.qualified_name() == name)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("compaction.model must name a configured provider::model")
+                })?;
+            let entry = self.providers[&choice.provider]
+                .models
+                .iter()
+                .find(|m| m.id == choice.model)
+                .unwrap();
+            let input = entry.input_context_tokens.unwrap_or_else(|| {
+                entry
+                    .context_tokens
+                    .unwrap_or(self.context_tokens)
+                    .saturating_sub(runtime.settings.max_output_tokens)
+            });
+            runtime.settings.max_input_tokens = runtime.settings.max_input_tokens.min(input);
+            runtime.backend = Some(std::sync::Arc::new(ModelClientBackend::new(
+                ModelClient::new(choice.config)?,
+            )));
+        }
+        Ok(runtime)
     }
 
     fn agent_config(&self) -> AgentConfig {
@@ -619,6 +663,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             auto_compact: agent_config.auto_compact,
             max_turns: agent_config.max_turns,
             max_tool_calls: agent_config.max_tool_calls,
+            compaction: file_config.compaction_runtime()?,
             instructions,
             model_options,
             skills,
@@ -778,8 +823,9 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             .flat_map(|run| run.events.iter()),
     );
     let archive_enabled = tools.contains("read_history");
-    let mut agent =
-        Agent::new(ModelClientBackend::new(client), tools, agent_config).with_file_activity(files);
+    let mut agent = Agent::new(ModelClientBackend::new(client), tools, agent_config)
+        .with_file_activity(files)
+        .with_compaction(file_config.compaction_runtime()?);
     if archive_enabled {
         agent = agent.with_context_archive(std::sync::Arc::new(history::SessionArchive::new(
             session.store.clone(),

@@ -170,7 +170,7 @@ fn summarize(
                         fallback_reason.or_else(|| Some("旧记录未保存回退原因".into()));
                 }
             }
-            AgentEvent::CompactionFailed { error } => {
+            AgentEvent::CompactionFailed { error, .. } => {
                 result.compaction_failures += 1;
                 result.failure = Some(error);
             }

@@ -50,6 +50,7 @@ pub struct Agent<B> {
     archive: Option<std::sync::Arc<dyn crate::archive::ContextArchive>>,
     calibration: crate::calibration::TokenCalibration,
     observation_profile: String,
+    compaction: crate::compaction::CompactionRuntime,
     journal: Option<std::sync::Arc<dyn crate::checkpoint::ExecutionJournal>>,
 }
 
@@ -67,7 +68,13 @@ where
             journal: None,
             calibration: Default::default(),
             observation_profile: String::new(),
+            compaction: Default::default(),
         }
+    }
+
+    pub fn with_compaction(mut self, runtime: crate::compaction::CompactionRuntime) -> Self {
+        self.compaction = runtime;
+        self
     }
 
     pub fn with_calibration(
@@ -251,6 +258,8 @@ where
         let mut tool_calls = 0;
         let mut compact_after = 0;
         let mut calibration = self.calibration.clone();
+        let mut recovery_limit = None;
+        let mut force_compaction = false;
         self.checkpoint(&history, turns, tool_calls, None, &[], None)
             .await?;
 
@@ -263,11 +272,13 @@ where
             }
 
             let output = request.max_tokens.unwrap_or(4096) as usize;
-            let local_limit = calibration.local_limit(self.config.context_tokens, output);
+            let local_limit = recovery_limit
+                .unwrap_or(usize::MAX)
+                .min(calibration.local_limit(self.config.context_tokens, output));
             let prepared = self
                 .prepare_context(
                     &mut history,
-                    (output, local_limit),
+                    (output, local_limit, force_compaction),
                     &mut compact_after,
                     &files,
                     cancellation.clone(),
@@ -291,6 +302,7 @@ where
                     .await?;
             }
             prepared?;
+            force_compaction = false;
             turns += 1;
             self.checkpoint(&history, turns, tool_calls, None, &[], None)
                 .await?;
@@ -322,6 +334,22 @@ where
                 elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
             })
             .await?;
+            if self.config.auto_compact
+                && recovery_limit.is_none()
+                && matches!(&response, Err(AgentError::Model(error)) if error.is_context_limit())
+            {
+                // No tool has started for this rejected request. Retry this
+                // request once after a verified reduction, not the whole run.
+                recovery_limit = Some(
+                    local_limit
+                        .saturating_sub(output)
+                        .min(estimated_input.saturating_mul(3) / 4)
+                        .saturating_add(output),
+                );
+                force_compaction = true;
+                turns = turns.saturating_sub(1);
+                continue;
+            }
             let (completion, _) = response?;
             check_finish_reason(completion.finish_reason.as_deref())?;
             let assistant = completion.message.clone();
@@ -421,7 +449,7 @@ where
     async fn prepare_context<F, Fut>(
         &self,
         history: &mut Vec<ChatMessage>,
-        (output, local_limit): (usize, usize),
+        (output, local_limit, force): (usize, usize, bool),
         compact_after: &mut usize,
         files: &crate::memory::FileActivity,
         cancellation: CancellationToken,
@@ -433,19 +461,36 @@ where
     {
         let tools = self.tools.definitions();
         let estimated = crate::context::estimate_tokens(history, &tools);
-        if self.config.auto_compact
-            && estimated >= *compact_after
-            && let Some(plan) = crate::autocompact::plan(history, &tools, output, local_limit)
-        {
+        let plan = if force {
+            Some(crate::autocompact::plan_configured(history, &tools, output, local_limit, crate::memory::CompactionMode::Manual, &self.compaction.settings)
+                .ok_or_else(|| AgentError::CompactionFailed {kind:crate::compaction::CompactionFailureKind::InputBudget,
+                    message:"no safe compaction boundary fits the rejected request; original context preserved".into()})?)
+        } else if self.config.auto_compact && estimated >= *compact_after {
+            crate::autocompact::plan_configured(
+                history,
+                &tools,
+                output,
+                local_limit,
+                crate::memory::CompactionMode::Automatic,
+                &self.compaction.settings,
+            )
+        } else {
+            None
+        };
+        if let Some(plan) = plan {
             emit(AgentEvent::CompactionStarted).await?;
-            let event = match crate::autocompact::execute_with_archive(
-                &self.backend,
+            let runtime = self
+                .compaction
+                .for_input_window(local_limit.saturating_sub(output));
+            let event = match crate::autocompact::execute_configured(
+                runtime.backend.as_deref().unwrap_or(&self.backend),
                 plan.with_files(files),
                 &tools,
                 output,
                 local_limit,
                 cancellation.clone(),
                 self.archive.as_deref(),
+                &runtime.settings,
             )
             .await
             {
@@ -476,9 +521,15 @@ where
                     // every tool call. Retry only after substantial input growth.
                     *compact_after =
                         estimated.saturating_add(local_limit.saturating_sub(output) / 10);
-                    AgentEvent::CompactionFailed {
+                    let event = AgentEvent::CompactionFailed {
+                        kind: error.compaction_kind(),
                         error: error.to_string(),
+                    };
+                    if force {
+                        emit(event).await?;
+                        return Err(error);
                     }
+                    event
                 }
             };
             emit(event).await?;

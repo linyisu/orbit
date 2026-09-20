@@ -97,24 +97,60 @@ pub async fn compact_with_archive<B: ModelBackend>(
     files: &crate::memory::FileActivity,
     archive: Option<&dyn crate::archive::ContextArchive>,
 ) -> Result<CompactedContext, AgentError> {
+    let runtime = crate::compaction::CompactionRuntime::default()
+        .for_input_window(limit.saturating_sub(output));
+    compact_configured(
+        backend,
+        history,
+        tools,
+        limit,
+        output,
+        cancellation,
+        files,
+        archive,
+        &runtime,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn compact_configured(
+    backend: &dyn ModelBackend,
+    history: Vec<ChatMessage>,
+    tools: &[ToolDefinition],
+    limit: usize,
+    output: usize,
+    cancellation: CancellationToken,
+    files: &crate::memory::FileActivity,
+    archive: Option<&dyn crate::archive::ContextArchive>,
+    runtime: &crate::compaction::CompactionRuntime,
+) -> Result<CompactedContext, AgentError> {
     if cancellation.is_cancelled() {
         return Err(AgentError::Cancelled);
     }
-    let plan = crate::autocompact::plan_manual(&history, tools, output, limit)
-        .ok_or_else(|| {
-            AgentError::Compaction(
-                "no safe compaction boundary fits this context; original context preserved".into(),
-            )
-        })?
-        .with_files(files);
-    crate::autocompact::execute_with_archive(
-        backend,
+    let plan = crate::autocompact::plan_configured(
+        &history,
+        tools,
+        output,
+        limit,
+        crate::memory::CompactionMode::Manual,
+        &runtime.settings,
+    )
+    .ok_or_else(|| {
+        AgentError::Compaction(
+            "no safe compaction boundary fits this context; original context preserved".into(),
+        )
+    })?
+    .with_files(files);
+    crate::autocompact::execute_configured(
+        runtime.backend.as_deref().unwrap_or(backend),
         plan,
         tools,
         output,
         limit,
         cancellation,
         archive,
+        &runtime.settings,
     )
     .await
 }

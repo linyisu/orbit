@@ -39,6 +39,35 @@ pub enum ModelError {
 }
 
 impl ModelError {
+    /// Only explicit protocol error codes justify context recovery. HTTP 400
+    /// also covers invalid parameters; 413 can mean byte size, not token count.
+    /// Do not infer a context limit from arbitrary upstream prose.
+    pub fn is_context_limit(&self) -> bool {
+        let Self::Http {
+            status: 400 | 413 | 422,
+            body,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+            return false;
+        };
+        [
+            value["error"]["code"].as_str(),
+            value["error"]["type"].as_str(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|code| {
+            matches!(
+                code,
+                "context_length_exceeded" | "context_window_exceeded" | "prompt_too_long"
+            )
+        })
+    }
+
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Http { retryable, .. } => *retryable,
