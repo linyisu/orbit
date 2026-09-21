@@ -40,11 +40,11 @@ impl Tool for ReadDocument {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_document",
-            "Convert a document in the current workspace to Markdown and read one Unicode-character page. Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. Scanned/image-only PDFs require OCR and return an explicit error. Conversion is local and creates no project files. Continue with next_start_char while truncated.",
+            "Convert a document inside the workspace (or outside path granted via request_capability) to Markdown and read one Unicode-character page. Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. Scanned/image-only PDFs require OCR and return an explicit error. Conversion is local and creates no project files. Continue with next_start_char while truncated.",
             json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Workspace-relative document path" },
+                    "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" },
                     "start_char": { "type": "integer", "minimum": 0, "default": 0 },
                     "max_chars": { "type": "integer", "minimum": 1, "maximum": MAX_CHARS, "default": DEFAULT_CHARS }
                 },
@@ -90,7 +90,7 @@ fn convert(
 ) -> Result<String, ToolError> {
     let path = Path::new(&arguments.path);
     let mut file = workspace
-        .open_read(path)
+        .authorize_read(path)
         .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
     let mut bytes = Vec::new();
     file.by_ref()

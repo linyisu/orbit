@@ -30,11 +30,11 @@ impl Tool for ReadImage {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_image",
-            "Load a PNG, JPEG, GIF or WebP image from the current workspace into the model's native vision input. Use this whenever the user asks about an image file; filesystem listing or shell pixel inspection does not show the image to the model. The path must be workspace-relative. The image is validated locally, copied to Orbit's global attachment store, and no project file is created.",
+            "Load a PNG, JPEG, GIF or WebP image inside the workspace (or outside path granted via request_capability) into the model's native vision input. Use this whenever the user asks about an image file; filesystem listing or shell pixel inspection does not show the image to the model. Use a relative path or granted outside path. The image is validated locally, copied to Orbit's global attachment store, and no project file is created.",
             json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Workspace-relative image path" }
+                    "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" }
                 },
                 "required": ["path"],
                 "additionalProperties": false
@@ -54,7 +54,7 @@ impl Tool for ReadImage {
             }
             let mut file = self
                 .workspace
-                .open_read(Path::new(&arguments.path))
+                .authorize_read(Path::new(&arguments.path))
                 .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
             let mut bytes = Vec::new();
             file.by_ref()

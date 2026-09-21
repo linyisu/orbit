@@ -8,7 +8,8 @@ use orbit_runtime::{
     policy::FilesystemGrant,
 };
 use orbit_tools::{
-    approval, edit_file::EditFile, list_files::ListFiles, read_file::ReadFile,
+    approval, edit_file::EditFile, image_assets::ImageAssets, list_files::ListFiles,
+    read_document::ReadDocument, read_file::ReadFile, read_image::ReadImage,
     search_text::SearchText, write_file::WriteFile,
 };
 use serde_json::json;
@@ -213,4 +214,125 @@ async fn external_path_integration_across_all_tools() {
         .unwrap();
     assert!(search_out.content.contains("config.txt"));
     assert!(search_out.content.contains("edited external line"));
+}
+
+#[tokio::test]
+async fn external_special_readers_integration() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let ext_temp = tempfile::tempdir().unwrap();
+    let db_temp = tempfile::tempdir().unwrap();
+
+    let workspace = Workspace::new(ws_temp.path()).unwrap();
+    let ext_dir = ext_temp.path().join("external_docs");
+    fs::create_dir_all(&ext_dir).unwrap();
+
+    let ext_doc = ext_dir.join("data.csv");
+    fs::write(&ext_doc, "name,value\nalpha,1\nbeta,2\n").unwrap();
+
+    let ext_rtf = ext_dir.join("book.rtf");
+    fs::write(
+        &ext_rtf,
+        "{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Courier;}}\\f0\\fs24 Rust for Rustaceans}",
+    )
+    .unwrap();
+
+    let ext_img = ext_dir.join("photo.png");
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+        .save(&ext_img)
+        .unwrap();
+
+    let doc_tool = ReadDocument::new(workspace.clone());
+    let img_tool = ReadImage::new(
+        workspace.clone(),
+        ImageAssets::for_database(&db_temp.path().join("orbit.db")),
+    );
+
+    let ext_doc_str = ext_doc.display().to_string();
+    let ext_rtf_str = ext_rtf.display().to_string();
+    let ext_img_str = ext_img.display().to_string();
+
+    // 1. Without capability grants, both read_document and read_image must reject external paths with permission denied
+    let doc_err = doc_tool
+        .execute(
+            ToolCall::function("d1", "read_document", json!({ "path": &ext_doc_str })),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(doc_err.to_string().contains("permission denied"));
+    assert!(doc_err.to_string().contains("request_capability"));
+
+    let rtf_err = doc_tool
+        .execute(
+            ToolCall::function("d_rtf", "read_document", json!({ "path": &ext_rtf_str })),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(rtf_err.to_string().contains("permission denied"));
+    assert!(rtf_err.to_string().contains("request_capability"));
+
+    let img_err = img_tool
+        .execute(
+            ToolCall::function("i1", "read_image", json!({ "path": &ext_img_str })),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(img_err.to_string().contains("permission denied"));
+    assert!(img_err.to_string().contains("request_capability"));
+
+    // 2. Grant Read capability on ext_dir
+    let resolved_ext_dir = ResolvedPath::resolve(&ext_dir, None).unwrap();
+    workspace.policy().record_grant(FilesystemGrant::read_only(
+        EnvironmentId::Local,
+        resolved_ext_dir,
+    ));
+
+    // 3. Now read_document succeeds on the granted outside document and RTF
+    let doc_out = doc_tool
+        .execute(
+            ToolCall::function("d2", "read_document", json!({ "path": &ext_doc_str })),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(doc_out.content.contains("local_document_markdown"));
+    assert!(doc_out.content.contains("alpha"));
+
+    let rtf_out = doc_tool
+        .execute(
+            ToolCall::function("d2_rtf", "read_document", json!({ "path": &ext_rtf_str })),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(rtf_out.content.contains("local_document_markdown"));
+    assert!(rtf_out.content.contains("Rust for Rustaceans"));
+
+    // 4. Now read_image succeeds on the granted outside image
+    let img_out = img_tool
+        .execute(
+            ToolCall::function("i2", "read_image", json!({ "path": &ext_img_str })),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(img_out.content.contains("local_image"));
+    assert_eq!(img_out.attachments.len(), 1);
+
+    // 5. Relative path traversal to granted outside document also succeeds
+    let rel_doc = format!(
+        "../{}/external_docs/data.csv",
+        ext_temp.path().file_name().unwrap().to_str().unwrap()
+    );
+    let rel_doc_out = doc_tool
+        .execute(
+            ToolCall::function("d3_rel", "read_document", json!({ "path": rel_doc })),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(rel_doc_out.content.contains("local_document_markdown"));
+    assert!(rel_doc_out.content.contains("alpha"));
 }

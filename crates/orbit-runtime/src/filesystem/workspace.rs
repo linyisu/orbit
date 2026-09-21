@@ -323,7 +323,9 @@ impl Workspace {
                 Err(WorkspaceError::PermissionDenied(err))
             }
             Err(WorkspaceError::InvalidPath) => {
-                let canonical = path.canonicalize()?;
+                let resolved =
+                    ResolvedPath::resolve(path, Some(&self.path)).map_err(WorkspaceError::Io)?;
+                let canonical = resolved.canonical().to_path_buf();
                 if !canonical.metadata()?.is_dir() {
                     return Err(WorkspaceError::NotDirectory);
                 }
@@ -457,7 +459,9 @@ impl Workspace {
                 Err(WorkspaceError::PermissionDenied(err))
             }
             Err(WorkspaceError::InvalidPath) => {
-                let canonical = path.canonicalize()?;
+                let resolved =
+                    ResolvedPath::resolve(path, Some(&self.path)).map_err(WorkspaceError::Io)?;
+                let canonical = resolved.canonical().to_path_buf();
                 self.check_protected_path(&canonical)?;
 
                 let cap = crate::capability::FilesystemCapability {
