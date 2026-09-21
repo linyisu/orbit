@@ -5,11 +5,11 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.11.0"
-tempfile = "3.27.0"
+sha2.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
