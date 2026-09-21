@@ -20,3 +20,4 @@ pub mod workspace;
 pub mod write_file;
 
 pub mod export_artifact;
+pub mod request_capability;

@@ -35,6 +35,7 @@ pub struct CapabilityPreview {
     pub environment: crate::capability::EnvironmentId,
     pub path: std::path::PathBuf,
     pub access: crate::capability::FilesystemAccess,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug)]

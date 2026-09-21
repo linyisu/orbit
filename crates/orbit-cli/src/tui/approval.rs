@@ -195,6 +195,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             let lines = vec![
                 Line::from(format!("环境：{}", preview.environment)),
                 Line::from(format!("路径：{}", preview.path.display())),
+                Line::from(format!("理由：{}", preview.reason)),
                 Line::from(""),
                 Line::from("该权限仅在当前 Runtime Session 内有效，会话结束自动销毁。"),
             ];

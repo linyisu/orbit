@@ -6,7 +6,8 @@ use orbit_tools::{
     approval::ApprovalSender, edit_file::EditFile, git_inspect::GitInspect,
     image_assets::ImageAssets, list_files::ListFiles, read_command_output::ReadCommandOutput,
     read_document::ReadDocument, read_file::ReadFile, read_image::ReadImage,
-    run_command::RunCommand, search_text::SearchText, workspace::Workspace, write_file::WriteFile,
+    request_capability::RequestCapability, run_command::RunCommand, search_text::SearchText,
+    workspace::Workspace, write_file::WriteFile,
 };
 
 pub struct WorkspaceRuntime {
@@ -48,6 +49,7 @@ pub async fn workspace_tools(
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
+        tools.register(RequestCapability::new(workspace.clone(), approvals.clone()));
         let command = RunCommand::with_limits(workspace.clone(), approvals, command_limits.clone());
         let command = if let Some(scratch) = scratch {
             if let Some(database) = database {
