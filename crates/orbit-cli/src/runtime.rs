@@ -2,12 +2,13 @@ use std::path::Path;
 
 use anyhow::Result;
 use orbit_agent::tool::ToolRegistry;
+use orbit_runtime::filesystem::Workspace;
 use orbit_tools::{
     approval::ApprovalSender, edit_file::EditFile, git_inspect::GitInspect,
     image_assets::ImageAssets, list_files::ListFiles, read_command_output::ReadCommandOutput,
     read_document::ReadDocument, read_file::ReadFile, read_image::ReadImage,
     request_capability::RequestCapability, run_command::RunCommand, search_text::SearchText,
-    workspace::Workspace, write_file::WriteFile,
+    write_file::WriteFile,
 };
 
 pub struct WorkspaceRuntime {

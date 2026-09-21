@@ -80,7 +80,7 @@ pub struct SessionState {
     pub scratch: orbit_tools::run_command::ScratchDirectory,
     pub command_output: orbit_tools::run_command::CommandOutputDirectory,
     pub git_baseline: Option<serde_json::Value>,
-    pub audit_workspace: Option<orbit_tools::workspace::Workspace>,
+    pub audit_workspace: Option<orbit_runtime::filesystem::Workspace>,
     pub audit_limits: orbit_tools::run_command::CommandLimits,
     pending: Vec<AgentEvent>,
     active: bool,
@@ -278,7 +278,7 @@ impl SessionState {
 
     pub async fn initialize_audit(
         &mut self,
-        workspace: orbit_tools::workspace::Workspace,
+        workspace: orbit_runtime::filesystem::Workspace,
         limits: orbit_tools::run_command::CommandLimits,
     ) -> Result<()> {
         self.audit_limits = limits.clone();
@@ -286,10 +286,10 @@ impl SessionState {
         // Never label the current state of an old session as its starting state.
         if self.snapshot.runs.is_empty()
             && self.store.workspace_baseline(self.id()).await?.is_none()
-            && let Ok(baseline) = orbit_tools::sandbox::fingerprint_configured(
+            && let Ok(baseline) = orbit_runtime::execution::fingerprint_configured(
                 workspace,
                 tokio_util::sync::CancellationToken::new(),
-                limits,
+                limits.into(),
             )
             .await
         {

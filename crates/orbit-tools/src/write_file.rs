@@ -16,9 +16,13 @@ use serde_json::json;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, DeletePreview, WritePreview},
-    workspace::{Workspace, WorkspaceError},
+use crate::approval::{
+    ApprovalPreview, ApprovalRequest, ApprovalSender, DeletePreview, WritePreview,
+};
+use orbit_runtime::{
+    capability::{EnvironmentId, FilesystemAccess, FilesystemCapability},
+    filesystem::{Workspace, WorkspaceError},
+    policy::PolicyDecision,
 };
 
 const MAX_BYTES: usize = 1024 * 1024;
@@ -303,21 +307,21 @@ struct Prepared {
 
 impl Prepared {
     fn new(workspace: Workspace, args: Arguments) -> Result<Self, ToolError> {
-        let cap = crate::capability::FilesystemCapability {
-            environment: crate::capability::EnvironmentId::Local,
+        let cap = FilesystemCapability {
+            environment: EnvironmentId::Local,
             path: std::path::PathBuf::from(&args.path),
-            access: crate::capability::FilesystemAccess::ReadWrite,
+            access: FilesystemAccess::ReadWrite,
         };
 
         match workspace.policy().check_filesystem(&cap) {
-            crate::policy::PolicyDecision::Granted => {}
-            crate::policy::PolicyDecision::NeedsApproval(_) => {
+            PolicyDecision::Granted => {}
+            PolicyDecision::NeedsApproval(_) => {
                 return Err(failed(format!(
                     "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
                     args.path
                 )));
             }
-            crate::policy::PolicyDecision::Denied(reason) => {
+            PolicyDecision::Denied(reason) => {
                 return Err(failed(format!("permission denied: {reason}")));
             }
         }

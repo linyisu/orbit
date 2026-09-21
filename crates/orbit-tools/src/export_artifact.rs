@@ -1,7 +1,8 @@
 //! Explicit export from a session's sandbox scratch to private host artifacts.
-use crate::{run_command::ScratchDirectory, workspace::Workspace};
+use crate::run_command::ScratchDirectory;
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::filesystem::Workspace;
 use serde::Deserialize;
 use serde_json::json;
 use std::{
@@ -131,7 +132,7 @@ fn export(
     std::fs::File::open(destination)
         .and_then(|d| d.sync_all())
         .map_err(failed)?;
-    Ok(ToolOutput::text(json!({"path":path,"name":name,"bytes":bytes.len(),"sha256":crate::sandbox::content_hash(&bytes)}).to_string()))
+    Ok(ToolOutput::text(json!({"path":path,"name":name,"bytes":bytes.len(),"sha256":orbit_runtime::execution::content_hash(&bytes)}).to_string()))
 }
 #[cfg(test)]
 mod tests {

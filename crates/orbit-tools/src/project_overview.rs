@@ -1,11 +1,11 @@
 //! Bounded, read-only repository orientation. Evidence, never executable policy.
-use crate::workspace::Workspace;
 use ignore::WalkBuilder;
 use orbit_agent::{
     context::estimate_tokens,
     tool::{Tool, ToolError, ToolFuture, ToolOutput},
 };
 use orbit_model::types::{ChatMessage, ToolCall, ToolDefinition};
+use orbit_runtime::filesystem::Workspace;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};

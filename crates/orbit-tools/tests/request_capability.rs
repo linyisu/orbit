@@ -2,9 +2,8 @@ use std::fs;
 
 use orbit_agent::tool::Tool;
 use orbit_model::types::ToolCall;
-use orbit_tools::{
-    approval, read_file::ReadFile, request_capability::RequestCapability, workspace::Workspace,
-};
+use orbit_runtime::filesystem::Workspace;
+use orbit_tools::{approval, read_file::ReadFile, request_capability::RequestCapability};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -62,7 +61,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
             );
             assert_eq!(
                 preview.access,
-                orbit_tools::capability::FilesystemAccess::Read
+                orbit_runtime::capability::FilesystemAccess::Read
             );
         }
         _ => panic!("unexpected preview type"),
@@ -258,7 +257,7 @@ async fn request_capability_supports_read_write_access() {
         approval::ApprovalPreview::Capability(preview) => {
             assert_eq!(
                 preview.access,
-                orbit_tools::capability::FilesystemAccess::ReadWrite
+                orbit_runtime::capability::FilesystemAccess::ReadWrite
             );
             assert!(preview.access.allows_read());
             assert!(preview.access.allows_write());

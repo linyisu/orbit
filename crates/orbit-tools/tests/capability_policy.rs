@@ -1,8 +1,8 @@
 use std::{fs, os::unix::fs::symlink};
 
-use orbit_tools::{
+use orbit_runtime::{
     capability::{EnvironmentId, FilesystemAccess, FilesystemCapability, NetworkPolicy},
-    path_security::ResolvedPath,
+    filesystem::ResolvedPath,
     policy::{FilesystemGrant, PolicyDecision, PolicyEngine, WorkspacePermissions},
 };
 

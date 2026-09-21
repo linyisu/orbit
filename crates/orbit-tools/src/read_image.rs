@@ -6,10 +6,8 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    image_assets::{ImageAssets, MAX_IMAGE_BYTES},
-    workspace::Workspace,
-};
+use crate::image_assets::{ImageAssets, MAX_IMAGE_BYTES};
+use orbit_runtime::filesystem::Workspace;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

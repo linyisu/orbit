@@ -1,10 +1,9 @@
 use std::fs;
 
-use orbit_tools::{
+use orbit_runtime::{
     capability::{EnvironmentId, FilesystemCapability, NetworkPolicy},
-    path_security::ResolvedPath,
+    filesystem::{ResolvedPath, Workspace},
     policy::{FilesystemGrant, PolicyDecision, WorkspacePermissions},
-    workspace::Workspace,
 };
 
 #[tokio::test]

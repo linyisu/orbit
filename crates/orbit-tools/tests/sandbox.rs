@@ -2,7 +2,11 @@ use std::{fs, os::unix::fs::symlink, time::Duration};
 
 use orbit_agent::tool::Tool;
 use orbit_model::types::ToolCall;
-use orbit_tools::{approval, run_command::RunCommand, sandbox, workspace::Workspace};
+use orbit_runtime::{
+    execution::{ProcessLimits, WorkspaceScanLimits, sandbox},
+    filesystem::Workspace,
+};
+use orbit_tools::{approval, run_command::RunCommand};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -236,16 +240,27 @@ async fn writable_snapshot_builds_without_changing_host_and_discards_outputs() {
 #[ignore = "requires Linux user namespaces"]
 async fn writable_workspace_has_a_total_size_limit() {
     let (_root, workspace) = fixture();
-    let result = sandbox::run_configured(workspace,
+    let scan_limits = WorkspaceScanLimits {
+        max_scan_mib: 1,
+        ..Default::default()
+    };
+    let process_limits = ProcessLimits {
+        max_file_size_bytes: 2 * 1024 * 1024,
+        ..Default::default()
+    };
+    let result = sandbox::run_configured(
+        workspace,
         "dd if=/dev/zero of=one bs=1M count=1 2>/dev/null; dd if=/dev/zero of=two bs=1M count=1 2>/dev/null; dd if=/dev/zero of=three bs=1M count=1".into(),
-        Duration::from_secs(15), CancellationToken::new(), true, &orbit_tools::run_command::CommandLimits {
-            max_scan_mib: 1,
-            process_limits: orbit_tools::sandbox::ProcessLimits {
-                max_file_size_bytes: 2 * 1024 * 1024,
-                ..Default::default()
-            },
-            ..Default::default()
-        }, None, None).await.unwrap();
+        Duration::from_secs(15),
+        CancellationToken::new(),
+        true,
+        &scan_limits,
+        &process_limits,
+        None,
+        &[],
+        None,
+        None,
+    ).await.unwrap();
     assert_ne!(result.exit_code, Some(0));
     assert!(
         result.stderr.contains("No space left on device"),
@@ -477,7 +492,7 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
     fs::write(cache.path().join("package.txt"), "offline dependency").unwrap();
     let limits = CommandLimits {
         max_scan_mib: 1,
-        process_limits: orbit_tools::sandbox::ProcessLimits {
+        process_limits: ProcessLimits {
             max_file_size_bytes: 2 * 1024 * 1024,
             ..Default::default()
         },
@@ -487,7 +502,22 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
         }],
         ..Default::default()
     };
-    let result=sandbox::run_configured(workspace.clone(),"cat /opt/orbit-cache/packages/package.txt; test ! -w /opt/orbit-cache/packages/package.txt && test ! -e /tmp/home/.ssh".into(),Duration::from_secs(10),CancellationToken::new(),true,&limits,None,None).await.unwrap();
+    let scan_limits = WorkspaceScanLimits::from(&limits);
+    let result = sandbox::run_configured(
+        workspace.clone(),
+        "cat /opt/orbit-cache/packages/package.txt; test ! -w /opt/orbit-cache/packages/package.txt && test ! -e /tmp/home/.ssh".into(),
+        Duration::from_secs(10),
+        CancellationToken::new(),
+        true,
+        &scan_limits,
+        &limits.process_limits,
+        None,
+        &limits.dependency_caches,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stdout.contains("offline dependency"));
     assert_eq!(result.verification.unwrap().dependency_caches.len(), 1);
@@ -498,7 +528,10 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
         Duration::from_secs(10),
         CancellationToken::new(),
         true,
-        &limits,
+        &scan_limits,
+        &limits.process_limits,
+        None,
+        &limits.dependency_caches,
         None,
         None,
     )

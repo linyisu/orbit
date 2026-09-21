@@ -5,12 +5,11 @@ use serde_json::json;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, CapabilityPreview},
+use crate::approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, CapabilityPreview};
+use orbit_runtime::{
     capability::{EnvironmentId, FilesystemAccess, FilesystemCapability},
-    path_security::ResolvedPath,
+    filesystem::{ResolvedPath, Workspace},
     policy::{FilesystemGrant, PolicyDecision},
-    workspace::Workspace,
 };
 
 #[derive(Deserialize)]
@@ -157,7 +156,7 @@ impl Tool for RequestCapability {
                             environment: cap.environment,
                             path: grant_path,
                             read: true,
-                            write: cap.access.is_write(),
+                            write: cap.access.allows_write(),
                         };
 
                         self.workspace.policy().record_grant(grant);

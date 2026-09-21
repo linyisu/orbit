@@ -1,9 +1,9 @@
 use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_model::types::ToolCall;
+use orbit_runtime::filesystem::Workspace;
 use orbit_tools::{
     approval::{self, ApprovalPreview},
     edit_file::EditFile,
-    workspace::Workspace,
 };
 use serde_json::{Value, json};
 use std::{fs, time::Duration};

@@ -2,10 +2,8 @@ use std::{fs, path::Path, process::Command};
 
 use orbit_agent::tool::{Tool, ToolError};
 use orbit_model::types::ToolCall;
-use orbit_tools::{
-    git_inspect::{GitInspect, capture_baseline, working_tree_patch},
-    workspace::Workspace,
-};
+use orbit_runtime::filesystem::Workspace;
+use orbit_tools::git_inspect::{GitInspect, capture_baseline, working_tree_patch};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 

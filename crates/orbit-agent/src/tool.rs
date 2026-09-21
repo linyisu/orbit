@@ -78,6 +78,19 @@ pub enum ToolError {
     Cancelled,
 }
 
+impl From<orbit_runtime::RuntimeError> for ToolError {
+    fn from(err: orbit_runtime::RuntimeError) -> Self {
+        match err {
+            orbit_runtime::RuntimeError::Cancelled => ToolError::Cancelled,
+            orbit_runtime::RuntimeError::ExecutionFailed(msg) => ToolError::ExecutionFailed(msg),
+            orbit_runtime::RuntimeError::Workspace(err) => {
+                ToolError::ExecutionFailed(err.to_string())
+            }
+            orbit_runtime::RuntimeError::Io(err) => ToolError::ExecutionFailed(err.to_string()),
+        }
+    }
+}
+
 pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 

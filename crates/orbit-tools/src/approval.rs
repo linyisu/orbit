@@ -32,9 +32,9 @@ pub struct McpPreview {
 
 #[derive(Clone, Debug)]
 pub struct CapabilityPreview {
-    pub environment: crate::capability::EnvironmentId,
+    pub environment: orbit_runtime::capability::EnvironmentId,
     pub path: std::path::PathBuf,
-    pub access: crate::capability::FilesystemAccess,
+    pub access: orbit_runtime::capability::FilesystemAccess,
     pub reason: String,
 }
 

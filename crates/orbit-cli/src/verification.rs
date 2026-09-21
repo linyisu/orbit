@@ -6,13 +6,13 @@ use orbit_agent::{
     tool::{ClosureTool, ToolError, ToolRegistry},
     verification::WorkspaceFingerprint,
 };
+use orbit_runtime::{
+    execution::{content_hash, fingerprint_configured},
+    filesystem::Workspace,
+};
 use orbit_store::{
     store::Store,
     types::{VerificationRecord, WorkspaceChange},
-};
-use orbit_tools::{
-    sandbox::{content_hash, fingerprint_configured},
-    workspace::Workspace,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -40,7 +40,7 @@ pub async fn report(
     token: CancellationToken,
     limits: orbit_tools::run_command::CommandLimits,
 ) -> Result<Value> {
-    let current = fingerprint_configured(workspace, token, limits).await?;
+    let current = fingerprint_configured(workspace, token, limits.into()).await?;
     let (baseline, changes, commands) = tokio::try_join!(
         store.workspace_baseline(id),
         store.workspace_changes(id),

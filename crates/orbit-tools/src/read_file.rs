@@ -6,7 +6,9 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::workspace::Workspace;
+use orbit_runtime::capability::{EnvironmentId, FilesystemAccess, FilesystemCapability};
+use orbit_runtime::filesystem::Workspace;
+use orbit_runtime::policy::PolicyDecision;
 
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
@@ -94,21 +96,21 @@ fn read(
     arguments: ReadArguments,
     cancellation: CancellationToken,
 ) -> Result<String, ToolError> {
-    let cap = crate::capability::FilesystemCapability {
-        environment: crate::capability::EnvironmentId::Local,
+    let cap = FilesystemCapability {
+        environment: EnvironmentId::Local,
         path: std::path::PathBuf::from(&arguments.path),
-        access: crate::capability::FilesystemAccess::Read,
+        access: FilesystemAccess::Read,
     };
 
     match workspace.policy().check_filesystem(&cap) {
-        crate::policy::PolicyDecision::Granted => {}
-        crate::policy::PolicyDecision::NeedsApproval(_) => {
+        PolicyDecision::Granted => {}
+        PolicyDecision::NeedsApproval(_) => {
             return Err(ToolError::ExecutionFailed(format!(
                 "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
                 arguments.path
             )));
         }
-        crate::policy::PolicyDecision::Denied(reason) => {
+        PolicyDecision::Denied(reason) => {
             return Err(ToolError::ExecutionFailed(format!(
                 "permission denied: {reason}"
             )));

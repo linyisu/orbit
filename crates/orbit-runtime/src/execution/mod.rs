@@ -8,5 +8,6 @@ pub use process::{
 };
 pub use sandbox::{
     BwrapSandboxBackend, SandboxBackend, Snapshot, WorkspaceScanLimits, content_hash, fingerprint,
-    fingerprint_configured, scan_workspace_summary,
+    fingerprint_configured, run, run_configured, run_with_options, run_with_resources,
+    run_with_resources_and_output, run_with_toolchain, scan_workspace_summary,
 };

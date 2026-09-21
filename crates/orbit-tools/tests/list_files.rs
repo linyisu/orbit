@@ -1,6 +1,7 @@
 use orbit_agent::tool::{Tool, ToolError};
 use orbit_model::types::ToolCall;
-use orbit_tools::{list_files::ListFiles, workspace::Workspace};
+use orbit_runtime::filesystem::Workspace;
+use orbit_tools::list_files::ListFiles;
 use serde_json::{Value, json};
 use std::fs;
 use tokio_util::sync::CancellationToken;

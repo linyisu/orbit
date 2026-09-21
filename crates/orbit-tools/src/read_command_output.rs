@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::sandbox::MAX_RETAINED_OUTPUT_PER_STREAM;
+use orbit_runtime::execution::MAX_RETAINED_OUTPUT_PER_STREAM;
 
 pub type CommandOutputDirectory = Arc<RwLock<PathBuf>>;
 

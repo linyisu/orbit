@@ -4,7 +4,8 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::{approval::ApprovalSender, workspace::Workspace, write_file::WriteFile};
+use crate::{approval::ApprovalSender, write_file::WriteFile};
+use orbit_runtime::filesystem::Workspace;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -7,12 +7,12 @@ use orbit_agent::{
     tool::ToolRegistry,
 };
 use orbit_model::types::{ChatCompletion, ChatMessage, ChatRequest, ToolCall};
+use orbit_runtime::filesystem::Workspace;
 use orbit_tools::{
     approval,
     edit_file::EditFile,
     read_file::ReadFile,
     run_command::{CommandLimits, RunCommand},
-    workspace::Workspace,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;

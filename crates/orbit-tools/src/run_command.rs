@@ -14,10 +14,10 @@ use serde_json::json;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview},
-    sandbox::{self, SandboxBackend},
-    workspace::Workspace,
+use crate::approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview};
+use orbit_runtime::{
+    execution::{BwrapSandboxBackend, OutputLog, ProcessSpec, SandboxBackend},
+    filesystem::Workspace,
 };
 
 #[derive(Clone)]
@@ -49,14 +49,14 @@ pub struct CommandLimits {
     pub max_scan_entries: usize,
     #[serde(alias = "writable_snapshot_mib")]
     pub legacy_writable_snapshot_mib: Option<usize>,
-    pub process_limits: sandbox::ProcessLimits,
+    pub process_limits: ProcessLimits,
     pub dependency_caches: Vec<DependencyCache>,
     pub verification_commands: std::collections::BTreeMap<String, String>,
     pub default_timeout_seconds: u64,
     pub max_timeout_seconds: u64,
 }
 
-pub use orbit_runtime::execution::{DependencyCache, WorkspaceScanLimits};
+pub use orbit_runtime::execution::{DependencyCache, ProcessLimits, WorkspaceScanLimits};
 
 impl From<&CommandLimits> for WorkspaceScanLimits {
     fn from(limits: &CommandLimits) -> Self {
@@ -83,7 +83,7 @@ impl Default for CommandLimits {
             max_scan_mib: 64,
             max_scan_entries: 10_000,
             legacy_writable_snapshot_mib: None,
-            process_limits: sandbox::ProcessLimits::default(),
+            process_limits: ProcessLimits::default(),
             dependency_caches: Vec::new(),
             verification_commands: Default::default(),
             default_timeout_seconds: 120,
@@ -265,20 +265,20 @@ impl Tool for RunCommand {
                         .read()
                         .expect("command output lock poisoned")
                         .clone();
-                    Some(sandbox::OutputLog::create(&directory).await?)
+                    Some(OutputLog::create(&directory).await?)
                 }
                 None => None,
             };
-            let (fingerprint, workspace_files, skipped_entries) = sandbox::scan_workspace_summary(
-                self.workspace.clone(),
-                cancellation.clone(),
-                self.limits.clone(),
-            )
-            .await?;
+            let (fingerprint, workspace_files, skipped_entries) =
+                orbit_runtime::execution::scan_workspace_summary(
+                    self.workspace.clone(),
+                    cancellation.clone(),
+                    self.limits.clone().into(),
+                )
+                .await?;
 
-            let backend = sandbox::BwrapSandboxBackend::new()?;
-            let mut spec =
-                sandbox::ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
+            let backend = BwrapSandboxBackend::new()?;
+            let mut spec = ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
             spec.scratch = scratch.clone();
             spec.rust_toolchain = self.limits.rust_toolchain.clone();
             spec.dependency_caches = self.limits.dependency_caches.clone();
@@ -292,10 +292,10 @@ impl Tool for RunCommand {
                 .run(spec, policy, output_log, cancellation.clone())
                 .await?;
 
-            let (post_fingerprint, _, _) = sandbox::scan_workspace_summary(
+            let (post_fingerprint, _, _) = orbit_runtime::execution::scan_workspace_summary(
                 self.workspace.clone(),
                 cancellation,
-                self.limits.clone(),
+                self.limits.clone().into(),
             )
             .await?;
 
@@ -361,7 +361,7 @@ mod configuration_tests {
     fn tool_schema_omits_writable_snapshot() {
         let (sender, _receiver) = crate::approval::channel();
         let ws_temp = tempfile::tempdir().unwrap();
-        let workspace = crate::workspace::Workspace::new(ws_temp.path()).unwrap();
+        let workspace = Workspace::new(ws_temp.path()).unwrap();
         let tool = RunCommand::new(workspace, sender);
         let def = tool.definition();
         let props = def.function.parameters["properties"].as_object().unwrap();

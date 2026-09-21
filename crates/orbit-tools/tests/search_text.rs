@@ -2,7 +2,8 @@ use std::fs;
 
 use orbit_agent::tool::{Tool, ToolError};
 use orbit_model::types::ToolCall;
-use orbit_tools::{search_text::SearchText, workspace::Workspace};
+use orbit_runtime::filesystem::Workspace;
+use orbit_tools::search_text::SearchText;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 

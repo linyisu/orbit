@@ -1,23 +1,17 @@
 pub mod approval;
-pub mod capability;
 pub mod edit_file;
+pub mod export_artifact;
 pub mod git_inspect;
 pub mod image_assets;
 pub mod list_files;
 pub mod mcp;
-pub mod path_security;
-pub mod policy;
 pub mod project_overview;
 pub mod read_command_output;
 pub mod read_document;
 pub mod read_file;
 pub mod read_image;
+pub mod request_capability;
 pub mod run_command;
-pub mod sandbox;
 pub mod search_text;
 pub mod web_fetch;
-pub mod workspace;
 pub mod write_file;
-
-pub mod export_artifact;
-pub mod request_capability;

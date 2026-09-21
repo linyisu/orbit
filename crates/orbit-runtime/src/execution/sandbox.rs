@@ -6,8 +6,8 @@ use std::{
     time::Duration,
 };
 
-use orbit_agent::tool::ToolError;
-use orbit_agent::verification::{FileFingerprint, VerificationEvidence, WorkspaceFingerprint};
+use crate::error::{RuntimeError, failed};
+use crate::verification::{FileFingerprint, VerificationEvidence, WorkspaceFingerprint};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -78,7 +78,7 @@ impl Snapshot {
     pub fn create(
         workspace: Workspace,
         cancellation: CancellationToken,
-    ) -> Result<Self, ToolError> {
+    ) -> Result<Self, RuntimeError> {
         Self::scan(workspace, cancellation, true)
     }
 
@@ -86,7 +86,7 @@ impl Snapshot {
         workspace: Workspace,
         cancellation: CancellationToken,
         copy: bool,
-    ) -> Result<Self, ToolError> {
+    ) -> Result<Self, RuntimeError> {
         Self::scan_configured(
             workspace,
             cancellation,
@@ -100,7 +100,7 @@ impl Snapshot {
         cancellation: CancellationToken,
         copy: bool,
         limits: WorkspaceScanLimits,
-    ) -> Result<Self, ToolError> {
+    ) -> Result<Self, RuntimeError> {
         limits.validate().map_err(failed)?;
         let directory = if copy {
             Some(
@@ -140,9 +140,9 @@ impl Snapshot {
         relative: &Path,
         token: &CancellationToken,
         depth: usize,
-    ) -> Result<(), ToolError> {
+    ) -> Result<(), RuntimeError> {
         if token.is_cancelled() {
-            return Err(ToolError::Cancelled);
+            return Err(RuntimeError::Cancelled);
         }
         if depth > 64 {
             return Err(failed("workspace snapshot exceeds 64 directory levels"));
@@ -156,7 +156,7 @@ impl Snapshot {
                 )));
             }
             if token.is_cancelled() {
-                return Err(ToolError::Cancelled);
+                return Err(RuntimeError::Cancelled);
             }
             if ["target", "node_modules", ".venv", "__pycache__"]
                 .iter()
@@ -236,7 +236,7 @@ pub fn content_hash(bytes: &[u8]) -> String {
 pub async fn fingerprint(
     workspace: Workspace,
     cancellation: CancellationToken,
-) -> Result<WorkspaceFingerprint, ToolError> {
+) -> Result<WorkspaceFingerprint, RuntimeError> {
     tokio::task::spawn_blocking(move || {
         Snapshot::scan(workspace, cancellation, false).map(|s| s.fingerprint)
     })
@@ -248,7 +248,7 @@ pub async fn fingerprint_configured(
     workspace: Workspace,
     cancellation: CancellationToken,
     limits: WorkspaceScanLimits,
-) -> Result<WorkspaceFingerprint, ToolError> {
+) -> Result<WorkspaceFingerprint, RuntimeError> {
     tokio::task::spawn_blocking(move || {
         Snapshot::scan_configured(workspace, cancellation, false, limits).map(|s| s.fingerprint)
     })
@@ -260,7 +260,7 @@ pub async fn scan_workspace_summary(
     workspace: Workspace,
     cancellation: CancellationToken,
     limits: WorkspaceScanLimits,
-) -> Result<(WorkspaceFingerprint, usize, usize), ToolError> {
+) -> Result<(WorkspaceFingerprint, usize, usize), RuntimeError> {
     tokio::task::spawn_blocking(move || {
         Snapshot::scan_configured(workspace, cancellation, false, limits)
             .map(|s| (s.fingerprint, s.files, s.skipped))
@@ -277,7 +277,7 @@ pub trait SandboxBackend: Send + Sync {
         output_log: Option<OutputLog>,
         cancellation: CancellationToken,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<CommandResult, ToolError>> + Send + 'a>,
+        Box<dyn std::future::Future<Output = Result<CommandResult, RuntimeError>> + Send + 'a>,
     >;
 }
 
@@ -287,7 +287,7 @@ pub struct BwrapSandboxBackend {
 }
 
 impl BwrapSandboxBackend {
-    pub fn new() -> Result<Self, ToolError> {
+    pub fn new() -> Result<Self, RuntimeError> {
         let bwrap_path = find_executable("bwrap").ok_or_else(|| {
             failed("sandbox unavailable: install Bubblewrap at /usr/bin/bwrap; refusing unsandboxed execution")
         })?;
@@ -320,7 +320,7 @@ impl BwrapSandboxBackend {
         writable_snapshot_source: Option<&Path>,
         rust_toolchain: Option<&Path>,
         dependency_caches: &[DependencyCache],
-    ) -> Result<Command, ToolError> {
+    ) -> Result<Command, RuntimeError> {
         let mut command = Command::new(&self.bwrap_path);
 
         command
@@ -379,7 +379,7 @@ impl SandboxBackend for BwrapSandboxBackend {
         output_log: Option<OutputLog>,
         cancellation: CancellationToken,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<CommandResult, ToolError>> + Send + 'a>,
+        Box<dyn std::future::Future<Output = Result<CommandResult, RuntimeError>> + Send + 'a>,
     > {
         Box::pin(async move {
             let mut script_file = tempfile::NamedTempFile::new().map_err(failed)?;
@@ -486,7 +486,7 @@ fn mount_system_paths(command: &mut Command, network: NetworkPolicy) {
     }
 }
 
-fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result<(), ToolError> {
+fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result<(), RuntimeError> {
     for path in &policy.persistent_read_write {
         let canonical = path.canonical();
         if canonical.exists() {
@@ -523,7 +523,7 @@ fn mount_toolchains_and_caches(
     command: &mut Command,
     rust_toolchain: Option<&Path>,
     dependency_caches: &[DependencyCache],
-) -> Result<(), ToolError> {
+) -> Result<(), RuntimeError> {
     if let Some(path) = rust_toolchain {
         let path = path.canonicalize().map_err(failed)?;
         if !path.join("bin/rustc").is_file()
@@ -553,7 +553,10 @@ fn mount_toolchains_and_caches(
     Ok(())
 }
 
-fn mount_scratch_and_tmp(command: &mut Command, scratch: Option<&Path>) -> Result<(), ToolError> {
+fn mount_scratch_and_tmp(
+    command: &mut Command,
+    scratch: Option<&Path>,
+) -> Result<(), RuntimeError> {
     if let Some(path) = scratch {
         use std::os::unix::fs::DirBuilderExt;
 
@@ -726,7 +729,7 @@ async fn run_child_process(
     workspace_files: usize,
     skipped_entries: usize,
     verification: Option<VerificationEvidence>,
-) -> Result<CommandResult, ToolError> {
+) -> Result<CommandResult, RuntimeError> {
     let started = std::time::Instant::now();
     let (output_id, stdout_log, stderr_log) = output_log
         .map(OutputLog::split)
@@ -805,11 +808,11 @@ pub async fn run_configured(
     dependency_caches: &[DependencyCache],
     scratch: Option<&Path>,
     output_log: Option<OutputLog>,
-) -> Result<CommandResult, ToolError> {
+) -> Result<CommandResult, RuntimeError> {
     scan_limits.validate().map_err(failed)?;
     process_limits.validate().map_err(failed)?;
     if token.is_cancelled() {
-        return Err(ToolError::Cancelled);
+        return Err(RuntimeError::Cancelled);
     }
     let copy_token = token.clone();
     let snapshot_limits = scan_limits.clone();
@@ -820,7 +823,7 @@ pub async fn run_configured(
     .await
     .map_err(failed)??;
     if token.is_cancelled() {
-        return Err(ToolError::Cancelled);
+        return Err(RuntimeError::Cancelled);
     }
 
     let mut script_file = tempfile::NamedTempFile::new().map_err(failed)?;
@@ -895,8 +898,94 @@ pub async fn run_configured(
     .await
 }
 
-fn failed(error: impl std::fmt::Display) -> ToolError {
-    ToolError::ExecutionFailed(error.to_string())
+pub async fn run(
+    workspace: Workspace,
+    script: String,
+    timeout: Duration,
+    token: CancellationToken,
+) -> Result<CommandResult, RuntimeError> {
+    run_with_options(workspace, script, timeout, token, false).await
+}
+
+pub async fn run_with_options(
+    workspace: Workspace,
+    script: String,
+    timeout: Duration,
+    token: CancellationToken,
+    writable_snapshot: bool,
+) -> Result<CommandResult, RuntimeError> {
+    run_with_toolchain(workspace, script, timeout, token, writable_snapshot, None).await
+}
+
+pub async fn run_with_toolchain(
+    workspace: Workspace,
+    script: String,
+    timeout: Duration,
+    token: CancellationToken,
+    writable_snapshot: bool,
+    rust_toolchain: Option<&Path>,
+) -> Result<CommandResult, RuntimeError> {
+    run_with_resources(
+        workspace,
+        script,
+        timeout,
+        token,
+        writable_snapshot,
+        rust_toolchain,
+        None,
+    )
+    .await
+}
+
+pub async fn run_with_resources(
+    workspace: Workspace,
+    script: String,
+    timeout: Duration,
+    token: CancellationToken,
+    writable_snapshot: bool,
+    rust_toolchain: Option<&Path>,
+    scratch: Option<&Path>,
+) -> Result<CommandResult, RuntimeError> {
+    run_with_resources_and_output(
+        workspace,
+        script,
+        timeout,
+        token,
+        writable_snapshot,
+        rust_toolchain,
+        scratch,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with_resources_and_output(
+    workspace: Workspace,
+    script: String,
+    timeout: Duration,
+    token: CancellationToken,
+    writable_snapshot: bool,
+    rust_toolchain: Option<&Path>,
+    scratch: Option<&Path>,
+    output_log: Option<OutputLog>,
+) -> Result<CommandResult, RuntimeError> {
+    let scan_limits = WorkspaceScanLimits::default();
+    let process_limits = ProcessLimits::default();
+    run_configured(
+        workspace,
+        script,
+        timeout,
+        token,
+        writable_snapshot,
+        &scan_limits,
+        &process_limits,
+        rust_toolchain,
+        &[],
+        scratch,
+        output_log,
+    )
+    .await
 }
 
 #[cfg(test)]

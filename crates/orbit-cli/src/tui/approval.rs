@@ -187,7 +187,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             )
         }
         orbit_tools::approval::ApprovalPreview::Capability(preview) => {
-            let access_desc = if preview.access.is_write() {
+            let access_desc = if preview.access.allows_write() {
                 "读写权限 (Read/Write)"
             } else {
                 "读取权限 (Read)"

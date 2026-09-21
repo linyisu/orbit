@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::workspace::Workspace;
+use orbit_runtime::filesystem::Workspace;
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 /// A SWE prediction must contain the complete patch. Refuse a larger patch

@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::workspace::Workspace;
+use orbit_runtime::filesystem::Workspace;
 
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_CHARS: usize = 20_000;

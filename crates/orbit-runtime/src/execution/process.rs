@@ -4,8 +4,8 @@ use std::{
     time::Duration,
 };
 
-use orbit_agent::tool::ToolError;
-use orbit_agent::verification::{VerificationEvidence, WorkspaceFingerprint};
+use crate::error::{RuntimeError, failed};
+use crate::verification::{VerificationEvidence, WorkspaceFingerprint};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_OUTPUT: usize = 32 * 1024;
@@ -125,7 +125,7 @@ pub struct OutputLog {
 }
 
 impl OutputLog {
-    pub async fn create(directory: &Path) -> Result<Self, ToolError> {
+    pub async fn create(directory: &Path) -> Result<Self, RuntimeError> {
         use std::os::unix::fs::DirBuilderExt;
 
         std::fs::DirBuilder::new()
@@ -171,7 +171,7 @@ impl OutputLog {
     }
 }
 
-fn create_output_file(path: &Path) -> Result<std::fs::File, ToolError> {
+fn create_output_file(path: &Path) -> Result<std::fs::File, RuntimeError> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .write(true)
@@ -181,7 +181,7 @@ fn create_output_file(path: &Path) -> Result<std::fs::File, ToolError> {
         .map_err(failed)
 }
 
-fn prune_output_directory(directory: &Path) -> Result<(), ToolError> {
+fn prune_output_directory(directory: &Path) -> Result<(), RuntimeError> {
     let mut entries = std::fs::read_dir(directory)
         .map_err(failed)?
         .filter_map(Result::ok)
@@ -209,8 +209,4 @@ fn prune_output_directory(directory: &Path) -> Result<(), ToolError> {
         total = total.saturating_sub(size);
     }
     Ok(())
-}
-
-fn failed(error: impl std::fmt::Display) -> ToolError {
-    ToolError::ExecutionFailed(error.to_string())
 }

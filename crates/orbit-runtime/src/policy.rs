@@ -283,7 +283,7 @@ impl PolicyEngine {
                 return PolicyDecision::Granted;
             }
 
-            if !capability.access.is_write() {
+            if !capability.access.allows_write() {
                 let is_persistent_r = self
                     .policy
                     .persistent_read

@@ -11,7 +11,8 @@ use orbit_agent::{
     tool::{Tool, ToolError, ToolRegistry},
 };
 use orbit_model::types::{ChatCompletion, ChatMessage, ChatRequest, ToolCall};
-use orbit_tools::{read_file::ReadFile, workspace::Workspace};
+use orbit_runtime::filesystem::Workspace;
+use orbit_tools::read_file::ReadFile;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -280,11 +281,11 @@ async fn read_file_can_read_granted_outside_path() {
     assert!(err.to_string().contains("permission denied"));
 
     // 2. With grant: should succeed
-    let resolved = orbit_tools::path_security::ResolvedPath::resolve(&outside_file, None).unwrap();
+    let resolved = orbit_runtime::filesystem::ResolvedPath::resolve(&outside_file, None).unwrap();
     workspace
         .policy()
-        .record_grant(orbit_tools::policy::FilesystemGrant {
-            environment: orbit_tools::capability::EnvironmentId::Local,
+        .record_grant(orbit_runtime::policy::FilesystemGrant {
+            environment: orbit_runtime::capability::EnvironmentId::Local,
             path: resolved,
             read: true,
             write: false,

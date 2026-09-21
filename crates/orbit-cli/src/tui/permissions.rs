@@ -50,10 +50,10 @@ impl Mode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbit_runtime::capability::{EnvironmentId, FilesystemAccess};
     use orbit_tools::approval::{
         CapabilityPreview, CommandPreview, DeletePreview, McpPreview, WritePreview,
     };
-    use orbit_tools::capability::{EnvironmentId, FilesystemAccess};
     use std::path::PathBuf;
 
     #[test]

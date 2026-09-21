@@ -8,9 +8,9 @@ use std::{
 
 use orbit_agent::tool::{FileChange, Tool, ToolError, ToolOutput};
 use orbit_model::types::ToolCall;
+use orbit_runtime::filesystem::Workspace;
 use orbit_tools::{
     approval::{self, ApprovalReceiver},
-    workspace::Workspace,
     write_file::WriteFile,
 };
 use serde_json::json;

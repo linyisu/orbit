@@ -2,10 +2,14 @@ use std::fs;
 
 use orbit_agent::tool::Tool;
 use orbit_model::types::ToolCall;
+use orbit_runtime::{
+    capability::EnvironmentId,
+    filesystem::{ResolvedPath, Workspace},
+    policy::FilesystemGrant,
+};
 use orbit_tools::{
-    approval, capability::EnvironmentId, edit_file::EditFile, list_files::ListFiles,
-    path_security::ResolvedPath, policy::FilesystemGrant, read_file::ReadFile,
-    search_text::SearchText, workspace::Workspace, write_file::WriteFile,
+    approval, edit_file::EditFile, list_files::ListFiles, read_file::ReadFile,
+    search_text::SearchText, write_file::WriteFile,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;

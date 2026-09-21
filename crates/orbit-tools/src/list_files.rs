@@ -9,7 +9,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::workspace::{Workspace, WorkspaceError};
+use orbit_runtime::capability::{EnvironmentId, FilesystemAccess, FilesystemCapability};
+use orbit_runtime::filesystem::{Workspace, WorkspaceError};
+use orbit_runtime::policy::PolicyDecision;
 
 const MAX_VISITED: usize = 20_000;
 const MAX_OUTPUT: usize = 32 * 1024;
@@ -107,20 +109,20 @@ fn list(
         return Err(invalid("use a workspace-relative path without '..'"));
     }
 
-    let cap = crate::capability::FilesystemCapability {
-        environment: crate::capability::EnvironmentId::Local,
+    let cap = FilesystemCapability {
+        environment: EnvironmentId::Local,
         path: target_path.to_path_buf(),
-        access: crate::capability::FilesystemAccess::Read,
+        access: FilesystemAccess::Read,
     };
     match workspace.policy().check_filesystem(&cap) {
-        crate::policy::PolicyDecision::Granted => {}
-        crate::policy::PolicyDecision::NeedsApproval(_) => {
+        PolicyDecision::Granted => {}
+        PolicyDecision::NeedsApproval(_) => {
             return Err(failed(format!(
                 "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
                 args.path
             )));
         }
-        crate::policy::PolicyDecision::Denied(reason) => {
+        PolicyDecision::Denied(reason) => {
             return Err(failed(format!("permission denied: {reason}")));
         }
     }

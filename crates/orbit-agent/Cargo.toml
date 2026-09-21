@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 async-stream.workspace = true
 orbit-model = { path = "../orbit-model" }
+orbit-runtime = { path = "../orbit-runtime" }
 serde_json.workspace = true
 serde.workspace = true
 thiserror.workspace = true
