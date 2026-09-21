@@ -100,22 +100,18 @@ impl Tool for RequestCapability {
             };
 
             match self.workspace.policy().check_filesystem(&capability) {
-                PolicyDecision::Granted => {
-                    return Ok(ToolOutput::text(
-                        json!({
-                            "status": "granted",
-                            "path": resolved.canonical().display().to_string(),
-                            "access": args.access,
-                            "message": "Capability is already granted"
-                        })
-                        .to_string(),
-                    ));
-                }
-                PolicyDecision::Denied(reason) => {
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "permission permanently denied: {reason}"
-                    )));
-                }
+                PolicyDecision::Granted => Ok(ToolOutput::text(
+                    json!({
+                        "status": "granted",
+                        "path": resolved.canonical().display().to_string(),
+                        "access": args.access,
+                        "message": "Capability is already granted"
+                    })
+                    .to_string(),
+                )),
+                PolicyDecision::Denied(reason) => Err(ToolError::ExecutionFailed(format!(
+                    "permission permanently denied: {reason}"
+                ))),
                 PolicyDecision::NeedsApproval(caps) => {
                     if cancellation.is_cancelled() {
                         return Err(ToolError::Cancelled);
@@ -186,10 +182,10 @@ fn expand_user_path(path: &str) -> String {
         if let Ok(home) = std::env::var("HOME") {
             return home;
         }
-    } else if let Some(stripped) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{stripped}");
-        }
+    } else if let Some(stripped) = path.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return format!("{home}/{stripped}");
     }
 
     path.to_string()

@@ -937,6 +937,7 @@ pub async fn run_with_resources(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_with_resources_and_output(
     workspace: Workspace,
     script: String,

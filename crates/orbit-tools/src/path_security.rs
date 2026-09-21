@@ -118,11 +118,11 @@ fn normalize_lexical(path: &Path) -> PathBuf {
             Component::RootDir => components.push(Component::RootDir),
             Component::CurDir => {}
             Component::ParentDir => {
-                if let Some(last) = components.last() {
-                    if matches!(last, Component::Normal(_)) {
-                        components.pop();
-                        continue;
-                    }
+                if let Some(last) = components.last()
+                    && matches!(last, Component::Normal(_))
+                {
+                    components.pop();
+                    continue;
                 }
                 components.push(Component::ParentDir);
             }
