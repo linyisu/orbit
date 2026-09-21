@@ -31,11 +31,19 @@ pub struct McpPreview {
 }
 
 #[derive(Clone, Debug)]
+pub struct CapabilityPreview {
+    pub environment: crate::capability::EnvironmentId,
+    pub path: std::path::PathBuf,
+    pub access: crate::capability::FilesystemAccess,
+}
+
+#[derive(Clone, Debug)]
 pub enum ApprovalPreview {
     Write(WritePreview),
     Delete(DeletePreview),
     Command(CommandPreview),
     Mcp(McpPreview),
+    Capability(CapabilityPreview),
 }
 
 pub struct ApprovalRequest {

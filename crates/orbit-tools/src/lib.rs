@@ -1,9 +1,12 @@
 pub mod approval;
+pub mod capability;
 pub mod edit_file;
 pub mod git_inspect;
 pub mod image_assets;
 pub mod list_files;
 pub mod mcp;
+pub mod path_security;
+pub mod policy;
 pub mod project_overview;
 pub mod read_command_output;
 pub mod read_document;

@@ -186,6 +186,20 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 lines,
             )
         }
+        orbit_tools::approval::ApprovalPreview::Capability(preview) => {
+            let access_desc = if preview.access.is_write() {
+                "写入权限 (Write)"
+            } else {
+                "读取权限 (Read)"
+            };
+            let lines = vec![
+                Line::from(format!("环境：{}", preview.environment)),
+                Line::from(format!("路径：{}", preview.path.display())),
+                Line::from(""),
+                Line::from("该权限仅在当前 Runtime Session 内有效，会话结束自动销毁。"),
+            ];
+            (format!("工作区外权限申请 · {access_desc}"), lines)
+        }
     };
     frame.render_widget(Paragraph::new(title), areas[0]);
     let lines = if state.approval_expanded {
