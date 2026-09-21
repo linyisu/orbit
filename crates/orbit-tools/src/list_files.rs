@@ -47,9 +47,9 @@ impl Tool for ListFiles {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "list_files",
-            "Browse workspace files and directories without running a shell. Paths are relative to the workspace root. Defaults to one directory level; depth 1–8, deterministic breadth-first ordering, paginated with offset/next_offset. Hidden entries are omitted by default; include_hidden includes hidden entries but never protected paths. Generated directories are listed but not recursively traversed; select their path explicitly to browse them. Does not apply .gitignore. Symlinks and special files are omitted. Results are bounded to 32 KiB and 20000 examined entries; narrow path if scan_truncated is true.",
+            "Browse files and directories in the workspace (or outside paths granted via request_capability) without running a shell. Paths are relative to the workspace root, or absolute paths granted via request_capability. Defaults to one directory level; depth 1–8, deterministic breadth-first ordering, paginated with offset/next_offset. Hidden entries are omitted by default; include_hidden includes hidden entries but never protected paths. Generated directories are listed but not recursively traversed; select their path explicitly to browse them. Does not apply .gitignore. Symlinks and special files are omitted. Results are bounded to 32 KiB and 20000 examined entries; narrow path if scan_truncated is true.",
             json!({"type":"object","properties":{
-                "path":{"type":"string","default":"."},
+                "path":{"type":"string","default":".","description":"Directory path (workspace-relative, or outside path granted via request_capability)"},
                 "depth":{"type":"integer","minimum":1,"maximum":8,"default":1},
                 "offset":{"type":"integer","minimum":0,"maximum":20000,"default":0},
                 "limit":{"type":"integer","minimum":1,"maximum":1000,"default":200},
@@ -99,17 +99,57 @@ fn list(
     args: Arguments,
     token: CancellationToken,
 ) -> Result<String, ToolError> {
-    let root = if Path::new(&args.path)
+    let target_path = Path::new(&args.path);
+    if target_path
         .components()
-        .all(|part| part == std::path::Component::CurDir)
+        .any(|c| matches!(c, std::path::Component::ParentDir))
     {
-        PathBuf::new()
-    } else {
-        workspace
-            .checked_relative(Path::new(&args.path))
-            .map_err(failed)?
+        return Err(invalid("use a workspace-relative path without '..'"));
+    }
+
+    let cap = crate::capability::FilesystemCapability {
+        environment: crate::capability::EnvironmentId::Local,
+        path: target_path.to_path_buf(),
+        access: crate::capability::FilesystemAccess::Read,
     };
-    workspace.open_directory(&root).map_err(failed)?;
+    match workspace.policy().check_filesystem(&cap) {
+        crate::policy::PolicyDecision::Granted => {}
+        crate::policy::PolicyDecision::NeedsApproval(_) => {
+            return Err(failed(format!(
+                "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                args.path
+            )));
+        }
+        crate::policy::PolicyDecision::Denied(reason) => {
+            return Err(failed(format!("permission denied: {reason}")));
+        }
+    }
+
+    let is_curdir = target_path
+        .components()
+        .all(|part| part == std::path::Component::CurDir);
+
+    let (root, is_external) = if is_curdir {
+        (PathBuf::new(), false)
+    } else {
+        match workspace.checked_relative(target_path) {
+            Ok(rel) => (rel, false),
+            Err(WorkspaceError::ProtectedPath) => {
+                return Err(failed(WorkspaceError::ProtectedPath));
+            }
+            Err(_) => {
+                let canonical = target_path.canonicalize().map_err(failed)?;
+                (canonical, true)
+            }
+        }
+    };
+
+    if is_external {
+        workspace.open_granted_directory(&root).map_err(failed)?;
+    } else {
+        workspace.open_directory(&root).map_err(failed)?;
+    }
+
     let mut pending = VecDeque::from([(root, 1)]);
     let mut entries: Vec<Value> = Vec::new();
     let mut visited = 0;
@@ -122,7 +162,13 @@ fn list(
         if token.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
-        let names = workspace.directory_entries(&directory).map_err(failed)?;
+        let names = if is_external {
+            workspace
+                .open_granted_directory_entries(&directory)
+                .map_err(failed)?
+        } else {
+            workspace.directory_entries(&directory).map_err(failed)?
+        };
         for name in names {
             if token.is_cancelled() {
                 return Err(ToolError::Cancelled);
@@ -140,30 +186,55 @@ fn list(
                 continue;
             }
             let path = directory.join(&name);
-            // Use the same descriptor-based opens as read_file, including protected
-            // hard-link checks. Never inspect contents or follow directory symlinks.
-            let kind = match workspace.open_read(&path) {
-                Ok(_) => "file",
-                Err(WorkspaceError::NotFile) => match workspace.open_directory(&path) {
-                    Ok(_) => {
-                        if level < args.depth
-                            && !matches!(
-                                name_text,
-                                "target" | "node_modules" | ".venv" | "__pycache__"
-                            )
-                        {
-                            pending.push_back((path.clone(), level + 1));
+            let kind = if is_external {
+                match workspace.open_granted_read(&path) {
+                    Ok(_) => "file",
+                    Err(WorkspaceError::NotFile) => match workspace.open_granted_directory(&path) {
+                        Ok(_) => {
+                            if level < args.depth
+                                && !matches!(
+                                    name_text,
+                                    "target" | "node_modules" | ".venv" | "__pycache__"
+                                )
+                            {
+                                pending.push_back((path.clone(), level + 1));
+                            }
+                            "directory"
                         }
-                        "directory"
-                    }
+                        Err(_) => {
+                            skipped += 1;
+                            continue;
+                        }
+                    },
                     Err(_) => {
                         skipped += 1;
                         continue;
                     }
-                },
-                Err(_) => {
-                    skipped += 1;
-                    continue;
+                }
+            } else {
+                match workspace.open_read(&path) {
+                    Ok(_) => "file",
+                    Err(WorkspaceError::NotFile) => match workspace.open_directory(&path) {
+                        Ok(_) => {
+                            if level < args.depth
+                                && !matches!(
+                                    name_text,
+                                    "target" | "node_modules" | ".venv" | "__pycache__"
+                                )
+                            {
+                                pending.push_back((path.clone(), level + 1));
+                            }
+                            "directory"
+                        }
+                        Err(_) => {
+                            skipped += 1;
+                            continue;
+                        }
+                    },
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
                 }
             };
             eligible += 1;

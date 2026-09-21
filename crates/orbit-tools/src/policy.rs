@@ -97,6 +97,10 @@ impl SessionGrantStore {
         self.filesystem.push(new_grant);
     }
 
+    pub fn clear(&mut self) {
+        self.filesystem.clear();
+    }
+
     /// Check whether the store grants access to the specified resolved path.
     pub fn check(
         &self,
@@ -115,7 +119,7 @@ impl SessionGrantStore {
 
             match access {
                 FilesystemAccess::Read => grant.read,
-                FilesystemAccess::Write => grant.write,
+                FilesystemAccess::ReadWrite => grant.write,
             }
         })
     }
@@ -244,6 +248,15 @@ impl PolicyEngine {
             .grant(grant);
     }
 
+    /// Clear all temporary runtime session grants.
+    pub fn clear_session_grants(&self) {
+        self.policy
+            .session_grants
+            .write()
+            .expect("session grant store lock poisoned")
+            .clear();
+    }
+
     /// Check whether a filesystem capability request is allowed under the current effective policy.
     pub fn check_filesystem(&self, capability: &FilesystemCapability) -> PolicyDecision {
         let base_dir = self.policy.base.workspace.canonical();
@@ -270,7 +283,7 @@ impl PolicyEngine {
                 return PolicyDecision::Granted;
             }
 
-            if capability.access.is_read() {
+            if !capability.access.is_write() {
                 let is_persistent_r = self
                     .policy
                     .persistent_read

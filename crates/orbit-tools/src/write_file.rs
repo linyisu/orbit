@@ -155,7 +155,9 @@ struct DeletePrepared {
 
 impl DeletePrepared {
     fn new(workspace: Workspace, path: String, expected: String) -> Result<Self, ToolError> {
-        let (parent, _) = workspace.write_parent(Path::new(&path)).map_err(failed)?;
+        let (parent, _) = workspace
+            .open_granted_write_parent(Path::new(&path))
+            .map_err(failed)?;
         let parent_metadata = parent.metadata().map_err(failed)?;
         let (before, text) = snapshot(&workspace, &path)?;
         let Some(before) = before else {
@@ -212,7 +214,10 @@ impl DeletePrepared {
     fn commit(self, cancellation: CancellationToken) -> Result<String, ToolError> {
         check_cancelled(&cancellation)?;
         let path = Path::new(&self.path);
-        let (parent, name) = self.workspace.write_parent(path).map_err(failed)?;
+        let (parent, name) = self
+            .workspace
+            .open_granted_write_parent(path)
+            .map_err(failed)?;
         let parent_metadata = parent.metadata().map_err(failed)?;
         if (parent_metadata.dev(), parent_metadata.ino()) != self.parent {
             return Err(failed(
@@ -236,7 +241,7 @@ impl Tool for WriteFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "write_file",
-            "Create or intentionally replace a whole UTF-8 file; prefer edit_file for localized changes to existing files. Write a file in an existing workspace directory after user approval of the before/after change preview. Use relative paths. Old and new content must each be at most 1 MiB. Symlinks, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
+            "Create or intentionally replace a whole UTF-8 file; prefer edit_file for localized changes to existing files. Write a file in an existing workspace directory (or outside path granted via request_capability) after user approval of the before/after change preview. Use relative paths or granted outside paths. Old and new content must each be at most 1 MiB. Symlinks, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
             json!({"type":"object", "properties":{"path":{"type":"string"},"content":{"type":"string"}}, "required":["path","content"],"additionalProperties":false}),
         )
     }
@@ -301,7 +306,7 @@ impl Prepared {
         let cap = crate::capability::FilesystemCapability {
             environment: crate::capability::EnvironmentId::Local,
             path: std::path::PathBuf::from(&args.path),
-            access: crate::capability::FilesystemAccess::Write,
+            access: crate::capability::FilesystemAccess::ReadWrite,
         };
 
         match workspace.policy().check_filesystem(&cap) {
@@ -318,7 +323,7 @@ impl Prepared {
         }
 
         let (parent, _) = workspace
-            .write_parent(Path::new(&args.path))
+            .open_granted_write_parent(Path::new(&args.path))
             .map_err(failed)?;
         let metadata = parent.metadata().map_err(failed)?;
         let (before, text) = snapshot(&workspace, &args.path)?;
@@ -378,7 +383,10 @@ impl Prepared {
     fn commit(self, cancellation: CancellationToken) -> Result<String, ToolError> {
         check_cancelled(&cancellation)?;
         let path = Path::new(&self.preview.path);
-        let (parent, name) = self.workspace.write_parent(path).map_err(failed)?;
+        let (parent, name) = self
+            .workspace
+            .open_granted_write_parent(path)
+            .map_err(failed)?;
         let metadata = parent.metadata().map_err(failed)?;
         if (metadata.dev(), metadata.ino()) != self.parent {
             return Err(failed(
@@ -409,7 +417,10 @@ impl Prepared {
         }
         file.sync_all().map_err(failed)?;
         let (now, text) = snapshot(&self.workspace, &self.preview.path)?;
-        let (current_parent, _) = self.workspace.write_parent(path).map_err(failed)?;
+        let (current_parent, _) = self
+            .workspace
+            .open_granted_write_parent(path)
+            .map_err(failed)?;
         let current = current_parent.metadata().map_err(failed)?;
         if now != self.before
             || text != self.preview.before
@@ -453,7 +464,7 @@ fn snapshot(
     workspace: &Workspace,
     path: &str,
 ) -> Result<(Option<Fingerprint>, Option<String>), ToolError> {
-    let file = match workspace.open_read(Path::new(path)) {
+    let file = match workspace.open_granted_read(Path::new(path)) {
         Ok(file) => file,
         Err(WorkspaceError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
             return Ok((None, None));

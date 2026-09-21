@@ -32,7 +32,7 @@ impl Tool for EditFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "edit_file",
-            "Edit an existing UTF-8 workspace file by exact text replacement, after approval. Read the file first. old_text must be nonempty and match exactly once unless replace_all is explicitly true. Include surrounding context to disambiguate. new_text may be empty to delete; include the existing anchor in new_text to insert. Whitespace and line endings must match exactly; no regex or fuzzy matching. Old and new files are limited to 1 MiB. Uses the same protected-path and conflict checks as write_file. Never retry a denied edit without a new user request.",
+            "Edit an existing UTF-8 file (inside workspace or outside path granted via request_capability) by exact text replacement, after approval. Read the file first. old_text must be nonempty and match exactly once unless replace_all is explicitly true. Include surrounding context to disambiguate. new_text may be empty to delete; include the existing anchor in new_text to insert. Whitespace and line endings must match exactly; no regex or fuzzy matching. Old and new files are limited to 1 MiB. Uses the same protected-path and conflict checks as write_file. Never retry a denied edit without a new user request.",
             json!({"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"},"replace_all":{"type":"boolean","default":false}},"required":["path","old_text","new_text"],"additionalProperties":false}),
         )
     }

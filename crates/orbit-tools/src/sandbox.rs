@@ -20,8 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     capability::NetworkPolicy,
-    path_security::ResolvedPath,
-    policy::{BasePolicy, EffectivePolicy},
+    policy::EffectivePolicy,
     workspace::{Workspace, WorkspaceError},
 };
 
@@ -983,8 +982,9 @@ pub async fn run_configured(
     }
     let copy_token = token.clone();
     let snapshot_limits = limits.clone();
+    let scan_workspace = workspace.clone();
     let snapshot = tokio::task::spawn_blocking(move || {
-        Snapshot::scan_configured(workspace, copy_token, true, snapshot_limits)
+        Snapshot::scan_configured(scan_workspace, copy_token, true, snapshot_limits)
     })
     .await
     .map_err(failed)??;
@@ -999,11 +999,7 @@ pub async fn run_configured(
     let backend = BwrapSandboxBackend::new()?;
     let snapshot_path = snapshot.directory.as_ref().expect("copied snapshot").path();
 
-    let base = BasePolicy {
-        workspace: ResolvedPath::resolve(snapshot_path, None).map_err(failed)?,
-        network: NetworkPolicy::Deny,
-    };
-    let policy = EffectivePolicy::new(base);
+    let policy = workspace.policy().effective_policy();
 
     let mut spec = ProcessSpec::new(&script, timeout);
     spec.scratch = scratch.map(Path::to_path_buf);
@@ -1018,7 +1014,7 @@ pub async fn run_configured(
 
     let child = backend
         .build_command(
-            &policy,
+            policy,
             script_file.path(),
             &spec,
             Some(snapshot_path),
@@ -1030,15 +1026,21 @@ pub async fn run_configured(
         .map_err(failed)?;
 
     let sandbox_label = if writable_snapshot {
-        "bubblewrap; no network; disposable writable workspace snapshot; changes discarded"
+        "bubblewrap; disposable writable workspace snapshot; changes discarded"
     } else {
-        "bubblewrap; no network; read-only filtered workspace snapshot"
+        "bubblewrap; read-only filtered workspace snapshot"
+    };
+
+    let network_desc = if policy.base.network.is_allowed() {
+        "network allowed"
+    } else {
+        "no network"
     };
 
     let verification = Some(VerificationEvidence {
         input: snapshot.fingerprint,
         platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-        isolation: "bubblewrap; no network; filtered source snapshot".into(),
+        isolation: format!("bubblewrap; {network_desc}; filtered source snapshot"),
         rust_toolchain: rust_toolchain.map(|p| p.display().to_string()),
         writable_snapshot,
         persistent_scratch: scratch.is_some(),

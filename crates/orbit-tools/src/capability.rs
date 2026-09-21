@@ -35,16 +35,24 @@ impl std::fmt::Display for EnvironmentId {
 #[serde(rename_all = "snake_case")]
 pub enum FilesystemAccess {
     Read,
-    Write,
+    #[serde(rename = "read_write", alias = "write")]
+    ReadWrite,
 }
 
 impl FilesystemAccess {
     pub fn is_read(&self) -> bool {
-        matches!(self, Self::Read)
+        true
     }
 
     pub fn is_write(&self) -> bool {
-        matches!(self, Self::Write)
+        matches!(self, Self::ReadWrite)
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::ReadWrite => "read and write",
+        }
     }
 }
 
@@ -73,8 +81,12 @@ impl FilesystemCapability {
         Self::new(EnvironmentId::local(), path, FilesystemAccess::Read)
     }
 
+    pub fn local_read_write(path: impl Into<PathBuf>) -> Self {
+        Self::new(EnvironmentId::local(), path, FilesystemAccess::ReadWrite)
+    }
+
     pub fn local_write(path: impl Into<PathBuf>) -> Self {
-        Self::new(EnvironmentId::local(), path, FilesystemAccess::Write)
+        Self::local_read_write(path)
     }
 }
 
@@ -114,8 +126,25 @@ mod tests {
         assert_eq!(cap.environment, EnvironmentId::Local);
         assert_eq!(cap.path, PathBuf::from("/data/models"));
         assert_eq!(cap.access, FilesystemAccess::Read);
+        assert!(cap.access.is_read());
+        assert!(!cap.access.is_write());
+        assert_eq!(cap.access.description(), "read");
+
+        let cap_rw = FilesystemCapability::local_read_write("/data/output");
+        assert_eq!(cap_rw.access, FilesystemAccess::ReadWrite);
+        assert!(cap_rw.access.is_read());
+        assert!(cap_rw.access.is_write());
+        assert_eq!(cap_rw.access.description(), "read and write");
 
         let cap_write = FilesystemCapability::local_write("/data/output");
-        assert_eq!(cap_write.access, FilesystemAccess::Write);
+        assert_eq!(cap_write.access, FilesystemAccess::ReadWrite);
+
+        // Serde test: "read_write" and "write" alias
+        let parsed_rw: FilesystemAccess = serde_json::from_str("\"read_write\"").unwrap();
+        assert_eq!(parsed_rw, FilesystemAccess::ReadWrite);
+        let parsed_alias: FilesystemAccess = serde_json::from_str("\"write\"").unwrap();
+        assert_eq!(parsed_alias, FilesystemAccess::ReadWrite);
+        let parsed_r: FilesystemAccess = serde_json::from_str("\"read\"").unwrap();
+        assert_eq!(parsed_r, FilesystemAccess::Read);
     }
 }

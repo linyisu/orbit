@@ -40,7 +40,7 @@ impl Tool for RequestCapability {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "request_capability",
-            "Request permission to access a file or directory outside the workspace. Prompts the user with an approval dialog with the requested path, access level ('read' or 'write'), and reason. If approved, access is granted for the remainder of this session.",
+            "Request permission to access a file or directory outside the workspace. Prompts the user with an approval dialog with the requested path, access level ('read' or 'read_write'), and reason. If approved, access is granted for the remainder of this session.",
             json!({
                 "type": "object",
                 "properties": {
@@ -50,8 +50,8 @@ impl Tool for RequestCapability {
                     },
                     "access": {
                         "type": "string",
-                        "enum": ["read", "write"],
-                        "description": "Requested access level: 'read' for read-only, 'write' for read and write"
+                        "enum": ["read", "read_write", "write"],
+                        "description": "Requested access level: 'read' for read-only, 'read_write' (or 'write') for read and write"
                     },
                     "reason": {
                         "type": "string",
@@ -79,10 +79,10 @@ impl Tool for RequestCapability {
 
             let access = match args.access.trim() {
                 "read" => FilesystemAccess::Read,
-                "write" => FilesystemAccess::Write,
+                "read_write" | "write" => FilesystemAccess::ReadWrite,
                 other => {
                     return Err(invalid(format!(
-                        "access must be 'read' or 'write', got '{other}'"
+                        "access must be 'read' or 'write' (or 'read_write'), got '{other}'"
                     )));
                 }
             };
@@ -104,7 +104,7 @@ impl Tool for RequestCapability {
                     json!({
                         "status": "granted",
                         "path": resolved.canonical().display().to_string(),
-                        "access": args.access,
+                        "access": capability.access.description(),
                         "message": "Capability is already granted"
                     })
                     .to_string(),
@@ -157,7 +157,7 @@ impl Tool for RequestCapability {
                             environment: cap.environment,
                             path: grant_path,
                             read: true,
-                            write: cap.access == FilesystemAccess::Write,
+                            write: cap.access.is_write(),
                         };
 
                         self.workspace.policy().record_grant(grant);
@@ -167,7 +167,7 @@ impl Tool for RequestCapability {
                         json!({
                             "status": "granted",
                             "path": resolved.canonical().display().to_string(),
-                            "access": args.access
+                            "access": capability.access.description()
                         })
                         .to_string(),
                     ))

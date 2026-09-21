@@ -42,11 +42,11 @@ impl Tool for ReadFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_file",
-            "Read a UTF-8 file inside the current workspace. Use a relative path and optional 1-based start_line/max_lines. Returns JSON with numbered lines. Symlinks and protected configuration files are rejected. Maximum file size: 1 MiB; maximum content field: 32 KiB.",
+            "Read a UTF-8 file inside the workspace (or outside path granted via request_capability). Use a relative path or granted outside path, and optional 1-based start_line/max_lines. Returns JSON with numbered lines. Symlinks and protected configuration files are rejected. Maximum file size: 1 MiB; maximum content field: 32 KiB.",
             json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Path relative to the workspace root" },
+                    "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" },
                     "start_line": { "type": "integer", "minimum": 1, "default": 1 },
                     "max_lines": { "type": "integer", "minimum": 1, "maximum": 500, "default": 200 }
                 },

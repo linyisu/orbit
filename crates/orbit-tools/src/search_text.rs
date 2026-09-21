@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, WorkspaceError};
 
 const MAX_VISITED: usize = 20_000;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -65,7 +65,7 @@ impl Tool for SearchText {
         ToolDefinition::function(
             "search_text",
             concat!(
-                "Search UTF-8 text files in the workspace without running a shell. ",
+                "Search UTF-8 text files in the workspace (or outside paths granted via request_capability) without running a shell. ",
                 "IMPORTANT: regex defaults to false. With regex=false or omitted, the entire query is literal: ",
                 "a|b searches for the actual text a|b, NOT either a or b. ",
                 "To search alternatives, send {\"query\":\"a|b\",\"regex\":true}; ",
@@ -75,13 +75,13 @@ impl Tool for SearchText {
                 "Both modes are case-insensitive unless case_sensitive=true. ",
                 "If a query returns no matches, check the returned regex mode and query before concluding the text is absent. ",
                 "Uses .gitignore and .ignore rules, never follows symlinks, and excludes protected metadata such as .git and .env. ",
-                "Optionally narrow with a workspace-relative path or glob such as **/*.rs. ",
+                "Optionally narrow with a workspace-relative path, outside granted path, or glob such as **/*.rs. ",
                 "Results have path, 1-based line/column, text and surrounding lines. Paginate matches with offset/next_offset. ",
                 "Large, binary and unreadable files are skipped; use read_file for full content after locating a match."
             ),
             json!({"type":"object","properties":{
                 "query":{"type":"string","description":"Search text. Literal unless regex=true: a|b means the literal pipe expression by default. For either term, use query=a|b AND regex=true. Do not add shell quotes or /regex/ delimiters."},
-                "path":{"type":"string","default":".","description":"Workspace-relative directory or file"},
+                "path":{"type":"string","default":".","description":"Workspace-relative directory or file, or outside path granted via request_capability"},
                 "regex":{"type":"boolean","default":false,"description":"false or omitted: exact literal substring matching, including | . * [ ] ^ $. true: interpret query as a Rust regular expression. REQUIRED for alternatives such as foo|bar; never inferred from query content."},
                 "case_sensitive":{"type":"boolean","default":false},
                 "glob":{"type":"string","description":"Optional glob filter, for example **/*.rs"},
@@ -138,36 +138,48 @@ fn validate(args: &Arguments) -> Result<(), ToolError> {
     Ok(())
 }
 
+enum SearchScope {
+    Workspace(PathBuf),
+    External(PathBuf),
+}
+
 fn search(
     workspace: Workspace,
     args: Arguments,
     token: CancellationToken,
 ) -> Result<String, ToolError> {
-    let scope = scope(&workspace, &args.path)?;
+    let search_scope = scope(&workspace, &args.path)?;
     let matcher = compile_pattern(&args)?;
     let glob = compile_glob(args.glob.as_deref())?;
 
-    let root = workspace.root().to_owned();
+    let (root, filter_scope, is_external) = match search_scope {
+        SearchScope::Workspace(scope) => (workspace.root().to_owned(), scope, false),
+        SearchScope::External(ext_root) => (ext_root, PathBuf::new(), true),
+    };
+
     let filter_workspace = workspace.clone();
-    let filter_scope = scope.clone();
+    let filter_scope_clone = filter_scope.clone();
     let mut walker = WalkBuilder::new(&root);
     walker
         .hidden(!args.include_hidden)
         .parents(false)
         .follow_links(false)
         .max_filesize(Some(MAX_FILE_BYTES))
-        .sort_by_file_name(|left, right| left.cmp(right))
-        .filter_entry(move |entry| {
+        .sort_by_file_name(|left, right| left.cmp(right));
+
+    if !is_external {
+        walker.filter_entry(move |entry| {
             let Ok(relative) = entry.path().strip_prefix(filter_workspace.root()) else {
                 return false;
             };
-            let within_scope = filter_scope.as_os_str().is_empty()
-                || relative.starts_with(&filter_scope)
-                || filter_scope.starts_with(relative);
+            let within_scope = filter_scope_clone.as_os_str().is_empty()
+                || relative.starts_with(&filter_scope_clone)
+                || filter_scope_clone.starts_with(relative);
             within_scope
                 && (relative.as_os_str().is_empty()
                     || filter_workspace.checked_relative(relative).is_ok())
         });
+    }
 
     let mut matches = Vec::new();
     let mut matched = 0;
@@ -195,27 +207,37 @@ fn search(
         }
         if visited >= MAX_VISITED {
             scan_truncated = true;
-            break;
+            break 'files;
         }
         visited += 1;
-        let relative = match entry.path().strip_prefix(workspace.root()) {
-            Ok(path) if workspace.checked_relative(path).is_ok() => path,
-            _ => {
-                skipped_files += 1;
+
+        let (relative_or_path, file_result) = if is_external {
+            let path = entry.path().to_path_buf();
+            let file = workspace.open_granted_read(&path);
+            (path, file)
+        } else {
+            let relative = match entry.path().strip_prefix(workspace.root()) {
+                Ok(path) if workspace.checked_relative(path).is_ok() => path.to_path_buf(),
+                _ => {
+                    skipped_files += 1;
+                    continue;
+                }
+            };
+            if !filter_scope.as_os_str().is_empty() && !relative.starts_with(&filter_scope) {
                 continue;
             }
+            let file = workspace.open_read(&relative);
+            (relative, file)
         };
-        if !scope.as_os_str().is_empty() && !relative.starts_with(&scope) {
-            continue;
-        }
+
         if glob
             .as_ref()
-            .is_some_and(|matcher| !matcher.is_match(relative))
+            .is_some_and(|matcher| !matcher.is_match(&relative_or_path))
         {
             continue;
         }
 
-        let mut file = match workspace.open_read(relative) {
+        let mut file = match file_result {
             Ok(file) => file,
             Err(_) => {
                 skipped_files += 1;
@@ -258,7 +280,14 @@ fn search(
                 if matched <= args.offset {
                     continue;
                 }
-                let entry = match_entry(relative, line_index, line, found.start(), &lines, &args);
+                let entry = match_entry(
+                    &relative_or_path,
+                    line_index,
+                    line,
+                    found.start(),
+                    &lines,
+                    &args,
+                );
                 let size = entry.to_string().len() + 1;
                 if matches.len() == args.limit || output_bytes + size > MAX_OUTPUT_BYTES - 1024 {
                     has_more = true;
@@ -285,22 +314,64 @@ fn search(
     .to_string())
 }
 
-fn scope(workspace: &Workspace, path: &str) -> Result<PathBuf, ToolError> {
-    if Path::new(path)
+fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
+    let target_path = Path::new(path);
+    if target_path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(invalid("use a workspace-relative path without '..'"));
+    }
+
+    let cap = crate::capability::FilesystemCapability {
+        environment: crate::capability::EnvironmentId::Local,
+        path: target_path.to_path_buf(),
+        access: crate::capability::FilesystemAccess::Read,
+    };
+    match workspace.policy().check_filesystem(&cap) {
+        crate::policy::PolicyDecision::Granted => {}
+        crate::policy::PolicyDecision::NeedsApproval(_) => {
+            return Err(failed(format!(
+                "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                path
+            )));
+        }
+        crate::policy::PolicyDecision::Denied(reason) => {
+            return Err(failed(format!("permission denied: {reason}")));
+        }
+    }
+
+    if target_path
         .components()
         .all(|component| component == std::path::Component::CurDir)
     {
-        return Ok(PathBuf::new());
+        return Ok(SearchScope::Workspace(PathBuf::new()));
     }
-    let relative = workspace
-        .checked_relative(Path::new(path))
-        .map_err(|error| invalid(error.to_string()))?;
-    if workspace.open_directory(&relative).is_err() && workspace.open_read(&relative).is_err() {
-        return Err(invalid(
-            "path must name a readable workspace file or directory",
-        ));
+
+    match workspace.checked_relative(target_path) {
+        Ok(relative) => {
+            if workspace.open_directory(&relative).is_err()
+                && workspace.open_read(&relative).is_err()
+            {
+                return Err(invalid(
+                    "path must name a readable workspace file or directory",
+                ));
+            }
+            Ok(SearchScope::Workspace(relative))
+        }
+        Err(WorkspaceError::ProtectedPath) => {
+            Err(invalid(WorkspaceError::ProtectedPath.to_string()))
+        }
+        Err(_) => {
+            let canonical = target_path.canonicalize().map_err(failed)?;
+            if workspace.open_granted_directory(&canonical).is_err()
+                && workspace.open_granted_read(&canonical).is_err()
+            {
+                return Err(invalid("path must name a readable file or directory"));
+            }
+            Ok(SearchScope::External(canonical))
+        }
     }
-    Ok(relative)
 }
 
 fn compile_pattern(args: &Arguments) -> Result<Regex, ToolError> {

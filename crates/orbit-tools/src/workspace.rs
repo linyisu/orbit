@@ -170,13 +170,113 @@ impl Workspace {
         Ok(directory)
     }
 
-    pub(crate) fn directory_entries(
+    fn check_protected_metadata(&self, metadata: &std::fs::Metadata) -> Result<(), WorkspaceError> {
+        use std::os::unix::fs::MetadataExt;
+        for protected in &self.protected {
+            if let Ok(other) = protected.metadata() {
+                if metadata.dev() == other.dev() && metadata.ino() == other.ino() {
+                    return Err(WorkspaceError::ProtectedPath);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn check_protected_path(&self, canonical: &Path) -> Result<(), WorkspaceError> {
+        for protected in &self.protected {
+            if canonical.starts_with(protected) {
+                return Err(WorkspaceError::ProtectedPath);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn open_granted_write_parent(
         &self,
         path: &Path,
+    ) -> Result<(File, std::ffi::OsString), WorkspaceError> {
+        match self.write_parent(path) {
+            Ok(res) => Ok(res),
+            Err(WorkspaceError::ProtectedPath) => Err(WorkspaceError::ProtectedPath),
+            Err(WorkspaceError::NotFile) => Err(WorkspaceError::NotFile),
+            Err(WorkspaceError::NotDirectory) => Err(WorkspaceError::NotDirectory),
+            Err(WorkspaceError::Io(err)) => Err(WorkspaceError::Io(err)),
+            Err(WorkspaceError::InvalidPath) => {
+                let resolved =
+                    ResolvedPath::resolve(path, Some(&self.path)).map_err(WorkspaceError::Io)?;
+                let canonical = resolved.canonical();
+                self.check_protected_path(canonical)?;
+
+                let parent_path = canonical.parent().ok_or(WorkspaceError::InvalidPath)?;
+                let file_name = canonical
+                    .file_name()
+                    .ok_or(WorkspaceError::InvalidPath)?
+                    .to_os_string();
+
+                let name_text = file_name.to_string_lossy();
+                if matches!(name_text.as_ref(), ".git" | ".env")
+                    || name_text.starts_with(".env.")
+                    || name_text.starts_with(".orbit-write-")
+                {
+                    return Err(WorkspaceError::ProtectedPath);
+                }
+
+                let parent_file = File::open(parent_path)?;
+                let parent_meta = parent_file.metadata()?;
+                if !parent_meta.is_dir() {
+                    return Err(WorkspaceError::NotDirectory);
+                }
+                self.check_protected_metadata(&parent_meta)?;
+
+                use std::os::unix::fs::MetadataExt;
+                let parent_symlink_meta = std::fs::symlink_metadata(parent_path)?;
+                if parent_meta.dev() != parent_symlink_meta.dev()
+                    || parent_meta.ino() != parent_symlink_meta.ino()
+                {
+                    return Err(WorkspaceError::Io(io::Error::other(
+                        "parent directory changed or swapped",
+                    )));
+                }
+
+                Ok((parent_file, file_name))
+            }
+        }
+    }
+
+    pub fn open_granted_directory(&self, path: &Path) -> Result<File, WorkspaceError> {
+        match self.open_directory(path) {
+            Ok(file) => Ok(file),
+            Err(WorkspaceError::ProtectedPath) => Err(WorkspaceError::ProtectedPath),
+            Err(WorkspaceError::NotFile) => Err(WorkspaceError::NotFile),
+            Err(WorkspaceError::NotDirectory) => Err(WorkspaceError::NotDirectory),
+            Err(WorkspaceError::Io(err)) => Err(WorkspaceError::Io(err)),
+            Err(WorkspaceError::InvalidPath) => {
+                let canonical = path.canonicalize()?;
+                self.check_protected_path(&canonical)?;
+
+                let dir = File::open(&canonical)?;
+                let meta = dir.metadata()?;
+                if !meta.is_dir() {
+                    return Err(WorkspaceError::NotDirectory);
+                }
+                use std::os::unix::fs::MetadataExt;
+                let symlink_meta = std::fs::symlink_metadata(&canonical)?;
+                if meta.dev() != symlink_meta.dev() || meta.ino() != symlink_meta.ino() {
+                    return Err(WorkspaceError::Io(io::Error::other(
+                        "directory swapped during open",
+                    )));
+                }
+                self.check_protected_metadata(&meta)?;
+                Ok(dir)
+            }
+        }
+    }
+
+    pub fn read_directory_entries(
+        directory: &File,
     ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
         use std::os::unix::ffi::OsStrExt;
-        let directory = self.open_directory(path)?;
-        let entries = rustix::fs::Dir::read_from(&directory).map_err(io::Error::from)?;
+        let entries = rustix::fs::Dir::read_from(directory).map_err(io::Error::from)?;
         let mut names = Vec::new();
         for entry in entries {
             let entry = entry.map_err(io::Error::from)?;
@@ -190,6 +290,22 @@ impl Workspace {
         }
         names.sort();
         Ok(names)
+    }
+
+    pub fn open_granted_directory_entries(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
+        let directory = self.open_granted_directory(path)?;
+        Self::read_directory_entries(&directory)
+    }
+
+    pub(crate) fn directory_entries(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
+        let directory = self.open_directory(path)?;
+        Self::read_directory_entries(&directory)
     }
 
     pub fn open_read(&self, path: &Path) -> Result<File, WorkspaceError> {
@@ -235,21 +351,49 @@ impl Workspace {
             Err(WorkspaceError::Io(err)) => Err(WorkspaceError::Io(err)),
             Err(WorkspaceError::InvalidPath) => {
                 let canonical = path.canonicalize()?;
-                let file = File::open(&canonical)?;
+                self.check_protected_path(&canonical)?;
+
+                let parent_path = canonical.parent().ok_or(WorkspaceError::InvalidPath)?;
+                let file_name = canonical.file_name().ok_or(WorkspaceError::InvalidPath)?;
+
+                let parent_file = File::open(parent_path)?;
+                let parent_meta = parent_file.metadata()?;
+                if !parent_meta.is_dir() {
+                    return Err(WorkspaceError::NotDirectory);
+                }
+                self.check_protected_metadata(&parent_meta)?;
+
+                use std::os::unix::fs::MetadataExt;
+                let parent_symlink_meta = std::fs::symlink_metadata(parent_path)?;
+                if parent_meta.dev() != parent_symlink_meta.dev()
+                    || parent_meta.ino() != parent_symlink_meta.ino()
+                {
+                    return Err(WorkspaceError::Io(io::Error::other(
+                        "parent directory swapped during open",
+                    )));
+                }
+
+                let fd = openat(
+                    &parent_file,
+                    file_name,
+                    OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+                    Mode::empty(),
+                )
+                .map_err(io::Error::from)?;
+                let file = File::from(fd);
                 let metadata = file.metadata()?;
                 if !metadata.is_file() {
                     return Err(WorkspaceError::NotFile);
                 }
 
-                for protected in &self.protected {
-                    if let Ok(other) = protected.metadata() {
-                        use std::os::unix::fs::MetadataExt;
-                        if metadata.dev() == other.dev() && metadata.ino() == other.ino() {
-                            return Err(WorkspaceError::ProtectedPath);
-                        }
-                    }
+                let canon_meta = canonical.metadata()?;
+                if metadata.dev() != canon_meta.dev() || metadata.ino() != canon_meta.ino() {
+                    return Err(WorkspaceError::Io(io::Error::other(
+                        "file inode changed during open",
+                    )));
                 }
 
+                self.check_protected_metadata(&metadata)?;
                 Ok(file)
             }
         }

@@ -188,13 +188,14 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         }
         orbit_tools::approval::ApprovalPreview::Capability(preview) => {
             let access_desc = if preview.access.is_write() {
-                "写入权限 (Write)"
+                "读写权限 (Read/Write)"
             } else {
                 "读取权限 (Read)"
             };
             let lines = vec![
                 Line::from(format!("环境：{}", preview.environment)),
                 Line::from(format!("路径：{}", preview.path.display())),
+                Line::from(format!("权限：{}", preview.access.description())),
                 Line::from(format!("理由：{}", preview.reason)),
                 Line::from(""),
                 Line::from("该权限仅在当前 Runtime Session 内有效，会话结束自动销毁。"),
