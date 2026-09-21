@@ -156,6 +156,17 @@ pub struct EffectivePolicy {
     pub session_grants: Arc<RwLock<SessionGrantStore>>,
 }
 
+impl EffectivePolicy {
+    pub fn new(base: BasePolicy) -> Self {
+        Self {
+            base,
+            persistent_read: Vec::new(),
+            persistent_read_write: Vec::new(),
+            session_grants: Arc::new(RwLock::new(SessionGrantStore::new())),
+        }
+    }
+}
+
 /// Decision made by the policy engine when a capability is evaluated.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PolicyDecision {

@@ -18,14 +18,22 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::workspace::{Workspace, WorkspaceError};
+use crate::{
+    capability::NetworkPolicy,
+    path_security::ResolvedPath,
+    policy::{BasePolicy, EffectivePolicy},
+    workspace::{Workspace, WorkspaceError},
+};
 
 const MAX_OUTPUT: usize = 32 * 1024;
 const MIB: usize = 1024 * 1024;
-/// A single command may retain enough output for a large compiler or test log,
-/// without making a runaway process capable of filling the user's disk.
 pub const MAX_RETAINED_OUTPUT_PER_STREAM: u64 = 16 * 1024 * 1024;
 pub const MAX_RETAINED_OUTPUT_PER_SESSION: u64 = 128 * 1024 * 1024;
+const TMP_SIZE_BYTES: u64 = 64 * 1024 * 1024;
+const DEFAULT_MAX_MEMORY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
+const DEFAULT_MAX_PROCESSES: u64 = 1024;
+const DEFAULT_MAX_OPEN_FILES: u64 = 1024;
 static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize)]
@@ -333,83 +341,271 @@ pub async fn fingerprint_configured(
     .map_err(failed)?
 }
 
-fn command(
-    snapshot: &Path,
-    script: &Path,
-    writable_snapshot: bool,
-    _timeout: Duration,
-    limits: &crate::run_command::CommandLimits,
-    scratch: Option<&Path>,
-) -> Result<Command, ToolError> {
-    let rust_toolchain = limits.rust_toolchain.as_deref();
-    use std::os::unix::fs::MetadataExt;
-    let executable = PathBuf::from("/usr/bin/bwrap");
-    let metadata = executable.metadata().map_err(|_| failed("sandbox unavailable: install Bubblewrap at /usr/bin/bwrap; refusing unsandboxed execution"))?;
-    if !metadata.is_file() || metadata.mode() & 0o6000 != 0 {
-        return Err(failed(
-            "sandbox unavailable: setuid/setgid Bubblewrap is not supported",
-        ));
+#[derive(Clone, Debug)]
+pub struct ProcessLimits {
+    pub max_memory_bytes: u64,
+    pub max_file_size_bytes: u64,
+    pub max_processes: u64,
+    pub max_open_files: u64,
+}
+
+impl Default for ProcessLimits {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: DEFAULT_MAX_MEMORY_BYTES,
+            max_file_size_bytes: DEFAULT_MAX_FILE_SIZE_BYTES,
+            max_processes: DEFAULT_MAX_PROCESSES,
+            max_open_files: DEFAULT_MAX_OPEN_FILES,
+        }
     }
-    if !Path::new("/usr/bin/prlimit").is_file() {
-        return Err(failed(
-            "sandbox unavailable: /usr/bin/prlimit is required for resource limits",
-        ));
+}
+
+#[derive(Clone, Debug)]
+pub struct ProcessSpec {
+    pub command: String,
+    pub timeout: Duration,
+    pub scratch: Option<PathBuf>,
+    pub limits: ProcessLimits,
+    pub read_only_workspace: bool,
+}
+
+impl ProcessSpec {
+    pub fn new(command: impl Into<String>, timeout: Duration) -> Self {
+        Self {
+            command: command.into(),
+            timeout,
+            scratch: None,
+            limits: ProcessLimits::default(),
+            read_only_workspace: false,
+        }
     }
-    let mut command = Command::new(executable);
-    command
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+}
+
+/// Abstract execution backend for running sandboxed commands.
+pub trait SandboxBackend: Send + Sync {
+    fn run<'a>(
+        &'a self,
+        spec: ProcessSpec,
+        policy: &'a EffectivePolicy,
+        output_log: Option<OutputLog>,
+        cancellation: CancellationToken,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<CommandResult, ToolError>> + Send + 'a>,
+    >;
+}
+
+/// Linux Bubblewrap sandbox backend implementing capability-driven isolation.
+pub struct BwrapSandboxBackend {
+    bwrap_path: PathBuf,
+    prlimit_path: PathBuf,
+}
+
+impl BwrapSandboxBackend {
+    pub fn new() -> Result<Self, ToolError> {
+        let bwrap_path = find_executable("bwrap").ok_or_else(|| {
+            failed("sandbox unavailable: install Bubblewrap at /usr/bin/bwrap; refusing unsandboxed execution")
+        })?;
+
+        let prlimit_path = find_executable("prlimit").ok_or_else(|| {
+            failed("sandbox unavailable: /usr/bin/prlimit is required for resource limits")
+        })?;
+
+        use std::os::unix::fs::MetadataExt;
+        let metadata = bwrap_path.metadata().map_err(failed)?;
+        if !metadata.is_file() || metadata.mode() & 0o6000 != 0 {
+            return Err(failed(
+                "sandbox unavailable: setuid/setgid Bubblewrap is not supported",
+            ));
+        }
+
+        Ok(Self {
+            bwrap_path,
+            prlimit_path,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_command(
+        &self,
+        policy: &EffectivePolicy,
+        script_path: &Path,
+        spec: &ProcessSpec,
+        custom_workspace: Option<&Path>,
+        writable_snapshot_source: Option<&Path>,
+        rust_toolchain: Option<&Path>,
+        dependency_caches: &[crate::run_command::DependencyCache],
+    ) -> Result<Command, ToolError> {
+        let mut command = Command::new(&self.bwrap_path);
+
+        command
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        configure_isolation(&mut command, policy.base.network);
+        mount_system_paths(&mut command, policy.base.network);
+
+        command
+            .arg("--ro-bind")
+            .arg(script_path)
+            .arg("/orbit-command.sh");
+
+        if let Some(source) = writable_snapshot_source {
+            command.arg("--ro-bind").arg(source).arg("/orbit-source");
+            command.args([
+                "--size",
+                &spec.limits.max_file_size_bytes.to_string(),
+                "--tmpfs",
+                "/workspace",
+            ]);
+        } else {
+            let ws_target = custom_workspace.unwrap_or_else(|| policy.base.workspace.canonical());
+            if spec.read_only_workspace {
+                command.arg("--ro-bind").arg(ws_target).arg("/workspace");
+            } else {
+                command.arg("--bind").arg(ws_target).arg("/workspace");
+            }
+        }
+
+        mount_scratch_and_tmp(&mut command, spec.scratch.as_deref())?;
+        mount_toolchains_and_caches(&mut command, rust_toolchain, dependency_caches)?;
+        mount_capabilities(&mut command, policy)?;
+
+        configure_limits_and_entrypoint(
+            &mut command,
+            &self.prlimit_path,
+            &spec.limits,
+            rust_toolchain.is_some(),
+            writable_snapshot_source.is_some(),
+        );
+
+        Ok(command)
+    }
+}
+
+impl SandboxBackend for BwrapSandboxBackend {
+    fn run<'a>(
+        &'a self,
+        spec: ProcessSpec,
+        policy: &'a EffectivePolicy,
+        output_log: Option<OutputLog>,
+        cancellation: CancellationToken,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<CommandResult, ToolError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let mut script_file = tempfile::NamedTempFile::new().map_err(failed)?;
+            script_file
+                .write_all(spec.command.as_bytes())
+                .map_err(failed)?;
+            script_file.flush().map_err(failed)?;
+
+            let child = self
+                .build_command(policy, script_file.path(), &spec, None, None, None, &[])?
+                .spawn()
+                .map_err(failed)?;
+
+            run_child_process(
+                child,
+                spec.timeout,
+                cancellation,
+                output_log,
+                "bubblewrap; capability policy sandbox",
+                spec.scratch.is_some(),
+                0,
+                0,
+                None,
+            )
+            .await
+        })
+    }
+}
+
+fn configure_isolation(command: &mut Command, network: NetworkPolicy) {
     command.args([
-        "--unshare-all",
         "--unshare-user",
         "--disable-userns",
         "--die-with-parent",
         "--new-session",
         "--cap-drop",
         "ALL",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--unshare-cgroup-try",
     ]);
+
+    if network == NetworkPolicy::Deny {
+        command.arg("--unshare-net");
+    }
+}
+
+fn mount_system_paths(command: &mut Command, network: NetworkPolicy) {
     for path in ["/usr", "/bin", "/sbin", "/lib", "/lib64"] {
         if Path::new(path).exists() {
             command.args(["--ro-bind", path, path]);
         }
     }
+
     if Path::new("/etc/ld.so.cache").exists() {
         command.args(["--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache"]);
     }
-    command
-        .arg("--ro-bind")
-        .arg(script)
-        .arg("/orbit-command.sh");
-    if writable_snapshot {
-        command.arg("--ro-bind").arg(snapshot).arg("/orbit-source");
-        command.args([
-            "--size",
-            &(limits.writable_snapshot_mib * MIB).to_string(),
-            "--tmpfs",
-            "/workspace",
-        ]);
-    } else {
-        command.arg("--ro-bind").arg(snapshot).arg("/workspace");
-    }
-    if let Some(path) = scratch {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(path)
-            .map_err(failed)?;
-        if std::fs::symlink_metadata(path)
-            .map_err(failed)?
-            .file_type()
-            .is_symlink()
-        {
-            return Err(failed("scratch directory must not be a symlink"));
+
+    if network == NetworkPolicy::Allow {
+        for path in [
+            "/etc/resolv.conf",
+            "/etc/hosts",
+            "/etc/ssl",
+            "/etc/pki",
+            "/etc/ca-certificates",
+        ] {
+            if Path::new(path).exists() {
+                command.args(["--ro-bind", path, path]);
+            }
         }
-        command.arg("--bind").arg(path).arg("/scratch");
     }
+}
+
+fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result<(), ToolError> {
+    for path in &policy.persistent_read_write {
+        let canonical = path.canonical();
+        if canonical.exists() {
+            command.arg("--bind").arg(canonical).arg(canonical);
+        }
+    }
+
+    for path in &policy.persistent_read {
+        let canonical = path.canonical();
+        if canonical.exists() {
+            command.arg("--ro-bind").arg(canonical).arg(canonical);
+        }
+    }
+
+    if let Ok(store) = policy.session_grants.read() {
+        for grant in store.grants() {
+            if grant.environment.is_local() {
+                let canonical = grant.path.canonical();
+                if canonical.exists() {
+                    if grant.write {
+                        command.arg("--bind").arg(canonical).arg(canonical);
+                    } else if grant.read {
+                        command.arg("--ro-bind").arg(canonical).arg(canonical);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn mount_toolchains_and_caches(
+    command: &mut Command,
+    rust_toolchain: Option<&Path>,
+    dependency_caches: &[crate::run_command::DependencyCache],
+) -> Result<(), ToolError> {
     if let Some(path) = rust_toolchain {
         let path = path.canonicalize().map_err(failed)?;
         if !path.join("bin/rustc").is_file()
@@ -420,35 +616,76 @@ fn command(
                 "configured Rust toolchain must contain bin/rustc, bin/cargo and lib/rustlib",
             ));
         }
+
         command.arg("--ro-bind").arg(path).arg("/opt/orbit-rust");
     }
-    for cache in &limits.dependency_caches {
+
+    for cache in dependency_caches {
         let path = cache.path.canonicalize().map_err(failed)?;
         if !path.is_dir() {
             return Err(failed("configured dependency cache must be a directory"));
         }
+
         command
             .arg("--ro-bind")
             .arg(path)
             .arg(format!("/opt/orbit-cache/{}", cache.name));
     }
+
+    Ok(())
+}
+
+fn mount_scratch_and_tmp(command: &mut Command, scratch: Option<&Path>) -> Result<(), ToolError> {
+    if let Some(path) = scratch {
+        use std::os::unix::fs::DirBuilderExt;
+
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
+            .map_err(failed)?;
+
+        if std::fs::symlink_metadata(path)
+            .map_err(failed)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(failed("scratch directory must not be a symlink"));
+        }
+
+        command.arg("--bind").arg(path).arg("/scratch");
+    }
+
     command.args([
         "--proc",
         "/proc",
         "--dev",
         "/dev",
         "--size",
-        "67108864",
+        &TMP_SIZE_BYTES.to_string(),
         "--tmpfs",
         "/tmp",
         "--dir",
         "/tmp/home",
         "--chdir",
         "/workspace",
+    ]);
+
+    Ok(())
+}
+
+fn configure_limits_and_entrypoint(
+    command: &mut Command,
+    prlimit: &Path,
+    limits: &ProcessLimits,
+    has_rust: bool,
+    is_writable_tmpfs: bool,
+) {
+    command.args([
         "--clearenv",
         "--setenv",
         "PATH",
-        if rust_toolchain.is_some() {
+        if has_rust {
             "/opt/orbit-rust/bin:/usr/bin:/bin"
         } else {
             "/usr/bin:/bin"
@@ -463,15 +700,25 @@ fn command(
         "LANG",
         "C.UTF-8",
         "--",
-        "/usr/bin/prlimit",
-        "--as=4294967296:4294967296",
-        "--fsize=67108864:67108864",
-        "--nofile=1024:1024",
-        "--nproc=1024:1024",
+        prlimit.to_str().unwrap_or("/usr/bin/prlimit"),
+        &format!(
+            "--as={}:{}",
+            limits.max_memory_bytes, limits.max_memory_bytes
+        ),
+        &format!(
+            "--fsize={}:{}",
+            limits.max_file_size_bytes, limits.max_file_size_bytes
+        ),
+        &format!(
+            "--nofile={}:{}",
+            limits.max_open_files, limits.max_open_files
+        ),
+        &format!("--nproc={}:{}", limits.max_processes, limits.max_processes),
         "--",
         "/bin/sh",
     ]);
-    if writable_snapshot {
+
+    if is_writable_tmpfs {
         command.args([
             "-c",
             "cp -R /orbit-source/. /workspace/ && exec /bin/sh /orbit-command.sh",
@@ -479,7 +726,30 @@ fn command(
     } else {
         command.arg("/orbit-command.sh");
     }
-    Ok(command)
+}
+
+fn find_executable(name: &str) -> Option<PathBuf> {
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    for fallback in [
+        format!("/usr/bin/{name}"),
+        format!("/bin/{name}"),
+        format!("/usr/local/bin/{name}"),
+    ] {
+        let path = PathBuf::from(fallback);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    None
 }
 
 struct Captured {
@@ -527,6 +797,83 @@ async fn capture(
         tail.drain(..overflow);
         tail.extend(&buffer[..count]);
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_child_process(
+    mut child: tokio::process::Child,
+    timeout: Duration,
+    token: CancellationToken,
+    output_log: Option<OutputLog>,
+    sandbox_label: &'static str,
+    persistent_scratch: bool,
+    workspace_files: usize,
+    skipped_entries: usize,
+    verification: Option<VerificationEvidence>,
+) -> Result<CommandResult, ToolError> {
+    let started = std::time::Instant::now();
+    let (output_id, stdout_log, stderr_log) = output_log
+        .map(OutputLog::split)
+        .map_or((None, None, None), |(id, stdout, stderr)| {
+            (Some(id), Some(stdout), Some(stderr))
+        });
+
+    let stdout = capture(child.stdout.take().expect("piped stdout"), stdout_log);
+    let stderr = capture(child.stderr.take().expect("piped stderr"), stderr_log);
+
+    let completion = async {
+        let mut timed_out = false;
+        let mut cancelled = false;
+        let status = tokio::select! {
+            result = child.wait() => result,
+            _ = token.cancelled() => {
+                cancelled = true;
+                child.start_kill()?;
+                child.wait().await
+            },
+            _ = tokio::time::sleep(timeout) => {
+                timed_out = true;
+                child.start_kill()?;
+                child.wait().await
+            },
+        }?;
+        Ok::<_, std::io::Error>((status, timed_out, cancelled))
+    };
+
+    let (result, stdout, stderr) = tokio::join!(completion, stdout, stderr);
+    let (status, timed_out, cancelled) = result.map_err(failed)?;
+    let stdout = stdout.map_err(failed)?;
+    let stderr = stderr.map_err(failed)?;
+
+    let stdout_total_bytes = stdout.total;
+    let stderr_total_bytes = stderr.total;
+    let output_truncated = stdout.total > MAX_OUTPUT as u64 || stderr.total > MAX_OUTPUT as u64;
+    let retained_output_truncated = stdout.retained_truncated || stderr.retained_truncated;
+    let stdout = String::from_utf8_lossy(&stdout.bytes).into_owned();
+    let stderr = String::from_utf8_lossy(&stderr.bytes).into_owned();
+
+    Ok(CommandResult {
+        exit_code: status.code(),
+        elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        stdout,
+        stderr,
+        timed_out,
+        cancelled,
+        output_truncated,
+        stdout_total_bytes,
+        stderr_total_bytes,
+        output_id,
+        retained_output_truncated,
+        sandbox: sandbox_label,
+        scratch: if persistent_scratch {
+            Some("/scratch (persistent session files; no persistent processes)")
+        } else {
+            None
+        },
+        workspace_files,
+        skipped_entries,
+        verification,
+    })
 }
 
 pub async fn run(
@@ -648,78 +995,71 @@ pub async fn run_configured(
     let mut script_file = tempfile::NamedTempFile::new().map_err(failed)?;
     script_file.write_all(script.as_bytes()).map_err(failed)?;
     script_file.flush().map_err(failed)?;
-    let mut child = command(
-        snapshot.directory.as_ref().expect("copied snapshot").path(),
-        script_file.path(),
-        writable_snapshot,
-        timeout,
-        limits,
-        scratch,
-    )?
-    .spawn()
-    .map_err(failed)?;
-    let started = std::time::Instant::now();
-    let (output_id, stdout_log, stderr_log) = output_log
-        .map(OutputLog::split)
-        .map_or((None, None, None), |(id, stdout, stderr)| {
-            (Some(id), Some(stdout), Some(stderr))
-        });
-    let stdout = capture(child.stdout.take().expect("piped stdout"), stdout_log);
-    let stderr = capture(child.stderr.take().expect("piped stderr"), stderr_log);
-    let completion = async {
-        let mut timed_out = false;
-        let mut cancelled = false;
-        let status = tokio::select! {
-            result = child.wait() => result,
-            _ = token.cancelled() => { cancelled = true; child.start_kill()?; child.wait().await },
-            _ = tokio::time::sleep(timeout) => { timed_out = true; child.start_kill()?; child.wait().await },
-        }?;
-        Ok::<_, std::io::Error>((status, timed_out, cancelled))
+    let backend = BwrapSandboxBackend::new()?;
+    let snapshot_path = snapshot.directory.as_ref().expect("copied snapshot").path();
+
+    let base = BasePolicy {
+        workspace: ResolvedPath::resolve(snapshot_path, None).map_err(failed)?,
+        network: NetworkPolicy::Deny,
     };
-    let (result, stdout, stderr) = tokio::join!(completion, stdout, stderr);
-    let (status, timed_out, cancelled) = result.map_err(failed)?;
-    let stdout = stdout.map_err(failed)?;
-    let stderr = stderr.map_err(failed)?;
-    let stdout_total_bytes = stdout.total;
-    let stderr_total_bytes = stderr.total;
-    let output_truncated = stdout.total > MAX_OUTPUT as u64 || stderr.total > MAX_OUTPUT as u64;
-    let retained_output_truncated = stdout.retained_truncated || stderr.retained_truncated;
-    let stdout = String::from_utf8_lossy(&stdout.bytes).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr.bytes).into_owned();
-    Ok(CommandResult {
-        exit_code: status.code(),
-        elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-        stdout,
-        stderr,
-        timed_out,
-        cancelled,
-        output_truncated,
-        stdout_total_bytes,
-        stderr_total_bytes,
-        output_id,
-        retained_output_truncated,
-        sandbox: if writable_snapshot {
-            "bubblewrap; no network; disposable writable workspace snapshot; changes discarded"
-        } else {
-            "bubblewrap; no network; read-only filtered workspace snapshot"
-        },
-        scratch: scratch.map(|_| "/scratch (persistent session files; no persistent processes)"),
-        workspace_files: snapshot.files,
-        skipped_entries: snapshot.skipped,
-        verification: Some(VerificationEvidence {
-            input: snapshot.fingerprint,
-            platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-            isolation: "bubblewrap; no network; filtered source snapshot".into(),
-            rust_toolchain: rust_toolchain.map(|p| p.display().to_string()),
-            writable_snapshot,
-            persistent_scratch: scratch.is_some(),
-            dependency_caches: limits
-                .dependency_caches
-                .iter()
-                .map(|c| format!("{}: {}", c.name, c.path.display()))
-                .collect(),
-        }),
-    })
+    let policy = EffectivePolicy::new(base);
+
+    let mut spec = ProcessSpec::new(&script, timeout);
+    spec.scratch = scratch.map(Path::to_path_buf);
+    spec.limits.max_file_size_bytes = (limits.writable_snapshot_mib * MIB) as u64;
+    spec.read_only_workspace = !writable_snapshot;
+
+    let writable_source = if writable_snapshot {
+        Some(snapshot_path)
+    } else {
+        None
+    };
+
+    let child = backend
+        .build_command(
+            &policy,
+            script_file.path(),
+            &spec,
+            Some(snapshot_path),
+            writable_source,
+            rust_toolchain,
+            &limits.dependency_caches,
+        )?
+        .spawn()
+        .map_err(failed)?;
+
+    let sandbox_label = if writable_snapshot {
+        "bubblewrap; no network; disposable writable workspace snapshot; changes discarded"
+    } else {
+        "bubblewrap; no network; read-only filtered workspace snapshot"
+    };
+
+    let verification = Some(VerificationEvidence {
+        input: snapshot.fingerprint,
+        platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        isolation: "bubblewrap; no network; filtered source snapshot".into(),
+        rust_toolchain: rust_toolchain.map(|p| p.display().to_string()),
+        writable_snapshot,
+        persistent_scratch: scratch.is_some(),
+        dependency_caches: limits
+            .dependency_caches
+            .iter()
+            .map(|c| format!("{}: {}", c.name, c.path.display()))
+            .collect(),
+    });
+
+    run_child_process(
+        child,
+        timeout,
+        token,
+        output_log,
+        sandbox_label,
+        scratch.is_some(),
+        snapshot.files,
+        snapshot.skipped,
+        verification,
+    )
+    .await
 }
 
 fn failed(error: impl std::fmt::Display) -> ToolError {
