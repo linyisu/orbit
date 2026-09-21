@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     capability::{EnvironmentId, FilesystemAccess, FilesystemCapability, NetworkPolicy},
+    error::{RuntimeError, failed},
     filesystem::ResolvedPath,
 };
 
@@ -159,13 +160,14 @@ pub struct WorkspacePermissions {
     pub read_write: Vec<PathBuf>,
 }
 
-/// Combined effective policy calculated from BasePolicy + Persistent Workspace Permissions + Session Grants.
+/// Combined effective policy calculated from BasePolicy + Persistent Workspace Permissions + Session Grants + Protected Paths.
 #[derive(Clone, Debug)]
 pub struct EffectivePolicy {
     pub base: BasePolicy,
     pub persistent_read: Vec<ResolvedPath>,
     pub persistent_read_write: Vec<ResolvedPath>,
     pub session_grants: Arc<RwLock<SessionGrantStore>>,
+    pub protected_paths: Arc<RwLock<Vec<PathBuf>>>,
 }
 
 impl EffectivePolicy {
@@ -175,6 +177,7 @@ impl EffectivePolicy {
             persistent_read: Vec::new(),
             persistent_read_write: Vec::new(),
             session_grants: Arc::new(RwLock::new(SessionGrantStore::new())),
+            protected_paths: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
@@ -202,33 +205,53 @@ impl PolicyEngine {
         )
     }
 
-    pub fn with_permissions(
+    pub fn try_with_permissions(
         workspace: ResolvedPath,
         permissions: WorkspacePermissions,
         network: NetworkPolicy,
-    ) -> Self {
+    ) -> Result<Self, RuntimeError> {
         let base_dir = workspace.canonical();
 
-        let persistent_read = permissions
-            .read
-            .into_iter()
-            .filter_map(|p| ResolvedPath::resolve(p, Some(base_dir)).ok())
-            .collect();
+        let mut persistent_read = Vec::new();
+        for p in permissions.read {
+            let resolved = ResolvedPath::resolve(&p, Some(base_dir)).map_err(|e| {
+                failed(format!(
+                    "invalid persistent read path '{}': {e}",
+                    p.display()
+                ))
+            })?;
+            persistent_read.push(resolved);
+        }
 
-        let persistent_read_write = permissions
-            .read_write
-            .into_iter()
-            .filter_map(|p| ResolvedPath::resolve(p, Some(base_dir)).ok())
-            .collect();
+        let mut persistent_read_write = Vec::new();
+        for p in permissions.read_write {
+            let resolved = ResolvedPath::resolve(&p, Some(base_dir)).map_err(|e| {
+                failed(format!(
+                    "invalid persistent read_write path '{}': {e}",
+                    p.display()
+                ))
+            })?;
+            persistent_read_write.push(resolved);
+        }
 
-        Self {
+        Ok(Self {
             policy: Arc::new(EffectivePolicy {
                 base: BasePolicy { workspace, network },
                 persistent_read,
                 persistent_read_write,
                 session_grants: Arc::new(RwLock::new(SessionGrantStore::new())),
+                protected_paths: Arc::new(RwLock::new(Vec::new())),
             }),
-        }
+        })
+    }
+
+    pub fn with_permissions(
+        workspace: ResolvedPath,
+        permissions: WorkspacePermissions,
+        network: NetworkPolicy,
+    ) -> Self {
+        Self::try_with_permissions(workspace, permissions, network)
+            .expect("invalid persistent workspace permissions")
     }
 
     pub fn workspace(&self) -> &ResolvedPath {
@@ -245,6 +268,25 @@ impl PolicyEngine {
 
     pub fn session_grants(&self) -> Arc<RwLock<SessionGrantStore>> {
         self.policy.session_grants.clone()
+    }
+
+    pub fn add_protected_path(&self, path: PathBuf) {
+        let mut guard = self
+            .policy
+            .protected_paths
+            .write()
+            .expect("protected_paths lock poisoned");
+        if !guard.contains(&path) {
+            guard.push(path);
+        }
+    }
+
+    pub fn protected_paths(&self) -> Vec<PathBuf> {
+        self.policy
+            .protected_paths
+            .read()
+            .expect("protected_paths lock poisoned")
+            .clone()
     }
 
     /// Record a granted capability into the current session store.
@@ -277,24 +319,70 @@ impl PolicyEngine {
             Err(e) => return PolicyDecision::Denied(format!("invalid path: {e}")),
         };
 
-        // 1. Local workspace is always granted RW by BasePolicy
-        if capability.environment.is_local() && resolved.is_subpath_of(&self.policy.base.workspace)
-        {
-            return PolicyDecision::Granted;
-        }
-
-        // 2. Reject reserved runtime/system paths for local environment
-        if capability.environment.is_local()
-            && crate::execution::process::is_reserved_system_path(resolved.canonical())
-        {
-            return PolicyDecision::Denied(format!(
-                "path '{}' is a reserved runtime path and cannot be granted as external capability",
-                resolved.canonical().display()
-            ));
-        }
-
-        // 2. Persistent workspace permissions
         if capability.environment.is_local() {
+            let canon = resolved.canonical();
+            let ws_canon = self.policy.base.workspace.canonical();
+
+            // Reject ancestor directories of the workspace (e.g. workspace is /home/user/project, capability is /home/user)
+            if ws_canon.starts_with(canon) && ws_canon != canon {
+                return PolicyDecision::Denied(format!(
+                    "path '{}' is an ancestor of the workspace and cannot be granted as an external capability",
+                    canon.display()
+                ));
+            }
+
+            // Reject reserved runtime/system paths
+            if crate::execution::process::is_reserved_system_path(canon) {
+                return PolicyDecision::Denied(format!(
+                    "path '{}' is a reserved runtime path and cannot be granted as external capability",
+                    canon.display()
+                ));
+            }
+
+            // Check against protected paths
+            let protected_guard = self
+                .policy
+                .protected_paths
+                .read()
+                .expect("protected_paths lock poisoned");
+            for p in protected_guard.iter() {
+                if canon == p || canon.starts_with(p) {
+                    return PolicyDecision::Denied(format!(
+                        "path '{}' is inside protected path '{}' and cannot be granted",
+                        canon.display(),
+                        p.display()
+                    ));
+                }
+                if p.starts_with(canon) {
+                    return PolicyDecision::Denied(format!(
+                        "path '{}' contains protected path '{}' and cannot be granted as capability",
+                        canon.display(),
+                        p.display()
+                    ));
+                }
+            }
+
+            // Inside workspace check
+            if resolved.is_subpath_of(&self.policy.base.workspace) {
+                if let Ok(rel) = canon.strip_prefix(ws_canon) {
+                    for component in rel.components() {
+                        let name = component.as_os_str().to_string_lossy();
+                        if name == ".git"
+                            || name == ".env"
+                            || name.starts_with(".env.")
+                            || name.starts_with(".orbit-write-")
+                        {
+                            return PolicyDecision::Denied(format!(
+                                "path '{}' is protected metadata and cannot be granted",
+                                canon.display()
+                            ));
+                        }
+                    }
+                }
+                return PolicyDecision::Granted;
+            }
+
+            // Persistent workspace permissions
             let is_persistent_rw = self
                 .policy
                 .persistent_read_write
@@ -318,7 +406,7 @@ impl PolicyEngine {
             }
         }
 
-        // 3. Runtime session grants
+        // Runtime session grants
         let session_allowed = self
             .policy
             .session_grants
@@ -330,7 +418,7 @@ impl PolicyEngine {
             return PolicyDecision::Granted;
         }
 
-        // 4. Otherwise, requires interactive user approval
+        // Otherwise, requires interactive user approval
         PolicyDecision::NeedsApproval(vec![capability.clone()])
     }
 }
@@ -338,6 +426,7 @@ impl PolicyEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn workspace_paths_are_always_granted() {
@@ -458,5 +547,80 @@ mod tests {
         // 3. Adding child R again is ignored as redundant
         store.grant(FilesystemGrant::read_only(EnvironmentId::Local, child));
         assert_eq!(store.grants().len(), 1);
+    }
+
+    #[test]
+    fn rejects_ancestor_of_workspace_as_capability() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = tmp.path().join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+
+        let workspace = ResolvedPath::resolve(&proj, None).unwrap();
+        let engine = PolicyEngine::new(workspace);
+
+        // Requesting the parent / ancestor directory of workspace
+        let cap = FilesystemCapability::local_read(tmp.path());
+        match engine.check_filesystem(&cap) {
+            PolicyDecision::Denied(reason) => {
+                assert!(reason.contains("ancestor of the workspace"));
+            }
+            other => panic!("expected Denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_protected_path_and_its_ancestor_and_descendant() {
+        let tmp_ws = tempfile::tempdir().unwrap();
+        let tmp_ext = tempfile::tempdir().unwrap();
+        let secret = tmp_ext.path().join("nested").join("orbit.db");
+        std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+        std::fs::write(&secret, "database").unwrap();
+
+        let workspace = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
+        let engine = PolicyEngine::new(workspace);
+        engine.add_protected_path(secret.clone());
+
+        // 1. Requesting the protected file directly is denied
+        let cap_direct = FilesystemCapability::local_read(&secret);
+        match engine.check_filesystem(&cap_direct) {
+            PolicyDecision::Denied(reason) => {
+                assert!(reason.contains("inside protected path"));
+            }
+            other => panic!("expected Denied, got {other:?}"),
+        }
+
+        // 2. Requesting the parent directory containing the protected file is denied
+        let cap_parent = FilesystemCapability::local_read(tmp_ext.path());
+        match engine.check_filesystem(&cap_parent) {
+            PolicyDecision::Denied(reason) => {
+                assert!(reason.contains("contains protected path"));
+            }
+            other => panic!("expected Denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_reserved_runtime_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = ResolvedPath::resolve(tmp.path(), None).unwrap();
+        let engine = PolicyEngine::new(workspace);
+
+        for reserved in [
+            "/workspace/sub",
+            "/scratch/file",
+            "/orbit-command.sh",
+            "/orbit-source/file",
+            "/opt/orbit-rust/bin",
+            "/tmp/home/user",
+            "/etc/shadow",
+            "/proc/cpuinfo",
+            "/dev/null",
+        ] {
+            let cap = FilesystemCapability::local_read(Path::new(reserved));
+            assert!(
+                matches!(engine.check_filesystem(&cap), PolicyDecision::Denied(_)),
+                "expected {reserved} to be denied"
+            );
+        }
     }
 }

@@ -18,6 +18,7 @@ use crate::approval::{
     ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview, CommandWorkspaceAccess,
 };
 use orbit_runtime::{
+    RuntimeError,
     execution::{BwrapSandboxBackend, OutputLog, ProcessSpec, SandboxBackend},
     filesystem::Workspace,
 };
@@ -263,12 +264,36 @@ impl Tool for RunCommand {
             } else {
                 args.workspace_access
             };
+            let network_allowed = self.workspace.policy().network_policy().is_allowed();
+            let mut external_capabilities = Vec::new();
+            for r in &self.workspace.policy().effective_policy().persistent_read {
+                external_capabilities.push(format!("{} (ro, persistent)", r.canonical().display()));
+            }
+            for rw in &self
+                .workspace
+                .policy()
+                .effective_policy()
+                .persistent_read_write
+            {
+                external_capabilities
+                    .push(format!("{} (rw, persistent)", rw.canonical().display()));
+            }
+            if let Ok(store) = self.workspace.policy().session_grants().read() {
+                for grant in store.grants() {
+                    let mode = if grant.write { "rw" } else { "ro" };
+                    external_capabilities.push(format!(
+                        "{} ({mode}, session)",
+                        grant.path.canonical().display()
+                    ));
+                }
+            }
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     command: args.command.clone(),
                     workspace_access,
-                    writable_snapshot: args.writable_snapshot,
                     timeout_seconds,
+                    network_allowed,
+                    external_capabilities,
                 }),
                 decision: sender,
             };
@@ -301,13 +326,17 @@ impl Tool for RunCommand {
                 }
                 None => None,
             };
-            let pre_scan = orbit_runtime::execution::scan_workspace_summary(
+            let pre_scan = match orbit_runtime::execution::scan_workspace_summary(
                 self.workspace.clone(),
                 cancellation.clone(),
                 self.limits.clone().into(),
             )
             .await
-            .ok();
+            {
+                Ok(summary) => Some(summary),
+                Err(RuntimeError::Cancelled) => return Err(ToolError::Cancelled),
+                Err(_) => None,
+            };
 
             let (fingerprint, workspace_files, skipped_entries) = match pre_scan {
                 Some((f, wf, se)) => (Some(f), wf, se),
@@ -336,13 +365,17 @@ impl Tool for RunCommand {
                 .run(spec, policy, output_log, cancellation.clone())
                 .await?;
 
-            let post_scan = orbit_runtime::execution::scan_workspace_summary(
+            let post_scan = match orbit_runtime::execution::scan_workspace_summary(
                 self.workspace.clone(),
                 cancellation,
                 self.limits.clone().into(),
             )
             .await
-            .ok();
+            {
+                Ok(summary) => Some(summary),
+                Err(RuntimeError::Cancelled) => return Err(ToolError::Cancelled),
+                Err(_) => None,
+            };
 
             if let Some(evidence) = result.verification.as_mut() {
                 evidence.output = post_scan.map(|(fp, _, _)| fp);

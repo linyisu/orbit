@@ -7,6 +7,7 @@ pub use process::{
     MAX_RETAINED_OUTPUT_PER_STREAM, MIB, MountAccess, MountSpec, OutputLog, ProcessLimits,
     ProcessSpec, TMP_SIZE_BYTES, is_reserved_mount_target, normalize_mount_target,
 };
+#[allow(deprecated)]
 pub use sandbox::{
     BwrapSandboxBackend, SandboxBackend, Snapshot, WorkspaceScanLimits, content_hash, fingerprint,
     fingerprint_configured, run, run_configured, run_with_options, run_with_resources,

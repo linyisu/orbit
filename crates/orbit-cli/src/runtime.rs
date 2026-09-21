@@ -18,6 +18,7 @@ pub struct WorkspaceRuntime {
     pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn workspace_tools(
     config: &Path,
     database: Option<&Path>,
@@ -27,8 +28,9 @@ pub async fn workspace_tools(
     mcp: orbit_tools::mcp::McpConfig,
     scratch: Option<orbit_tools::run_command::ScratchDirectory>,
     command_output: Option<orbit_tools::run_command::CommandOutputDirectory>,
+    permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
 ) -> Result<WorkspaceRuntime> {
-    let workspace = protected_workspace(config, database)?;
+    let workspace = protected_workspace(config, database, permissions)?;
     let mut tools = ToolRegistry::new();
     tools.register(ReadFile::new(workspace.clone()));
     tools.register(ReadDocument::new(workspace.clone()));
@@ -84,18 +86,21 @@ pub fn workspace_writer(
     config: &Path,
     database: &Path,
     approvals: ApprovalSender,
+    permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
 ) -> Result<WriteFile> {
     Ok(WriteFile::new(
-        protected_workspace(config, Some(database))?,
+        protected_workspace(config, Some(database), permissions)?,
         approvals,
     ))
 }
 
-fn protected_workspace(config: &Path, database: Option<&Path>) -> Result<Workspace> {
+fn protected_workspace(
+    config: &Path,
+    database: Option<&Path>,
+    permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
+) -> Result<Workspace> {
     let mut workspace = Workspace::new(std::env::current_dir()?)?;
-    if config.exists() {
-        workspace.protect(config)?;
-    }
+    workspace.protect(config)?;
     if let Some(database) = database {
         workspace.protect(database)?;
         workspace.protect(database.with_extension("session-locks"))?;
@@ -107,6 +112,9 @@ fn protected_workspace(config: &Path, database: Option<&Path>) -> Result<Workspa
             sidecar.push(suffix);
             workspace.protect(std::path::PathBuf::from(sidecar))?;
         }
+    }
+    if let Some(perms) = permissions {
+        workspace.configure_policy(perms, orbit_runtime::capability::NetworkPolicy::Allow)?;
     }
     Ok(workspace)
 }

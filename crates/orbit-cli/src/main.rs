@@ -229,6 +229,8 @@ struct FileConfig {
     web: orbit_tools::web_fetch::WebConfig,
     #[serde(default)]
     mcp: orbit_tools::mcp::McpConfig,
+    #[serde(default)]
+    permissions: orbit_runtime::policy::WorkspacePermissions,
     providers: BTreeMap<String, ProviderConfig>,
 }
 
@@ -619,8 +621,12 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         .await?;
     let plugin_skill_roots = crate::marketplaces::enabled_skill_roots(&enabled_plugins);
     let skills = skills::Skills::discover_current_with_plugin_roots(plugin_skill_roots.roots);
-    let undo_writer =
-        runtime::workspace_writer(&config_path, session.store.path(), approvals.clone())?;
+    let undo_writer = runtime::workspace_writer(
+        &config_path,
+        session.store.path(),
+        approvals.clone(),
+        Some(file_config.permissions.clone()),
+    )?;
     let runtime = runtime::workspace_tools(
         &config_path,
         Some(session.store.path()),
@@ -630,6 +636,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         mcp,
         Some(session.scratch.clone()),
         Some(session.command_output.clone()),
+        Some(file_config.permissions.clone()),
     )
     .await?;
     session
@@ -755,6 +762,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         },
         Some(session.scratch.clone()),
         Some(session.command_output.clone()),
+        Some(file_config.permissions.clone()),
     )
     .await?;
     if !capability_is_disabled(&disabled, ChatCapability::Files)
@@ -1369,5 +1377,32 @@ reasoning = { adapter = "openai_chat", efforts = ["high", "high"], default = "hi
         )
         .unwrap();
         assert!(FileConfig::load(&path).is_err());
+    }
+
+    #[test]
+    fn config_parses_permissions() {
+        let input = r#"
+default_provider = "test"
+context_tokens = 100000
+max_output_tokens = 4000
+max_turns = 10
+max_tool_calls = 50
+
+[permissions]
+read = ["/tmp/data"]
+read_write = ["/tmp/out"]
+
+[providers.test]
+base_url = "https://test.example/v1"
+api_key = "test-key"
+[[providers.test.models]]
+id = "model-1"
+"#;
+        let config: FileConfig = toml::from_str(input).unwrap();
+        assert_eq!(config.permissions.read, vec![PathBuf::from("/tmp/data")]);
+        assert_eq!(
+            config.permissions.read_write,
+            vec![PathBuf::from("/tmp/out")]
+        );
     }
 }

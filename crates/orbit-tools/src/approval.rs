@@ -23,10 +23,11 @@ pub enum CommandWorkspaceAccess {
 
 #[derive(Clone, Debug)]
 pub struct CommandPreview {
-    pub writable_snapshot: bool,
     pub command: String,
     pub timeout_seconds: u64,
     pub workspace_access: CommandWorkspaceAccess,
+    pub network_allowed: bool,
+    pub external_capabilities: Vec<String>,
 }
 
 /// An MCP server is an external program with capabilities Orbit cannot

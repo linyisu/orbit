@@ -68,14 +68,16 @@ mod tests {
         let cmd_read = ApprovalPreview::Command(CommandPreview {
             command: "pwd".into(),
             timeout_seconds: 30,
-            writable_snapshot: false,
             workspace_access: CommandWorkspaceAccess::Read,
+            network_allowed: true,
+            external_capabilities: Vec::new(),
         });
         let cmd_rw = ApprovalPreview::Command(CommandPreview {
             command: "cargo build".into(),
             timeout_seconds: 30,
-            writable_snapshot: false,
             workspace_access: CommandWorkspaceAccess::ReadWrite,
+            network_allowed: true,
+            external_capabilities: Vec::new(),
         });
         let write = ApprovalPreview::Write(WritePreview {
             path: "file".into(),

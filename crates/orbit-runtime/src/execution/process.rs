@@ -163,9 +163,22 @@ pub fn is_reserved_mount_target(normalized_target: &Path) -> bool {
 }
 
 pub fn is_reserved_system_path(path: &Path) -> bool {
-    const EXACT_RESERVED: &[&str] = &["/", "/tmp", "/opt", "/opt/orbit-cache", "/workspace"];
+    const EXACT_RESERVED: &[&str] = &["/", "/tmp", "/orbit-command.sh", "/opt", "/opt/orbit-cache"];
     const PREFIX_RESERVED: &[&str] = &[
-        "/proc", "/dev", "/sys", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
+        "/proc",
+        "/dev",
+        "/sys",
+        "/etc",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/lib",
+        "/lib64",
+        "/workspace",
+        "/scratch",
+        "/orbit-source",
+        "/opt/orbit-rust",
+        "/tmp/home",
     ];
 
     for exact in EXACT_RESERVED {
@@ -175,7 +188,7 @@ pub fn is_reserved_system_path(path: &Path) -> bool {
     }
 
     for prefix in PREFIX_RESERVED {
-        if path == Path::new(prefix) || path.starts_with(Path::new(prefix)) {
+        if path.starts_with(Path::new(prefix)) {
             return true;
         }
     }

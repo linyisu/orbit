@@ -146,15 +146,31 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             return draw_file_modal(frame, state);
         }
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
+            let ws_desc = match preview.workspace_access {
+                orbit_tools::approval::CommandWorkspaceAccess::Read => "只读 (受保护路径隔离)",
+                orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => "读写 (受保护路径隔离)",
+            };
+            let net_desc = if preview.network_allowed {
+                "允许"
+            } else {
+                "禁止"
+            };
             let mut lines = vec![
-                Line::from(if preview.writable_snapshot {
-                    "临时可写副本 · 容量按配置 · /scratch 按会话保留 · 无网络"
-                } else {
-                    "只读项目副本 · /scratch 按会话保留 · 无网络"
-                }),
-                Line::from("不含配置、数据库、.git、符号链接和依赖缓存；仅系统工具。"),
-                Line::from(""),
+                Line::from(format!("工作区：{ws_desc}")),
+                Line::from(format!("网络：{net_desc}")),
             ];
+            if preview.external_capabilities.is_empty() {
+                lines.push(Line::from("外部路径：无额外已授权 Capability"));
+            } else {
+                lines.push(Line::from("外部路径（已授权 Capability）："));
+                for cap in &preview.external_capabilities {
+                    lines.push(Line::from(format!("  • {cap}")));
+                }
+            }
+            lines.push(Line::from(
+                "受保护路径（如 .env、.git、配置及数据库）已强制隔离屏蔽。",
+            ));
+            lines.push(Line::from(""));
             lines.extend(
                 preview
                     .command
@@ -163,8 +179,13 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             );
             (
                 format!(
-                    "命令执行确认\n超时：{} 秒 · 原项目只读 · 无网络",
-                    preview.timeout_seconds
+                    "命令执行确认\n超时：{} 秒 · 工作区：{} · 网络：{}",
+                    preview.timeout_seconds,
+                    match preview.workspace_access {
+                        orbit_tools::approval::CommandWorkspaceAccess::Read => "只读",
+                        orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => "读写",
+                    },
+                    net_desc,
                 ),
                 lines,
             )

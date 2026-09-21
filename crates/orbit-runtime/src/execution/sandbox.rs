@@ -320,7 +320,7 @@ impl BwrapSandboxBackend {
         writable_snapshot_source: Option<&Path>,
         rust_toolchain: Option<&Path>,
         mounts: &[MountSpec],
-    ) -> Result<Command, RuntimeError> {
+    ) -> Result<(Command, Vec<PathBuf>), RuntimeError> {
         validate_mounts(mounts, policy)?;
 
         let mut command = Command::new(&self.bwrap_path);
@@ -340,6 +340,9 @@ impl BwrapSandboxBackend {
             .arg(script_path)
             .arg("/orbit-command.sh");
 
+        let mut placeholders = Vec::new();
+        let ws_target = custom_workspace.unwrap_or_else(|| policy.base.workspace.canonical());
+
         if let Some(source) = writable_snapshot_source {
             command.arg("--ro-bind").arg(source).arg("/orbit-source");
             command.args([
@@ -349,14 +352,14 @@ impl BwrapSandboxBackend {
                 "/workspace",
             ]);
         } else {
-            let ws_target = custom_workspace.unwrap_or_else(|| policy.base.workspace.canonical());
             if spec.read_only_workspace {
                 command.arg("--ro-bind").arg(ws_target).arg("/workspace");
             } else {
                 command.arg("--bind").arg(ws_target).arg("/workspace");
             }
 
-            let masked = collect_masked_paths(ws_target, &spec.protected_paths);
+            let (masked, ph) = collect_masked_paths(ws_target, &spec.protected_paths)?;
+            placeholders = ph;
             for (container_path, is_dir) in masked {
                 if let Some(path_str) = container_path.to_str() {
                     if is_dir {
@@ -370,7 +373,7 @@ impl BwrapSandboxBackend {
 
         mount_scratch_and_tmp(&mut command, spec.scratch.as_deref())?;
         mount_toolchain_and_mounts(&mut command, rust_toolchain, mounts)?;
-        mount_capabilities(&mut command, policy)?;
+        mount_capabilities(&mut command, policy, ws_target, &spec.protected_paths)?;
 
         configure_limits_and_entrypoint(
             &mut command,
@@ -380,7 +383,20 @@ impl BwrapSandboxBackend {
             writable_snapshot_source.is_some(),
         );
 
-        Ok(command)
+        Ok((command, placeholders))
+    }
+}
+
+struct PlaceholderCleanup(Vec<PathBuf>);
+impl Drop for PlaceholderCleanup {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            if let Ok(meta) = std::fs::symlink_metadata(path) {
+                if meta.is_file() && meta.len() == 0 {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
     }
 }
 
@@ -401,18 +417,17 @@ impl SandboxBackend for BwrapSandboxBackend {
                 .map_err(failed)?;
             script_file.flush().map_err(failed)?;
 
-            let child = self
-                .build_command(
-                    policy,
-                    script_file.path(),
-                    &spec,
-                    None,
-                    None,
-                    spec.rust_toolchain.as_deref(),
-                    &spec.mounts,
-                )?
-                .spawn()
-                .map_err(failed)?;
+            let (mut cmd, placeholders) = self.build_command(
+                policy,
+                script_file.path(),
+                &spec,
+                None,
+                None,
+                spec.rust_toolchain.as_deref(),
+                &spec.mounts,
+            )?;
+            let child = cmd.spawn().map_err(failed)?;
+            let _guard = PlaceholderCleanup(placeholders);
 
             let network_desc = if policy.base.network.is_allowed() {
                 "network allowed"
@@ -506,16 +521,47 @@ fn mount_system_paths(command: &mut Command, network: NetworkPolicy) {
     }
 }
 
-fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result<(), RuntimeError> {
+fn mount_capabilities(
+    command: &mut Command,
+    policy: &EffectivePolicy,
+    ws_target: &Path,
+    protected_paths: &[PathBuf],
+) -> Result<(), RuntimeError> {
+    let validate_cap = |canonical: &Path| -> Result<(), RuntimeError> {
+        if crate::execution::process::is_reserved_system_path(canonical) {
+            return Err(failed(format!(
+                "capability target '{}' is a reserved runtime path",
+                canonical.display()
+            )));
+        }
+        if ws_target.starts_with(canonical) {
+            return Err(failed(format!(
+                "capability target '{}' is an ancestor of workspace",
+                canonical.display()
+            )));
+        }
+        if canonical.starts_with(ws_target) {
+            return Err(failed(format!(
+                "capability target '{}' is inside workspace",
+                canonical.display()
+            )));
+        }
+        for p in protected_paths {
+            if p.starts_with(canonical) || canonical.starts_with(p) {
+                return Err(failed(format!(
+                    "capability target '{}' conflicts with protected path '{}'",
+                    canonical.display(),
+                    p.display()
+                )));
+            }
+        }
+        Ok(())
+    };
+
     for path in &policy.persistent_read_write {
         let canonical = path.canonical();
         if canonical.exists() {
-            if crate::execution::process::is_reserved_system_path(canonical) {
-                return Err(failed(format!(
-                    "persistent capability target '{}' is a reserved runtime path",
-                    canonical.display()
-                )));
-            }
+            validate_cap(canonical)?;
             command.arg("--bind").arg(canonical).arg(canonical);
         }
     }
@@ -523,12 +569,7 @@ fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result
     for path in &policy.persistent_read {
         let canonical = path.canonical();
         if canonical.exists() {
-            if crate::execution::process::is_reserved_system_path(canonical) {
-                return Err(failed(format!(
-                    "persistent capability target '{}' is a reserved runtime path",
-                    canonical.display()
-                )));
-            }
+            validate_cap(canonical)?;
             command.arg("--ro-bind").arg(canonical).arg(canonical);
         }
     }
@@ -538,12 +579,7 @@ fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result
             if grant.environment.is_local() {
                 let canonical = grant.path.canonical();
                 if canonical.exists() {
-                    if crate::execution::process::is_reserved_system_path(canonical) {
-                        return Err(failed(format!(
-                            "session capability target '{}' is a reserved runtime path",
-                            canonical.display()
-                        )));
-                    }
+                    validate_cap(canonical)?;
                     if grant.write {
                         command.arg("--bind").arg(canonical).arg(canonical);
                     } else if grant.read {
@@ -557,45 +593,117 @@ fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result
     Ok(())
 }
 
-pub fn collect_masked_paths(ws_target: &Path, protected_paths: &[PathBuf]) -> Vec<(PathBuf, bool)> {
+pub fn collect_masked_paths(
+    ws_target: &Path,
+    protected_paths: &[PathBuf],
+) -> Result<(Vec<(PathBuf, bool)>, Vec<PathBuf>), RuntimeError> {
     let mut masked = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut placeholders_created = Vec::new();
 
     // 1. Check spec.protected_paths
     for protected in protected_paths {
-        if let Ok(rel) = protected.strip_prefix(ws_target)
-            && !rel.as_os_str().is_empty()
-            && let Ok(meta) = std::fs::symlink_metadata(protected)
-        {
+        if let Ok(rel) = protected.strip_prefix(ws_target) {
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
             let container_path = Path::new("/workspace").join(rel);
-            if seen.insert(container_path.clone()) {
-                masked.push((container_path, meta.is_dir()));
+            match std::fs::symlink_metadata(protected) {
+                Ok(meta) => {
+                    if seen.insert(container_path.clone()) {
+                        masked.push((container_path, meta.is_dir()));
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // Protected path does not currently exist on disk.
+                    // Create an empty placeholder file so bwrap can bind /dev/null over it,
+                    // blocking shell creation with permission denied.
+                    if let Some(parent) = protected.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Ok(file) = std::fs::File::create_new(protected) {
+                        drop(file);
+                        placeholders_created.push(protected.clone());
+                        if seen.insert(container_path.clone()) {
+                            masked.push((container_path, false));
+                        }
+                    } else if protected.exists() {
+                        if seen.insert(container_path.clone()) {
+                            let is_dir = std::fs::symlink_metadata(protected)
+                                .map(|m| m.is_dir())
+                                .unwrap_or(false);
+                            masked.push((container_path, is_dir));
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(failed(format!(
+                        "failed to inspect protected path '{}': {e}",
+                        protected.display()
+                    )));
+                }
             }
         }
     }
 
     // 2. Scan ws_target for .git, .env*, .orbit-write-*
+    const MAX_SCAN_DIRS: usize = 50_000;
+    const MAX_DEPTH: usize = 32;
+
     let mut queue = VecDeque::new();
-    queue.push_back(PathBuf::new());
+    queue.push_back((PathBuf::new(), 0usize));
     let mut count = 0;
-    while let Some(rel) = queue.pop_front() {
+
+    while let Some((rel, depth)) = queue.pop_front() {
         count += 1;
-        if count > 10_000 {
-            break;
+        if count > MAX_SCAN_DIRS {
+            return Err(failed(format!(
+                "workspace directory count exceeds {MAX_SCAN_DIRS} while scanning protected paths; refusing to start read-write sandbox"
+            )));
         }
+        if depth > MAX_DEPTH {
+            return Err(failed(format!(
+                "workspace directory depth exceeds {MAX_DEPTH} at '{}'; refusing to start read-write sandbox",
+                rel.display()
+            )));
+        }
+
         let current_host = ws_target.join(&rel);
-        let Ok(entries) = std::fs::read_dir(&current_host) else {
-            continue;
+        let entries = match std::fs::read_dir(&current_host) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(failed(format!(
+                    "failed to read directory '{}' while scanning protected paths: {e}",
+                    current_host.display()
+                )));
+            }
         };
-        for entry in entries.flatten() {
+
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                failed(format!(
+                    "failed to read directory entry in '{}': {e}",
+                    current_host.display()
+                ))
+            })?;
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
             let child_rel = rel.join(&file_name);
             let child_host = ws_target.join(&child_rel);
-            let Ok(meta) = std::fs::symlink_metadata(&child_host) else {
-                continue;
+            let meta = match std::fs::symlink_metadata(&child_host) {
+                Ok(m) => m,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    return Err(failed(format!(
+                        "failed to inspect file '{}': {e}",
+                        child_host.display()
+                    )));
+                }
             };
+
             let is_dir = meta.is_dir();
+            let is_symlink = meta.file_type().is_symlink();
             let is_protected_name = name == ".git"
                 || name == ".env"
                 || name.starts_with(".env.")
@@ -604,18 +712,13 @@ pub fn collect_masked_paths(ws_target: &Path, protected_paths: &[PathBuf]) -> Ve
             if is_protected_name {
                 let container_path = Path::new("/workspace").join(&child_rel);
                 if seen.insert(container_path.clone()) {
-                    masked.push((container_path, is_dir));
+                    masked.push((container_path, is_dir && !is_symlink));
                 }
                 continue;
             }
 
-            if is_dir {
-                if ["target", "node_modules", ".venv", "__pycache__"].contains(&name.as_ref()) {
-                    continue;
-                }
-                if child_rel.components().count() <= 16 {
-                    queue.push_back(child_rel);
-                }
+            if is_dir && !is_symlink {
+                queue.push_back((child_rel, depth + 1));
             }
         }
     }
@@ -634,7 +737,7 @@ pub fn collect_masked_paths(ws_target: &Path, protected_paths: &[PathBuf]) -> Ve
         }
     }
 
-    filtered
+    Ok((filtered, placeholders_created))
 }
 
 pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result<(), RuntimeError> {
@@ -976,6 +1079,7 @@ async fn run_child_process(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[deprecated(note = "legacy snapshot execution API; use BwrapSandboxBackend instead")]
 pub async fn run_configured(
     workspace: Workspace,
     script: String,
@@ -1027,18 +1131,16 @@ pub async fn run_configured(
         None
     };
 
-    let child = backend
-        .build_command(
-            policy,
-            script_file.path(),
-            &spec,
-            Some(snapshot_path),
-            writable_source,
-            rust_toolchain,
-            mounts,
-        )?
-        .spawn()
-        .map_err(failed)?;
+    let (mut child_cmd, _placeholders) = backend.build_command(
+        policy,
+        script_file.path(),
+        &spec,
+        Some(snapshot_path),
+        writable_source,
+        rust_toolchain,
+        mounts,
+    )?;
+    let child = child_cmd.spawn().map_err(failed)?;
 
     let sandbox_label = if writable_snapshot {
         "bubblewrap; disposable writable workspace snapshot; changes discarded"
@@ -1087,15 +1189,18 @@ pub async fn run_configured(
     .await
 }
 
+#[deprecated(note = "legacy snapshot execution API; use BwrapSandboxBackend instead")]
 pub async fn run(
     workspace: Workspace,
     script: String,
     timeout: Duration,
     token: CancellationToken,
 ) -> Result<CommandResult, RuntimeError> {
+    #[allow(deprecated)]
     run_with_options(workspace, script, timeout, token, false).await
 }
 
+#[deprecated(note = "legacy snapshot execution API; use BwrapSandboxBackend instead")]
 pub async fn run_with_options(
     workspace: Workspace,
     script: String,
@@ -1103,9 +1208,11 @@ pub async fn run_with_options(
     token: CancellationToken,
     writable_snapshot: bool,
 ) -> Result<CommandResult, RuntimeError> {
+    #[allow(deprecated)]
     run_with_toolchain(workspace, script, timeout, token, writable_snapshot, None).await
 }
 
+#[deprecated(note = "legacy snapshot execution API; use BwrapSandboxBackend instead")]
 pub async fn run_with_toolchain(
     workspace: Workspace,
     script: String,
@@ -1114,6 +1221,7 @@ pub async fn run_with_toolchain(
     writable_snapshot: bool,
     rust_toolchain: Option<&Path>,
 ) -> Result<CommandResult, RuntimeError> {
+    #[allow(deprecated)]
     run_with_resources(
         workspace,
         script,
@@ -1126,6 +1234,7 @@ pub async fn run_with_toolchain(
     .await
 }
 
+#[deprecated(note = "legacy snapshot execution API; use BwrapSandboxBackend instead")]
 pub async fn run_with_resources(
     workspace: Workspace,
     script: String,
@@ -1135,6 +1244,7 @@ pub async fn run_with_resources(
     rust_toolchain: Option<&Path>,
     scratch: Option<&Path>,
 ) -> Result<CommandResult, RuntimeError> {
+    #[allow(deprecated)]
     run_with_resources_and_output(
         workspace,
         script,
@@ -1149,6 +1259,7 @@ pub async fn run_with_resources(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[deprecated(note = "legacy snapshot execution API; use BwrapSandboxBackend instead")]
 pub async fn run_with_resources_and_output(
     workspace: Workspace,
     script: String,
@@ -1161,6 +1272,7 @@ pub async fn run_with_resources_and_output(
 ) -> Result<CommandResult, RuntimeError> {
     let scan_limits = WorkspaceScanLimits::default();
     let process_limits = ProcessLimits::default();
+    #[allow(deprecated)]
     run_configured(
         workspace,
         script,
@@ -1421,5 +1533,41 @@ mod tests {
                 .iter()
                 .any(|m| m.contains(dir.path().to_str().unwrap()))
         );
+    }
+
+    #[test]
+    fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders() {
+        let ws_dir = tempfile::tempdir().unwrap();
+        let ws = ws_dir.path();
+
+        // 1. Create a .env file inside a target/ directory
+        let target_dir = ws.join("target").join("debug");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join(".env"), "SECRET=123").unwrap();
+
+        // 2. Non-existent protected path (e.g. config.toml that does not exist yet)
+        let nonexistent_config = ws.join("config.toml");
+        assert!(!nonexistent_config.exists());
+
+        let protected_paths = vec![nonexistent_config.clone()];
+        let (masked, placeholders) = collect_masked_paths(ws, &protected_paths).unwrap();
+
+        // Target .env must be masked!
+        let has_target_env = masked
+            .iter()
+            .any(|(p, is_dir)| p == Path::new("/workspace/target/debug/.env") && !*is_dir);
+        assert!(has_target_env, "target/debug/.env should be masked");
+
+        // Non-existent config.toml must have had a placeholder created and masked!
+        let has_config = masked
+            .iter()
+            .any(|(p, is_dir)| p == Path::new("/workspace/config.toml") && !*is_dir);
+        assert!(has_config, "nonexistent config.toml should be masked");
+        assert_eq!(placeholders, vec![nonexistent_config.clone()]);
+        assert!(nonexistent_config.exists());
+
+        // Cleanup guard should delete it
+        drop(PlaceholderCleanup(placeholders));
+        assert!(!nonexistent_config.exists());
     }
 }

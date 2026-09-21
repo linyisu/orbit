@@ -39,7 +39,7 @@ impl Tool for RequestCapability {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "request_capability",
-            "Request permission to access a file or directory outside the workspace. Prompts the user with an approval dialog with the requested path, access level ('read' or 'read_write'), and reason. If approved, access is granted for the remainder of this session.",
+            "Request permission to access an existing file or directory outside the workspace. Path must exist; to create new files outside the workspace, request read_write permission for an existing parent directory. Prompts the user with an approval dialog with the requested path, access level ('read' or 'read_write'), and reason. If approved, access is granted for the remainder of this session.",
             json!({
                 "type": "object",
                 "properties": {
@@ -91,6 +91,18 @@ impl Tool for RequestCapability {
                 .map_err(|e| {
                     ToolError::ExecutionFailed(format!("invalid path '{expanded_path}': {e}"))
                 })?;
+
+            if !resolved.canonical().exists() {
+                let parent = resolved
+                    .canonical()
+                    .parent()
+                    .unwrap_or(std::path::Path::new("/"));
+                return Err(ToolError::ExecutionFailed(format!(
+                    "path '{}' does not exist. Sandbox capability mounts only attach existing resources; to create files outside the workspace, request read_write capability for the existing parent directory '{}'",
+                    expanded_path,
+                    parent.display()
+                )));
+            }
 
             let capability = FilesystemCapability {
                 environment: EnvironmentId::Local,

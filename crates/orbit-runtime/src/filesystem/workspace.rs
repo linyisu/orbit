@@ -5,6 +5,8 @@ use std::{
     sync::Arc,
 };
 
+use std::os::unix::fs::MetadataExt;
+
 use rustix::fs::{Mode, OFlags, openat};
 use thiserror::Error;
 
@@ -28,6 +30,30 @@ pub enum WorkspaceError {
     NotFile,
     #[error("cannot open workspace file (symlinks are not followed): {0}")]
     Io(#[from] io::Error),
+}
+
+fn open_canonical_parent_stepwise(canonical_parent: &Path) -> Result<File, WorkspaceError> {
+    if !canonical_parent.is_absolute() {
+        return Err(WorkspaceError::InvalidPath);
+    }
+    let mut current = File::open("/")?;
+    for component in canonical_parent.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => {
+                let next_fd = openat(
+                    &current,
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(io::Error::from)?;
+                current = File::from(next_fd);
+            }
+            _ => return Err(WorkspaceError::InvalidPath),
+        }
+    }
+    Ok(current)
 }
 
 #[derive(Clone)]
@@ -83,7 +109,12 @@ impl Workspace {
         network: NetworkPolicy,
     ) -> Result<(), WorkspaceError> {
         let resolved = ResolvedPath::resolve(&self.path, None).map_err(WorkspaceError::Io)?;
-        self.policy = PolicyEngine::with_permissions(resolved, permissions, network);
+        let policy = PolicyEngine::try_with_permissions(resolved, permissions, network)
+            .map_err(|e| WorkspaceError::PermissionDenied(e.to_string()))?;
+        self.policy = policy;
+        for p in &self.protected {
+            self.policy.add_protected_path(p.clone());
+        }
         Ok(())
     }
 
@@ -91,14 +122,21 @@ impl Workspace {
         let path = path.as_ref();
         let resolved = match path.canonicalize() {
             Ok(path) => path,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => path
-                .parent()
-                .ok_or(WorkspaceError::InvalidPath)?
-                .canonicalize()?
-                .join(path.file_name().ok_or(WorkspaceError::InvalidPath)?),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let parent = path.parent().ok_or(WorkspaceError::InvalidPath)?;
+                let parent_canon = if parent.as_os_str().is_empty() {
+                    self.path.clone()
+                } else if parent.exists() {
+                    parent.canonicalize()?
+                } else {
+                    return Err(WorkspaceError::InvalidPath);
+                };
+                parent_canon.join(path.file_name().ok_or(WorkspaceError::InvalidPath)?)
+            }
             Err(error) => return Err(error.into()),
         };
-        self.protected.push(resolved);
+        self.protected.push(resolved.clone());
+        self.policy.add_protected_path(resolved);
         Ok(())
     }
 
@@ -250,22 +288,12 @@ impl Workspace {
                     return Err(WorkspaceError::ProtectedPath);
                 }
 
-                let parent_file = File::open(parent_path)?;
+                let parent_file = open_canonical_parent_stepwise(parent_path)?;
                 let parent_meta = parent_file.metadata()?;
                 if !parent_meta.is_dir() {
                     return Err(WorkspaceError::NotDirectory);
                 }
                 self.check_protected_metadata(&parent_meta)?;
-
-                use std::os::unix::fs::MetadataExt;
-                let parent_symlink_meta = std::fs::symlink_metadata(parent_path)?;
-                if parent_meta.dev() != parent_symlink_meta.dev()
-                    || parent_meta.ino() != parent_symlink_meta.ino()
-                {
-                    return Err(WorkspaceError::Io(io::Error::other(
-                        "parent directory changed or swapped",
-                    )));
-                }
 
                 Ok((parent_file, file_name))
             }
@@ -304,17 +332,10 @@ impl Workspace {
                     }
                 }
 
-                let dir = File::open(&canonical)?;
+                let dir = open_canonical_parent_stepwise(&canonical)?;
                 let meta = dir.metadata()?;
                 if !meta.is_dir() {
                     return Err(WorkspaceError::NotDirectory);
-                }
-                use std::os::unix::fs::MetadataExt;
-                let symlink_meta = std::fs::symlink_metadata(&canonical)?;
-                if meta.dev() != symlink_meta.dev() || meta.ino() != symlink_meta.ino() {
-                    return Err(WorkspaceError::Io(io::Error::other(
-                        "directory swapped during open",
-                    )));
                 }
                 self.check_protected_metadata(&meta)?;
                 Ok(dir)
@@ -445,22 +466,12 @@ impl Workspace {
                 let parent_path = canonical.parent().ok_or(WorkspaceError::InvalidPath)?;
                 let file_name = canonical.file_name().ok_or(WorkspaceError::InvalidPath)?;
 
-                let parent_file = File::open(parent_path)?;
+                let parent_file = open_canonical_parent_stepwise(parent_path)?;
                 let parent_meta = parent_file.metadata()?;
                 if !parent_meta.is_dir() {
                     return Err(WorkspaceError::NotDirectory);
                 }
                 self.check_protected_metadata(&parent_meta)?;
-
-                use std::os::unix::fs::MetadataExt;
-                let parent_symlink_meta = std::fs::symlink_metadata(parent_path)?;
-                if parent_meta.dev() != parent_symlink_meta.dev()
-                    || parent_meta.ino() != parent_symlink_meta.ino()
-                {
-                    return Err(WorkspaceError::Io(io::Error::other(
-                        "parent directory changed or swapped",
-                    )));
-                }
 
                 let fd = openat(
                     &parent_file,
