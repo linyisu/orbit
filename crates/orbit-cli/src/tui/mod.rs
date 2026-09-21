@@ -1886,7 +1886,7 @@ fn resume_ui_shell(state: &UiState) -> UiState {
     restored.auto_compact = state.auto_compact;
     restored.max_output_tokens = state.max_output_tokens;
     restored.model_completions = state.model_completions.clone();
-    restored.permission_mode = state.permission_mode;
+    restored.permission_mode = crate::tui::permissions::Mode::Auto;
     restored
 }
 
@@ -2248,6 +2248,24 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
 mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
+
+    #[test]
+    fn resume_ui_shell_resets_permission_mode_to_auto() {
+        let mut state = UiState::new("test::model");
+        state.permission_mode = crate::tui::permissions::Mode::Yolo;
+        let restored = resume_ui_shell(&state);
+        assert_eq!(
+            restored.permission_mode,
+            crate::tui::permissions::Mode::Auto
+        );
+
+        state.permission_mode = crate::tui::permissions::Mode::Ask;
+        let restored = resume_ui_shell(&state);
+        assert_eq!(
+            restored.permission_mode,
+            crate::tui::permissions::Mode::Auto
+        );
+    }
 
     #[test]
     fn overview_budget_counts_only_matching_tool_results_in_effective_history() {

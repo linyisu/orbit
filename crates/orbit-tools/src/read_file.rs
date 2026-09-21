@@ -6,9 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use orbit_runtime::capability::{EnvironmentId, FilesystemAccess, FilesystemCapability};
 use orbit_runtime::filesystem::Workspace;
-use orbit_runtime::policy::PolicyDecision;
 
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
@@ -96,29 +94,8 @@ fn read(
     arguments: ReadArguments,
     cancellation: CancellationToken,
 ) -> Result<String, ToolError> {
-    let cap = FilesystemCapability {
-        environment: EnvironmentId::Local,
-        path: std::path::PathBuf::from(&arguments.path),
-        access: FilesystemAccess::Read,
-    };
-
-    match workspace.policy().check_filesystem(&cap) {
-        PolicyDecision::Granted => {}
-        PolicyDecision::NeedsApproval(_) => {
-            return Err(ToolError::ExecutionFailed(format!(
-                "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
-                arguments.path
-            )));
-        }
-        PolicyDecision::Denied(reason) => {
-            return Err(ToolError::ExecutionFailed(format!(
-                "permission denied: {reason}"
-            )));
-        }
-    }
-
     let file = workspace
-        .open_granted_read(Path::new(&arguments.path))
+        .authorize_read(Path::new(&arguments.path))
         .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
     let mut bytes = Vec::new();
     file.take(MAX_FILE_BYTES + 1)

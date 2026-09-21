@@ -24,7 +24,7 @@ impl FilesystemGrant {
         Self {
             environment,
             path,
-            read,
+            read: read || write,
             write,
         }
     }
@@ -39,8 +39,11 @@ impl FilesystemGrant {
 
     /// Merge another grant into this grant, combining access rights (R + W -> RW).
     pub fn merge(&mut self, other: &Self) {
-        self.read |= other.read;
+        self.read |= other.read || other.write;
         self.write |= other.write;
+        if self.write {
+            self.read = true;
+        }
     }
 }
 
@@ -64,37 +67,42 @@ impl SessionGrantStore {
     /// and normalizing redundant child grants.
     pub fn grant(&mut self, new_grant: FilesystemGrant) {
         // 1. Check if an exact grant for the same environment and path already exists
-        if let Some(existing) = self.filesystem.iter_mut().find(|g| {
+        let grant_to_check = if let Some(existing) = self.filesystem.iter_mut().find(|g| {
             g.environment == new_grant.environment
                 && g.path.canonical() == new_grant.path.canonical()
         }) {
             existing.merge(&new_grant);
-            return;
-        }
+            existing.clone()
+        } else {
+            // 2. If an existing grant already covers this path with equal or greater permissions, skip redundant
+            let is_redundant = self.filesystem.iter().any(|existing| {
+                existing.environment == new_grant.environment
+                    && new_grant.path.is_subpath_of(&existing.path)
+                    && (!new_grant.read || existing.read)
+                    && (!new_grant.write || existing.write)
+            });
 
-        // 2. If an existing grant already covers this path with equal or greater permissions, skip redundant
-        let is_redundant = self.filesystem.iter().any(|existing| {
-            existing.environment == new_grant.environment
-                && new_grant.path.is_subpath_of(&existing.path)
-                && (!new_grant.read || existing.read)
-                && (!new_grant.write || existing.write)
-        });
+            if is_redundant {
+                return;
+            }
 
-        if is_redundant {
-            return;
-        }
+            self.filesystem.push(new_grant.clone());
+            new_grant
+        };
 
         // 3. Remove existing subpath grants that are made redundant by the new broader grant
         self.filesystem.retain(|existing| {
-            let is_child_redundant = existing.environment == new_grant.environment
-                && existing.path.is_subpath_of(&new_grant.path)
-                && (!existing.read || new_grant.read)
-                && (!existing.write || new_grant.write);
+            if existing.environment != grant_to_check.environment
+                || existing.path.canonical() == grant_to_check.path.canonical()
+            {
+                return true;
+            }
+            let is_child_redundant = existing.path.is_subpath_of(&grant_to_check.path)
+                && (!existing.read || grant_to_check.read)
+                && (!existing.write || grant_to_check.write);
 
             !is_child_redundant
         });
-
-        self.filesystem.push(new_grant);
     }
 
     pub fn clear(&mut self) {
@@ -259,8 +267,12 @@ impl PolicyEngine {
 
     /// Check whether a filesystem capability request is allowed under the current effective policy.
     pub fn check_filesystem(&self, capability: &FilesystemCapability) -> PolicyDecision {
-        let base_dir = self.policy.base.workspace.canonical();
-        let resolved = match ResolvedPath::resolve(&capability.path, Some(base_dir)) {
+        let base_dir = if capability.environment.is_local() {
+            Some(self.policy.base.workspace.canonical())
+        } else {
+            None
+        };
+        let resolved = match ResolvedPath::resolve(&capability.path, base_dir) {
             Ok(p) => p,
             Err(e) => return PolicyDecision::Denied(format!("invalid path: {e}")),
         };
@@ -269,6 +281,16 @@ impl PolicyEngine {
         if capability.environment.is_local() && resolved.is_subpath_of(&self.policy.base.workspace)
         {
             return PolicyDecision::Granted;
+        }
+
+        // 2. Reject reserved runtime/system paths for local environment
+        if capability.environment.is_local()
+            && crate::execution::process::is_reserved_system_path(resolved.canonical())
+        {
+            return PolicyDecision::Denied(format!(
+                "path '{}' is a reserved runtime path and cannot be granted as external capability",
+                resolved.canonical().display()
+            ));
         }
 
         // 2. Persistent workspace permissions

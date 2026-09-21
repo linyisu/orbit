@@ -19,11 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::approval::{
     ApprovalPreview, ApprovalRequest, ApprovalSender, DeletePreview, WritePreview,
 };
-use orbit_runtime::{
-    capability::{EnvironmentId, FilesystemAccess, FilesystemCapability},
-    filesystem::{Workspace, WorkspaceError},
-    policy::PolicyDecision,
-};
+use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 
 const MAX_BYTES: usize = 1024 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
@@ -307,27 +303,8 @@ struct Prepared {
 
 impl Prepared {
     fn new(workspace: Workspace, args: Arguments) -> Result<Self, ToolError> {
-        let cap = FilesystemCapability {
-            environment: EnvironmentId::Local,
-            path: std::path::PathBuf::from(&args.path),
-            access: FilesystemAccess::ReadWrite,
-        };
-
-        match workspace.policy().check_filesystem(&cap) {
-            PolicyDecision::Granted => {}
-            PolicyDecision::NeedsApproval(_) => {
-                return Err(failed(format!(
-                    "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
-                    args.path
-                )));
-            }
-            PolicyDecision::Denied(reason) => {
-                return Err(failed(format!("permission denied: {reason}")));
-            }
-        }
-
         let (parent, _) = workspace
-            .open_granted_write_parent(Path::new(&args.path))
+            .authorize_write_parent(Path::new(&args.path))
             .map_err(failed)?;
         let metadata = parent.metadata().map_err(failed)?;
         let (before, text) = snapshot(&workspace, &args.path)?;
@@ -389,7 +366,7 @@ impl Prepared {
         let path = Path::new(&self.preview.path);
         let (parent, name) = self
             .workspace
-            .open_granted_write_parent(path)
+            .authorize_write_parent(path)
             .map_err(failed)?;
         let metadata = parent.metadata().map_err(failed)?;
         if (metadata.dev(), metadata.ino()) != self.parent {
@@ -468,7 +445,7 @@ fn snapshot(
     workspace: &Workspace,
     path: &str,
 ) -> Result<(Option<Fingerprint>, Option<String>), ToolError> {
-    let file = match workspace.open_granted_read(Path::new(path)) {
+    let file = match workspace.authorize_read(Path::new(path)) {
         Ok(file) => file,
         Err(WorkspaceError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
             return Ok((None, None));

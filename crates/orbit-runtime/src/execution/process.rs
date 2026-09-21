@@ -162,6 +162,27 @@ pub fn is_reserved_mount_target(normalized_target: &Path) -> bool {
     false
 }
 
+pub fn is_reserved_system_path(path: &Path) -> bool {
+    const EXACT_RESERVED: &[&str] = &["/", "/tmp", "/opt", "/opt/orbit-cache", "/workspace"];
+    const PREFIX_RESERVED: &[&str] = &[
+        "/proc", "/dev", "/sys", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
+    ];
+
+    for exact in EXACT_RESERVED {
+        if path == Path::new(exact) {
+            return true;
+        }
+    }
+
+    for prefix in PREFIX_RESERVED {
+        if path == Path::new(prefix) || path.starts_with(Path::new(prefix)) {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProcessLimits {
@@ -212,6 +233,7 @@ pub struct ProcessSpec {
     pub workspace_files: usize,
     pub skipped_entries: usize,
     pub fingerprint: Option<WorkspaceFingerprint>,
+    pub protected_paths: Vec<PathBuf>,
 }
 
 impl ProcessSpec {
@@ -227,6 +249,7 @@ impl ProcessSpec {
             workspace_files: 0,
             skipped_entries: 0,
             fingerprint: None,
+            protected_paths: Vec::new(),
         }
     }
 }

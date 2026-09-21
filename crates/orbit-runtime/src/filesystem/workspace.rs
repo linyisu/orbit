@@ -22,6 +22,8 @@ pub enum WorkspaceError {
     InvalidPath,
     #[error("access to this configuration or metadata file is blocked")]
     ProtectedPath,
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
     #[error("only regular files can be read")]
     NotFile,
     #[error("cannot open workspace file (symlinks are not followed): {0}")]
@@ -59,8 +61,16 @@ impl Workspace {
         &self.path
     }
 
+    pub fn protected(&self) -> &[PathBuf] {
+        &self.protected
+    }
+
     pub fn policy(&self) -> &PolicyEngine {
         &self.policy
+    }
+
+    pub fn clear_session_grants(&self) {
+        self.policy.clear_session_grants();
     }
 
     pub fn set_policy(&mut self, policy: PolicyEngine) {
@@ -189,7 +199,7 @@ impl Workspace {
         Ok(())
     }
 
-    pub fn open_granted_write_parent(
+    pub fn authorize_write_parent(
         &self,
         path: &Path,
     ) -> Result<(File, std::ffi::OsString), WorkspaceError> {
@@ -199,11 +209,32 @@ impl Workspace {
             Err(WorkspaceError::NotFile) => Err(WorkspaceError::NotFile),
             Err(WorkspaceError::NotDirectory) => Err(WorkspaceError::NotDirectory),
             Err(WorkspaceError::Io(err)) => Err(WorkspaceError::Io(err)),
+            Err(WorkspaceError::PermissionDenied(err)) => {
+                Err(WorkspaceError::PermissionDenied(err))
+            }
             Err(WorkspaceError::InvalidPath) => {
                 let resolved =
                     ResolvedPath::resolve(path, Some(&self.path)).map_err(WorkspaceError::Io)?;
                 let canonical = resolved.canonical();
                 self.check_protected_path(canonical)?;
+
+                let cap = crate::capability::FilesystemCapability {
+                    environment: crate::capability::EnvironmentId::Local,
+                    path: canonical.to_path_buf(),
+                    access: crate::capability::FilesystemAccess::ReadWrite,
+                };
+                match self.policy.check_filesystem(&cap) {
+                    crate::policy::PolicyDecision::Granted => {}
+                    crate::policy::PolicyDecision::NeedsApproval(_) => {
+                        return Err(WorkspaceError::PermissionDenied(format!(
+                            "write permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                            path.display()
+                        )));
+                    }
+                    crate::policy::PolicyDecision::Denied(reason) => {
+                        return Err(WorkspaceError::PermissionDenied(reason));
+                    }
+                }
 
                 let parent_path = canonical.parent().ok_or(WorkspaceError::InvalidPath)?;
                 let file_name = canonical
@@ -241,16 +272,37 @@ impl Workspace {
         }
     }
 
-    pub fn open_granted_directory(&self, path: &Path) -> Result<File, WorkspaceError> {
+    pub fn authorize_directory(&self, path: &Path) -> Result<File, WorkspaceError> {
         match self.open_directory(path) {
             Ok(file) => Ok(file),
             Err(WorkspaceError::ProtectedPath) => Err(WorkspaceError::ProtectedPath),
             Err(WorkspaceError::NotFile) => Err(WorkspaceError::NotFile),
             Err(WorkspaceError::NotDirectory) => Err(WorkspaceError::NotDirectory),
             Err(WorkspaceError::Io(err)) => Err(WorkspaceError::Io(err)),
+            Err(WorkspaceError::PermissionDenied(err)) => {
+                Err(WorkspaceError::PermissionDenied(err))
+            }
             Err(WorkspaceError::InvalidPath) => {
                 let canonical = path.canonicalize()?;
                 self.check_protected_path(&canonical)?;
+
+                let cap = crate::capability::FilesystemCapability {
+                    environment: crate::capability::EnvironmentId::Local,
+                    path: canonical.clone(),
+                    access: crate::capability::FilesystemAccess::Read,
+                };
+                match self.policy.check_filesystem(&cap) {
+                    crate::policy::PolicyDecision::Granted => {}
+                    crate::policy::PolicyDecision::NeedsApproval(_) => {
+                        return Err(WorkspaceError::PermissionDenied(format!(
+                            "directory read permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                            path.display()
+                        )));
+                    }
+                    crate::policy::PolicyDecision::Denied(reason) => {
+                        return Err(WorkspaceError::PermissionDenied(reason));
+                    }
+                }
 
                 let dir = File::open(&canonical)?;
                 let meta = dir.metadata()?;
@@ -268,6 +320,32 @@ impl Workspace {
                 Ok(dir)
             }
         }
+    }
+
+    pub fn authorize_directory_entries(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
+        let directory = self.authorize_directory(path)?;
+        Self::read_directory_entries(&directory)
+    }
+
+    pub fn open_granted_write_parent(
+        &self,
+        path: &Path,
+    ) -> Result<(File, std::ffi::OsString), WorkspaceError> {
+        self.authorize_write_parent(path)
+    }
+
+    pub fn open_granted_directory(&self, path: &Path) -> Result<File, WorkspaceError> {
+        self.authorize_directory(path)
+    }
+
+    pub fn open_granted_directory_entries(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
+        self.authorize_directory_entries(path)
     }
 
     pub fn read_directory_entries(
@@ -288,14 +366,6 @@ impl Workspace {
         }
         names.sort();
         Ok(names)
-    }
-
-    pub fn open_granted_directory_entries(
-        &self,
-        path: &Path,
-    ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
-        let directory = self.open_granted_directory(path)?;
-        Self::read_directory_entries(&directory)
     }
 
     pub fn directory_entries(
@@ -340,16 +410,37 @@ impl Workspace {
         Err(WorkspaceError::InvalidPath)
     }
 
-    pub fn open_granted_read(&self, path: &Path) -> Result<File, WorkspaceError> {
+    pub fn authorize_read(&self, path: &Path) -> Result<File, WorkspaceError> {
         match self.open_read(path) {
             Ok(file) => Ok(file),
             Err(WorkspaceError::ProtectedPath) => Err(WorkspaceError::ProtectedPath),
             Err(WorkspaceError::NotFile) => Err(WorkspaceError::NotFile),
             Err(WorkspaceError::NotDirectory) => Err(WorkspaceError::NotDirectory),
             Err(WorkspaceError::Io(err)) => Err(WorkspaceError::Io(err)),
+            Err(WorkspaceError::PermissionDenied(err)) => {
+                Err(WorkspaceError::PermissionDenied(err))
+            }
             Err(WorkspaceError::InvalidPath) => {
                 let canonical = path.canonicalize()?;
                 self.check_protected_path(&canonical)?;
+
+                let cap = crate::capability::FilesystemCapability {
+                    environment: crate::capability::EnvironmentId::Local,
+                    path: canonical.clone(),
+                    access: crate::capability::FilesystemAccess::Read,
+                };
+                match self.policy.check_filesystem(&cap) {
+                    crate::policy::PolicyDecision::Granted => {}
+                    crate::policy::PolicyDecision::NeedsApproval(_) => {
+                        return Err(WorkspaceError::PermissionDenied(format!(
+                            "read permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                            path.display()
+                        )));
+                    }
+                    crate::policy::PolicyDecision::Denied(reason) => {
+                        return Err(WorkspaceError::PermissionDenied(reason));
+                    }
+                }
 
                 let parent_path = canonical.parent().ok_or(WorkspaceError::InvalidPath)?;
                 let file_name = canonical.file_name().ok_or(WorkspaceError::InvalidPath)?;
@@ -367,7 +458,7 @@ impl Workspace {
                     || parent_meta.ino() != parent_symlink_meta.ino()
                 {
                     return Err(WorkspaceError::Io(io::Error::other(
-                        "parent directory swapped during open",
+                        "parent directory changed or swapped",
                     )));
                 }
 
@@ -395,5 +486,9 @@ impl Workspace {
                 Ok(file)
             }
         }
+    }
+
+    pub fn open_granted_read(&self, path: &Path) -> Result<File, WorkspaceError> {
+        self.authorize_read(path)
     }
 }

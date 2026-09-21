@@ -9,9 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use orbit_runtime::capability::{EnvironmentId, FilesystemAccess, FilesystemCapability};
 use orbit_runtime::filesystem::{Workspace, WorkspaceError};
-use orbit_runtime::policy::PolicyDecision;
 
 const MAX_VISITED: usize = 20_000;
 const MAX_OUTPUT: usize = 32 * 1024;
@@ -109,48 +107,29 @@ fn list(
         return Err(invalid("use a workspace-relative path without '..'"));
     }
 
-    let cap = FilesystemCapability {
-        environment: EnvironmentId::Local,
-        path: target_path.to_path_buf(),
-        access: FilesystemAccess::Read,
-    };
-    match workspace.policy().check_filesystem(&cap) {
-        PolicyDecision::Granted => {}
-        PolicyDecision::NeedsApproval(_) => {
-            return Err(failed(format!(
-                "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
-                args.path
-            )));
-        }
-        PolicyDecision::Denied(reason) => {
-            return Err(failed(format!("permission denied: {reason}")));
-        }
-    }
-
     let is_curdir = target_path
         .components()
         .all(|part| part == std::path::Component::CurDir);
 
     let (root, is_external) = if is_curdir {
+        workspace.open_directory(Path::new("")).map_err(failed)?;
         (PathBuf::new(), false)
     } else {
         match workspace.checked_relative(target_path) {
-            Ok(rel) => (rel, false),
+            Ok(rel) => {
+                workspace.open_directory(&rel).map_err(failed)?;
+                (rel, false)
+            }
             Err(WorkspaceError::ProtectedPath) => {
                 return Err(failed(WorkspaceError::ProtectedPath));
             }
             Err(_) => {
                 let canonical = target_path.canonicalize().map_err(failed)?;
+                workspace.authorize_directory(&canonical).map_err(failed)?;
                 (canonical, true)
             }
         }
     };
-
-    if is_external {
-        workspace.open_granted_directory(&root).map_err(failed)?;
-    } else {
-        workspace.open_directory(&root).map_err(failed)?;
-    }
 
     let mut pending = VecDeque::from([(root, 1)]);
     let mut entries: Vec<Value> = Vec::new();
@@ -166,7 +145,7 @@ fn list(
         }
         let names = if is_external {
             workspace
-                .open_granted_directory_entries(&directory)
+                .authorize_directory_entries(&directory)
                 .map_err(failed)?
         } else {
             workspace.directory_entries(&directory).map_err(failed)?
@@ -189,9 +168,9 @@ fn list(
             }
             let path = directory.join(&name);
             let kind = if is_external {
-                match workspace.open_granted_read(&path) {
+                match workspace.authorize_read(&path) {
                     Ok(_) => "file",
-                    Err(WorkspaceError::NotFile) => match workspace.open_granted_directory(&path) {
+                    Err(WorkspaceError::NotFile) => match workspace.authorize_directory(&path) {
                         Ok(_) => {
                             if level < args.depth
                                 && !matches!(

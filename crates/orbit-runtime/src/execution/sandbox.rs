@@ -355,6 +355,17 @@ impl BwrapSandboxBackend {
             } else {
                 command.arg("--bind").arg(ws_target).arg("/workspace");
             }
+
+            let masked = collect_masked_paths(ws_target, &spec.protected_paths);
+            for (container_path, is_dir) in masked {
+                if let Some(path_str) = container_path.to_str() {
+                    if is_dir {
+                        command.args(["--tmpfs", path_str]);
+                    } else {
+                        command.args(["--ro-bind", "/dev/null", path_str]);
+                    }
+                }
+            }
         }
 
         mount_scratch_and_tmp(&mut command, spec.scratch.as_deref())?;
@@ -499,6 +510,12 @@ fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result
     for path in &policy.persistent_read_write {
         let canonical = path.canonical();
         if canonical.exists() {
+            if crate::execution::process::is_reserved_system_path(canonical) {
+                return Err(failed(format!(
+                    "persistent capability target '{}' is a reserved runtime path",
+                    canonical.display()
+                )));
+            }
             command.arg("--bind").arg(canonical).arg(canonical);
         }
     }
@@ -506,6 +523,12 @@ fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result
     for path in &policy.persistent_read {
         let canonical = path.canonical();
         if canonical.exists() {
+            if crate::execution::process::is_reserved_system_path(canonical) {
+                return Err(failed(format!(
+                    "persistent capability target '{}' is a reserved runtime path",
+                    canonical.display()
+                )));
+            }
             command.arg("--ro-bind").arg(canonical).arg(canonical);
         }
     }
@@ -515,6 +538,12 @@ fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result
             if grant.environment.is_local() {
                 let canonical = grant.path.canonical();
                 if canonical.exists() {
+                    if crate::execution::process::is_reserved_system_path(canonical) {
+                        return Err(failed(format!(
+                            "session capability target '{}' is a reserved runtime path",
+                            canonical.display()
+                        )));
+                    }
                     if grant.write {
                         command.arg("--bind").arg(canonical).arg(canonical);
                     } else if grant.read {
@@ -526,6 +555,86 @@ fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result
     }
 
     Ok(())
+}
+
+pub fn collect_masked_paths(ws_target: &Path, protected_paths: &[PathBuf]) -> Vec<(PathBuf, bool)> {
+    let mut masked = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // 1. Check spec.protected_paths
+    for protected in protected_paths {
+        if let Ok(rel) = protected.strip_prefix(ws_target)
+            && !rel.as_os_str().is_empty()
+            && let Ok(meta) = std::fs::symlink_metadata(protected)
+        {
+            let container_path = Path::new("/workspace").join(rel);
+            if seen.insert(container_path.clone()) {
+                masked.push((container_path, meta.is_dir()));
+            }
+        }
+    }
+
+    // 2. Scan ws_target for .git, .env*, .orbit-write-*
+    let mut queue = VecDeque::new();
+    queue.push_back(PathBuf::new());
+    let mut count = 0;
+    while let Some(rel) = queue.pop_front() {
+        count += 1;
+        if count > 10_000 {
+            break;
+        }
+        let current_host = ws_target.join(&rel);
+        let Ok(entries) = std::fs::read_dir(&current_host) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            let child_rel = rel.join(&file_name);
+            let child_host = ws_target.join(&child_rel);
+            let Ok(meta) = std::fs::symlink_metadata(&child_host) else {
+                continue;
+            };
+            let is_dir = meta.is_dir();
+            let is_protected_name = name == ".git"
+                || name == ".env"
+                || name.starts_with(".env.")
+                || name.starts_with(".orbit-write-");
+
+            if is_protected_name {
+                let container_path = Path::new("/workspace").join(&child_rel);
+                if seen.insert(container_path.clone()) {
+                    masked.push((container_path, is_dir));
+                }
+                continue;
+            }
+
+            if is_dir {
+                if ["target", "node_modules", ".venv", "__pycache__"].contains(&name.as_ref()) {
+                    continue;
+                }
+                if child_rel.components().count() <= 16 {
+                    queue.push_back(child_rel);
+                }
+            }
+        }
+    }
+
+    // Filter so that if a parent directory is already masked with tmpfs, child paths are omitted
+    let mut filtered = Vec::new();
+    masked.sort_by_key(|(p, _)| p.components().count());
+    for (path, is_dir) in masked {
+        let is_covered = filtered
+            .iter()
+            .any(|(parent, parent_is_dir): &(PathBuf, bool)| {
+                *parent_is_dir && path.starts_with(parent) && &path != parent
+            });
+        if !is_covered {
+            filtered.push((path, is_dir));
+        }
+    }
+
+    filtered
 }
 
 pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result<(), RuntimeError> {
@@ -1286,6 +1395,7 @@ mod tests {
             workspace_files: 0,
             skipped_entries: 0,
             fingerprint: Some(WorkspaceFingerprint::default()),
+            protected_paths: Vec::new(),
         };
         let formatted: Vec<String> = spec
             .mounts

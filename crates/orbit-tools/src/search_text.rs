@@ -12,9 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use orbit_runtime::capability::{EnvironmentId, FilesystemAccess, FilesystemCapability};
 use orbit_runtime::filesystem::{Workspace, WorkspaceError};
-use orbit_runtime::policy::PolicyDecision;
 
 const MAX_VISITED: usize = 20_000;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -215,7 +213,7 @@ fn search(
 
         let (relative_or_path, file_result) = if is_external {
             let path = entry.path().to_path_buf();
-            let file = workspace.open_granted_read(&path);
+            let file = workspace.authorize_read(&path);
             (path, file)
         } else {
             let relative = match entry.path().strip_prefix(workspace.root()) {
@@ -325,24 +323,6 @@ fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
         return Err(invalid("use a workspace-relative path without '..'"));
     }
 
-    let cap = FilesystemCapability {
-        environment: EnvironmentId::Local,
-        path: target_path.to_path_buf(),
-        access: FilesystemAccess::Read,
-    };
-    match workspace.policy().check_filesystem(&cap) {
-        PolicyDecision::Granted => {}
-        PolicyDecision::NeedsApproval(_) => {
-            return Err(failed(format!(
-                "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
-                path
-            )));
-        }
-        PolicyDecision::Denied(reason) => {
-            return Err(failed(format!("permission denied: {reason}")));
-        }
-    }
-
     if target_path
         .components()
         .all(|component| component == std::path::Component::CurDir)
@@ -366,12 +346,16 @@ fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
         }
         Err(_) => {
             let canonical = target_path.canonicalize().map_err(failed)?;
-            if workspace.open_granted_directory(&canonical).is_err()
-                && workspace.open_granted_read(&canonical).is_err()
-            {
-                return Err(invalid("path must name a readable file or directory"));
+            match workspace.authorize_directory(&canonical) {
+                Ok(_) => Ok(SearchScope::External(canonical)),
+                Err(WorkspaceError::NotDirectory) => match workspace.authorize_read(&canonical) {
+                    Ok(_) => Ok(SearchScope::External(canonical)),
+                    Err(WorkspaceError::PermissionDenied(err)) => Err(failed(err)),
+                    Err(_) => Err(invalid("path must name a readable file or directory")),
+                },
+                Err(WorkspaceError::PermissionDenied(err)) => Err(failed(err)),
+                Err(_) => Err(invalid("path must name a readable file or directory")),
             }
-            Ok(SearchScope::External(canonical))
         }
     }
 }

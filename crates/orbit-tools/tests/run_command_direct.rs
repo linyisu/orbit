@@ -28,7 +28,8 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
                 "test",
                 "run_command",
                 json!({
-                    "command": "echo 'direct execution' > /workspace/output.txt"
+                    "command": "echo 'direct execution' > /workspace/output.txt",
+                    "workspace_access": "read_write"
                 }),
             ),
             CancellationToken::new(),
@@ -62,6 +63,52 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
         fs::read_to_string(created).unwrap().trim(),
         "direct execution"
     );
+}
+
+#[tokio::test]
+async fn run_command_defaults_to_read_only_workspace() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "test",
+                "run_command",
+                json!({
+                    "command": "echo 'should fail' > /workspace/readonly.txt"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    match &request.preview {
+        approval::ApprovalPreview::Command(preview) => {
+            assert_eq!(
+                preview.workspace_access,
+                approval::CommandWorkspaceAccess::Read
+            );
+        }
+        _ => panic!("expected command preview"),
+    }
+    request.decision.send(true).unwrap();
+
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    // Writing to read-only workspace fails
+    assert_ne!(value["exit_code"], 0);
+
+    let created = ws_temp.path().join("readonly.txt");
+    assert!(!created.exists());
 }
 
 #[tokio::test]
@@ -173,5 +220,70 @@ async fn run_command_accepts_deprecated_writable_snapshot_flag() {
     assert_eq!(
         fs::read_to_string(created).unwrap().trim(),
         "snapshot compat"
+    );
+}
+
+#[tokio::test]
+async fn run_command_masks_protected_files_and_git_directory_even_with_read_write() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let mut workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    let env_file = ws_temp.path().join(".env");
+    fs::write(&env_file, "SECRET_ENV_KEY=12345\n").unwrap();
+
+    let git_dir = ws_temp.path().join(".git");
+    fs::create_dir(&git_dir).unwrap();
+    let git_config = git_dir.join("config");
+    fs::write(&git_config, "SECRET_GIT_CONFIG\n").unwrap();
+
+    let config_file = ws_temp.path().join("config.toml");
+    fs::write(&config_file, "SECRET_CONFIG_DATA=xyz\n").unwrap();
+    workspace.protect(&config_file).unwrap();
+
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "test",
+                "run_command",
+                json!({
+                    "command": "cat /workspace/.env 2>/dev/null || true; cat /workspace/.git/config 2>/dev/null || true; cat /workspace/config.toml 2>/dev/null || true; echo hacked > /workspace/.env 2>/dev/null || true; rm -rf /workspace/.git 2>/dev/null || true; rm -f /workspace/config.toml 2>/dev/null || true",
+                    "workspace_access": "read_write"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    request.decision.send(true).unwrap();
+
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
+    // Verify secrets were not leaked into stdout
+    let stdout = value["stdout"].as_str().unwrap_or("");
+    assert!(!stdout.contains("SECRET_ENV_KEY"));
+    assert!(!stdout.contains("SECRET_GIT_CONFIG"));
+    assert!(!stdout.contains("SECRET_CONFIG_DATA"));
+
+    // Verify host files are unchanged
+    assert_eq!(
+        fs::read_to_string(&env_file).unwrap(),
+        "SECRET_ENV_KEY=12345\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&git_config).unwrap(),
+        "SECRET_GIT_CONFIG\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&config_file).unwrap(),
+        "SECRET_CONFIG_DATA=xyz\n"
     );
 }

@@ -13,11 +13,20 @@ pub struct DeletePreview {
     pub before: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandWorkspaceAccess {
+    #[default]
+    Read,
+    ReadWrite,
+}
+
 #[derive(Clone, Debug)]
 pub struct CommandPreview {
     pub writable_snapshot: bool,
     pub command: String,
     pub timeout_seconds: u64,
+    pub workspace_access: CommandWorkspaceAccess,
 }
 
 /// An MCP server is an external program with capabilities Orbit cannot

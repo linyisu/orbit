@@ -155,7 +155,11 @@ impl ChatMode {
     fn allows(self, preview: &orbit_tools::approval::ApprovalPreview) -> bool {
         match self {
             Self::ReadOnly => false,
-            Self::Auto => matches!(preview, orbit_tools::approval::ApprovalPreview::Command(_)),
+            Self::Auto => matches!(
+                preview,
+                orbit_tools::approval::ApprovalPreview::Command(cmd)
+                    if cmd.workspace_access == orbit_tools::approval::CommandWorkspaceAccess::Read
+            ),
             Self::Yolo => true,
         }
     }

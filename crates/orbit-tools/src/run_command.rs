@@ -14,7 +14,9 @@ use serde_json::json;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use crate::approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview};
+use crate::approval::{
+    ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview, CommandWorkspaceAccess,
+};
 use orbit_runtime::{
     execution::{BwrapSandboxBackend, OutputLog, ProcessSpec, SandboxBackend},
     filesystem::Workspace,
@@ -33,6 +35,8 @@ pub struct RunCommand {
 #[serde(deny_unknown_fields)]
 struct Arguments {
     command: String,
+    #[serde(default)]
+    workspace_access: CommandWorkspaceAccess,
     #[serde(default)]
     writable_snapshot: bool,
     #[serde(default)]
@@ -216,6 +220,12 @@ impl Tool for RunCommand {
                         "type": "string",
                         "description": "The shell command to execute"
                     },
+                    "workspace_access": {
+                        "type": "string",
+                        "enum": ["read", "read_write"],
+                        "default": "read",
+                        "description": "Workspace access mode. Defaults to 'read' (read-only workspace). Specify 'read_write' if the command needs to modify files in the workspace (such as cargo build, npm install, code generation)."
+                    },
                     "timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
@@ -248,9 +258,15 @@ impl Tool for RunCommand {
                 )));
             }
             let (sender, receiver) = oneshot::channel();
+            let workspace_access = if args.writable_snapshot {
+                CommandWorkspaceAccess::ReadWrite
+            } else {
+                args.workspace_access
+            };
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     command: args.command.clone(),
+                    workspace_access,
                     writable_snapshot: args.writable_snapshot,
                     timeout_seconds,
                 }),
@@ -285,16 +301,23 @@ impl Tool for RunCommand {
                 }
                 None => None,
             };
-            let (fingerprint, workspace_files, skipped_entries) =
-                orbit_runtime::execution::scan_workspace_summary(
-                    self.workspace.clone(),
-                    cancellation.clone(),
-                    self.limits.clone().into(),
-                )
-                .await?;
+            let pre_scan = orbit_runtime::execution::scan_workspace_summary(
+                self.workspace.clone(),
+                cancellation.clone(),
+                self.limits.clone().into(),
+            )
+            .await
+            .ok();
+
+            let (fingerprint, workspace_files, skipped_entries) = match pre_scan {
+                Some((f, wf, se)) => (Some(f), wf, se),
+                None => (None, 0, 0),
+            };
 
             let backend = BwrapSandboxBackend::new()?;
             let mut spec = ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
+            spec.read_only_workspace = workspace_access == CommandWorkspaceAccess::Read;
+            spec.protected_paths = self.workspace.protected().to_vec();
             spec.scratch = scratch.clone();
             spec.rust_toolchain = self.limits.rust_toolchain.clone();
             spec.mounts = self
@@ -306,22 +329,23 @@ impl Tool for RunCommand {
             spec.limits = self.limits.process_limits.clone();
             spec.workspace_files = workspace_files;
             spec.skipped_entries = skipped_entries;
-            spec.fingerprint = Some(fingerprint);
+            spec.fingerprint = fingerprint;
 
             let policy = self.workspace.policy().effective_policy();
             let mut result = backend
                 .run(spec, policy, output_log, cancellation.clone())
                 .await?;
 
-            let (post_fingerprint, _, _) = orbit_runtime::execution::scan_workspace_summary(
+            let post_scan = orbit_runtime::execution::scan_workspace_summary(
                 self.workspace.clone(),
                 cancellation,
                 self.limits.clone().into(),
             )
-            .await?;
+            .await
+            .ok();
 
             if let Some(evidence) = result.verification.as_mut() {
-                evidence.output = Some(post_fingerprint);
+                evidence.output = post_scan.map(|(fp, _, _)| fp);
             }
             let evidence = result.verification.take();
             serde_json::to_string(&result)
@@ -387,6 +411,7 @@ mod configuration_tests {
         let def = tool.definition();
         let props = def.function.parameters["properties"].as_object().unwrap();
         assert!(props.contains_key("command"));
+        assert!(props.contains_key("workspace_access"));
         assert!(props.contains_key("timeout_seconds"));
         assert!(!props.contains_key("writable_snapshot"));
     }

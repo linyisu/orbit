@@ -479,6 +479,9 @@ impl SessionState {
         self.writer = prepared.writer;
         self.snapshot = prepared.snapshot;
         self.git_baseline = prepared.git_baseline;
+        if let Some(ws) = &self.audit_workspace {
+            ws.clear_session_grants();
+        }
         *self.scratch.write().expect("scratch lock poisoned") = self
             .store
             .path()
@@ -506,6 +509,9 @@ impl SessionState {
         self.writer = writer;
         self.snapshot = snapshot;
         self.git_baseline = None;
+        if let Some(ws) = &self.audit_workspace {
+            ws.clear_session_grants();
+        }
         if let Some(baseline) =
             orbit_tools::git_inspect::capture_baseline(Path::new(&self.snapshot.session.workspace))
         {
@@ -931,5 +937,102 @@ mod tests {
         assert_eq!(ui.calibration().estimate(100), 500);
         ui.model = "new::model".into();
         assert_eq!(ui.calibration().estimate(100), 100);
+    }
+
+    #[tokio::test]
+    async fn test_session_switch_and_resume_clears_session_grants() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws_dir = tempfile::tempdir().unwrap();
+        let workspace = orbit_runtime::filesystem::Workspace::new(ws_dir.path()).unwrap();
+        let mut session =
+            SessionState::open(tmp.path().join("sessions.db"), None, "a::model".into())
+                .await
+                .unwrap();
+        session.audit_workspace = Some(workspace.clone());
+
+        // 1. Add ephemeral grant
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("file.txt");
+        std::fs::write(&file, "data").unwrap();
+        let res = orbit_runtime::filesystem::ResolvedPath::resolve(&file, None).unwrap();
+        workspace
+            .policy()
+            .record_grant(orbit_runtime::policy::FilesystemGrant::read_only(
+                orbit_runtime::capability::EnvironmentId::Local,
+                res.clone(),
+            ));
+        assert_eq!(
+            workspace
+                .policy()
+                .session_grants()
+                .read()
+                .unwrap()
+                .grants()
+                .len(),
+            1
+        );
+
+        // 2. Switching to a new session clears ephemeral grants
+        session.new_session("a::model".into()).await.unwrap();
+        assert_eq!(
+            workspace
+                .policy()
+                .session_grants()
+                .read()
+                .unwrap()
+                .grants()
+                .len(),
+            0
+        );
+
+        // 3. Add grant again and verify resume clears it
+        workspace
+            .policy()
+            .record_grant(orbit_runtime::policy::FilesystemGrant::read_only(
+                orbit_runtime::capability::EnvironmentId::Local,
+                res,
+            ));
+        assert_eq!(
+            workspace
+                .policy()
+                .session_grants()
+                .read()
+                .unwrap()
+                .grants()
+                .len(),
+            1
+        );
+
+        let writer2 = session
+            .store
+            .create(
+                session.snapshot.session.workspace.clone(),
+                "a::model".into(),
+                false,
+            )
+            .await
+            .unwrap();
+        let second_id = writer2.id().to_owned();
+        drop(writer2);
+
+        let prepared = SessionState::prepare_resume(
+            session.store.clone(),
+            session.snapshot.session.project_id.clone(),
+            second_id,
+        )
+        .await
+        .unwrap();
+
+        session.install_resume(prepared);
+        assert_eq!(
+            workspace
+                .policy()
+                .session_grants()
+                .read()
+                .unwrap()
+                .grants()
+                .len(),
+            0
+        );
     }
 }
