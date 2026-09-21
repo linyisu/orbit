@@ -94,8 +94,29 @@ fn read(
     arguments: ReadArguments,
     cancellation: CancellationToken,
 ) -> Result<String, ToolError> {
+    let cap = crate::capability::FilesystemCapability {
+        environment: crate::capability::EnvironmentId::Local,
+        path: std::path::PathBuf::from(&arguments.path),
+        access: crate::capability::FilesystemAccess::Read,
+    };
+
+    match workspace.policy().check_filesystem(&cap) {
+        crate::policy::PolicyDecision::Granted => {}
+        crate::policy::PolicyDecision::NeedsApproval(_) => {
+            return Err(ToolError::ExecutionFailed(format!(
+                "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                arguments.path
+            )));
+        }
+        crate::policy::PolicyDecision::Denied(reason) => {
+            return Err(ToolError::ExecutionFailed(format!(
+                "permission denied: {reason}"
+            )));
+        }
+    }
+
     let file = workspace
-        .open_read(Path::new(&arguments.path))
+        .open_granted_read(Path::new(&arguments.path))
         .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
     let mut bytes = Vec::new();
     file.take(MAX_FILE_BYTES + 1)

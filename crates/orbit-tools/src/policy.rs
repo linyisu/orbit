@@ -223,6 +223,10 @@ impl PolicyEngine {
         &self.policy.base.workspace
     }
 
+    pub fn effective_policy(&self) -> &EffectivePolicy {
+        &self.policy
+    }
+
     pub fn network_policy(&self) -> NetworkPolicy {
         self.policy.base.network
     }

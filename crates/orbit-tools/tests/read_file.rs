@@ -258,3 +258,45 @@ fn protects_database_sidecars_created_after_registry_initialization() {
     fs::hard_link(&sidecar, root.0.join("alias")).unwrap();
     assert!(workspace.open_read(std::path::Path::new("alias")).is_err());
 }
+
+#[tokio::test]
+async fn read_file_can_read_granted_outside_path() {
+    let root = Fixture::new();
+    let outside = Fixture::new();
+    let outside_file = outside.0.join("external.txt");
+    fs::write(&outside_file, "granted outside content\n").unwrap();
+
+    let workspace = Workspace::new(&root.0).unwrap();
+
+    // 1. Without grant: should fail with permission denied
+    let tool = ReadFile::new(workspace.clone());
+    let err = tool
+        .execute(
+            call(json!({"path": outside_file.display().to_string()})),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("permission denied"));
+
+    // 2. With grant: should succeed
+    let resolved = orbit_tools::path_security::ResolvedPath::resolve(&outside_file, None).unwrap();
+    workspace
+        .policy()
+        .record_grant(orbit_tools::policy::FilesystemGrant {
+            environment: orbit_tools::capability::EnvironmentId::Local,
+            path: resolved,
+            read: true,
+            write: false,
+        });
+
+    let output = tool
+        .execute(
+            call(json!({"path": outside_file.display().to_string()})),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["content"], "1: granted outside content\n");
+}

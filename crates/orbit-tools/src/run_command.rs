@@ -16,10 +16,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview},
-    sandbox,
+    sandbox::{self, SandboxBackend},
     workspace::Workspace,
 };
 
+#[derive(Clone)]
 pub struct RunCommand {
     workspace: Workspace,
     approvals: ApprovalSender,
@@ -239,17 +240,26 @@ impl Tool for RunCommand {
                 }
                 None => None,
             };
-            let mut result = sandbox::run_configured(
-                self.workspace.clone(),
-                args.command,
-                Duration::from_secs(timeout_seconds),
-                cancellation,
-                args.writable_snapshot,
-                &self.limits,
-                scratch.as_deref(),
-                output_log,
-            )
-            .await?;
+            let mut result = if args.writable_snapshot {
+                sandbox::run_configured(
+                    self.workspace.clone(),
+                    args.command,
+                    Duration::from_secs(timeout_seconds),
+                    cancellation,
+                    true,
+                    &self.limits,
+                    scratch.as_deref(),
+                    output_log,
+                )
+                .await?
+            } else {
+                let backend = sandbox::BwrapSandboxBackend::new()?;
+                let mut spec =
+                    sandbox::ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
+                spec.scratch = scratch.clone();
+                let policy = self.workspace.policy().effective_policy();
+                backend.run(spec, policy, output_log, cancellation).await?
+            };
             let evidence = result.verification.take();
             serde_json::to_string(&result)
                 .map(|content| {

@@ -298,6 +298,25 @@ struct Prepared {
 
 impl Prepared {
     fn new(workspace: Workspace, args: Arguments) -> Result<Self, ToolError> {
+        let cap = crate::capability::FilesystemCapability {
+            environment: crate::capability::EnvironmentId::Local,
+            path: std::path::PathBuf::from(&args.path),
+            access: crate::capability::FilesystemAccess::Write,
+        };
+
+        match workspace.policy().check_filesystem(&cap) {
+            crate::policy::PolicyDecision::Granted => {}
+            crate::policy::PolicyDecision::NeedsApproval(_) => {
+                return Err(failed(format!(
+                    "permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                    args.path
+                )));
+            }
+            crate::policy::PolicyDecision::Denied(reason) => {
+                return Err(failed(format!("permission denied: {reason}")));
+            }
+        }
+
         let (parent, _) = workspace
             .write_parent(Path::new(&args.path))
             .map_err(failed)?;

@@ -8,6 +8,12 @@ use std::{
 use rustix::fs::{Mode, OFlags, openat};
 use thiserror::Error;
 
+use crate::{
+    capability::NetworkPolicy,
+    path_security::ResolvedPath,
+    policy::{PolicyEngine, WorkspacePermissions},
+};
+
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
     #[error("workspace root must be a directory")]
@@ -27,6 +33,7 @@ pub struct Workspace {
     root: Arc<File>,
     path: PathBuf,
     protected: Vec<PathBuf>,
+    policy: PolicyEngine,
 }
 
 impl Workspace {
@@ -37,15 +44,37 @@ impl Workspace {
             return Err(WorkspaceError::NotDirectory);
         }
 
+        let resolved = ResolvedPath::resolve(&path, None).map_err(WorkspaceError::Io)?;
+        let policy = PolicyEngine::new(resolved);
+
         Ok(Self {
             root: Arc::new(root),
             path,
             protected: Vec::new(),
+            policy,
         })
     }
 
     pub fn root(&self) -> &Path {
         &self.path
+    }
+
+    pub fn policy(&self) -> &PolicyEngine {
+        &self.policy
+    }
+
+    pub fn set_policy(&mut self, policy: PolicyEngine) {
+        self.policy = policy;
+    }
+
+    pub fn configure_policy(
+        &mut self,
+        permissions: WorkspacePermissions,
+        network: NetworkPolicy,
+    ) -> Result<(), WorkspaceError> {
+        let resolved = ResolvedPath::resolve(&self.path, None).map_err(WorkspaceError::Io)?;
+        self.policy = PolicyEngine::with_permissions(resolved, permissions, network);
+        Ok(())
     }
 
     pub fn protect(&mut self, path: impl AsRef<Path>) -> Result<(), WorkspaceError> {
@@ -195,5 +224,34 @@ impl Workspace {
             directory = file;
         }
         Err(WorkspaceError::InvalidPath)
+    }
+
+    pub fn open_granted_read(&self, path: &Path) -> Result<File, WorkspaceError> {
+        match self.open_read(path) {
+            Ok(file) => Ok(file),
+            Err(WorkspaceError::ProtectedPath) => Err(WorkspaceError::ProtectedPath),
+            Err(WorkspaceError::NotFile) => Err(WorkspaceError::NotFile),
+            Err(WorkspaceError::NotDirectory) => Err(WorkspaceError::NotDirectory),
+            Err(WorkspaceError::Io(err)) => Err(WorkspaceError::Io(err)),
+            Err(WorkspaceError::InvalidPath) => {
+                let canonical = path.canonicalize()?;
+                let file = File::open(&canonical)?;
+                let metadata = file.metadata()?;
+                if !metadata.is_file() {
+                    return Err(WorkspaceError::NotFile);
+                }
+
+                for protected in &self.protected {
+                    if let Ok(other) = protected.metadata() {
+                        use std::os::unix::fs::MetadataExt;
+                        if metadata.dev() == other.dev() && metadata.ino() == other.ino() {
+                            return Err(WorkspaceError::ProtectedPath);
+                        }
+                    }
+                }
+
+                Ok(file)
+            }
+        }
     }
 }
