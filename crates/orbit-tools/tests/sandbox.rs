@@ -503,6 +503,11 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
         ..Default::default()
     };
     let scan_limits = WorkspaceScanLimits::from(&limits);
+    let mounts: Vec<orbit_runtime::execution::MountSpec> = limits
+        .dependency_caches
+        .iter()
+        .map(|c| c.to_mount_spec())
+        .collect();
     let result = sandbox::run_configured(
         workspace.clone(),
         "cat /opt/orbit-cache/packages/package.txt; test ! -w /opt/orbit-cache/packages/package.txt && test ! -e /tmp/home/.ssh".into(),
@@ -512,7 +517,7 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
         &scan_limits,
         &limits.process_limits,
         None,
-        &limits.dependency_caches,
+        &mounts,
         None,
         None,
     )
@@ -520,7 +525,7 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
     .unwrap();
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stdout.contains("offline dependency"));
-    assert_eq!(result.verification.unwrap().dependency_caches.len(), 1);
+    assert_eq!(result.verification.unwrap().mounts.len(), 1);
     fs::write(root.path().join("large.bin"), vec![0; 1024 * 1024 + 1]).unwrap();
     let error = sandbox::run_configured(
         workspace,
@@ -531,7 +536,7 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
         &scan_limits,
         &limits.process_limits,
         None,
-        &limits.dependency_caches,
+        &mounts,
         None,
         None,
     )

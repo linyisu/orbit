@@ -20,8 +20,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     capability::NetworkPolicy,
     execution::process::{
-        CommandResult, DependencyCache, MAX_OUTPUT, MAX_RETAINED_OUTPUT_PER_STREAM, MIB, OutputLog,
-        ProcessLimits, ProcessSpec, TMP_SIZE_BYTES,
+        CommandResult, MAX_OUTPUT, MAX_RETAINED_OUTPUT_PER_STREAM, MIB, MountAccess, MountSpec,
+        OutputLog, ProcessLimits, ProcessSpec, TMP_SIZE_BYTES,
     },
     filesystem::workspace::{Workspace, WorkspaceError},
     policy::EffectivePolicy,
@@ -319,7 +319,7 @@ impl BwrapSandboxBackend {
         custom_workspace: Option<&Path>,
         writable_snapshot_source: Option<&Path>,
         rust_toolchain: Option<&Path>,
-        dependency_caches: &[DependencyCache],
+        mounts: &[MountSpec],
     ) -> Result<Command, RuntimeError> {
         let mut command = Command::new(&self.bwrap_path);
 
@@ -356,7 +356,7 @@ impl BwrapSandboxBackend {
         }
 
         mount_scratch_and_tmp(&mut command, spec.scratch.as_deref())?;
-        mount_toolchains_and_caches(&mut command, rust_toolchain, dependency_caches)?;
+        mount_toolchain_and_mounts(&mut command, rust_toolchain, mounts)?;
         mount_capabilities(&mut command, policy)?;
 
         configure_limits_and_entrypoint(
@@ -396,7 +396,7 @@ impl SandboxBackend for BwrapSandboxBackend {
                     None,
                     None,
                     spec.rust_toolchain.as_deref(),
-                    &spec.dependency_caches,
+                    &spec.mounts,
                 )?
                 .spawn()
                 .map_err(failed)?;
@@ -418,10 +418,10 @@ impl SandboxBackend for BwrapSandboxBackend {
                     .map(|p| p.display().to_string()),
                 writable_snapshot: false,
                 persistent_scratch: spec.scratch.is_some(),
-                dependency_caches: spec
-                    .dependency_caches
+                mounts: spec
+                    .mounts
                     .iter()
-                    .map(|c| format!("{}: {}", c.name, c.path.display()))
+                    .map(|m| format!("{}: {}", m.source.display(), m.target.display()))
                     .collect(),
             });
 
@@ -519,10 +519,10 @@ fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result
     Ok(())
 }
 
-fn mount_toolchains_and_caches(
+fn mount_toolchain_and_mounts(
     command: &mut Command,
     rust_toolchain: Option<&Path>,
-    dependency_caches: &[DependencyCache],
+    mounts: &[MountSpec],
 ) -> Result<(), RuntimeError> {
     if let Some(path) = rust_toolchain {
         let path = path.canonicalize().map_err(failed)?;
@@ -538,16 +538,23 @@ fn mount_toolchains_and_caches(
         command.arg("--ro-bind").arg(path).arg("/opt/orbit-rust");
     }
 
-    for cache in dependency_caches {
-        let path = cache.path.canonicalize().map_err(failed)?;
-        if !path.is_dir() {
-            return Err(failed("configured dependency cache must be a directory"));
+    for mount in mounts {
+        let path = mount.source.canonicalize().map_err(failed)?;
+        if !path.exists() {
+            return Err(failed(format!(
+                "configured mount source '{}' must exist",
+                mount.source.display()
+            )));
         }
 
-        command
-            .arg("--ro-bind")
-            .arg(path)
-            .arg(format!("/opt/orbit-cache/{}", cache.name));
+        match mount.access {
+            MountAccess::ReadOnly => {
+                command.arg("--ro-bind").arg(path).arg(&mount.target);
+            }
+            MountAccess::ReadWrite => {
+                command.arg("--bind").arg(path).arg(&mount.target);
+            }
+        }
     }
 
     Ok(())
@@ -805,7 +812,7 @@ pub async fn run_configured(
     scan_limits: &WorkspaceScanLimits,
     process_limits: &ProcessLimits,
     rust_toolchain: Option<&Path>,
-    dependency_caches: &[DependencyCache],
+    mounts: &[MountSpec],
     scratch: Option<&Path>,
     output_log: Option<OutputLog>,
 ) -> Result<CommandResult, RuntimeError> {
@@ -853,7 +860,7 @@ pub async fn run_configured(
             Some(snapshot_path),
             writable_source,
             rust_toolchain,
-            dependency_caches,
+            mounts,
         )?
         .spawn()
         .map_err(failed)?;
@@ -878,9 +885,9 @@ pub async fn run_configured(
         rust_toolchain: rust_toolchain.map(|p| p.display().to_string()),
         writable_snapshot,
         persistent_scratch: scratch.is_some(),
-        dependency_caches: dependency_caches
+        mounts: mounts
             .iter()
-            .map(|c| format!("{}: {}", c.name, c.path.display()))
+            .map(|m| format!("{}: {}", m.source.display(), m.target.display()))
             .collect(),
     });
 

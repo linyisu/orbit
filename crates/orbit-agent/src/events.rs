@@ -28,7 +28,7 @@ pub enum AgentEvent {
     },
     VerificationRecorded {
         call_id: String,
-        evidence: crate::verification::VerificationEvidence,
+        evidence: orbit_runtime::verification::VerificationEvidence,
     },
     ToolFailed {
         call: ToolCall,

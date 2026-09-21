@@ -13,7 +13,7 @@ pub struct ToolOutput {
     /// Local audit data for a successfully committed workspace write. This is
     /// intentionally excluded from the model-facing tool result.
     pub changes: Vec<FileChange>,
-    pub verification: Option<crate::verification::VerificationEvidence>,
+    pub verification: Option<orbit_runtime::verification::VerificationEvidence>,
 }
 
 /// A reversible text-file mutation reported only after the filesystem commit

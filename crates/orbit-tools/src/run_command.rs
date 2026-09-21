@@ -9,7 +9,7 @@ pub type CommandOutputDirectory = crate::read_command_output::CommandOutputDirec
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -56,7 +56,23 @@ pub struct CommandLimits {
     pub max_timeout_seconds: u64,
 }
 
-pub use orbit_runtime::execution::{DependencyCache, ProcessLimits, WorkspaceScanLimits};
+pub use orbit_runtime::execution::{MountAccess, MountSpec, ProcessLimits, WorkspaceScanLimits};
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyCache {
+    pub name: String,
+    pub path: std::path::PathBuf,
+}
+
+impl DependencyCache {
+    pub fn to_mount_spec(&self) -> MountSpec {
+        MountSpec::read_only(
+            &self.path,
+            std::path::PathBuf::from(format!("/opt/orbit-cache/{}", self.name)),
+        )
+    }
+}
 
 impl From<&CommandLimits> for WorkspaceScanLimits {
     fn from(limits: &CommandLimits) -> Self {
@@ -281,7 +297,12 @@ impl Tool for RunCommand {
             let mut spec = ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
             spec.scratch = scratch.clone();
             spec.rust_toolchain = self.limits.rust_toolchain.clone();
-            spec.dependency_caches = self.limits.dependency_caches.clone();
+            spec.mounts = self
+                .limits
+                .dependency_caches
+                .iter()
+                .map(DependencyCache::to_mount_spec)
+                .collect();
             spec.limits = self.limits.process_limits.clone();
             spec.workspace_files = workspace_files;
             spec.skipped_entries = skipped_entries;

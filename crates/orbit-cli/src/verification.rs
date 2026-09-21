@@ -2,13 +2,11 @@
 //! claiming that a zero exit status proves a test suite or reproduces an OS.
 use crate::project_state::MemoryScope;
 use anyhow::Result;
-use orbit_agent::{
-    tool::{ClosureTool, ToolError, ToolRegistry},
-    verification::WorkspaceFingerprint,
-};
+use orbit_agent::tool::{ClosureTool, ToolError, ToolRegistry};
 use orbit_runtime::{
     execution::{content_hash, fingerprint_configured},
     filesystem::Workspace,
+    verification::WorkspaceFingerprint,
 };
 use orbit_store::{
     store::Store,
@@ -114,7 +112,7 @@ fn compare(
                     "rust_toolchain": e.rust_toolchain,
                     "writable_snapshot": e.writable_snapshot,
                     "persistent_scratch": e.persistent_scratch,
-                    "dependency_caches": e.dependency_caches,
+                    "mounts": e.mounts,
                 }))
             })
         })
@@ -229,7 +227,7 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
 mod tests {
     use super::*;
     use orbit_agent::tool::FileChange;
-    use orbit_agent::verification::{FileFingerprint, VerificationEvidence};
+    use orbit_runtime::verification::{FileFingerprint, VerificationEvidence};
     fn input(content: &str) -> WorkspaceFingerprint {
         WorkspaceFingerprint {
             digest: content_hash(content.as_bytes()),
@@ -277,7 +275,7 @@ mod tests {
                 rust_toolchain: None,
                 writable_snapshot: true,
                 persistent_scratch: true,
-                dependency_caches: Vec::new(),
+                mounts: Vec::new(),
             }),
         };
         let same = compare(
@@ -307,7 +305,7 @@ mod tests {
                 rust_toolchain: None,
                 writable_snapshot: false,
                 persistent_scratch: false,
-                dependency_caches: Vec::new(),
+                mounts: Vec::new(),
             }),
         };
         let compared = compare(

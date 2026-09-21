@@ -497,7 +497,7 @@ impl Store {
     pub async fn save_workspace_baseline(
         &self,
         session_id: &str,
-        baseline: &orbit_agent::verification::WorkspaceFingerprint,
+        baseline: &orbit_runtime::verification::WorkspaceFingerprint,
     ) -> Result<()> {
         let id = session_id.to_owned();
         let payload = serde_json::to_string(baseline)?;
@@ -506,7 +506,7 @@ impl Store {
     pub async fn workspace_baseline(
         &self,
         session_id: &str,
-    ) -> Result<Option<orbit_agent::verification::WorkspaceFingerprint>> {
+    ) -> Result<Option<orbit_runtime::verification::WorkspaceFingerprint>> {
         let id = session_id.to_owned();
         self.access(move |conn| {
             let payload: Option<String> = conn

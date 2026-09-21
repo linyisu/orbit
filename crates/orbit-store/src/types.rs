@@ -70,7 +70,7 @@ pub struct VerificationRecord {
     pub cancelled: bool,
     pub elapsed_ms: u64,
     #[serde(default)]
-    pub evidence: Option<orbit_agent::verification::VerificationEvidence>,
+    pub evidence: Option<orbit_runtime::verification::VerificationEvidence>,
 }
 
 /// A durable, user-visible unit of project work. Tasks live on the stable

@@ -866,7 +866,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
 
 #[tokio::test]
 async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped() {
-    use orbit_agent::verification::{VerificationEvidence, WorkspaceFingerprint};
+    use orbit_runtime::verification::{VerificationEvidence, WorkspaceFingerprint};
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
@@ -913,7 +913,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         rust_toolchain: None,
         writable_snapshot: false,
         persistent_scratch: true,
-        dependency_caches: Vec::new(),
+        mounts: Vec::new(),
     };
     writer
         .finish(

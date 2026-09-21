@@ -2394,6 +2394,7 @@ dependencies = [
  "anyhow",
  "orbit-agent",
  "orbit-model",
+ "orbit-runtime",
  "rusqlite",
  "serde",
  "serde_json",

@@ -20,11 +20,39 @@ pub const DEFAULT_MAX_OPEN_FILES: u64 = 1024;
 
 static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(deny_unknown_fields)]
-pub struct DependencyCache {
-    pub name: String,
-    pub path: PathBuf,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MountAccess {
+    ReadOnly,
+    ReadWrite,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MountSpec {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    pub access: MountAccess,
+}
+
+impl MountSpec {
+    pub fn new(
+        source: impl Into<PathBuf>,
+        target: impl Into<PathBuf>,
+        access: MountAccess,
+    ) -> Self {
+        Self {
+            source: source.into(),
+            target: target.into(),
+            access,
+        }
+    }
+
+    pub fn read_only(source: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Self {
+        Self::new(source, target, MountAccess::ReadOnly)
+    }
+
+    pub fn read_write(source: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Self {
+        Self::new(source, target, MountAccess::ReadWrite)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -73,7 +101,7 @@ pub struct ProcessSpec {
     pub limits: ProcessLimits,
     pub read_only_workspace: bool,
     pub rust_toolchain: Option<PathBuf>,
-    pub dependency_caches: Vec<DependencyCache>,
+    pub mounts: Vec<MountSpec>,
     pub workspace_files: usize,
     pub skipped_entries: usize,
     pub fingerprint: Option<WorkspaceFingerprint>,
@@ -88,7 +116,7 @@ impl ProcessSpec {
             limits: ProcessLimits::default(),
             read_only_workspace: false,
             rust_toolchain: None,
-            dependency_caches: Vec::new(),
+            mounts: Vec::new(),
             workspace_files: 0,
             skipped_entries: 0,
             fingerprint: None,
