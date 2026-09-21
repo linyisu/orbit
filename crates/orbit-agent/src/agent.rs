@@ -360,7 +360,7 @@ mod tests {
         tools.register(ClosureTool::new(
             "echo",
             "Echo a value",
-            json!({"type": "object"}),
+            json!({ "type": "object" }),
             |_arguments, _cancellation| async {
                 Err(ToolError::ExecutionFailed("should not execute".to_owned()))
             },

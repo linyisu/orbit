@@ -25,19 +25,80 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
     for message in request.messages {
         match message {
             ChatMessage::System { .. } => {}
-            ChatMessage::User { content } => messages.push(json!({"role": "user", "content": [{"type": "text", "text": content}]})),
-            ChatMessage::Assistant { content, tool_calls } => {
-                let mut blocks = Vec::new();
-                if let Some(content) = content { blocks.push(json!({"type": "text", "text": content})); }
-                blocks.extend(tool_calls.into_iter().map(|call| json!({"type": "tool_use", "id": call.id, "name": call.function.name, "input": serde_json::from_str::<Value>(&call.function.arguments).unwrap_or_else(|_| json!({}))})));
-                messages.push(json!({"role": "assistant", "content": blocks}));
+            ChatMessage::User { content } => {
+                messages.push(json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "text",
+                        "text": content,
+                    }],
+                }));
             }
-            ChatMessage::Tool { tool_call_id, content } => messages.push(json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_call_id, "content": content}]})),
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+            } => {
+                let mut blocks = Vec::new();
+                if let Some(content) = content {
+                    blocks.push(json!({
+                        "type": "text",
+                        "text": content,
+                    }));
+                }
+
+                for call in tool_calls {
+                    let input = serde_json::from_str::<Value>(&call.function.arguments)
+                        .unwrap_or_else(|_| json!({}));
+                    blocks.push(json!({
+                        "type": "tool_use",
+                        "id": call.id,
+                        "name": call.function.name,
+                        "input": input,
+                    }));
+                }
+
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": blocks,
+                }));
+            }
+            ChatMessage::Tool {
+                tool_call_id,
+                content,
+            } => {
+                messages.push(json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id,
+                        "content": content,
+                    }],
+                }));
+            }
         }
     }
 
-    let tools = request.tools.into_iter().map(|tool| json!({"name": tool.function.name, "description": tool.function.description, "input_schema": tool.function.parameters})).collect::<Vec<_>>();
-    let body = json!({"model": model, "max_tokens": request.max_tokens.unwrap_or(4096), "system": system, "messages": messages, "tools": tools, "temperature": request.temperature, "stream": stream});
+    let tools = request
+        .tools
+        .into_iter()
+        .map(|tool| {
+            json!({
+                "name": tool.function.name,
+                "description": tool.function.description,
+                "input_schema": tool.function.parameters,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let body = json!({
+        "model": model,
+        "max_tokens": request.max_tokens.unwrap_or(4096),
+        "system": system,
+        "messages": messages,
+        "tools": tools,
+        "temperature": request.temperature,
+        "stream": stream,
+    });
 
     let mut headers = HeaderMap::new();
     headers.insert(

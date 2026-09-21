@@ -44,16 +44,12 @@ struct ChatArgs {
 
 #[derive(Debug, Deserialize)]
 struct FileConfig {
-    #[serde(default = "default_api_format")]
+    #[serde(default)]
     api_format: ApiFormat,
     base_url: String,
     api_key: String,
     model: String,
     timeout_seconds: u64,
-}
-
-fn default_api_format() -> ApiFormat {
-    ApiFormat::OpenaiChatCompletions
 }
 
 impl FileConfig {

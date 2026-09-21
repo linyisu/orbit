@@ -12,9 +12,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{error::ModelError, types::*};
 
-#[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiFormat {
+    #[default]
     OpenaiChatCompletions,
     OpenaiResponses,
     AnthropicMessages,
