@@ -1,0 +1,14 @@
+[package]
+name = "orbit-agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-stream.workspace = true
+orbit-model = { path = "../orbit-model" }
+serde_json.workspace = true
+thiserror.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
