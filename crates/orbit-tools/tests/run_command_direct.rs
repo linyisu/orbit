@@ -47,6 +47,12 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
     assert!(!evidence.input.digest.is_empty());
     assert!(!evidence.writable_snapshot);
     assert!(evidence.isolation.contains("capability policy sandbox"));
+    let post_output = evidence
+        .output
+        .expect("output fingerprint should be present");
+    assert!(!post_output.digest.is_empty());
+    assert_ne!(post_output.digest, evidence.input.digest);
+    assert!(post_output.files.contains_key("output.txt"));
 
     let created = ws_temp.path().join("output.txt");
     assert!(created.is_file());

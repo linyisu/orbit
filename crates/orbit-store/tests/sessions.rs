@@ -907,6 +907,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
     writer.begin("verify".into(), "mock".into()).await.unwrap();
     let evidence = VerificationEvidence {
         input: baseline,
+        output: None,
         platform: "linux-x86_64".into(),
         isolation: "bubblewrap".into(),
         rust_toolchain: None,

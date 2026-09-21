@@ -9,7 +9,7 @@ use std::{
 
 use orbit_agent::tool::ToolError;
 use orbit_agent::verification::{FileFingerprint, VerificationEvidence, WorkspaceFingerprint};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::{
@@ -233,10 +233,10 @@ impl Snapshot {
         }
         for name in workspace.directory_entries(relative).map_err(failed)? {
             self.visited += 1;
-            if self.visited > self.limits.snapshot_entries {
+            if self.visited > self.limits.max_scan_entries {
                 return Err(failed(format!(
                     "workspace snapshot exceeds {} entries",
-                    self.limits.snapshot_entries
+                    self.limits.max_scan_entries
                 )));
             }
             if token.is_cancelled() {
@@ -258,7 +258,7 @@ impl Snapshot {
                     use std::os::unix::fs::PermissionsExt;
                     let executable =
                         file.metadata().map_err(failed)?.permissions().mode() & 0o111 != 0;
-                    let available = (self.limits.snapshot_mib * MIB).saturating_sub(self.bytes);
+                    let available = (self.limits.max_scan_mib * MIB).saturating_sub(self.bytes);
                     let mut content = Vec::new();
                     file.take(available as u64 + 1)
                         .read_to_end(&mut content)
@@ -266,7 +266,7 @@ impl Snapshot {
                     if content.len() > available {
                         return Err(failed(format!(
                             "workspace snapshot exceeds {} MiB; no command was started",
-                            self.limits.snapshot_mib
+                            self.limits.max_scan_mib
                         )));
                     }
                     self.bytes += content.len();
@@ -353,12 +353,31 @@ pub async fn scan_workspace_summary(
     .map_err(failed)?
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
 pub struct ProcessLimits {
     pub max_memory_bytes: u64,
     pub max_file_size_bytes: u64,
     pub max_processes: u64,
     pub max_open_files: u64,
+}
+
+impl ProcessLimits {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.max_memory_bytes < 16 * 1024 * 1024 {
+            return Err("process max_memory_bytes must be at least 16 MiB");
+        }
+        if self.max_file_size_bytes < 1024 {
+            return Err("process max_file_size_bytes must be at least 1 KiB");
+        }
+        if self.max_processes < 1 {
+            return Err("process max_processes must be at least 1");
+        }
+        if self.max_open_files < 16 {
+            return Err("process max_open_files must be at least 16");
+        }
+        Ok(())
+    }
 }
 
 impl Default for ProcessLimits {
@@ -545,6 +564,7 @@ impl SandboxBackend for BwrapSandboxBackend {
 
             let verification = spec.fingerprint.map(|fingerprint| VerificationEvidence {
                 input: fingerprint,
+                output: None,
                 platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
                 isolation: format!("bubblewrap; {network_desc}; capability policy sandbox"),
                 rust_toolchain: spec
@@ -1057,7 +1077,7 @@ pub async fn run_configured(
 
     let mut spec = ProcessSpec::new(&script, timeout);
     spec.scratch = scratch.map(Path::to_path_buf);
-    spec.limits.max_file_size_bytes = (limits.writable_snapshot_mib * MIB) as u64;
+    spec.limits = limits.process_limits.clone();
     spec.read_only_workspace = !writable_snapshot;
 
     let writable_source = if writable_snapshot {
@@ -1093,6 +1113,7 @@ pub async fn run_configured(
 
     let verification = Some(VerificationEvidence {
         input: snapshot.fingerprint,
+        output: None,
         platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
         isolation: format!("bubblewrap; {network_desc}; filtered source snapshot"),
         rust_toolchain: rust_toolchain.map(|p| p.display().to_string()),

@@ -17,6 +17,8 @@ pub struct FileFingerprint {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerificationEvidence {
     pub input: WorkspaceFingerprint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<WorkspaceFingerprint>,
     pub platform: String,
     pub isolation: String,
     pub rust_toolchain: Option<String>,

@@ -74,12 +74,51 @@ fn compare(
     changes: &[WorkspaceChange],
     commands: &[VerificationRecord],
 ) -> Value {
-    let records:Vec<_>=commands.iter().rev().take(20).map(|record| {
-        let input_state=match &record.evidence {None=>"unknown",Some(e) if e.input.digest==current.digest=>"input_unchanged",Some(_)=>"stale"};
-        json!({"run":record.run_id,"command":record.command.chars().take(512).collect::<String>(),"command_truncated":record.command.chars().count()>512,"exit_code":record.exit_code,"timed_out":record.timed_out,"cancelled":record.cancelled,"elapsed_ms":record.elapsed_ms,
-            "input_state":input_state,"snapshot_id":record.evidence.as_ref().map(|e|&e.input.digest),
-            "environment":record.evidence.as_ref().map(|e|json!({"platform":e.platform,"isolation":e.isolation,"rust_toolchain":e.rust_toolchain,"writable_snapshot":e.writable_snapshot,"persistent_scratch":e.persistent_scratch,"dependency_caches":e.dependency_caches}))})
-    }).collect();
+    let records: Vec<_> = commands
+        .iter()
+        .rev()
+        .take(20)
+        .map(|record| {
+            let input_state = match &record.evidence {
+                None => "unknown",
+                Some(e) => {
+                    let matches_output = e
+                        .output
+                        .as_ref()
+                        .is_some_and(|o| o.digest == current.digest);
+                    let matches_input = e.input.digest == current.digest;
+                    if matches_output || matches_input {
+                        "input_unchanged"
+                    } else {
+                        "stale"
+                    }
+                }
+            };
+            let snapshot_id = record
+                .evidence
+                .as_ref()
+                .map(|e| e.output.as_ref().unwrap_or(&e.input).digest.as_str());
+            json!({
+                "run": record.run_id,
+                "command": record.command.chars().take(512).collect::<String>(),
+                "command_truncated": record.command.chars().count() > 512,
+                "exit_code": record.exit_code,
+                "timed_out": record.timed_out,
+                "cancelled": record.cancelled,
+                "elapsed_ms": record.elapsed_ms,
+                "input_state": input_state,
+                "snapshot_id": snapshot_id,
+                "environment": record.evidence.as_ref().map(|e| json!({
+                    "platform": e.platform,
+                    "isolation": e.isolation,
+                    "rust_toolchain": e.rust_toolchain,
+                    "writable_snapshot": e.writable_snapshot,
+                    "persistent_scratch": e.persistent_scratch,
+                    "dependency_caches": e.dependency_caches,
+                }))
+            })
+        })
+        .collect();
     let mut paths = std::collections::BTreeSet::new();
     for c in changes {
         paths.insert(c.change.path.clone());
@@ -232,6 +271,7 @@ mod tests {
             elapsed_ms: 1,
             evidence: Some(VerificationEvidence {
                 input: verified.clone(),
+                output: None,
                 platform: "linux".into(),
                 isolation: "bubblewrap".into(),
                 rust_toolchain: None,
@@ -247,6 +287,37 @@ mod tests {
             std::slice::from_ref(&command),
         );
         assert_eq!(same["commands"][0]["input_state"], "input_unchanged");
+
+        // When command itself modified workspace, e.output matches current workspace digest
+        let mut modified_ws = verified.clone();
+        modified_ws.digest = "modified_digest".into();
+        let command_with_output = VerificationRecord {
+            run_id: 2,
+            run_status: "completed".into(),
+            command: "touch new_file".into(),
+            exit_code: Some(0),
+            timed_out: false,
+            cancelled: false,
+            elapsed_ms: 5,
+            evidence: Some(VerificationEvidence {
+                input: verified.clone(),
+                output: Some(modified_ws.clone()),
+                platform: "linux".into(),
+                isolation: "bubblewrap".into(),
+                rust_toolchain: None,
+                writable_snapshot: false,
+                persistent_scratch: false,
+                dependency_caches: Vec::new(),
+            }),
+        };
+        let compared = compare(
+            &modified_ws,
+            Some(&baseline),
+            &[],
+            std::slice::from_ref(&command_with_output),
+        );
+        assert_eq!(compared["commands"][0]["input_state"], "input_unchanged");
+        assert_eq!(compared["commands"][0]["snapshot_id"], "modified_digest");
         assert_eq!(
             same["changes"][0]["external_before_first_orbit_write"],
             true

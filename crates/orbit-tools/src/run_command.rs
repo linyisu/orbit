@@ -43,9 +43,13 @@ struct Arguments {
 #[serde(default, deny_unknown_fields)]
 pub struct CommandLimits {
     pub rust_toolchain: Option<std::path::PathBuf>,
-    pub snapshot_mib: usize,
-    pub snapshot_entries: usize,
-    pub writable_snapshot_mib: usize,
+    #[serde(alias = "snapshot_mib")]
+    pub max_scan_mib: usize,
+    #[serde(alias = "snapshot_entries")]
+    pub max_scan_entries: usize,
+    #[serde(alias = "writable_snapshot_mib")]
+    pub legacy_writable_snapshot_mib: Option<usize>,
+    pub process_limits: sandbox::ProcessLimits,
     pub dependency_caches: Vec<DependencyCache>,
     pub verification_commands: std::collections::BTreeMap<String, String>,
     pub default_timeout_seconds: u64,
@@ -63,9 +67,10 @@ impl Default for CommandLimits {
     fn default() -> Self {
         Self {
             rust_toolchain: None,
-            snapshot_mib: 64,
-            snapshot_entries: 10_000,
-            writable_snapshot_mib: 256,
+            max_scan_mib: 64,
+            max_scan_entries: 10_000,
+            legacy_writable_snapshot_mib: None,
+            process_limits: sandbox::ProcessLimits::default(),
             dependency_caches: Vec::new(),
             verification_commands: Default::default(),
             default_timeout_seconds: 120,
@@ -90,15 +95,12 @@ impl CommandLimits {
         {
             return Err("command.rust_toolchain must be an absolute toolchain directory");
         }
-        if !(1..=1024).contains(&self.snapshot_mib)
-            || !(1..=100_000).contains(&self.snapshot_entries)
-            || self.writable_snapshot_mib < self.snapshot_mib
-            || self.writable_snapshot_mib > 2048
+        if !(1..=1024).contains(&self.max_scan_mib)
+            || !(1..=100_000).contains(&self.max_scan_entries)
         {
-            return Err(
-                "snapshot_mib must be 1..1024, snapshot_entries 1..100000 and writable_snapshot_mib between snapshot_mib and 2048",
-            );
+            return Err("max_scan_mib must be 1..1024 and max_scan_entries 1..100000");
         }
+        self.process_limits.validate()?;
         let mut names = std::collections::BTreeSet::new();
         for cache in &self.dependency_caches {
             if cache.name.is_empty()
@@ -185,11 +187,6 @@ impl Tool for RunCommand {
                         "type": "string",
                         "description": "The shell command to execute"
                     },
-                    "writable_snapshot": {
-                        "type": "boolean",
-                        "default": false,
-                        "description": "Deprecated: /workspace is now mounted read-write directly by default"
-                    },
                     "timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
@@ -272,14 +269,26 @@ impl Tool for RunCommand {
             spec.scratch = scratch.clone();
             spec.rust_toolchain = self.limits.rust_toolchain.clone();
             spec.dependency_caches = self.limits.dependency_caches.clone();
-            spec.limits.max_file_size_bytes =
-                (self.limits.writable_snapshot_mib * sandbox::MIB) as u64;
+            spec.limits = self.limits.process_limits.clone();
             spec.workspace_files = workspace_files;
             spec.skipped_entries = skipped_entries;
             spec.fingerprint = Some(fingerprint);
 
             let policy = self.workspace.policy().effective_policy();
-            let mut result = backend.run(spec, policy, output_log, cancellation).await?;
+            let mut result = backend
+                .run(spec, policy, output_log, cancellation.clone())
+                .await?;
+
+            let (post_fingerprint, _, _) = sandbox::scan_workspace_summary(
+                self.workspace.clone(),
+                cancellation,
+                self.limits.clone(),
+            )
+            .await?;
+
+            if let Some(evidence) = result.verification.as_mut() {
+                evidence.output = Some(post_fingerprint);
+            }
             let evidence = result.verification.take();
             serde_json::to_string(&result)
                 .map(|content| {
@@ -302,12 +311,27 @@ fn invalid(message: impl Into<String>) -> ToolError {
 #[cfg(test)]
 mod configuration_tests {
     use super::*;
+
     #[test]
     fn configurable_environment_rejects_ambiguous_mounts_and_invalid_budgets() {
-        let limits:CommandLimits=toml::from_str("snapshot_mib=128\nsnapshot_entries=20000\nwritable_snapshot_mib=512\ndependency_caches=[{name='cargo',path='/offline/cargo'}]\n[verification_commands]\ntest='cargo test --offline'\n").unwrap();
+        let limits: CommandLimits = toml::from_str("max_scan_mib=128\nmax_scan_entries=20000\ndependency_caches=[{name='cargo',path='/offline/cargo'}]\n[verification_commands]\ntest='cargo test --offline'\n").unwrap();
         assert!(limits.validate().is_ok());
+        assert_eq!(limits.max_scan_mib, 128);
+        assert_eq!(limits.max_scan_entries, 20000);
+
+        // Backward compatibility: alias snapshot_mib and snapshot_entries
+        let legacy: CommandLimits =
+            toml::from_str("snapshot_mib=256\nsnapshot_entries=30000\nwritable_snapshot_mib=512\n")
+                .unwrap();
+        assert!(legacy.validate().is_ok());
+        assert_eq!(legacy.max_scan_mib, 256);
+        assert_eq!(legacy.max_scan_entries, 30000);
+
         let mut bad = limits.clone();
-        bad.writable_snapshot_mib = 127;
+        bad.max_scan_mib = 0;
+        assert!(bad.validate().is_err());
+        let mut bad = limits.clone();
+        bad.process_limits.max_memory_bytes = 1024; // < 16 MiB
         assert!(bad.validate().is_err());
         let mut bad = limits.clone();
         bad.dependency_caches.push(bad.dependency_caches[0].clone());
@@ -318,5 +342,18 @@ mod configuration_tests {
         let mut bad = limits;
         bad.dependency_caches[0].path = "relative".into();
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn tool_schema_omits_writable_snapshot() {
+        let (sender, _receiver) = crate::approval::channel();
+        let ws_temp = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::Workspace::new(ws_temp.path()).unwrap();
+        let tool = RunCommand::new(workspace, sender);
+        let def = tool.definition();
+        let props = def.function.parameters["properties"].as_object().unwrap();
+        assert!(props.contains_key("command"));
+        assert!(props.contains_key("timeout_seconds"));
+        assert!(!props.contains_key("writable_snapshot"));
     }
 }

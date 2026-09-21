@@ -238,7 +238,14 @@ async fn writable_workspace_has_a_total_size_limit() {
     let (_root, workspace) = fixture();
     let result = sandbox::run_configured(workspace,
         "dd if=/dev/zero of=one bs=1M count=1 2>/dev/null; dd if=/dev/zero of=two bs=1M count=1 2>/dev/null; dd if=/dev/zero of=three bs=1M count=1".into(),
-        Duration::from_secs(15), CancellationToken::new(), true, &orbit_tools::run_command::CommandLimits {snapshot_mib:1,writable_snapshot_mib:2,..Default::default()},None,None).await.unwrap();
+        Duration::from_secs(15), CancellationToken::new(), true, &orbit_tools::run_command::CommandLimits {
+            max_scan_mib: 1,
+            process_limits: orbit_tools::sandbox::ProcessLimits {
+                max_file_size_bytes: 2 * 1024 * 1024,
+                ..Default::default()
+            },
+            ..Default::default()
+        }, None, None).await.unwrap();
     assert_ne!(result.exit_code, Some(0));
     assert!(
         result.stderr.contains("No space left on device"),
@@ -469,8 +476,11 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
     let cache = tempfile::tempdir().unwrap();
     fs::write(cache.path().join("package.txt"), "offline dependency").unwrap();
     let limits = CommandLimits {
-        snapshot_mib: 1,
-        writable_snapshot_mib: 2,
+        max_scan_mib: 1,
+        process_limits: orbit_tools::sandbox::ProcessLimits {
+            max_file_size_bytes: 2 * 1024 * 1024,
+            ..Default::default()
+        },
         dependency_caches: vec![DependencyCache {
             name: "packages".into(),
             path: cache.path().into(),
