@@ -11,6 +11,7 @@ globset = "0.4.18"
 ignore = "0.4.33"
 orbit-agent = { path = "../orbit-agent" }
 orbit-model = { path = "../orbit-model" }
+orbit-runtime = { path = "../orbit-runtime" }
 regex = "1.13.1"
 reqwest.workspace = true
 url = "2.5"

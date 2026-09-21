@@ -56,11 +56,24 @@ pub struct CommandLimits {
     pub max_timeout_seconds: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DependencyCache {
-    pub name: String,
-    pub path: PathBuf,
+pub use orbit_runtime::execution::{DependencyCache, WorkspaceScanLimits};
+
+impl From<&CommandLimits> for WorkspaceScanLimits {
+    fn from(limits: &CommandLimits) -> Self {
+        Self {
+            max_scan_mib: limits.max_scan_mib,
+            max_scan_entries: limits.max_scan_entries,
+        }
+    }
+}
+
+impl From<CommandLimits> for WorkspaceScanLimits {
+    fn from(limits: CommandLimits) -> Self {
+        Self {
+            max_scan_mib: limits.max_scan_mib,
+            max_scan_entries: limits.max_scan_entries,
+        }
+    }
 }
 
 impl Default for CommandLimits {
