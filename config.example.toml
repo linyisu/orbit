@@ -52,11 +52,16 @@ reasoning = { adapter = "anthropic_messages", efforts = ["minimal", "low", "medi
 [command]
 default_timeout_seconds = 120
 max_timeout_seconds = 600
-snapshot_mib = 64
-snapshot_entries = 10000
-writable_snapshot_mib = 256
+max_scan_mib = 64
+max_scan_entries = 10000
 dependency_caches = []
 verification_commands = {}
+
+# Persistent filesystem permissions for directories/files outside the workspace.
+# Paths must exist on host, must be outside the workspace, and cannot overlap between read and read_write.
+# [permissions]
+# read = ["/opt/datasets"]
+# read_write = ["/var/log/myproject"]
 
 # Optional trusted HTTP(S) proxy for web_fetch only. Never set by the model.
 # The proxy resolves destination domains and must enforce its own egress policy.

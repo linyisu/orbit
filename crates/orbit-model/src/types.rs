@@ -224,15 +224,9 @@ impl ReasoningEffort {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "minimal" => Some(Self::Minimal),
-            "low" => Some(Self::Low),
-            "medium" => Some(Self::Medium),
-            "high" => Some(Self::High),
-            "xhigh" => Some(Self::Xhigh),
-            _ => None,
-        }
+        value.parse().ok()
     }
 
     pub fn label(self) -> &'static str {
@@ -242,6 +236,21 @@ impl ReasoningEffort {
             Self::Medium => "中",
             Self::High => "高",
             Self::Xhigh => "极高",
+        }
+    }
+}
+
+impl std::str::FromStr for ReasoningEffort {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "minimal" => Ok(Self::Minimal),
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "xhigh" => Ok(Self::Xhigh),
+            _ => Err(()),
         }
     }
 }

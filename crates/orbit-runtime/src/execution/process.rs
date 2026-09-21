@@ -256,7 +256,7 @@ impl ProcessSpec {
             timeout,
             scratch: None,
             limits: ProcessLimits::default(),
-            read_only_workspace: false,
+            read_only_workspace: true,
             rust_toolchain: None,
             mounts: Vec::new(),
             workspace_files: 0,
@@ -264,6 +264,11 @@ impl ProcessSpec {
             fingerprint: None,
             protected_paths: Vec::new(),
         }
+    }
+
+    pub fn with_read_write_workspace(mut self, rw: bool) -> Self {
+        self.read_only_workspace = !rw;
+        self
     }
 }
 

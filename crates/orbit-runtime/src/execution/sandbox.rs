@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     io::{Read, Write},
     path::{Path, PathBuf},
     process::Stdio,
@@ -309,7 +309,57 @@ impl BwrapSandboxBackend {
             prlimit_path,
         })
     }
+}
 
+#[derive(Debug)]
+pub enum Placeholder {
+    File { path: PathBuf, dev: u64, ino: u64 },
+    Dir { path: PathBuf, dev: u64, ino: u64 },
+}
+
+#[derive(Debug, Default)]
+pub struct PlaceholderGuard(pub Vec<Placeholder>);
+
+impl PlaceholderGuard {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn push(&mut self, placeholder: Placeholder) {
+        self.0.push(placeholder);
+    }
+}
+
+impl Drop for PlaceholderGuard {
+    fn drop(&mut self) {
+        use std::os::unix::fs::MetadataExt;
+        for item in &self.0 {
+            match item {
+                Placeholder::File { path, dev, ino } => {
+                    let matches = std::fs::symlink_metadata(path).is_ok_and(|meta| {
+                        meta.dev() == *dev
+                            && meta.ino() == *ino
+                            && meta.is_file()
+                            && meta.len() == 0
+                    });
+                    if matches {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+                Placeholder::Dir { path, dev, ino } => {
+                    let matches = std::fs::symlink_metadata(path).is_ok_and(|meta| {
+                        meta.dev() == *dev && meta.ino() == *ino && meta.is_dir()
+                    });
+                    if matches {
+                        let _ = std::fs::remove_dir(path);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl BwrapSandboxBackend {
     #[allow(clippy::too_many_arguments)]
     pub fn build_command(
         &self,
@@ -320,7 +370,8 @@ impl BwrapSandboxBackend {
         writable_snapshot_source: Option<&Path>,
         rust_toolchain: Option<&Path>,
         mounts: &[MountSpec],
-    ) -> Result<(Command, Vec<PathBuf>), RuntimeError> {
+        placeholder_guard: &mut PlaceholderGuard,
+    ) -> Result<Command, RuntimeError> {
         validate_mounts(mounts, policy)?;
 
         let mut command = Command::new(&self.bwrap_path);
@@ -340,10 +391,9 @@ impl BwrapSandboxBackend {
             .arg(script_path)
             .arg("/orbit-command.sh");
 
-        let mut placeholders = Vec::new();
         let ws_target = custom_workspace.unwrap_or_else(|| policy.base.workspace.canonical());
 
-        if let Some(source) = writable_snapshot_source {
+        let protected_inodes = if let Some(source) = writable_snapshot_source {
             command.arg("--ro-bind").arg(source).arg("/orbit-source");
             command.args([
                 "--size",
@@ -351,6 +401,7 @@ impl BwrapSandboxBackend {
                 "--tmpfs",
                 "/workspace",
             ]);
+            HashSet::new()
         } else {
             if spec.read_only_workspace {
                 command.arg("--ro-bind").arg(ws_target).arg("/workspace");
@@ -358,8 +409,12 @@ impl BwrapSandboxBackend {
                 command.arg("--bind").arg(ws_target).arg("/workspace");
             }
 
-            let (masked, ph) = collect_masked_paths(ws_target, &spec.protected_paths)?;
-            placeholders = ph;
+            let (masked, inodes) = collect_masked_paths(
+                ws_target,
+                &spec.protected_paths,
+                spec.read_only_workspace,
+                placeholder_guard,
+            )?;
             for (container_path, is_dir) in masked {
                 if let Some(path_str) = container_path.to_str() {
                     if is_dir {
@@ -369,11 +424,18 @@ impl BwrapSandboxBackend {
                     }
                 }
             }
-        }
+            inodes
+        };
 
         mount_scratch_and_tmp(&mut command, spec.scratch.as_deref())?;
         mount_toolchain_and_mounts(&mut command, rust_toolchain, mounts)?;
-        mount_capabilities(&mut command, policy, ws_target, &spec.protected_paths)?;
+        mount_capabilities(
+            &mut command,
+            policy,
+            ws_target,
+            &spec.protected_paths,
+            &protected_inodes,
+        )?;
 
         configure_limits_and_entrypoint(
             &mut command,
@@ -383,20 +445,7 @@ impl BwrapSandboxBackend {
             writable_snapshot_source.is_some(),
         );
 
-        Ok((command, placeholders))
-    }
-}
-
-struct PlaceholderCleanup(Vec<PathBuf>);
-impl Drop for PlaceholderCleanup {
-    fn drop(&mut self) {
-        for path in &self.0 {
-            if let Ok(meta) = std::fs::symlink_metadata(path) {
-                if meta.is_file() && meta.len() == 0 {
-                    let _ = std::fs::remove_file(path);
-                }
-            }
-        }
+        Ok(command)
     }
 }
 
@@ -417,7 +466,8 @@ impl SandboxBackend for BwrapSandboxBackend {
                 .map_err(failed)?;
             script_file.flush().map_err(failed)?;
 
-            let (mut cmd, placeholders) = self.build_command(
+            let mut placeholder_guard = PlaceholderGuard::new();
+            let mut cmd = self.build_command(
                 policy,
                 script_file.path(),
                 &spec,
@@ -425,9 +475,9 @@ impl SandboxBackend for BwrapSandboxBackend {
                 None,
                 spec.rust_toolchain.as_deref(),
                 &spec.mounts,
+                &mut placeholder_guard,
             )?;
             let child = cmd.spawn().map_err(failed)?;
-            let _guard = PlaceholderCleanup(placeholders);
 
             let network_desc = if policy.base.network.is_allowed() {
                 "network allowed"
@@ -521,13 +571,39 @@ fn mount_system_paths(command: &mut Command, network: NetworkPolicy) {
     }
 }
 
+fn is_protected_directory(path: &Path) -> bool {
+    let has_protected_ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext,
+                "session-locks" | "workspaces" | "command-output" | "artifacts"
+            )
+        });
+    if has_protected_ext {
+        return true;
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    name == ".git"
+        || name.ends_with(".workspaces")
+        || name.ends_with(".command-output")
+        || name.ends_with(".artifacts")
+        || name.ends_with(".session-locks")
+}
+
 fn mount_capabilities(
     command: &mut Command,
     policy: &EffectivePolicy,
     ws_target: &Path,
     protected_paths: &[PathBuf],
+    protected_inodes: &HashSet<(u64, u64)>,
 ) -> Result<(), RuntimeError> {
     let validate_cap = |canonical: &Path| -> Result<(), RuntimeError> {
+        use std::os::unix::fs::MetadataExt;
         if crate::execution::process::is_reserved_system_path(canonical) {
             return Err(failed(format!(
                 "capability target '{}' is a reserved runtime path",
@@ -553,6 +629,28 @@ fn mount_capabilities(
                     canonical.display(),
                     p.display()
                 )));
+            }
+        }
+        if let Ok(meta) = std::fs::symlink_metadata(canonical) {
+            if protected_inodes.contains(&(meta.dev(), meta.ino())) {
+                return Err(failed(format!(
+                    "capability target '{}' is a hardlink alias of a protected path",
+                    canonical.display()
+                )));
+            }
+            if meta.is_dir() {
+                let entries = std::fs::read_dir(canonical).into_iter().flatten();
+                for entry in entries.flatten() {
+                    let is_hardlink = entry
+                        .metadata()
+                        .is_ok_and(|em| protected_inodes.contains(&(em.dev(), em.ino())));
+                    if is_hardlink {
+                        return Err(failed(format!(
+                            "capability directory '{}' contains hardlink to protected path",
+                            canonical.display()
+                        )));
+                    }
+                }
             }
         }
         Ok(())
@@ -593,77 +691,103 @@ fn mount_capabilities(
     Ok(())
 }
 
-pub fn collect_masked_paths(
+pub type MaskedPathsAndInodes = (Vec<(PathBuf, bool)>, HashSet<(u64, u64)>);
+
+fn collect_masked_paths(
     ws_target: &Path,
     protected_paths: &[PathBuf],
-) -> Result<(Vec<(PathBuf, bool)>, Vec<PathBuf>), RuntimeError> {
-    let mut masked = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut placeholders_created = Vec::new();
+    read_only_workspace: bool,
+    placeholder_guard: &mut PlaceholderGuard,
+) -> Result<MaskedPathsAndInodes, RuntimeError> {
+    use std::os::unix::fs::MetadataExt;
 
-    // 1. Check spec.protected_paths
+    let mut masked = Vec::new();
+    let mut seen = HashSet::new();
+    let mut protected_inodes = HashSet::new();
+
+    // 1. Process spec.protected_paths
     for protected in protected_paths {
-        if let Ok(rel) = protected.strip_prefix(ws_target) {
-            if rel.as_os_str().is_empty() {
-                continue;
-            }
-            let container_path = Path::new("/workspace").join(rel);
-            match std::fs::symlink_metadata(protected) {
-                Ok(meta) => {
+        match std::fs::symlink_metadata(protected) {
+            Ok(meta) => {
+                protected_inodes.insert((meta.dev(), meta.ino()));
+                let rel = protected.strip_prefix(ws_target).ok();
+                if let Some(rel) = rel.filter(|r| !r.as_os_str().is_empty()) {
+                    let container_path = Path::new("/workspace").join(rel);
                     if seen.insert(container_path.clone()) {
                         masked.push((container_path, meta.is_dir()));
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    // Protected path does not currently exist on disk.
-                    // Create an empty placeholder file so bwrap can bind /dev/null over it,
-                    // blocking shell creation with permission denied.
-                    if let Some(parent) = protected.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    if let Ok(file) = std::fs::File::create_new(protected) {
-                        drop(file);
-                        placeholders_created.push(protected.clone());
-                        if seen.insert(container_path.clone()) {
-                            masked.push((container_path, false));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // When workspace is read-only, bwrap mounts with --ro-bind; container cannot create any files.
+                // When workspace is read-write, create a guarded placeholder so bwrap can mask it.
+                if !read_only_workspace {
+                    let rel = protected.strip_prefix(ws_target).ok();
+                    if let Some(rel) = rel.filter(|r| !r.as_os_str().is_empty()) {
+                        let container_path = Path::new("/workspace").join(rel);
+                        if let Some(parent) = protected.parent() {
+                            let _ = std::fs::create_dir_all(parent);
                         }
-                    } else if protected.exists() {
-                        if seen.insert(container_path.clone()) {
-                            let is_dir = std::fs::symlink_metadata(protected)
-                                .map(|m| m.is_dir())
-                                .unwrap_or(false);
-                            masked.push((container_path, is_dir));
+                        if is_protected_directory(protected) {
+                            if std::fs::create_dir(protected).is_ok() {
+                                let meta = std::fs::symlink_metadata(protected).ok();
+                                if let Some(meta) = meta {
+                                    placeholder_guard.push(Placeholder::Dir {
+                                        path: protected.clone(),
+                                        dev: meta.dev(),
+                                        ino: meta.ino(),
+                                    });
+                                    protected_inodes.insert((meta.dev(), meta.ino()));
+                                    if seen.insert(container_path.clone()) {
+                                        masked.push((container_path, true));
+                                    }
+                                }
+                            }
+                        } else if std::fs::File::create_new(protected).is_ok() {
+                            let meta = std::fs::symlink_metadata(protected).ok();
+                            if let Some(meta) = meta {
+                                placeholder_guard.push(Placeholder::File {
+                                    path: protected.clone(),
+                                    dev: meta.dev(),
+                                    ino: meta.ino(),
+                                });
+                                protected_inodes.insert((meta.dev(), meta.ino()));
+                                if seen.insert(container_path.clone()) {
+                                    masked.push((container_path, false));
+                                }
+                            }
                         }
                     }
                 }
-                Err(e) => {
-                    return Err(failed(format!(
-                        "failed to inspect protected path '{}': {e}",
-                        protected.display()
-                    )));
-                }
+            }
+            Err(e) => {
+                return Err(failed(format!(
+                    "failed to inspect protected path '{}': {e}",
+                    protected.display()
+                )));
             }
         }
     }
 
-    // 2. Scan ws_target for .git, .env*, .orbit-write-*
+    // 2. Scan ws_target for .git, .env*, .orbit-write-* and identify hardlinks
     const MAX_SCAN_DIRS: usize = 50_000;
     const MAX_DEPTH: usize = 32;
 
     let mut queue = VecDeque::new();
     queue.push_back((PathBuf::new(), 0usize));
     let mut count = 0;
+    let mut files_to_check: Vec<(PathBuf, u64, u64, bool)> = Vec::new();
 
     while let Some((rel, depth)) = queue.pop_front() {
         count += 1;
         if count > MAX_SCAN_DIRS {
             return Err(failed(format!(
-                "workspace directory count exceeds {MAX_SCAN_DIRS} while scanning protected paths; refusing to start read-write sandbox"
+                "workspace directory count exceeds {MAX_SCAN_DIRS} while scanning protected paths; refusing to start sandbox"
             )));
         }
         if depth > MAX_DEPTH {
             return Err(failed(format!(
-                "workspace directory depth exceeds {MAX_DEPTH} at '{}'; refusing to start read-write sandbox",
+                "workspace directory depth exceeds {MAX_DEPTH} at '{}'; refusing to start sandbox",
                 rel.display()
             )));
         }
@@ -704,21 +828,45 @@ pub fn collect_masked_paths(
 
             let is_dir = meta.is_dir();
             let is_symlink = meta.file_type().is_symlink();
+            let dev = meta.dev();
+            let ino = meta.ino();
+
             let is_protected_name = name == ".git"
                 || name == ".env"
                 || name.starts_with(".env.")
                 || name.starts_with(".orbit-write-");
 
             if is_protected_name {
+                protected_inodes.insert((dev, ino));
                 let container_path = Path::new("/workspace").join(&child_rel);
                 if seen.insert(container_path.clone()) {
                     masked.push((container_path, is_dir && !is_symlink));
                 }
+                if name == ".git" && is_dir && !is_symlink {
+                    let git_entries = std::fs::read_dir(&child_host).into_iter().flatten();
+                    for ge in git_entries.flatten() {
+                        if let Ok(gm) = ge.metadata() {
+                            protected_inodes.insert((gm.dev(), gm.ino()));
+                        }
+                    }
+                }
                 continue;
             }
 
+            files_to_check.push((child_rel.clone(), dev, ino, is_dir && !is_symlink));
+
             if is_dir && !is_symlink {
                 queue.push_back((child_rel, depth + 1));
+            }
+        }
+    }
+
+    // Mask all files matching protected_inodes (e.g. hardlink aliases of config.toml, .env, etc.)
+    for (child_rel, dev, ino, is_dir) in files_to_check {
+        if protected_inodes.contains(&(dev, ino)) {
+            let container_path = Path::new("/workspace").join(&child_rel);
+            if seen.insert(container_path.clone()) {
+                masked.push((container_path, is_dir));
             }
         }
     }
@@ -737,7 +885,7 @@ pub fn collect_masked_paths(
         }
     }
 
-    Ok((filtered, placeholders_created))
+    Ok((filtered, protected_inodes))
 }
 
 pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result<(), RuntimeError> {
@@ -1131,7 +1279,8 @@ pub async fn run_configured(
         None
     };
 
-    let (mut child_cmd, _placeholders) = backend.build_command(
+    let mut placeholder_guard = PlaceholderGuard::new();
+    let mut child_cmd = backend.build_command(
         policy,
         script_file.path(),
         &spec,
@@ -1139,6 +1288,7 @@ pub async fn run_configured(
         writable_source,
         rust_toolchain,
         mounts,
+        &mut placeholder_guard,
     )?;
     let child = child_cmd.spawn().map_err(failed)?;
 
@@ -1536,38 +1686,101 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders() {
+    fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_hardlinks() {
         let ws_dir = tempfile::tempdir().unwrap();
         let ws = ws_dir.path();
 
-        // 1. Create a .env file inside a target/ directory
-        let target_dir = ws.join("target").join("debug");
-        std::fs::create_dir_all(&target_dir).unwrap();
-        std::fs::write(target_dir.join(".env"), "SECRET=123").unwrap();
+        // 1. Create a .env file and hardlink to it
+        let env_file = ws.join(".env");
+        std::fs::write(&env_file, "SECRET=123").unwrap();
+        let env_alias = ws.join("alias.env");
+        std::fs::hard_link(&env_file, &env_alias).unwrap();
 
-        // 2. Non-existent protected path (e.g. config.toml that does not exist yet)
-        let nonexistent_config = ws.join("config.toml");
-        assert!(!nonexistent_config.exists());
+        // 2. Real config.toml and hardlink to it
+        let config_file = ws.join("config.toml");
+        std::fs::write(&config_file, "key=456").unwrap();
+        let config_alias = ws.join("alias.toml");
+        std::fs::hard_link(&config_file, &config_alias).unwrap();
 
-        let protected_paths = vec![nonexistent_config.clone()];
-        let (masked, placeholders) = collect_masked_paths(ws, &protected_paths).unwrap();
+        // 3. Non-existent protected paths: one file, one directory
+        let nonexistent_file = ws.join("secret.key");
+        let nonexistent_dir = ws.join("orbit.db.workspaces");
 
-        // Target .env must be masked!
-        let has_target_env = masked
-            .iter()
-            .any(|(p, is_dir)| p == Path::new("/workspace/target/debug/.env") && !*is_dir);
-        assert!(has_target_env, "target/debug/.env should be masked");
+        let protected_paths = vec![
+            config_file.clone(),
+            nonexistent_file.clone(),
+            nonexistent_dir.clone(),
+        ];
 
-        // Non-existent config.toml must have had a placeholder created and masked!
-        let has_config = masked
-            .iter()
-            .any(|(p, is_dir)| p == Path::new("/workspace/config.toml") && !*is_dir);
-        assert!(has_config, "nonexistent config.toml should be masked");
-        assert_eq!(placeholders, vec![nonexistent_config.clone()]);
-        assert!(nonexistent_config.exists());
+        // Case A: Read-only workspace - does NOT create placeholders
+        {
+            let mut guard = PlaceholderGuard::new();
+            let (masked, _) = collect_masked_paths(ws, &protected_paths, true, &mut guard).unwrap();
+            assert!(!nonexistent_file.exists());
+            assert!(!nonexistent_dir.exists());
 
-        // Cleanup guard should delete it
-        drop(PlaceholderCleanup(placeholders));
-        assert!(!nonexistent_config.exists());
+            // But existing config and alias are masked!
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/config.toml") && !*is_dir)
+            );
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/alias.toml") && !*is_dir)
+            );
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/.env") && !*is_dir)
+            );
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/alias.env") && !*is_dir)
+            );
+        }
+
+        // Case B: Read-write workspace - creates guarded placeholders and cleans them up
+        {
+            let mut guard = PlaceholderGuard::new();
+            let (masked, _) =
+                collect_masked_paths(ws, &protected_paths, false, &mut guard).unwrap();
+            assert!(nonexistent_file.is_file());
+            assert!(nonexistent_dir.is_dir());
+
+            // Masked list contains the placeholders with correct is_dir flags
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/secret.key") && !*is_dir)
+            );
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/orbit.db.workspaces") && *is_dir)
+            );
+
+            // Masked list contains the hardlink aliases
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/alias.toml") && !*is_dir)
+            );
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/alias.env") && !*is_dir)
+            );
+
+            drop(guard);
+            // After drop, placeholders are removed!
+            assert!(!nonexistent_file.exists());
+            assert!(!nonexistent_dir.exists());
+            // Existing files are NOT removed!
+            assert!(config_file.exists());
+            assert!(env_file.exists());
+        }
     }
 }

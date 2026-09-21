@@ -28,7 +28,8 @@ async fn backend_executes_in_workspace_directly_with_write_access() {
     let spec = ProcessSpec::new(
         "echo 'hello capability' > /workspace/result.txt",
         Duration::from_secs(5),
-    );
+    )
+    .with_read_write_workspace(true);
     let result = backend
         .run(spec, &policy, None, CancellationToken::new())
         .await

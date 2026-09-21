@@ -183,18 +183,18 @@ async fn run_command_respects_session_grants_for_outside_paths() {
 }
 
 #[tokio::test]
-async fn run_command_accepts_deprecated_writable_snapshot_flag() {
+async fn run_command_rejects_deprecated_writable_snapshot_flag() {
     let ws_temp = tempfile::tempdir().unwrap();
     let workspace = match Workspace::new(ws_temp.path()) {
         Ok(w) => w,
         Err(_) => return,
     };
 
-    let (sender, mut receiver) = approval::channel();
+    let (sender, _receiver) = approval::channel();
     let tool = RunCommand::new(workspace, sender);
 
-    let task = tokio::spawn(async move {
-        tool.execute(
+    let err = tool
+        .execute(
             ToolCall::function(
                 "legacy_call",
                 "run_command",
@@ -206,21 +206,11 @@ async fn run_command_accepts_deprecated_writable_snapshot_flag() {
             CancellationToken::new(),
         )
         .await
-    });
+        .unwrap_err()
+        .to_string();
 
-    let request = receiver.recv().await.unwrap();
-    request.decision.send(true).unwrap();
-
-    let output = task.await.unwrap().unwrap();
-    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
-    assert_eq!(value["exit_code"], 0);
-
-    let created = ws_temp.path().join("legacy.txt");
-    assert!(created.is_file());
-    assert_eq!(
-        fs::read_to_string(created).unwrap().trim(),
-        "snapshot compat"
-    );
+    assert!(err.contains("'writable_snapshot' is deprecated"));
+    assert!(err.contains("workspace_access"));
 }
 
 #[tokio::test]

@@ -191,7 +191,7 @@ pub enum PolicyDecision {
 }
 
 /// Unified capability decision engine. All tools query permissions through this engine.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PolicyEngine {
     policy: Arc<EffectivePolicy>,
 }
@@ -212,6 +212,37 @@ impl PolicyEngine {
     ) -> Result<Self, RuntimeError> {
         let base_dir = workspace.canonical();
 
+        let validate_path = |p: &std::path::Path,
+                             resolved: &ResolvedPath|
+         -> Result<(), RuntimeError> {
+            let canon = resolved.canonical();
+            if !canon.exists() {
+                return Err(failed(format!(
+                    "persistent permission path '{}' does not exist",
+                    p.display()
+                )));
+            }
+            if crate::execution::process::is_reserved_system_path(canon) {
+                return Err(failed(format!(
+                    "persistent permission path '{}' is a reserved system path",
+                    p.display()
+                )));
+            }
+            if base_dir.starts_with(canon) {
+                return Err(failed(format!(
+                    "persistent permission path '{}' is an ancestor of the workspace",
+                    p.display()
+                )));
+            }
+            if canon.starts_with(base_dir) {
+                return Err(failed(format!(
+                    "persistent permission path '{}' is inside the workspace; persistent permissions are for external paths",
+                    p.display()
+                )));
+            }
+            Ok(())
+        };
+
         let mut persistent_read = Vec::new();
         for p in permissions.read {
             let resolved = ResolvedPath::resolve(&p, Some(base_dir)).map_err(|e| {
@@ -220,6 +251,7 @@ impl PolicyEngine {
                     p.display()
                 ))
             })?;
+            validate_path(&p, &resolved)?;
             persistent_read.push(resolved);
         }
 
@@ -231,7 +263,29 @@ impl PolicyEngine {
                     p.display()
                 ))
             })?;
+            validate_path(&p, &resolved)?;
             persistent_read_write.push(resolved);
+        }
+
+        // Normalize persistent_read_write (deduplicate and keep broader ancestor)
+        normalize_resolved_paths(&mut persistent_read_write);
+
+        // Normalize persistent_read (deduplicate and keep broader ancestor)
+        normalize_resolved_paths(&mut persistent_read);
+
+        // Check overlap between read_write and read
+        for rw in &persistent_read_write {
+            for ro in &persistent_read {
+                let rw_c = rw.canonical();
+                let ro_c = ro.canonical();
+                if rw_c == ro_c || rw_c.starts_with(ro_c) || ro_c.starts_with(rw_c) {
+                    return Err(failed(format!(
+                        "persistent permissions conflict: read_write path '{}' overlaps with read path '{}'; read and read_write ranges cannot overlap",
+                        rw_c.display(),
+                        ro_c.display()
+                    )));
+                }
+            }
         }
 
         Ok(Self {
@@ -421,6 +475,20 @@ impl PolicyEngine {
         // Otherwise, requires interactive user approval
         PolicyDecision::NeedsApproval(vec![capability.clone()])
     }
+}
+
+fn normalize_resolved_paths(paths: &mut Vec<ResolvedPath>) {
+    paths.sort_by_key(|p| p.canonical().components().count());
+    let mut normalized: Vec<ResolvedPath> = Vec::new();
+    for p in paths.drain(..) {
+        let is_covered = normalized
+            .iter()
+            .any(|existing| p.canonical().starts_with(existing.canonical()));
+        if !is_covered {
+            normalized.push(p);
+        }
+    }
+    *paths = normalized;
 }
 
 #[cfg(test)]
@@ -622,5 +690,69 @@ mod tests {
                 "expected {reserved} to be denied"
             );
         }
+    }
+
+    #[test]
+    fn persistent_permissions_upfront_validation_and_overlap_rejection() {
+        let tmp_ws = tempfile::tempdir().unwrap();
+        let tmp_ext = tempfile::tempdir().unwrap();
+        let ext_dir = tmp_ext.path().join("data");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+
+        let ws = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
+
+        // 1. Non-existent path rejected
+        let perms_nonexistent = WorkspacePermissions {
+            read: vec![tmp_ext.path().join("nonexistent")],
+            read_write: Vec::new(),
+        };
+        assert!(
+            PolicyEngine::try_with_permissions(ws.clone(), perms_nonexistent, NetworkPolicy::Allow)
+                .is_err()
+        );
+
+        // 2. Workspace ancestor rejected
+        let perms_ancestor = WorkspacePermissions {
+            read: vec![tmp_ws.path().parent().unwrap().to_path_buf()],
+            read_write: Vec::new(),
+        };
+        assert!(
+            PolicyEngine::try_with_permissions(ws.clone(), perms_ancestor, NetworkPolicy::Allow)
+                .is_err()
+        );
+
+        // 3. Inside workspace rejected
+        let perms_inside = WorkspacePermissions {
+            read: vec![tmp_ws.path().join("src")],
+            read_write: Vec::new(),
+        };
+        assert!(
+            PolicyEngine::try_with_permissions(ws.clone(), perms_inside, NetworkPolicy::Allow)
+                .is_err()
+        );
+
+        // 4. Overlapping read and read_write rejected
+        let sub_dir = ext_dir.join("secret");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let perms_overlap = WorkspacePermissions {
+            read_write: vec![ext_dir.clone()],
+            read: vec![sub_dir.clone()],
+        };
+        let err =
+            PolicyEngine::try_with_permissions(ws.clone(), perms_overlap, NetworkPolicy::Allow)
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("overlaps with read path"));
+
+        // 5. Redundant paths normalized
+        let sub_rw = ext_dir.join("sub_rw");
+        std::fs::create_dir_all(&sub_rw).unwrap();
+        let perms_redundant = WorkspacePermissions {
+            read_write: vec![ext_dir.clone(), sub_rw],
+            read: Vec::new(),
+        };
+        let engine =
+            PolicyEngine::try_with_permissions(ws, perms_redundant, NetworkPolicy::Allow).unwrap();
+        assert_eq!(engine.effective_policy().persistent_read_write.len(), 1);
     }
 }

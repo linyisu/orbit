@@ -2,7 +2,11 @@ use std::fs;
 
 use orbit_agent::tool::{Tool, ToolError};
 use orbit_model::types::ToolCall;
-use orbit_runtime::filesystem::Workspace;
+use orbit_runtime::{
+    capability::EnvironmentId,
+    filesystem::{ResolvedPath, Workspace},
+    policy::FilesystemGrant,
+};
 use orbit_tools::search_text::SearchText;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -157,4 +161,41 @@ async fn bounds_serialized_results_and_reports_truncation() {
     assert!(result.to_string().len() <= 32 * 1024);
     assert_eq!(result["has_more"], true);
     assert!(result["next_offset"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn search_text_external_single_file() {
+    let ws_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let outside_file = outside_dir.path().join("outside.txt");
+    fs::write(&outside_file, "line 1\nfound_unique_needle\nline 3\n").unwrap();
+
+    let workspace = Workspace::new(ws_dir.path()).unwrap();
+    let resolved = ResolvedPath::resolve(&outside_file, None).unwrap();
+    workspace
+        .policy()
+        .session_grants()
+        .write()
+        .unwrap()
+        .grant(FilesystemGrant::read_only(EnvironmentId::Local, resolved));
+
+    let tool = SearchText::new(workspace);
+    let result = run(
+        &tool,
+        json!({
+            "path": outside_file.to_str().unwrap(),
+            "query": "found_unique_needle"
+        }),
+    )
+    .await;
+
+    let matches = result["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["line"], 2);
+    assert!(
+        matches[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("found_unique_needle")
+    );
 }

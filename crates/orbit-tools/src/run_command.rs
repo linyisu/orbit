@@ -202,7 +202,7 @@ impl Tool for RunCommand {
         ToolDefinition::function(
             "run_command",
             format!(
-                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-write by default, allowing build, test, and development commands (such as cargo, npm, git) to modify project files directly. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is allowed by default under policy. Enforces execution timeout, private script execution, and resource limits (memory, file size, processes, open files). /tmp is a disposable tmpfs. Persistent scratch is mounted at /scratch when configured to retain files across commands and session resume. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Never automatically retry a denied command. Read-only cache mounts: {}. Host-configured verification commands: {}.",
+                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (which prompts for interactive user approval in Auto mode). Protected paths (.env*, .git, orbit config/db) are isolated and masked. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is allowed by default under policy. Enforces execution timeout, private script execution, and resource limits (memory, file size, processes, open files). /tmp is a disposable tmpfs. Persistent scratch is mounted at /scratch when configured to retain files across commands and session resume. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Never automatically retry a denied command. Read-only cache mounts: {}. Host-configured verification commands: {}.",
                 serde_json::to_string(
                     &self
                         .limits
@@ -259,11 +259,12 @@ impl Tool for RunCommand {
                 )));
             }
             let (sender, receiver) = oneshot::channel();
-            let workspace_access = if args.writable_snapshot {
-                CommandWorkspaceAccess::ReadWrite
-            } else {
-                args.workspace_access
-            };
+            if args.writable_snapshot {
+                return Err(invalid(
+                    "'writable_snapshot' is deprecated. Orbit executes directly in the workspace with protected path masking. For workspace write access, specify 'workspace_access': 'read_write'.",
+                ));
+            }
+            let workspace_access = args.workspace_access;
             let network_allowed = self.workspace.policy().network_policy().is_allowed();
             let mut external_capabilities = Vec::new();
             for r in &self.workspace.policy().effective_policy().persistent_read {
@@ -365,17 +366,13 @@ impl Tool for RunCommand {
                 .run(spec, policy, output_log, cancellation.clone())
                 .await?;
 
-            let post_scan = match orbit_runtime::execution::scan_workspace_summary(
+            let post_scan = orbit_runtime::execution::scan_workspace_summary(
                 self.workspace.clone(),
                 cancellation,
                 self.limits.clone().into(),
             )
             .await
-            {
-                Ok(summary) => Some(summary),
-                Err(RuntimeError::Cancelled) => return Err(ToolError::Cancelled),
-                Err(_) => None,
-            };
+            .ok();
 
             if let Some(evidence) = result.verification.as_mut() {
                 evidence.output = post_scan.map(|(fp, _, _)| fp);

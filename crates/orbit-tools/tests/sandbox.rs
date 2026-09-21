@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use std::{fs, os::unix::fs::symlink, time::Duration};
 
 use orbit_agent::tool::Tool;

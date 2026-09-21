@@ -47,7 +47,13 @@ fn open_canonical_parent_stepwise(canonical_parent: &Path) -> Result<File, Works
                     OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                     Mode::empty(),
                 )
-                .map_err(io::Error::from)?;
+                .map_err(|e| {
+                    if io::Error::from(e).kind() == io::ErrorKind::NotADirectory {
+                        WorkspaceError::NotDirectory
+                    } else {
+                        WorkspaceError::Io(e.into())
+                    }
+                })?;
                 current = File::from(next_fd);
             }
             _ => return Err(WorkspaceError::InvalidPath),
@@ -209,7 +215,13 @@ impl Workspace {
                     OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                     Mode::empty(),
                 )
-                .map_err(io::Error::from)?,
+                .map_err(|e| {
+                    if io::Error::from(e).kind() == io::ErrorKind::NotADirectory {
+                        WorkspaceError::NotDirectory
+                    } else {
+                        WorkspaceError::Io(e.into())
+                    }
+                })?,
             )
         };
         Ok(directory)
@@ -312,6 +324,9 @@ impl Workspace {
             }
             Err(WorkspaceError::InvalidPath) => {
                 let canonical = path.canonicalize()?;
+                if !canonical.metadata()?.is_dir() {
+                    return Err(WorkspaceError::NotDirectory);
+                }
                 self.check_protected_path(&canonical)?;
 
                 let cap = crate::capability::FilesystemCapability {
