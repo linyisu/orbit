@@ -41,6 +41,13 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
     assert_eq!(value["exit_code"], 0);
 
+    let evidence = output
+        .verification
+        .expect("verification evidence should be present");
+    assert!(!evidence.input.digest.is_empty());
+    assert!(!evidence.writable_snapshot);
+    assert!(evidence.isolation.contains("capability policy sandbox"));
+
     let created = ws_temp.path().join("output.txt");
     assert!(created.is_file());
     assert_eq!(
@@ -117,5 +124,46 @@ async fn run_command_respects_session_grants_for_outside_paths() {
     assert_eq!(
         fs::read_to_string(&outside_file).unwrap().trim(),
         "granted write"
+    );
+}
+
+#[tokio::test]
+async fn run_command_accepts_deprecated_writable_snapshot_flag() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "legacy_call",
+                "run_command",
+                json!({
+                    "command": "echo 'snapshot compat' > /workspace/legacy.txt",
+                    "writable_snapshot": true
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    request.decision.send(true).unwrap();
+
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(value["exit_code"], 0);
+
+    let created = ws_temp.path().join("legacy.txt");
+    assert!(created.is_file());
+    assert_eq!(
+        fs::read_to_string(created).unwrap().trim(),
+        "snapshot compat"
     );
 }

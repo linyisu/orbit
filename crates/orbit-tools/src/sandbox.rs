@@ -25,7 +25,7 @@ use crate::{
 };
 
 const MAX_OUTPUT: usize = 32 * 1024;
-const MIB: usize = 1024 * 1024;
+pub const MIB: usize = 1024 * 1024;
 pub const MAX_RETAINED_OUTPUT_PER_STREAM: u64 = 16 * 1024 * 1024;
 pub const MAX_RETAINED_OUTPUT_PER_SESSION: u64 = 128 * 1024 * 1024;
 const TMP_SIZE_BYTES: u64 = 64 * 1024 * 1024;
@@ -340,6 +340,19 @@ pub async fn fingerprint_configured(
     .map_err(failed)?
 }
 
+pub async fn scan_workspace_summary(
+    workspace: Workspace,
+    cancellation: CancellationToken,
+    limits: crate::run_command::CommandLimits,
+) -> Result<(WorkspaceFingerprint, usize, usize), ToolError> {
+    tokio::task::spawn_blocking(move || {
+        Snapshot::scan_configured(workspace, cancellation, false, limits)
+            .map(|s| (s.fingerprint, s.files, s.skipped))
+    })
+    .await
+    .map_err(failed)?
+}
+
 #[derive(Clone, Debug)]
 pub struct ProcessLimits {
     pub max_memory_bytes: u64,
@@ -366,6 +379,11 @@ pub struct ProcessSpec {
     pub scratch: Option<PathBuf>,
     pub limits: ProcessLimits,
     pub read_only_workspace: bool,
+    pub rust_toolchain: Option<PathBuf>,
+    pub dependency_caches: Vec<crate::run_command::DependencyCache>,
+    pub workspace_files: usize,
+    pub skipped_entries: usize,
+    pub fingerprint: Option<WorkspaceFingerprint>,
 }
 
 impl ProcessSpec {
@@ -376,6 +394,11 @@ impl ProcessSpec {
             scratch: None,
             limits: ProcessLimits::default(),
             read_only_workspace: false,
+            rust_toolchain: None,
+            dependency_caches: Vec::new(),
+            workspace_files: 0,
+            skipped_entries: 0,
+            fingerprint: None,
         }
     }
 }
@@ -502,9 +525,40 @@ impl SandboxBackend for BwrapSandboxBackend {
             script_file.flush().map_err(failed)?;
 
             let child = self
-                .build_command(policy, script_file.path(), &spec, None, None, None, &[])?
+                .build_command(
+                    policy,
+                    script_file.path(),
+                    &spec,
+                    None,
+                    None,
+                    spec.rust_toolchain.as_deref(),
+                    &spec.dependency_caches,
+                )?
                 .spawn()
                 .map_err(failed)?;
+
+            let network_desc = if policy.base.network.is_allowed() {
+                "network allowed"
+            } else {
+                "no network"
+            };
+
+            let verification = spec.fingerprint.map(|fingerprint| VerificationEvidence {
+                input: fingerprint,
+                platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+                isolation: format!("bubblewrap; {network_desc}; capability policy sandbox"),
+                rust_toolchain: spec
+                    .rust_toolchain
+                    .as_ref()
+                    .map(|p| p.display().to_string()),
+                writable_snapshot: false,
+                persistent_scratch: spec.scratch.is_some(),
+                dependency_caches: spec
+                    .dependency_caches
+                    .iter()
+                    .map(|c| format!("{}: {}", c.name, c.path.display()))
+                    .collect(),
+            });
 
             run_child_process(
                 child,
@@ -513,9 +567,9 @@ impl SandboxBackend for BwrapSandboxBackend {
                 output_log,
                 "bubblewrap; capability policy sandbox",
                 spec.scratch.is_some(),
-                0,
-                0,
-                None,
+                spec.workspace_files,
+                spec.skipped_entries,
+                verification,
             )
             .await
         })

@@ -166,10 +166,7 @@ impl Tool for RunCommand {
         ToolDefinition::function(
             "run_command",
             format!(
-                "Run a /bin/sh command under the user-selected approval policy in a Linux Bubblewrap sandbox. Use read_image instead when the task is to view or describe an image; shell metadata, OCR, pixel dumps and generated statistics do not expose the actual picture to the vision model. No network, credentials or host home. /workspace is a filtered snapshot, read-only by default. Set writable_snapshot=true to build or test in a disposable writable copy with host-configured capacity. Changes inside /workspace are discarded after each command; copy sources or build outputs to /scratch when they must survive subsequent commands. /tmp is a disposable 64 MiB tmpfs and each produced file is limited to 64 MiB. In the TUI, /scratch is a private writable directory retained across commands and session resume. Save intermediate files, binaries and checkpoints there; new sessions use separate scratch directories. It does not keep background processes alive. Cannot modify the original project. Metadata, symlinks, target/node_modules/.venv/__pycache__ are omitted. System tools are available; a host-configured Rust toolchain may also be mounted read-only at /opt/orbit-rust and added to PATH. Only explicitly configured dependency caches are mounted; network remains blocked. Timeout defaults and maximum are specified in the tool schema; timeout and cancellation stop the sandbox process, while CPU time has no separate limit. Command text is executed from a private script file, without an 8 KiB or OS argument-size limit. stdout/stderr each return the last 32 KiB with total byte counts. In the TUI, full output is privately retained by session and returns an output_id for read_command_output pagination; it is capped at 16 MiB per stream and 128 MiB per session. Never automatically retry a denied command. Configured source limits: {} MiB / {} entries, disposable writable capacity {} MiB. Read-only cache mounts: {}. Host-configured verification commands, not yet executed: {}.",
-                self.limits.snapshot_mib,
-                self.limits.snapshot_entries,
-                self.limits.writable_snapshot_mib,
+                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-write by default, allowing build, test, and development commands (such as cargo, npm, git) to modify project files directly. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is allowed by default under policy. Enforces execution timeout, private script execution, and resource limits (memory, file size, processes, open files). /tmp is a disposable tmpfs. Persistent scratch is mounted at /scratch when configured to retain files across commands and session resume. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Never automatically retry a denied command. Read-only cache mounts: {}. Host-configured verification commands: {}.",
                 serde_json::to_string(
                     &self
                         .limits
@@ -181,7 +178,29 @@ impl Tool for RunCommand {
                 .unwrap_or_default(),
                 serde_json::to_string(&self.limits.verification_commands).unwrap_or_default()
             ),
-            json!({"type":"object","properties":{"writable_snapshot":{"type":"boolean","default":false},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":self.limits.max_timeout_seconds,"default":self.limits.default_timeout_seconds}},"required":["command"],"additionalProperties":false}),
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute"
+                    },
+                    "writable_snapshot": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Deprecated: /workspace is now mounted read-write directly by default"
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": self.limits.max_timeout_seconds,
+                        "default": self.limits.default_timeout_seconds,
+                        "description": "Execution timeout in seconds"
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }),
         )
     }
 
@@ -240,26 +259,27 @@ impl Tool for RunCommand {
                 }
                 None => None,
             };
-            let mut result = if args.writable_snapshot {
-                sandbox::run_configured(
-                    self.workspace.clone(),
-                    args.command,
-                    Duration::from_secs(timeout_seconds),
-                    cancellation,
-                    true,
-                    &self.limits,
-                    scratch.as_deref(),
-                    output_log,
-                )
-                .await?
-            } else {
-                let backend = sandbox::BwrapSandboxBackend::new()?;
-                let mut spec =
-                    sandbox::ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
-                spec.scratch = scratch.clone();
-                let policy = self.workspace.policy().effective_policy();
-                backend.run(spec, policy, output_log, cancellation).await?
-            };
+            let (fingerprint, workspace_files, skipped_entries) = sandbox::scan_workspace_summary(
+                self.workspace.clone(),
+                cancellation.clone(),
+                self.limits.clone(),
+            )
+            .await?;
+
+            let backend = sandbox::BwrapSandboxBackend::new()?;
+            let mut spec =
+                sandbox::ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
+            spec.scratch = scratch.clone();
+            spec.rust_toolchain = self.limits.rust_toolchain.clone();
+            spec.dependency_caches = self.limits.dependency_caches.clone();
+            spec.limits.max_file_size_bytes =
+                (self.limits.writable_snapshot_mib * sandbox::MIB) as u64;
+            spec.workspace_files = workspace_files;
+            spec.skipped_entries = skipped_entries;
+            spec.fingerprint = Some(fingerprint);
+
+            let policy = self.workspace.policy().effective_policy();
+            let mut result = backend.run(spec, policy, output_log, cancellation).await?;
             let evidence = result.verification.take();
             serde_json::to_string(&result)
                 .map(|content| {

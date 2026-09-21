@@ -40,11 +40,27 @@ pub enum FilesystemAccess {
 }
 
 impl FilesystemAccess {
-    pub fn is_read(&self) -> bool {
+    pub fn allows_read(&self) -> bool {
         true
     }
 
+    pub fn allows_write(&self) -> bool {
+        matches!(self, Self::ReadWrite)
+    }
+
+    pub fn is_read(&self) -> bool {
+        self.allows_read()
+    }
+
     pub fn is_write(&self) -> bool {
+        self.allows_write()
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        matches!(self, Self::Read)
+    }
+
+    pub fn is_read_write(&self) -> bool {
         matches!(self, Self::ReadWrite)
     }
 
@@ -128,12 +144,20 @@ mod tests {
         assert_eq!(cap.access, FilesystemAccess::Read);
         assert!(cap.access.is_read());
         assert!(!cap.access.is_write());
+        assert!(cap.access.allows_read());
+        assert!(!cap.access.allows_write());
+        assert!(cap.access.is_read_only());
+        assert!(!cap.access.is_read_write());
         assert_eq!(cap.access.description(), "read");
 
         let cap_rw = FilesystemCapability::local_read_write("/data/output");
         assert_eq!(cap_rw.access, FilesystemAccess::ReadWrite);
         assert!(cap_rw.access.is_read());
         assert!(cap_rw.access.is_write());
+        assert!(cap_rw.access.allows_read());
+        assert!(cap_rw.access.allows_write());
+        assert!(!cap_rw.access.is_read_only());
+        assert!(cap_rw.access.is_read_write());
         assert_eq!(cap_rw.access.description(), "read and write");
 
         let cap_write = FilesystemCapability::local_write("/data/output");

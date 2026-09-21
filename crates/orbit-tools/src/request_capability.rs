@@ -50,8 +50,8 @@ impl Tool for RequestCapability {
                     },
                     "access": {
                         "type": "string",
-                        "enum": ["read", "read_write", "write"],
-                        "description": "Requested access level: 'read' for read-only, 'read_write' (or 'write') for read and write"
+                        "enum": ["read", "read_write"],
+                        "description": "Requested access level: 'read' for read-only, 'read_write' for read and write"
                     },
                     "reason": {
                         "type": "string",
@@ -82,7 +82,7 @@ impl Tool for RequestCapability {
                 "read_write" | "write" => FilesystemAccess::ReadWrite,
                 other => {
                     return Err(invalid(format!(
-                        "access must be 'read' or 'write' (or 'read_write'), got '{other}'"
+                        "access must be 'read' or 'read_write' (or 'write'), got '{other}'"
                     )));
                 }
             };

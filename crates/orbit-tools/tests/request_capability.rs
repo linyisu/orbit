@@ -202,7 +202,7 @@ async fn request_capability_validates_arguments() {
         .unwrap_err();
     assert!(
         err2.to_string()
-            .contains("access must be 'read' or 'write'")
+            .contains("access must be 'read' or 'read_write'")
     );
 
     // Empty reason
@@ -222,4 +222,54 @@ async fn request_capability_validates_arguments() {
         .await
         .unwrap_err();
     assert!(err3.to_string().contains("reason must not be empty"));
+}
+
+#[tokio::test]
+async fn request_capability_supports_read_write_access() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let outside_temp = tempfile::tempdir().unwrap();
+
+    let workspace = Workspace::new(ws_temp.path()).unwrap();
+    let outside_file = outside_temp.path().join("rw_data.txt");
+    fs::write(&outside_file, "initial\n").unwrap();
+
+    let (sender, mut receiver) = approval::channel();
+    let tool = RequestCapability::new(workspace.clone(), sender);
+
+    let req_file = outside_file.display().to_string();
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "call_rw",
+                "request_capability",
+                json!({
+                    "path": req_file,
+                    "access": "read_write",
+                    "reason": "Modify external config"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    match &request.preview {
+        approval::ApprovalPreview::Capability(preview) => {
+            assert_eq!(
+                preview.access,
+                orbit_tools::capability::FilesystemAccess::ReadWrite
+            );
+            assert!(preview.access.allows_read());
+            assert!(preview.access.allows_write());
+        }
+        _ => panic!("unexpected preview type"),
+    }
+
+    request.decision.send(true).unwrap();
+
+    let output = task.await.unwrap().unwrap();
+    let result_json: Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(result_json["status"], "granted");
+    assert_eq!(result_json["access"], "read and write");
 }
