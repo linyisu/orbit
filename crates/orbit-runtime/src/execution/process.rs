@@ -53,6 +53,113 @@ impl MountSpec {
     pub fn read_write(source: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Self {
         Self::new(source, target, MountAccess::ReadWrite)
     }
+
+    pub fn normalized_target(&self) -> Result<PathBuf, RuntimeError> {
+        normalize_mount_target(&self.target)
+    }
+
+    pub fn validate(&self) -> Result<(), RuntimeError> {
+        let normalized = self.normalized_target()?;
+        if is_reserved_mount_target(&normalized) {
+            return Err(failed(format!(
+                "mount target '{}' is a reserved runtime path",
+                self.target.display()
+            )));
+        }
+        let canonical_source = self.source.canonicalize().map_err(|e| {
+            failed(format!(
+                "configured mount source '{}' must exist: {e}",
+                self.source.display()
+            ))
+        })?;
+        if !canonical_source.exists() {
+            return Err(failed(format!(
+                "configured mount source '{}' must exist",
+                self.source.display()
+            )));
+        }
+        Ok(())
+    }
+}
+
+pub fn normalize_mount_target(target: &Path) -> Result<PathBuf, RuntimeError> {
+    if !target.is_absolute() {
+        return Err(failed(format!(
+            "mount target '{}' must be an absolute path",
+            target.display()
+        )));
+    }
+    use std::os::unix::ffi::OsStrExt;
+    for seg in target.as_os_str().as_bytes().split(|&b| b == b'/') {
+        if seg == b"." || seg == b".." {
+            return Err(failed(format!(
+                "mount target '{}' must not contain '.' or '..' components",
+                target.display()
+            )));
+        }
+    }
+    let mut normalized = PathBuf::from("/");
+    let mut has_normal = false;
+    for component in target.components() {
+        match component {
+            std::path::Component::RootDir => {}
+            std::path::Component::Normal(c) => {
+                has_normal = true;
+                normalized.push(c);
+            }
+            std::path::Component::CurDir | std::path::Component::ParentDir => {
+                return Err(failed(format!(
+                    "mount target '{}' must not contain '.' or '..' components",
+                    target.display()
+                )));
+            }
+            std::path::Component::Prefix(_) => {
+                return Err(failed(format!(
+                    "mount target '{}' contains unsupported prefix component",
+                    target.display()
+                )));
+            }
+        }
+    }
+    if !has_normal {
+        return Err(failed("mount target cannot be root '/'"));
+    }
+    Ok(normalized)
+}
+
+pub fn is_reserved_mount_target(normalized_target: &Path) -> bool {
+    const EXACT_RESERVED: &[&str] = &["/", "/opt", "/opt/orbit-cache"];
+    const PREFIX_RESERVED: &[&str] = &[
+        "/workspace",
+        "/tmp",
+        "/scratch",
+        "/opt/orbit-rust",
+        "/dev",
+        "/proc",
+        "/sys",
+        "/etc",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/lib",
+        "/lib64",
+        "/orbit-command.sh",
+        "/orbit-source",
+    ];
+
+    for exact in EXACT_RESERVED {
+        if normalized_target == Path::new(exact) {
+            return true;
+        }
+    }
+
+    for prefix in PREFIX_RESERVED {
+        if normalized_target.starts_with(Path::new(prefix)) {
+            return true;
+        }
+    }
+
+    false
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

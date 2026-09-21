@@ -525,7 +525,12 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
     .unwrap();
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stdout.contains("offline dependency"));
-    assert_eq!(result.verification.unwrap().mounts.len(), 1);
+    let evidence_mounts = result.verification.unwrap().mounts;
+    assert_eq!(
+        evidence_mounts,
+        vec!["/opt/orbit-cache/packages: ro".to_string()]
+    );
+    assert!(!evidence_mounts[0].contains(cache.path().to_str().unwrap()));
     fs::write(root.path().join("large.bin"), vec![0; 1024 * 1024 + 1]).unwrap();
     let error = sandbox::run_configured(
         workspace,

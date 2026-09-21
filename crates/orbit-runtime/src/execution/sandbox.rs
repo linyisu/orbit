@@ -321,6 +321,8 @@ impl BwrapSandboxBackend {
         rust_toolchain: Option<&Path>,
         mounts: &[MountSpec],
     ) -> Result<Command, RuntimeError> {
+        validate_mounts(mounts, policy)?;
+
         let mut command = Command::new(&self.bwrap_path);
 
         command
@@ -421,7 +423,14 @@ impl SandboxBackend for BwrapSandboxBackend {
                 mounts: spec
                     .mounts
                     .iter()
-                    .map(|m| format!("{}: {}", m.source.display(), m.target.display()))
+                    .map(|m| {
+                        let target = m.normalized_target().unwrap_or_else(|_| m.target.clone());
+                        let access = match m.access {
+                            MountAccess::ReadOnly => "ro",
+                            MountAccess::ReadWrite => "rw",
+                        };
+                        format!("{}: {access}", target.display())
+                    })
                     .collect(),
             });
 
@@ -519,6 +528,60 @@ fn mount_capabilities(command: &mut Command, policy: &EffectivePolicy) -> Result
     Ok(())
 }
 
+pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result<(), RuntimeError> {
+    let mut normalized_targets = Vec::with_capacity(mounts.len());
+    for mount in mounts {
+        mount.validate()?;
+        normalized_targets.push(mount.normalized_target()?);
+    }
+
+    for i in 0..normalized_targets.len() {
+        for j in (i + 1)..normalized_targets.len() {
+            let ti = &normalized_targets[i];
+            let tj = &normalized_targets[j];
+            if ti == tj {
+                return Err(failed(format!("duplicate mount target '{}'", ti.display())));
+            }
+            if ti.starts_with(tj) || tj.starts_with(ti) {
+                return Err(failed(format!(
+                    "conflicting or overlapping mount targets: '{}' and '{}'",
+                    ti.display(),
+                    tj.display()
+                )));
+            }
+        }
+    }
+
+    let mut capability_paths: Vec<PathBuf> = Vec::new();
+    for path in &policy.persistent_read_write {
+        capability_paths.push(path.canonical().to_path_buf());
+    }
+    for path in &policy.persistent_read {
+        capability_paths.push(path.canonical().to_path_buf());
+    }
+    if let Ok(store) = policy.session_grants.read() {
+        for grant in store.grants() {
+            if grant.environment.is_local() {
+                capability_paths.push(grant.path.canonical().to_path_buf());
+            }
+        }
+    }
+
+    for target in &normalized_targets {
+        for cap_path in &capability_paths {
+            if target == cap_path || target.starts_with(cap_path) || cap_path.starts_with(target) {
+                return Err(failed(format!(
+                    "mount target '{}' conflicts or overlaps with active capability grant '{}'",
+                    target.display(),
+                    cap_path.display()
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn mount_toolchain_and_mounts(
     command: &mut Command,
     rust_toolchain: Option<&Path>,
@@ -546,13 +609,14 @@ fn mount_toolchain_and_mounts(
                 mount.source.display()
             )));
         }
+        let target = mount.normalized_target()?;
 
         match mount.access {
             MountAccess::ReadOnly => {
-                command.arg("--ro-bind").arg(path).arg(&mount.target);
+                command.arg("--ro-bind").arg(path).arg(&target);
             }
             MountAccess::ReadWrite => {
-                command.arg("--bind").arg(path).arg(&mount.target);
+                command.arg("--bind").arg(path).arg(&target);
             }
         }
     }
@@ -818,6 +882,10 @@ pub async fn run_configured(
 ) -> Result<CommandResult, RuntimeError> {
     scan_limits.validate().map_err(failed)?;
     process_limits.validate().map_err(failed)?;
+    let policy_engine = workspace.policy().clone();
+    let policy = policy_engine.effective_policy();
+    validate_mounts(mounts, policy)?;
+
     if token.is_cancelled() {
         return Err(RuntimeError::Cancelled);
     }
@@ -838,8 +906,6 @@ pub async fn run_configured(
     script_file.flush().map_err(failed)?;
     let backend = BwrapSandboxBackend::new()?;
     let snapshot_path = snapshot.directory.as_ref().expect("copied snapshot").path();
-
-    let policy = workspace.policy().effective_policy();
 
     let mut spec = ProcessSpec::new(&script, timeout);
     spec.scratch = scratch.map(Path::to_path_buf);
@@ -887,7 +953,14 @@ pub async fn run_configured(
         persistent_scratch: scratch.is_some(),
         mounts: mounts
             .iter()
-            .map(|m| format!("{}: {}", m.source.display(), m.target.display()))
+            .map(|m| {
+                let target = m.normalized_target().unwrap_or_else(|_| m.target.clone());
+                let access = match m.access {
+                    MountAccess::ReadOnly => "ro",
+                    MountAccess::ReadWrite => "rw",
+                };
+                format!("{}: {access}", target.display())
+            })
             .collect(),
     });
 
@@ -998,6 +1071,7 @@ pub async fn run_with_resources_and_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution::process::{is_reserved_mount_target, normalize_mount_target};
 
     #[tokio::test]
     async fn capture_keeps_bounded_unicode_tail_and_counts_all_output() {
@@ -1027,6 +1101,215 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(directory.path().join(format!("{id}.stdout"))).unwrap(),
             "first\nsecond\n"
+        );
+    }
+
+    #[test]
+    fn test_normalize_mount_target() {
+        assert_eq!(
+            normalize_mount_target(Path::new("/opt/orbit-cache/packages")).unwrap(),
+            PathBuf::from("/opt/orbit-cache/packages")
+        );
+        assert_eq!(
+            normalize_mount_target(Path::new("/opt/orbit-cache/packages/")).unwrap(),
+            PathBuf::from("/opt/orbit-cache/packages")
+        );
+        assert_eq!(
+            normalize_mount_target(Path::new("/opt//orbit-cache///packages")).unwrap(),
+            PathBuf::from("/opt/orbit-cache/packages")
+        );
+        assert!(normalize_mount_target(Path::new("relative/path")).is_err());
+        assert!(normalize_mount_target(Path::new("/opt/../etc")).is_err());
+        assert!(normalize_mount_target(Path::new("/opt/./cache")).is_err());
+        assert!(normalize_mount_target(Path::new("/")).is_err());
+        assert!(normalize_mount_target(Path::new("///")).is_err());
+    }
+
+    #[test]
+    fn test_is_reserved_mount_target() {
+        // Exact reserved
+        assert!(is_reserved_mount_target(Path::new("/")));
+        assert!(is_reserved_mount_target(Path::new("/opt")));
+        assert!(is_reserved_mount_target(Path::new("/opt/orbit-cache")));
+
+        // Prefix reserved
+        assert!(is_reserved_mount_target(Path::new("/workspace")));
+        assert!(is_reserved_mount_target(Path::new("/workspace/src")));
+        assert!(is_reserved_mount_target(Path::new("/tmp")));
+        assert!(is_reserved_mount_target(Path::new("/tmp/scratch")));
+        assert!(is_reserved_mount_target(Path::new("/scratch")));
+        assert!(is_reserved_mount_target(Path::new("/scratch/dir")));
+        assert!(is_reserved_mount_target(Path::new("/opt/orbit-rust")));
+        assert!(is_reserved_mount_target(Path::new("/opt/orbit-rust/bin")));
+        assert!(is_reserved_mount_target(Path::new("/dev")));
+        assert!(is_reserved_mount_target(Path::new("/dev/null")));
+        assert!(is_reserved_mount_target(Path::new("/proc")));
+        assert!(is_reserved_mount_target(Path::new("/sys")));
+        assert!(is_reserved_mount_target(Path::new("/etc")));
+        assert!(is_reserved_mount_target(Path::new("/etc/passwd")));
+        assert!(is_reserved_mount_target(Path::new("/usr")));
+        assert!(is_reserved_mount_target(Path::new("/bin")));
+        assert!(is_reserved_mount_target(Path::new("/sbin")));
+        assert!(is_reserved_mount_target(Path::new("/lib")));
+        assert!(is_reserved_mount_target(Path::new("/lib64")));
+        assert!(is_reserved_mount_target(Path::new("/orbit-command.sh")));
+        assert!(is_reserved_mount_target(Path::new("/orbit-source")));
+
+        // Allowed targets
+        assert!(!is_reserved_mount_target(Path::new(
+            "/opt/orbit-cache/cargo"
+        )));
+        assert!(!is_reserved_mount_target(Path::new(
+            "/opt/orbit-cache/packages"
+        )));
+        assert!(!is_reserved_mount_target(Path::new(
+            "/opt/orbit-cache/nested/dir"
+        )));
+        assert!(!is_reserved_mount_target(Path::new("/mnt/data")));
+        assert!(!is_reserved_mount_target(Path::new("/data")));
+        assert!(!is_reserved_mount_target(Path::new("/var/cache")));
+    }
+
+    #[test]
+    fn test_mount_spec_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let valid_mount = MountSpec::read_only(dir.path(), "/opt/orbit-cache/packages");
+        assert!(valid_mount.validate().is_ok());
+
+        // Non-existent source
+        let bad_source = MountSpec::read_only(
+            dir.path().join("does_not_exist"),
+            "/opt/orbit-cache/packages",
+        );
+        assert!(bad_source.validate().is_err());
+
+        // Reserved target
+        let reserved_mount = MountSpec::read_only(dir.path(), "/workspace");
+        assert!(reserved_mount.validate().is_err());
+
+        // Relative target
+        let relative_mount = MountSpec::read_only(dir.path(), "opt/orbit-cache/packages");
+        assert!(relative_mount.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_mounts_duplicate_and_overlapping() {
+        let dir1 = tempfile::tempdir().unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        let policy = EffectivePolicy::new(crate::policy::BasePolicy::new(
+            crate::filesystem::ResolvedPath::from_canonical(dir1.path()),
+        ));
+
+        // Duplicate targets
+        let duplicates = vec![
+            MountSpec::read_only(dir1.path(), "/mnt/data"),
+            MountSpec::read_write(dir2.path(), "/mnt/data"),
+        ];
+        let err = validate_mounts(&duplicates, &policy).unwrap_err();
+        assert!(err.to_string().contains("duplicate mount target"));
+
+        // Overlapping targets
+        let overlapping = vec![
+            MountSpec::read_only(dir1.path(), "/mnt/data"),
+            MountSpec::read_write(dir2.path(), "/mnt/data/subdir"),
+        ];
+        let err = validate_mounts(&overlapping, &policy).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("conflicting or overlapping mount targets")
+        );
+
+        // Non-overlapping targets
+        let non_overlapping = vec![
+            MountSpec::read_only(dir1.path(), "/mnt/data1"),
+            MountSpec::read_write(dir2.path(), "/mnt/data2"),
+        ];
+        assert!(validate_mounts(&non_overlapping, &policy).is_ok());
+    }
+
+    #[test]
+    fn test_validate_mounts_capability_collision() {
+        let ws_dir = tempfile::tempdir().unwrap();
+        let cap_canonical = PathBuf::from("/var/data/shared");
+        let mount_src = tempfile::tempdir().unwrap();
+
+        let mut policy = EffectivePolicy::new(crate::policy::BasePolicy::new(
+            crate::filesystem::ResolvedPath::from_canonical(ws_dir.path()),
+        ));
+        policy
+            .persistent_read
+            .push(crate::filesystem::ResolvedPath::from_canonical(
+                &cap_canonical,
+            ));
+
+        // Mount target collides with capability path
+        let collides = vec![MountSpec::read_only(mount_src.path(), &cap_canonical)];
+        let err = validate_mounts(&collides, &policy).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("conflicts or overlaps with active capability grant")
+        );
+
+        // Mount target is subpath of capability path
+        let subpath = vec![MountSpec::read_only(
+            mount_src.path(),
+            cap_canonical.join("sub"),
+        )];
+        let err = validate_mounts(&subpath, &policy).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("conflicts or overlaps with active capability grant")
+        );
+
+        // Non-colliding target succeeds
+        let valid = vec![MountSpec::read_only(
+            mount_src.path(),
+            "/opt/orbit-cache/cargo",
+        )];
+        assert!(validate_mounts(&valid, &policy).is_ok());
+    }
+
+    #[test]
+    fn test_verification_evidence_mounts_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = ProcessSpec {
+            command: "echo test".into(),
+            timeout: Duration::from_secs(5),
+            scratch: None,
+            limits: ProcessLimits::default(),
+            read_only_workspace: false,
+            rust_toolchain: None,
+            mounts: vec![
+                MountSpec::read_only(dir.path(), "/opt/orbit-cache/packages/"),
+                MountSpec::read_write(dir.path(), "/mnt/extra"),
+            ],
+            workspace_files: 0,
+            skipped_entries: 0,
+            fingerprint: Some(WorkspaceFingerprint::default()),
+        };
+        let formatted: Vec<String> = spec
+            .mounts
+            .iter()
+            .map(|m| {
+                let target = m.normalized_target().unwrap_or_else(|_| m.target.clone());
+                let access = match m.access {
+                    MountAccess::ReadOnly => "ro",
+                    MountAccess::ReadWrite => "rw",
+                };
+                format!("{}: {access}", target.display())
+            })
+            .collect();
+        assert_eq!(
+            formatted,
+            vec![
+                "/opt/orbit-cache/packages: ro".to_string(),
+                "/mnt/extra: rw".to_string(),
+            ]
+        );
+        assert!(
+            !formatted
+                .iter()
+                .any(|m| m.contains(dir.path().to_str().unwrap()))
         );
     }
 }
