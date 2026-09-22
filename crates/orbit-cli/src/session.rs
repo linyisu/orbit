@@ -1036,7 +1036,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resume_sanitizes_unsupported_attachments_for_text_only_model() {
+    async fn test_resume_preserves_attachments_losslessly_and_projects_for_text_only_model() {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("orbit.db");
         let mut session = SessionState::open(db_path.clone(), None, "test::model".into())
@@ -1068,12 +1068,10 @@ mod tests {
         let id = session.id().to_owned();
         drop(session);
 
-        // Resume session
-        let mut resumed = SessionState::open(db_path, Some(id), "test::model".into())
+        // Resume session: canonical history remains lossless
+        let resumed = SessionState::open(db_path, Some(id), "test::model".into())
             .await
             .unwrap();
-        // Sanitize for text-only model
-        orbit_agent::sanitize_unsupported_attachments(&mut resumed.snapshot.history);
 
         assert_eq!(resumed.snapshot.history.len(), 2);
         let ChatMessage::User {
@@ -1083,9 +1081,28 @@ mod tests {
         else {
             panic!("expected user message");
         };
-        assert!(attachments.is_empty(), "attachments must be emptied");
+        assert_eq!(
+            attachments.len(),
+            1,
+            "persisted history must retain attachments losslessly"
+        );
+        assert_eq!(content, "check this");
+
+        // When projected for text-only model via model_messages, attachments are omitted
+        let projected = orbit_agent::model_messages(&resumed.snapshot.history, false);
+        let ChatMessage::User {
+            content: proj_content,
+            attachments: proj_attachments,
+        } = &projected[1]
+        else {
+            panic!("expected projected user message");
+        };
         assert!(
-            content
+            proj_attachments.is_empty(),
+            "projected request attachments must be emptied"
+        );
+        assert!(
+            proj_content
                 .contains("[Image omitted: current model does not support image input: pic.png]")
         );
     }

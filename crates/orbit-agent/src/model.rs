@@ -24,7 +24,7 @@ pub type ObservedStreamFuture<'a> =
 
 pub trait ModelBackend: Send + Sync {
     fn supports_vision(&self) -> bool {
-        true
+        false
     }
 
     fn stream_with_retries<'a>(
@@ -115,7 +115,7 @@ impl MockModel {
         Self {
             responses: Arc::new(Mutex::new(responses.into_iter().collect())),
             requests: Arc::new(Mutex::new(Vec::new())),
-            supports_vision: true,
+            supports_vision: false,
         }
     }
 

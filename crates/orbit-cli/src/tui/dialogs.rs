@@ -192,14 +192,7 @@ impl ModelPicker {
         let Some(model) = matches.get(self.selected) else {
             return Vec::new();
         };
-        if model.reasoning_efforts.is_empty() {
-            return Vec::new();
-        }
-        let mut efforts = model.reasoning_efforts.clone();
-        if !efforts.contains(&orbit_model::types::ReasoningEffort::None) {
-            efforts.insert(0, orbit_model::types::ReasoningEffort::None);
-        }
-        efforts
+        model.reasoning_efforts.clone()
     }
     fn cycle_effort(&mut self, forward: bool) {
         let efforts = self.selected_efforts();
@@ -229,13 +222,7 @@ impl ModelPicker {
                 .get(self.selected)
                 .and_then(|m| m.config.reasoning_effort)
                 .filter(|d| efforts.contains(d));
-            self.effort = default.or_else(|| {
-                if efforts[0] == orbit_model::types::ReasoningEffort::None && efforts.len() > 1 {
-                    Some(efforts[1])
-                } else {
-                    Some(efforts[0])
-                }
-            });
+            self.effort = default.or_else(|| Some(efforts[0]));
         }
     }
 }
@@ -1146,16 +1133,31 @@ mod tests {
     fn model_picker_can_select_no_thinking_effort() {
         let mut state = UiState::new("deepseek::deepseek-chat");
         state.model_picker = Some(ModelPicker::new(
-            vec![ModelOption {
-                provider: "deepseek".into(),
-                model: "deepseek-chat".into(),
-                context_tokens: 64_000,
-                input_context_tokens: 32_000,
-                default_for_provider: true,
-                reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
-                supports_vision: false,
-                config: orbit_model::types::ModelConfig::default(),
-            }],
+            vec![
+                ModelOption {
+                    provider: "deepseek".into(),
+                    model: "deepseek-chat".into(),
+                    context_tokens: 64_000,
+                    input_context_tokens: 32_000,
+                    default_for_provider: true,
+                    reasoning_efforts: vec![
+                        orbit_model::types::ReasoningEffort::None,
+                        orbit_model::types::ReasoningEffort::Low,
+                    ],
+                    supports_vision: false,
+                    config: orbit_model::types::ModelConfig::default(),
+                },
+                ModelOption {
+                    provider: "deepseek".into(),
+                    model: "strict-model".into(),
+                    context_tokens: 64_000,
+                    input_context_tokens: 32_000,
+                    default_for_provider: false,
+                    reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
+                    supports_vision: false,
+                    config: orbit_model::types::ModelConfig::default(),
+                },
+            ],
             state.model.clone(),
             Some(orbit_model::types::ReasoningEffort::Low),
         ));
@@ -1166,6 +1168,29 @@ mod tests {
         assert_eq!(
             state.chosen_effort,
             Some(orbit_model::types::ReasoningEffort::None)
+        );
+
+        // Model without None in efforts cannot select None
+        state.model = "deepseek::strict-model".into();
+        state.model_picker = Some(ModelPicker::new(
+            vec![ModelOption {
+                provider: "deepseek".into(),
+                model: "strict-model".into(),
+                context_tokens: 64_000,
+                input_context_tokens: 32_000,
+                default_for_provider: false,
+                reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
+                supports_vision: false,
+                config: orbit_model::types::ModelConfig::default(),
+            }],
+            state.model.clone(),
+            Some(orbit_model::types::ReasoningEffort::Low),
+        ));
+        handle(&mut state, key(KeyCode::Left));
+        handle(&mut state, key(KeyCode::Enter));
+        assert_eq!(
+            state.chosen_effort,
+            Some(orbit_model::types::ReasoningEffort::Low)
         );
     }
 

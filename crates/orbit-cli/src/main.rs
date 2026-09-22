@@ -820,9 +820,6 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     }
 
     let mut messages = session.snapshot.history.clone();
-    if !selected_model.supports_vision {
-        orbit_agent::sanitize_unsupported_attachments(&mut messages);
-    }
     instructions::inject(&mut messages, &instructions);
     if !capability_is_disabled(&disabled, ChatCapability::Skills) {
         skills.inject(&mut messages);

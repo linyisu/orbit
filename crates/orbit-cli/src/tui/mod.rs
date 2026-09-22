@@ -136,6 +136,7 @@ pub async fn run(
     state.auto_compact = auto_compact;
     state.max_output_tokens = max_output_tokens;
     state.reasoning_effort = model.config().reasoning_effort;
+    state.supports_vision = model.supports_vision();
     state.model_completions = model_options
         .iter()
         .map(ModelOption::qualified_name)
@@ -1571,13 +1572,7 @@ async fn select_model(
     };
     let mut config = choice.config.clone();
     if let Some(effort) = selected_effort {
-        config.reasoning_effort = if effort == orbit_model::types::ReasoningEffort::None
-            || choice.reasoning_efforts.contains(&effort)
-        {
-            Some(effort)
-        } else {
-            choice.config.reasoning_effort
-        };
+        config.reasoning_effort = choice.reasoning_efforts.contains(&effort).then_some(effort);
     }
     match ModelClient::new(config) {
         Ok(client) => {
@@ -1594,6 +1589,7 @@ async fn select_model(
             state.context_tokens = choice.context_tokens;
             state.input_context_tokens = choice.input_context_tokens;
             state.reasoning_effort = reasoning_effort;
+            state.supports_vision = choice.supports_vision;
             if previous_model != state.model {
                 state.transcript.push(TranscriptItem::CommandResult(format!(
                     "{previous_model} → {}",
@@ -1678,6 +1674,9 @@ fn pasted_image_paths(text: &str) -> Option<Vec<PathBuf>> {
 }
 
 fn queue_attachment(state: &mut UiState, attachment: orbit_model::types::Attachment) -> bool {
+    if !state.supports_vision {
+        return false;
+    }
     if state
         .attachments
         .iter()
@@ -1757,6 +1756,12 @@ fn remove_focused_attachment(state: &mut UiState, backwards: bool) -> bool {
 }
 
 fn attach_paths(state: &mut UiState, session: &SessionState, paths: Vec<PathBuf>) -> Result<()> {
+    if !state.supports_vision {
+        state.transcript.push(TranscriptItem::Notice(
+            "当前模型不支持图片输入，未添加图片附件。可在配置中为该模型设置 supports_vision = true。".into(),
+        ));
+        return Ok(());
+    }
     for path in paths {
         let attachment = session.import_image(&path)?;
         queue_attachment(state, attachment);
@@ -1802,6 +1807,13 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
             height,
             bytes,
         } => {
+            if !state.supports_vision {
+                state.transcript.push(TranscriptItem::Notice(
+                    "当前模型不支持图片输入，未添加图片附件。可在配置中为该模型设置 supports_vision = true。".into(),
+                ));
+                state.menu_dismissed = false;
+                return Ok(());
+            }
             let attachment = session.import_clipboard_image(width, height, bytes)?;
             queue_attachment(state, attachment);
         }
@@ -1902,6 +1914,7 @@ fn resume_ui_shell(state: &UiState) -> UiState {
     restored.max_output_tokens = state.max_output_tokens;
     restored.model_completions = state.model_completions.clone();
     restored.permission_mode = crate::tui::permissions::Mode::Auto;
+    restored.supports_vision = state.supports_vision;
     restored
 }
 
@@ -1919,10 +1932,7 @@ fn restore_model_profile(
         return;
     };
     let mut config = choice.config.clone();
-    if let Some(effort) = saved_effort.filter(|effort| {
-        *effort == orbit_model::types::ReasoningEffort::None
-            || choice.reasoning_efforts.contains(effort)
-    }) {
+    if let Some(effort) = saved_effort.filter(|effort| choice.reasoning_efforts.contains(effort)) {
         config.reasoning_effort = Some(effort);
     }
     let Ok(client) = ModelClient::new(config) else {
@@ -1933,6 +1943,7 @@ fn restore_model_profile(
     state.context_tokens = choice.context_tokens;
     state.input_context_tokens = choice.input_context_tokens;
     state.reasoning_effort = model.config().reasoning_effort;
+    state.supports_vision = choice.supports_vision;
 }
 
 #[derive(Debug, PartialEq)]
@@ -2571,5 +2582,32 @@ mod tests {
             Action::Submit(String::new())
         );
         assert_eq!(state.attachment_cursor, None);
+    }
+
+    #[tokio::test]
+    async fn text_only_model_blocks_queuing_and_attaching_images() {
+        let mut state = UiState::new("mock");
+        state.supports_vision = false;
+
+        assert!(!queue_attachment(&mut state, image("test.png")));
+        assert!(state.attachments.is_empty());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("orbit.db");
+        let session = SessionState::open(db_path, None, "test::model".into())
+            .await
+            .unwrap();
+
+        attach_paths(&mut state, &session, vec![PathBuf::from("test.png")]).unwrap();
+        assert!(state.attachments.is_empty());
+        assert!(state.transcript.iter().any(|item| matches!(
+            item,
+            TranscriptItem::Notice(msg) if msg.contains("当前模型不支持图片输入，未添加图片附件")
+        )));
+
+        // With vision enabled, queue_attachment works
+        state.supports_vision = true;
+        assert!(queue_attachment(&mut state, image("test.png")));
+        assert_eq!(state.attachments.len(), 1);
     }
 }

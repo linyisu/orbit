@@ -255,9 +255,6 @@ where
         }
 
         let mut history = request.messages;
-        if !self.backend.supports_vision() {
-            sanitize_unsupported_attachments(&mut history);
-        }
         let mut files = self.files.clone();
         files.merge(&crate::memory::FileActivity::from_history(&history));
         let mut turns = 0;
@@ -356,17 +353,7 @@ where
                 turns = turns.saturating_sub(1);
                 continue;
             }
-            let (completion, _) = match response {
-                Ok(res) => res,
-                Err(error) => {
-                    if sanitize_uncommitted_attachments(&mut history) {
-                        let _ = self
-                            .checkpoint(&history, turns, tool_calls, None, &[], None)
-                            .await;
-                    }
-                    return Err(error);
-                }
-            };
+            let (completion, _) = response?;
             check_finish_reason(completion.finish_reason.as_deref())?;
             let assistant = completion.message.clone();
             let calls = match &assistant {
@@ -1179,7 +1166,8 @@ mod tests {
         let backend = MockModel::new(vec![
             assistant_tool_call("image-call", "read_image", "{}"),
             assistant_text("I can see it"),
-        ]);
+        ])
+        .with_vision(true);
         let mut tools = ToolRegistry::new();
         tools.register(ImageTool);
         let agent = Agent::new(backend.clone(), tools, AgentConfig::default());
@@ -1242,7 +1230,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scenario_2_multimodal_tool_failure_rolls_back_uncommitted_attachments_in_checkpoint() {
+    async fn scenario_2_model_failure_preserves_attachments_in_checkpoint_losslessly() {
         use std::sync::Arc;
         let journal = Arc::new(FailingJournal {
             checkpoints: std::sync::Mutex::new(Vec::new()),
@@ -1252,9 +1240,10 @@ mod tests {
         let backend = MockModel::from_results(vec![
             Ok(assistant_tool_call("image-call", "read_image", "{}")),
             Err(orbit_model::error::ModelError::Protocol(
-                "HTTP 500: image input is not supported".into(),
+                "HTTP 500: rate limit or transient failure".into(),
             )),
-        ]);
+        ])
+        .with_vision(true);
         let mut tools = ToolRegistry::new();
         tools.register(ImageTool);
         let agent = Agent::new(backend.clone(), tools, AgentConfig::default())
@@ -1262,33 +1251,21 @@ mod tests {
         let result = agent.run(request(), CancellationToken::new()).await;
         assert!(result.is_err());
 
-        // Check the last saved checkpoint in journal
+        // Check the last saved checkpoint in journal: canonical history preserves image attachments losslessly
         let checkpoints = journal.checkpoints.lock().unwrap();
         let last_checkpoint = checkpoints.last().expect("saved checkpoint");
-        // Verify that uncommitted attachments in the checkpoint were sanitized
         let has_raw_attachments = last_checkpoint.history.iter().any(|m| match m {
             ChatMessage::User { attachments, .. } => !attachments.is_empty(),
             _ => false,
         });
         assert!(
-            !has_raw_attachments,
-            "checkpoint must not retain raw image attachments on model failure"
-        );
-        // Verify the message explains the omission
-        let sanitized_msg = last_checkpoint.history.iter().find(|m| match m {
-            ChatMessage::User { content, .. } => {
-                content.contains("[Image attachment omitted: request failed: scene.png]")
-            }
-            _ => false,
-        });
-        assert!(
-            sanitized_msg.is_some(),
-            "omission notice must be preserved in history"
+            has_raw_attachments,
+            "checkpoint must preserve raw image attachments losslessly on model failure"
         );
     }
 
     #[tokio::test]
-    async fn scenario_3_subsequent_text_message_succeeds_after_multimodal_failure() {
+    async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
         use std::sync::Arc;
         let journal = Arc::new(FailingJournal {
             checkpoints: std::sync::Mutex::new(Vec::new()),
@@ -1298,34 +1275,39 @@ mod tests {
         let backend = MockModel::from_results(vec![
             Ok(assistant_tool_call("image-call", "read_image", "{}")),
             Err(orbit_model::error::ModelError::Protocol(
-                "HTTP 500: image input is not supported".into(),
+                "HTTP 500: transient error".into(),
             )),
-        ]);
+        ])
+        .with_vision(true);
         let mut tools = ToolRegistry::new();
         tools.register(ImageTool);
         let agent = Agent::new(backend.clone(), tools.clone(), AgentConfig::default())
             .with_execution_journal(journal.clone());
         let _ = agent.run(request(), CancellationToken::new()).await;
 
-        // Recover history from the sanitized checkpoint
+        // Recover history from the checkpoint
         let restored_history = {
             let checkpoints = journal.checkpoints.lock().unwrap();
             checkpoints.last().unwrap().history.clone()
         };
+        // Verify restored_history still has image attachment losslessly
+        assert!(restored_history.iter().any(|m| match m {
+            ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+            _ => false,
+        }));
 
-        // User now sends a follow-up text message
-        let mut follow_up = restored_history;
-        follow_up.push(ChatMessage::user("never mind the image, hello"));
-        let follow_up_backend = MockModel::new(vec![assistant_text("hello! How can I help?")]);
+        // Retry / follow-up with working vision model succeeds and sends the image
+        let follow_up_backend =
+            MockModel::new(vec![assistant_text("I see the image and help you")]).with_vision(true);
         let follow_up_agent = Agent::new(follow_up_backend.clone(), tools, AgentConfig::default());
         let result = follow_up_agent
-            .run(ChatRequest::new(follow_up), CancellationToken::new())
+            .run(ChatRequest::new(restored_history), CancellationToken::new())
             .await
             .unwrap();
         assert_eq!(result.turns, 1);
         let requests = follow_up_backend.requests();
         assert_eq!(requests.len(), 1);
-        assert!(!requests[0].messages.iter().any(|m| match m {
+        assert!(requests[0].messages.iter().any(|m| match m {
             ChatMessage::User { attachments, .. } => !attachments.is_empty(),
             _ => false,
         }));
@@ -1387,12 +1369,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scenario_5_switching_conversation_with_historical_images_to_text_only_model() {
+    async fn scenario_5_switching_conversation_with_historical_images_to_text_only_and_back_to_vision()
+     {
         // Step 1: Run with multimodal model where read_image completes and assistant answers
         let vision_backend = MockModel::new(vec![
             assistant_tool_call("image-call", "read_image", "{}"),
             assistant_text("I see a blue square in scene.png."),
-        ]);
+        ])
+        .with_vision(true);
         let mut tools = ToolRegistry::new();
         tools.register(ImageTool);
         let agent = Agent::new(vision_backend, tools.clone(), AgentConfig::default());
@@ -1407,7 +1391,11 @@ mod tests {
         switched_history.push(ChatMessage::user("What color was the square?"));
         let text_only_backend =
             MockModel::new(vec![assistant_text("The square was blue.")]).with_vision(false);
-        let text_agent = Agent::new(text_only_backend.clone(), tools, AgentConfig::default());
+        let text_agent = Agent::new(
+            text_only_backend.clone(),
+            tools.clone(),
+            AgentConfig::default(),
+        );
         let result2 = text_agent
             .run(ChatRequest::new(switched_history), CancellationToken::new())
             .await
@@ -1428,6 +1416,37 @@ mod tests {
                 ),
             _ => false,
         }));
+        // Verify canonical history still retains the image attachment losslessly!
+        assert!(result2.history.iter().any(|m| match m {
+            ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+            _ => false,
+        }));
+
+        // Step 3: Switch back to vision model; original image attachment is still preserved and sent
+        let mut back_to_vision_history = result2.history;
+        back_to_vision_history.push(ChatMessage::user(
+            "Look at the image again, what is in the corner?",
+        ));
+        let vision_backend_2 =
+            MockModel::new(vec![assistant_text("In the corner is a circle.")]).with_vision(true);
+        let vision_agent_2 = Agent::new(vision_backend_2.clone(), tools, AgentConfig::default());
+        let result3 = vision_agent_2
+            .run(
+                ChatRequest::new(back_to_vision_history),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result3.turns, 1);
+        let requests2 = vision_backend_2.requests();
+        assert_eq!(requests2.len(), 1);
+        assert!(
+            requests2[0].messages.iter().any(|m| match m {
+                ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+                _ => false,
+            }),
+            "vision model must receive restored raw image attachment"
+        );
     }
 
     #[tokio::test]
