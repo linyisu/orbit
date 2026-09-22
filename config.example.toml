@@ -22,15 +22,21 @@ timeout_seconds = 600
 # streaming begins. Once response headers arrive, Orbit never replays it.
 max_retries = 2
 
+# Set supports_vision = true (or vision = true) for models that accept image inputs.
+# When omitted or false, Orbit treats the model as text-only and guards against image poisoning.
 [[providers.openai.models]]
 id = "gpt-5.6-sol"
 context_tokens = 128000
-reasoning = { adapter = "openai_responses", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high" }
+supports_vision = true
+# reasoning.efforts supports: "none" (不思考), "minimal", "low", "medium", "high", "xhigh".
+# TUI (/model) also allows selecting "不思考" whenever a model has reasoning configured.
+reasoning = { adapter = "openai_responses", efforts = ["none", "minimal", "low", "medium", "high", "xhigh"], default = "high" }
 
 [[providers.openai.models]]
 id = "gpt-6-astra"
 context_tokens = 128000
-reasoning = { adapter = "openai_responses", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high" }
+supports_vision = true
+reasoning = { adapter = "openai_responses", efforts = ["none", "minimal", "low", "medium", "high", "xhigh"], default = "high" }
 
 [providers.deepseek]
 api_format = "anthropic_messages"

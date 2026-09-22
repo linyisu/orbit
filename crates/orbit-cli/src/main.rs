@@ -501,9 +501,7 @@ impl FileConfig {
                     |input| input.saturating_add(self.max_output_tokens as usize),
                 );
                 let reasoning = model.reasoning.as_ref();
-                let supports_vision = model
-                    .supports_vision
-                    .unwrap_or_else(|| orbit_model::types::infer_supports_vision(&model.id));
+                let supports_vision = model.supports_vision.unwrap_or(false);
                 options.push(tui::ModelOption {
                     provider: name.clone(),
                     model: model.id.clone(),

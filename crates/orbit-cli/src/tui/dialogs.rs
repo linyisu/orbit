@@ -188,10 +188,18 @@ impl ModelPicker {
         self.normalize_effort();
     }
     fn selected_efforts(&self) -> Vec<orbit_model::types::ReasoningEffort> {
-        self.matches()
-            .get(self.selected)
-            .map(|model| model.reasoning_efforts.clone())
-            .unwrap_or_default()
+        let matches = self.matches();
+        let Some(model) = matches.get(self.selected) else {
+            return Vec::new();
+        };
+        if model.reasoning_efforts.is_empty() {
+            return Vec::new();
+        }
+        let mut efforts = model.reasoning_efforts.clone();
+        if !efforts.contains(&orbit_model::types::ReasoningEffort::None) {
+            efforts.insert(0, orbit_model::types::ReasoningEffort::None);
+        }
+        efforts
     }
     fn cycle_effort(&mut self, forward: bool) {
         let efforts = self.selected_efforts();
@@ -216,7 +224,18 @@ impl ModelPicker {
         if efforts.is_empty() {
             self.effort = None;
         } else if !efforts.iter().any(|effort| Some(*effort) == self.effort) {
-            self.effort = Some(efforts[0]);
+            let matches = self.matches();
+            let default = matches
+                .get(self.selected)
+                .and_then(|m| m.config.reasoning_effort)
+                .filter(|d| efforts.contains(d));
+            self.effort = default.or_else(|| {
+                if efforts[0] == orbit_model::types::ReasoningEffort::None && efforts.len() > 1 {
+                    Some(efforts[1])
+                } else {
+                    Some(efforts[0])
+                }
+            });
         }
     }
 }
@@ -653,10 +672,15 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             };
             lines.push(Line::styled(
                 format!(
-                    "{} {}. {}{}{}",
+                    "{} {}. {}{}{}{}",
                     if selected { "›" } else { " " },
                     ordinal,
                     model.model,
+                    if model.supports_vision {
+                        "  (视觉)"
+                    } else {
+                        ""
+                    },
                     if model.default_for_provider {
                         "  (默认)"
                     } else {
@@ -1115,6 +1139,33 @@ mod tests {
         assert_eq!(
             state.chosen_effort,
             Some(orbit_model::types::ReasoningEffort::High)
+        );
+    }
+
+    #[test]
+    fn model_picker_can_select_no_thinking_effort() {
+        let mut state = UiState::new("deepseek::deepseek-chat");
+        state.model_picker = Some(ModelPicker::new(
+            vec![ModelOption {
+                provider: "deepseek".into(),
+                model: "deepseek-chat".into(),
+                context_tokens: 64_000,
+                input_context_tokens: 32_000,
+                default_for_provider: true,
+                reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
+                supports_vision: false,
+                config: orbit_model::types::ModelConfig::default(),
+            }],
+            state.model.clone(),
+            Some(orbit_model::types::ReasoningEffort::Low),
+        ));
+        // Cycling left from Low (which is at index 1 of [None, Low]) goes to None ("不思考")
+        handle(&mut state, key(KeyCode::Left));
+        handle(&mut state, key(KeyCode::Enter));
+        assert!(state.model_picker.is_none());
+        assert_eq!(
+            state.chosen_effort,
+            Some(orbit_model::types::ReasoningEffort::None)
         );
     }
 

@@ -1571,7 +1571,13 @@ async fn select_model(
     };
     let mut config = choice.config.clone();
     if let Some(effort) = selected_effort {
-        config.reasoning_effort = choice.reasoning_efforts.contains(&effort).then_some(effort);
+        config.reasoning_effort = if effort == orbit_model::types::ReasoningEffort::None
+            || choice.reasoning_efforts.contains(&effort)
+        {
+            Some(effort)
+        } else {
+            choice.config.reasoning_effort
+        };
     }
     match ModelClient::new(config) {
         Ok(client) => {
@@ -1913,7 +1919,10 @@ fn restore_model_profile(
         return;
     };
     let mut config = choice.config.clone();
-    if let Some(effort) = saved_effort.filter(|effort| choice.reasoning_efforts.contains(effort)) {
+    if let Some(effort) = saved_effort.filter(|effort| {
+        *effort == orbit_model::types::ReasoningEffort::None
+            || choice.reasoning_efforts.contains(effort)
+    }) {
         config.reasoning_effort = Some(effort);
     }
     let Ok(client) = ModelClient::new(config) else {

@@ -54,7 +54,7 @@ context_tokens = 128000
 reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
 ```
 
-`context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。若供应商将输入窗口和输出上限分开计算，可在模型档案改用 `input_context_tokens`；它表示完整可用输入窗口，Orbit 不会再从中扣除 `max_output_tokens`，并将两者相加作为本地请求预算。可用思考值固定为五档：`minimal`、`low`、`medium`、`high` 和 `xhigh`。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，但不能覆盖模型、流式传输、工具、输出预算、温度或已配置的思考强度。未写 `reasoning` 时，Orbit 不发送任何思考参数。
+`context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。若供应商将输入窗口和输出上限分开计算，可在模型档案改用 `input_context_tokens`；它表示完整可用输入窗口，Orbit 不会再从中扣除 `max_output_tokens`，并将两者相加作为本地请求预算。可用思考值包括：`none`（不思考）、`minimal`、`low`、`medium`、`high` 和 `xhigh`。TUI 选模型（`/model`）时，凡是配置了思考能力的模型均可随时通过 `←/→` 选择“不思考”。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`（选择“不思考”时置为 disabled 并省去 effort）。模型可通过 `supports_vision = true`（或 `vision = true`）显式声明多模态视觉能力；未声明时默认为纯文本模型，自动隐藏 `read_image` 工具并对历史图片内容进行平滑降级。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，但不能覆盖模型、流式传输、工具、输出预算、温度或已配置的思考强度。未写 `reasoning` 时，Orbit 不发送任何思考参数。
 
 `/compact` 与自动整理共用预算和安全切点，单个长任务也可整理。先把原文保存到 Orbit 中央数据库，再按预算精简旧工具输出；释放空间足够时不调用模型，否则生成增量摘要。近期工作和当前用户要求原样保留，模型可通过 `read_history` 检索归档原文。摘要失败或取消时保留原上下文，不再以固定说明替代旧历史。
 

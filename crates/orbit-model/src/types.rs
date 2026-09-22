@@ -197,6 +197,7 @@ pub struct ChatRequest {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
+    None,
     Minimal,
     Low,
     Medium,
@@ -216,6 +217,7 @@ pub enum ReasoningAdapter {
 impl ReasoningEffort {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::None => "none",
             Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
@@ -231,6 +233,7 @@ impl ReasoningEffort {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::None => "不思考",
             Self::Minimal => "极低",
             Self::Low => "低",
             Self::Medium => "中",
@@ -245,6 +248,7 @@ impl std::str::FromStr for ReasoningEffort {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "none" | "off" | "disabled" => Ok(Self::None),
             "minimal" => Ok(Self::Minimal),
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
@@ -358,49 +362,6 @@ pub const fn default_max_retries() -> u8 {
 }
 
 pub const fn default_supports_vision() -> bool {
-    true
-}
-
-/// Infer whether a model supports native image/vision input from its ID/name.
-pub fn infer_supports_vision(model_id: &str) -> bool {
-    let lower = model_id.to_ascii_lowercase();
-
-    // Check common vision/multimodal substrings and tags
-    for pattern in [
-        "-vl",
-        "_vl",
-        "vl-",
-        "vl_",
-        "/vl",
-        "vision",
-        "multimodal",
-        "qvq",
-        "omni",
-        "llava",
-        "pixtral",
-        "paligemma",
-        "glm-4v",
-    ] {
-        if lower.contains(pattern) {
-            return true;
-        }
-    }
-
-    // Check specific known vision model families
-    if lower.starts_with("gpt-4o")
-        || lower.starts_with("gpt-4-turbo")
-        || lower.starts_with("gpt-4-vision")
-        || lower.starts_with("gpt-5")
-        || lower.starts_with("gpt-6")
-        || lower.starts_with("o1")
-        || lower.starts_with("o3")
-        || lower.starts_with("o4")
-        || lower.starts_with("claude-3")
-        || lower.starts_with("gemini")
-    {
-        return true;
-    }
-
     false
 }
 
@@ -428,21 +389,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_infer_supports_vision() {
-        assert!(!infer_supports_vision("qwen3.8-27b"));
-        assert!(!infer_supports_vision("deepseek-flash"));
-        assert!(!infer_supports_vision("deepseek-pro"));
-        assert!(!infer_supports_vision("deepseek-chat"));
-        assert!(!infer_supports_vision("llama-3.1-8b-instruct"));
-        assert!(!infer_supports_vision("qwen2.5-coder-32b"));
+    fn test_reasoning_effort_parsing_and_labels() {
+        assert_eq!(
+            "none".parse::<ReasoningEffort>().unwrap(),
+            ReasoningEffort::None
+        );
+        assert_eq!(
+            "off".parse::<ReasoningEffort>().unwrap(),
+            ReasoningEffort::None
+        );
+        assert_eq!(
+            "disabled".parse::<ReasoningEffort>().unwrap(),
+            ReasoningEffort::None
+        );
+        assert_eq!(
+            "high".parse::<ReasoningEffort>().unwrap(),
+            ReasoningEffort::High
+        );
 
-        assert!(infer_supports_vision("gpt-5.6-sol"));
-        assert!(infer_supports_vision("gpt-6-astra"));
-        assert!(infer_supports_vision("gpt-4o"));
-        assert!(infer_supports_vision("gpt-4o-mini"));
-        assert!(infer_supports_vision("claude-3-5-sonnet-20241022"));
-        assert!(infer_supports_vision("gemini-1.5-pro"));
-        assert!(infer_supports_vision("qwen2.5-vl-72b-instruct"));
-        assert!(infer_supports_vision("llama-3.2-11b-vision-instruct"));
+        assert_eq!(ReasoningEffort::None.as_str(), "none");
+        assert_eq!(ReasoningEffort::None.label(), "不思考");
+
+        let serialized = serde_json::to_string(&ReasoningEffort::None).unwrap();
+        assert_eq!(serialized, "\"none\"");
+        let deserialized: ReasoningEffort = serde_json::from_str("\"none\"").unwrap();
+        assert_eq!(deserialized, ReasoningEffort::None);
     }
 }
