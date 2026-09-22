@@ -1106,4 +1106,149 @@ mod tests {
                 .contains("[Image omitted: current model does not support image input: pic.png]")
         );
     }
+
+    #[tokio::test]
+    async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_losslessly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("orbit.db");
+
+        // Round 1: Vision model session with image attachment
+        let mut session = SessionState::open(db_path.clone(), None, "test::vision-model".into())
+            .await
+            .unwrap();
+        session
+            .begin("look at image".into(), "test::vision-model".into())
+            .await
+            .unwrap();
+        let history = vec![
+            ChatMessage::user("look at image"),
+            ChatMessage::user_with_attachments(
+                "analyze this",
+                vec![orbit_model::types::Attachment::Image {
+                    name: "photo.png".into(),
+                    mime_type: "image/png".into(),
+                    path: "/path/to/photo.png".into(),
+                }],
+            ),
+            ChatMessage::assistant("I see a mountain in photo.png"),
+        ];
+        session.finish("completed", Some(history)).await.unwrap();
+        let id = session.id().to_owned();
+        drop(session);
+
+        // Round 2: Resume with text-only model (supports_vision: false)
+        let mut session_text =
+            SessionState::open(db_path.clone(), Some(id.clone()), "test::text-model".into())
+                .await
+                .unwrap();
+        // Model messages projected for text-only model omits image
+        let projected = orbit_agent::model_messages(&session_text.snapshot.history, false);
+        assert_eq!(projected.len(), 3);
+        let ChatMessage::User {
+            attachments,
+            content,
+        } = &projected[1]
+        else {
+            panic!()
+        };
+        assert!(attachments.is_empty());
+        assert!(
+            content
+                .contains("[Image omitted: current model does not support image input: photo.png]")
+        );
+
+        // User sends a follow-up text message on text-only model and finishes
+        session_text
+            .begin("what was that mountain?".into(), "test::text-model".into())
+            .await
+            .unwrap();
+        let mut history_turn2 = session_text.snapshot.history.clone();
+        history_turn2.push(ChatMessage::user("what was that mountain?"));
+        history_turn2.push(ChatMessage::assistant("It was Mount Fuji."));
+        session_text
+            .finish("completed", Some(history_turn2))
+            .await
+            .unwrap();
+        drop(session_text);
+
+        // Verify that in the database, the original image attachment was NOT lost!
+        let session_vision = SessionState::open(
+            db_path.clone(),
+            Some(id.clone()),
+            "test::vision-model".into(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(session_vision.snapshot.history.len(), 5);
+        let ChatMessage::User {
+            attachments: final_attachments,
+            ..
+        } = &session_vision.snapshot.history[1]
+        else {
+            panic!()
+        };
+        assert_eq!(
+            final_attachments.len(),
+            1,
+            "persisted history must still retain image attachment"
+        );
+
+        // Round 3: Projected for vision model (supports_vision: true)
+        let projected_vision = orbit_agent::model_messages(&session_vision.snapshot.history, true);
+        let ChatMessage::User {
+            attachments: vis_attachments,
+            ..
+        } = &projected_vision[1]
+        else {
+            panic!()
+        };
+        assert_eq!(
+            vis_attachments.len(),
+            1,
+            "vision projection must include the raw image attachment"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_real_session_recovery_validation() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let real_db = std::path::PathBuf::from(home).join(".local/share/orbit/orbit.db");
+        if !real_db.exists() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let copy_db = tmp.path().join("orbit_copy.db");
+        std::fs::copy(&real_db, &copy_db).unwrap();
+
+        let store = orbit_store::store::Store::open(copy_db).await.unwrap();
+        let saved = store
+            .session("30578762e4148641e6252994c8a2569d")
+            .await
+            .unwrap();
+        let prepared = SessionState::prepare_resume(
+            store.clone(),
+            saved.project_id.clone(),
+            "30578762e4148641e6252994c8a2569d".into(),
+        )
+        .await
+        .unwrap();
+
+        // Check history loaded without error
+        assert!(!prepared.snapshot.history.is_empty());
+
+        // 1. Project messages for text-only model: no image attachments
+        let projected_text = orbit_agent::model_messages(&prepared.snapshot.history, false);
+        for msg in &projected_text {
+            if let ChatMessage::User { attachments, .. } = msg {
+                assert!(
+                    attachments.is_empty(),
+                    "text-only model must receive 0 attachments"
+                );
+            }
+        }
+
+        // 2. Project messages for vision model: history remains valid
+        let projected_vision = orbit_agent::model_messages(&prepared.snapshot.history, true);
+        assert_eq!(projected_vision.len(), prepared.snapshot.history.len());
+    }
 }

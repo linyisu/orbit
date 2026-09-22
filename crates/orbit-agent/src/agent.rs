@@ -716,69 +716,6 @@ pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<Cha
     messages
 }
 
-/// Sanitize unsupported image attachments across all messages in history in-place.
-/// Replaces binary attachments with informative text notes and clears attachments vector.
-/// Returns the number of messages that had attachments sanitized.
-pub fn sanitize_unsupported_attachments(history: &mut [ChatMessage]) -> usize {
-    let mut sanitized = 0;
-    for message in history.iter_mut() {
-        let ChatMessage::User {
-            content,
-            attachments,
-        } = message
-        else {
-            continue;
-        };
-        if attachments.is_empty() {
-            continue;
-        }
-        let names = attachments
-            .iter()
-            .map(|attachment| attachment.name())
-            .collect::<Vec<_>>()
-            .join(", ");
-        content.push_str(&format!(
-            "\n\n[Image omitted: current model does not support image input: {names}]"
-        ));
-        attachments.clear();
-        sanitized += 1;
-    }
-    sanitized
-}
-
-/// Sanitize uncommitted image attachments in history that were not answered by a completed
-/// assistant message. This prevents failed turns from poisoning subsequent requests or checkpoints.
-pub fn sanitize_uncommitted_attachments(history: &mut [ChatMessage]) -> bool {
-    let last_assistant_idx = history
-        .iter()
-        .rposition(|m| matches!(m, ChatMessage::Assistant { .. }));
-    let start = last_assistant_idx.map_or(0, |idx| idx + 1);
-    let mut changed = false;
-    for message in &mut history[start..] {
-        let ChatMessage::User {
-            content,
-            attachments,
-        } = message
-        else {
-            continue;
-        };
-        if attachments.is_empty() {
-            continue;
-        }
-        let names = attachments
-            .iter()
-            .map(|attachment| attachment.name())
-            .collect::<Vec<_>>()
-            .join(", ");
-        content.push_str(&format!(
-            "\n\n[Image attachment omitted: request failed: {names}]"
-        ));
-        attachments.clear();
-        changed = true;
-    }
-    changed
-}
-
 fn append_loaded_attachments(
     history: &mut Vec<ChatMessage>,
     attachments: Vec<orbit_model::types::Attachment>,
