@@ -1210,9 +1210,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires ORBIT_RECOVERY_DB and ORBIT_RECOVERY_SESSION"]
     async fn test_real_session_recovery_validation() {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let real_db = std::path::PathBuf::from(home).join(".local/share/orbit/orbit.db");
+        let real_db = match std::env::var("ORBIT_RECOVERY_DB") {
+            Ok(v) if !v.is_empty() => std::path::PathBuf::from(v),
+            _ => return,
+        };
+        let session_id = match std::env::var("ORBIT_RECOVERY_SESSION") {
+            Ok(v) if !v.is_empty() => v,
+            _ => return,
+        };
         if !real_db.exists() {
             return;
         }
@@ -1221,17 +1228,11 @@ mod tests {
         std::fs::copy(&real_db, &copy_db).unwrap();
 
         let store = orbit_store::store::Store::open(copy_db).await.unwrap();
-        let saved = store
-            .session("30578762e4148641e6252994c8a2569d")
-            .await
-            .unwrap();
-        let prepared = SessionState::prepare_resume(
-            store.clone(),
-            saved.project_id.clone(),
-            "30578762e4148641e6252994c8a2569d".into(),
-        )
-        .await
-        .unwrap();
+        let saved = store.session(&session_id).await.unwrap();
+        let prepared =
+            SessionState::prepare_resume(store.clone(), saved.project_id.clone(), session_id)
+                .await
+                .unwrap();
 
         // Check history loaded without error
         assert!(!prepared.snapshot.history.is_empty());

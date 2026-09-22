@@ -815,109 +815,127 @@ fn collect_masked_paths(
 
     // 1. Process all_protected
     for protected in &all_protected {
+        let rel = protected
+            .strip_prefix(ws_target)
+            .ok()
+            .map(|p| p.to_path_buf())
+            .or_else(|| {
+                if let (Ok(p_canon), Ok(ws_canon)) =
+                    (protected.canonicalize(), ws_target.canonicalize())
+                {
+                    p_canon
+                        .strip_prefix(&ws_canon)
+                        .ok()
+                        .map(|r| r.to_path_buf())
+                } else {
+                    None
+                }
+            });
+        let is_inside_ws = rel.as_ref().is_some_and(|r| !r.as_os_str().is_empty());
+
         match std::fs::symlink_metadata(protected) {
             Ok(meta) => {
                 protected_inodes.insert((meta.dev(), meta.ino()));
-                if meta.is_dir() && !meta.file_type().is_symlink() {
-                    collect_dir_inodes(protected, &mut protected_inodes)?;
-                }
-                let rel = protected.strip_prefix(ws_target).ok();
-                if let Some(rel) = rel.filter(|r| !r.as_os_str().is_empty()) {
-                    let container_path = Path::new("/workspace").join(rel);
-                    if seen.insert(container_path.clone()) {
-                        masked.push((container_path, meta.is_dir()));
+                if is_inside_ws {
+                    if meta.is_dir() && !meta.file_type().is_symlink() {
+                        collect_dir_inodes(protected, &mut protected_inodes)?;
+                    }
+                    if let Some(rel) = rel {
+                        let container_path = Path::new("/workspace").join(rel);
+                        if seen.insert(container_path.clone()) {
+                            masked.push((container_path, meta.is_dir()));
+                        }
                     }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // When workspace is read-only, bwrap mounts with --ro-bind; container cannot create any files.
                 // When workspace is read-write, create a guarded placeholder so bwrap can mask it.
-                if !read_only_workspace {
-                    let rel = protected.strip_prefix(ws_target).ok();
-                    if let Some(rel) = rel.filter(|r| !r.as_os_str().is_empty()) {
-                        let container_path = Path::new("/workspace").join(rel);
-                        if let Some(parent) = protected.parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        if is_protected_directory(protected) {
-                            match std::fs::create_dir(protected) {
-                                Ok(()) => {
-                                    let meta =
-                                        std::fs::symlink_metadata(protected).map_err(|e| {
-                                            failed(format!(
-                                                "failed to stat placeholder directory '{}': {e}",
-                                                protected.display()
-                                            ))
-                                        })?;
-                                    placeholder_guard.push(Placeholder::Dir {
-                                        path: protected.clone(),
-                                        dev: meta.dev(),
-                                        ino: meta.ino(),
-                                    });
-                                    protected_inodes.insert((meta.dev(), meta.ino()));
-                                    if seen.insert(container_path.clone()) {
-                                        masked.push((container_path, true));
-                                    }
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                                    let meta = std::fs::symlink_metadata(protected).map_err(|e| {
-                                        failed(format!(
-                                            "failed to stat existing protected directory '{}': {e}",
-                                            protected.display()
-                                        ))
-                                    })?;
-                                    protected_inodes.insert((meta.dev(), meta.ino()));
-                                    if seen.insert(container_path.clone()) {
-                                        masked.push((container_path, meta.is_dir()));
-                                    }
-                                }
-                                Err(e) => {
-                                    return Err(failed(format!(
-                                        "failed to create placeholder directory for protected path '{}': {e}",
+                let target_rel = if !read_only_workspace {
+                    rel.filter(|r| !r.as_os_str().is_empty())
+                } else {
+                    None
+                };
+                if let Some(rel) = target_rel {
+                    let container_path = Path::new("/workspace").join(rel);
+                    if let Some(parent) = protected.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if is_protected_directory(protected) {
+                        match std::fs::create_dir(protected) {
+                            Ok(()) => {
+                                let meta = std::fs::symlink_metadata(protected).map_err(|e| {
+                                    failed(format!(
+                                        "failed to stat placeholder directory '{}': {e}",
                                         protected.display()
-                                    )));
+                                    ))
+                                })?;
+                                placeholder_guard.push(Placeholder::Dir {
+                                    path: protected.clone(),
+                                    dev: meta.dev(),
+                                    ino: meta.ino(),
+                                });
+                                protected_inodes.insert((meta.dev(), meta.ino()));
+                                if seen.insert(container_path.clone()) {
+                                    masked.push((container_path, true));
                                 }
                             }
-                        } else {
-                            match std::fs::File::create_new(protected) {
-                                Ok(file) => {
-                                    drop(file);
-                                    let meta =
-                                        std::fs::symlink_metadata(protected).map_err(|e| {
-                                            failed(format!(
-                                                "failed to stat placeholder file '{}': {e}",
-                                                protected.display()
-                                            ))
-                                        })?;
-                                    placeholder_guard.push(Placeholder::File {
-                                        path: protected.clone(),
-                                        dev: meta.dev(),
-                                        ino: meta.ino(),
-                                    });
-                                    protected_inodes.insert((meta.dev(), meta.ino()));
-                                    if seen.insert(container_path.clone()) {
-                                        masked.push((container_path, false));
-                                    }
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                                    let meta =
-                                        std::fs::symlink_metadata(protected).map_err(|e| {
-                                            failed(format!(
-                                                "failed to stat existing protected file '{}': {e}",
-                                                protected.display()
-                                            ))
-                                        })?;
-                                    protected_inodes.insert((meta.dev(), meta.ino()));
-                                    if seen.insert(container_path.clone()) {
-                                        masked.push((container_path, meta.is_dir()));
-                                    }
-                                }
-                                Err(e) => {
-                                    return Err(failed(format!(
-                                        "failed to create placeholder file for protected path '{}': {e}",
+                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                let meta = std::fs::symlink_metadata(protected).map_err(|e| {
+                                    failed(format!(
+                                        "failed to stat existing protected directory '{}': {e}",
                                         protected.display()
-                                    )));
+                                    ))
+                                })?;
+                                protected_inodes.insert((meta.dev(), meta.ino()));
+                                if seen.insert(container_path.clone()) {
+                                    masked.push((container_path, meta.is_dir()));
                                 }
+                            }
+                            Err(e) => {
+                                return Err(failed(format!(
+                                    "failed to create placeholder directory for protected path '{}': {e}",
+                                    protected.display()
+                                )));
+                            }
+                        }
+                    } else {
+                        match std::fs::File::create_new(protected) {
+                            Ok(file) => {
+                                drop(file);
+                                let meta = std::fs::symlink_metadata(protected).map_err(|e| {
+                                    failed(format!(
+                                        "failed to stat placeholder file '{}': {e}",
+                                        protected.display()
+                                    ))
+                                })?;
+                                placeholder_guard.push(Placeholder::File {
+                                    path: protected.clone(),
+                                    dev: meta.dev(),
+                                    ino: meta.ino(),
+                                });
+                                protected_inodes.insert((meta.dev(), meta.ino()));
+                                if seen.insert(container_path.clone()) {
+                                    masked.push((container_path, false));
+                                }
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                let meta = std::fs::symlink_metadata(protected).map_err(|e| {
+                                    failed(format!(
+                                        "failed to stat existing protected file '{}': {e}",
+                                        protected.display()
+                                    ))
+                                })?;
+                                protected_inodes.insert((meta.dev(), meta.ino()));
+                                if seen.insert(container_path.clone()) {
+                                    masked.push((container_path, meta.is_dir()));
+                                }
+                            }
+                            Err(e) => {
+                                return Err(failed(format!(
+                                    "failed to create placeholder file for protected path '{}': {e}",
+                                    protected.display()
+                                )));
                             }
                         }
                     }
@@ -2077,6 +2095,60 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("depth exceeds maximum limit of 16")
+        );
+    }
+
+    #[test]
+    fn test_collect_masked_paths_does_not_scan_external_protected_directories_recursively() {
+        use std::os::unix::fs::MetadataExt;
+
+        let ws_dir = tempfile::tempdir().unwrap();
+        let ws = ws_dir.path();
+
+        // 1. Create an external protected directory (e.g. orbit.workspaces) that exceeds MAX_PROTECTED_DIR_DEPTH (32)
+        let external_storage = tempfile::tempdir().unwrap();
+        let mut curr = external_storage.path().to_path_buf();
+        for i in 0..35 {
+            curr = curr.join(format!("level_{i}"));
+        }
+        std::fs::create_dir_all(&curr).unwrap();
+        std::fs::write(curr.join("deep.txt"), "content").unwrap();
+
+        // Verify that direct collect_dir_inodes on external_storage WOULD fail closed
+        let mut test_inodes = HashSet::new();
+        assert!(collect_dir_inodes(external_storage.path(), &mut test_inodes).is_err());
+
+        // 2. Create an external protected file (e.g. orbit.db) and a hardlink alias inside the workspace
+        let external_file_dir = tempfile::tempdir().unwrap();
+        let external_db = external_file_dir.path().join("orbit.db");
+        std::fs::write(&external_db, "sqlite_header").unwrap();
+        let ws_db_alias = ws.join("leaked_orbit.db");
+        std::fs::hard_link(&external_db, &ws_db_alias).unwrap();
+
+        let protected_paths = vec![external_storage.path().to_path_buf(), external_db.clone()];
+
+        let mut guard = PlaceholderGuard::new();
+        let (masked, inodes) =
+            collect_masked_paths(ws, &protected_paths, false, &mut guard).unwrap();
+
+        // External directory itself is in inodes, but its deep contents were NOT scanned
+        let ext_meta = std::fs::symlink_metadata(external_storage.path()).unwrap();
+        assert!(inodes.contains(&(ext_meta.dev(), ext_meta.ino())));
+
+        // External directory is NOT masked in /workspace
+        assert!(
+            !masked
+                .iter()
+                .any(|(p, _)| p.starts_with("/workspace/level_0")
+                    || p.to_string_lossy().contains("level"))
+        );
+
+        // External DB hardlink alias inside workspace IS masked!
+        assert!(
+            masked
+                .iter()
+                .any(|(p, is_dir)| p == Path::new("/workspace/leaked_orbit.db") && !*is_dir),
+            "hardlink alias inside workspace pointing to external protected file must be masked"
         );
     }
 }
