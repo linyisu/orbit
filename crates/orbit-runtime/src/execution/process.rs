@@ -247,6 +247,7 @@ pub struct ProcessSpec {
     pub skipped_entries: usize,
     pub fingerprint: Option<WorkspaceFingerprint>,
     pub protected_paths: Vec<PathBuf>,
+    pub opaque_runtime_roots: Vec<PathBuf>,
 }
 
 impl ProcessSpec {
@@ -263,6 +264,7 @@ impl ProcessSpec {
             skipped_entries: 0,
             fingerprint: None,
             protected_paths: Vec::new(),
+            opaque_runtime_roots: Vec::new(),
         }
     }
 

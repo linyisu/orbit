@@ -103,10 +103,10 @@ fn protected_workspace(
     workspace.protect(config)?;
     if let Some(database) = database {
         workspace.protect(database)?;
-        workspace.protect(database.with_extension("session-locks"))?;
-        workspace.protect(database.with_extension("workspaces"))?;
-        workspace.protect(database.with_extension("command-output"))?;
-        workspace.protect(database.with_extension("artifacts"))?;
+        workspace.protect_opaque_runtime_root(database.with_extension("session-locks"))?;
+        workspace.protect_opaque_runtime_root(database.with_extension("workspaces"))?;
+        workspace.protect_opaque_runtime_root(database.with_extension("command-output"))?;
+        workspace.protect_opaque_runtime_root(database.with_extension("artifacts"))?;
         for suffix in ["-wal", "-shm", "-journal"] {
             let mut sidecar = database.as_os_str().to_os_string();
             sidecar.push(suffix);

@@ -67,6 +67,7 @@ pub struct Workspace {
     root: Arc<File>,
     path: PathBuf,
     protected: Vec<PathBuf>,
+    opaque_runtime_roots: Vec<PathBuf>,
     policy: PolicyEngine,
 }
 
@@ -85,6 +86,7 @@ impl Workspace {
             root: Arc::new(root),
             path,
             protected: Vec::new(),
+            opaque_runtime_roots: Vec::new(),
             policy,
         })
     }
@@ -95,6 +97,10 @@ impl Workspace {
 
     pub fn protected(&self) -> &[PathBuf] {
         &self.protected
+    }
+
+    pub fn opaque_runtime_roots(&self) -> &[PathBuf] {
+        &self.opaque_runtime_roots
     }
 
     pub fn policy(&self) -> &PolicyEngine {
@@ -141,8 +147,7 @@ impl Workspace {
         Ok(())
     }
 
-    pub fn protect(&mut self, path: impl AsRef<Path>) -> Result<(), WorkspaceError> {
-        let path = path.as_ref();
+    fn resolve_and_validate_protected_path(&self, path: &Path) -> Result<PathBuf, WorkspaceError> {
         let resolved = match path.canonicalize() {
             Ok(path) => path,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -174,8 +179,30 @@ impl Workspace {
                 )));
             }
         }
+        Ok(resolved)
+    }
 
+    pub fn protect(&mut self, path: impl AsRef<Path>) -> Result<(), WorkspaceError> {
+        let resolved = self.resolve_and_validate_protected_path(path.as_ref())?;
         self.protected.push(resolved.clone());
+        self.policy.add_protected_path(resolved);
+        Ok(())
+    }
+
+    /// Protects an internal runtime storage directory (e.g. orbit.workspaces, command-output).
+    ///
+    /// Opaque runtime roots are forbidden from capability mounts and cannot be accessed
+    /// from the sandbox. Unlike regular sensitive directories, when located outside the
+    /// workspace they are treated as opaque roots without recursive descendant hardlink scanning,
+    /// preventing historical session caches with tens of thousands of build artifacts
+    /// from hitting scan limits or degrading performance.
+    pub fn protect_opaque_runtime_root(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), WorkspaceError> {
+        let resolved = self.resolve_and_validate_protected_path(path.as_ref())?;
+        self.protected.push(resolved.clone());
+        self.opaque_runtime_roots.push(resolved.clone());
         self.policy.add_protected_path(resolved);
         Ok(())
     }

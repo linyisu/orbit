@@ -348,6 +348,7 @@ impl Tool for RunCommand {
             let mut spec = ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
             spec.read_only_workspace = workspace_access == CommandWorkspaceAccess::Read;
             spec.protected_paths = self.workspace.protected().to_vec();
+            spec.opaque_runtime_roots = self.workspace.opaque_runtime_roots().to_vec();
             spec.scratch = scratch.clone();
             spec.rust_toolchain = self.limits.rust_toolchain.clone();
             spec.mounts = self

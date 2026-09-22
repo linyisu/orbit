@@ -42,6 +42,12 @@ test = "cargo test --offline --workspace --target-dir /scratch/target"
 
 上述参数用于 `export_artifact`。它接受二进制或文本文件，拒绝路径穿越与符号链接，将文件保存到 Orbit 私有产物目录，返回真实宿主路径、字节数与 SHA-256。每次生成独立文件，不覆盖项目或已有产物。限制为单文件 64 MiB、每会话 128 个文件及 256 MiB；达到限制时保留已有文件并拒绝新增。`chat --disable command` 同时禁用执行、命令日志查询、验证状态和产物导出。
 
+### 保护路径与不透明运行时根目录（Opaque Runtime Roots）
+
+为了防止沙箱逃逸或外部敏感数据泄露：
+- **常规保护路径（Protected Paths）**：通过 `Workspace::protect` 注册的用户敏感路径（例如宿主配置、凭据目录或独立数据库文件）。如果位于工作区外部，运行时会对其递归扫描并收集后代 inode（深度上限 32，上限 20,000 项）；如果工作区内存在指向这些受保护文件的硬链接别名，沙箱在启动时会自动识别并挂载 `/dev/null`（或只读空 tmpfs）遮蔽（mask）。
+- **不透明运行时根目录（Opaque Runtime Roots）**：通过 `Workspace::protect_opaque_runtime_root` 显式注册的运行时内部持久化根目录（例如 `orbit.workspaces`、`command-output`、`artifacts`、`session-locks` 等）。它们本身在沙箱中被严格阻断访问且绝对禁止作为能力挂载（Capability Mounts），但当位于工作区外部时，**显式且有意跳过递归后代 inode 扫描**。这从根本上避免了当历史会话累积数万甚至数十万项目构建文件时，在每次执行命令前承受巨大的 $O(N)$ 磁盘扫描耗时或触发扫描熔断。
+
 ## 审批与执行证据
 
 `ask` 逐次审批，`auto` 自动执行沙箱命令并审批源文件修改，`YOLO` 允许两者；这些模式都不取消隔离与文件冲突检查。TUI 的文件审批使用差异弹窗。

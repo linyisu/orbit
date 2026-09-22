@@ -412,6 +412,7 @@ impl BwrapSandboxBackend {
             let (masked, inodes) = collect_masked_paths(
                 ws_target,
                 &spec.protected_paths,
+                &spec.opaque_runtime_roots,
                 spec.read_only_workspace,
                 placeholder_guard,
             )?;
@@ -574,38 +575,30 @@ fn mount_system_paths(command: &mut Command, network: NetworkPolicy) {
     }
 }
 
-pub fn is_opaque_runtime_storage(path: &Path) -> bool {
-    let has_protected_ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext,
-                "session-locks" | "workspaces" | "command-output" | "artifacts"
-            )
-        });
-    if has_protected_ext {
-        return true;
-    }
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy())
-        .unwrap_or_default();
-    matches!(
-        name.as_ref(),
-        "session-locks" | "workspaces" | "command-output" | "artifacts"
-    ) || name.ends_with(".workspaces")
-        || name.ends_with(".command-output")
-        || name.ends_with(".artifacts")
-        || name.ends_with(".session-locks")
+fn is_opaque_runtime_root(path: &Path, opaque_runtime_roots: &[PathBuf]) -> bool {
+    let path_canon = path.canonicalize().ok();
+    opaque_runtime_roots.iter().any(|root| {
+        if path == root || path.starts_with(root) {
+            return true;
+        }
+        if let Some(ref pc) = path_canon {
+            if pc == root || pc.starts_with(root) {
+                return true;
+            }
+            if let Ok(rc) = root.canonicalize() {
+                return pc == &rc || pc.starts_with(&rc);
+            }
+        }
+        false
+    })
 }
 
-fn is_protected_directory(path: &Path) -> bool {
+fn is_protected_directory(path: &Path, opaque_runtime_roots: &[PathBuf]) -> bool {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy())
         .unwrap_or_default();
-    name == ".git" || is_opaque_runtime_storage(path)
+    name == ".git" || is_opaque_runtime_root(path, opaque_runtime_roots)
 }
 
 fn collect_dir_inodes(
@@ -804,6 +797,7 @@ pub type MaskedPathsAndInodes = (Vec<(PathBuf, bool)>, HashSet<(u64, u64)>);
 fn collect_masked_paths(
     ws_target: &Path,
     protected_paths: &[PathBuf],
+    opaque_runtime_roots: &[PathBuf],
     read_only_workspace: bool,
     placeholder_guard: &mut PlaceholderGuard,
 ) -> Result<MaskedPathsAndInodes, RuntimeError> {
@@ -848,7 +842,7 @@ fn collect_masked_paths(
                 protected_inodes.insert((meta.dev(), meta.ino()));
                 if meta.is_dir() && !meta.file_type().is_symlink() {
                     let should_scan_descendants =
-                        is_inside_ws || !is_opaque_runtime_storage(protected);
+                        is_inside_ws || !is_opaque_runtime_root(protected, opaque_runtime_roots);
                     if should_scan_descendants {
                         collect_dir_inodes(protected, &mut protected_inodes)?;
                     }
@@ -873,7 +867,7 @@ fn collect_masked_paths(
                     if let Some(parent) = protected.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
-                    if is_protected_directory(protected) {
+                    if is_protected_directory(protected, opaque_runtime_roots) {
                         match std::fs::create_dir(protected) {
                             Ok(()) => {
                                 let meta = std::fs::symlink_metadata(protected).map_err(|e| {
@@ -1846,6 +1840,7 @@ mod tests {
             skipped_entries: 0,
             fingerprint: Some(WorkspaceFingerprint::default()),
             protected_paths: Vec::new(),
+            opaque_runtime_roots: Vec::new(),
         };
         let formatted: Vec<String> = spec
             .mounts
@@ -1899,11 +1894,19 @@ mod tests {
             nonexistent_file.clone(),
             nonexistent_dir.clone(),
         ];
+        let opaque_runtime_roots = vec![nonexistent_dir.clone()];
 
         // Case A: Read-only workspace - does NOT create placeholders
         {
             let mut guard = PlaceholderGuard::new();
-            let (masked, _) = collect_masked_paths(ws, &protected_paths, true, &mut guard).unwrap();
+            let (masked, _) = collect_masked_paths(
+                ws,
+                &protected_paths,
+                &opaque_runtime_roots,
+                true,
+                &mut guard,
+            )
+            .unwrap();
             assert!(!nonexistent_file.exists());
             assert!(!nonexistent_dir.exists());
 
@@ -1933,8 +1936,14 @@ mod tests {
         // Case B: Read-write workspace - creates guarded placeholders and cleans them up
         {
             let mut guard = PlaceholderGuard::new();
-            let (masked, _) =
-                collect_masked_paths(ws, &protected_paths, false, &mut guard).unwrap();
+            let (masked, _) = collect_masked_paths(
+                ws,
+                &protected_paths,
+                &opaque_runtime_roots,
+                false,
+                &mut guard,
+            )
+            .unwrap();
             assert!(nonexistent_file.is_file());
             assert!(nonexistent_dir.is_dir());
 
@@ -1981,9 +1990,14 @@ mod tests {
             std::fs::hard_link(&secret_file, &secret_alias).unwrap();
 
             let mut guard = PlaceholderGuard::new();
-            let (masked, _) =
-                collect_masked_paths(ws, std::slice::from_ref(&artifact_dir), true, &mut guard)
-                    .unwrap();
+            let (masked, _) = collect_masked_paths(
+                ws,
+                std::slice::from_ref(&artifact_dir),
+                &[],
+                true,
+                &mut guard,
+            )
+            .unwrap();
 
             // Both the artifact directory and the hardlink outside it are masked!
             assert!(
@@ -2003,7 +2017,7 @@ mod tests {
             let fresh_ws = tempfile::tempdir().unwrap();
             let mut guard = PlaceholderGuard::new();
             let (masked, _) =
-                collect_masked_paths(fresh_ws.path(), &[], false, &mut guard).unwrap();
+                collect_masked_paths(fresh_ws.path(), &[], &[], false, &mut guard).unwrap();
 
             // .git (dir) and .env (file) were created as placeholders and masked!
             assert!(fresh_ws.path().join(".git").is_dir());
@@ -2035,8 +2049,14 @@ mod tests {
 
         // Collect protected inodes for the workspace
         let mut guard = PlaceholderGuard::new();
-        let (_, protected_inodes) =
-            collect_masked_paths(ws, std::slice::from_ref(&config_file), true, &mut guard).unwrap();
+        let (_, protected_inodes) = collect_masked_paths(
+            ws,
+            std::slice::from_ref(&config_file),
+            &[],
+            true,
+            &mut guard,
+        )
+        .unwrap();
 
         // Create an external capability directory with a deeply nested hardlink to config.toml
         let cap_dir = tempfile::tempdir().unwrap();
@@ -2139,10 +2159,17 @@ mod tests {
         std::fs::hard_link(&external_db, &ws_db_alias).unwrap();
 
         let protected_paths = vec![external_storage.clone(), external_db.clone()];
+        let opaque_runtime_roots = vec![external_storage.clone()];
 
         let mut guard = PlaceholderGuard::new();
-        let (masked, inodes) =
-            collect_masked_paths(ws, &protected_paths, false, &mut guard).unwrap();
+        let (masked, inodes) = collect_masked_paths(
+            ws,
+            &protected_paths,
+            &opaque_runtime_roots,
+            false,
+            &mut guard,
+        )
+        .unwrap();
 
         // External directory itself is in inodes, but its deep contents were NOT scanned
         let ext_meta = std::fs::symlink_metadata(&external_storage).unwrap();
@@ -2193,7 +2220,7 @@ mod tests {
 
         let mut guard = PlaceholderGuard::new();
         let (masked, inodes) =
-            collect_masked_paths(ws, &protected_paths, false, &mut guard).unwrap();
+            collect_masked_paths(ws, &protected_paths, &[], false, &mut guard).unwrap();
 
         // The secret files inside external directory MUST be collected into protected_inodes
         let secret_meta1 = std::fs::symlink_metadata(&secret_file).unwrap();
@@ -2219,6 +2246,51 @@ mod tests {
                 .iter()
                 .any(|(p, is_dir)| p == Path::new("/workspace/leaked_token.json") && !*is_dir),
             "nested hardlink alias inside workspace pointing to file in external protected directory must be masked"
+        );
+    }
+
+    #[test]
+    fn test_external_directory_matching_heuristic_name_scans_descendants_when_not_in_opaque_roots()
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let ws_dir = tempfile::tempdir().unwrap();
+        let ws = ws_dir.path();
+
+        // Directory named like the old heuristic suffix (e.g. .workspaces), but it is a user directory
+        let external_dir = tempfile::tempdir().unwrap();
+        let custom_workspaces = external_dir.path().join("my_project.workspaces");
+        std::fs::create_dir_all(&custom_workspaces).unwrap();
+        let secret = custom_workspaces.join("secret_data.csv");
+        std::fs::write(&secret, "confidential").unwrap();
+
+        let ws_link = ws.join("leak_data.csv");
+        std::fs::hard_link(&secret, &ws_link).unwrap();
+
+        let protected_paths = vec![custom_workspaces.clone()];
+        // NOT in opaque_runtime_roots
+        let opaque_runtime_roots = vec![];
+
+        let mut guard = PlaceholderGuard::new();
+        let (masked, inodes) = collect_masked_paths(
+            ws,
+            &protected_paths,
+            &opaque_runtime_roots,
+            false,
+            &mut guard,
+        )
+        .unwrap();
+
+        let meta = std::fs::symlink_metadata(&secret).unwrap();
+        assert!(
+            inodes.contains(&(meta.dev(), meta.ino())),
+            "descendant of user directory named *.workspaces must be scanned when not registered as opaque runtime root"
+        );
+        assert!(
+            masked
+                .iter()
+                .any(|(p, is_dir)| p == Path::new("/workspace/leak_data.csv") && !*is_dir),
+            "hardlink to secret inside user directory named *.workspaces must be masked"
         );
     }
 }

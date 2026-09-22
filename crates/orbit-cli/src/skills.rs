@@ -58,17 +58,24 @@ pub(crate) struct Skills {
 impl Skills {
     pub(crate) fn discover_current_with_plugin_roots(plugin_roots: Vec<PathBuf>) -> Self {
         let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        Self::discover_with_plugin_roots(&cwd, env::var_os("HOME").map(PathBuf::from), plugin_roots)
+        let home = env::var_os("HOME").map(PathBuf::from);
+        let config_home = env::var_os("XDG_CONFIG_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|h| h.join(".config")));
+        Self::discover_with_plugin_roots(&cwd, home, config_home, plugin_roots)
     }
 
     #[cfg(test)]
     fn discover(cwd: &Path, home: Option<PathBuf>) -> Self {
-        Self::discover_with_plugin_roots(cwd, home, Vec::new())
+        let config_home = home.as_ref().map(|h| h.join(".config"));
+        Self::discover_with_plugin_roots(cwd, home, config_home, Vec::new())
     }
 
     fn discover_with_plugin_roots(
         cwd: &Path,
         home: Option<PathBuf>,
+        config_home: Option<PathBuf>,
         mut plugin_roots: Vec<PathBuf>,
     ) -> Self {
         // Later roots override earlier ones. The native Orbit location wins
@@ -76,11 +83,9 @@ impl Skills {
         let mut roots = Vec::new();
         if let Some(home) = home {
             roots.push((home.join(".claude/skills"), SkillSource::ClaudeUser));
-            let orbit_home = env::var_os("XDG_CONFIG_HOME")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".config"));
-            roots.push((orbit_home.join("orbit/skills"), SkillSource::OrbitUser));
+        }
+        if let Some(config_home) = config_home {
+            roots.push((config_home.join("orbit/skills"), SkillSource::OrbitUser));
         }
         plugin_roots.sort();
         for root in plugin_roots {
@@ -364,6 +369,7 @@ mod tests {
         let skills = Skills::discover_with_plugin_roots(
             &repo,
             None,
+            None,
             vec![plugin.parent().unwrap().parent().unwrap().to_path_buf()],
         );
         assert_eq!(skills.entries.len(), 1);
@@ -383,5 +389,30 @@ mod tests {
         fs::write(&claude, "---\ndescription: Claude version\n---\nCompatible").unwrap();
         let skills = Skills::discover(temp.path(), Some(home));
         assert_eq!(skills.entries[0].description, "Orbit version");
+    }
+
+    #[test]
+    fn custom_config_home_overrides_claude_user_skill() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let custom_config = temp.path().join("custom_config");
+        let native = custom_config.join("orbit/skills/check/SKILL.md");
+        let claude = home.join(".claude/skills/check/SKILL.md");
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        fs::create_dir_all(claude.parent().unwrap()).unwrap();
+        fs::write(
+            &native,
+            "---\ndescription: Custom config version\n---\nNative",
+        )
+        .unwrap();
+        fs::write(&claude, "---\ndescription: Claude version\n---\nCompatible").unwrap();
+        let skills = Skills::discover_with_plugin_roots(
+            temp.path(),
+            Some(home),
+            Some(custom_config),
+            Vec::new(),
+        );
+        assert_eq!(skills.entries[0].description, "Custom config version");
+        assert_eq!(skills.entries[0].source, SkillSource::OrbitUser);
     }
 }

@@ -277,3 +277,60 @@ async fn run_command_masks_protected_files_and_git_directory_even_with_read_writ
         "SECRET_CONFIG_DATA=xyz\n"
     );
 }
+
+#[tokio::test]
+async fn run_command_succeeds_when_protecting_deep_opaque_runtime_root() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let mut workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    // Construct an external opaque runtime root whose directory depth (35) exceeds
+    // MAX_PROTECTED_DIR_DEPTH (32). If scanned recursively as a regular protected directory,
+    // collect_dir_inodes would fail closed. Because it is registered as an opaque runtime root,
+    // recursive descendant scanning is skipped, ensuring hermetic execution without host dependencies.
+    let temp_storage = tempfile::tempdir().unwrap();
+    let external_storage = temp_storage.path().join("orbit.workspaces");
+    let mut curr = external_storage.clone();
+    for i in 0..35 {
+        curr = curr.join(format!("level_{i}"));
+    }
+    fs::create_dir_all(&curr).unwrap();
+    fs::write(curr.join("deep.txt"), "deep content").unwrap();
+
+    workspace
+        .protect_opaque_runtime_root(&external_storage)
+        .unwrap();
+
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "test",
+                "run_command",
+                json!({
+                    "command": "echo 'opaque root safe'",
+                    "workspace_access": "read_write"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    request.decision.send(true).unwrap();
+
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(value["exit_code"], 0);
+    assert!(
+        value["stdout"]
+            .as_str()
+            .unwrap_or("")
+            .contains("opaque root safe")
+    );
+}
