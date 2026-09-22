@@ -1226,6 +1226,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let copy_db = tmp.path().join("orbit_copy.db");
         std::fs::copy(&real_db, &copy_db).unwrap();
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let mut src = real_db.as_os_str().to_os_string();
+            src.push(suffix);
+            let src = std::path::PathBuf::from(src);
+            if src.exists() {
+                let mut dst = copy_db.as_os_str().to_os_string();
+                dst.push(suffix);
+                let _ = std::fs::copy(&src, std::path::PathBuf::from(dst));
+            }
+        }
 
         let store = orbit_store::store::Store::open(copy_db).await.unwrap();
         let saved = store.session(&session_id).await.unwrap();

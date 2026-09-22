@@ -574,7 +574,7 @@ fn mount_system_paths(command: &mut Command, network: NetworkPolicy) {
     }
 }
 
-fn is_protected_directory(path: &Path) -> bool {
+pub fn is_opaque_runtime_storage(path: &Path) -> bool {
     let has_protected_ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -591,11 +591,21 @@ fn is_protected_directory(path: &Path) -> bool {
         .file_name()
         .map(|n| n.to_string_lossy())
         .unwrap_or_default();
-    name == ".git"
-        || name.ends_with(".workspaces")
+    matches!(
+        name.as_ref(),
+        "session-locks" | "workspaces" | "command-output" | "artifacts"
+    ) || name.ends_with(".workspaces")
         || name.ends_with(".command-output")
         || name.ends_with(".artifacts")
         || name.ends_with(".session-locks")
+}
+
+fn is_protected_directory(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    name == ".git" || is_opaque_runtime_storage(path)
 }
 
 fn collect_dir_inodes(
@@ -836,15 +846,17 @@ fn collect_masked_paths(
         match std::fs::symlink_metadata(protected) {
             Ok(meta) => {
                 protected_inodes.insert((meta.dev(), meta.ino()));
-                if is_inside_ws {
-                    if meta.is_dir() && !meta.file_type().is_symlink() {
+                if meta.is_dir() && !meta.file_type().is_symlink() {
+                    let should_scan_descendants =
+                        is_inside_ws || !is_opaque_runtime_storage(protected);
+                    if should_scan_descendants {
                         collect_dir_inodes(protected, &mut protected_inodes)?;
                     }
-                    if let Some(rel) = rel {
-                        let container_path = Path::new("/workspace").join(rel);
-                        if seen.insert(container_path.clone()) {
-                            masked.push((container_path, meta.is_dir()));
-                        }
+                }
+                if let Some(rel) = rel.filter(|r| !r.as_os_str().is_empty()) {
+                    let container_path = Path::new("/workspace").join(rel);
+                    if seen.insert(container_path.clone()) {
+                        masked.push((container_path, meta.is_dir()));
                     }
                 }
             }
@@ -2105,9 +2117,10 @@ mod tests {
         let ws_dir = tempfile::tempdir().unwrap();
         let ws = ws_dir.path();
 
-        // 1. Create an external protected directory (e.g. orbit.workspaces) that exceeds MAX_PROTECTED_DIR_DEPTH (32)
-        let external_storage = tempfile::tempdir().unwrap();
-        let mut curr = external_storage.path().to_path_buf();
+        // 1. Create an external opaque runtime storage directory (e.g. orbit.workspaces) that exceeds MAX_PROTECTED_DIR_DEPTH (32)
+        let storage_parent = tempfile::tempdir().unwrap();
+        let external_storage = storage_parent.path().join("orbit.workspaces");
+        let mut curr = external_storage.clone();
         for i in 0..35 {
             curr = curr.join(format!("level_{i}"));
         }
@@ -2116,7 +2129,7 @@ mod tests {
 
         // Verify that direct collect_dir_inodes on external_storage WOULD fail closed
         let mut test_inodes = HashSet::new();
-        assert!(collect_dir_inodes(external_storage.path(), &mut test_inodes).is_err());
+        assert!(collect_dir_inodes(&external_storage, &mut test_inodes).is_err());
 
         // 2. Create an external protected file (e.g. orbit.db) and a hardlink alias inside the workspace
         let external_file_dir = tempfile::tempdir().unwrap();
@@ -2125,14 +2138,14 @@ mod tests {
         let ws_db_alias = ws.join("leaked_orbit.db");
         std::fs::hard_link(&external_db, &ws_db_alias).unwrap();
 
-        let protected_paths = vec![external_storage.path().to_path_buf(), external_db.clone()];
+        let protected_paths = vec![external_storage.clone(), external_db.clone()];
 
         let mut guard = PlaceholderGuard::new();
         let (masked, inodes) =
             collect_masked_paths(ws, &protected_paths, false, &mut guard).unwrap();
 
         // External directory itself is in inodes, but its deep contents were NOT scanned
-        let ext_meta = std::fs::symlink_metadata(external_storage.path()).unwrap();
+        let ext_meta = std::fs::symlink_metadata(&external_storage).unwrap();
         assert!(inodes.contains(&(ext_meta.dev(), ext_meta.ino())));
 
         // External directory is NOT masked in /workspace
@@ -2149,6 +2162,63 @@ mod tests {
                 .iter()
                 .any(|(p, is_dir)| p == Path::new("/workspace/leaked_orbit.db") && !*is_dir),
             "hardlink alias inside workspace pointing to external protected file must be masked"
+        );
+    }
+
+    #[test]
+    fn test_external_protected_directory_descendant_hardlinks_are_masked() {
+        use std::os::unix::fs::MetadataExt;
+
+        let ws_dir = tempfile::tempdir().unwrap();
+        let ws = ws_dir.path();
+
+        // 1. Create a regular external protected directory (e.g. user credentials folder)
+        let external_secrets = tempfile::tempdir().unwrap();
+        let secret_file = external_secrets.path().join("api_key.txt");
+        std::fs::write(&secret_file, "secret_content_12345").unwrap();
+
+        // 2. Create a nested secret file in a subdirectory of external protected directory
+        let nested_secrets_dir = external_secrets.path().join("nested_folder");
+        std::fs::create_dir_all(&nested_secrets_dir).unwrap();
+        let nested_secret_file = nested_secrets_dir.join("token.json");
+        std::fs::write(&nested_secret_file, r#"{"token": "xyz"}"#).unwrap();
+
+        // 3. Hardlink to secret_file and nested_secret_file from inside the workspace
+        let ws_leak1 = ws.join("leaked_key.txt");
+        std::fs::hard_link(&secret_file, &ws_leak1).unwrap();
+        let ws_leak2 = ws.join("leaked_token.json");
+        std::fs::hard_link(&nested_secret_file, &ws_leak2).unwrap();
+
+        let protected_paths = vec![external_secrets.path().to_path_buf()];
+
+        let mut guard = PlaceholderGuard::new();
+        let (masked, inodes) =
+            collect_masked_paths(ws, &protected_paths, false, &mut guard).unwrap();
+
+        // The secret files inside external directory MUST be collected into protected_inodes
+        let secret_meta1 = std::fs::symlink_metadata(&secret_file).unwrap();
+        let secret_meta2 = std::fs::symlink_metadata(&nested_secret_file).unwrap();
+        assert!(
+            inodes.contains(&(secret_meta1.dev(), secret_meta1.ino())),
+            "descendant file inside external protected directory must be tracked in protected_inodes"
+        );
+        assert!(
+            inodes.contains(&(secret_meta2.dev(), secret_meta2.ino())),
+            "nested descendant file inside external protected directory must be tracked in protected_inodes"
+        );
+
+        // Both hardlink aliases inside workspace MUST be masked!
+        assert!(
+            masked
+                .iter()
+                .any(|(p, is_dir)| p == Path::new("/workspace/leaked_key.txt") && !*is_dir),
+            "hardlink alias inside workspace pointing to file in external protected directory must be masked"
+        );
+        assert!(
+            masked
+                .iter()
+                .any(|(p, is_dir)| p == Path::new("/workspace/leaked_token.json") && !*is_dir),
+            "nested hardlink alias inside workspace pointing to file in external protected directory must be masked"
         );
     }
 }
