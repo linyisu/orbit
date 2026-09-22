@@ -70,9 +70,11 @@ pub async fn inject(
                 task.id,
                 task.status.as_str(),
                 task.title,
-                (!task.details.is_empty())
-                    .then(|| format!(" — {}", task.details))
-                    .unwrap_or_default(),
+                if !task.details.is_empty() {
+                    format!(" — {}", task.details)
+                } else {
+                    String::new()
+                },
             );
         }
         if tasks.len() > 24 {
@@ -313,18 +315,10 @@ fn register_memories(tools: &mut ToolRegistry, store: Store, memory_scope: Memor
     ));
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct TaskListArguments {
     include_closed: bool,
-}
-
-impl Default for TaskListArguments {
-    fn default() -> Self {
-        Self {
-            include_closed: false,
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -339,18 +333,10 @@ struct TaskUpdateArguments {
     priority: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct MemoryListArguments {
     include_inactive: bool,
-}
-
-impl Default for MemoryListArguments {
-    fn default() -> Self {
-        Self {
-            include_inactive: false,
-        }
-    }
 }
 
 #[derive(Deserialize)]

@@ -309,13 +309,12 @@ impl SessionState {
                 usage,
                 ..
             } = event
+                && key == profile
             {
-                if key == profile {
-                    result.observe(
-                        *estimated_input,
-                        usage.as_ref().and_then(|u| u.prompt_tokens),
-                    );
-                }
+                result.observe(
+                    *estimated_input,
+                    usage.as_ref().and_then(|u| u.prompt_tokens),
+                );
             }
         }
         result
@@ -1033,6 +1032,61 @@ mod tests {
                 .grants()
                 .len(),
             0
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resume_sanitizes_unsupported_attachments_for_text_only_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("orbit.db");
+        let mut session = SessionState::open(db_path.clone(), None, "test::model".into())
+            .await
+            .unwrap();
+
+        session
+            .begin("hi".into(), "test::model".into())
+            .await
+            .unwrap();
+        session
+            .finish(
+                "completed",
+                Some(vec![
+                    ChatMessage::user("hi"),
+                    ChatMessage::user_with_attachments(
+                        "check this",
+                        vec![orbit_model::types::Attachment::Image {
+                            name: "pic.png".into(),
+                            mime_type: "image/png".into(),
+                            path: "/path/to/pic.png".into(),
+                        }],
+                    ),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let id = session.id().to_owned();
+        drop(session);
+
+        // Resume session
+        let mut resumed = SessionState::open(db_path, Some(id), "test::model".into())
+            .await
+            .unwrap();
+        // Sanitize for text-only model
+        orbit_agent::sanitize_unsupported_attachments(&mut resumed.snapshot.history);
+
+        assert_eq!(resumed.snapshot.history.len(), 2);
+        let ChatMessage::User {
+            content,
+            attachments,
+        } = &resumed.snapshot.history[1]
+        else {
+            panic!("expected user message");
+        };
+        assert!(attachments.is_empty(), "attachments must be emptied");
+        assert!(
+            content
+                .contains("[Image omitted: current model does not support image input: pic.png]")
         );
     }
 }

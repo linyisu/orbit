@@ -609,7 +609,10 @@ mod tests {
             enabled_at: 0,
         };
 
-        let roots = enabled_skill_roots_from_markets(&[enabled.clone()], &[market.clone()]);
+        let roots = enabled_skill_roots_from_markets(
+            std::slice::from_ref(&enabled),
+            std::slice::from_ref(&market),
+        );
         assert_eq!(roots.roots, vec![package.join("skills")]);
         assert!(roots.diagnostics.is_empty());
 

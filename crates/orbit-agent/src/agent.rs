@@ -58,7 +58,10 @@ impl<B> Agent<B>
 where
     B: ModelBackend,
 {
-    pub fn new(backend: B, tools: ToolRegistry, config: AgentConfig) -> Self {
+    pub fn new(backend: B, mut tools: ToolRegistry, config: AgentConfig) -> Self {
+        if !backend.supports_vision() {
+            tools.remove("read_image");
+        }
         Self {
             backend,
             tools,
@@ -252,6 +255,9 @@ where
         }
 
         let mut history = request.messages;
+        if !self.backend.supports_vision() {
+            sanitize_unsupported_attachments(&mut history);
+        }
         let mut files = self.files.clone();
         files.merge(&crate::memory::FileActivity::from_history(&history));
         let mut turns = 0;
@@ -309,7 +315,7 @@ where
             emit(AgentEvent::TurnStarted { turn: turns }).await?;
 
             let model_request = ChatRequest {
-                messages: model_messages(&history),
+                messages: model_messages(&history, self.backend.supports_vision()),
                 tools: self.tools.definitions(),
                 temperature: request.temperature,
                 max_tokens: request.max_tokens,
@@ -350,7 +356,17 @@ where
                 turns = turns.saturating_sub(1);
                 continue;
             }
-            let (completion, _) = response?;
+            let (completion, _) = match response {
+                Ok(res) => res,
+                Err(error) => {
+                    if sanitize_uncommitted_attachments(&mut history) {
+                        let _ = self
+                            .checkpoint(&history, turns, tool_calls, None, &[], None)
+                            .await;
+                    }
+                    return Err(error);
+                }
+            };
             check_finish_reason(completion.finish_reason.as_deref())?;
             let assistant = completion.message.clone();
             let calls = match &assistant {
@@ -392,6 +408,25 @@ where
                 )
                 .await?;
                 emit(event).await?;
+                if call.function.name == "read_image" && !self.backend.supports_vision() {
+                    let message = "current model does not support image input".to_string();
+                    let event = AgentEvent::ToolFailed {
+                        call: call.clone(),
+                        error: message.clone(),
+                    };
+                    history.push(ChatMessage::tool(call.id, format!("tool error: {message}")));
+                    self.checkpoint(
+                        &history,
+                        turns,
+                        tool_calls,
+                        None,
+                        &loaded_attachments,
+                        Some(event.clone()),
+                    )
+                    .await?;
+                    emit(event).await?;
+                    continue;
+                }
                 match self.tools.execute(call.clone(), cancellation.clone()).await {
                     Ok(output) => {
                         files.observe(&call, &output.content);
@@ -635,7 +670,35 @@ where
 
 /// Keep persisted history lossless, but bound binary payloads assembled for one
 /// provider request. Older images remain represented by their name in text.
-fn model_messages(history: &[ChatMessage]) -> Vec<ChatMessage> {
+/// If the model does not support native vision input, all image attachments are
+/// omitted from the request payload and represented as text notes.
+pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<ChatMessage> {
+    if !supports_vision {
+        let mut messages = history.to_vec();
+        for message in &mut messages {
+            let ChatMessage::User {
+                content,
+                attachments,
+            } = message
+            else {
+                continue;
+            };
+            if attachments.is_empty() {
+                continue;
+            }
+            let omitted = attachments
+                .iter()
+                .map(|attachment| attachment.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            content.push_str(&format!(
+                "\n\n[Image omitted: current model does not support image input: {omitted}]"
+            ));
+            attachments.clear();
+        }
+        return messages;
+    }
+
     const MAX_IMAGES: usize = 4;
     let mut remaining = MAX_IMAGES;
     let mut messages = history.to_vec();
@@ -664,6 +727,69 @@ fn model_messages(history: &[ChatMessage]) -> Vec<ChatMessage> {
         remaining = 0;
     }
     messages
+}
+
+/// Sanitize unsupported image attachments across all messages in history in-place.
+/// Replaces binary attachments with informative text notes and clears attachments vector.
+/// Returns the number of messages that had attachments sanitized.
+pub fn sanitize_unsupported_attachments(history: &mut [ChatMessage]) -> usize {
+    let mut sanitized = 0;
+    for message in history.iter_mut() {
+        let ChatMessage::User {
+            content,
+            attachments,
+        } = message
+        else {
+            continue;
+        };
+        if attachments.is_empty() {
+            continue;
+        }
+        let names = attachments
+            .iter()
+            .map(|attachment| attachment.name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        content.push_str(&format!(
+            "\n\n[Image omitted: current model does not support image input: {names}]"
+        ));
+        attachments.clear();
+        sanitized += 1;
+    }
+    sanitized
+}
+
+/// Sanitize uncommitted image attachments in history that were not answered by a completed
+/// assistant message. This prevents failed turns from poisoning subsequent requests or checkpoints.
+pub fn sanitize_uncommitted_attachments(history: &mut [ChatMessage]) -> bool {
+    let last_assistant_idx = history
+        .iter()
+        .rposition(|m| matches!(m, ChatMessage::Assistant { .. }));
+    let start = last_assistant_idx.map_or(0, |idx| idx + 1);
+    let mut changed = false;
+    for message in &mut history[start..] {
+        let ChatMessage::User {
+            content,
+            attachments,
+        } = message
+        else {
+            continue;
+        };
+        if attachments.is_empty() {
+            continue;
+        }
+        let names = attachments
+            .iter()
+            .map(|attachment| attachment.name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        content.push_str(&format!(
+            "\n\n[Image attachment omitted: request failed: {names}]"
+        ));
+        attachments.clear();
+        changed = true;
+    }
+    changed
 }
 
 fn append_loaded_attachments(
@@ -945,7 +1071,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let payload = model_messages(&history);
+        let payload = model_messages(&history, true);
         let image_count = payload
             .iter()
             .map(|message| match message {
@@ -969,6 +1095,33 @@ mod tests {
                     path: "/stored/0.png".into(),
                 }]
             )
+        );
+    }
+
+    #[test]
+    fn provider_payload_omits_all_images_for_text_only_model() {
+        let history = vec![ChatMessage::user_with_attachments(
+            "check this scene",
+            vec![Attachment::Image {
+                name: "scene.png".into(),
+                mime_type: "image/png".into(),
+                path: "/stored/scene.png".into(),
+            }],
+        )];
+        let payload = model_messages(&history, false);
+        assert_eq!(payload.len(), 1);
+        let ChatMessage::User {
+            content,
+            attachments,
+        } = &payload[0]
+        else {
+            panic!("expected user message");
+        };
+        assert!(attachments.is_empty());
+        assert!(content.contains("check this scene"));
+        assert!(
+            content
+                .contains("[Image omitted: current model does not support image input: scene.png]")
         );
     }
 
@@ -1046,6 +1199,235 @@ mod tests {
             &requests[1].messages[2],
             ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "image-call"
         ));
+    }
+
+    #[tokio::test]
+    async fn scenario_1_text_only_model_removes_read_image_and_fails_fast_on_invocation() {
+        let backend = MockModel::new(vec![
+            assistant_tool_call("image-call", "read_image", "{}"),
+            assistant_text("I see it failed"),
+        ])
+        .with_vision(false);
+        let mut tools = ToolRegistry::new();
+        tools.register(ImageTool);
+        let agent = Agent::new(backend.clone(), tools, AgentConfig::default());
+        // Verify tool definition does not expose read_image
+        assert!(!agent.tools.contains("read_image"));
+        assert!(
+            !agent
+                .tools
+                .definitions()
+                .iter()
+                .any(|d| d.function.name == "read_image")
+        );
+
+        let result = agent
+            .run(request(), CancellationToken::new())
+            .await
+            .unwrap();
+        // The assistant called read_image, which agent intercepted as unsupported, returning tool error
+        assert_eq!(result.turns, 2);
+        let requests = backend.requests();
+        assert_eq!(requests.len(), 2);
+        // The tool result in the next request should contain the informative error
+        assert!(matches!(
+            &requests[1].messages[2],
+            ChatMessage::Tool { content, .. } if content.contains("current model does not support image input")
+        ));
+        // No user_with_attachments was pushed with image
+        assert!(!requests[1].messages.iter().any(|m| match m {
+            ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+            _ => false,
+        }));
+    }
+
+    #[tokio::test]
+    async fn scenario_2_multimodal_tool_failure_rolls_back_uncommitted_attachments_in_checkpoint() {
+        use std::sync::Arc;
+        let journal = Arc::new(FailingJournal {
+            checkpoints: std::sync::Mutex::new(Vec::new()),
+            fail_start: false,
+            fail_receipt: false,
+        });
+        let backend = MockModel::from_results(vec![
+            Ok(assistant_tool_call("image-call", "read_image", "{}")),
+            Err(orbit_model::error::ModelError::Protocol(
+                "HTTP 500: image input is not supported".into(),
+            )),
+        ]);
+        let mut tools = ToolRegistry::new();
+        tools.register(ImageTool);
+        let agent = Agent::new(backend.clone(), tools, AgentConfig::default())
+            .with_execution_journal(journal.clone());
+        let result = agent.run(request(), CancellationToken::new()).await;
+        assert!(result.is_err());
+
+        // Check the last saved checkpoint in journal
+        let checkpoints = journal.checkpoints.lock().unwrap();
+        let last_checkpoint = checkpoints.last().expect("saved checkpoint");
+        // Verify that uncommitted attachments in the checkpoint were sanitized
+        let has_raw_attachments = last_checkpoint.history.iter().any(|m| match m {
+            ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+            _ => false,
+        });
+        assert!(
+            !has_raw_attachments,
+            "checkpoint must not retain raw image attachments on model failure"
+        );
+        // Verify the message explains the omission
+        let sanitized_msg = last_checkpoint.history.iter().find(|m| match m {
+            ChatMessage::User { content, .. } => {
+                content.contains("[Image attachment omitted: request failed: scene.png]")
+            }
+            _ => false,
+        });
+        assert!(
+            sanitized_msg.is_some(),
+            "omission notice must be preserved in history"
+        );
+    }
+
+    #[tokio::test]
+    async fn scenario_3_subsequent_text_message_succeeds_after_multimodal_failure() {
+        use std::sync::Arc;
+        let journal = Arc::new(FailingJournal {
+            checkpoints: std::sync::Mutex::new(Vec::new()),
+            fail_start: false,
+            fail_receipt: false,
+        });
+        let backend = MockModel::from_results(vec![
+            Ok(assistant_tool_call("image-call", "read_image", "{}")),
+            Err(orbit_model::error::ModelError::Protocol(
+                "HTTP 500: image input is not supported".into(),
+            )),
+        ]);
+        let mut tools = ToolRegistry::new();
+        tools.register(ImageTool);
+        let agent = Agent::new(backend.clone(), tools.clone(), AgentConfig::default())
+            .with_execution_journal(journal.clone());
+        let _ = agent.run(request(), CancellationToken::new()).await;
+
+        // Recover history from the sanitized checkpoint
+        let restored_history = {
+            let checkpoints = journal.checkpoints.lock().unwrap();
+            checkpoints.last().unwrap().history.clone()
+        };
+
+        // User now sends a follow-up text message
+        let mut follow_up = restored_history;
+        follow_up.push(ChatMessage::user("never mind the image, hello"));
+        let follow_up_backend = MockModel::new(vec![assistant_text("hello! How can I help?")]);
+        let follow_up_agent = Agent::new(follow_up_backend.clone(), tools, AgentConfig::default());
+        let result = follow_up_agent
+            .run(ChatRequest::new(follow_up), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.turns, 1);
+        let requests = follow_up_backend.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].messages.iter().any(|m| match m {
+            ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+            _ => false,
+        }));
+    }
+
+    #[tokio::test]
+    async fn scenario_4_resuming_failed_conversation_with_text_only_model() {
+        // Conversation has a poisoned historical image attachment (e.g. created prior to fix)
+        let historical_poison = vec![
+            ChatMessage::system("system"),
+            ChatMessage::user("look at 1.jpg"),
+            ChatMessage::user_with_attachments(
+                "The read_image tool loaded the following local image into this model request: 1.jpg. Analyze the actual image content directly.",
+                vec![Attachment::Image {
+                    name: "1.jpg".into(),
+                    mime_type: "image/jpeg".into(),
+                    path: "/stored/1.jpg".into(),
+                }],
+            ),
+            ChatMessage::user("你看，我就说你不能识图吧"),
+        ];
+
+        let text_only_backend =
+            MockModel::new(vec![assistant_text("确实，当前模型不支持直接识图。")])
+                .with_vision(false);
+        let agent = Agent::new(
+            text_only_backend.clone(),
+            ToolRegistry::new(),
+            AgentConfig::default(),
+        );
+        let result = agent
+            .run(
+                ChatRequest::new(historical_poison),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.turns, 1);
+        let requests = text_only_backend.requests();
+        assert_eq!(requests.len(), 1);
+        // Verify that the request sent to the text-only model has 0 image attachments
+        for msg in &requests[0].messages {
+            if let ChatMessage::User { attachments, .. } = msg {
+                assert!(
+                    attachments.is_empty(),
+                    "text-only model must receive 0 attachments"
+                );
+            }
+        }
+        let recovered_image_msg = requests[0].messages.iter().find(|m| match m {
+            ChatMessage::User { content, .. } => content
+                .contains("[Image omitted: current model does not support image input: 1.jpg]"),
+            _ => false,
+        });
+        assert!(
+            recovered_image_msg.is_some(),
+            "must contain degradation text notice"
+        );
+    }
+
+    #[tokio::test]
+    async fn scenario_5_switching_conversation_with_historical_images_to_text_only_model() {
+        // Step 1: Run with multimodal model where read_image completes and assistant answers
+        let vision_backend = MockModel::new(vec![
+            assistant_tool_call("image-call", "read_image", "{}"),
+            assistant_text("I see a blue square in scene.png."),
+        ]);
+        let mut tools = ToolRegistry::new();
+        tools.register(ImageTool);
+        let agent = Agent::new(vision_backend, tools.clone(), AgentConfig::default());
+        let result = agent
+            .run(request(), CancellationToken::new())
+            .await
+            .unwrap();
+        let history_after_vision = result.history;
+
+        // Step 2: Switch to text-only model and ask a question about the image
+        let mut switched_history = history_after_vision;
+        switched_history.push(ChatMessage::user("What color was the square?"));
+        let text_only_backend =
+            MockModel::new(vec![assistant_text("The square was blue.")]).with_vision(false);
+        let text_agent = Agent::new(text_only_backend.clone(), tools, AgentConfig::default());
+        let result2 = text_agent
+            .run(ChatRequest::new(switched_history), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result2.turns, 1);
+        let requests = text_only_backend.requests();
+        assert_eq!(requests.len(), 1);
+        // Ensure no image attachment was sent to the text-only model
+        for msg in &requests[0].messages {
+            if let ChatMessage::User { attachments, .. } = msg {
+                assert!(attachments.is_empty());
+            }
+        }
+        assert!(requests[0].messages.iter().any(|m| match m {
+            ChatMessage::User { content, .. } =>
+                content.contains(
+                    "[Image omitted: current model does not support image input: scene.png]"
+                ),
+            _ => false,
+        }));
     }
 
     #[tokio::test]

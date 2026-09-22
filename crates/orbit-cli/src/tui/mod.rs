@@ -79,6 +79,7 @@ pub struct ModelOption {
     pub input_context_tokens: usize,
     pub default_for_provider: bool,
     pub reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
+    pub supports_vision: bool,
     pub config: orbit_model::types::ModelConfig,
 }
 
@@ -262,17 +263,17 @@ pub async fn run(
                         if let Some(id) = dialogs::handle(&mut state, event) {
                             state.resume_request = Some(id);
                         }
-                        if let Some(name) = state.chosen_model.take() {
-                            if let Err(error) = select_model(
+                        if let Some(name) = state.chosen_model.take()
+                            && let Err(error) = select_model(
                                 &name,
                                 state.chosen_effort.take(),
                                 &mut state,
                                 &mut model,
                                 &model_options,
                                 &mut session,
-                            ).await {
-                                state.transcript.push(TranscriptItem::Error(error.to_string()));
-                            }
+                            ).await
+                        {
+                            state.transcript.push(TranscriptItem::Error(error.to_string()));
                         }
                         if let Some(source) = state.pending_marketplace_source.take() {
                             state.transcript.push(TranscriptItem::Command(format!("/plugins add {source}")));
@@ -1497,9 +1498,11 @@ fn render_tasks(tasks: &[orbit_store::types::ProjectTask]) -> String {
             task_status_label(task.status),
             task.id,
             task.title,
-            (!task.details.is_empty())
-                .then(|| format!("\n        {}", task.details))
-                .unwrap_or_default(),
+            if !task.details.is_empty() {
+                format!("\n        {}", task.details)
+            } else {
+                String::new()
+            },
         );
     }
     output
@@ -1590,6 +1593,12 @@ async fn select_model(
                     "{previous_model} → {}",
                     state.model
                 )));
+            }
+            if !choice.supports_vision && !state.attachments.is_empty() {
+                state.attachments.clear();
+                state.transcript.push(TranscriptItem::Notice(
+                    "所选模型不支持图片输入，已清除待发送的图片附件。".into(),
+                ));
             }
         }
         Err(error) => state
@@ -2318,6 +2327,7 @@ mod tests {
             input_context_tokens: 224_000,
             default_for_provider: true,
             reasoning_efforts: vec![],
+            supports_vision: true,
             config: Default::default(),
         }];
         let mut tools = ToolRegistry::new();

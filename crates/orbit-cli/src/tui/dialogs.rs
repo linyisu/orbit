@@ -251,16 +251,16 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         if key.kind == KeyEventKind::Release {
             return None;
         }
-        if key.code == KeyCode::Esc {
-            if let Some(dialog) = &mut state.marketplace_dialog {
-                if dialog.inspection.take().is_some() {
-                    return None;
-                }
-                if dialog.viewing_plugins {
-                    dialog.viewing_plugins = false;
-                    dialog.selected_plugin = 0;
-                    return None;
-                }
+        if key.code == KeyCode::Esc
+            && let Some(dialog) = &mut state.marketplace_dialog
+        {
+            if dialog.inspection.take().is_some() {
+                return None;
+            }
+            if dialog.viewing_plugins {
+                dialog.viewing_plugins = false;
+                dialog.selected_plugin = 0;
+                return None;
             }
         }
         if key.code == KeyCode::Esc
@@ -828,7 +828,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                         .is_some_and(|(market, plugin)| dialog.is_enabled(market, plugin))
                     {
                         "E 停用 · Esc 返回插件列表"
-                    } else if matches!(inspection, Ok(_)) {
+                    } else if inspection.is_ok() {
                         "E 启用 · Esc 返回插件列表"
                     } else {
                         "Esc 返回插件列表"
@@ -1087,6 +1087,7 @@ mod tests {
                     input_context_tokens: 32_000,
                     default_for_provider: true,
                     reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
+                    supports_vision: false,
                     config: orbit_model::types::ModelConfig::default(),
                 },
                 ModelOption {
@@ -1099,6 +1100,7 @@ mod tests {
                         orbit_model::types::ReasoningEffort::Medium,
                         orbit_model::types::ReasoningEffort::High,
                     ],
+                    supports_vision: true,
                     config: orbit_model::types::ModelConfig::default(),
                 },
             ],

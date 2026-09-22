@@ -129,6 +129,10 @@ impl ModelClient {
         &self.config
     }
 
+    pub fn supports_vision(&self) -> bool {
+        self.config.supports_vision
+    }
+
     pub async fn complete(&self, request: ChatRequest) -> Result<ChatCompletion, ModelError> {
         self.complete_with_cancel(request, CancellationToken::new())
             .await
@@ -980,6 +984,7 @@ mod tests {
             reasoning_effort: None,
             reasoning_adapter: None,
             reasoning_extra: serde_json::json!({}),
+            supports_vision: true,
         })
         .expect("client builds")
     }

@@ -315,6 +315,8 @@ pub struct ModelConfig {
     pub reasoning_adapter: Option<ReasoningAdapter>,
     #[serde(default)]
     pub reasoning_extra: Value,
+    #[serde(default = "default_supports_vision")]
+    pub supports_vision: bool,
 }
 
 impl Default for ModelConfig {
@@ -329,6 +331,7 @@ impl Default for ModelConfig {
             reasoning_effort: None,
             reasoning_adapter: None,
             reasoning_extra: Value::Object(Default::default()),
+            supports_vision: default_supports_vision(),
         }
     }
 }
@@ -345,12 +348,60 @@ impl std::fmt::Debug for ModelConfig {
             .field("max_retries", &self.max_retries)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("reasoning_adapter", &self.reasoning_adapter)
+            .field("supports_vision", &self.supports_vision)
             .finish()
     }
 }
 
 pub const fn default_max_retries() -> u8 {
     2
+}
+
+pub const fn default_supports_vision() -> bool {
+    true
+}
+
+/// Infer whether a model supports native image/vision input from its ID/name.
+pub fn infer_supports_vision(model_id: &str) -> bool {
+    let lower = model_id.to_ascii_lowercase();
+
+    // Check common vision/multimodal substrings and tags
+    for pattern in [
+        "-vl",
+        "_vl",
+        "vl-",
+        "vl_",
+        "/vl",
+        "vision",
+        "multimodal",
+        "qvq",
+        "omni",
+        "llava",
+        "pixtral",
+        "paligemma",
+        "glm-4v",
+    ] {
+        if lower.contains(pattern) {
+            return true;
+        }
+    }
+
+    // Check specific known vision model families
+    if lower.starts_with("gpt-4o")
+        || lower.starts_with("gpt-4-turbo")
+        || lower.starts_with("gpt-4-vision")
+        || lower.starts_with("gpt-5")
+        || lower.starts_with("gpt-6")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+        || lower.starts_with("claude-3")
+        || lower.starts_with("gemini")
+    {
+        return true;
+    }
+
+    false
 }
 
 mod duration_seconds {
@@ -369,5 +420,29 @@ mod duration_seconds {
         D: Deserializer<'de>,
     {
         Ok(Duration::from_secs(u64::deserialize(deserializer)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_infer_supports_vision() {
+        assert!(!infer_supports_vision("qwen3.8-27b"));
+        assert!(!infer_supports_vision("deepseek-flash"));
+        assert!(!infer_supports_vision("deepseek-pro"));
+        assert!(!infer_supports_vision("deepseek-chat"));
+        assert!(!infer_supports_vision("llama-3.1-8b-instruct"));
+        assert!(!infer_supports_vision("qwen2.5-coder-32b"));
+
+        assert!(infer_supports_vision("gpt-5.6-sol"));
+        assert!(infer_supports_vision("gpt-6-astra"));
+        assert!(infer_supports_vision("gpt-4o"));
+        assert!(infer_supports_vision("gpt-4o-mini"));
+        assert!(infer_supports_vision("claude-3-5-sonnet-20241022"));
+        assert!(infer_supports_vision("gemini-1.5-pro"));
+        assert!(infer_supports_vision("qwen2.5-vl-72b-instruct"));
+        assert!(infer_supports_vision("llama-3.2-11b-vision-instruct"));
     }
 }

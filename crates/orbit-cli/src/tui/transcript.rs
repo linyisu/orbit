@@ -285,9 +285,11 @@ impl Entry {
             } else {
                 render::assistant_line(line, index, &mut code)
             };
-            let links = (!was_code)
-                .then(|| super::markdown::links(line, &rendered))
-                .unwrap_or_default();
+            let links = if !was_code {
+                super::markdown::links(line, &rendered)
+            } else {
+                Default::default()
+            };
             self.push_with_links(rendered, width, links);
             index += 1;
             consumed += part.len();

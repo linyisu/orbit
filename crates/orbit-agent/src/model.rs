@@ -23,6 +23,10 @@ pub type ObservedStreamFuture<'a> =
     Pin<Box<dyn Future<Output = Result<(ModelStream, Option<u32>), ModelError>> + Send + 'a>>;
 
 pub trait ModelBackend: Send + Sync {
+    fn supports_vision(&self) -> bool {
+        true
+    }
+
     fn stream_with_retries<'a>(
         &'a self,
         request: ChatRequest,
@@ -59,6 +63,10 @@ impl ModelClientBackend {
 }
 
 impl ModelBackend for ModelClientBackend {
+    fn supports_vision(&self) -> bool {
+        self.client.supports_vision()
+    }
+
     fn stream_with_retries<'a>(
         &'a self,
         request: ChatRequest,
@@ -93,6 +101,7 @@ impl ModelBackend for ModelClientBackend {
 pub struct MockModel {
     responses: Arc<Mutex<VecDeque<Result<ChatCompletion, ModelError>>>>,
     requests: Arc<Mutex<Vec<ChatRequest>>>,
+    supports_vision: bool,
 }
 
 impl MockModel {
@@ -106,7 +115,13 @@ impl MockModel {
         Self {
             responses: Arc::new(Mutex::new(responses.into_iter().collect())),
             requests: Arc::new(Mutex::new(Vec::new())),
+            supports_vision: true,
         }
+    }
+
+    pub fn with_vision(mut self, supports_vision: bool) -> Self {
+        self.supports_vision = supports_vision;
+        self
     }
 
     pub fn requests(&self) -> Vec<ChatRequest> {
@@ -118,6 +133,10 @@ impl MockModel {
 }
 
 impl ModelBackend for MockModel {
+    fn supports_vision(&self) -> bool {
+        self.supports_vision
+    }
+
     fn complete<'a>(
         &'a self,
         request: ChatRequest,

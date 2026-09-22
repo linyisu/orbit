@@ -259,6 +259,8 @@ struct ModelProfile {
     /// meaning and Orbit reserves the configured output upper bound from it.
     input_context_tokens: Option<usize>,
     reasoning: Option<ReasoningProfile>,
+    #[serde(default, alias = "vision")]
+    supports_vision: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -499,6 +501,9 @@ impl FileConfig {
                     |input| input.saturating_add(self.max_output_tokens as usize),
                 );
                 let reasoning = model.reasoning.as_ref();
+                let supports_vision = model
+                    .supports_vision
+                    .unwrap_or_else(|| orbit_model::types::infer_supports_vision(&model.id));
                 options.push(tui::ModelOption {
                     provider: name.clone(),
                     model: model.id.clone(),
@@ -507,6 +512,7 @@ impl FileConfig {
                     default_for_provider: index == 0,
                     reasoning_efforts: reasoning
                         .map_or_else(Vec::new, |profile| profile.efforts.clone()),
+                    supports_vision,
                     config: ModelConfig {
                         api_format: provider.api_format,
                         base_url: provider.base_url.clone(),
@@ -520,6 +526,7 @@ impl FileConfig {
                             .map(|profile| serde_json::to_value(&profile.extra))
                             .transpose()?
                             .unwrap_or_else(|| serde_json::json!({})),
+                        supports_vision,
                     },
                 });
             }
@@ -713,6 +720,12 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         &file_config,
         args.model.as_deref().or(saved_model.as_deref()),
     )?;
+    if !selected_model.supports_vision && !args.images.is_empty() {
+        bail!(
+            "--image cannot be used because model {:?} does not support image input",
+            selected_model.qualified_name()
+        );
+    }
     let model_name = selected_model.qualified_name();
     let agent_config = file_config.agent_config_for(selected_model.context_tokens);
     let client = ModelClient::new(selected_model.config.clone())?;
@@ -801,11 +814,17 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         skills.register_tool(&mut tools);
     }
     disable_chat_capabilities(&mut tools, &disabled);
+    if !selected_model.supports_vision {
+        tools.remove("read_image");
+    }
     if capability_is_disabled(&disabled, ChatCapability::Files) {
         tools.remove("verification_status");
     }
 
     let mut messages = session.snapshot.history.clone();
+    if !selected_model.supports_vision {
+        orbit_agent::sanitize_unsupported_attachments(&mut messages);
+    }
     instructions::inject(&mut messages, &instructions);
     if !capability_is_disabled(&disabled, ChatCapability::Skills) {
         skills.inject(&mut messages);

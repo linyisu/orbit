@@ -18,11 +18,21 @@ struct Arguments {
 pub struct ReadImage {
     workspace: Workspace,
     assets: ImageAssets,
+    enabled: bool,
 }
 
 impl ReadImage {
     pub fn new(workspace: Workspace, assets: ImageAssets) -> Self {
-        Self { workspace, assets }
+        Self {
+            workspace,
+            assets,
+            enabled: true,
+        }
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
     }
 }
 
@@ -44,6 +54,11 @@ impl Tool for ReadImage {
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
         Box::pin(async move {
+            if !self.enabled {
+                return Err(ToolError::ExecutionFailed(
+                    "current model does not support image input".into(),
+                ));
+            }
             let arguments: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|error| invalid(error.to_string()))?;
             if arguments.path.trim().is_empty() {
@@ -126,5 +141,26 @@ mod tests {
         let orbit_model::types::Attachment::Image { path, .. } = &output.attachments[0];
         assert!(path.starts_with(data.path().join("orbit.attachments")));
         assert_eq!(std::fs::read_dir(workspace.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn disabled_tool_fails_fast_with_clear_error() {
+        let workspace = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let tool = ReadImage::new(
+            Workspace::new(workspace.path()).unwrap(),
+            ImageAssets::for_database(&data.path().join("orbit.db")),
+        )
+        .with_enabled(false);
+        let err = tool
+            .execute(
+                ToolCall::function("image-1", "read_image", json!({"path":"scene.png"})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ToolError::ExecutionFailed(msg) if msg.contains("does not support image input"))
+        );
     }
 }

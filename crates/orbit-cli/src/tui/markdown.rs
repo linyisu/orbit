@@ -154,13 +154,11 @@ fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
                 && url.host().is_some()
                 && url.username().is_empty()
                 && url.password().is_none()
-        }) {
-            if !found
-                .iter()
-                .any(|(range, _)| range.start <= start && start < range.end)
-            {
-                found.push((start..end, target));
-            }
+        }) && !found
+            .iter()
+            .any(|(range, _)| range.start <= start && start < range.end)
+        {
+            found.push((start..end, target));
         }
     }
     found.sort_by_key(|(range, _)| range.start);
@@ -582,11 +580,10 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             && marker == code.delimiter
             && count >= code.length
             && trimmed[count..].trim().is_empty()
+            && code.nested_fences.is_empty()
         {
-            if code.nested_fences.is_empty() {
-                *fence = None;
-                return Line::styled("  └─", Style::default().fg(SECONDARY));
-            }
+            *fence = None;
+            return Line::styled("  └─", Style::default().fg(SECONDARY));
         }
         let mut highlighter =
             HighlightLines::from_state(&CODE_THEME, code.state.0.clone(), code.state.1.clone());

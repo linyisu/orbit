@@ -10,3 +10,8 @@ pub mod events;
 pub mod memory;
 pub mod model;
 pub mod tool;
+
+pub use agent::{
+    Agent, AgentConfig, AgentResult, model_messages, sanitize_uncommitted_attachments,
+    sanitize_unsupported_attachments,
+};
