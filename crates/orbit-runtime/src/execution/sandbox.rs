@@ -418,7 +418,7 @@ impl BwrapSandboxBackend {
             for (container_path, is_dir) in masked {
                 if let Some(path_str) = container_path.to_str() {
                     if is_dir {
-                        command.args(["--tmpfs", path_str]);
+                        command.args(["--tmpfs", path_str, "--remount-ro", path_str]);
                     } else {
                         command.args(["--ro-bind", "/dev/null", path_str]);
                     }
@@ -595,6 +595,56 @@ fn is_protected_directory(path: &Path) -> bool {
         || name.ends_with(".session-locks")
 }
 
+fn collect_dir_inodes(
+    dir: &Path,
+    protected_inodes: &mut HashSet<(u64, u64)>,
+) -> Result<(), RuntimeError> {
+    use std::os::unix::fs::MetadataExt;
+    let mut queue = VecDeque::from([(dir.to_path_buf(), 0usize)]);
+    let mut visited = 0usize;
+    const MAX_PROTECTED_DIR_ENTRIES: usize = 20_000;
+    const MAX_PROTECTED_DIR_DEPTH: usize = 32;
+
+    while let Some((curr, depth)) = queue.pop_front() {
+        let entries = match std::fs::read_dir(&curr) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(failed(format!(
+                    "failed to read protected directory '{}': {e}",
+                    curr.display()
+                )));
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                failed(format!(
+                    "failed to read entry in protected directory '{}': {e}",
+                    curr.display()
+                ))
+            })?;
+            visited += 1;
+            if visited > MAX_PROTECTED_DIR_ENTRIES {
+                return Err(failed(format!(
+                    "protected directory '{}' exceeds maximum scan limit of {MAX_PROTECTED_DIR_ENTRIES} entries",
+                    dir.display()
+                )));
+            }
+            let meta = entry.path().symlink_metadata().map_err(|e| {
+                failed(format!(
+                    "failed to inspect protected entry '{}': {e}",
+                    entry.path().display()
+                ))
+            })?;
+            protected_inodes.insert((meta.dev(), meta.ino()));
+            if meta.is_dir() && !meta.file_type().is_symlink() && depth < MAX_PROTECTED_DIR_DEPTH {
+                queue.push_back((entry.path(), depth + 1));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn mount_capabilities(
     command: &mut Command,
     policy: &EffectivePolicy,
@@ -638,17 +688,49 @@ fn mount_capabilities(
                     canonical.display()
                 )));
             }
-            if meta.is_dir() {
-                let entries = std::fs::read_dir(canonical).into_iter().flatten();
-                for entry in entries.flatten() {
-                    let is_hardlink = entry
-                        .metadata()
-                        .is_ok_and(|em| protected_inodes.contains(&(em.dev(), em.ino())));
-                    if is_hardlink {
-                        return Err(failed(format!(
-                            "capability directory '{}' contains hardlink to protected path",
-                            canonical.display()
-                        )));
+            if meta.is_dir() && !meta.file_type().is_symlink() {
+                let mut queue = VecDeque::from([(canonical.to_path_buf(), 0usize)]);
+                let mut visited = 0usize;
+                const MAX_CAP_SCAN_ENTRIES: usize = 10_000;
+                const MAX_CAP_SCAN_DEPTH: usize = 16;
+                while let Some((curr, depth)) = queue.pop_front() {
+                    let entries = std::fs::read_dir(&curr).map_err(|e| {
+                        failed(format!(
+                            "failed to read capability directory '{}': {e}",
+                            curr.display()
+                        ))
+                    })?;
+                    for entry in entries {
+                        let entry = entry.map_err(|e| {
+                            failed(format!(
+                                "failed to read entry in capability directory '{}': {e}",
+                                curr.display()
+                            ))
+                        })?;
+                        visited += 1;
+                        if visited > MAX_CAP_SCAN_ENTRIES {
+                            return Err(failed(format!(
+                                "capability directory '{}' exceeds maximum scan limit of {MAX_CAP_SCAN_ENTRIES} entries",
+                                canonical.display()
+                            )));
+                        }
+                        let em = entry.path().symlink_metadata().map_err(|e| {
+                            failed(format!(
+                                "failed to inspect entry in capability directory '{}': {e}",
+                                entry.path().display()
+                            ))
+                        })?;
+                        if protected_inodes.contains(&(em.dev(), em.ino())) {
+                            return Err(failed(format!(
+                                "capability directory '{}' contains hardlink to protected path at '{}'",
+                                canonical.display(),
+                                entry.path().display()
+                            )));
+                        }
+                        if em.is_dir() && !em.file_type().is_symlink() && depth < MAX_CAP_SCAN_DEPTH
+                        {
+                            queue.push_back((entry.path(), depth + 1));
+                        }
                     }
                 }
             }
@@ -705,11 +787,24 @@ fn collect_masked_paths(
     let mut seen = HashSet::new();
     let mut protected_inodes = HashSet::new();
 
-    // 1. Process spec.protected_paths
-    for protected in protected_paths {
+    let mut all_protected = protected_paths.to_vec();
+    if !read_only_workspace {
+        for name in [".git", ".env", ".env.local"] {
+            let candidate = ws_target.join(name);
+            if !all_protected.contains(&candidate) {
+                all_protected.push(candidate);
+            }
+        }
+    }
+
+    // 1. Process all_protected
+    for protected in &all_protected {
         match std::fs::symlink_metadata(protected) {
             Ok(meta) => {
                 protected_inodes.insert((meta.dev(), meta.ino()));
+                if meta.is_dir() && !meta.file_type().is_symlink() {
+                    collect_dir_inodes(protected, &mut protected_inodes)?;
+                }
                 let rel = protected.strip_prefix(ws_target).ok();
                 if let Some(rel) = rel.filter(|r| !r.as_os_str().is_empty()) {
                     let container_path = Path::new("/workspace").join(rel);
@@ -729,9 +824,15 @@ fn collect_masked_paths(
                             let _ = std::fs::create_dir_all(parent);
                         }
                         if is_protected_directory(protected) {
-                            if std::fs::create_dir(protected).is_ok() {
-                                let meta = std::fs::symlink_metadata(protected).ok();
-                                if let Some(meta) = meta {
+                            match std::fs::create_dir(protected) {
+                                Ok(()) => {
+                                    let meta =
+                                        std::fs::symlink_metadata(protected).map_err(|e| {
+                                            failed(format!(
+                                                "failed to stat placeholder directory '{}': {e}",
+                                                protected.display()
+                                            ))
+                                        })?;
                                     placeholder_guard.push(Placeholder::Dir {
                                         path: protected.clone(),
                                         dev: meta.dev(),
@@ -742,18 +843,64 @@ fn collect_masked_paths(
                                         masked.push((container_path, true));
                                     }
                                 }
+                                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                    let meta = std::fs::symlink_metadata(protected).map_err(|e| {
+                                        failed(format!(
+                                            "failed to stat existing protected directory '{}': {e}",
+                                            protected.display()
+                                        ))
+                                    })?;
+                                    protected_inodes.insert((meta.dev(), meta.ino()));
+                                    if seen.insert(container_path.clone()) {
+                                        masked.push((container_path, meta.is_dir()));
+                                    }
+                                }
+                                Err(e) => {
+                                    return Err(failed(format!(
+                                        "failed to create placeholder directory for protected path '{}': {e}",
+                                        protected.display()
+                                    )));
+                                }
                             }
-                        } else if std::fs::File::create_new(protected).is_ok() {
-                            let meta = std::fs::symlink_metadata(protected).ok();
-                            if let Some(meta) = meta {
-                                placeholder_guard.push(Placeholder::File {
-                                    path: protected.clone(),
-                                    dev: meta.dev(),
-                                    ino: meta.ino(),
-                                });
-                                protected_inodes.insert((meta.dev(), meta.ino()));
-                                if seen.insert(container_path.clone()) {
-                                    masked.push((container_path, false));
+                        } else {
+                            match std::fs::File::create_new(protected) {
+                                Ok(file) => {
+                                    drop(file);
+                                    let meta =
+                                        std::fs::symlink_metadata(protected).map_err(|e| {
+                                            failed(format!(
+                                                "failed to stat placeholder file '{}': {e}",
+                                                protected.display()
+                                            ))
+                                        })?;
+                                    placeholder_guard.push(Placeholder::File {
+                                        path: protected.clone(),
+                                        dev: meta.dev(),
+                                        ino: meta.ino(),
+                                    });
+                                    protected_inodes.insert((meta.dev(), meta.ino()));
+                                    if seen.insert(container_path.clone()) {
+                                        masked.push((container_path, false));
+                                    }
+                                }
+                                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                    let meta =
+                                        std::fs::symlink_metadata(protected).map_err(|e| {
+                                            failed(format!(
+                                                "failed to stat existing protected file '{}': {e}",
+                                                protected.display()
+                                            ))
+                                        })?;
+                                    protected_inodes.insert((meta.dev(), meta.ino()));
+                                    if seen.insert(container_path.clone()) {
+                                        masked.push((container_path, meta.is_dir()));
+                                    }
+                                }
+                                Err(e) => {
+                                    return Err(failed(format!(
+                                        "failed to create placeholder file for protected path '{}': {e}",
+                                        protected.display()
+                                    )));
                                 }
                             }
                         }
@@ -842,13 +989,8 @@ fn collect_masked_paths(
                 if seen.insert(container_path.clone()) {
                     masked.push((container_path, is_dir && !is_symlink));
                 }
-                if name == ".git" && is_dir && !is_symlink {
-                    let git_entries = std::fs::read_dir(&child_host).into_iter().flatten();
-                    for ge in git_entries.flatten() {
-                        if let Ok(gm) = ge.metadata() {
-                            protected_inodes.insert((gm.dev(), gm.ino()));
-                        }
-                    }
+                if is_dir && !is_symlink {
+                    collect_dir_inodes(&child_host, &mut protected_inodes)?;
                 }
                 continue;
             }
@@ -1782,5 +1924,94 @@ mod tests {
             assert!(config_file.exists());
             assert!(env_file.exists());
         }
+
+        // Case C: Protected directory contents are recursively added to protected_inodes
+        {
+            let artifact_dir = ws.join("my.artifacts");
+            std::fs::create_dir_all(&artifact_dir).unwrap();
+            let secret_file = artifact_dir.join("token.txt");
+            std::fs::write(&secret_file, "supersecret").unwrap();
+            let secret_alias = ws.join("leak_token.txt");
+            std::fs::hard_link(&secret_file, &secret_alias).unwrap();
+
+            let mut guard = PlaceholderGuard::new();
+            let (masked, _) =
+                collect_masked_paths(ws, std::slice::from_ref(&artifact_dir), true, &mut guard)
+                    .unwrap();
+
+            // Both the artifact directory and the hardlink outside it are masked!
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/my.artifacts") && *is_dir)
+            );
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/leak_token.txt") && !*is_dir)
+            );
+        }
+
+        // Case D: Non-existent .git and .env are protected with placeholders in RW mode
+        {
+            let fresh_ws = tempfile::tempdir().unwrap();
+            let mut guard = PlaceholderGuard::new();
+            let (masked, _) =
+                collect_masked_paths(fresh_ws.path(), &[], false, &mut guard).unwrap();
+
+            // .git (dir) and .env (file) were created as placeholders and masked!
+            assert!(fresh_ws.path().join(".git").is_dir());
+            assert!(fresh_ws.path().join(".env").is_file());
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/.git") && *is_dir)
+            );
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/.env") && !*is_dir)
+            );
+
+            drop(guard);
+            // Cleaned up after drop
+            assert!(!fresh_ws.path().join(".git").exists());
+            assert!(!fresh_ws.path().join(".env").exists());
+        }
+    }
+
+    #[test]
+    fn test_mount_capabilities_rejects_deep_nested_hardlinks() {
+        let ws_dir = tempfile::tempdir().unwrap();
+        let ws = ws_dir.path();
+        let config_file = ws.join("config.toml");
+        std::fs::write(&config_file, "super_api_key").unwrap();
+
+        // Collect protected inodes for the workspace
+        let mut guard = PlaceholderGuard::new();
+        let (_, protected_inodes) =
+            collect_masked_paths(ws, std::slice::from_ref(&config_file), true, &mut guard).unwrap();
+
+        // Create an external capability directory with a deeply nested hardlink to config.toml
+        let cap_dir = tempfile::tempdir().unwrap();
+        let nested_dir = cap_dir.path().join("sub1").join("sub2");
+        std::fs::create_dir_all(&nested_dir).unwrap();
+        let hardlink = nested_dir.join("aliased_config.txt");
+        std::fs::hard_link(&config_file, &hardlink).unwrap();
+
+        let mut policy = EffectivePolicy::new(crate::policy::BasePolicy::new(
+            crate::filesystem::ResolvedPath::from_canonical(ws),
+        ));
+        let resolved_cap = crate::filesystem::ResolvedPath::from_canonical(cap_dir.path());
+        policy.persistent_read.push(resolved_cap);
+
+        let mut command = tokio::process::Command::new("/bin/true");
+        let err = mount_capabilities(&mut command, &policy, ws, &[config_file], &protected_inodes)
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("contains hardlink to protected path")
+        );
     }
 }

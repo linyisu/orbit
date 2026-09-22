@@ -121,6 +121,23 @@ impl Workspace {
         for p in &self.protected {
             self.policy.add_protected_path(p.clone());
         }
+        let effective = self.policy.effective_policy();
+        for p in &self.protected {
+            for grant in effective
+                .persistent_read
+                .iter()
+                .chain(effective.persistent_read_write.iter())
+            {
+                let canon = grant.canonical();
+                if canon.starts_with(p) || p.starts_with(canon) {
+                    return Err(WorkspaceError::PermissionDenied(format!(
+                        "persistent permission '{}' conflicts with protected path '{}'",
+                        grant.requested().display(),
+                        p.display()
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -141,6 +158,23 @@ impl Workspace {
             }
             Err(error) => return Err(error.into()),
         };
+
+        let effective = self.policy.effective_policy();
+        for grant in effective
+            .persistent_read
+            .iter()
+            .chain(effective.persistent_read_write.iter())
+        {
+            let canon = grant.canonical();
+            if canon.starts_with(&resolved) || resolved.starts_with(canon) {
+                return Err(WorkspaceError::PermissionDenied(format!(
+                    "protected path '{}' conflicts with persistent permission '{}'",
+                    resolved.display(),
+                    grant.requested().display()
+                )));
+            }
+        }
+
         self.protected.push(resolved.clone());
         self.policy.add_protected_path(resolved);
         Ok(())
@@ -520,5 +554,46 @@ impl Workspace {
 
     pub fn open_granted_read(&self, path: &Path) -> Result<File, WorkspaceError> {
         self.authorize_read(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_persistent_permission_conflicts_with_protected_path() {
+        let ws_dir = tempdir().unwrap();
+        let outside_dir = tempdir().unwrap();
+        let db_file = outside_dir.path().join("orbit.db");
+        std::fs::write(&db_file, "data").unwrap();
+
+        let mut ws = Workspace::new(ws_dir.path()).unwrap();
+        ws.protect(&db_file).unwrap();
+
+        // 1. configure_policy with permissions covering db_file fails upfront
+        let perms = WorkspacePermissions {
+            read: vec![outside_dir.path().to_path_buf()],
+            read_write: Vec::new(),
+        };
+        let err = ws
+            .configure_policy(perms, NetworkPolicy::Allow)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("conflicts with protected path"));
+
+        // 2. protect() fails if persistent permission is already configured
+        let other_outside = tempdir().unwrap();
+        let mut ws2 = Workspace::new(ws_dir.path()).unwrap();
+        let perms2 = WorkspacePermissions {
+            read: vec![other_outside.path().to_path_buf()],
+            read_write: Vec::new(),
+        };
+        ws2.configure_policy(perms2, NetworkPolicy::Allow).unwrap();
+
+        let sub_secret = other_outside.path().join("secret.db");
+        let err2 = ws2.protect(&sub_secret).unwrap_err().to_string();
+        assert!(err2.contains("conflicts with persistent permission"));
     }
 }
