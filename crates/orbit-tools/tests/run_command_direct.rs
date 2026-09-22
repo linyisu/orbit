@@ -277,3 +277,43 @@ async fn run_command_masks_protected_files_and_git_directory_even_with_read_writ
         "SECRET_CONFIG_DATA=xyz\n"
     );
 }
+
+#[tokio::test]
+async fn run_command_rw_prohibits_and_cleans_up_new_env_file() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "test",
+                "run_command",
+                json!({
+                    "command": "echo 'MALICIOUS_KEY=1' > /workspace/.env.production",
+                    "workspace_access": "read_write"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    request.decision.send(true).unwrap();
+
+    let res = task.await.unwrap();
+    // Must return an ExecutionFailed error indicating created prohibited protected path
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains(".env.production"));
+
+    // Crucially: .env.production must NOT exist on host workspace!
+    let env_prod = ws_temp.path().join(".env.production");
+    assert!(!env_prod.exists());
+}

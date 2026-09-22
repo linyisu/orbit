@@ -117,11 +117,10 @@ impl Workspace {
         let resolved = ResolvedPath::resolve(&self.path, None).map_err(WorkspaceError::Io)?;
         let policy = PolicyEngine::try_with_permissions(resolved, permissions, network)
             .map_err(|e| WorkspaceError::PermissionDenied(e.to_string()))?;
-        self.policy = policy;
         for p in &self.protected {
-            self.policy.add_protected_path(p.clone());
+            policy.add_protected_path(p.clone());
         }
-        let effective = self.policy.effective_policy();
+        let effective = policy.effective_policy();
         for p in &self.protected {
             for grant in effective
                 .persistent_read
@@ -138,6 +137,7 @@ impl Workspace {
                 }
             }
         }
+        self.policy = policy;
         Ok(())
     }
 
@@ -595,5 +595,49 @@ mod tests {
         let sub_secret = other_outside.path().join("secret.db");
         let err2 = ws2.protect(&sub_secret).unwrap_err().to_string();
         assert!(err2.contains("conflicts with persistent permission"));
+    }
+
+    #[test]
+    fn test_configure_policy_is_transactional() {
+        let ws_dir = tempdir().unwrap();
+        let valid_dir = tempdir().unwrap();
+        let invalid_dir = tempdir().unwrap();
+        let secret_file = invalid_dir.path().join("secret.key");
+        std::fs::write(&secret_file, "12345").unwrap();
+
+        let mut ws = Workspace::new(ws_dir.path()).unwrap();
+        ws.protect(&secret_file).unwrap();
+
+        // 1. Configure valid initial policy
+        let initial_perms = WorkspacePermissions {
+            read: vec![valid_dir.path().to_path_buf()],
+            read_write: Vec::new(),
+        };
+        ws.configure_policy(initial_perms, NetworkPolicy::Deny)
+            .unwrap();
+        let valid_canonical = valid_dir.path().canonicalize().unwrap();
+        assert_eq!(
+            ws.policy().effective_policy().persistent_read[0].canonical(),
+            valid_canonical
+        );
+
+        // 2. Attempt to configure conflicting policy (covering secret_file)
+        let bad_perms = WorkspacePermissions {
+            read: vec![invalid_dir.path().to_path_buf()],
+            read_write: Vec::new(),
+        };
+        let err = ws
+            .configure_policy(bad_perms, NetworkPolicy::Allow)
+            .unwrap_err();
+        assert!(err.to_string().contains("conflicts with protected path"));
+
+        // 3. Verify that self.policy was NOT mutated
+        let current_policy = ws.policy().effective_policy();
+        assert_eq!(current_policy.persistent_read.len(), 1);
+        assert_eq!(
+            current_policy.persistent_read[0].canonical(),
+            valid_canonical
+        );
+        assert_eq!(current_policy.base.network, NetworkPolicy::Deny);
     }
 }

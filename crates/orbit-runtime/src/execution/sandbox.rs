@@ -318,22 +318,28 @@ pub enum Placeholder {
 }
 
 #[derive(Debug, Default)]
-pub struct PlaceholderGuard(pub Vec<Placeholder>);
+pub struct PlaceholderGuard {
+    pub placeholders: Vec<Placeholder>,
+    pub initial_protected_rel_paths: HashSet<PathBuf>,
+}
 
 impl PlaceholderGuard {
     pub fn new() -> Self {
-        Self(Vec::new())
+        Self {
+            placeholders: Vec::new(),
+            initial_protected_rel_paths: HashSet::new(),
+        }
     }
 
     pub fn push(&mut self, placeholder: Placeholder) {
-        self.0.push(placeholder);
+        self.placeholders.push(placeholder);
     }
 }
 
 impl Drop for PlaceholderGuard {
     fn drop(&mut self) {
         use std::os::unix::fs::MetadataExt;
-        for item in &self.0 {
+        for item in &self.placeholders {
             match item {
                 Placeholder::File { path, dev, ino } => {
                     let matches = std::fs::symlink_metadata(path).is_ok_and(|meta| {
@@ -510,7 +516,7 @@ impl SandboxBackend for BwrapSandboxBackend {
                     .collect(),
             });
 
-            run_child_process(
+            let result = run_child_process(
                 child,
                 spec.timeout,
                 cancellation,
@@ -521,7 +527,26 @@ impl SandboxBackend for BwrapSandboxBackend {
                 spec.skipped_entries,
                 verification,
             )
-            .await
+            .await;
+
+            let initial_protected =
+                std::mem::take(&mut placeholder_guard.initial_protected_rel_paths);
+            drop(placeholder_guard);
+
+            let prohibited_check = if !spec.read_only_workspace {
+                let ws_target = policy.base.workspace.canonical();
+                verify_and_clean_prohibited_creations(
+                    ws_target,
+                    &initial_protected,
+                    &spec.protected_paths,
+                )
+            } else {
+                Ok(())
+            };
+
+            let command_res = result?;
+            prohibited_check?;
+            Ok(command_res)
         })
     }
 }
@@ -637,7 +662,14 @@ fn collect_dir_inodes(
                 ))
             })?;
             protected_inodes.insert((meta.dev(), meta.ino()));
-            if meta.is_dir() && !meta.file_type().is_symlink() && depth < MAX_PROTECTED_DIR_DEPTH {
+            if meta.is_dir() && !meta.file_type().is_symlink() {
+                if depth >= MAX_PROTECTED_DIR_DEPTH {
+                    return Err(failed(format!(
+                        "protected directory '{}' depth exceeds maximum limit of {MAX_PROTECTED_DIR_DEPTH} at '{}'",
+                        dir.display(),
+                        entry.path().display()
+                    )));
+                }
                 queue.push_back((entry.path(), depth + 1));
             }
         }
@@ -727,8 +759,14 @@ fn mount_capabilities(
                                 entry.path().display()
                             )));
                         }
-                        if em.is_dir() && !em.file_type().is_symlink() && depth < MAX_CAP_SCAN_DEPTH
-                        {
+                        if em.is_dir() && !em.file_type().is_symlink() {
+                            if depth >= MAX_CAP_SCAN_DEPTH {
+                                return Err(failed(format!(
+                                    "capability directory '{}' depth exceeds maximum limit of {MAX_CAP_SCAN_DEPTH} at '{}'",
+                                    canonical.display(),
+                                    entry.path().display()
+                                )));
+                            }
                             queue.push_back((entry.path(), depth + 1));
                         }
                     }
@@ -807,6 +845,9 @@ fn collect_masked_paths(
                 }
                 let rel = protected.strip_prefix(ws_target).ok();
                 if let Some(rel) = rel.filter(|r| !r.as_os_str().is_empty()) {
+                    placeholder_guard
+                        .initial_protected_rel_paths
+                        .insert(rel.to_path_buf());
                     let container_path = Path::new("/workspace").join(rel);
                     if seen.insert(container_path.clone()) {
                         masked.push((container_path, meta.is_dir()));
@@ -819,6 +860,9 @@ fn collect_masked_paths(
                 if !read_only_workspace {
                     let rel = protected.strip_prefix(ws_target).ok();
                     if let Some(rel) = rel.filter(|r| !r.as_os_str().is_empty()) {
+                        placeholder_guard
+                            .initial_protected_rel_paths
+                            .insert(rel.to_path_buf());
                         let container_path = Path::new("/workspace").join(rel);
                         if let Some(parent) = protected.parent() {
                             let _ = std::fs::create_dir_all(parent);
@@ -984,6 +1028,9 @@ fn collect_masked_paths(
                 || name.starts_with(".orbit-write-");
 
             if is_protected_name {
+                placeholder_guard
+                    .initial_protected_rel_paths
+                    .insert(child_rel.clone());
                 protected_inodes.insert((dev, ino));
                 let container_path = Path::new("/workspace").join(&child_rel);
                 if seen.insert(container_path.clone()) {
@@ -1006,6 +1053,9 @@ fn collect_masked_paths(
     // Mask all files matching protected_inodes (e.g. hardlink aliases of config.toml, .env, etc.)
     for (child_rel, dev, ino, is_dir) in files_to_check {
         if protected_inodes.contains(&(dev, ino)) {
+            placeholder_guard
+                .initial_protected_rel_paths
+                .insert(child_rel.clone());
             let container_path = Path::new("/workspace").join(&child_rel);
             if seen.insert(container_path.clone()) {
                 masked.push((container_path, is_dir));
@@ -1028,6 +1078,104 @@ fn collect_masked_paths(
     }
 
     Ok((filtered, protected_inodes))
+}
+
+fn verify_and_clean_prohibited_creations(
+    ws_target: &Path,
+    initial_protected_rel_paths: &HashSet<PathBuf>,
+    protected_paths: &[PathBuf],
+) -> Result<(), RuntimeError> {
+    const MAX_SCAN_DIRS: usize = 50_000;
+    const MAX_DEPTH: usize = 32;
+
+    let mut queue = VecDeque::new();
+    queue.push_back((PathBuf::new(), 0usize));
+    let mut count = 0;
+    let mut prohibited_found = Vec::new();
+
+    while let Some((rel, depth)) = queue.pop_front() {
+        count += 1;
+        if count > MAX_SCAN_DIRS {
+            return Err(failed(format!(
+                "workspace directory count exceeds {MAX_SCAN_DIRS} while verifying created files"
+            )));
+        }
+        if depth > MAX_DEPTH {
+            return Err(failed(format!(
+                "workspace directory depth exceeds {MAX_DEPTH} at '{}' while verifying created files",
+                rel.display()
+            )));
+        }
+
+        let current_host = ws_target.join(&rel);
+        let entries = match std::fs::read_dir(&current_host) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(failed(format!(
+                    "failed to read directory '{}' while verifying created files: {e}",
+                    current_host.display()
+                )));
+            }
+        };
+
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                failed(format!(
+                    "failed to read directory entry in '{}': {e}",
+                    current_host.display()
+                ))
+            })?;
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            let child_rel = rel.join(&file_name);
+            let child_host = ws_target.join(&child_rel);
+            let meta = match std::fs::symlink_metadata(&child_host) {
+                Ok(m) => m,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    return Err(failed(format!(
+                        "failed to inspect file '{}': {e}",
+                        child_host.display()
+                    )));
+                }
+            };
+
+            let is_dir = meta.is_dir();
+            let is_symlink = meta.file_type().is_symlink();
+
+            let is_prohibited_name = name == ".git"
+                || name == ".env"
+                || name.starts_with(".env.")
+                || name.starts_with(".orbit-write-")
+                || protected_paths.iter().any(|p| child_host.starts_with(p));
+
+            if is_prohibited_name && !initial_protected_rel_paths.contains(&child_rel) {
+                // Illicit file or directory created by the command.
+                // Immediately purge from host workspace.
+                if is_dir && !is_symlink {
+                    let _ = std::fs::remove_dir_all(&child_host);
+                } else {
+                    let _ = std::fs::remove_file(&child_host);
+                }
+                prohibited_found.push(child_rel);
+                continue;
+            }
+
+            if is_dir && !is_symlink {
+                queue.push_back((child_rel, depth + 1));
+            }
+        }
+    }
+
+    if !prohibited_found.is_empty() {
+        return Err(failed(format!(
+            "command execution created prohibited protected path(s) in workspace: {:?}; prohibited paths have been removed",
+            prohibited_found
+        )));
+    }
+
+    Ok(())
 }
 
 pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result<(), RuntimeError> {
@@ -2013,5 +2161,98 @@ mod tests {
             err.to_string()
                 .contains("contains hardlink to protected path")
         );
+    }
+
+    #[test]
+    fn test_collect_dir_inodes_rejects_depth_exceeding_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut curr = temp.path().to_path_buf();
+        // Create 34 nested directory levels (exceeding MAX_PROTECTED_DIR_DEPTH = 32)
+        for i in 0..34 {
+            curr = curr.join(format!("dir_{i}"));
+        }
+        std::fs::create_dir_all(&curr).unwrap();
+        let file = curr.join("secret.txt");
+        std::fs::write(&file, "leak").unwrap();
+
+        let mut inodes = HashSet::new();
+        let err = collect_dir_inodes(temp.path(), &mut inodes).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("depth exceeds maximum limit of 32")
+        );
+    }
+
+    #[test]
+    fn test_mount_capabilities_rejects_depth_exceeding_limit() {
+        let ws_dir = tempfile::tempdir().unwrap();
+        let cap_dir = tempfile::tempdir().unwrap();
+        let mut curr = cap_dir.path().to_path_buf();
+        // Create 18 nested directory levels (exceeding MAX_CAP_SCAN_DEPTH = 16)
+        for i in 0..18 {
+            curr = curr.join(format!("sub_{i}"));
+        }
+        std::fs::create_dir_all(&curr).unwrap();
+        let file = curr.join("data.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        let mut policy = EffectivePolicy::new(crate::policy::BasePolicy::new(
+            crate::filesystem::ResolvedPath::from_canonical(ws_dir.path()),
+        ));
+        let resolved_cap = crate::filesystem::ResolvedPath::from_canonical(cap_dir.path());
+        policy.persistent_read.push(resolved_cap);
+
+        let mut command = tokio::process::Command::new("/bin/true");
+        let protected_inodes = HashSet::new();
+        let err = mount_capabilities(&mut command, &policy, ws_dir.path(), &[], &protected_inodes)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("depth exceeds maximum limit of 16")
+        );
+    }
+
+    #[test]
+    fn test_verify_and_clean_prohibited_creations() {
+        let ws_dir = tempfile::tempdir().unwrap();
+        let ws = ws_dir.path();
+
+        // 1. Initial valid file and initial existing protected file
+        let existing_env = ws.join(".env.existing");
+        std::fs::write(&existing_env, "old").unwrap();
+        let existing_src = ws.join("src").join("main.rs");
+        std::fs::create_dir_all(existing_src.parent().unwrap()).unwrap();
+        std::fs::write(&existing_src, "fn main() {}").unwrap();
+
+        let mut initial_protected = HashSet::new();
+        initial_protected.insert(PathBuf::from(".env.existing"));
+
+        // No new prohibited files => Ok
+        verify_and_clean_prohibited_creations(ws, &initial_protected, &[]).unwrap();
+
+        // 2. Command creates newly prohibited file .env.production
+        let prohibited_file = ws.join(".env.production");
+        std::fs::write(&prohibited_file, "SECRET=1").unwrap();
+        assert!(prohibited_file.exists());
+
+        let err = verify_and_clean_prohibited_creations(ws, &initial_protected, &[]).unwrap_err();
+        assert!(err.to_string().contains(".env.production"));
+        // File must be deleted!
+        assert!(!prohibited_file.exists());
+        // Existing files remain intact
+        assert!(existing_env.exists());
+        assert!(existing_src.exists());
+
+        // 3. Command creates prohibited directory with nested files
+        let prohibited_dir = ws.join("sub").join(".orbit-write-tmp");
+        std::fs::create_dir_all(&prohibited_dir).unwrap();
+        let nested_file = prohibited_dir.join("data");
+        std::fs::write(&nested_file, "lock").unwrap();
+        assert!(prohibited_dir.exists());
+
+        let err = verify_and_clean_prohibited_creations(ws, &initial_protected, &[]).unwrap_err();
+        assert!(err.to_string().contains(".orbit-write-tmp"));
+        // Directory must be purged!
+        assert!(!prohibited_dir.exists());
     }
 }
