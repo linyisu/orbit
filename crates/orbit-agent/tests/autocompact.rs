@@ -479,6 +479,88 @@ impl orbit_agent::archive::ContextArchive for Archive {
     }
 }
 
+#[derive(Default)]
+struct ProgressArchive(std::sync::Mutex<Option<orbit_agent::memory::SummaryProgress>>);
+impl orbit_agent::archive::ContextArchive for ProgressArchive {
+    fn save<'a>(&'a self, _: &'a [ChatMessage]) -> orbit_agent::archive::ArchiveFuture<'a> {
+        Box::pin(async { Ok("read_history archive_id=1".into()) })
+    }
+
+    fn load_progress<'a>(&'a self, _: &'a str) -> orbit_agent::archive::ProgressLoadFuture<'a> {
+        Box::pin(async move { Ok(self.0.lock().unwrap().clone()) })
+    }
+
+    fn save_progress<'a>(
+        &'a self,
+        progress: &'a orbit_agent::memory::SummaryProgress,
+    ) -> orbit_agent::archive::ProgressSaveFuture<'a> {
+        Box::pin(async move {
+            *self.0.lock().unwrap() = Some(progress.clone());
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn successful_summary_batches_resume_after_later_provider_failure() {
+    let history = vec![
+        ChatMessage::system("Keep the API stable"),
+        ChatMessage::user("Investigate the parser"),
+        ChatMessage::assistant("Important earlier analysis. ".repeat(3_000)),
+        ChatMessage::user("Continue the current task"),
+        ChatMessage::assistant("Ready"),
+    ];
+    let archive = ProgressArchive::default();
+    let failure = ModelError::Http {
+        status: 429,
+        request_id: String::new(),
+        body: "rate limited".into(),
+        retryable: true,
+    };
+    let first = MockModel::from_results([Ok(answer("First batch accepted")), Err(failure)]);
+    let first_result = autocompact::execute_with_archive(
+        &first,
+        autocompact::plan(&history, &[], 1000, 8000).unwrap(),
+        &[],
+        1000,
+        8000,
+        CancellationToken::new(),
+        Some(&archive),
+    )
+    .await;
+    assert!(first_result.is_err());
+    let saved = archive.0.lock().unwrap().clone().unwrap();
+    assert!(saved.next_record > 0 || saved.next_byte_offset > 0);
+    assert_eq!(saved.summary.goal, "First batch accepted");
+
+    let resumed = MockModel::new((0..50).map(|_| answer("Complete historical state")));
+    let result = autocompact::execute_with_archive(
+        &resumed,
+        autocompact::plan(&history, &[], 1000, 8000).unwrap(),
+        &[],
+        1000,
+        8000,
+        CancellationToken::new(),
+        Some(&archive),
+    )
+    .await
+    .unwrap();
+    let ChatMessage::User { content, .. } = &resumed.requests()[0].messages[1] else {
+        panic!("summary input should be JSON user data");
+    };
+    let input: serde_json::Value = serde_json::from_str(content).unwrap();
+    assert!(
+        input["previous_summary"]
+            .as_str()
+            .unwrap()
+            .contains("First batch accepted")
+    );
+    assert_eq!(
+        result.record.strategy,
+        orbit_agent::memory::CompactionStrategy::Summary
+    );
+}
+
 fn tool_heavy_task() -> Vec<ChatMessage> {
     let mut messages = vec![
         ChatMessage::system("Never change the tests"),
@@ -543,6 +625,47 @@ async fn tool_heavy_history_reclaims_over_seventy_percent_without_a_model_call()
     let shortened = serde_json::to_string(&compacted.history).unwrap();
     assert!(shortened.contains("failure-0"));
     assert!(shortened.contains("read_history archive_id=1"));
+}
+
+#[tokio::test]
+async fn agent_prunes_archived_tools_before_the_summary_threshold() {
+    let history = tool_heavy_task();
+    let before = estimate_tokens(&history, &[]);
+    let context_tokens = before.saturating_mul(100) / 70 + 4_096;
+    assert!(before >= (context_tokens - 4_096) * 60 / 100);
+    assert!(before < (context_tokens - 4_096) * 85 / 100);
+    let backend = MockModel::new([ChatCompletion {
+        id: None,
+        model: None,
+        message: ChatMessage::assistant("Continue"),
+        finish_reason: Some("stop".into()),
+        usage: None,
+    }]);
+    let archive = std::sync::Arc::new(Archive::default());
+    let agent = Agent::new(
+        backend.clone(),
+        ToolRegistry::new(),
+        AgentConfig {
+            context_tokens,
+            ..AgentConfig::default()
+        },
+    )
+    .with_context_archive(archive.clone());
+    let result = agent
+        .run(ChatRequest::new(history.clone()), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        result.history.last(),
+        Some(&ChatMessage::assistant("Continue"))
+    );
+    assert_eq!(
+        backend.requests().len(),
+        1,
+        "no summary model call should occur"
+    );
+    assert!(estimate_tokens(&backend.requests()[0].messages, &[]) < before.saturating_mul(3) / 4);
+    assert_eq!(archive.0.lock().unwrap()[0], history);
 }
 
 #[tokio::test]

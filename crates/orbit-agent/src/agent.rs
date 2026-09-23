@@ -42,6 +42,12 @@ pub struct AgentResult {
     pub tool_calls: usize,
 }
 
+#[derive(Default)]
+struct ContextThresholds {
+    prune_after: usize,
+    compact_after: usize,
+}
+
 pub struct Agent<B> {
     backend: B,
     tools: ToolRegistry,
@@ -255,11 +261,19 @@ where
         }
 
         let mut history = request.messages;
+        // The host builds a request from its previous projection plus the new
+        // user message. Instructions injected by the host are request context,
+        // not canonical conversation messages.
+        if let Some(journal) = &self.journal
+            && let Some(message @ ChatMessage::User { .. }) = history.last()
+        {
+            journal.record_message(message.clone());
+        }
         let mut files = self.files.clone();
         files.merge(&crate::memory::FileActivity::from_history(&history));
         let mut turns = 0;
         let mut tool_calls = 0;
-        let mut compact_after = 0;
+        let mut context_thresholds = ContextThresholds::default();
         let mut calibration = self.calibration.clone();
         let mut recovery_limit = None;
         let mut force_compaction = false;
@@ -282,7 +296,7 @@ where
                 .prepare_context(
                     &mut history,
                     (output, local_limit, force_compaction),
-                    &mut compact_after,
+                    &mut context_thresholds,
                     &files,
                     cancellation.clone(),
                     emit,
@@ -361,7 +375,10 @@ where
                 _ => Vec::new(),
             };
             validate_tool_ids(&calls)?;
-            history.push(assistant);
+            history.push(assistant.clone());
+            if let Some(journal) = &self.journal {
+                journal.record_message(assistant);
+            }
             self.checkpoint(&history, turns, tool_calls, None, &[], None)
                 .await?;
 
@@ -401,7 +418,11 @@ where
                         call: call.clone(),
                         error: message.clone(),
                     };
-                    history.push(ChatMessage::tool(call.id, format!("tool error: {message}")));
+                    let result = ChatMessage::tool(call.id, format!("tool error: {message}"));
+                    history.push(result.clone());
+                    if let Some(journal) = &self.journal {
+                        journal.record_message(result);
+                    }
                     self.checkpoint(
                         &history,
                         turns,
@@ -429,7 +450,11 @@ where
                             content: output.content.clone(),
                             changes: output.changes.clone(),
                         };
-                        history.push(ChatMessage::tool(call.id, output.content));
+                        let result = ChatMessage::tool(call.id, output.content);
+                        history.push(result.clone());
+                        if let Some(journal) = &self.journal {
+                            journal.record_message(result);
+                        }
                         loaded_attachments.extend(output.attachments);
                         self.checkpoint(
                             &history,
@@ -448,7 +473,11 @@ where
                             call: call.clone(),
                             error: message.clone(),
                         };
-                        history.push(ChatMessage::tool(call.id, format!("tool error: {message}")));
+                        let result = ChatMessage::tool(call.id, format!("tool error: {message}"));
+                        history.push(result.clone());
+                        if let Some(journal) = &self.journal {
+                            journal.record_message(result);
+                        }
                         self.checkpoint(
                             &history,
                             turns,
@@ -462,7 +491,13 @@ where
                     }
                 }
             }
+            let before_attachments = history.len();
             append_loaded_attachments(&mut history, loaded_attachments);
+            if let Some(journal) = &self.journal {
+                for message in &history[before_attachments..] {
+                    journal.record_message(message.clone());
+                }
+            }
             self.checkpoint(&history, turns, tool_calls, None, &[], None)
                 .await?;
         }
@@ -472,7 +507,7 @@ where
         &self,
         history: &mut Vec<ChatMessage>,
         (output, local_limit, force): (usize, usize, bool),
-        compact_after: &mut usize,
+        thresholds: &mut ContextThresholds,
         files: &crate::memory::FileActivity,
         cancellation: CancellationToken,
         emit: &mut F,
@@ -482,12 +517,63 @@ where
         Fut: Future<Output = Result<(), AgentError>>,
     {
         let tools = self.tools.definitions();
-        let estimated = crate::context::estimate_tokens(history, &tools);
+        let mut estimated = crate::context::estimate_tokens(history, &tools);
+        if !force
+            && self.config.auto_compact
+            && estimated >= thresholds.prune_after
+            && let Some(archive) = self.archive.as_deref()
+            && let Some(plan) = crate::autocompact::plan_pruning(
+                history,
+                &tools,
+                output,
+                local_limit,
+                &self.compaction.settings,
+            )
+        {
+            match crate::autocompact::execute_pruning_configured(
+                plan,
+                &tools,
+                output,
+                local_limit,
+                cancellation.clone(),
+                archive,
+            )
+            .await
+            {
+                Ok(Some(result)) => {
+                    emit(AgentEvent::CompactionRecorded {
+                        record: result.record,
+                    })
+                    .await?;
+                    *history = result.history;
+                    estimated = result.after_tokens;
+                    thresholds.prune_after = estimated.saturating_add(local_limit / 10);
+                    emit(AgentEvent::ContextCompacted {
+                        strategy: crate::memory::CompactionStrategy::ToolPruning,
+                        before_tokens: result.before_tokens,
+                        after_tokens: result.after_tokens,
+                        fallback: false,
+                        fallback_reason: None,
+                    })
+                    .await?;
+                }
+                Ok(None) => thresholds.prune_after = estimated.saturating_add(local_limit / 10),
+                Err(AgentError::Cancelled) => return Err(AgentError::Cancelled),
+                Err(error) => {
+                    thresholds.prune_after = estimated.saturating_add(local_limit / 10);
+                    emit(AgentEvent::CompactionFailed {
+                        kind: error.compaction_kind(),
+                        error: error.to_string(),
+                    })
+                    .await?;
+                }
+            }
+        }
         let plan = if force {
             Some(crate::autocompact::plan_configured(history, &tools, output, local_limit, crate::memory::CompactionMode::Manual, &self.compaction.settings)
                 .ok_or_else(|| AgentError::CompactionFailed {kind:crate::compaction::CompactionFailureKind::InputBudget,
                     message:"no safe compaction boundary fits the rejected request; original context preserved".into()})?)
-        } else if self.config.auto_compact && estimated >= *compact_after {
+        } else if self.config.auto_compact && estimated >= thresholds.compact_after {
             crate::autocompact::plan_configured(
                 history,
                 &tools,
@@ -532,7 +618,7 @@ where
                         fallback_reason,
                     };
                     *history = result.history;
-                    *compact_after = result
+                    thresholds.compact_after = result
                         .after_tokens
                         .saturating_add(local_limit.saturating_sub(output) / 10);
                     event
@@ -541,7 +627,7 @@ where
                 Err(error) => {
                     // A failed early attempt must not cause a summary request on
                     // every tool call. Retry only after substantial input growth.
-                    *compact_after =
+                    thresholds.compact_after =
                         estimated.saturating_add(local_limit.saturating_sub(output) / 10);
                     let event = AgentEvent::CompactionFailed {
                         kind: error.compaction_kind(),

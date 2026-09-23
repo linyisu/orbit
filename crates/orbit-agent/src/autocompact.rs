@@ -6,6 +6,7 @@ use std::{
 
 use orbit_model::types::{ChatMessage, ChatRequest, ToolDefinition};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 use crate::compaction::CompactionFailureKind as Failure;
@@ -20,7 +21,10 @@ use crate::{
     archive::ContextArchive,
     context::{CompactedContext, SUMMARY_PROMPT, check_budget, estimate_tokens},
     error::AgentError,
-    memory::{CompactionMode, CompactionRecord, CompactionStrategy, FileActivity, TaskSummary},
+    memory::{
+        CompactionMode, CompactionRecord, CompactionStrategy, FileActivity, SummaryProgress,
+        TaskSummary,
+    },
     model::ModelBackend,
 };
 
@@ -104,6 +108,28 @@ pub fn plan_configured(
         output,
         limit,
         mode,
+        settings.max_output_tokens,
+    )
+}
+
+/// Cheap, model-free reduction begins before the summary threshold. It only
+/// proposes a plan when durable retrieval is available at execution time.
+pub fn plan_pruning(
+    history: &[ChatMessage],
+    tools: &[ToolDefinition],
+    output: usize,
+    limit: usize,
+    settings: &crate::compaction::CompactionSettings,
+) -> Option<Plan> {
+    if estimate_tokens(history, tools) < limit.checked_sub(output)?.saturating_mul(60) / 100 {
+        return None;
+    }
+    plan_for(
+        history,
+        tools,
+        output,
+        limit,
+        CompactionMode::Automatic,
         settings.max_output_tokens,
     )
 }
@@ -312,34 +338,7 @@ pub async fn execute_configured(
     };
     let mut projected = plan.original.clone();
     if let Some(reference) = &archived {
-        // Start with generous excerpts, then shrink older evidence only if
-        // needed. The recent working set and all conversation prose stay exact.
-        for excerpt_bytes in [
-            TOOL_EXCERPT_BYTES,
-            TOOL_EXCERPT_BYTES / 2,
-            TOOL_EXCERPT_BYTES / 4,
-        ] {
-            projected = plan.original.clone();
-            for (i, message) in projected[..plan.retained_from].iter_mut().enumerate() {
-                let reference = format!("{reference}; message={i}");
-                match message {
-                    ChatMessage::Tool { content, .. } => {
-                        *content = excerpt(content, &reference, excerpt_bytes)
-                    }
-                    ChatMessage::Assistant { tool_calls, .. } => {
-                        for call in tool_calls {
-                            if call.function.arguments.len() > excerpt_bytes * 2 {
-                                call.function.arguments = json!({"archived_arguments":excerpt(&call.function.arguments, &reference, excerpt_bytes)}).to_string();
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if estimate_tokens(&projected, tools) <= plan.target_tokens {
-                break;
-            }
-        }
+        projected = project_archived_evidence(&plan, tools, reference);
         let after = estimate_tokens(&projected, tools);
         // Pruning is cheap and leaves every conversation message intact. Do
         // not pay for a model summary merely to shave off a few more tokens.
@@ -379,6 +378,7 @@ pub async fn execute_configured(
             .saturating_add(plan.summary_tokens),
         settings,
         cancellation.clone(),
+        archive,
     )
     .await?;
     if cancellation.is_cancelled() {
@@ -406,6 +406,92 @@ pub async fn execute_configured(
         requests,
         input_tokens,
     )
+}
+
+/// Return `None` when old tool evidence cannot free enough space; ordinary
+/// prose is never summarized in this early stage.
+pub async fn execute_pruning_configured(
+    plan: Plan,
+    tools: &[ToolDefinition],
+    output: usize,
+    limit: usize,
+    cancellation: CancellationToken,
+    archive: &dyn ContextArchive,
+) -> Result<Option<CompactedContext>, AgentError> {
+    if cancellation.is_cancelled() {
+        return Err(AgentError::Cancelled);
+    }
+    let reference = tokio::select! {
+        _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
+        result = archive.save(&plan.original) => result.map_err(|error| failure(Failure::Archive,error.to_string()))?,
+    };
+    let projected = project_archived_evidence(&plan, tools, &reference);
+    let after = estimate_tokens(&projected, tools);
+    let pruning_target = plan.target_tokens.max(limit.saturating_sub(output) / 3);
+    if after > pruning_target || after > plan.before_tokens.saturating_mul(3) / 4 {
+        return Ok(None);
+    }
+    if cancellation.is_cancelled() {
+        return Err(AgentError::Cancelled);
+    }
+    finish(
+        &plan,
+        tools,
+        output,
+        limit,
+        projected,
+        TaskSummary {
+            goal: "旧工具输出已归档，保留全部对话及近期工具原文。".into(),
+            constraints: vec![],
+            decisions: vec![],
+            completed: vec![],
+            remaining: vec![],
+            verification: vec![],
+            uncertainty: vec![],
+        },
+        CompactionStrategy::ToolPruning,
+        Some(reference),
+        0,
+        0,
+    )
+    .map(Some)
+}
+
+fn project_archived_evidence(
+    plan: &Plan,
+    tools: &[ToolDefinition],
+    reference: &str,
+) -> Vec<ChatMessage> {
+    // Start with generous excerpts, then shrink older evidence only if needed.
+    // Recent work and ordinary conversation remain verbatim.
+    let mut projected = plan.original.clone();
+    for excerpt_bytes in [
+        TOOL_EXCERPT_BYTES,
+        TOOL_EXCERPT_BYTES / 2,
+        TOOL_EXCERPT_BYTES / 4,
+    ] {
+        projected = plan.original.clone();
+        for (i, message) in projected[..plan.retained_from].iter_mut().enumerate() {
+            let reference = format!("{reference}; message={i}");
+            match message {
+                ChatMessage::Tool { content, .. } => {
+                    *content = excerpt(content, &reference, excerpt_bytes)
+                }
+                ChatMessage::Assistant { tool_calls, .. } => {
+                    for call in tool_calls {
+                        if call.function.arguments.len() > excerpt_bytes * 2 {
+                            call.function.arguments = json!({"archived_arguments":excerpt(&call.function.arguments, &reference, excerpt_bytes)}).to_string();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if estimate_tokens(&projected, tools) <= plan.target_tokens {
+            break;
+        }
+    }
+    projected
 }
 
 /// Keep both ends, plus a bounded set of error lines from the middle. The
@@ -473,6 +559,9 @@ fn records(messages: &[ChatMessage], pinned: Option<usize>) -> (String, Vec<Valu
             ChatMessage::Tool { tool_call_id, content } => records.push(json!({"source_message":i,"role":"tool","tool_call_id":tool_call_id,"field":"content","text":content})),
         }
     }
+    for (index, record) in records.iter_mut().enumerate() {
+        record["source_record_index"] = json!(index);
+    }
     (previous, records)
 }
 
@@ -483,12 +572,74 @@ async fn model_summary(
     limit: usize,
     settings: &crate::compaction::CompactionSettings,
     cancellation: CancellationToken,
+    archive: Option<&dyn ContextArchive>,
 ) -> Result<(TaskSummary, usize, usize), AgentError> {
     let (mut summary, source) = records(&projected[..plan.retained_from], plan.pinned_user);
-    let mut remaining: std::collections::VecDeque<_> = source.into();
+    let source_count = source.len();
+    let fingerprint_input = serde_json::to_vec(&(
+        &projected[..plan.retained_from],
+        plan.summary_tokens,
+        settings.max_input_tokens,
+    ))
+    .map_err(|error| AgentError::Compaction(error.to_string()))?;
+    let source_fingerprint = Sha256::digest(&fingerprint_input)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let progress = if let Some(archive) = archive {
+        archive.load_progress(&source_fingerprint).await?
+    } else {
+        None
+    };
+    let (mut requests, mut input_tokens, next_record, next_offset) =
+        if let Some(progress) = progress {
+            if progress.version != 1
+                || progress.source_fingerprint != source_fingerprint
+                || progress.next_record > source_count
+                || (progress.next_record == source_count && progress.next_byte_offset != 0)
+            {
+                return Err(failure(
+                    Failure::Archive,
+                    "saved summary progress does not match its source",
+                ));
+            }
+            summary = serde_json::to_string(&progress.summary)
+                .map_err(|error| AgentError::Compaction(error.to_string()))?;
+            (
+                progress.requests,
+                progress.input_tokens,
+                progress.next_record,
+                progress.next_byte_offset,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
+    if next_offset > 0 {
+        let valid = source.get(next_record).is_some_and(|record| {
+            record["text"]
+                .as_str()
+                .is_some_and(|text| next_offset <= text.len() && text.is_char_boundary(next_offset))
+        });
+        if !valid {
+            return Err(failure(
+                Failure::Archive,
+                "saved summary progress has an invalid record offset",
+            ));
+        }
+    }
+    let mut remaining = std::collections::VecDeque::new();
+    for (index, mut record) in source.into_iter().enumerate().skip(next_record) {
+        if index == next_record && next_offset > 0 {
+            let text = record["text"]
+                .as_str()
+                .ok_or_else(|| failure(Failure::Archive, "saved summary record has no text"))?;
+            record["text"] = json!(&text[next_offset..]);
+            record["byte_offset"] = json!(next_offset);
+            record["fragment"] = json!(true);
+        }
+        remaining.push_back(record);
+    }
     let deadline = Instant::now() + Duration::from_secs(settings.total_timeout_seconds);
-    let mut requests = 0;
-    let mut input_tokens = 0;
     while !remaining.is_empty() {
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled);
@@ -588,6 +739,26 @@ async fn model_summary(
             .map_err(|e| failure(Failure::InvalidSummary, e.to_string()))?;
         summary = serde_json::to_string(&structured)
             .map_err(|e| AgentError::Compaction(e.to_string()))?;
+        if let Some(archive) = archive {
+            let (next_record, next_byte_offset) =
+                remaining.front().map_or((source_count, 0), |record| {
+                    (
+                        record["source_record_index"].as_u64().unwrap_or(0) as usize,
+                        record["byte_offset"].as_u64().unwrap_or(0) as usize,
+                    )
+                });
+            archive
+                .save_progress(&SummaryProgress {
+                    version: 1,
+                    source_fingerprint: source_fingerprint.clone(),
+                    next_record,
+                    next_byte_offset,
+                    summary: structured,
+                    requests,
+                    input_tokens,
+                })
+                .await?;
+        }
     }
     Ok((TaskSummary::parse(&summary)?, requests, input_tokens))
 }

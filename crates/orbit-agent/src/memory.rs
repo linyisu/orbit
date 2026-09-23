@@ -92,6 +92,19 @@ pub struct TaskSummary {
     pub uncertainty: Vec<String>,
 }
 
+/// Successfully summarized prefix of one immutable compaction input. The
+/// cursor points to the first record byte not yet reflected in `summary`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SummaryProgress {
+    pub version: u32,
+    pub source_fingerprint: String,
+    pub next_record: usize,
+    pub next_byte_offset: usize,
+    pub summary: TaskSummary,
+    pub requests: usize,
+    pub input_tokens: usize,
+}
+
 impl TaskSummary {
     pub fn parse(text: &str) -> Result<Self, AgentError> {
         let text = text.trim();

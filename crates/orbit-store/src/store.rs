@@ -47,7 +47,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 13,
+                version <= 15,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -223,6 +223,44 @@ impl Store {
             }
             if version < 13 {
                 connection.execute_batch("CREATE TABLE session_workspace_baselines(session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,payload TEXT NOT NULL); PRAGMA user_version=13;")?;
+            }
+            if version < 14 {
+                connection.execute_batch(
+                    "CREATE TABLE session_messages (
+                        id INTEGER PRIMARY KEY,
+                        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                        ordinal INTEGER NOT NULL,
+                        payload TEXT NOT NULL,
+                        sha256 TEXT NOT NULL,
+                        UNIQUE(run_id, ordinal)
+                    );
+                    CREATE INDEX session_messages_session ON session_messages(session_id,id);
+                    CREATE TABLE session_log_gaps (
+                        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                        reason TEXT NOT NULL
+                    );
+                    INSERT INTO session_log_gaps(session_id,reason)
+                    SELECT id,'session predates the canonical message log'
+                    FROM sessions;
+                    PRAGMA user_version=14;",
+                )?;
+            }
+            if version < 15 {
+                connection.execute_batch(
+                    "ALTER TABLE context_archives ADD COLUMN content_sha256 TEXT;
+                     CREATE UNIQUE INDEX context_archives_content
+                       ON context_archives(session_id,content_sha256)
+                       WHERE content_sha256 IS NOT NULL;
+                     CREATE TABLE compaction_progress (
+                         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                         source_fingerprint TEXT NOT NULL,
+                         payload TEXT NOT NULL,
+                         updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                         PRIMARY KEY(session_id,source_fingerprint)
+                     );
+                     PRAGMA user_version=15;",
+                )?;
             }
             connection.execute_batch("COMMIT;")?;
             Ok(Self {
@@ -1110,6 +1148,7 @@ impl SessionWriter {
             run: self.active_run.context("no active run")?,
             session: self.id.clone(),
             pending: Mutex::new(Vec::new()),
+            pending_messages: Mutex::new(Vec::new()),
         }))
     }
 

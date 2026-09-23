@@ -4,6 +4,7 @@ use anyhow::{Result, ensure};
 use orbit_model::types::ChatMessage;
 use rusqlite::params;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::store::Store;
 
@@ -14,10 +15,26 @@ impl Store {
             .iter()
             .map(serde_json::to_string)
             .collect::<Result<Vec<_>, _>>()?;
+        let fingerprint = Sha256::digest(serde_json::to_vec(&messages)?)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         self.access(move |conn| {
             let tx = conn.transaction()?;
-            tx.execute("INSERT INTO context_archives(session_id) VALUES (?1)", [&session_id])?;
-            let id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT OR IGNORE INTO context_archives(session_id,content_sha256) VALUES (?1,?2)",
+                params![session_id, fingerprint],
+            )?;
+            let inserted = tx.changes() > 0;
+            let id: i64 = tx.query_row(
+                "SELECT id FROM context_archives WHERE session_id=?1 AND content_sha256=?2",
+                params![session_id, fingerprint],
+                |row| row.get(0),
+            )?;
+            if !inserted {
+                tx.commit()?;
+                return Ok(id);
+            }
             {
                 let mut insert = tx.prepare("INSERT INTO context_archive_messages(archive_id,ordinal,payload) VALUES (?1,?2,?3)")?;
                 for (index, message) in messages.iter().enumerate() {
@@ -115,6 +132,11 @@ mod tests {
             ),
         ];
         let archive = store.archive_context(owner.id(), &history).await.unwrap();
+        assert_eq!(
+            store.archive_context(owner.id(), &history).await.unwrap(),
+            archive,
+            "repeated compaction of one source must preserve archive references"
+        );
         let reopened = Store::open(path).await.unwrap();
         assert!(
             reopened

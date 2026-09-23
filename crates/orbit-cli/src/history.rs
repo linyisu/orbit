@@ -1,7 +1,8 @@
 //! The archive writer and its reader share an explicit conversation scope.
 use orbit_agent::{
-    archive::{ArchiveFuture, ContextArchive},
+    archive::{ArchiveFuture, ContextArchive, ProgressLoadFuture, ProgressSaveFuture},
     error::AgentError,
+    memory::SummaryProgress,
     tool::{ClosureTool, ToolError, ToolRegistry},
 };
 use orbit_model::types::ChatMessage;
@@ -35,6 +36,24 @@ impl ContextArchive for SessionArchive {
             Ok(format!(
                 "read_history archive_id={id}; search with query or read a source message by its zero-based message index"
             ))
+        })
+    }
+
+    fn load_progress<'a>(&'a self, fingerprint: &'a str) -> ProgressLoadFuture<'a> {
+        Box::pin(async move {
+            self.store
+                .load_compaction_progress(&self.session_id, fingerprint)
+                .await
+                .map_err(|error| AgentError::Compaction(error.to_string()))
+        })
+    }
+
+    fn save_progress<'a>(&'a self, progress: &'a SummaryProgress) -> ProgressSaveFuture<'a> {
+        Box::pin(async move {
+            self.store
+                .save_compaction_progress(&self.session_id, progress)
+                .await
+                .map_err(|error| AgentError::Compaction(error.to_string()))
         })
     }
 }

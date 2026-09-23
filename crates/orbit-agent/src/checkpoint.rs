@@ -57,6 +57,9 @@ impl ExecutionCheckpoint {
 pub type CheckpointFuture<'a> = Pin<Box<dyn Future<Output = Result<(), AgentError>> + Send + 'a>>;
 pub trait ExecutionJournal: Send + Sync {
     fn record(&self, event: AgentEvent);
+    /// Queue a newly produced canonical conversation message. The next save
+    /// commits it atomically with the execution checkpoint.
+    fn record_message(&self, _message: ChatMessage) {}
     fn flush(&self) -> CheckpointFuture<'_>;
     /// Atomically save the effective context and an optional tool audit event.
     /// The caller waits for success before starting another tool or model call.
