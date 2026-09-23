@@ -231,8 +231,9 @@ impl SessionState {
         let creating = resume.is_none();
         let writer = if let Some(id) = resume {
             let saved = store.session(&id).await?;
+            let equivalent = store.equivalent_project_ids(&project.id).await?;
             ensure!(
-                saved.project_id == project.id,
+                equivalent.contains(&saved.project_id),
                 "session belongs to workspace {}",
                 saved.workspace
             );
@@ -421,13 +422,17 @@ impl SessionState {
     }
 
     pub async fn resumable(&self) -> Result<Vec<orbit_store::types::Session>> {
+        let equivalent = self
+            .store
+            .equivalent_project_ids(&self.snapshot.session.project_id)
+            .await?;
         Ok(self
             .store
             .list()
             .await?
             .into_iter()
             .filter(|saved| {
-                saved.project_id == self.snapshot.session.project_id
+                equivalent.contains(&saved.project_id)
                     && !saved.demo
                     && saved.id != self.id()
                     && !saved.title.is_empty()
@@ -459,8 +464,9 @@ impl SessionState {
         id: String,
     ) -> Result<PreparedResume> {
         let saved = store.session(&id).await?;
+        let equivalent = store.equivalent_project_ids(&project).await?;
         ensure!(
-            saved.project_id == project,
+            equivalent.contains(&saved.project_id),
             "该会话属于其他项目，请在对应目录恢复。"
         );
         ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");

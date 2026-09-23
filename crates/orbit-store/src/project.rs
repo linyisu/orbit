@@ -16,6 +16,32 @@ pub(crate) struct Directory {
     pub strong: bool,
 }
 
+/// A Linux mount can expose the same directory with a different device
+/// number. The inode *and* filesystem birth time remain stable in that case.
+/// Only use this weaker match together with a previously recorded path.
+pub(crate) fn same_directory_identity(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    fn linux_inode_birth(identity: &str) -> Option<(&str, &str)> {
+        let mut fields = identity.split(':');
+        if fields.next()? != "linux" {
+            return None;
+        }
+        let _device = fields.next()?;
+        let inode = fields.next()?;
+        let birth = fields.next()?;
+        if inode.is_empty() || birth.is_empty() || fields.next().is_some() {
+            return None;
+        }
+        Some((inode, birth))
+    }
+    matches!(
+        (linux_inode_birth(left), linux_inode_birth(right)),
+        (Some(a), Some(b)) if a == b
+    )
+}
+
 impl Directory {
     pub fn read(path: &Path) -> Result<Self> {
         let path = path.canonicalize()?;
@@ -90,4 +116,25 @@ fn object_id(path: &Path, _: &fs::Metadata) -> Option<String> {
 #[cfg(not(any(unix, windows)))]
 fn object_id(_: &Path, _: &fs::Metadata) -> Option<String> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_directory_identity;
+
+    #[test]
+    fn linux_mount_device_change_does_not_change_directory_identity() {
+        assert!(same_directory_identity(
+            "linux:66308:11940401:1789431744",
+            "linux:66307:11940401:1789431744"
+        ));
+        assert!(!same_directory_identity(
+            "linux:66308:11940401:1789431744",
+            "linux:66307:11940402:1789431744"
+        ));
+        assert!(!same_directory_identity(
+            "linux:66308:11940401:1789431744",
+            "linux:66307:11940401:1789431745"
+        ));
+    }
 }
