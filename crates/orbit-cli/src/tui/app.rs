@@ -77,6 +77,8 @@ pub struct UiState {
     /// Last drawn link hint; it must be cleared before the transcript redraws.
     pub link_tooltip_area: ratatui::layout::Rect,
     pub auto_compact: bool,
+    /// Archive reference emitted immediately before a context compaction event.
+    pending_compaction_archive: Option<String>,
     pub max_output_tokens: u32,
     pub model: String,
     pub reasoning_effort: Option<orbit_model::types::ReasoningEffort>,
@@ -157,6 +159,7 @@ impl UiState {
             link_hovered: None,
             link_tooltip_area: ratatui::layout::Rect::default(),
             auto_compact: true,
+            pending_compaction_archive: None,
             max_output_tokens: 32_000,
             model: model.into(),
             reasoning_effort: None,
@@ -261,7 +264,10 @@ impl UiState {
                     .filter(|tokens| *tokens > 0)
                     .unwrap_or_else(|| self.calibration().estimate(estimated_input));
             }
-            AgentEvent::CompactionRecorded { .. } | AgentEvent::VerificationRecorded { .. } => {}
+            AgentEvent::CompactionRecorded { record } => {
+                self.pending_compaction_archive = record.archive;
+            }
+            AgentEvent::VerificationRecorded { .. } => {}
             // Compaction is an implementation detail while it runs. Showing a
             // second transcript row for it made every automatic checkpoint
             // look like a noisy command result.
@@ -288,8 +294,23 @@ impl UiState {
                         "旧历史已归档，摘要未完成"
                     }
                 };
+                let archive_note =
+                    if strategy == orbit_agent::memory::CompactionStrategy::ArchiveProjection {
+                        self.pending_compaction_archive
+                            .take()
+                            .and_then(|reference| {
+                                reference
+                                    .strip_prefix("read_history archive_id=")
+                                    .and_then(|value| value.split(';').next())
+                                    .map(|id| format!(" · 归档 #{id} · 旧约束需按需回读"))
+                            })
+                            .unwrap_or_else(|| " · 旧约束需按需回读".into())
+                    } else {
+                        self.pending_compaction_archive = None;
+                        String::new()
+                    };
                 self.transcript.push(TranscriptItem::Maintenance(format!(
-                    "{action}  {before_tokens} → {after_tokens} tokens{detail}"
+                    "{action}  {before_tokens} → {after_tokens} tokens{detail}{archive_note}"
                 )));
             }
             AgentEvent::CompactionFailed { kind, .. } => {
@@ -521,6 +542,52 @@ mod tests {
             state.transcript.as_slice(),
             [TranscriptItem::Maintenance(text)]
                 if text.contains("195754 → 96000") && text.contains("保留最近工作内容")
+        ));
+    }
+
+    #[test]
+    fn archive_projection_explains_that_older_constraints_need_retrieval() {
+        use orbit_agent::memory::{CompactionMode, CompactionRecord, FileActivity, TaskSummary};
+
+        let mut state = UiState::new("mock");
+        state.apply(AgentEvent::CompactionRecorded {
+            record: CompactionRecord {
+                version: 2,
+                mode: CompactionMode::Manual,
+                source_messages: 8,
+                retained_from: 4,
+                pinned_user: None,
+                before_tokens: 200_000,
+                after_tokens: 40_000,
+                strategy: orbit_agent::memory::CompactionStrategy::ArchiveProjection,
+                summary_requests: 1,
+                summary_input_tokens: 2_048,
+                archive: Some("read_history archive_id=12; search with query".into()),
+                fallback: true,
+                fallback_reason: None,
+                summary: TaskSummary {
+                    goal: String::new(),
+                    constraints: vec![],
+                    decisions: vec![],
+                    completed: vec![],
+                    remaining: vec![],
+                    verification: vec![],
+                    uncertainty: vec![],
+                },
+                files: FileActivity::default(),
+            },
+        });
+        state.apply(AgentEvent::ContextCompacted {
+            strategy: orbit_agent::memory::CompactionStrategy::ArchiveProjection,
+            before_tokens: 200_000,
+            after_tokens: 40_000,
+            fallback: true,
+            fallback_reason: None,
+        });
+        assert!(matches!(
+            state.transcript.as_slice(),
+            [TranscriptItem::Maintenance(text)]
+                if text.contains("摘要未完成") && text.contains("归档 #12") && text.contains("旧约束需按需回读")
         ));
     }
 

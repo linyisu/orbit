@@ -1,6 +1,7 @@
 pub mod approval;
 pub mod edit_file;
 pub mod export_artifact;
+pub mod git_export_patch;
 pub mod git_inspect;
 pub mod image_assets;
 pub mod list_files;

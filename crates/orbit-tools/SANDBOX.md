@@ -6,7 +6,7 @@
 
 原项目直接挂载到 `/workspace`，默认只读。命令显式请求 `workspace_access = "read_write"` 并通过当前审批模式后，可直接修改原项目；这些修改不会随命令结束而丢弃，也不经过 `write_file`、`edit_file` 的逐文件差异确认。受保护路径、Git 元数据及其识别出的硬链接别名在命令启动前遮蔽。工作区中的其他文件，包括 `target`、`node_modules`，仍按挂载权限可见。
 
-`/scratch` 在 TUI 和 `chat` 中按会话保存，恢复会话可继续使用；不同会话隔离。它不保留后台进程。编译与测试可以在同一命令内完成，或把需要复用的输出放在 `/scratch`。
+`/scratch` 在 TUI 和 `chat` 中按会话保存，恢复会话可继续使用；不同会话隔离。配置了 scratch 时，`HOME=/scratch/home`，写入 HOME 的配置和缓存也会跨命令保留；未配置 scratch 时，`HOME=/tmp/home` 仍是一次性的。后台进程不会保留。编译与测试可以在同一命令内完成，或把需要复用的输出放在 `/scratch`。
 
 容量与验证入口在用户配置中设置：
 
@@ -40,6 +40,8 @@ test = "cargo test --offline --workspace --target-dir /scratch/target"
 ```
 
 上述参数用于 `export_artifact`。它接受二进制或文本文件，拒绝路径穿越与符号链接，将文件保存到 Orbit 私有产物目录，返回真实宿主路径、字节数与 SHA-256。每次生成独立文件，不覆盖项目或已有产物。限制为单文件 64 MiB、每会话 128 个文件及 256 MiB；达到限制时保留已有文件并拒绝新增。`chat --disable command` 同时禁用执行、命令日志查询、验证状态和产物导出。
+
+命令沙盒遮蔽 `.git`，因此 `run_command` 不能执行 `git init`、`git add` 或 `git commit`。已有 HEAD 提交的仓库可调用 `git_export_patch {}`，将工作树改动和新增文件导出为完整补丁，供用户在宿主环境应用或提交；这不会修改 Git 元数据。尚未初始化的项目可将交付文件写入 `/scratch` 并用 `export_artifact` 导出。`chat --disable git` 同时禁用只读 Git 检查和补丁导出。
 
 ### 保护路径与不透明运行时根目录（Opaque Runtime Roots）
 

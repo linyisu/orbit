@@ -446,6 +446,7 @@ impl BwrapSandboxBackend {
             &spec.limits,
             rust_toolchain.is_some(),
             writable_snapshot_source.is_some(),
+            spec.scratch.is_some(),
         );
 
         Ok(command)
@@ -1195,6 +1196,21 @@ fn mount_scratch_and_tmp(
             return Err(failed("scratch directory must not be a symlink"));
         }
 
+        let home = path.join("home");
+        match std::fs::symlink_metadata(&home) {
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Err(failed("scratch home must be a regular directory"));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&home)
+                    .map_err(failed)?;
+            }
+            Err(error) => return Err(failed(error)),
+        }
+
         command.arg("--bind").arg(path).arg("/scratch");
     }
 
@@ -1207,11 +1223,13 @@ fn mount_scratch_and_tmp(
         &TMP_SIZE_BYTES.to_string(),
         "--tmpfs",
         "/tmp",
-        "--dir",
-        "/tmp/home",
         "--chdir",
         "/workspace",
     ]);
+
+    if scratch.is_none() {
+        command.args(["--dir", "/tmp/home"]);
+    }
 
     Ok(())
 }
@@ -1222,6 +1240,7 @@ fn configure_limits_and_entrypoint(
     limits: &ProcessLimits,
     has_rust: bool,
     is_writable_tmpfs: bool,
+    persistent_home: bool,
 ) {
     command.args([
         "--clearenv",
@@ -1234,7 +1253,11 @@ fn configure_limits_and_entrypoint(
         },
         "--setenv",
         "HOME",
-        "/tmp/home",
+        if persistent_home {
+            "/scratch/home"
+        } else {
+            "/tmp/home"
+        },
         "--setenv",
         "TMPDIR",
         "/tmp",

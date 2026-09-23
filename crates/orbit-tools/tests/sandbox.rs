@@ -455,14 +455,20 @@ async fn scratch_persists_between_commands_and_is_separate_from_tmp_and_other_se
     for (directory, script) in [
         (
             &first,
-            "printf checkpoint > /scratch/state; printf transient > /tmp/state",
+            "test \"$HOME\" = /scratch/home && printf checkpoint > /scratch/state && printf home-state > \"$HOME/state\" && printf transient > /tmp/state",
         ),
         (
             &first,
-            "test ! -e /tmp/state && test \"$(cat /scratch/state)\" = checkpoint && printf continued",
+            "test ! -e /tmp/state && test \"$(cat /scratch/state)\" = checkpoint && test \"$(cat \"$HOME/state\")\" = home-state && printf continued",
         ),
-        (&second, "test ! -e /scratch/state && test ! -e /tmp/state"),
-        (&first, "test \"$(cat /scratch/state)\" = checkpoint"),
+        (
+            &second,
+            "test ! -e /scratch/state && test ! -e \"$HOME/state\" && test ! -e /tmp/state",
+        ),
+        (
+            &first,
+            "test \"$(cat /scratch/state)\" = checkpoint && test \"$(cat \"$HOME/state\")\" = home-state",
+        ),
     ] {
         let result = sandbox::run_with_resources(
             workspace.clone(),
@@ -482,6 +488,10 @@ async fn scratch_persists_between_commands_and_is_separate_from_tmp_and_other_se
     assert_eq!(
         fs::read_to_string(first.join("state")).unwrap(),
         "checkpoint"
+    );
+    assert_eq!(
+        fs::read_to_string(first.join("home/state")).unwrap(),
+        "home-state"
     );
 }
 

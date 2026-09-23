@@ -46,6 +46,12 @@ pub async fn workspace_tools(
         workspace.clone(),
     ));
     tools.register(GitInspect::new(workspace.clone()));
+    if let Some(database) = database {
+        tools.register(orbit_tools::git_export_patch::GitExportPatch::new(
+            workspace.clone(),
+            database.with_extension("artifacts"),
+        ));
+    }
     tools.register(orbit_tools::web_fetch::WebFetch::new(web.clone())?);
     tools.register(orbit_tools::web_fetch::WebSearch::new(web)?);
     let mcp_approvals = approvals.clone();

@@ -184,7 +184,7 @@ enum ChatCapability {
     Document,
     /// read_file, list_files, search_text and project_overview.
     Files,
-    /// git_inspect.
+    /// git_inspect and git_export_patch.
     Git,
     /// write_file and edit_file.
     Write,
@@ -658,12 +658,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         runtime.command_limits,
     );
     history::register(&mut tools, session.store.clone(), memory_scope.clone());
-    project_state::register(
-        &mut tools,
-        session.store.clone(),
-        session.snapshot.session.project_id.clone(),
-        memory_scope.clone(),
-    );
+    project_state::register(&mut tools, session.store.clone(), memory_scope.clone());
     skills.register_tool(&mut tools);
     tui::run(
         client,
@@ -804,12 +799,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     }
     if !capability_is_disabled(&disabled, ChatCapability::ProjectState) {
         let memory_scope = project_state::MemoryScope::new(session.id().into());
-        project_state::register(
-            &mut tools,
-            session.store.clone(),
-            session.snapshot.session.project_id.clone(),
-            memory_scope,
-        );
+        project_state::register(&mut tools, session.store.clone(), memory_scope);
     }
     if !capability_is_disabled(&disabled, ChatCapability::Skills) {
         skills.register_tool(&mut tools);
@@ -1028,6 +1018,7 @@ fn disable_chat_capabilities(
     }
     if capability_is_disabled(disabled, ChatCapability::Git) {
         tools.remove("git_inspect");
+        tools.remove("git_export_patch");
     }
     if capability_is_disabled(disabled, ChatCapability::Write) {
         tools.remove("write_file");
@@ -1162,6 +1153,21 @@ mod config_tests {
             ));
         }
         disable_chat_capabilities(&mut tools, &[ChatCapability::Command].into_iter().collect());
+        assert!(tools.definitions().is_empty());
+    }
+
+    #[test]
+    fn disabled_git_hides_patch_export_as_well_as_inspection() {
+        let mut tools = ToolRegistry::new();
+        for name in ["git_inspect", "git_export_patch"] {
+            tools.register(ClosureTool::new(
+                name,
+                "",
+                serde_json::json!({}),
+                |_, _| async { Ok::<_, orbit_agent::tool::ToolError>("unused".into()) },
+            ));
+        }
+        disable_chat_capabilities(&mut tools, &[ChatCapability::Git].into_iter().collect());
         assert!(tools.definitions().is_empty());
     }
 
