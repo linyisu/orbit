@@ -31,6 +31,9 @@ use crate::{
 const SUMMARY_OUTPUT_TOKENS: usize = 8_192;
 const RECENT_TOKENS: usize = 32_000;
 const TOOL_EXCERPT_BYTES: usize = 2_048;
+// Start with a batch that a local model can finish promptly. Larger batches
+// are useful only after the backend has demonstrated adequate throughput.
+const INITIAL_SUMMARY_INPUT_TOKENS: usize = 4_096;
 const RECORD_PREFIX: &str = "BEGIN_UNTRUSTED_COMPACTION_RECORD\n";
 
 pub struct Plan {
@@ -782,7 +785,7 @@ async fn model_summary(
         )
     };
     let deadline = Instant::now() + Duration::from_secs(total_timeout);
-    let mut batch_limit = settings.max_input_tokens;
+    let mut batch_limit = settings.max_input_tokens.min(INITIAL_SUMMARY_INPUT_TOKENS);
     while !remaining.is_empty() {
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled);
@@ -850,6 +853,7 @@ async fn model_summary(
         let _cancel_request_on_exit = request_cancel.clone().drop_guard();
         requests += 1;
         attempts.requests = requests;
+        let request_started = Instant::now();
         let response = tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
             result = tokio::time::timeout(time.min(Duration::from_secs(request_timeout)), backend.complete(request, request_cancel)) => {
@@ -925,6 +929,15 @@ async fn model_summary(
         }
         let structured = TaskSummary::parse(&text)
             .map_err(|e| failure(Failure::InvalidSummary, e.to_string()))?;
+        // A fast successful response permits a larger next batch. Slow local
+        // models keep the small size instead of repeatedly reaching a timeout.
+        if request_started.elapsed() < Duration::from_secs(request_timeout / 4)
+            && batch_limit < settings.max_input_tokens
+        {
+            batch_limit = batch_limit
+                .saturating_add(batch_limit / 2)
+                .min(settings.max_input_tokens);
+        }
         summary = serde_json::to_string(&structured)
             .map_err(|e| AgentError::Compaction(e.to_string()))?;
         if let Some(archive) = archive {

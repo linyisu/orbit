@@ -170,6 +170,14 @@ async fn large_context_uses_bounded_summary_fragments() {
         requests.len() > 1,
         "large context should use several fragments"
     );
+    let first_tokens = estimate_tokens(&requests[0].messages, &[]);
+    assert!(first_tokens <= 4_096, "first summary batch should be small");
+    assert!(
+        requests[1..]
+            .iter()
+            .any(|request| estimate_tokens(&request.messages, &[]) > first_tokens),
+        "quick successful requests should permit larger later batches"
+    );
     for request in requests {
         let ChatMessage::User { content, .. } = &request.messages[1] else {
             panic!("summary request must carry its fragment as user data");
@@ -277,11 +285,9 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
             message: call("new"),
             ..answer("")
         };
-        let backend = MockModel::new([
-            first,
-            answer("Already inspected old evidence. Continue the exact request."),
-            answer("Finished after compaction."),
-        ]);
+        let backend = MockModel::new([first].into_iter().chain(
+            (0..12).map(|_| answer("Already inspected old evidence. Continue the exact request.")),
+        ));
         let mut tools = ToolRegistry::new();
         tools.register(ClosureTool::new(
             "read",
@@ -331,7 +337,7 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
         };
         assert_eq!(result.turns, 2);
         assert_eq!(result.tool_calls, 1);
-        assert_eq!(backend.requests().len(), 3);
+        assert!(backend.requests().len() >= 3);
         assert!(result.history.contains(&history[1]));
         assert!(!result.history.contains(&history[3]));
         assert_paired(&result.history);
@@ -876,7 +882,7 @@ async fn archive_failure_prevents_any_lossy_projection_or_model_request() {
 async fn manual_compaction_handles_a_single_long_task_with_the_same_budget() {
     let history = long_task();
     let compacted = orbit_agent::context::compact_with_archive(
-        &MockModel::new([answer("Continue scheduler fix")]),
+        &MockModel::new((0..12).map(|_| answer("Continue scheduler fix"))),
         history,
         &[],
         8000,
@@ -988,7 +994,7 @@ async fn repeated_compaction_carries_prior_constraints_errors_and_verification_a
         finish_reason: Some("stop".into()),
         usage: None,
     };
-    let backend = MockModel::new(vec![response.clone(); 8]);
+    let backend = MockModel::new(vec![response.clone(); 40]);
     let original = vec![
         ChatMessage::system("Never change user files without task authorization"),
         ChatMessage::user("fix parser, preserve parse_v2"),
