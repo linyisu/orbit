@@ -343,7 +343,10 @@ pub async fn execute_configured(
         // Pruning is cheap and leaves every conversation message intact. Do
         // not pay for a model summary merely to shave off a few more tokens.
         let pruning_target = plan.target_tokens.max(limit.saturating_sub(output) / 3);
-        if after <= pruning_target && after <= plan.before_tokens.saturating_mul(3) / 4 {
+        if plan.mode == CompactionMode::Automatic
+            && after <= pruning_target
+            && after <= plan.before_tokens.saturating_mul(3) / 4
+        {
             if cancellation.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
@@ -397,9 +400,8 @@ pub async fn execute_configured(
                         | Failure::InputBudget
                 )
             ) && archived.is_some()
-                && (plan.mode == CompactionMode::Manual
-                    || plan.before_tokens
-                        >= limit.saturating_sub(output).saturating_mul(92) / 100) =>
+                && plan.mode == CompactionMode::Automatic
+                && plan.before_tokens >= limit.saturating_sub(output).saturating_mul(92) / 100 =>
         {
             if cancellation.is_cancelled() {
                 return Err(AgentError::Cancelled);
@@ -768,9 +770,19 @@ async fn model_summary(
         }
         remaining.push_back(record);
     }
-    let deadline = Instant::now() + Duration::from_secs(settings.total_timeout_seconds);
+    let (request_timeout, total_timeout) = if plan.mode == CompactionMode::Manual {
+        (
+            settings.manual_request_timeout_seconds,
+            settings.manual_total_timeout_seconds,
+        )
+    } else {
+        (
+            settings.request_timeout_seconds,
+            settings.total_timeout_seconds,
+        )
+    };
+    let deadline = Instant::now() + Duration::from_secs(total_timeout);
     let mut batch_limit = settings.max_input_tokens;
-    let mut consecutive_shrinks = 0;
     while !remaining.is_empty() {
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled);
@@ -840,23 +852,31 @@ async fn model_summary(
         attempts.requests = requests;
         let response = tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
-            result = tokio::time::timeout(time.min(Duration::from_secs(settings.request_timeout_seconds)), backend.complete(request, request_cancel)) => {
+            result = tokio::time::timeout(time.min(Duration::from_secs(request_timeout)), backend.complete(request, request_cancel)) => {
                 result
             }
         };
         let response = match response {
             Ok(Ok(response)) => response,
             Err(_) | Ok(Err(orbit_model::error::ModelError::Timeout { .. }))
-                if consecutive_shrinks < 1
-                    && batch_limit > 4096
+                if batch_limit
+                    > estimate_tokens(
+                        &summary_request(&summary, &[], plan.summary_tokens).messages,
+                        &[],
+                    )
+                    .saturating_add(256)
                     && deadline.saturating_duration_since(Instant::now())
                         > Duration::from_secs(1) =>
             {
                 for record in batch.into_iter().rev() {
                     remaining.push_front(record);
                 }
-                batch_limit = (batch_limit / 2).max(4096);
-                consecutive_shrinks += 1;
+                let minimum = estimate_tokens(
+                    &summary_request(&summary, &[], plan.summary_tokens).messages,
+                    &[],
+                )
+                .saturating_add(256);
+                batch_limit = (batch_limit / 2).max(minimum);
                 continue;
             }
             Err(_) => {
@@ -905,7 +925,6 @@ async fn model_summary(
         }
         let structured = TaskSummary::parse(&text)
             .map_err(|e| failure(Failure::InvalidSummary, e.to_string()))?;
-        consecutive_shrinks = 0;
         summary = serde_json::to_string(&structured)
             .map_err(|e| AgentError::Compaction(e.to_string()))?;
         if let Some(archive) = archive {

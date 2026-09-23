@@ -1013,7 +1013,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 "拖选 + Ctrl+C  复制选区",
                 "Ctrl+O         展开工具结果；再次按下收起当前展开项",
                 "Shift+Tab      切换 ask / auto / YOLO",
-                "Esc            立即取消响应 / 关闭面板",
+                "Esc            关闭面板或命令菜单",
                 "Ctrl+A / E     移到行首 / 行尾",
                 "Ctrl+U / K     删除到行首 / 行尾",
                 "Ctrl+C         取消响应 / 清空输入 / 空输入时退出",

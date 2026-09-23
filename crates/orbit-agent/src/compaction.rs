@@ -12,6 +12,9 @@ pub struct CompactionSettings {
     pub max_output_tokens: usize,
     pub request_timeout_seconds: u64,
     pub total_timeout_seconds: u64,
+    /// Manual /compact may spend longer on a local model than automatic upkeep.
+    pub manual_request_timeout_seconds: u64,
+    pub manual_total_timeout_seconds: u64,
 }
 impl Default for CompactionSettings {
     fn default() -> Self {
@@ -21,6 +24,8 @@ impl Default for CompactionSettings {
             max_output_tokens: 4096,
             request_timeout_seconds: 45,
             total_timeout_seconds: 180,
+            manual_request_timeout_seconds: 180,
+            manual_total_timeout_seconds: 3600,
         }
     }
 }
@@ -36,9 +41,12 @@ impl CompactionSettings {
         if self.request_timeout_seconds == 0
             || self.request_timeout_seconds > self.total_timeout_seconds
             || self.total_timeout_seconds > 3600
+            || self.manual_request_timeout_seconds == 0
+            || self.manual_request_timeout_seconds > self.manual_total_timeout_seconds
+            || self.manual_total_timeout_seconds > 3600
         {
             return Err(
-                "compaction timeouts must satisfy 1 <= request_timeout_seconds <= total_timeout_seconds <= 3600",
+                "compaction timeouts must satisfy 1 <= request_timeout_seconds <= total_timeout_seconds <= 3600 and 1 <= manual_request_timeout_seconds <= manual_total_timeout_seconds <= 3600",
             );
         }
         if self.model.as_ref().is_some_and(|m| {

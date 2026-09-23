@@ -502,7 +502,7 @@ impl orbit_agent::archive::ContextArchive for ProgressArchive {
 }
 
 #[tokio::test]
-async fn manual_compaction_uses_retrievable_projection_after_summary_timeouts() {
+async fn manual_compaction_keeps_summarizing_after_two_timeouts() {
     use orbit_agent::{
         compaction::CompactionSettings,
         memory::{CompactionMode, CompactionStrategy},
@@ -519,6 +519,8 @@ async fn manual_compaction_uses_retrievable_projection_after_summary_timeouts() 
         max_output_tokens: 512,
         request_timeout_seconds: 1,
         total_timeout_seconds: 4,
+        manual_request_timeout_seconds: 1,
+        manual_total_timeout_seconds: 30,
         ..Default::default()
     };
     let archive = Archive::default();
@@ -526,7 +528,11 @@ async fn manual_compaction_uses_retrievable_projection_after_summary_timeouts() 
         duration: std::time::Duration::from_secs(1),
         stage: "summary".into(),
     };
-    let backend = MockModel::from_results([Err(timeout()), Err(timeout())]);
+    let backend = MockModel::from_results(
+        [Err(timeout()), Err(timeout())]
+            .into_iter()
+            .chain((0..50).map(|_| Ok(answer("Parser investigation summarized")))),
+    );
     let plan = autocompact::plan_configured(
         &history,
         &[],
@@ -548,24 +554,76 @@ async fn manual_compaction_uses_retrievable_projection_after_summary_timeouts() 
     )
     .await
     .unwrap();
-    assert_eq!(
-        result.record.strategy,
-        CompactionStrategy::ArchiveProjection
-    );
-    assert!(result.record.fallback);
+    assert_eq!(result.record.strategy, CompactionStrategy::Summary);
+    assert!(!result.record.fallback);
     assert!(result.after_tokens < result.before_tokens);
     assert_eq!(
         archive.0.lock().unwrap().as_slice(),
         std::slice::from_ref(&history)
     );
     assert!(result.history.iter().any(|message| matches!(message, ChatMessage::User { content, .. } if content == "Continue the current task")));
-    assert!(result.history.iter().any(|message| matches!(message, ChatMessage::User { content, .. } if content.contains("read_history archive_id=1") && content.contains("尚未概括"))));
+    assert!(result.history.iter().any(|message| matches!(message, ChatMessage::User { content, .. } if content.contains("Parser investigation summarized"))));
     assert_paired(&result.history);
     let requests = backend.requests();
-    assert_eq!(requests.len(), 2);
+    assert!(requests.len() >= 3);
     assert!(
         estimate_tokens(&requests[1].messages, &[]) < estimate_tokens(&requests[0].messages, &[])
     );
+    assert!(
+        estimate_tokens(&requests[2].messages, &[]) < estimate_tokens(&requests[1].messages, &[])
+    );
+}
+
+#[tokio::test]
+async fn manual_compaction_does_not_report_success_without_a_summary() {
+    use orbit_agent::{compaction::CompactionSettings, memory::CompactionMode};
+    let history = vec![
+        ChatMessage::system("Keep the API stable"),
+        ChatMessage::user("Fix the parser ".repeat(1_500)),
+        ChatMessage::assistant("Old analysis. ".repeat(3_000)),
+        ChatMessage::user("Continue the current task"),
+        ChatMessage::assistant("Ready"),
+    ];
+    let settings = CompactionSettings {
+        max_input_tokens: 8192,
+        max_output_tokens: 512,
+        manual_request_timeout_seconds: 1,
+        manual_total_timeout_seconds: 30,
+        ..Default::default()
+    };
+    let archive = Archive::default();
+    let backend = MockModel::from_results((0..20).map(|_| {
+        Err(ModelError::Timeout {
+            duration: std::time::Duration::from_secs(1),
+            stage: "summary".into(),
+        })
+    }));
+    let plan = autocompact::plan_configured(
+        &history,
+        &[],
+        1000,
+        16000,
+        CompactionMode::Manual,
+        &settings,
+    )
+    .unwrap();
+    let result = autocompact::execute_configured(
+        &backend,
+        plan,
+        &[],
+        1000,
+        16000,
+        CancellationToken::new(),
+        Some(&archive),
+        &settings,
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(
+        archive.0.lock().unwrap().as_slice(),
+        std::slice::from_ref(&history)
+    );
+    assert!(backend.requests().len() > 2);
 }
 
 #[tokio::test]
@@ -874,10 +932,7 @@ async fn replay_archived_tool_pruning() {
 #[tokio::test]
 #[ignore = "set ORBIT_REPLAY_HISTORY to a locally exported ChatMessage array"]
 async fn replay_manual_compaction_when_summary_is_unavailable() {
-    use orbit_agent::{
-        compaction::CompactionSettings,
-        memory::{CompactionMode, CompactionStrategy},
-    };
+    use orbit_agent::{compaction::CompactionSettings, memory::CompactionMode};
     let path = std::env::var("ORBIT_REPLAY_HISTORY").unwrap();
     let history: Vec<ChatMessage> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let settings = CompactionSettings::default();
@@ -886,7 +941,7 @@ async fn replay_manual_compaction_when_summary_is_unavailable() {
         duration: std::time::Duration::from_secs(1),
         stage: "summary".into(),
     };
-    let backend = MockModel::from_results([Err(timeout()), Err(timeout())]);
+    let backend = MockModel::from_results((0..20).map(|_| Err(timeout())));
     let plan = autocompact::plan_configured(
         &history,
         &[],
@@ -896,7 +951,7 @@ async fn replay_manual_compaction_when_summary_is_unavailable() {
         &settings,
     )
     .unwrap();
-    let compacted = autocompact::execute_configured(
+    let result = autocompact::execute_configured(
         &backend,
         plan,
         &[],
@@ -906,18 +961,10 @@ async fn replay_manual_compaction_when_summary_is_unavailable() {
         Some(&archive),
         &settings,
     )
-    .await
-    .unwrap();
-    assert!(matches!(
-        compacted.record.strategy,
-        CompactionStrategy::ToolPruning | CompactionStrategy::ArchiveProjection
-    ));
-    assert_paired(&compacted.history);
+    .await;
+    assert!(result.is_err());
     println!(
-        "local replay: {:?}, {} -> {} estimated tokens, {} model requests",
-        compacted.record.strategy,
-        compacted.before_tokens,
-        compacted.after_tokens,
+        "local replay: manual summary did not complete after {} model requests",
         backend.requests().len()
     );
 }

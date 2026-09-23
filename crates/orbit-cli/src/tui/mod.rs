@@ -493,7 +493,7 @@ pub async fn run(
                                 }
                                 if compacting && task.is_some() {
                                     state.transcript.push(TranscriptItem::CommandError(
-                                        "运行中不能压缩上下文；请先按 Esc 取消当前响应。".into(),
+                                        "运行中不能压缩上下文；请先按 Ctrl+C 取消当前响应。".into(),
                                     ));
                                     continue;
                                 }
@@ -502,7 +502,7 @@ pub async fn run(
                                         && !commands::available_while_running(command)
                                     {
                                         state.transcript.push(TranscriptItem::CommandError(
-                                            "运行中只能使用 /status、/diagnostics、/model、/context、/skills、/mcp、/plugins、/mode 或 /permissions；请先按 Esc 取消当前响应。".into(),
+                                            "运行中只能使用 /status、/diagnostics、/model、/context、/skills、/mcp、/plugins、/mode 或 /permissions；请先按 Ctrl+C 取消当前响应。".into(),
                                         ));
                                         continue;
                                     }
@@ -2096,9 +2096,6 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         return Action::None;
     }
     if key.code == KeyCode::Esc {
-        if busy {
-            return Action::Cancel;
-        }
         state.attachment_cursor = None;
         state.show_help = false;
         state.menu_dismissed = true;
@@ -2447,6 +2444,10 @@ mod tests {
         );
         assert_eq!(
             press(&mut state, KeyCode::Esc, KeyModifiers::NONE, true),
+            Action::None
+        );
+        assert_eq!(
+            press(&mut state, KeyCode::Char('c'), KeyModifiers::CONTROL, true),
             Action::Cancel
         );
     }
