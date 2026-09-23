@@ -1048,7 +1048,7 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
         RunStatus::Running => {
             let frames = ["✶", "✳", "✢", "✻"];
             format!(
-                "  {} 正在响应…  {:.1}s  ·  第 {} 轮  ·  esc 取消",
+                "  {} 正在响应…  {:.1}s  ·  第 {} 轮  ·  Ctrl+C 取消",
                 frames[(elapsed.as_millis() / 160) as usize % frames.len()],
                 elapsed.as_secs_f32(),
                 state.turn.max(1)
@@ -1553,6 +1553,16 @@ mod tests {
         for (width, height) in [(20, 5), (10, 3), (1, 1)] {
             assert!(!render(&mut state, width, height).contains("请放大终端"));
         }
+    }
+
+    #[test]
+    fn running_status_shows_the_actual_cancel_shortcut() {
+        let mut state = UiState::new("mock-model");
+        state.begin_run();
+        let screen = render(&mut state, 100, 24);
+        let compact = screen.replace(' ', "");
+        assert!(compact.contains("Ctrl+C取消"));
+        assert!(!compact.contains("esc取消"));
     }
 
     #[test]
