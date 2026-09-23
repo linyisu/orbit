@@ -7,6 +7,10 @@ pub enum AgentEvent {
         turn: usize,
     },
     Model(StreamEvent),
+    /// Estimated size of the request about to be sent, including tool schemas.
+    ContextUsage {
+        estimated_input: usize,
+    },
     RequestMetrics {
         profile: String,
         estimated_input: usize,

@@ -193,6 +193,7 @@ fn summarize(
                 }
             }
             AgentEvent::VerificationRecorded { .. }
+            | AgentEvent::ContextUsage { .. }
             | AgentEvent::Completed { .. }
             | AgentEvent::CompactionStarted
             | AgentEvent::Cancelled => {}

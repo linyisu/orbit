@@ -114,7 +114,7 @@ struct ChatArgs {
     #[arg(long, value_name = "PROVIDER::MODEL")]
     model: Option<String>,
 
-    /// Execution permission policy. auto runs sandbox commands; yolo also permits workspace edits.
+    /// Execution permission policy. auto allows workspace operations; yolo allows every request.
     #[arg(long, value_enum, default_value_t = ChatMode::Auto)]
     mode: ChatMode,
 
@@ -143,7 +143,7 @@ enum ChatMode {
     /// Register only read-only tools.
     #[value(name = "read-only")]
     ReadOnly,
-    /// Automatically run sandbox commands; reject workspace edits.
+    /// Automatically run operations inside the workspace.
     #[default]
     Auto,
     /// Automatically run sandbox commands and permit workspace edits.
@@ -152,14 +152,14 @@ enum ChatMode {
 }
 
 impl ChatMode {
-    fn allows(self, preview: &orbit_tools::approval::ApprovalPreview) -> bool {
+    fn allows(
+        self,
+        preview: &orbit_tools::approval::ApprovalPreview,
+        workspace: &std::path::Path,
+    ) -> bool {
         match self {
             Self::ReadOnly => false,
-            Self::Auto => matches!(
-                preview,
-                orbit_tools::approval::ApprovalPreview::Command(cmd)
-                    if cmd.workspace_access == orbit_tools::approval::CommandWorkspaceAccess::Read
-            ),
+            Self::Auto => orbit_tools::approval::auto_allows(preview, workspace),
             Self::Yolo => true,
         }
     }
@@ -752,9 +752,12 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         ChatMode::ReadOnly => (None, None),
         mode => {
             let (sender, mut receiver) = orbit_tools::approval::channel();
+            let approval_workspace = std::path::PathBuf::from(&session.snapshot.session.workspace);
             let task = tokio::spawn(async move {
                 while let Some(request) = receiver.recv().await {
-                    let _ = request.decision.send(mode.allows(&request.preview));
+                    let _ = request
+                        .decision
+                        .send(mode.allows(&request.preview, &approval_workspace));
                 }
             });
             (Some(sender), Some(task))

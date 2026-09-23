@@ -334,6 +334,7 @@ where
             };
             let estimated_input =
                 crate::context::estimate_tokens(&model_request.messages, &model_request.tools);
+            emit(AgentEvent::ContextUsage { estimated_input }).await?;
             let started = std::time::Instant::now();
             let response = self
                 .collect_stream(model_request, cancellation.clone(), emit)

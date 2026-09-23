@@ -1,3 +1,4 @@
+use std::path::Path;
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone, Debug)]
@@ -28,6 +29,40 @@ pub struct CommandPreview {
     pub workspace_access: CommandWorkspaceAccess,
     pub network_allowed: bool,
     pub external_capabilities: Vec<String>,
+    /// The command can write outside the workspace through an existing grant.
+    pub external_write: bool,
+}
+
+/// The file tool has already validated this path. Resolve its parent again for
+/// the approval policy so a symlinked directory cannot make an outside write
+/// look like a workspace-local edit.
+pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
+    let path = Path::new(path);
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Some(root) = workspace.canonicalize().ok() else {
+        return false;
+    };
+    let candidate = if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        root.join(parent)
+    };
+    candidate
+        .canonicalize()
+        .is_ok_and(|resolved| resolved.starts_with(root))
+}
+
+/// Auto mode permits operations confined to the workspace. External write
+/// grants, MCP tools, and new filesystem capabilities retain their own gate.
+pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
+    match preview {
+        ApprovalPreview::Command(command) => !command.external_write,
+        ApprovalPreview::Write(write) => workspace_local_file(&write.path, workspace),
+        ApprovalPreview::Delete(delete) => workspace_local_file(&delete.path, workspace),
+        ApprovalPreview::Mcp(_) | ApprovalPreview::Capability(_) => false,
+    }
 }
 
 /// An MCP server is an external program with capabilities Orbit cannot
@@ -67,4 +102,31 @@ pub type ApprovalReceiver = mpsc::Receiver<ApprovalRequest>;
 
 pub fn channel() -> (ApprovalSender, ApprovalReceiver) {
     mpsc::channel(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_local_file;
+
+    #[test]
+    fn workspace_write_scope_resolves_parent_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("src")).unwrap();
+        assert!(workspace_local_file("src/ui.rs", root.path()));
+        assert!(workspace_local_file(
+            root.path().join("src/ui.rs").to_str().unwrap(),
+            root.path()
+        ));
+        assert!(!workspace_local_file("../outside.txt", root.path()));
+        assert!(!workspace_local_file(
+            outside.path().join("data.txt").to_str().unwrap(),
+            root.path()
+        ));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), root.path().join("linked")).unwrap();
+            assert!(!workspace_local_file("linked/data.txt", root.path()));
+        }
+    }
 }

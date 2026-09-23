@@ -80,30 +80,6 @@ impl Cache {
                 cache.right.extend(right);
             }
         }
-        let ending = |text: &str| {
-            if text.is_empty() {
-                Some("空文件")
-            } else if text.ends_with('\n') {
-                None
-            } else {
-                Some("末尾无换行")
-            }
-        };
-        let left_ending = ending(before);
-        let right_ending = ending(after);
-        if left_ending.is_some() || right_ending.is_some() {
-            for (rows, label, width) in [
-                (&mut cache.left, left_ending, widths.0),
-                (&mut cache.right, right_ending, widths.1),
-            ] {
-                rows.push(label.map_or_else(Line::default, |label| {
-                    Line::styled(
-                        fit_label(label, width as usize, false),
-                        Style::default().fg(FOLDED_COLOR),
-                    )
-                }));
-            }
-        }
         cache
     }
 }
@@ -217,13 +193,7 @@ mod tests {
             !folded
                 .left
                 .iter()
-                .any(|line| line.to_string().contains("末尾有换行"))
-        );
-        assert!(
-            !folded
-                .right
-                .iter()
-                .any(|line| line.to_string().contains("末尾有换行"))
+                .any(|line| line.to_string().contains("末尾"))
         );
         assert_eq!(folded.left.len(), folded.right.len());
         assert!(
@@ -246,12 +216,10 @@ mod tests {
             one_side_missing_newline.right.len()
         );
         assert!(
-            one_side_missing_newline
+            !one_side_missing_newline
                 .right
-                .last()
-                .unwrap()
-                .to_string()
-                .contains("末尾无换行")
+                .iter()
+                .any(|line| line.to_string().contains("末尾"))
         );
         for width in [0, 1, 8, 9, 20] {
             for (a, b) in [("", "新内容\u{1b}\t\n"), ("old", ""), ("", "")] {

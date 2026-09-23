@@ -242,16 +242,24 @@ impl UiState {
                 self.turn = turn;
                 self.ensure_assistant_item();
             }
+            AgentEvent::ContextUsage { estimated_input } => {
+                self.context_used_tokens = self.calibration().estimate(estimated_input);
+            }
             AgentEvent::RequestMetrics {
                 profile,
                 estimated_input,
                 usage,
                 ..
             } => {
-                self.calibrations.entry(profile).or_default().observe(
-                    estimated_input,
-                    usage.as_ref().and_then(|u| u.prompt_tokens),
-                );
+                let reported_input = usage.as_ref().and_then(|usage| usage.prompt_tokens);
+                self.calibrations
+                    .entry(profile)
+                    .or_default()
+                    .observe(estimated_input, reported_input);
+                self.context_used_tokens = reported_input
+                    .and_then(|tokens| usize::try_from(tokens).ok())
+                    .filter(|tokens| *tokens > 0)
+                    .unwrap_or_else(|| self.calibration().estimate(estimated_input));
             }
             AgentEvent::CompactionRecorded { .. } | AgentEvent::VerificationRecorded { .. } => {}
             // Compaction is an implementation detail while it runs. Showing a
@@ -514,5 +522,31 @@ mod tests {
             [TranscriptItem::Maintenance(text)]
                 if text.contains("195754 → 96000") && text.contains("保留最近工作内容")
         ));
+    }
+
+    #[test]
+    fn context_indicator_tracks_each_model_request_during_a_run() {
+        let mut state = UiState::new("mock");
+        state.begin_run();
+        state.apply(AgentEvent::ContextUsage {
+            estimated_input: 4_000,
+        });
+        assert_eq!(state.context_used_tokens, 4_000);
+        state.apply(AgentEvent::ContextUsage {
+            estimated_input: 12_000,
+        });
+        assert_eq!(state.context_used_tokens, 12_000);
+        state.apply(AgentEvent::RequestMetrics {
+            profile: "mock".into(),
+            estimated_input: 12_000,
+            retries: None,
+            usage: Some(orbit_model::types::Usage {
+                prompt_tokens: Some(13_000),
+                completion_tokens: None,
+                total_tokens: None,
+            }),
+            elapsed_ms: 100,
+        });
+        assert_eq!(state.context_used_tokens, 13_000);
     }
 }

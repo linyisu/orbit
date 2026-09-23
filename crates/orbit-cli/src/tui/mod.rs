@@ -383,7 +383,7 @@ pub async fn run(
                     }
                     if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release) {
                         state.permission_mode = state.permission_mode.next();
-                        if state.approval_shown && pending.as_ref().is_some_and(|request| state.permission_mode.allows(&request.preview)) {
+                        if state.approval_shown && pending.as_ref().is_some_and(|request| state.permission_mode.allows(&request.preview, std::path::Path::new(&session.snapshot.session.workspace))) {
                             if let Some(request) = pending.take() { let _ = request.decision.send(true); }
                             state.approval = None;
                             state.resume_clock();
@@ -556,7 +556,7 @@ pub async fn run(
                 }
                 Some(request) = approvals.recv() => {
                     if request.decision.is_closed() { continue; }
-                    if state.permission_mode.allows(&request.preview) {
+                    if state.permission_mode.allows(&request.preview, std::path::Path::new(&session.snapshot.session.workspace)) {
                         let _ = request.decision.send(true);
                         continue;
                     }
