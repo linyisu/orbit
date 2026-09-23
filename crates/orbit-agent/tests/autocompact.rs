@@ -240,6 +240,70 @@ async fn invalid_summary_and_cancellation_preserve_history() {
 }
 
 #[tokio::test]
+async fn invalid_local_summary_gets_one_schema_repair_request() {
+    let history = long_task();
+    let plan = autocompact::plan(&history, &[], 1_000, 8_000).unwrap();
+    let invalid = ChatCompletion {
+        message: ChatMessage::assistant("I have reviewed the history."),
+        ..answer("")
+    };
+    let backend = MockModel::new(
+        [invalid]
+            .into_iter()
+            .chain((0..20).map(|_| answer("Continue fixing the scheduler; preserve the API."))),
+    );
+    let result = autocompact::execute(&backend, plan, &[], 1_000, 8_000, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        result.record.strategy,
+        orbit_agent::memory::CompactionStrategy::Summary
+    );
+    assert!(!result.record.fallback);
+    let requests = backend.requests();
+    assert!(requests.len() >= 2);
+    assert!(
+        matches!(&requests[1].messages[0], ChatMessage::System { content } if content.contains("last response did not satisfy"))
+    );
+}
+
+#[tokio::test]
+async fn truncated_summary_retries_with_a_smaller_source_batch() {
+    let mut history = long_task();
+    history[3] = ChatMessage::tool("old", "evidence ".repeat(42_000));
+    let plan = autocompact::plan(&history, &[], 1_000, 128_000).unwrap();
+    let mut truncated = answer("incomplete");
+    truncated.finish_reason = Some("length".into());
+    let backend = MockModel::new(
+        [answer("Keep the scheduler API stable."), truncated]
+            .into_iter()
+            .chain((0..100).map(|_| answer("Keep the current task and API stable."))),
+    );
+    let result = autocompact::execute(
+        &backend,
+        plan,
+        &[],
+        1_000,
+        128_000,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.record.strategy,
+        orbit_agent::memory::CompactionStrategy::Summary
+    );
+    let requests = backend.requests();
+    assert!(requests.len() > 2);
+    assert!(
+        estimate_tokens(&requests[2].messages, &[]) < estimate_tokens(&requests[1].messages, &[]),
+        "truncated={} retry={}",
+        estimate_tokens(&requests[1].messages, &[]),
+        estimate_tokens(&requests[2].messages, &[]),
+    );
+}
+
+#[tokio::test]
 async fn automatic_compaction_preserves_history_after_a_retryable_summary_failure() {
     let history = long_task();
     let original = history.clone();
@@ -350,7 +414,7 @@ async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compact
     assert!(estimate_tokens(&history, &[]) + 1000 < 8000);
     for enabled in [false, true] {
         let backend = MockModel::new(if enabled {
-            vec![answer(""), answer("Still works")]
+            vec![answer(""), answer(""), answer("Still works")]
         } else {
             vec![answer("Still works")]
         });
@@ -368,8 +432,8 @@ async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compact
         let result = agent.run(request, CancellationToken::new()).await.unwrap();
         let requests = backend.requests();
         if enabled {
-            assert_eq!(requests.len(), 2);
-            assert_eq!(requests[1].messages, history);
+            assert_eq!(requests.len(), 3);
+            assert_eq!(requests[2].messages, history);
             assert_eq!(&result.history[..history.len()], history.as_slice());
         } else {
             assert_eq!(requests.len(), 1);
@@ -413,6 +477,7 @@ async fn cancellation_interrupts_a_summary_backend_that_does_not_poll_the_token(
 async fn failed_summary_is_not_retried_on_every_tool_call() {
     let backend = MockModel::new([
         answer(""),
+        answer(""),
         ChatCompletion {
             message: call("next"),
             ..answer("")
@@ -438,15 +503,15 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
     request.max_tokens = Some(1000);
     let result = agent.run(request, CancellationToken::new()).await.unwrap();
     assert_eq!(result.tool_calls, 1);
-    assert_eq!(backend.requests().len(), 3);
-    assert_eq!(backend.requests().iter().filter(|r| matches!(r.messages.first(),Some(ChatMessage::System{content}) if content.starts_with(orbit_agent::context::SUMMARY_PROMPT))).count(), 1);
+    assert_eq!(backend.requests().len(), 4);
+    assert_eq!(backend.requests().iter().filter(|r| matches!(r.messages.first(),Some(ChatMessage::System{content}) if content.starts_with(orbit_agent::context::SUMMARY_PROMPT))).count(), 2);
 }
 
 #[tokio::test]
 async fn failed_over_limit_summary_stops_without_discarding_history() {
     let mut history = long_task();
     history[3] = ChatMessage::tool("old", "x".repeat(30_000));
-    let backend = MockModel::new([answer(""), answer("continues after local compaction")]);
+    let backend = MockModel::new([answer(""), answer("")]);
     let agent = Agent::new(
         backend.clone(),
         ToolRegistry::new(),
@@ -462,7 +527,7 @@ async fn failed_over_limit_summary_stops_without_discarding_history() {
         result,
         Err(orbit_agent::error::AgentError::ContextBudget { .. })
     ));
-    assert_eq!(backend.requests().len(), 1);
+    assert_eq!(backend.requests().len(), 2);
     for request in backend.requests() {
         check_budget(
             &request.messages,
@@ -505,6 +570,56 @@ impl orbit_agent::archive::ContextArchive for ProgressArchive {
             Ok(())
         })
     }
+}
+
+#[tokio::test]
+async fn manual_compaction_archives_when_format_repair_still_fails() {
+    use orbit_agent::{
+        compaction::CompactionSettings,
+        memory::{CompactionMode, CompactionStrategy},
+    };
+
+    let history = long_task();
+    let settings = CompactionSettings::default();
+    let plan = autocompact::plan_configured(
+        &history,
+        &[],
+        1_000,
+        8_000,
+        CompactionMode::Manual,
+        &settings,
+    )
+    .unwrap();
+    let bad = ChatCompletion {
+        message: ChatMessage::assistant("A prose summary without structured fields"),
+        ..answer("")
+    };
+    let backend = MockModel::new([bad.clone(), bad]);
+    let archive = Archive::default();
+    let result = autocompact::execute_configured(
+        &backend,
+        plan,
+        &[],
+        1_000,
+        8_000,
+        CancellationToken::new(),
+        Some(&archive),
+        &settings,
+    )
+    .await
+    .unwrap();
+    assert_eq!(backend.requests().len(), 2);
+    assert_eq!(
+        result.record.strategy,
+        CompactionStrategy::ArchiveProjection
+    );
+    assert!(result.record.fallback);
+    assert!(result.record.archive.is_some());
+    assert!(result.after_tokens < result.before_tokens);
+    assert_eq!(
+        archive.0.lock().unwrap().as_slice(),
+        std::slice::from_ref(&history)
+    );
 }
 
 #[tokio::test]

@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use orbit_model::types::{ChatMessage, ChatRequest, ToolDefinition};
+use orbit_model::types::{ChatCompletion, ChatMessage, ChatRequest, ToolDefinition};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -265,6 +265,34 @@ fn summary_request(previous: &str, records: &[Value], tokens: usize) -> ChatRequ
     request
 }
 
+fn parse_summary_completion(response: ChatCompletion) -> Result<TaskSummary, AgentError> {
+    let ChatMessage::Assistant {
+        content: Some(text),
+        tool_calls,
+    } = response.message
+    else {
+        return Err(failure(
+            Failure::InvalidSummary,
+            "summary response contains no text; original context preserved",
+        ));
+    };
+    if text.trim().is_empty()
+        || !tool_calls.is_empty()
+        || text.len() > 128 * 1024
+        || response
+            .finish_reason
+            .as_deref()
+            .is_some_and(|reason| matches!(reason, "length" | "max_tokens" | "incomplete"))
+    {
+        return Err(failure(
+            Failure::InvalidSummary,
+            "summary is empty, invalid or truncated; original context preserved",
+        ));
+    }
+    TaskSummary::parse_model_response(&text)
+        .map_err(|error| failure(Failure::InvalidSummary, error.to_string()))
+}
+
 pub async fn execute<B: ModelBackend>(
     backend: &B,
     plan: Plan,
@@ -403,8 +431,11 @@ pub async fn execute_configured(
                         | Failure::InputBudget
                 )
             ) && archived.is_some()
-                && plan.mode == CompactionMode::Automatic
-                && plan.before_tokens >= limit.saturating_sub(output).saturating_mul(92) / 100 =>
+                && ((plan.mode == CompactionMode::Automatic
+                    && plan.before_tokens
+                        >= limit.saturating_sub(output).saturating_mul(92) / 100)
+                    || (plan.mode == CompactionMode::Manual
+                        && error.compaction_kind() == Some(Failure::InvalidSummary))) =>
         {
             if cancellation.is_cancelled() {
                 return Err(AgentError::Cancelled);
@@ -856,7 +887,7 @@ async fn model_summary(
         let request_started = Instant::now();
         let response = tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
-            result = tokio::time::timeout(time.min(Duration::from_secs(request_timeout)), backend.complete(request, request_cancel)) => {
+            result = tokio::time::timeout(time.min(Duration::from_secs(request_timeout)), backend.complete(request.clone(), request_cancel)) => {
                 result
             }
         };
@@ -904,31 +935,72 @@ async fn model_summary(
             }
             Ok(Err(error)) => return Err(failure(Failure::Upstream, error.to_string())),
         };
-        let ChatMessage::Assistant {
-            content: Some(text),
-            tool_calls,
-        } = response.message
-        else {
-            return Err(failure(
-                Failure::InvalidSummary,
-                "summary response contains no text; original context preserved",
-            ));
-        };
-        if text.trim().is_empty()
-            || !tool_calls.is_empty()
-            || text.len() > 128 * 1024
-            || response
-                .finish_reason
-                .as_deref()
-                .is_some_and(|r| matches!(r, "length" | "max_tokens" | "incomplete"))
+        if response
+            .finish_reason
+            .as_deref()
+            .is_some_and(|reason| matches!(reason, "length" | "max_tokens" | "incomplete"))
         {
-            return Err(failure(
-                Failure::InvalidSummary,
-                "summary is empty, invalid or truncated; original context preserved",
-            ));
+            // A truncated JSON object is often a batch-size problem. Retry a
+            // smaller slice before spending a request on schema repair.
+            let minimum = estimate_tokens(
+                &summary_request(&summary, &[], plan.summary_tokens).messages,
+                &[],
+            )
+            .saturating_add(256);
+            let current_tokens = estimate_tokens(&request.messages, &[]);
+            let reduced = (batch_limit / 2).min(current_tokens / 2).max(minimum);
+            if reduced < batch_limit
+                && reduced < current_tokens
+                && deadline.saturating_duration_since(Instant::now()) > Duration::from_secs(1)
+            {
+                for record in batch.into_iter().rev() {
+                    remaining.push_front(record);
+                }
+                batch_limit = reduced;
+                continue;
+            }
         }
-        let structured = TaskSummary::parse(&text)
-            .map_err(|e| failure(Failure::InvalidSummary, e.to_string()))?;
+        let structured = match parse_summary_completion(response) {
+            Ok(summary) => summary,
+            Err(invalid) => {
+                // A local model may answer in prose despite the JSON contract.
+                // Give it one bounded schema-focused retry for this batch.
+                let mut repair = request;
+                if let Some(ChatMessage::System { content }) = repair.messages.first_mut() {
+                    content.push_str(" The last response did not satisfy the required JSON schema. Retry the same records. Output only one complete JSON object with goal as a nonempty string and constraints, decisions, completed, remaining, verification, uncertainty as arrays of strings. Use [] for unknown sections. No Markdown or commentary.");
+                }
+                if check_budget(&repair.messages, &[], plan.summary_tokens, limit).is_err() {
+                    return Err(invalid);
+                }
+                let time = deadline.saturating_duration_since(Instant::now());
+                if time.is_zero() {
+                    return Err(invalid);
+                }
+                input_tokens += estimate_tokens(&repair.messages, &[]);
+                attempts.input_tokens = input_tokens;
+                requests += 1;
+                attempts.requests = requests;
+                let repair_cancel = cancellation.child_token();
+                let _cancel_repair_on_exit = repair_cancel.clone().drop_guard();
+                let retry = tokio::select! {
+                    _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
+                    result = tokio::time::timeout(time.min(Duration::from_secs(request_timeout)), backend.complete(repair, repair_cancel)) => result,
+                };
+                match retry {
+                    Ok(Ok(response)) => parse_summary_completion(response)?,
+                    Ok(Err(orbit_model::error::ModelError::Cancelled)) => {
+                        return Err(AgentError::Cancelled);
+                    }
+                    Ok(Err(error)) => return Err(failure(Failure::Upstream, error.to_string())),
+                    Err(_) => {
+                        return Err(failure(
+                            Failure::InvalidSummary,
+                            "summary repair timed out after an invalid response; original context preserved",
+                        ));
+                    }
+                }
+            }
+        };
         // A fast successful response permits a larger next batch. Slow local
         // models keep the small size instead of repeatedly reaching a timeout.
         if request_started.elapsed() < Duration::from_secs(request_timeout / 4)

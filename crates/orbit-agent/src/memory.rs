@@ -123,6 +123,30 @@ impl TaskSummary {
         Ok(summary)
     }
 
+    /// Local models sometimes wrap an otherwise valid JSON object in a short
+    /// explanation or a Markdown fence. Accept that wrapper without relaxing
+    /// the required task-state fields or inventing missing facts.
+    pub fn parse_model_response(text: &str) -> Result<Self, AgentError> {
+        if let Ok(summary) = Self::parse(text) {
+            return Ok(summary);
+        }
+        // The model output is capped by the caller, and only a small number of
+        // candidate objects are worth trying. Bound parsing work on prose or
+        // code-heavy malformed output.
+        for (start, _) in text.match_indices('{').take(32) {
+            let mut values = serde_json::Deserializer::from_str(&text[start..]).into_iter::<Self>();
+            if let Some(Ok(summary)) = values.next()
+                && !summary.goal.trim().is_empty()
+            {
+                return Ok(summary);
+            }
+        }
+        Err(AgentError::Compaction(
+            "summary must contain the required structured task fields; original context preserved"
+                .into(),
+        ))
+    }
+
     pub fn render(&self) -> String {
         let mut text = format!("目标\n{}", self.goal);
         for (title, items) in [

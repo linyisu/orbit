@@ -103,6 +103,15 @@ fn structured_summary_rejects_missing_fields_and_accepts_fenced_json() {
     let mut empty = valid;
     empty.goal = " ".into();
     assert!(TaskSummary::parse(&serde_json::to_string(&empty).unwrap()).is_err());
+    assert_eq!(
+        TaskSummary::parse_model_response(&format!(
+            "Here is the summary:\n```json\n{}\n```\nDone.",
+            serde_json::to_string(&summary()).unwrap()
+        ))
+        .unwrap(),
+        summary()
+    );
+    assert!(TaskSummary::parse_model_response(r#"{"goal":"missing sections"}"#).is_err());
 }
 
 #[tokio::test]
