@@ -7,7 +7,10 @@ use orbit_runtime::{
     filesystem::{ResolvedPath, Workspace},
     policy::FilesystemGrant,
 };
-use orbit_tools::{approval, run_command::RunCommand};
+use orbit_tools::{
+    approval,
+    run_command::{CommandLimits, RunCommand},
+};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -333,4 +336,68 @@ async fn run_command_succeeds_when_protecting_deep_opaque_runtime_root() {
             .unwrap_or("")
             .contains("opaque root safe")
     );
+}
+
+#[tokio::test]
+async fn run_command_masks_hardlink_to_file_inside_external_opaque_root() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let storage = tempfile::tempdir().unwrap();
+    let opaque = storage.path().join("orbit.workspaces");
+    fs::create_dir(&opaque).unwrap();
+    let secret = opaque.join("private.txt");
+    fs::write(&secret, "PRIVATE_RUNTIME_DATA").unwrap();
+    fs::hard_link(&secret, ws_temp.path().join("alias.txt")).unwrap();
+
+    let mut workspace = Workspace::new(ws_temp.path()).unwrap();
+    workspace.protect_opaque_runtime_root(&opaque).unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "opaque_alias",
+                "run_command",
+                json!({"command": "cat /workspace/alias.txt"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+    receiver.recv().await.unwrap().decision.send(true).unwrap();
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(value["stdout"], "");
+    assert_eq!(fs::read_to_string(&secret).unwrap(), "PRIVATE_RUNTIME_DATA");
+}
+
+#[tokio::test]
+async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    fs::write(
+        ws_temp.path().join("large.txt"),
+        vec![b'x'; 2 * 1024 * 1024],
+    )
+    .unwrap();
+    let workspace = Workspace::new(ws_temp.path()).unwrap();
+    let limits = CommandLimits {
+        max_scan_mib: 1,
+        ..CommandLimits::default()
+    };
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::with_limits(workspace, sender, limits);
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function("scan_limit", "run_command", json!({"command": "true"})),
+            CancellationToken::new(),
+        )
+        .await
+    });
+    receiver.recv().await.unwrap().decision.send(true).unwrap();
+    let output = task.await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(result["exit_code"], 0);
+    assert!(output.verification.is_none());
+    let warning = result["verification_error"].as_str().unwrap();
+    assert!(warning.contains("input workspace fingerprint unavailable"));
+    assert!(warning.contains("output workspace fingerprint unavailable"));
 }

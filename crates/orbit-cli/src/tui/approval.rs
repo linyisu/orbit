@@ -148,7 +148,9 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
             let ws_desc = match preview.workspace_access {
                 orbit_tools::approval::CommandWorkspaceAccess::Read => "只读 (受保护路径隔离)",
-                orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => "读写 (受保护路径隔离)",
+                orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => {
+                    "读写真实项目 (受保护路径隔离)"
+                }
             };
             let net_desc = if preview.network_allowed {
                 "允许"
@@ -159,6 +161,10 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 Line::from(format!("工作区：{ws_desc}")),
                 Line::from(format!("网络：{net_desc}")),
             ];
+            if preview.workspace_access == orbit_tools::approval::CommandWorkspaceAccess::ReadWrite
+            {
+                lines.push(Line::from("命令对项目文件的修改会在执行结束后保留。"));
+            }
             if preview.external_capabilities.is_empty() {
                 lines.push(Line::from("外部路径：无额外已授权 Capability"));
             } else {

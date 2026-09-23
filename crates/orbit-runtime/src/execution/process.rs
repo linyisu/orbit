@@ -292,6 +292,8 @@ pub struct CommandResult {
     pub scratch: Option<&'static str>,
     pub workspace_files: usize,
     pub skipped_entries: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_error: Option<String>,
     #[serde(skip)]
     pub verification: Option<VerificationEvidence>,
 }

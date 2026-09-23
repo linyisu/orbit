@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     io::{Read, Write},
     path::{Path, PathBuf},
     process::Stdio,
@@ -23,6 +23,7 @@ use crate::{
         CommandResult, MAX_OUTPUT, MAX_RETAINED_OUTPUT_PER_STREAM, MIB, MountAccess, MountSpec,
         OutputLog, ProcessLimits, ProcessSpec, TMP_SIZE_BYTES,
     },
+    filesystem::inodes::{collect_dir_inodes, collect_opaque_inodes_for_dev},
     filesystem::workspace::{Workspace, WorkspaceError},
     policy::EffectivePolicy,
 };
@@ -436,6 +437,7 @@ impl BwrapSandboxBackend {
             ws_target,
             &spec.protected_paths,
             &protected_inodes,
+            &spec.opaque_runtime_roots,
         )?;
 
         configure_limits_and_entrypoint(
@@ -601,71 +603,17 @@ fn is_protected_directory(path: &Path, opaque_runtime_roots: &[PathBuf]) -> bool
     name == ".git" || is_opaque_runtime_root(path, opaque_runtime_roots)
 }
 
-fn collect_dir_inodes(
-    dir: &Path,
-    protected_inodes: &mut HashSet<(u64, u64)>,
-) -> Result<(), RuntimeError> {
-    use std::os::unix::fs::MetadataExt;
-    let mut queue = VecDeque::from([(dir.to_path_buf(), 0usize)]);
-    let mut visited = 0usize;
-    const MAX_PROTECTED_DIR_ENTRIES: usize = 20_000;
-    const MAX_PROTECTED_DIR_DEPTH: usize = 32;
-
-    while let Some((curr, depth)) = queue.pop_front() {
-        let entries = match std::fs::read_dir(&curr) {
-            Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                return Err(failed(format!(
-                    "failed to read protected directory '{}': {e}",
-                    curr.display()
-                )));
-            }
-        };
-        for entry in entries {
-            let entry = entry.map_err(|e| {
-                failed(format!(
-                    "failed to read entry in protected directory '{}': {e}",
-                    curr.display()
-                ))
-            })?;
-            visited += 1;
-            if visited > MAX_PROTECTED_DIR_ENTRIES {
-                return Err(failed(format!(
-                    "protected directory '{}' exceeds maximum scan limit of {MAX_PROTECTED_DIR_ENTRIES} entries",
-                    dir.display()
-                )));
-            }
-            let meta = entry.path().symlink_metadata().map_err(|e| {
-                failed(format!(
-                    "failed to inspect protected entry '{}': {e}",
-                    entry.path().display()
-                ))
-            })?;
-            protected_inodes.insert((meta.dev(), meta.ino()));
-            if meta.is_dir() && !meta.file_type().is_symlink() {
-                if depth >= MAX_PROTECTED_DIR_DEPTH {
-                    return Err(failed(format!(
-                        "protected directory '{}' depth exceeds maximum limit of {MAX_PROTECTED_DIR_DEPTH} at '{}'",
-                        dir.display(),
-                        entry.path().display()
-                    )));
-                }
-                queue.push_back((entry.path(), depth + 1));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn mount_capabilities(
     command: &mut Command,
     policy: &EffectivePolicy,
     ws_target: &Path,
     protected_paths: &[PathBuf],
     protected_inodes: &HashSet<(u64, u64)>,
+    opaque_runtime_roots: &[PathBuf],
 ) -> Result<(), RuntimeError> {
-    let validate_cap = |canonical: &Path| -> Result<(), RuntimeError> {
+    let mut protected_inodes = protected_inodes.clone();
+    let mut scanned_opaque_roots = HashSet::new();
+    let mut validate_cap = |canonical: &Path| -> Result<(), RuntimeError> {
         use std::os::unix::fs::MetadataExt;
         if crate::execution::process::is_reserved_system_path(canonical) {
             return Err(failed(format!(
@@ -695,6 +643,14 @@ fn mount_capabilities(
             }
         }
         if let Ok(meta) = std::fs::symlink_metadata(canonical) {
+            if meta.is_file() && meta.nlink() > 1 {
+                collect_opaque_inodes_for_dev(
+                    meta.dev(),
+                    opaque_runtime_roots,
+                    &mut protected_inodes,
+                    &mut scanned_opaque_roots,
+                )?;
+            }
             if protected_inodes.contains(&(meta.dev(), meta.ino())) {
                 return Err(failed(format!(
                     "capability target '{}' is a hardlink alias of a protected path",
@@ -733,6 +689,14 @@ fn mount_capabilities(
                                 entry.path().display()
                             ))
                         })?;
+                        if em.is_file() && em.nlink() > 1 {
+                            collect_opaque_inodes_for_dev(
+                                em.dev(),
+                                opaque_runtime_roots,
+                                &mut protected_inodes,
+                                &mut scanned_opaque_roots,
+                            )?;
+                        }
                         if protected_inodes.contains(&(em.dev(), em.ino())) {
                             return Err(failed(format!(
                                 "capability directory '{}' contains hardlink to protected path at '{}'",
@@ -793,6 +757,15 @@ fn mount_capabilities(
 }
 
 pub type MaskedPathsAndInodes = (Vec<(PathBuf, bool)>, HashSet<(u64, u64)>);
+
+struct WorkspaceEntry {
+    relative: PathBuf,
+    dev: u64,
+    ino: u64,
+    is_dir: bool,
+    nlink: u64,
+    is_file: bool,
+}
 
 fn collect_masked_paths(
     ws_target: &Path,
@@ -963,7 +936,7 @@ fn collect_masked_paths(
     let mut queue = VecDeque::new();
     queue.push_back((PathBuf::new(), 0usize));
     let mut count = 0;
-    let mut files_to_check: Vec<(PathBuf, u64, u64, bool)> = Vec::new();
+    let mut files_to_check: Vec<WorkspaceEntry> = Vec::new();
 
     while let Some((rel, depth)) = queue.pop_front() {
         count += 1;
@@ -1035,7 +1008,14 @@ fn collect_masked_paths(
                 continue;
             }
 
-            files_to_check.push((child_rel.clone(), dev, ino, is_dir && !is_symlink));
+            files_to_check.push(WorkspaceEntry {
+                relative: child_rel.clone(),
+                dev,
+                ino,
+                is_dir: is_dir && !is_symlink,
+                nlink: meta.nlink(),
+                is_file: meta.is_file(),
+            });
 
             if is_dir && !is_symlink {
                 queue.push_back((child_rel, depth + 1));
@@ -1043,12 +1023,40 @@ fn collect_masked_paths(
         }
     }
 
-    // Mask all files matching protected_inodes (e.g. hardlink aliases of config.toml, .env, etc.)
-    for (child_rel, dev, ino, is_dir) in files_to_check {
-        if protected_inodes.contains(&(dev, ino)) {
-            let container_path = Path::new("/workspace").join(&child_rel);
+    // A hardlink with fewer visible names than its link count may point into
+    // an external opaque root. Inspect such roots on demand, avoiding a full
+    // scan for ordinary workspaces and internal-only hardlinks.
+    let mut visible_links = HashMap::new();
+    for entry in &files_to_check {
+        if entry.is_file && entry.nlink > 1 {
+            *visible_links.entry((entry.dev, entry.ino)).or_insert(0u64) += 1;
+        }
+    }
+    let mut scanned_opaque_roots = HashSet::new();
+    for entry in &files_to_check {
+        if entry.is_file
+            && entry.nlink > 1
+            && entry.nlink
+                > visible_links
+                    .get(&(entry.dev, entry.ino))
+                    .copied()
+                    .unwrap_or(0)
+        {
+            collect_opaque_inodes_for_dev(
+                entry.dev,
+                opaque_runtime_roots,
+                &mut protected_inodes,
+                &mut scanned_opaque_roots,
+            )?;
+        }
+    }
+
+    // Mask all files matching protected_inodes (including discovered aliases).
+    for entry in files_to_check {
+        if protected_inodes.contains(&(entry.dev, entry.ino)) {
+            let container_path = Path::new("/workspace").join(&entry.relative);
             if seen.insert(container_path.clone()) {
-                masked.push((container_path, is_dir));
+                masked.push((container_path, entry.is_dir));
             }
         }
     }
@@ -1404,6 +1412,7 @@ async fn run_child_process(
         },
         workspace_files,
         skipped_entries,
+        verification_error: None,
         verification,
     })
 }
@@ -2072,12 +2081,54 @@ mod tests {
         policy.persistent_read.push(resolved_cap);
 
         let mut command = tokio::process::Command::new("/bin/true");
-        let err = mount_capabilities(&mut command, &policy, ws, &[config_file], &protected_inodes)
-            .unwrap_err();
+        let err = mount_capabilities(
+            &mut command,
+            &policy,
+            ws,
+            &[config_file],
+            &protected_inodes,
+            &[],
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string()
                 .contains("contains hardlink to protected path")
+        );
+    }
+
+    #[test]
+    fn mount_capabilities_rejects_opaque_root_descendant_alias() {
+        let ws_dir = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let opaque = storage.path().join("orbit.workspaces");
+        std::fs::create_dir(&opaque).unwrap();
+        let secret = opaque.join("secret.txt");
+        std::fs::write(&secret, "private runtime data").unwrap();
+        let alias = external.path().join("alias.txt");
+        std::fs::hard_link(&secret, &alias).unwrap();
+
+        let mut policy = EffectivePolicy::new(crate::policy::BasePolicy::new(
+            crate::filesystem::ResolvedPath::from_canonical(ws_dir.path()),
+        ));
+        policy
+            .persistent_read
+            .push(crate::filesystem::ResolvedPath::from_canonical(&alias));
+        let mut command = tokio::process::Command::new("/bin/true");
+        let error = mount_capabilities(
+            &mut command,
+            &policy,
+            ws_dir.path(),
+            std::slice::from_ref(&opaque),
+            &HashSet::new(),
+            std::slice::from_ref(&opaque),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("hardlink alias of a protected path")
         );
     }
 
@@ -2122,8 +2173,15 @@ mod tests {
 
         let mut command = tokio::process::Command::new("/bin/true");
         let protected_inodes = HashSet::new();
-        let err = mount_capabilities(&mut command, &policy, ws_dir.path(), &[], &protected_inodes)
-            .unwrap_err();
+        let err = mount_capabilities(
+            &mut command,
+            &policy,
+            ws_dir.path(),
+            &[],
+            &protected_inodes,
+            &[],
+        )
+        .unwrap_err();
         assert!(
             err.to_string()
                 .contains("depth exceeds maximum limit of 16")
@@ -2131,7 +2189,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_masked_paths_does_not_scan_external_protected_directories_recursively() {
+    fn opaque_roots_skip_idle_scans_and_fail_closed_for_ambiguous_hardlinks() {
         use std::os::unix::fs::MetadataExt;
 
         let ws_dir = tempfile::tempdir().unwrap();
@@ -2151,7 +2209,25 @@ mod tests {
         let mut test_inodes = HashSet::new();
         assert!(collect_dir_inodes(&external_storage, &mut test_inodes).is_err());
 
-        // 2. Create an external protected file (e.g. orbit.db) and a hardlink alias inside the workspace
+        let mut guard = PlaceholderGuard::new();
+        let (masked, inodes) = collect_masked_paths(
+            ws,
+            std::slice::from_ref(&external_storage),
+            std::slice::from_ref(&external_storage),
+            false,
+            &mut guard,
+        )
+        .unwrap();
+        let ext_meta = std::fs::symlink_metadata(&external_storage).unwrap();
+        assert!(inodes.contains(&(ext_meta.dev(), ext_meta.ino())));
+        assert!(
+            masked
+                .iter()
+                .all(|(path, _)| !path.to_string_lossy().contains("level_"))
+        );
+
+        // An external hardlink on the same device makes the skipped root
+        // ambiguous. Its deep scan cannot complete, so the command is denied.
         let external_file_dir = tempfile::tempdir().unwrap();
         let external_db = external_file_dir.path().join("orbit.db");
         std::fs::write(&external_db, "sqlite_header").unwrap();
@@ -2162,34 +2238,15 @@ mod tests {
         let opaque_runtime_roots = vec![external_storage.clone()];
 
         let mut guard = PlaceholderGuard::new();
-        let (masked, inodes) = collect_masked_paths(
+        let error = collect_masked_paths(
             ws,
             &protected_paths,
             &opaque_runtime_roots,
             false,
             &mut guard,
         )
-        .unwrap();
-
-        // External directory itself is in inodes, but its deep contents were NOT scanned
-        let ext_meta = std::fs::symlink_metadata(&external_storage).unwrap();
-        assert!(inodes.contains(&(ext_meta.dev(), ext_meta.ino())));
-
-        // External directory is NOT masked in /workspace
-        assert!(
-            !masked
-                .iter()
-                .any(|(p, _)| p.starts_with("/workspace/level_0")
-                    || p.to_string_lossy().contains("level"))
-        );
-
-        // External DB hardlink alias inside workspace IS masked!
-        assert!(
-            masked
-                .iter()
-                .any(|(p, is_dir)| p == Path::new("/workspace/leaked_orbit.db") && !*is_dir),
-            "hardlink alias inside workspace pointing to external protected file must be masked"
-        );
+        .unwrap_err();
+        assert!(error.to_string().contains("depth exceeds maximum limit"));
     }
 
     #[test]

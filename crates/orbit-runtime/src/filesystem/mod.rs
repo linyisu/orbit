@@ -1,3 +1,4 @@
+pub(crate) mod inodes;
 pub mod path_security;
 pub mod workspace;
 

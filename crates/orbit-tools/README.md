@@ -108,7 +108,7 @@ TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中�
 
 ## run_command
 
-按当前审批模式在 Linux Bubblewrap 中执行，原项目只读、无网络，默认 120 秒超时（模型可选择至 600 秒，也可配置）。依赖与边界详见 [SANDBOX.md](SANDBOX.md)。
+按当前审批模式在 Linux Bubblewrap 中执行；默认只读挂载真实工作区，显式请求 `workspace_access = "read_write"` 并获批准后可直接修改项目。当前命令默认允许联网，默认超时 120 秒（模型可选择至 600 秒，也可配置）。依赖与边界详见 [SANDBOX.md](SANDBOX.md)。
 
 ## edit_file 局部编辑
 

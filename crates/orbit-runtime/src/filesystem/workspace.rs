@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::File,
     io,
     path::{Component, Path, PathBuf},
@@ -12,6 +13,7 @@ use thiserror::Error;
 
 use crate::{
     capability::NetworkPolicy,
+    filesystem::inodes::{collect_dir_inodes, is_reserved_workspace_inode},
     filesystem::path_security::ResolvedPath,
     policy::{PolicyEngine, WorkspacePermissions},
 };
@@ -193,9 +195,8 @@ impl Workspace {
     ///
     /// Opaque runtime roots are forbidden from capability mounts and cannot be accessed
     /// from the sandbox. Unlike regular sensitive directories, when located outside the
-    /// workspace they are treated as opaque roots without recursive descendant hardlink scanning,
-    /// preventing historical session caches with tens of thousands of build artifacts
-    /// from hitting scan limits or degrading performance.
+    /// workspace they are not scanned until a hardlink could alias a descendant.
+    /// This avoids scanning historical session caches on ordinary reads and commands.
     pub fn protect_opaque_runtime_root(
         &mut self,
         path: impl AsRef<Path>,
@@ -289,14 +290,34 @@ impl Workspace {
     }
 
     fn check_protected_metadata(&self, metadata: &std::fs::Metadata) -> Result<(), WorkspaceError> {
-        use std::os::unix::fs::MetadataExt;
+        let mut protected_inodes = HashSet::new();
         for protected in &self.protected {
-            if let Ok(other) = protected.metadata()
-                && metadata.dev() == other.dev()
-                && metadata.ino() == other.ino()
-            {
+            let other = match std::fs::symlink_metadata(protected) {
+                Ok(other) => other,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(WorkspaceError::Io(error)),
+            };
+            if metadata.dev() == other.dev() && metadata.ino() == other.ino() {
                 return Err(WorkspaceError::ProtectedPath);
             }
+            if metadata.is_file()
+                && metadata.nlink() > 1
+                && other.is_dir()
+                && other.dev() == metadata.dev()
+            {
+                collect_dir_inodes(protected, &mut protected_inodes)
+                    .map_err(|error| WorkspaceError::PermissionDenied(error.to_string()))?;
+            }
+        }
+        if protected_inodes.contains(&(metadata.dev(), metadata.ino())) {
+            return Err(WorkspaceError::ProtectedPath);
+        }
+        if metadata.is_file()
+            && metadata.nlink() > 1
+            && is_reserved_workspace_inode(&self.path, (metadata.dev(), metadata.ino()))
+                .map_err(|error| WorkspaceError::PermissionDenied(error.to_string()))?
+        {
+            return Err(WorkspaceError::ProtectedPath);
         }
         Ok(())
     }
@@ -494,14 +515,7 @@ impl Workspace {
                 if !metadata.is_file() {
                     return Err(WorkspaceError::NotFile);
                 }
-                for protected in &self.protected {
-                    if let Ok(other) = protected.metadata() {
-                        use std::os::unix::fs::MetadataExt;
-                        if metadata.dev() == other.dev() && metadata.ino() == other.ino() {
-                            return Err(WorkspaceError::ProtectedPath);
-                        }
-                    }
-                }
+                self.check_protected_metadata(&metadata)?;
                 return Ok(file);
             }
             directory = file;
@@ -588,6 +602,40 @@ impl Workspace {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn protected_directory_descendant_hardlinks_cannot_be_read() {
+        let ws_dir = tempdir().unwrap();
+        let storage = tempdir().unwrap();
+        let opaque = storage.path().join("orbit.workspaces");
+        std::fs::create_dir(&opaque).unwrap();
+        let private_file = opaque.join("secret.txt");
+        std::fs::write(&private_file, "private runtime data").unwrap();
+        std::fs::hard_link(&private_file, ws_dir.path().join("alias.txt")).unwrap();
+
+        let mut workspace = Workspace::new(ws_dir.path()).unwrap();
+        workspace.protect_opaque_runtime_root(&opaque).unwrap();
+        assert!(matches!(
+            workspace.open_read(Path::new("alias.txt")),
+            Err(WorkspaceError::ProtectedPath)
+        ));
+    }
+
+    #[test]
+    fn reserved_workspace_file_hardlinks_cannot_be_read() {
+        let ws_dir = tempdir().unwrap();
+        let nested = ws_dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let private_file = nested.join(".env.local");
+        std::fs::write(&private_file, "private workspace data").unwrap();
+        std::fs::hard_link(&private_file, ws_dir.path().join("alias.txt")).unwrap();
+
+        let workspace = Workspace::new(ws_dir.path()).unwrap();
+        assert!(matches!(
+            workspace.open_read(Path::new("alias.txt")),
+            Err(WorkspaceError::ProtectedPath)
+        ));
+    }
 
     #[test]
     fn test_persistent_permission_conflicts_with_protected_path() {

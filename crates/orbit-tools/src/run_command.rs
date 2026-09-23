@@ -334,15 +334,21 @@ impl Tool for RunCommand {
             )
             .await
             {
-                Ok(summary) => Some(summary),
+                Ok(summary) => Ok(summary),
                 Err(RuntimeError::Cancelled) => return Err(ToolError::Cancelled),
-                Err(_) => None,
+                Err(error) => Err(error),
             };
 
-            let (fingerprint, workspace_files, skipped_entries) = match pre_scan {
-                Some((f, wf, se)) => (Some(f), wf, se),
-                None => (None, 0, 0),
-            };
+            let (fingerprint, workspace_files, skipped_entries, mut verification_error) =
+                match pre_scan {
+                    Ok((f, wf, se)) => (Some(f), wf, se, None),
+                    Err(error) => (
+                        None,
+                        0,
+                        0,
+                        Some(format!("input workspace fingerprint unavailable: {error}")),
+                    ),
+                };
 
             let backend = BwrapSandboxBackend::new()?;
             let mut spec = ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
@@ -372,12 +378,26 @@ impl Tool for RunCommand {
                 cancellation,
                 self.limits.clone().into(),
             )
-            .await
-            .ok();
+            .await;
+
+            let post_fingerprint = match post_scan {
+                Ok((fingerprint, _, _)) => Some(fingerprint),
+                Err(error) => {
+                    let warning = format!("output workspace fingerprint unavailable: {error}");
+                    if let Some(existing) = &mut verification_error {
+                        existing.push_str("; ");
+                        existing.push_str(&warning);
+                    } else {
+                        verification_error = Some(warning);
+                    }
+                    None
+                }
+            };
 
             if let Some(evidence) = result.verification.as_mut() {
-                evidence.output = post_scan.map(|(fp, _, _)| fp);
+                evidence.output = post_fingerprint;
             }
+            result.verification_error = verification_error;
             let evidence = result.verification.take();
             serde_json::to_string(&result)
                 .map(|content| {

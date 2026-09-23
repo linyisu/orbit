@@ -787,15 +787,26 @@ pub(super) fn transcript_lines_at_width(
                                 .as_str()
                                 .map(|id| format!(" · output {id}"))
                                 .unwrap_or_default();
+                            let verification_error = value["verification_error"].as_str();
+                            let verification_badge = if verification_error.is_some() {
+                                " · 验证不可用"
+                            } else {
+                                ""
+                            };
+                            let verification_detail = verification_error
+                                .map(|error| format!("\n验证：{error}"))
+                                .unwrap_or_default();
                             Some(format!(
-                                "exit {} · {} ms · timeout {} · truncated {}{}\n{}{}",
+                                "exit {} · {} ms · timeout {} · truncated {}{}{}\n{}{}{}",
                                 value["exit_code"],
                                 value["elapsed_ms"],
                                 value["timed_out"],
                                 value["output_truncated"],
                                 retained,
+                                verification_badge,
                                 value["stdout"].as_str().unwrap_or_default(),
-                                value["stderr"].as_str().unwrap_or_default()
+                                value["stderr"].as_str().unwrap_or_default(),
+                                verification_detail,
                             ))
                         } else if let Some(bytes) = value["written_bytes"].as_u64() {
                             Some(format!(
