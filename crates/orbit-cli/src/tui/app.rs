@@ -118,6 +118,8 @@ pub struct UiState {
     pub scroll: usize,
     pub follow_bottom: bool,
     pub started_at: Option<Instant>,
+    paused_at: Option<Instant>,
+    paused_elapsed: std::time::Duration,
 }
 
 impl UiState {
@@ -196,6 +198,8 @@ impl UiState {
             scroll: 0,
             follow_bottom: true,
             started_at: None,
+            paused_at: None,
+            paused_elapsed: std::time::Duration::ZERO,
         }
     }
 
@@ -212,6 +216,8 @@ impl UiState {
         self.turn = 0;
         self.tool_calls = 0;
         self.started_at = Some(Instant::now());
+        self.paused_at = None;
+        self.paused_elapsed = std::time::Duration::ZERO;
         self.follow_bottom = true;
     }
 
@@ -349,10 +355,33 @@ impl UiState {
         }
     }
 
-    pub fn finish_clock(&mut self) {
-        if let Some(start) = self.started_at.take() {
-            self.elapsed = start.elapsed();
+    pub fn active_elapsed(&self) -> std::time::Duration {
+        let Some(start) = self.started_at else {
+            return self.elapsed;
+        };
+        self.paused_at
+            .unwrap_or_else(Instant::now)
+            .saturating_duration_since(start)
+            .saturating_sub(self.paused_elapsed)
+    }
+
+    pub fn pause_clock(&mut self) {
+        if self.started_at.is_some() && self.paused_at.is_none() {
+            self.paused_at = Some(Instant::now());
         }
+    }
+
+    pub fn resume_clock(&mut self) {
+        if let Some(paused_at) = self.paused_at.take() {
+            self.paused_elapsed += paused_at.elapsed();
+        }
+    }
+
+    pub fn finish_clock(&mut self) {
+        self.elapsed = self.active_elapsed();
+        self.started_at = None;
+        self.paused_at = None;
+        self.paused_elapsed = std::time::Duration::ZERO;
     }
 
     fn apply_model_event(&mut self, event: StreamEvent) {
@@ -399,6 +428,22 @@ impl UiState {
 mod tests {
     use super::*;
     use orbit_model::types::FunctionCall;
+
+    #[test]
+    fn approval_wait_is_excluded_from_response_clock() {
+        let mut state = UiState::new("mock");
+        state.begin_run();
+        state.started_at = Some(Instant::now() - std::time::Duration::from_secs(12));
+        state.pause_clock();
+        state.paused_at = Some(Instant::now() - std::time::Duration::from_secs(8));
+        let active = state.active_elapsed();
+        assert!(active >= std::time::Duration::from_secs(3));
+        assert!(active < std::time::Duration::from_secs(5));
+        state.resume_clock();
+        state.finish_clock();
+        assert!(state.elapsed >= std::time::Duration::from_secs(3));
+        assert!(state.elapsed < std::time::Duration::from_secs(5));
+    }
 
     fn call(id: &str) -> ToolCall {
         ToolCall {

@@ -143,11 +143,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         nav.targets.push((
             y,
             *start,
-            format!(
-                "第 {} 轮 · {}",
-                index + 1,
-                render::safe_output(&text.replace(['\n', '\r'], " "))
-            ),
+            render::safe_output(&text.replace(['\n', '\r'], " ")),
         ));
     }
     let bottom = nav.area.bottom() - 1;
@@ -234,7 +230,8 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(screen.replace(' ', "").contains("第2轮·问题1"));
+        assert!(screen.replace(' ', "").contains("问题1"));
+        assert!(!screen.replace(' ', "").contains("第2轮"));
         assert_eq!(
             handle(
                 &mut state,
@@ -306,17 +303,12 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(shown.replace(' ', "").contains("第1轮"), "{shown}");
+        assert!(shown.replace(' ', "").contains("first"), "{shown}");
+        assert!(!shown.replace(' ', "").contains("第1轮"), "{shown}");
+        assert_ne!(state.navigation.tooltip_area, Rect::default());
         handle(&mut state, &mouse(MouseEventKind::Moved, 0, 0));
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
-        let hidden = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(!hidden.replace(' ', "").contains("第1轮"), "{hidden}");
+        assert_eq!(state.navigation.tooltip_area, Rect::default());
     }
 
     #[test]

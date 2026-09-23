@@ -1039,24 +1039,23 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
         );
         return;
     }
-    let elapsed = state
-        .started_at
-        .map(|time| time.elapsed())
-        .unwrap_or(state.elapsed);
+    let elapsed = state.active_elapsed();
     let text = match state.status {
         RunStatus::Idle => String::new(),
+        RunStatus::Running if state.approval.is_some() => {
+            format!("  等待审批  ·  {:.1}s", elapsed.as_secs_f32())
+        }
         RunStatus::Running => {
             let frames = ["✶", "✳", "✢", "✻"];
             format!(
-                "  {} 正在响应…  {:.1}s  ·  第 {} 轮  ·  Ctrl+C 取消",
+                "  {} 正在响应…  {:.1}s  ·  Ctrl+C 取消",
                 frames[(elapsed.as_millis() / 160) as usize % frames.len()],
-                elapsed.as_secs_f32(),
-                state.turn.max(1)
+                elapsed.as_secs_f32()
             )
         }
         RunStatus::Cancelling => "  ◌ 正在取消…".into(),
         RunStatus::Completed => format!("  ✓ 完成  ·  {:.1}s", elapsed.as_secs_f32()),
-        RunStatus::Failed => "  × 请求失败 · 请查看上方错误，可重新发送".into(),
+        RunStatus::Failed => "  × 操作未完成 · 请查看上方错误".into(),
         RunStatus::Cancelled => "  ◇ 已取消 · 可以继续输入".into(),
     };
     frame.render_widget(
@@ -1563,6 +1562,7 @@ mod tests {
         let compact = screen.replace(' ', "");
         assert!(compact.contains("Ctrl+C取消"));
         assert!(!compact.contains("esc取消"));
+        assert!(!compact.contains("第1轮"));
     }
 
     #[test]

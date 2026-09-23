@@ -34,6 +34,7 @@ use orbit_agent::{
     agent::{Agent, AgentConfig, AgentResult},
     error::AgentError,
     events::AgentEvent,
+    memory::CompactionStrategy,
     model::ModelClientBackend,
     tool::ToolRegistry,
 };
@@ -45,6 +46,7 @@ use tokio::{select, sync::mpsc, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 
 use crate::session::SessionState;
+use orbit_store::types::Run;
 
 use self::{
     app::{TranscriptItem, UiState},
@@ -384,6 +386,7 @@ pub async fn run(
                         if state.approval_shown && pending.as_ref().is_some_and(|request| state.permission_mode.allows(&request.preview)) {
                             if let Some(request) = pending.take() { let _ = request.decision.send(true); }
                             state.approval = None;
+                            state.resume_clock();
                         }
                         continue;
                     }
@@ -392,14 +395,17 @@ pub async fn run(
                             approval::Action::Approve => {
                                 if let Some(request) = pending.take() { let _ = request.decision.send(true); }
                                 state.approval = None;
+                                state.resume_clock();
                             }
                             approval::Action::Deny => {
                                 if let Some(request) = pending.take() { let _ = request.decision.send(false); }
                                 state.approval = None;
+                                state.resume_clock();
                             }
                             approval::Action::Cancel => {
                                 if let Some(request) = pending.take() { let _ = request.decision.send(false); }
                                 state.approval = None;
+                                state.resume_clock();
                                 state.cancel();
                                 if let Some(token) = &cancellation { token.cancel(); }
                                 if let Some(token) = &local_cancellation { token.cancel(); }
@@ -562,6 +568,7 @@ pub async fn run(
                     state.approval_choice = 0;
                     state.approval_diff = None;
                     pending = Some(request);
+                    state.pause_clock();
                     dirty = true;
                 }
                 event = async { receiver.as_mut().unwrap().recv().await }, if receiver.is_some() => {
@@ -589,6 +596,8 @@ pub async fn run(
                         }
                         Ok(Err(_)) if cancellation.as_ref().is_some_and(CancellationToken::is_cancelled) => ("cancelled", AgentEvent::Cancelled, None),
                         Ok(Err(AgentError::Cancelled)) => ("cancelled", AgentEvent::Cancelled, None),
+                        Ok(Err(AgentError::CompactionFailed { kind, .. })) => ("failed", AgentEvent::Failed { error: format!("上下文整理未完成：{}。原上下文已保留。", kind.label()) }, None),
+                        Ok(Err(AgentError::Compaction(_))) => ("failed", AgentEvent::Failed { error: "上下文整理未完成，原上下文已保留。".into() }, None),
                         Ok(Err(error)) => ("failed", AgentEvent::Failed { error: error.to_string() }, None),
                         Err(error) => ("failed", AgentEvent::Failed { error: format!("后台任务中断：{error}") }, None),
                     };
@@ -708,7 +717,7 @@ pub async fn run(
                             state.resume_loading = None;
                             refresh_context_usage(&mut state, &history, &tools);
                         } else {
-                            state.resume_loading = Some(format!("正在显示会话历史…  {}/{} 轮", replay.completed_runs(), session.snapshot.runs.len()));
+                            state.resume_loading = Some(format!("正在显示会话历史…  {}/{}", replay.completed_runs(), session.snapshot.runs.len()));
                         }
                         dirty = true;
                     }
@@ -852,6 +861,11 @@ async fn start_agent_run(
     max_tool_calls: usize,
     compaction: &orbit_agent::compaction::CompactionRuntime,
 ) -> Result<StartedRun> {
+    let mut messages = if compacting {
+        compaction_source_history(session, history).await?
+    } else {
+        history.to_vec()
+    };
     session.begin(prompt.clone(), state.model.clone()).await?;
     let display_prompt = if attachments.is_empty() {
         prompt.clone()
@@ -872,7 +886,6 @@ async fn start_agent_run(
     } else {
         state.submit(display_prompt);
     }
-    let mut messages = history.to_vec();
     if !compacting {
         messages.push(ChatMessage::user_with_attachments(prompt, attachments));
     }
@@ -975,6 +988,66 @@ async fn start_agent_run(
         cancellation,
         task,
     })
+}
+
+// A failed model summary may have committed a retrieval-backed projection. If
+// the user retries immediately, summarize the immutable source snapshot rather
+// than trying to compress the already small projection a second time.
+fn retry_archive_id(runs: &[Run], history: &[ChatMessage]) -> Option<i64> {
+    let last_completed = runs.iter().rev().find(|run| run.status == "completed")?;
+    if last_completed.prompt != "/compact" {
+        return None;
+    }
+    let reference = last_completed.events.iter().find_map(|event| match event {
+        AgentEvent::CompactionRecorded { record }
+            if record.strategy == CompactionStrategy::ArchiveProjection =>
+        {
+            record.archive.as_deref()
+        }
+        _ => None,
+    })?;
+    let id = reference
+        .strip_prefix("read_history archive_id=")?
+        .split(';')
+        .next()?
+        .parse::<i64>()
+        .ok()
+        .filter(|id| *id > 0)?;
+    let marker = format!("read_history archive_id={id};");
+    history
+        .iter()
+        .any(|message| {
+            matches!(message, ChatMessage::User { content, .. }
+            if content.starts_with("BEGIN_UNTRUSTED_COMPACTION_RECORD\n")
+                && content.contains(&marker))
+        })
+        .then_some(id)
+}
+
+async fn compaction_source_history(
+    session: &SessionState,
+    history: &[ChatMessage],
+) -> Result<Vec<ChatMessage>> {
+    let Some(archive_id) = retry_archive_id(&session.snapshot.runs, history) else {
+        return Ok(history.to_vec());
+    };
+    let source = session
+        .store
+        .load_context_archive(session.id(), archive_id)
+        .await?;
+    // Current injected instructions can change across restarts. Keep them,
+    // while restoring the original conversation messages from the archive.
+    let mut restored = history
+        .iter()
+        .take_while(|message| matches!(message, ChatMessage::System { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    restored.extend(
+        source
+            .into_iter()
+            .skip_while(|message| matches!(message, ChatMessage::System { .. })),
+    );
+    Ok(restored)
 }
 
 async fn run_command(
@@ -2274,6 +2347,100 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
 mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
+
+    #[tokio::test]
+    async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
+        use orbit_agent::memory::{CompactionMode, CompactionRecord, FileActivity, TaskSummary};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = SessionState::open(dir.path().join("orbit.db"), None, "mock".into())
+            .await
+            .unwrap();
+        let original = vec![
+            ChatMessage::system("old instructions"),
+            ChatMessage::user("original work"),
+            ChatMessage::assistant("original answer"),
+        ];
+        let id = session
+            .store
+            .archive_context(session.id(), &original)
+            .await
+            .unwrap();
+
+        let record = CompactionRecord {
+            version: 2,
+            mode: CompactionMode::Manual,
+            source_messages: 3,
+            retained_from: 2,
+            pinned_user: None,
+            before_tokens: 200_000,
+            after_tokens: 40_000,
+            strategy: CompactionStrategy::ArchiveProjection,
+            summary_requests: 1,
+            summary_input_tokens: 4_096,
+            archive: Some(format!("read_history archive_id={id}; search with query")),
+            fallback: true,
+            fallback_reason: None,
+            summary: TaskSummary {
+                goal: String::new(),
+                constraints: vec![],
+                decisions: vec![],
+                completed: vec![],
+                remaining: vec![],
+                verification: vec![],
+                uncertainty: vec![],
+            },
+            files: FileActivity::default(),
+        };
+        let archive_run = Run {
+            prompt: "/compact".into(),
+            status: "completed".into(),
+            elapsed_ms: None,
+            events: vec![AgentEvent::CompactionRecorded { record }],
+        };
+        let failed_retry = Run {
+            prompt: "/compact".into(),
+            status: "failed".into(),
+            elapsed_ms: None,
+            events: vec![],
+        };
+        let projected = vec![
+            ChatMessage::system("current instructions"),
+            ChatMessage::user(format!(
+                "BEGIN_UNTRUSTED_COMPACTION_RECORD\nread_history archive_id={id}; search with query"
+            )),
+        ];
+        assert_eq!(
+            retry_archive_id(&[archive_run.clone(), failed_retry], &projected),
+            Some(id)
+        );
+        session.snapshot.runs = vec![archive_run.clone()];
+        let restored = compaction_source_history(&session, &projected)
+            .await
+            .unwrap();
+        assert_eq!(
+            restored,
+            vec![
+                ChatMessage::system("current instructions"),
+                ChatMessage::user("original work"),
+                ChatMessage::assistant("original answer"),
+            ]
+        );
+        assert_eq!(
+            retry_archive_id(std::slice::from_ref(&archive_run), &[]),
+            None
+        );
+        let later_reply = Run {
+            prompt: "new work".into(),
+            status: "completed".into(),
+            elapsed_ms: None,
+            events: vec![],
+        };
+        assert_eq!(
+            retry_archive_id(&[archive_run, later_reply], &projected),
+            None
+        );
+    }
 
     #[test]
     fn resume_ui_shell_resets_permission_mode_to_auto() {

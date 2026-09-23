@@ -9,6 +9,35 @@ use sha2::{Digest, Sha256};
 use crate::store::Store;
 
 impl Store {
+    /// Restore the complete snapshot for a retry of a previously incomplete
+    /// compaction. The archive ID alone never grants cross-session access.
+    pub async fn load_context_archive(
+        &self,
+        session_id: &str,
+        archive_id: i64,
+    ) -> Result<Vec<ChatMessage>> {
+        ensure!(archive_id > 0, "invalid history archive ID");
+        let session_id = session_id.to_owned();
+        self.access(move |conn| {
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM context_archives WHERE id=?1 AND session_id=?2)",
+                params![archive_id, session_id],
+                |row| row.get(0),
+            )?;
+            ensure!(exists, "history archive not found in this session");
+            let mut stmt = conn.prepare(
+                "SELECT payload FROM context_archive_messages WHERE archive_id=?1 ORDER BY ordinal",
+            )?;
+            let rows = stmt.query_map(params![archive_id], |row| row.get::<_, String>(0))?;
+            let mut messages = Vec::new();
+            for row in rows {
+                messages.push(serde_json::from_str(&row?)?);
+            }
+            Ok(messages)
+        })
+        .await
+    }
+
     pub async fn archive_context(&self, session_id: &str, messages: &[ChatMessage]) -> Result<i64> {
         let session_id = session_id.to_owned();
         let messages = messages
@@ -138,6 +167,20 @@ mod tests {
             "repeated compaction of one source must preserve archive references"
         );
         let reopened = Store::open(path).await.unwrap();
+        assert_eq!(
+            reopened
+                .load_context_archive(owner.id(), archive)
+                .await
+                .unwrap(),
+            history
+        );
+        assert!(
+            reopened
+                .load_context_archive(foreign.id(), archive)
+                .await
+                .is_err(),
+            "an archive ID must not expose another session's history"
+        );
         assert!(
             reopened
                 .read_context_archive(foreign.id(), archive, None, None, None, 0, 100)

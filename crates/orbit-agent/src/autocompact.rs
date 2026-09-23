@@ -978,13 +978,13 @@ fn finish(
     summary_input_tokens: usize,
 ) -> Result<CompactedContext, AgentError> {
     let after_tokens = estimate_tokens(&history, tools);
-    // An expensive summary must reclaim meaningful room, not merely one token.
-    let target = if strategy == CompactionStrategy::ToolPruning {
-        plan.target_tokens.max(limit.saturating_sub(output) / 3)
-    } else {
-        plan.target_tokens
-    };
-    if after_tokens > plan.before_tokens.saturating_mul(3) / 4 || after_tokens > target {
+    // The planner's target selects a safe cut point, but is not a hard
+    // success bound for a model-authored summary. A slightly longer valid
+    // summary must not turn substantial reclaimed space into a failure.
+    let pruning_target = plan.target_tokens.max(limit.saturating_sub(output) / 3);
+    if after_tokens > plan.before_tokens.saturating_mul(3) / 4
+        || (strategy == CompactionStrategy::ToolPruning && after_tokens > pruning_target)
+    {
         return Err(failure(
             Failure::InsufficientReduction,
             "compaction did not free enough context; original context preserved",
@@ -1015,4 +1015,53 @@ fn finish(
         after_tokens,
         record,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_summary_can_exceed_the_planning_target_when_it_frees_space() {
+        let history = vec![
+            ChatMessage::system("rules"),
+            ChatMessage::user("recent work"),
+        ];
+        let after_tokens = estimate_tokens(&history, &[]);
+        let plan = Plan {
+            original: vec![ChatMessage::user("old history ".repeat(3_000))],
+            retained: history.clone(),
+            before_tokens: after_tokens * 10,
+            summary_tokens: 256,
+            target_tokens: after_tokens - 1,
+            retained_from: 1,
+            pinned_user: None,
+            mode: CompactionMode::Manual,
+            files: FileActivity::default(),
+        };
+        let summary = TaskSummary {
+            goal: "continue recent work".into(),
+            constraints: vec![],
+            decisions: vec![],
+            completed: vec![],
+            remaining: vec![],
+            verification: vec![],
+            uncertainty: vec![],
+        };
+        let result = finish(
+            &plan,
+            &[],
+            256,
+            10_000,
+            history,
+            summary,
+            CompactionStrategy::Summary,
+            None,
+            1,
+            512,
+        )
+        .unwrap();
+        assert!(result.after_tokens > plan.target_tokens);
+        assert!(result.after_tokens < result.before_tokens * 3 / 4);
+    }
 }

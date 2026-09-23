@@ -11,6 +11,8 @@ use super::{
     transcript::wrap_line,
 };
 
+const FOLDED_COLOR: Color = Color::Rgb(170, 170, 170);
+
 #[derive(Debug)]
 pub(super) struct Cache {
     before: String,
@@ -56,11 +58,11 @@ impl Cache {
                         let text = format!("… {} 行未改动", len - 6);
                         cache.left.push(Line::styled(
                             fit_label(&text, widths.0 as usize, false),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(FOLDED_COLOR),
                         ));
                         cache.right.push(Line::styled(
                             fit_label(&text, widths.1 as usize, false),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(FOLDED_COLOR),
                         ));
                     }
                     continue;
@@ -78,21 +80,29 @@ impl Cache {
                 cache.right.extend(right);
             }
         }
-        for (rows, text, width) in [
-            (&mut cache.left, before, widths.0),
-            (&mut cache.right, after, widths.1),
-        ] {
-            let ending = if text.is_empty() {
-                "空文件"
+        let ending = |text: &str| {
+            if text.is_empty() {
+                Some("空文件")
             } else if text.ends_with('\n') {
-                "末尾有换行"
+                None
             } else {
-                "末尾无换行"
-            };
-            rows.push(Line::styled(
-                fit_label(ending, width as usize, false),
-                Style::default().fg(Color::DarkGray),
-            ));
+                Some("末尾无换行")
+            }
+        };
+        let left_ending = ending(before);
+        let right_ending = ending(after);
+        if left_ending.is_some() || right_ending.is_some() {
+            for (rows, label, width) in [
+                (&mut cache.left, left_ending, widths.0),
+                (&mut cache.right, right_ending, widths.1),
+            ] {
+                rows.push(label.map_or_else(Line::default, |label| {
+                    Line::styled(
+                        fit_label(label, width as usize, false),
+                        Style::default().fg(FOLDED_COLOR),
+                    )
+                }));
+            }
         }
         cache
     }
@@ -197,6 +207,25 @@ mod tests {
         let folded = Cache::new(&before, &after, (40, 40), false);
         let full = Cache::new(&before, &after, (40, 40), true);
         assert!(folded.left.len() < full.left.len());
+        let folded_row = folded
+            .left
+            .iter()
+            .find(|line| line.to_string().contains("行未改动"))
+            .unwrap();
+        assert_eq!(folded_row.style.fg, Some(FOLDED_COLOR));
+        assert!(
+            !folded
+                .left
+                .iter()
+                .any(|line| line.to_string().contains("末尾有换行"))
+        );
+        assert!(
+            !folded
+                .right
+                .iter()
+                .any(|line| line.to_string().contains("末尾有换行"))
+        );
+        assert_eq!(folded.left.len(), folded.right.len());
         assert!(
             folded
                 .left
@@ -211,6 +240,19 @@ mod tests {
         );
         assert!(folded.matches(&before, &after, (40, 40), false));
         assert!(!folded.matches(&before, &after, (30, 40), false));
+        let one_side_missing_newline = Cache::new("before\n", "after", (40, 40), false);
+        assert_eq!(
+            one_side_missing_newline.left.len(),
+            one_side_missing_newline.right.len()
+        );
+        assert!(
+            one_side_missing_newline
+                .right
+                .last()
+                .unwrap()
+                .to_string()
+                .contains("末尾无换行")
+        );
         for width in [0, 1, 8, 9, 20] {
             for (a, b) in [("", "新内容\u{1b}\t\n"), ("old", ""), ("", "")] {
                 let diff = Cache::new(a, b, (width, width), true);
