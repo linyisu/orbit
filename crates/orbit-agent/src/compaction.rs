@@ -17,10 +17,10 @@ impl Default for CompactionSettings {
     fn default() -> Self {
         Self {
             model: None,
-            max_input_tokens: 32768,
-            max_output_tokens: 8192,
-            request_timeout_seconds: 90,
-            total_timeout_seconds: 240,
+            max_input_tokens: 16384,
+            max_output_tokens: 4096,
+            request_timeout_seconds: 45,
+            total_timeout_seconds: 180,
         }
     }
 }

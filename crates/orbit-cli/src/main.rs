@@ -1080,6 +1080,9 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
             match strategy {
                 orbit_agent::memory::CompactionStrategy::ToolPruning => "旧工具输出已精简",
                 orbit_agent::memory::CompactionStrategy::Summary => "上下文已整理",
+                orbit_agent::memory::CompactionStrategy::ArchiveProjection => {
+                    "旧历史已归档，摘要未完成"
+                }
             },
             if *fallback {
                 "；保留最近工作内容"

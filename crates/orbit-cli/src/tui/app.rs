@@ -260,7 +260,9 @@ impl UiState {
                 ..
             } => {
                 self.context_used_tokens = self.calibration().estimate(after_tokens);
-                let detail = if fallback {
+                let detail = if fallback
+                    && strategy != orbit_agent::memory::CompactionStrategy::ArchiveProjection
+                {
                     " · 保留最近工作内容"
                 } else {
                     ""
@@ -268,6 +270,9 @@ impl UiState {
                 let action = match strategy {
                     orbit_agent::memory::CompactionStrategy::ToolPruning => "旧工具输出已精简",
                     orbit_agent::memory::CompactionStrategy::Summary => "上下文已整理",
+                    orbit_agent::memory::CompactionStrategy::ArchiveProjection => {
+                        "旧历史已归档，摘要未完成"
+                    }
                 };
                 self.transcript.push(TranscriptItem::Maintenance(format!(
                     "{action}  {before_tokens} → {after_tokens} tokens{detail}"

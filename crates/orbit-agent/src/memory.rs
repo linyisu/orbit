@@ -163,6 +163,9 @@ pub enum CompactionStrategy {
     #[default]
     Summary,
     ToolPruning,
+    /// The model summary failed; the old prefix is retrievable, but its
+    /// contents have not been summarized or promoted to task state.
+    ArchiveProjection,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -183,9 +186,9 @@ pub struct CompactionRecord {
     pub summary_input_tokens: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive: Option<String>,
-    /// Retained for backwards compatibility with historical records. The current
-    /// engine preserves the original context on failure instead of generating
-    /// deterministic local fallbacks.
+    /// Historical template fallbacks remain readable. New `archive_projection`
+    /// records set this only after originals are durably archived and the
+    /// omitted range is explicitly marked as unsummarized.
     #[serde(default)]
     pub fallback: bool,
     /// Retained for backwards compatibility with older persisted records.
