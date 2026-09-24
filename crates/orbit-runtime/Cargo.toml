@@ -5,9 +5,11 @@ edition.workspace = true
 
 [dependencies]
 rustix.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-tempfile.workspace = true

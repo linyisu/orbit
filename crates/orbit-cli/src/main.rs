@@ -5,9 +5,11 @@ use std::{
     time::Duration,
 };
 
+mod approval;
 mod runtime;
 
 use anyhow::{Context, Result, bail, ensure};
+use approval::ApprovalMode;
 use clap::{Args, Parser, Subcommand};
 use orbit_agent::{
     agent::{Agent, AgentConfig},
@@ -66,6 +68,9 @@ struct ChatArgs {
     #[arg(long)]
     resume: Option<String>,
 
+    #[arg(long, value_enum, default_value_t = ApprovalMode::Ask)]
+    approval: ApprovalMode,
+
     prompt: String,
 }
 
@@ -77,6 +82,13 @@ struct FileConfig {
     api_key: String,
     model: String,
     timeout_seconds: u64,
+    #[serde(default)]
+    command: CommandConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CommandConfig {
+    rust_toolchain: Option<PathBuf>,
 }
 
 impl FileConfig {
@@ -147,9 +159,17 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     let workspace = std::env::current_dir()?.canonicalize()?;
     let file_config = FileConfig::load(&config_path)?;
     let model_name = file_config.model.clone();
+    let rust_toolchain = file_config.command.rust_toolchain.clone();
     let client = ModelClient::new(file_config.model_config())?;
     let store = Store::open(&database).await?;
-    let tools = runtime::read_only_workspace_tools(&workspace, &config_path, store.path())?;
+    let (approval_sender, approval_receiver) = orbit_tools::approval::channel();
+    let tools = runtime::workspace_tools(
+        &workspace,
+        &config_path,
+        store.path(),
+        approval_sender,
+        rust_toolchain,
+    )?;
 
     let (mut writer, mut history) = if let Some(id) = args.resume.as_deref() {
         let session = store.session(id).await?;
@@ -175,6 +195,12 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
         AgentConfig::default(),
     );
 
+    let approval_mode = args.approval;
+    let approval_workspace = workspace.clone();
+    let approval_task = tokio::spawn(async move {
+        approval::serve(approval_receiver, approval_mode, &approval_workspace).await;
+    });
+
     let streaming = args.stream;
     let result = agent
         .run_with_agent_events(request, CancellationToken::new(), |event| {
@@ -197,6 +223,7 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
             }
         })
         .await;
+    approval_task.abort();
 
     let status = match &result {
         Ok(_) => "completed",
@@ -213,4 +240,24 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_requires_explicit_auto_approval_opt_in() {
+        let default = Cli::try_parse_from(["orbit", "chat", "hello"]).unwrap();
+        let Command::Chat(default) = default.command else {
+            panic!("chat command expected");
+        };
+        assert!(matches!(default.approval, ApprovalMode::Ask));
+
+        let auto = Cli::try_parse_from(["orbit", "chat", "--approval", "auto", "hello"]).unwrap();
+        let Command::Chat(auto) = auto.command else {
+            panic!("chat command expected");
+        };
+        assert!(matches!(auto.approval, ApprovalMode::Auto));
+    }
 }
