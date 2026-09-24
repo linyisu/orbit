@@ -1,10 +1,16 @@
+use std::{collections::HashSet, future::Future};
+
 use futures_util::StreamExt;
-use orbit_model::types::{
-    ChatCompletion, ChatMessage, ChatRequest, FunctionCall, StreamEvent, ToolCall, ToolCallDelta,
+use orbit_model::{
+    error::ModelError,
+    types::{
+        ChatCompletion, ChatMessage, ChatRequest, FunctionCall, StreamEvent, ToolCall,
+        ToolCallDelta, Usage,
+    },
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{error::AgentError, model::ModelBackend, tool::ToolRegistry};
+use crate::{error::AgentError, events::AgentEvent, model::ModelBackend, tool::ToolRegistry};
 
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
@@ -52,7 +58,10 @@ where
         request: ChatRequest,
         cancellation: CancellationToken,
     ) -> Result<AgentResult, AgentError> {
-        self.run_internal(request, cancellation, None).await
+        self.run_core(request, cancellation, |_| {
+            std::future::ready(Ok::<(), AgentError>(()))
+        })
+        .await
     }
 
     pub async fn run_with_events<F>(
@@ -64,57 +73,112 @@ where
     where
         F: Fn(StreamEvent) + Send + Sync,
     {
-        self.run_internal(request, cancellation, Some(&on_event))
-            .await
+        self.run_core(request, cancellation, |event| {
+            if let AgentEvent::Model(event) = event {
+                on_event(event);
+            }
+            std::future::ready(Ok::<(), AgentError>(()))
+        })
+        .await
     }
 
-    async fn run_internal(
+    pub async fn run_with_agent_events<F, Fut>(
         &self,
         request: ChatRequest,
         cancellation: CancellationToken,
-        on_event: Option<&dyn Fn(StreamEvent)>,
-    ) -> Result<AgentResult, AgentError> {
+        emit: F,
+    ) -> Result<AgentResult, AgentError>
+    where
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: Future<Output = Result<(), AgentError>>,
+    {
+        self.run_core(request, cancellation, emit).await
+    }
+
+    async fn run_core<F, Fut>(
+        &self,
+        request: ChatRequest,
+        cancellation: CancellationToken,
+        mut emit: F,
+    ) -> Result<AgentResult, AgentError>
+    where
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: Future<Output = Result<(), AgentError>>,
+    {
+        let result = self.execute_core(request, cancellation, &mut emit).await;
+        let terminal = match &result {
+            Ok(result) => AgentEvent::Completed {
+                turns: result.turns,
+                tool_calls: result.tool_calls,
+            },
+            Err(AgentError::Cancelled | AgentError::Model(ModelError::Cancelled)) => {
+                AgentEvent::Cancelled
+            }
+            Err(error) => AgentEvent::Failed {
+                error: error.to_string(),
+            },
+        };
+
+        emit(terminal).await?;
+        result
+    }
+
+    async fn execute_core<F, Fut>(
+        &self,
+        request: ChatRequest,
+        cancellation: CancellationToken,
+        emit: &mut F,
+    ) -> Result<AgentResult, AgentError>
+    where
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: Future<Output = Result<(), AgentError>>,
+    {
         if request.messages.is_empty() {
             return Err(AgentError::InvalidInitialRequest);
         }
 
         let mut history = request.messages;
-        let mut turns = 0;
-        let mut tool_calls = 0;
+        let mut turns = 0usize;
+        let mut tool_calls = 0usize;
 
         loop {
             if cancellation.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
-
             if self.config.max_turns > 0 && turns >= self.config.max_turns {
                 return Err(AgentError::MaxTurns);
             }
 
             turns += 1;
+            emit(AgentEvent::TurnStarted { turn: turns }).await?;
+
             let model_request = ChatRequest {
                 messages: history.clone(),
                 tools: self.tools.definitions(),
                 temperature: request.temperature,
                 max_tokens: request.max_tokens,
             };
-            let completion = match on_event {
-                Some(on_event) => {
-                    self.collect_stream(model_request, cancellation.clone(), on_event)
-                        .await?
-                }
-                None => {
-                    self.backend
-                        .complete(model_request, cancellation.clone())
-                        .await?
-                }
-            };
+            let completion = self
+                .collect_stream(model_request, cancellation.clone(), emit)
+                .await?;
+            check_finish_reason(completion.finish_reason.as_deref())?;
 
-            let assistant = completion.message.clone();
+            let assistant = completion.message;
             let calls = match &assistant {
                 ChatMessage::Assistant { tool_calls, .. } => tool_calls.clone(),
-                _ => Vec::new(),
+                _ => {
+                    return Err(AgentError::Model(ModelError::Protocol(
+                        "model returned a non-assistant message".to_owned(),
+                    )));
+                }
             };
+            validate_tool_ids(&calls)?;
+            if self.config.max_tool_calls > 0
+                && tool_calls.saturating_add(calls.len()) > self.config.max_tool_calls
+            {
+                return Err(AgentError::MaxToolCalls);
+            }
+
             history.push(assistant.clone());
 
             if calls.is_empty() {
@@ -130,29 +194,51 @@ where
                 if cancellation.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
-
-                if self.config.max_tool_calls > 0 && tool_calls >= self.config.max_tool_calls {
-                    return Err(AgentError::MaxToolCalls);
-                }
-
                 tool_calls += 1;
+                emit(AgentEvent::ToolStarted { call: call.clone() }).await?;
+
                 let result = self.tools.execute(call.clone(), cancellation.clone()).await;
-                let content = match result {
-                    Ok(content) => content,
-                    Err(error) => format!("tool error: {error}"),
+                let (content, event) = match result {
+                    Ok(content) => (
+                        content.clone(),
+                        AgentEvent::ToolFinished {
+                            call: call.clone(),
+                            content,
+                        },
+                    ),
+                    Err(error) => {
+                        if cancellation.is_cancelled() {
+                            return Err(AgentError::Cancelled);
+                        }
+
+                        let message = error.to_string();
+                        (
+                            format!("tool error: {message}"),
+                            AgentEvent::ToolFailed {
+                                call: call.clone(),
+                                error: message,
+                            },
+                        )
+                    }
                 };
                 history.push(ChatMessage::tool(call.id, content));
+                emit(event).await?;
             }
         }
     }
 
-    async fn collect_stream(
+    async fn collect_stream<F, Fut>(
         &self,
         request: ChatRequest,
         cancellation: CancellationToken,
-        on_event: &dyn Fn(StreamEvent),
-    ) -> Result<ChatCompletion, AgentError> {
-        let mut stream = self.backend.stream(request, cancellation).await?;
+        emit: &mut F,
+    ) -> Result<ChatCompletion, AgentError>
+    where
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: Future<Output = Result<(), AgentError>>,
+    {
+        let fallback_request = request.clone();
+        let mut stream = self.backend.stream(request, cancellation.clone()).await?;
         let mut text = String::new();
         let mut calls = Vec::new();
         let mut finish_reason = None;
@@ -160,21 +246,31 @@ where
 
         while let Some(event) = stream.next().await {
             let event = event.map_err(AgentError::Model)?;
-            on_event(event.clone());
+            emit(AgentEvent::Model(event.clone())).await?;
 
             match event {
-                StreamEvent::TextDelta(delta) | StreamEvent::ReasoningDelta(delta) => {
-                    text.push_str(&delta);
-                }
+                StreamEvent::TextDelta(delta) => text.push_str(&delta),
+                StreamEvent::ReasoningDelta(_) => {}
                 StreamEvent::ToolCallDelta(delta) => merge_tool_call(&mut calls, delta),
                 StreamEvent::Completed {
                     finish_reason: reason,
                     usage: event_usage,
                 } => {
-                    finish_reason = reason;
-                    usage = event_usage;
+                    if reason.is_some() {
+                        finish_reason = reason;
+                    }
+                    merge_usage(&mut usage, event_usage);
                 }
             }
+        }
+
+        if text.is_empty() && calls.is_empty() && finish_reason.is_none() {
+            let completion = self
+                .backend
+                .complete(fallback_request, cancellation)
+                .await?;
+            emit_completion(&completion, emit).await?;
+            return Ok(completion);
         }
 
         Ok(ChatCompletion {
@@ -187,6 +283,83 @@ where
             finish_reason,
             usage,
         })
+    }
+}
+
+async fn emit_completion<F, Fut>(
+    completion: &ChatCompletion,
+    emit: &mut F,
+) -> Result<(), AgentError>
+where
+    F: FnMut(AgentEvent) -> Fut,
+    Fut: Future<Output = Result<(), AgentError>>,
+{
+    if let ChatMessage::Assistant {
+        content,
+        tool_calls,
+    } = &completion.message
+    {
+        if let Some(content) = content {
+            emit(AgentEvent::Model(StreamEvent::TextDelta(content.clone()))).await?;
+        }
+        for (index, call) in tool_calls.iter().enumerate() {
+            emit(AgentEvent::Model(StreamEvent::ToolCallDelta(
+                ToolCallDelta {
+                    index,
+                    id: Some(call.id.clone()),
+                    name: Some(call.function.name.clone()),
+                    arguments: call.function.arguments.clone(),
+                },
+            )))
+            .await?;
+        }
+        emit(AgentEvent::Model(StreamEvent::Completed {
+            finish_reason: completion.finish_reason.clone(),
+            usage: completion.usage.clone(),
+        }))
+        .await?;
+    }
+
+    Ok(())
+}
+
+fn check_finish_reason(reason: Option<&str>) -> Result<(), AgentError> {
+    if let Some(reason) =
+        reason.filter(|reason| matches!(*reason, "max_tokens" | "length" | "incomplete"))
+    {
+        return Err(AgentError::Model(ModelError::Protocol(format!(
+            "model output was incomplete (finish_reason={reason})"
+        ))));
+    }
+
+    Ok(())
+}
+
+fn validate_tool_ids(calls: &[ToolCall]) -> Result<(), AgentError> {
+    let mut ids = HashSet::new();
+    for call in calls {
+        if call.id.trim().is_empty() || !ids.insert(&call.id) {
+            return Err(AgentError::Model(ModelError::Protocol(
+                "model returned empty or duplicate tool call IDs; no tools were executed"
+                    .to_owned(),
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn merge_usage(current: &mut Option<Usage>, update: Option<Usage>) {
+    let Some(update) = update else {
+        return;
+    };
+
+    if let Some(current) = current {
+        current.prompt_tokens = update.prompt_tokens.or(current.prompt_tokens);
+        current.completion_tokens = update.completion_tokens.or(current.completion_tokens);
+        current.total_tokens = update.total_tokens.or(current.total_tokens);
+    } else {
+        *current = Some(update);
     }
 }
 
@@ -435,12 +608,188 @@ mod tests {
             },
         );
 
+        let mut events = Vec::new();
+
         let error = agent
-            .run(request(), CancellationToken::new())
+            .run_with_agent_events(request(), CancellationToken::new(), |event| {
+                events.push(event);
+                std::future::ready(Ok(()))
+            })
             .await
             .expect_err("tool budget must stop the loop");
 
         assert!(matches!(error, AgentError::MaxToolCalls));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::ToolStarted { .. }))
+        );
+    }
+
+    #[derive(Clone)]
+    struct ScriptedStreamModel {
+        events: Vec<StreamEvent>,
+    }
+
+    impl ModelBackend for ScriptedStreamModel {
+        fn complete<'a>(
+            &'a self,
+            _request: ChatRequest,
+            _cancellation: CancellationToken,
+        ) -> crate::model::CompletionFuture<'a> {
+            Box::pin(async {
+                Err(ModelError::Protocol(
+                    "unexpected non-streaming fallback".to_owned(),
+                ))
+            })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _request: ChatRequest,
+            _cancellation: CancellationToken,
+        ) -> crate::model::StreamFuture<'a> {
+            let events = self.events.clone();
+            Box::pin(async move {
+                Ok(
+                    Box::pin(futures_util::stream::iter(events.into_iter().map(Ok)))
+                        as orbit_model::types::ModelStream,
+                )
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn reasoning_and_usage_events_do_not_change_the_final_answer() {
+        let model = ScriptedStreamModel {
+            events: vec![
+                StreamEvent::ReasoningDelta("private reasoning".to_owned()),
+                StreamEvent::TextDelta("answer".to_owned()),
+                StreamEvent::Completed {
+                    finish_reason: Some("stop".to_owned()),
+                    usage: None,
+                },
+                StreamEvent::Completed {
+                    finish_reason: None,
+                    usage: Some(Usage {
+                        prompt_tokens: Some(12),
+                        completion_tokens: Some(3),
+                        total_tokens: Some(15),
+                    }),
+                },
+            ],
+        };
+        let agent = Agent::new(model, ToolRegistry::new(), AgentConfig::default());
+        let mut events = Vec::new();
+
+        let result = agent
+            .run_with_agent_events(request(), CancellationToken::new(), |event| {
+                events.push(event);
+                std::future::ready(Ok(()))
+            })
+            .await
+            .expect("streamed agent completes");
+
+        assert_eq!(result.final_message, ChatMessage::assistant("answer"));
+        assert!(matches!(
+            events.first(),
+            Some(AgentEvent::TurnStarted { turn: 1 })
+        ));
+        assert!(matches!(
+            events.get(1),
+            Some(AgentEvent::Model(StreamEvent::ReasoningDelta(text))) if text == "private reasoning"
+        ));
+        assert!(matches!(
+            events.last(),
+            Some(AgentEvent::Completed {
+                turns: 1,
+                tool_calls: 0
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn plain_and_event_runs_execute_the_same_tool_loop() {
+        let responses = [
+            assistant_tool_call("call-1", "missing", "{}"),
+            assistant_text("recovered"),
+        ];
+        let plain_model = MockModel::new(responses.clone());
+        let event_model = MockModel::new(responses);
+        let plain_agent = Agent::new(
+            plain_model.clone(),
+            ToolRegistry::new(),
+            AgentConfig::default(),
+        );
+        let event_agent = Agent::new(
+            event_model.clone(),
+            ToolRegistry::new(),
+            AgentConfig::default(),
+        );
+        let mut events = Vec::new();
+
+        let plain = plain_agent
+            .run(request(), CancellationToken::new())
+            .await
+            .unwrap();
+        let streamed = event_agent
+            .run_with_agent_events(request(), CancellationToken::new(), |event| {
+                events.push(event);
+                std::future::ready(Ok(()))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(plain.history, streamed.history);
+        assert_eq!(plain_model.requests(), event_model.requests());
+        assert!(matches!(
+            events.as_slice(),
+            [
+                AgentEvent::TurnStarted { turn: 1 },
+                AgentEvent::Model(_),
+                AgentEvent::Model(_),
+                AgentEvent::ToolStarted { .. },
+                AgentEvent::ToolFailed { .. },
+                AgentEvent::TurnStarted { turn: 2 },
+                AgentEvent::Model(_),
+                AgentEvent::Model(_),
+                AgentEvent::Completed {
+                    turns: 2,
+                    tool_calls: 1
+                }
+            ]
+        ));
+    }
+
+    #[tokio::test]
+    async fn incomplete_response_never_executes_its_tool_calls() {
+        let mut incomplete = assistant_tool_call("call-1", "echo", "{}");
+        incomplete.finish_reason = Some("length".to_owned());
+        let model = MockModel::new([incomplete]);
+        let executions = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = executions.clone();
+        let mut tools = ToolRegistry::new();
+        tools.register(ClosureTool::new(
+            "echo",
+            "Count executions",
+            json!({ "type": "object" }),
+            move |_arguments, _cancellation| {
+                let observed = observed.clone();
+                async move {
+                    observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok("done".to_owned())
+                }
+            },
+        ));
+        let agent = Agent::new(model, tools, AgentConfig::default());
+
+        let error = agent
+            .run(request(), CancellationToken::new())
+            .await
+            .expect_err("truncated tool call must fail");
+
+        assert!(matches!(error, AgentError::Model(ModelError::Protocol(_))));
+        assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

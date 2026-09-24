@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use orbit_agent::{
     agent::{Agent, AgentConfig},
+    events::AgentEvent,
     model::ModelClientBackend,
 };
 use orbit_model::{
@@ -101,10 +102,11 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
 
     if args.stream {
         agent
-            .run_with_events(request, CancellationToken::new(), |event| {
-                if let StreamEvent::TextDelta(text) | StreamEvent::ReasoningDelta(text) = event {
+            .run_with_agent_events(request, CancellationToken::new(), |event| {
+                if let AgentEvent::Model(StreamEvent::TextDelta(text)) = event {
                     print!("{text}");
                 }
+                std::future::ready(Ok(()))
             })
             .await?;
         println!();
