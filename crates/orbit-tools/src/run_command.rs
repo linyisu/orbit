@@ -3,6 +3,7 @@ use std::{path::PathBuf, time::Duration};
 use orbit_agent::tool::{Tool, ToolError, ToolFuture};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::execution::{CommandSpec, run};
+use orbit_store::Store;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -29,14 +30,23 @@ pub struct RunCommand {
     workspace: Workspace,
     approvals: ApprovalSender,
     rust_toolchain: Option<PathBuf>,
+    store: Store,
+    session_id: String,
 }
 
 impl RunCommand {
-    pub fn new(workspace: Workspace, approvals: ApprovalSender) -> Self {
+    pub fn new(
+        workspace: Workspace,
+        approvals: ApprovalSender,
+        store: Store,
+        session_id: String,
+    ) -> Self {
         Self {
             workspace,
             approvals,
             rust_toolchain: None,
+            store,
+            session_id,
         }
     }
 
@@ -50,7 +60,7 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",
-            "Run a shell command in a fail-closed Bubblewrap sandbox with a disposable copy of the current workspace. Network access is allowed. Changes to the sandbox copy are discarded after this call; use write_file or edit_file for persistent project changes. /scratch is a disposable writable build directory for this invocation; Cargo uses it for its cache and target output. A host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust. /tmp is temporary and writable. Protected configuration, session data, links to protected files, and Git metadata are excluded. Output is limited to 32 KiB per stream. Never retry a denied command without a new user request.",
+            "Run a shell command in a fail-closed Bubblewrap sandbox with a disposable copy of the current workspace. Network access is allowed. Changes to the sandbox copy are discarded after this call; use write_file or edit_file for persistent project changes. /scratch is a disposable writable build directory for this invocation; Cargo uses it for its cache and target output. A host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust. /tmp is temporary and writable. Protected configuration, session data, links to protected files, and Git metadata are excluded. The response previews at most 32 KiB per stream; use read_command_output with output_id for retained output. Never retry a denied command without a new user request.",
             json!({
                 "type": "object",
                 "properties": {
@@ -120,7 +130,7 @@ impl Tool for RunCommand {
                 ));
             }
 
-            let result = run(
+            let mut result = run(
                 self.workspace.clone(),
                 CommandSpec {
                     command: args.command,
@@ -134,7 +144,21 @@ impl Tool for RunCommand {
                 orbit_runtime::RuntimeError::Cancelled => ToolError::Cancelled,
                 other => ToolError::ExecutionFailed(other.to_string()),
             })?;
-            serde_json::to_string(&result)
+            let output_id = self
+                .store
+                .save_command_output(
+                    &self.session_id,
+                    std::mem::take(&mut result.stdout_retained),
+                    std::mem::take(&mut result.stderr_retained),
+                    result.stdout_total_bytes,
+                    result.stderr_total_bytes,
+                )
+                .await
+                .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+            let mut response = serde_json::to_value(&result)
+                .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+            response["output_id"] = json!(output_id);
+            serde_json::to_string(&response)
                 .map_err(|error| ToolError::ExecutionFailed(error.to_string()))
         })
     }

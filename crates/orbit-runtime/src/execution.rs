@@ -21,6 +21,7 @@ const MAX_ENTRIES: usize = 10_000;
 const MAX_DEPTH: usize = 32;
 const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
+const MAX_RETAINED_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct CommandSpec {
@@ -38,6 +39,11 @@ pub struct CommandResult {
     pub stdout_total_bytes: usize,
     pub stderr_total_bytes: usize,
     pub output_truncated: bool,
+    pub retained_output_truncated: bool,
+    #[serde(skip)]
+    pub stdout_retained: Vec<u8>,
+    #[serde(skip)]
+    pub stderr_retained: Vec<u8>,
     pub timed_out: bool,
     pub sandbox: &'static str,
 }
@@ -277,7 +283,7 @@ fn sandbox_command(
 
 async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(
     mut reader: R,
-) -> Result<(String, usize, bool), RuntimeError> {
+) -> Result<(String, Vec<u8>, usize, bool), RuntimeError> {
     let mut kept = Vec::new();
     let mut total = 0usize;
     let mut buffer = [0u8; 8192];
@@ -288,14 +294,15 @@ async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(
             break;
         }
         total = total.saturating_add(count);
-        let remaining = MAX_OUTPUT_BYTES.saturating_sub(kept.len());
+        let remaining = MAX_RETAINED_BYTES.saturating_sub(kept.len());
         kept.extend_from_slice(&buffer[..count.min(remaining)]);
     }
 
     Ok((
-        String::from_utf8_lossy(&kept).into_owned(),
+        String::from_utf8_lossy(&kept[..kept.len().min(MAX_OUTPUT_BYTES)]).into_owned(),
+        kept,
         total,
-        total > kept.len(),
+        total > MAX_OUTPUT_BYTES,
     ))
 }
 
@@ -363,12 +370,12 @@ pub async fn run(
         status = child.wait() => (status.map_err(failed)?.code(), false, false),
     };
 
-    let (stdout, stdout_total_bytes, stdout_truncated) =
+    let (stdout, stdout_retained, stdout_total_bytes, stdout_truncated) =
         tokio::time::timeout(Duration::from_secs(2), stdout_task)
             .await
             .map_err(failed)?
             .map_err(failed)??;
-    let (stderr, stderr_total_bytes, stderr_truncated) =
+    let (stderr, stderr_retained, stderr_total_bytes, stderr_truncated) =
         tokio::time::timeout(Duration::from_secs(2), stderr_task)
             .await
             .map_err(failed)?
@@ -391,6 +398,10 @@ pub async fn run(
         stdout_total_bytes,
         stderr_total_bytes,
         output_truncated: stdout_truncated || stderr_truncated,
+        retained_output_truncated: stdout_total_bytes > stdout_retained.len()
+            || stderr_total_bytes > stderr_retained.len(),
+        stdout_retained,
+        stderr_retained,
         timed_out,
         sandbox: "bubblewrap; disposable workspace snapshot; network allowed",
     })

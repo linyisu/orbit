@@ -1034,6 +1034,7 @@ dependencies = [
  "orbit-agent",
  "orbit-model",
  "orbit-runtime",
+ "orbit-store",
  "regex",
  "rustix",
  "serde",

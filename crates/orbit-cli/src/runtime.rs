@@ -2,9 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use orbit_agent::tool::ToolRegistry;
+use orbit_store::Store;
 use orbit_tools::{
-    EditFile, ListFiles, ReadFile, RunCommand, SearchText, WriteFile, approval::ApprovalSender,
-    workspace::Workspace,
+    EditFile, ListFiles, ReadCommandOutput, ReadFile, RunCommand, SearchText, WriteFile,
+    approval::ApprovalSender, workspace::Workspace,
 };
 
 /// Every tool shares the same protected workspace and explicit approval channel.
@@ -12,6 +13,8 @@ pub fn workspace_tools(
     root: &Path,
     config: &Path,
     database: &Path,
+    store: Store,
+    session_id: &str,
     approvals: ApprovalSender,
     rust_toolchain: Option<PathBuf>,
 ) -> Result<ToolRegistry> {
@@ -26,12 +29,16 @@ pub fn workspace_tools(
     workspace.protect_opaque_runtime_root(database.with_extension("session-locks"))?;
 
     let mut tools = ToolRegistry::new();
+    tools.register(ReadCommandOutput::new(store.clone(), session_id.to_owned()));
     tools.register(ReadFile::new(workspace.clone()));
     tools.register(ListFiles::new(workspace.clone()));
     tools.register(SearchText::new(workspace.clone()));
     tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
     tools.register(EditFile::new(workspace.clone(), approvals.clone()));
-    tools.register(RunCommand::new(workspace, approvals).with_toolchain(rust_toolchain));
+    tools.register(
+        RunCommand::new(workspace, approvals, store, session_id.to_owned())
+            .with_toolchain(rust_toolchain),
+    );
     Ok(tools)
 }
 
@@ -50,8 +57,19 @@ mod tests {
         std::fs::write(&config, "api_key = 'secret'\n").unwrap();
 
         let database = project.path().join("sessions.sqlite");
+        let store = Store::open(&database).await.unwrap();
+        let writer = store.create(project.path(), "test-model").await.unwrap();
         let (approvals, _receiver) = orbit_tools::approval::channel();
-        let tools = workspace_tools(project.path(), &config, &database, approvals, None).unwrap();
+        let tools = workspace_tools(
+            project.path(),
+            &config,
+            &database,
+            store,
+            writer.id(),
+            approvals,
+            None,
+        )
+        .unwrap();
         let names = tools
             .definitions()
             .into_iter()
@@ -62,6 +80,7 @@ mod tests {
             [
                 "edit_file",
                 "list_files",
+                "read_command_output",
                 "read_file",
                 "run_command",
                 "search_text",
@@ -122,8 +141,19 @@ mod tests {
         let config = project.path().join("config.toml");
         std::fs::write(&config, "api_key = 'secret'\n").unwrap();
         let database = project.path().join("sessions.db");
+        let store = Store::open(&database).await.unwrap();
+        let writer = store.create(project.path(), "test-model").await.unwrap();
         let (approvals, receiver) = orbit_tools::approval::channel();
-        let tools = workspace_tools(project.path(), &config, &database, approvals, None).unwrap();
+        let tools = workspace_tools(
+            project.path(),
+            &config,
+            &database,
+            store,
+            writer.id(),
+            approvals,
+            None,
+        )
+        .unwrap();
         let workspace = project.path().to_path_buf();
         let approval_task = tokio::spawn(async move {
             crate::approval::serve(receiver, crate::approval::ApprovalMode::Auto, &workspace).await;
@@ -188,13 +218,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn long_command_output_can_be_paged_after_reopening_the_session() {
+        let project = tempfile::tempdir().unwrap();
+        let config = project.path().join("config.toml");
+        std::fs::write(&config, "api_key = 'secret'\n").unwrap();
+        let database = project.path().join("sessions.db");
+        let store = Store::open(&database).await.unwrap();
+        let writer = store.create(project.path(), "test-model").await.unwrap();
+        let session_id = writer.id().to_owned();
+        let (approvals, receiver) = orbit_tools::approval::channel();
+        let tools = workspace_tools(
+            project.path(),
+            &config,
+            &database,
+            store.clone(),
+            &session_id,
+            approvals,
+            None,
+        )
+        .unwrap();
+        let workspace = project.path().to_path_buf();
+        let approval_task = tokio::spawn(async move {
+            crate::approval::serve(receiver, crate::approval::ApprovalMode::Auto, &workspace).await;
+        });
+
+        let response = tools
+            .execute(
+                ToolCall::function(
+                    "command-long",
+                    "run_command",
+                    json!({ "command": "seq 1 10000" }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        approval_task.abort();
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            response["exit_code"], 0,
+            "stdout: {}; stderr: {}",
+            response["stdout"], response["stderr"]
+        );
+        assert!(response["output_truncated"].as_bool().unwrap());
+        assert!(response["stdout_total_bytes"].as_u64().unwrap() > 32 * 1024);
+        let output_id = response["output_id"].as_str().unwrap();
+        drop(tools);
+        drop(writer);
+        drop(store);
+
+        let reopened = Store::open(&database).await.unwrap();
+        let _resumed = reopened.acquire(&session_id).await.unwrap();
+        let (approvals, _receiver) = orbit_tools::approval::channel();
+        let resumed_tools = workspace_tools(
+            project.path(),
+            &config,
+            &database,
+            reopened,
+            &session_id,
+            approvals,
+            None,
+        )
+        .unwrap();
+        let page = resumed_tools
+            .execute(
+                ToolCall::function(
+                    "read-tail",
+                    "read_command_output",
+                    json!({
+                        "output_id": output_id,
+                        "stream": "stdout",
+                        "offset": 48_000,
+                        "limit": 8192
+                    }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let page: serde_json::Value = serde_json::from_str(&page).unwrap();
+        assert!(
+            page["content"].as_str().unwrap().contains("10000\n"),
+            "{page}"
+        );
+        assert_eq!(page["has_more"], false);
+    }
+
+    #[tokio::test]
     async fn denied_approval_prevents_command_execution() {
         let project = tempfile::tempdir().unwrap();
         let config = project.path().join("config.toml");
         std::fs::write(&config, "api_key = 'secret'\n").unwrap();
         let database = project.path().join("sessions.db");
+        let store = Store::open(&database).await.unwrap();
+        let writer = store.create(project.path(), "test-model").await.unwrap();
         let (approvals, receiver) = orbit_tools::approval::channel();
-        let tools = workspace_tools(project.path(), &config, &database, approvals, None).unwrap();
+        let tools = workspace_tools(
+            project.path(),
+            &config,
+            &database,
+            store,
+            writer.id(),
+            approvals,
+            None,
+        )
+        .unwrap();
         let workspace = project.path().to_path_buf();
         let approval_task = tokio::spawn(async move {
             crate::approval::serve(receiver, crate::approval::ApprovalMode::Deny, &workspace).await;

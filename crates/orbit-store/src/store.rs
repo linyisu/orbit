@@ -12,7 +12,16 @@ use sha2::{Digest, Sha256};
 
 use crate::session::{CanonicalMessage, Run, Session, Snapshot};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
+const MAX_SESSION_OUTPUT_BYTES: i64 = 128 * 1024 * 1024;
+
+#[derive(Debug)]
+pub struct CommandOutputPage {
+    pub content: Vec<u8>,
+    pub offset: usize,
+    pub retained_bytes: usize,
+    pub total_bytes: usize,
+}
 
 #[derive(Clone)]
 pub struct Store {
@@ -42,7 +51,7 @@ impl Store {
             connection.busy_timeout(Duration::from_secs(3))?;
             let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version == 0 || version == SCHEMA_VERSION,
+                (0..=SCHEMA_VERSION).contains(&version),
                 "database schema {version} is incompatible with orbit-main schema {SCHEMA_VERSION}; select a different --database path"
             );
             if version == 0 {
@@ -92,6 +101,25 @@ impl Store {
                      );
                      CREATE INDEX messages_session ON messages(session_id, id);
                      PRAGMA user_version = 1;
+                     COMMIT;",
+                )?;
+            }
+
+            if version < 2 {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     CREATE TABLE command_outputs (
+                         id TEXT PRIMARY KEY,
+                         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                         created_at_ms INTEGER NOT NULL,
+                         stdout BLOB NOT NULL,
+                         stderr BLOB NOT NULL,
+                         stdout_total_bytes INTEGER NOT NULL,
+                         stderr_total_bytes INTEGER NOT NULL
+                     );
+                     CREATE INDEX command_outputs_session_created
+                         ON command_outputs(session_id, created_at_ms, id);
+                     PRAGMA user_version = 2;
                      COMMIT;",
                 )?;
             }
@@ -253,6 +281,112 @@ impl Store {
                 session,
                 runs,
                 messages,
+            })
+        })
+        .await
+    }
+
+    /// Save bounded command evidence under the canonical session ID.
+    /// Oldest command results are evicted once the per-session quota is reached.
+    pub async fn save_command_output(
+        &self,
+        session_id: &str,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        stdout_total_bytes: usize,
+        stderr_total_bytes: usize,
+    ) -> Result<String> {
+        validate_session_id(session_id)?;
+        ensure!(
+            stdout.len() <= 16 * 1024 * 1024 && stderr.len() <= 16 * 1024 * 1024,
+            "command output exceeds retention limit"
+        );
+        let session_id = session_id.to_owned();
+        self.access(move |connection| {
+            let transaction = connection.transaction()?;
+            let id: String =
+                transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?;
+            transaction.execute(
+                "INSERT INTO command_outputs (
+                    id, session_id, created_at_ms, stdout, stderr,
+                    stdout_total_bytes, stderr_total_bytes
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    id,
+                    session_id,
+                    now_millis(),
+                    stdout,
+                    stderr,
+                    stdout_total_bytes as i64,
+                    stderr_total_bytes as i64
+                ],
+            )?;
+
+            loop {
+                let bytes: i64 = transaction.query_row(
+                    "SELECT COALESCE(SUM(length(stdout) + length(stderr)), 0)
+                     FROM command_outputs WHERE session_id=?1",
+                    [&session_id],
+                    |row| row.get(0),
+                )?;
+                if bytes <= MAX_SESSION_OUTPUT_BYTES {
+                    break;
+                }
+                transaction.execute(
+                    "DELETE FROM command_outputs WHERE id = (
+                        SELECT id FROM command_outputs WHERE session_id=?1
+                        ORDER BY created_at_ms, rowid LIMIT 1
+                    )",
+                    [&session_id],
+                )?;
+            }
+
+            transaction.commit()?;
+            Ok(id)
+        })
+        .await
+    }
+
+    pub async fn read_command_output(
+        &self,
+        session_id: &str,
+        output_id: &str,
+        stream: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<CommandOutputPage> {
+        validate_session_id(session_id)?;
+        validate_session_id(output_id)?;
+        ensure!(
+            matches!(stream, "stdout" | "stderr"),
+            "invalid output stream"
+        );
+        ensure!(
+            (1..=8192).contains(&limit),
+            "output page limit must be 1–8192"
+        );
+        ensure!(offset <= 16 * 1024 * 1024, "output offset is out of range");
+        let column = stream.to_owned();
+        let session_id = session_id.to_owned();
+        let output_id = output_id.to_owned();
+        self.access(move |connection| {
+            let sql = format!(
+                "SELECT substr({column}, ?3, ?4), length({column}), {column}_total_bytes
+                 FROM command_outputs WHERE id=?1 AND session_id=?2"
+            );
+            let (content, retained_bytes, total_bytes): (Vec<u8>, i64, i64) = connection
+                .query_row(
+                    &sql,
+                    params![output_id, session_id, offset as i64 + 1, limit as i64],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?
+                .context("command output not found in this session")?;
+            Ok(CommandOutputPage {
+                content,
+                offset,
+                retained_bytes: retained_bytes as usize,
+                total_bytes: total_bytes as usize,
             })
         })
         .await

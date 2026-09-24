@@ -147,3 +147,95 @@ async fn rejects_unversioned_existing_schema_without_changing_journal_mode() {
         .unwrap();
     assert_eq!(mode, "delete");
 }
+
+#[tokio::test]
+async fn command_output_pages_survive_resume_and_stay_in_their_session() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let writer = store.create(root.path(), "model-a").await.unwrap();
+    let session_id = writer.id().to_owned();
+    let output_id = store
+        .save_command_output(
+            &session_id,
+            b"alpha\nbeta\n".to_vec(),
+            b"warning\n".to_vec(),
+            25,
+            8,
+        )
+        .await
+        .unwrap();
+    drop(writer);
+    drop(store);
+
+    let reopened = Store::open(&database).await.unwrap();
+    let _resumed = reopened.acquire(&session_id).await.unwrap();
+    let first = reopened
+        .read_command_output(&session_id, &output_id, "stdout", 0, 6)
+        .await
+        .unwrap();
+    assert_eq!(first.content, b"alpha\n");
+    assert_eq!(first.retained_bytes, 11);
+    assert_eq!(first.total_bytes, 25);
+    let second = reopened
+        .read_command_output(&session_id, &output_id, "stdout", 6, 8)
+        .await
+        .unwrap();
+    assert_eq!(second.content, b"beta\n");
+
+    let other = reopened.create(root.path(), "model-b").await.unwrap();
+    let denied = reopened
+        .read_command_output(other.id(), &output_id, "stderr", 0, 8)
+        .await
+        .unwrap_err();
+    assert!(denied.to_string().contains("not found"), "{denied}");
+    let invalid = reopened
+        .read_command_output(&session_id, "../escape", "stdout", 0, 8)
+        .await
+        .unwrap_err();
+    assert!(
+        invalid.to_string().contains("invalid session ID"),
+        "{invalid}"
+    );
+}
+
+#[tokio::test]
+async fn upgrades_existing_session_database_without_losing_messages() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store.create(root.path(), "model-a").await.unwrap();
+    let id = writer.id().to_owned();
+    writer
+        .begin("hello".to_owned(), "model-a".to_owned())
+        .await
+        .unwrap();
+    writer.finish("completed").await.unwrap();
+    drop(writer);
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch("DROP TABLE command_outputs; PRAGMA user_version = 1;")
+        .unwrap();
+    drop(connection);
+
+    let upgraded = Store::open(&database).await.unwrap();
+    let snapshot = upgraded.load(&id).await.unwrap();
+    assert_eq!(
+        snapshot.projected_history(),
+        vec![ChatMessage::user("hello")]
+    );
+    let output_id = upgraded
+        .save_command_output(&id, b"ok".to_vec(), Vec::new(), 2, 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        upgraded
+            .read_command_output(&id, &output_id, "stdout", 0, 8)
+            .await
+            .unwrap()
+            .content,
+        b"ok"
+    );
+}

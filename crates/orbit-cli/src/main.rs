@@ -163,14 +163,6 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     let client = ModelClient::new(file_config.model_config())?;
     let store = Store::open(&database).await?;
     let (approval_sender, approval_receiver) = orbit_tools::approval::channel();
-    let tools = runtime::workspace_tools(
-        &workspace,
-        &config_path,
-        store.path(),
-        approval_sender,
-        rust_toolchain,
-    )?;
-
     let (mut writer, mut history) = if let Some(id) = args.resume.as_deref() {
         let session = store.session(id).await?;
         ensure!(
@@ -184,6 +176,16 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     } else {
         (store.create(&workspace, &model_name).await?, Vec::new())
     };
+
+    let tools = runtime::workspace_tools(
+        &workspace,
+        &config_path,
+        store.path(),
+        store.clone(),
+        writer.id(),
+        approval_sender,
+        rust_toolchain,
+    )?;
 
     writer.begin(args.prompt.clone(), model_name).await?;
     eprintln!("session {}", writer.id());
