@@ -882,7 +882,10 @@ dependencies = [
  "clap",
  "orbit-agent",
  "orbit-model",
+ "orbit-tools",
  "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "toml",
@@ -904,6 +907,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-runtime"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "orbit-tools"
 version = "0.1.0"
 dependencies = [
@@ -912,6 +926,7 @@ dependencies = [
  "ignore",
  "orbit-agent",
  "orbit-model",
+ "orbit-runtime",
  "regex",
  "rustix",
  "serde",

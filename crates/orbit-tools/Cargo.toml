@@ -8,6 +8,7 @@ globset.workspace = true
 ignore.workspace = true
 orbit-agent = { path = "../orbit-agent" }
 orbit-model = { path = "../orbit-model" }
+orbit-runtime = { path = "../orbit-runtime" }
 regex.workspace = true
 rustix.workspace = true
 serde.workspace = true

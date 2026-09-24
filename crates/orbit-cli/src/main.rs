@@ -1,11 +1,12 @@
 use std::{fs, path::PathBuf, time::Duration};
 
+mod runtime;
+
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use orbit_agent::{
     agent::{Agent, AgentConfig},
     model::ModelClientBackend,
-    tool::ToolRegistry,
 };
 use orbit_model::{
     client::{ApiFormat, ModelClient},
@@ -90,10 +91,11 @@ async fn chat(config_path: PathBuf, args: ChatArgs) -> Result<()> {
     let file_config = FileConfig::load(&config_path)?;
     let client = ModelClient::new(file_config.model_config())?;
     let request = ChatRequest::new(vec![ChatMessage::user(args.prompt)]);
+    let tools = runtime::read_only_workspace_tools(&std::env::current_dir()?, &config_path)?;
 
     let agent = Agent::new(
         ModelClientBackend::new(client),
-        ToolRegistry::new(),
+        tools,
         AgentConfig::default(),
     );
 
