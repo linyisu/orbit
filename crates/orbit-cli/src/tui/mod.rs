@@ -277,6 +277,10 @@ async fn handle_event(
 ) -> Result<bool> {
     match event {
         Event::Resize(_, _) => return Ok(false),
+        Event::Paste(text) if let Some(picker) = &mut app.picker => {
+            picker.insert_query(&text);
+            return Ok(false);
+        }
         Event::Paste(text)
             if app.approval.is_none()
                 && app.picker.is_none()
@@ -284,6 +288,7 @@ async fn handle_event(
                 && active.is_none() =>
         {
             app.input.insert(&text);
+            app.command_selection = 0;
             return Ok(false);
         }
         Event::Mouse(mouse) => {
@@ -333,13 +338,25 @@ async fn handle_key(
             KeyCode::Esc => app.picker = None,
             KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
             KeyCode::Down => {
-                picker.selected = (picker.selected + 1).min(picker.sessions.len().saturating_sub(1))
+                picker.selected =
+                    (picker.selected + 1).min(picker.matching().len().saturating_sub(1))
+            }
+            KeyCode::Backspace => picker.backspace_query(),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                picker.query.clear();
+                picker.selected = 0;
+            }
+            KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                picker.insert_query(&character.to_string());
             }
             KeyCode::Enter => {
                 let id = picker
-                    .sessions
+                    .matching()
                     .get(picker.selected)
                     .map(|session| session.id.clone());
+                if id.is_none() {
+                    return Ok(false);
+                }
                 app.picker = None;
                 if let Some(id) = id
                     && let Err(error) = runtime.switch_session(Some(&id), app).await
@@ -411,8 +428,14 @@ async fn handle_key(
         KeyCode::Right => app.input.move_right(),
         KeyCode::Home => app.input.move_home(),
         KeyCode::End => app.input.move_end(),
-        KeyCode::Backspace => app.input.backspace(),
-        KeyCode::Delete => app.input.delete(),
+        KeyCode::Backspace => {
+            app.input.backspace();
+            app.command_selection = 0;
+        }
+        KeyCode::Delete => {
+            app.input.delete();
+            app.command_selection = 0;
+        }
         KeyCode::Up if !commands::matching(app.input.text()).is_empty() => {
             app.command_selection = app.command_selection.saturating_sub(1);
         }
@@ -420,8 +443,14 @@ async fn handle_key(
             let count = commands::matching(app.input.text()).len();
             app.command_selection = (app.command_selection + 1).min(count - 1);
         }
-        KeyCode::Up => app.input.history_up(),
-        KeyCode::Down => app.input.history_down(),
+        KeyCode::Up => {
+            app.input.history_up();
+            app.command_selection = 0;
+        }
+        KeyCode::Down => {
+            app.input.history_down();
+            app.command_selection = 0;
+        }
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => app.input.insert("\n"),
         KeyCode::Enter => {
             let matches = commands::matching(app.input.text());
@@ -452,6 +481,7 @@ async fn handle_key(
         }
         KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.input.insert(&character.to_string());
+            app.command_selection = 0;
         }
         _ => {}
     }
@@ -483,6 +513,7 @@ async fn command(
                 app.picker = Some(Picker {
                     sessions,
                     selected: 0,
+                    query: String::new(),
                 });
             }
             Ok(false)
@@ -492,6 +523,7 @@ async fn command(
             app.picker = Some(Picker {
                 sessions,
                 selected: 0,
+                query: String::new(),
             });
             Ok(false)
         }

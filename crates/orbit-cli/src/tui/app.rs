@@ -61,6 +61,37 @@ pub(crate) struct CachedEntry {
 pub struct Picker {
     pub sessions: Vec<Session>,
     pub selected: usize,
+    pub query: String,
+}
+
+impl Picker {
+    pub fn matching(&self) -> Vec<&Session> {
+        let query = self.query.trim().to_lowercase();
+        self.sessions
+            .iter()
+            .filter(|session| {
+                query.is_empty()
+                    || session.id.to_lowercase().contains(&query)
+                    || session.title.to_lowercase().contains(&query)
+                    || session.model.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    pub fn insert_query(&mut self, text: &str) {
+        let remaining = 120usize.saturating_sub(self.query.chars().count());
+        self.query.extend(
+            text.chars()
+                .filter(|character| !character.is_control())
+                .take(remaining),
+        );
+        self.selected = 0;
+    }
+
+    pub fn backspace_query(&mut self) {
+        self.query.pop();
+        self.selected = 0;
+    }
 }
 
 pub struct ModelPicker {
@@ -520,5 +551,36 @@ mod tests {
             actual_input_tokens: Some(2_000),
         });
         assert_eq!(app.context_used_tokens, 2_000);
+    }
+
+    #[test]
+    fn session_picker_filters_titles_ids_and_models_without_losing_original_order() {
+        let session = |id: &str, title: &str, model: &str| Session {
+            id: id.into(),
+            workspace: "workspace".into(),
+            model: model.into(),
+            reasoning_effort: None,
+            title: title.into(),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        let mut picker = Picker {
+            sessions: vec![
+                session("first", "Parser repair", "qwen"),
+                session("second", "渲染检查", "gpt"),
+            ],
+            selected: 1,
+            query: String::new(),
+        };
+
+        picker.insert_query("渲染");
+        assert_eq!(picker.selected, 0);
+        assert_eq!(picker.matching()[0].id, "second");
+        picker.backspace_query();
+        picker.backspace_query();
+        assert!(picker.query.is_empty());
+        assert_eq!(picker.matching().len(), 2);
+        picker.insert_query("QWEN");
+        assert_eq!(picker.matching()[0].id, "first");
     }
 }

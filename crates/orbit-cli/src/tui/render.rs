@@ -363,30 +363,42 @@ fn draw_picker(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let Some(picker) = &app.picker else { return };
-    let rows = inner.height.saturating_sub(1) as usize;
-    let start = picker.selected.saturating_sub(rows.saturating_sub(1));
-    let mut lines = Vec::new();
-    for (index, session) in picker.sessions.iter().enumerate().skip(start).take(rows) {
+    let matches = picker.matching();
+    let rows = inner.height.saturating_sub(2) as usize;
+    let selected = picker.selected.min(matches.len().saturating_sub(1));
+    let start = selected
+        .saturating_sub(rows / 2)
+        .min(matches.len().saturating_sub(rows));
+    let mut lines = vec![Line::from(format!("Search: {}", picker.query))];
+    for (index, session) in matches.iter().enumerate().skip(start).take(rows) {
         let title = if session.title.is_empty() {
             "(untitled)"
         } else {
             &session.title
         };
         let text = format!(
-            "{} {}  {}",
-            if index == picker.selected { ">" } else { " " },
-            &session.id[..8],
+            "{} {}{}  {}",
+            if index == selected { ">" } else { " " },
+            session.id.chars().take(8).collect::<String>(),
+            if session.id == app.session_id {
+                " (current)"
+            } else {
+                ""
+            },
             title
         );
-        let style = if index == picker.selected {
+        let style = if index == selected {
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
-        lines.push(Line::styled(text, style));
+        lines.push(Line::styled(
+            truncate_width(&text, inner.width as usize),
+            style,
+        ));
     }
-    if lines.is_empty() {
-        lines.push(Line::from("No saved sessions in this workspace"));
+    if matches.is_empty() {
+        lines.push(Line::from("No matching sessions"));
     }
     lines.push(Line::from(Span::styled(
         "↑↓ select  Enter resume  Esc close",
@@ -649,5 +661,41 @@ mod tests {
         let lines = entry_lines(&entry, 32, true);
 
         assert!(lines.iter().all(|line| line.width() <= 32));
+    }
+
+    #[test]
+    fn resume_picker_marks_the_current_session_in_a_narrow_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
+        let mut app = App::new(
+            "current-session".into(),
+            "workspace".into(),
+            "model".into(),
+            128_000,
+        );
+        app.picker = Some(super::super::app::Picker {
+            sessions: vec![orbit_store::Session {
+                id: "current-session".into(),
+                workspace: "workspace".into(),
+                model: "model".into(),
+                reasoning_effort: None,
+                title: "A very long title that should be clipped to the popup".into(),
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            }],
+            selected: 0,
+            query: "current".into(),
+        });
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("Search: current"), "{screen}");
+        assert!(screen.contains("(current)"), "{screen}");
     }
 }
