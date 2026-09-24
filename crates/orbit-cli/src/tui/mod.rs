@@ -4,6 +4,7 @@ mod input;
 mod render;
 mod session_runtime;
 mod terminal;
+mod tool_display;
 
 use std::{
     future::pending,

@@ -153,7 +153,7 @@ fn entry_lines(entry: &Entry, width: usize, selected: bool) -> Vec<Line<'static>
         entry.text.clone()
     };
     let mut lines = Vec::new();
-    for (row, wrapped) in wrap(&body, width).into_iter().enumerate() {
+    for (row, wrapped) in wrap(&body, width.saturating_sub(2)).into_iter().enumerate() {
         let label = if row == 0 { prefix } else { "  " };
         let style = Style::default().fg(color);
         let style = if entry.kind == EntryKind::User {
@@ -172,8 +172,12 @@ fn entry_lines(entry: &Entry, width: usize, selected: bool) -> Vec<Line<'static>
         } else {
             entry.preview.as_str()
         };
-        let extra = entry.output.lines().count().saturating_sub(1);
-        for wrapped in wrap(preview, width.saturating_sub(2)) {
+        let extra = entry
+            .output
+            .lines()
+            .count()
+            .saturating_sub(entry.preview.lines().count());
+        for wrapped in wrap(preview, width.saturating_sub(4)) {
             lines.push(Line::from(Span::styled(
                 format!("    {wrapped}"),
                 Style::default().fg(if entry.failed { ERROR } else { DIM }),
@@ -191,9 +195,13 @@ fn entry_lines(entry: &Entry, width: usize, selected: bool) -> Vec<Line<'static>
                 ),
                 Style::default().fg(DIM),
             )));
-        } else if entry.expanded && selected {
+        } else if selected {
             lines.push(Line::from(Span::styled(
-                "    Enter to collapse",
+                if entry.expanded {
+                    "    Enter to collapse"
+                } else {
+                    "    Enter to expand"
+                },
                 Style::default().fg(DIM),
             )));
         }
@@ -628,5 +636,18 @@ mod tests {
             .collect::<String>();
         assert!(screen.contains("/help"), "{screen}");
         assert!(!screen.contains("/new"), "{screen}");
+    }
+
+    #[test]
+    fn long_tool_lines_remain_within_the_transcript_width() {
+        let mut entry = Entry::new(EntryKind::Tool, "read_file src/long.rs".repeat(4));
+        entry.finished = true;
+        entry.output = "a".repeat(180);
+        entry.preview = entry.output.clone();
+        entry.expanded = true;
+
+        let lines = entry_lines(&entry, 32, true);
+
+        assert!(lines.iter().all(|line| line.width() <= 32));
     }
 }

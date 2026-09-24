@@ -26,6 +26,7 @@ pub struct Entry {
     pub kind: EntryKind,
     pub text: String,
     pub tool_id: Option<String>,
+    pub tool_name: Option<String>,
     pub output: String,
     pub preview: String,
     pub expanded: bool,
@@ -35,11 +36,12 @@ pub struct Entry {
 }
 
 impl Entry {
-    fn new(kind: EntryKind, text: impl Into<String>) -> Self {
+    pub(super) fn new(kind: EntryKind, text: impl Into<String>) -> Self {
         Self {
             kind,
             text: text.into(),
             tool_id: None,
+            tool_name: None,
             output: String::new(),
             preview: String::new(),
             expanded: false,
@@ -344,7 +346,8 @@ impl App {
             .get(id)
             .and_then(|index| self.entries.get_mut(*index))
         {
-            let (output, preview) = display_output(content);
+            let (output, preview) =
+                super::tool_display::display(entry.tool_name.as_deref().unwrap_or(""), content);
             entry.output = output;
             entry.preview = preview;
             entry.finished = true;
@@ -356,6 +359,7 @@ impl App {
     fn add_tool(&mut self, call: &ToolCall) {
         let mut entry = Entry::new(EntryKind::Tool, tool_label(call));
         entry.tool_id = Some(call.id.clone());
+        entry.tool_name = Some(call.function.name.clone());
         self.tool_entries
             .insert(call.id.clone(), self.entries.len());
         self.entries.push(entry);
@@ -402,33 +406,6 @@ fn tool_label(call: &ToolCall) -> String {
         Some(target) => format!("{}  {}", call.function.name, truncate(&target, 90)),
         None => call.function.name.clone(),
     }
-}
-
-fn display_output(content: &str) -> (String, String) {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
-        return (
-            content.to_owned(),
-            truncate(content.lines().next().unwrap_or(""), 120),
-        );
-    };
-    let full = serde_json::to_string_pretty(&value).unwrap_or_else(|_| content.to_owned());
-    let summary = if let Some(matches) = value.get("matches").and_then(|value| value.as_array()) {
-        format!("{} matches", matches.len())
-    } else if let Some(entries) = value.get("entries").and_then(|value| value.as_array()) {
-        format!("{} entries", entries.len())
-    } else {
-        ["content", "stdout", "message", "summary"]
-            .into_iter()
-            .find_map(|key| value.get(key).and_then(|value| value.as_str()))
-            .map(|text| {
-                truncate(
-                    text.lines().find(|line| !line.is_empty()).unwrap_or(""),
-                    120,
-                )
-            })
-            .unwrap_or_else(|| truncate(content, 120))
-    };
-    (full, summary)
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -512,12 +489,20 @@ mod tests {
         app.apply(AgentEvent::ToolStarted { call: call.clone() });
         app.apply(AgentEvent::ToolFinished {
             call,
-            content: json!({ "matches": [{ "line": 1 }, { "line": 2 }] }).to_string(),
+            content: json!({
+                "matches": [
+                    { "path": "src/a.rs", "line": 1, "text": "fallback one" },
+                    { "path": "src/a.rs", "line": 2, "text": "fallback two" }
+                ],
+                "has_more": false,
+                "scan_truncated": false
+            })
+            .to_string(),
         });
 
         assert_eq!(app.entries[0].text, "search_text  \"fallback\"  src");
-        assert_eq!(app.entries[0].preview, "2 matches");
-        assert!(app.entries[0].output.contains("\"line\": 1"));
+        assert!(app.entries[0].preview.starts_with("2 matches in 1 file"));
+        assert!(app.entries[0].output.contains("> 1 │ fallback one"));
     }
 
     #[test]
