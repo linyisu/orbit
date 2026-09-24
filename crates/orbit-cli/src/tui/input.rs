@@ -116,6 +116,11 @@ impl Input {
         self.draft.clear();
     }
 
+    pub fn replace(&mut self, text: String) {
+        self.set(text);
+        self.history_index = None;
+    }
+
     fn set(&mut self, text: String) {
         self.cursor = text.len();
         self.text = text;

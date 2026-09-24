@@ -11,6 +11,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use super::app::{App, CachedEntry, Entry, EntryKind};
+use super::commands;
 use orbit_tools::approval::ApprovalPreview;
 
 const ACCENT: Color = Color::Rgb(218, 139, 109);
@@ -37,6 +38,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     draw_input(frame, app, regions[2]);
     draw_footer(frame, app, regions[3]);
 
+    if !app.running && !app.restoring && app.approval.is_none() {
+        draw_command_palette(frame, app, regions[2], area);
+    }
     if app.picker.is_some() {
         draw_picker(frame, app, area);
     }
@@ -266,6 +270,79 @@ fn draw_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         session
     );
     frame.render_widget(Paragraph::new(text).style(Style::default().fg(DIM)), area);
+}
+
+fn draw_command_palette(frame: &mut Frame<'_>, app: &App, input: Rect, area: Rect) {
+    if app.picker.is_some() || app.model_picker.is_some() {
+        return;
+    }
+    let matches = commands::matching(app.input.text());
+    if matches.is_empty() {
+        return;
+    }
+
+    let width = area.width.saturating_sub(4).min(96);
+    let height = (matches.len() as u16 + 2)
+        .min(area.height / 2)
+        .min(input.y.saturating_sub(area.y));
+    if width < 12 || height < 3 {
+        return;
+    }
+    let popup = Rect::new(area.x + 2, input.y - height, width, height);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Commands ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let rows = inner.height as usize;
+    let selected = app.command_selection.min(matches.len() - 1);
+    let start = selected
+        .saturating_sub(rows / 2)
+        .min(matches.len().saturating_sub(rows));
+    let lines = matches
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(rows)
+        .map(|(index, command)| {
+            let available = inner.width.saturating_sub(2) as usize;
+            let name = format!("{:<14}", command.name);
+            let description = if available > 14 {
+                truncate_width(command.description, available - 14)
+            } else {
+                String::new()
+            };
+            let label = if index == selected { "> " } else { "  " };
+            let style = if index == selected {
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            Line::from(vec![
+                Span::styled(label, style),
+                Span::styled(truncate_width(&name, available), style),
+                Span::styled(description, style),
+            ])
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn truncate_width(text: &str, width: usize) -> String {
+    let mut output = String::new();
+    let mut used = 0;
+    for grapheme in text.graphemes(true) {
+        let size = grapheme.width();
+        if used + size > width {
+            break;
+        }
+        output.push_str(grapheme);
+        used += size;
+    }
+    output
 }
 
 fn draw_picker(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -526,5 +603,30 @@ mod tests {
             stable_lines
         );
         assert_eq!(app.render_cache[2].as_ref().unwrap().revision, 1);
+    }
+
+    #[test]
+    fn command_palette_scrolls_to_selection_in_a_narrow_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
+        let mut app = App::new(
+            "session".into(),
+            "workspace".into(),
+            "model".into(),
+            128_000,
+        );
+        app.input.insert("/");
+        app.command_selection = 12;
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("/help"), "{screen}");
+        assert!(!screen.contains("/new"), "{screen}");
     }
 }

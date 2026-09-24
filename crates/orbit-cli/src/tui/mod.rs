@@ -1,4 +1,5 @@
 mod app;
+mod commands;
 mod input;
 mod render;
 mod session_runtime;
@@ -384,6 +385,20 @@ async fn handle_key(
             app.approval_mode = app.approval_mode.next();
             app.notice(format!("Approval mode: {}", app.approval_mode.label()));
         }
+        KeyCode::Tab
+            if active.is_none()
+                && !app.restoring
+                && !commands::matching(app.input.text()).is_empty() =>
+        {
+            let matches = commands::matching(app.input.text());
+            let selected = matches[app.command_selection.min(matches.len() - 1)];
+            app.input.replace(if selected.needs_argument {
+                format!("{} ", selected.name)
+            } else {
+                selected.name.to_owned()
+            });
+            app.command_selection = 0;
+        }
         KeyCode::Tab => app.select_next_tool(),
         KeyCode::Enter if app.selected_tool.is_some() && app.input.text().is_empty() => {
             app.toggle_tool()
@@ -397,11 +412,34 @@ async fn handle_key(
         KeyCode::End => app.input.move_end(),
         KeyCode::Backspace => app.input.backspace(),
         KeyCode::Delete => app.input.delete(),
+        KeyCode::Up if !commands::matching(app.input.text()).is_empty() => {
+            app.command_selection = app.command_selection.saturating_sub(1);
+        }
+        KeyCode::Down if !commands::matching(app.input.text()).is_empty() => {
+            let count = commands::matching(app.input.text()).len();
+            app.command_selection = (app.command_selection + 1).min(count - 1);
+        }
         KeyCode::Up => app.input.history_up(),
         KeyCode::Down => app.input.history_down(),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => app.input.insert("\n"),
         KeyCode::Enter => {
+            let matches = commands::matching(app.input.text());
+            if let Some(selected) = matches
+                .get(app.command_selection.min(matches.len().saturating_sub(1)))
+                .copied()
+            {
+                if selected.needs_argument {
+                    app.input.replace(format!("{} ", selected.name));
+                    app.command_selection = 0;
+                    return Ok(false);
+                }
+
+                if selected.name != app.input.text() {
+                    app.input.replace(selected.name.to_owned());
+                }
+            }
             if let Some(text) = app.input.take() {
+                app.command_selection = 0;
                 if text.starts_with('/') {
                     return command(&text, runtime, app, active).await;
                 }
@@ -566,8 +604,14 @@ async fn command(
             Ok(false)
         }
         "/help" => {
-            app.notice("/new  /resume [id]  /sessions  /model [name]  /reasoning [level]  /attach <image>  /detach  /rename <title>  /status  /context  /compact  /mode [auto|ask|deny]  /help  /exit");
-            app.notice("Enter sends · Shift+Enter adds a line · Tab selects a tool · Enter expands it · Shift+Tab changes approval mode · Ctrl+C cancels or exits");
+            app.notice(
+                commands::COMMANDS
+                    .iter()
+                    .map(|command| format!("{:<12} {}", command.name, command.description))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+            app.notice("Enter sends · Shift+Enter adds a line · Tab completes a command or selects a tool · Enter expands the selected tool · Shift+Tab changes approval mode · Ctrl+C cancels or exits");
             Ok(false)
         }
         other => {
