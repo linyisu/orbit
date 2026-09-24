@@ -6,8 +6,16 @@ use orbit_store::Store;
 use orbit_tools::{
     EditFile, GitInspect, ListFiles, ProjectInstructions, ProjectOverview, ReadCommandOutput,
     ReadFile, ReadHistory, RunCommand, SearchHistory, SearchText, VerificationStatus, WriteFile,
-    approval::ApprovalSender, workspace::Workspace,
+    approval::ApprovalSender,
+    web::{WebConfig, WebFetch, WebSearch},
+    workspace::Workspace,
 };
+
+#[derive(Default)]
+pub struct WorkspaceToolOptions {
+    pub rust_toolchain: Option<PathBuf>,
+    pub web: WebConfig,
+}
 
 /// Every tool shares the same protected workspace and explicit approval channel.
 pub fn workspace_tools(
@@ -17,7 +25,7 @@ pub fn workspace_tools(
     store: Store,
     session_id: &str,
     approvals: ApprovalSender,
-    rust_toolchain: Option<PathBuf>,
+    options: WorkspaceToolOptions,
 ) -> Result<ToolRegistry> {
     let mut workspace = Workspace::new(root)?;
     workspace.protect(config)?;
@@ -44,11 +52,13 @@ pub fn workspace_tools(
         session_id.to_owned(),
     ));
     tools.register(SearchText::new(workspace.clone()));
+    tools.register(WebFetch::new(options.web.clone())?);
+    tools.register(WebSearch::new(options.web)?);
     tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
     tools.register(EditFile::new(workspace.clone(), approvals.clone()));
     tools.register(
         RunCommand::new(workspace, approvals, store, session_id.to_owned())
-            .with_toolchain(rust_toolchain),
+            .with_toolchain(options.rust_toolchain),
     );
     Ok(tools)
 }
@@ -83,7 +93,7 @@ mod tests {
             store,
             writer.id(),
             approvals,
-            None,
+            WorkspaceToolOptions::default(),
         )
         .unwrap();
         let names = tools
@@ -106,6 +116,8 @@ mod tests {
                 "search_history",
                 "search_text",
                 "verification_status",
+                "web_fetch",
+                "web_search",
                 "write_file"
             ]
         );
@@ -188,7 +200,7 @@ mod tests {
             store,
             writer.id(),
             approvals,
-            None,
+            WorkspaceToolOptions::default(),
         )
         .unwrap();
         let workspace = project.path().to_path_buf();
@@ -271,7 +283,7 @@ mod tests {
             store.clone(),
             &session_id,
             approvals,
-            None,
+            WorkspaceToolOptions::default(),
         )
         .unwrap();
         let workspace = project.path().to_path_buf();
@@ -314,7 +326,7 @@ mod tests {
             reopened,
             &session_id,
             approvals,
-            None,
+            WorkspaceToolOptions::default(),
         )
         .unwrap();
         let page = resumed_tools
@@ -357,7 +369,7 @@ mod tests {
             store.clone(),
             writer.id(),
             approvals,
-            None,
+            WorkspaceToolOptions::default(),
         )
         .unwrap();
         let workspace = project.path().to_path_buf();
@@ -485,7 +497,7 @@ mod tests {
             store,
             writer.id(),
             approvals,
-            None,
+            WorkspaceToolOptions::default(),
         )
         .unwrap();
         let workspace = project.path().to_path_buf();
@@ -582,7 +594,7 @@ mod tests {
             store,
             writer.id(),
             approvals,
-            None,
+            WorkspaceToolOptions::default(),
         )
         .unwrap();
         let workspace = project.path().to_path_buf();

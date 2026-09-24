@@ -102,6 +102,8 @@ struct FileConfig {
     max_output_tokens: usize,
     instruction_home: Option<PathBuf>,
     #[serde(default)]
+    web: orbit_tools::web::WebConfig,
+    #[serde(default)]
     command: CommandConfig,
 }
 
@@ -255,6 +257,7 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     let file_config = FileConfig::load(&config_path)?;
     let model_name = file_config.model.clone();
     let rust_toolchain = file_config.command.rust_toolchain.clone();
+    let web = file_config.web.clone();
     let instruction_home = args
         .instruction_home
         .as_deref()
@@ -302,7 +305,10 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
         store.clone(),
         writer.id(),
         approval_sender,
-        rust_toolchain,
+        runtime::WorkspaceToolOptions {
+            rust_toolchain,
+            web,
+        },
     )?;
 
     writer.begin(args.prompt.clone(), model_name).await?;

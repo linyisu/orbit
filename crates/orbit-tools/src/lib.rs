@@ -10,6 +10,7 @@ pub mod read_file;
 pub mod run_command;
 pub mod search_text;
 pub mod verification_status;
+pub mod web;
 pub mod workspace;
 pub mod write_file;
 

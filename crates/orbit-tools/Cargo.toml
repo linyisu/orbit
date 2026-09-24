@@ -5,12 +5,15 @@ edition.workspace = true
 
 [dependencies]
 globset.workspace = true
+html2text.workspace = true
 ignore.workspace = true
 orbit-agent = { path = "../orbit-agent" }
 orbit-model = { path = "../orbit-model" }
 orbit-runtime = { path = "../orbit-runtime" }
 orbit-store = { path = "../orbit-store" }
 regex.workspace = true
+reqwest.workspace = true
+roxmltree.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -19,6 +22,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true

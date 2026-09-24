@@ -8,3 +8,7 @@ context_tokens = 128000
 max_output_tokens = 4096
 # Optional user-level AGENTS.md directory; relative paths resolve beside this file.
 # instruction_home = "instructions"
+
+# Optional explicit web proxy for public web_fetch/web_search requests.
+# [web]
+# proxy = "http://127.0.0.1:7890"
