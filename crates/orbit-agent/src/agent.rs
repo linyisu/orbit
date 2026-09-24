@@ -163,7 +163,10 @@ where
             turns += 1;
             emit(AgentEvent::TurnStarted { turn: turns }).await?;
 
-            let definitions = self.tools.definitions();
+            let mut definitions = self.tools.definitions();
+            if !self.backend.supports_vision() {
+                definitions.retain(|definition| definition.function.name != "read_image");
+            }
             let mut projected_messages = history.clone();
             if let Some(runtime) = &mut context {
                 for _ in 0..64 {
@@ -223,6 +226,7 @@ where
                 });
             }
 
+            let mut loaded_attachments = Vec::new();
             for call in calls {
                 if cancellation.is_cancelled() {
                     return Err(AgentError::Cancelled);
@@ -230,13 +234,23 @@ where
                 tool_calls += 1;
                 emit(AgentEvent::ToolStarted { call: call.clone() }).await?;
 
-                let result = self.tools.execute(call.clone(), cancellation.clone()).await;
-                let (content, event) = match result {
-                    Ok(content) => (
-                        content.clone(),
+                let result =
+                    if call.function.name == "read_image" && !self.backend.supports_vision() {
+                        Err(crate::tool::ToolError::ExecutionFailed(
+                            "current model does not support image input".into(),
+                        ))
+                    } else {
+                        self.tools
+                            .execute_output(call.clone(), cancellation.clone())
+                            .await
+                    };
+                let (content, attachments, event) = match result {
+                    Ok(output) => (
+                        output.content.clone(),
+                        output.attachments,
                         AgentEvent::ToolFinished {
                             call: call.clone(),
-                            content,
+                            content: output.content,
                         },
                     ),
                     Err(error) => {
@@ -247,6 +261,7 @@ where
                         let message = error.to_string();
                         (
                             format!("tool error: {message}"),
+                            Vec::new(),
                             AgentEvent::ToolFailed {
                                 call: call.clone(),
                                 error: message,
@@ -258,6 +273,20 @@ where
                 history.push(message.clone());
                 emit(AgentEvent::MessageCommitted { message }).await?;
                 emit(event).await?;
+                loaded_attachments.extend(attachments);
+            }
+            if !loaded_attachments.is_empty() {
+                let names = loaded_attachments
+                    .iter()
+                    .map(|attachment| attachment.name())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let message = ChatMessage::user_with_attachments(
+                    format!("Images loaded by read_image: {names}. Analyze their visual content."),
+                    loaded_attachments,
+                );
+                history.push(message.clone());
+                emit(AgentEvent::MessageCommitted { message }).await?;
             }
         }
     }
@@ -464,8 +493,8 @@ impl From<ChatCompletion> for AgentResult {
 mod tests {
     use super::*;
     use crate::{
-        model::MockModel,
-        tool::{ClosureTool, ToolError},
+        model::{CompletionFuture, MockModel, StreamFuture},
+        tool::{ClosureTool, Tool, ToolError, ToolFuture, ToolOutput, ToolOutputFuture},
     };
     use orbit_model::types::{Attachment, FunctionCall, ToolCall};
     use serde_json::json;
@@ -502,6 +531,139 @@ mod tests {
 
     fn request() -> ChatRequest {
         ChatRequest::new(vec![ChatMessage::user("hello")])
+    }
+
+    struct VisionModel(MockModel);
+
+    impl ModelBackend for VisionModel {
+        fn supports_vision(&self) -> bool {
+            true
+        }
+
+        fn complete<'a>(
+            &'a self,
+            request: ChatRequest,
+            cancellation: CancellationToken,
+        ) -> CompletionFuture<'a> {
+            self.0.complete(request, cancellation)
+        }
+
+        fn stream<'a>(
+            &'a self,
+            request: ChatRequest,
+            cancellation: CancellationToken,
+        ) -> StreamFuture<'a> {
+            self.0.stream(request, cancellation)
+        }
+    }
+
+    struct ImageTool;
+
+    impl Tool for ImageTool {
+        fn definition(&self) -> orbit_model::types::ToolDefinition {
+            orbit_model::types::ToolDefinition::function(
+                "read_image",
+                "Load an image",
+                json!({ "type": "object" }),
+            )
+        }
+
+        fn execute<'a>(
+            &'a self,
+            call: ToolCall,
+            cancellation: CancellationToken,
+        ) -> ToolFuture<'a> {
+            Box::pin(async move {
+                self.execute_output(call, cancellation)
+                    .await
+                    .map(|output| output.content)
+            })
+        }
+
+        fn execute_output<'a>(
+            &'a self,
+            _call: ToolCall,
+            _cancellation: CancellationToken,
+        ) -> ToolOutputFuture<'a> {
+            Box::pin(async {
+                Ok(ToolOutput::with_attachments(
+                    json!({ "loaded": true }).to_string(),
+                    vec![Attachment::Image {
+                        name: "scene.png".into(),
+                        mime_type: "image/png".into(),
+                        path: "/unused/mock.png".into(),
+                        sha256: "digest".into(),
+                    }],
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn read_image_is_projected_after_tool_results_and_retained_in_history() {
+        let model = MockModel::new([
+            assistant_tool_call("image-1", "read_image", "{}"),
+            assistant_text("I see a scene"),
+        ]);
+        let mut tools = ToolRegistry::new();
+        tools.register(ImageTool);
+        let agent = Agent::new(VisionModel(model.clone()), tools, AgentConfig::default());
+
+        let result = agent
+            .run(request(), CancellationToken::new())
+            .await
+            .unwrap();
+        let requests = model.requests();
+
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[0]
+                .tools
+                .iter()
+                .any(|tool| tool.function.name == "read_image")
+        );
+        assert!(matches!(
+            &requests[1].messages[3],
+            ChatMessage::User { attachments, .. } if attachments.len() == 1
+        ));
+        assert_eq!(
+            result.history,
+            requests[1]
+                .messages
+                .iter()
+                .cloned()
+                .chain([result.final_message])
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn text_only_model_never_executes_read_image() {
+        let model = MockModel::new([
+            assistant_tool_call("image-1", "read_image", "{}"),
+            assistant_text("image unavailable"),
+        ]);
+        let mut tools = ToolRegistry::new();
+        tools.register(ImageTool);
+        let agent = Agent::new(model.clone(), tools, AgentConfig::default());
+
+        let result = agent
+            .run(request(), CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert!(
+            !model.requests()[0]
+                .tools
+                .iter()
+                .any(|tool| tool.function.name == "read_image")
+        );
+        assert!(
+            matches!(&result.history[2], ChatMessage::Tool { content, .. } if content.contains("does not support image input"))
+        );
+        assert!(!result.history.iter().any(|message| {
+            matches!(message, ChatMessage::User { attachments, .. } if !attachments.is_empty())
+        }));
     }
 
     #[tokio::test]

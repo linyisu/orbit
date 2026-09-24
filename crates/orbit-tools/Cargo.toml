@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+anydoc.workspace = true
 globset.workspace = true
 html2text.workspace = true
 ignore.workspace = true
@@ -26,3 +27,4 @@ url.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
+image.workspace = true

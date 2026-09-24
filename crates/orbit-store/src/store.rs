@@ -251,13 +251,13 @@ impl Store {
     }
 
     pub async fn save_image(&self, session_id: &str, source: &Path) -> Result<Attachment> {
-        validate_session_id(session_id)?;
-        self.session(session_id).await?;
-
         let source = source.to_path_buf();
-        let attachment_root = self.path.with_extension("attachments");
-        let root = attachment_root.join(session_id);
-        tokio::task::spawn_blocking(move || {
+        let name = source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("image filename is not valid UTF-8")?
+            .to_owned();
+        let bytes = tokio::task::spawn_blocking(move || {
             let metadata = std::fs::metadata(&source)
                 .with_context(|| format!("failed to inspect image {}", source.display()))?;
             ensure!(metadata.is_file(), "image path is not a regular file");
@@ -265,9 +265,27 @@ impl Store {
                 metadata.len() <= MAX_IMAGE_BYTES as u64,
                 "image exceeds 20 MiB"
             );
-            let bytes = std::fs::read(&source)
-                .with_context(|| format!("failed to read image {}", source.display()))?;
-            ensure!(bytes.len() <= MAX_IMAGE_BYTES, "image exceeds 20 MiB");
+            std::fs::read(&source)
+                .with_context(|| format!("failed to read image {}", source.display()))
+        })
+        .await??;
+        self.save_image_bytes(session_id, name, bytes).await
+    }
+
+    pub async fn save_image_bytes(
+        &self,
+        session_id: &str,
+        name: String,
+        bytes: Vec<u8>,
+    ) -> Result<Attachment> {
+        validate_session_id(session_id)?;
+        self.session(session_id).await?;
+        ensure!(!name.trim().is_empty(), "image name must be nonempty");
+        ensure!(bytes.len() <= MAX_IMAGE_BYTES, "image exceeds 20 MiB");
+
+        let attachment_root = self.path.with_extension("attachments");
+        let root = attachment_root.join(session_id);
+        tokio::task::spawn_blocking(move || {
             let mime_type = image_mime(&bytes).context("unsupported image format")?;
             let format = match mime_type {
                 "image/png" => image::ImageFormat::Png,
@@ -287,12 +305,6 @@ impl Store {
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>();
-            let name = source
-                .file_name()
-                .and_then(|value| value.to_str())
-                .context("image filename is not valid UTF-8")?
-                .to_owned();
-
             if !attachment_root.exists() {
                 std::fs::create_dir(&attachment_root)?;
             }

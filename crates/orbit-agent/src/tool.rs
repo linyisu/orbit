@@ -1,10 +1,34 @@
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
-use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_model::types::{Attachment, ToolCall, ToolDefinition};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + 'a>>;
+pub type ToolOutputFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolOutput {
+    pub content: String,
+    pub attachments: Vec<Attachment>,
+}
+
+impl ToolOutput {
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    pub fn with_attachments(content: impl Into<String>, attachments: Vec<Attachment>) -> Self {
+        Self {
+            content: content.into(),
+            attachments,
+        }
+    }
+}
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ToolError {
@@ -26,6 +50,14 @@ pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a>;
+
+    fn execute_output<'a>(
+        &'a self,
+        call: ToolCall,
+        cancellation: CancellationToken,
+    ) -> ToolOutputFuture<'a> {
+        Box::pin(async move { self.execute(call, cancellation).await.map(ToolOutput::text) })
+    }
 }
 
 #[derive(Clone, Default)]
@@ -65,6 +97,15 @@ impl ToolRegistry {
     }
 
     pub fn execute(&self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'static> {
+        let future = self.execute_output(call, cancellation);
+        Box::pin(async move { future.await.map(|output| output.content) })
+    }
+
+    pub fn execute_output(
+        &self,
+        call: ToolCall,
+        cancellation: CancellationToken,
+    ) -> ToolOutputFuture<'static> {
         if call.id.trim().is_empty() {
             return Box::pin(async { Err(ToolError::EmptyCallId) });
         }
@@ -104,7 +145,7 @@ impl ToolRegistry {
                 return Err(ToolError::Cancelled);
             }
 
-            tool.execute(call, cancellation).await
+            tool.execute_output(call, cancellation).await
         })
     }
 }

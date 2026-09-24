@@ -5,7 +5,8 @@ use orbit_agent::tool::ToolRegistry;
 use orbit_store::Store;
 use orbit_tools::{
     EditFile, GitInspect, ListFiles, ProjectInstructions, ProjectOverview, ReadCommandOutput,
-    ReadFile, ReadHistory, RunCommand, SearchHistory, SearchText, VerificationStatus, WriteFile,
+    ReadDocument, ReadFile, ReadHistory, ReadImage, RunCommand, SearchHistory, SearchText,
+    VerificationStatus, WriteFile,
     approval::ApprovalSender,
     web::{WebConfig, WebFetch, WebSearch},
     workspace::Workspace,
@@ -47,6 +48,12 @@ pub fn workspace_tools(
     );
     tools.register(ReadCommandOutput::new(store.clone(), session_id.to_owned()));
     tools.register(ReadFile::new(workspace.clone()));
+    tools.register(ReadDocument::new(workspace.clone()));
+    tools.register(ReadImage::new(
+        workspace.clone(),
+        store.clone(),
+        session_id.to_owned(),
+    ));
     tools.register(ReadHistory::new(store.clone(), session_id.to_owned()));
     tools.register(SearchHistory::new(store.clone(), session_id.to_owned()));
     tools.register(ListFiles::new(workspace.clone()));
@@ -121,8 +128,10 @@ mod tests {
                 "project_instructions",
                 "project_overview",
                 "read_command_output",
+                "read_document",
                 "read_file",
                 "read_history",
+                "read_image",
                 "run_command",
                 "search_history",
                 "search_text",
