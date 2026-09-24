@@ -1,4 +1,5 @@
 mod app;
+mod approval_diff;
 mod commands;
 mod input;
 mod markdown;
@@ -266,6 +267,8 @@ fn resolve_approval(
         ApprovalMode::Ask => {
             app.approval = Some(request);
             app.approval_scroll = 0;
+            app.approval_diff = None;
+            app.approval_full = false;
         }
     }
 }
@@ -318,9 +321,11 @@ async fn handle_key(
         match key.code {
             KeyCode::Char('y' | 'Y') => {
                 let _ = request.decision.send(true);
+                app.approval_diff = None;
             }
             KeyCode::Char('n' | 'N') | KeyCode::Esc => {
                 let _ = request.decision.send(false);
+                app.approval_diff = None;
             }
             KeyCode::Up => {
                 app.approval_scroll = app.approval_scroll.saturating_sub(1);
@@ -328,6 +333,17 @@ async fn handle_key(
             }
             KeyCode::Down => {
                 app.approval_scroll = app.approval_scroll.saturating_add(1);
+                app.approval = Some(request);
+            }
+            KeyCode::Tab
+                if matches!(
+                    &request.preview,
+                    orbit_tools::approval::ApprovalPreview::Write(_)
+                ) =>
+            {
+                app.approval_full = !app.approval_full;
+                app.approval_scroll = 0;
+                app.approval_diff = None;
                 app.approval = Some(request);
             }
             _ => app.approval = Some(request),
