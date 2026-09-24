@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use orbit_agent::events::AgentEvent;
-use orbit_model::types::{ChatMessage, StreamEvent, ToolCall};
+use orbit_model::types::{ChatMessage, ReasoningEffort, StreamEvent, ToolCall};
 use orbit_store::Session;
 use orbit_tools::approval::ApprovalRequest;
 use ratatui::text::Line;
@@ -72,6 +72,7 @@ pub struct App {
     pub session_id: String,
     pub workspace: String,
     pub model: String,
+    pub reasoning: Option<ReasoningEffort>,
     pub context_tokens: usize,
     pub running: bool,
     pub status: String,
@@ -103,6 +104,7 @@ impl App {
             session_id,
             workspace,
             model,
+            reasoning: None,
             context_tokens,
             running: false,
             status: "Ready".to_owned(),

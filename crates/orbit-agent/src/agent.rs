@@ -185,6 +185,7 @@ where
                 tools: definitions,
                 temperature: request.temperature,
                 max_tokens: request.max_tokens,
+                reasoning_effort: request.reasoning_effort,
             };
             let completion = self
                 .collect_stream(model_request, cancellation.clone(), emit)

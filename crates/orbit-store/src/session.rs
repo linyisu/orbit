@@ -5,6 +5,7 @@ pub struct Session {
     pub id: String,
     pub workspace: String,
     pub model: String,
+    pub reasoning_effort: Option<String>,
     pub title: String,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,

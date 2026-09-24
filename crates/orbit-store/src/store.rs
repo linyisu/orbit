@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::session::{CanonicalMessage, Run, Session, Snapshot};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const MAX_SESSION_OUTPUT_BYTES: i64 = 128 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -226,6 +226,15 @@ impl Store {
                 )?;
             }
 
+            if version < 6 {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT;
+                     PRAGMA user_version = 6;
+                     COMMIT;",
+                )?;
+            }
+
             Ok(connection)
         })
         .await??;
@@ -322,7 +331,7 @@ impl Store {
         self.access(move |connection| {
             connection
                 .query_row(
-                    "SELECT id, workspace, model, title, created_at_ms, updated_at_ms
+                    "SELECT id, workspace, model, title, created_at_ms, updated_at_ms, reasoning_effort
                      FROM sessions WHERE id=?1",
                     [id],
                     session_row,
@@ -355,15 +364,25 @@ impl Store {
     }
 
     pub async fn set_session_model(&self, id: &str, model: &str) -> Result<()> {
+        self.set_session_profile(id, model, None).await
+    }
+
+    pub async fn set_session_profile(
+        &self,
+        id: &str,
+        model: &str,
+        reasoning_effort: Option<&str>,
+    ) -> Result<()> {
         validate_session_id(id)?;
         let model = model.trim();
         ensure!(!model.is_empty(), "session model must not be empty");
         let id = id.to_owned();
         let model = model.to_owned();
+        let reasoning_effort = reasoning_effort.map(str::to_owned);
         self.access(move |connection| {
             let changed = connection.execute(
-                "UPDATE sessions SET model=?2, updated_at_ms=?3 WHERE id=?1",
-                params![id, model, now_millis()],
+                "UPDATE sessions SET model=?2, reasoning_effort=?3, updated_at_ms=?4 WHERE id=?1",
+                params![id, model, reasoning_effort, now_millis()],
             )?;
             ensure!(changed == 1, "session not found");
             Ok(())
@@ -375,7 +394,7 @@ impl Store {
         let workspace = workspace.canonicalize()?.to_string_lossy().into_owned();
         self.access(move |connection| {
             let mut statement = connection.prepare(
-                "SELECT id, workspace, model, title, created_at_ms, updated_at_ms
+                "SELECT id, workspace, model, title, created_at_ms, updated_at_ms, reasoning_effort
                  FROM sessions WHERE workspace=?1 ORDER BY updated_at_ms DESC, id DESC",
             )?;
             let sessions = statement
@@ -392,7 +411,7 @@ impl Store {
         self.access(move |connection| {
             let session = connection
                 .query_row(
-                    "SELECT id, workspace, model, title, created_at_ms, updated_at_ms
+                    "SELECT id, workspace, model, title, created_at_ms, updated_at_ms, reasoning_effort
                      FROM sessions WHERE id=?1",
                     [&id],
                     session_row,
@@ -921,6 +940,7 @@ fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         title: row.get(3)?,
         created_at_ms: row.get(4)?,
         updated_at_ms: row.get(5)?,
+        reasoning_effort: row.get(6)?,
     })
 }
 

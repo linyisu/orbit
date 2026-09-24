@@ -55,6 +55,7 @@ pub async fn run(config_path: PathBuf, database: PathBuf, args: TuiArgs) -> Resu
         runtime.selected_model().context_tokens,
     );
     app.approval_mode = args.approval;
+    app.reasoning = runtime.reasoning();
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     app.begin_restore();
     let mut restore = Some(start_restore(runtime.store.clone(), app.session_id.clone()));
@@ -467,11 +468,38 @@ async fn command(
             }
             Ok(false)
         }
+        "/reasoning" => {
+            if let Some(value) = parts.next() {
+                match value.parse() {
+                    Ok(effort) => {
+                        if let Err(error) = runtime.select_reasoning(effort, app).await {
+                            app.error(error.to_string());
+                        }
+                    }
+                    Err(error) => app.error(error),
+                }
+            } else {
+                let available = runtime
+                    .selected_model()
+                    .reasoning_efforts
+                    .iter()
+                    .map(|effort| effort.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if available.is_empty() {
+                    app.notice("This model has no reasoning controls");
+                } else {
+                    app.notice(format!("Reasoning choices: {available}"));
+                }
+            }
+            Ok(false)
+        }
         "/status" => {
             app.notice(format!(
-                "Session {}  |  model {}  |  approval {}  |  workspace {}",
+                "Session {}  |  model {}  |  reasoning {}  |  approval {}  |  workspace {}",
                 app.session_id,
                 app.model,
+                app.reasoning.map_or("default", |effort| effort.as_str()),
                 app.approval_mode.label(),
                 app.workspace
             ));
@@ -514,7 +542,7 @@ async fn command(
             Ok(false)
         }
         "/help" => {
-            app.notice("/new  /resume [id]  /sessions  /model [name]  /rename <title>  /status  /context  /compact  /mode [auto|ask|deny]  /help  /exit");
+            app.notice("/new  /resume [id]  /sessions  /model [name]  /reasoning [level]  /rename <title>  /status  /context  /compact  /mode [auto|ask|deny]  /help  /exit");
             app.notice("Enter sends · Shift+Enter adds a line · Tab selects a tool · Enter expands it · Shift+Tab changes approval mode · Ctrl+C cancels or exits");
             Ok(false)
         }

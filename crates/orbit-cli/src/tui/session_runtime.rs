@@ -11,7 +11,10 @@ use orbit_agent::{
     model::ModelClientBackend,
     tool::ToolRegistry,
 };
-use orbit_model::{client::ModelClient, types::ChatMessage};
+use orbit_model::{
+    client::ModelClient,
+    types::{ChatMessage, ReasoningEffort},
+};
 use orbit_store::{SessionWriter, Store};
 use orbit_tools::{InstructionSet, approval::ApprovalSender};
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -54,6 +57,7 @@ pub(super) struct Runtime {
     pub(super) store: Store,
     client: ModelClient,
     selected: ModelOption,
+    reasoning: Option<ReasoningEffort>,
     instructions: InstructionSet,
     approval_sender: ApprovalSender,
     pub(super) writer: Option<SessionWriter>,
@@ -87,6 +91,7 @@ impl Runtime {
         )?;
         let mut selected = config.select_model(args.model.as_deref())?;
         let store = Store::open(database).await?;
+        let mut saved_effort = None;
         let writer = if let Some(id) = args.resume.as_deref() {
             let session = store.session(id).await?;
             ensure!(
@@ -96,10 +101,14 @@ impl Runtime {
             if args.model.is_none() {
                 selected = config.select_model(Some(&session.model))?;
             }
+            if args.model.is_none() || selected.name == session.model {
+                saved_effort = session.reasoning_effort;
+            }
             store.acquire(id).await?
         } else {
             store.create(&workspace, &selected.name).await?
         };
+        let reasoning = selected.select_reasoning(args.reasoning, saved_effort.as_deref())?;
         let client = ModelClient::new(selected.config.clone())?;
         let tools = tools_for(
             &workspace,
@@ -109,9 +118,13 @@ impl Runtime {
             approval_sender.clone(),
             &config,
         )?;
-        if args.resume.is_some() && args.model.is_some() {
-            store.set_session_model(writer.id(), &selected.name).await?;
-        }
+        store
+            .set_session_profile(
+                writer.id(),
+                &selected.name,
+                reasoning.map(ReasoningEffort::as_str),
+            )
+            .await?;
 
         Ok(Self {
             config_path,
@@ -120,6 +133,7 @@ impl Runtime {
             store,
             client,
             selected,
+            reasoning,
             instructions,
             approval_sender,
             writer: Some(writer),
@@ -140,6 +154,10 @@ impl Runtime {
         &self.selected
     }
 
+    pub(super) fn reasoning(&self) -> Option<ReasoningEffort> {
+        self.reasoning
+    }
+
     pub(super) fn model_options(&self) -> Result<Vec<ModelOption>> {
         self.config.model_options()
     }
@@ -147,14 +165,43 @@ impl Runtime {
     pub(super) async fn select_model(&mut self, name: &str, app: &mut App) -> Result<()> {
         let selected = self.config.select_model(Some(name))?;
         let client = ModelClient::new(selected.config.clone())?;
+        let saved = (selected.name == self.selected.name)
+            .then(|| self.reasoning.map(ReasoningEffort::as_str))
+            .flatten();
+        let reasoning = selected.select_reasoning(None, saved)?;
         self.store
-            .set_session_model(self.session_id(), &selected.name)
+            .set_session_profile(
+                self.session_id(),
+                &selected.name,
+                reasoning.map(ReasoningEffort::as_str),
+            )
             .await?;
         self.client = client;
         self.selected = selected;
+        self.reasoning = reasoning;
         app.model = self.selected.name.clone();
         app.context_tokens = self.selected.context_tokens;
+        app.reasoning = reasoning;
         app.notice(format!("Model: {}", app.model));
+        Ok(())
+    }
+
+    pub(super) async fn select_reasoning(
+        &mut self,
+        effort: ReasoningEffort,
+        app: &mut App,
+    ) -> Result<()> {
+        let reasoning = self.selected.select_reasoning(Some(effort), None)?;
+        self.store
+            .set_session_profile(
+                self.session_id(),
+                &self.selected.name,
+                reasoning.map(ReasoningEffort::as_str),
+            )
+            .await?;
+        self.reasoning = reasoning;
+        app.reasoning = reasoning;
+        app.notice(format!("Reasoning: {}", effort.as_str()));
         Ok(())
     }
 
@@ -163,16 +210,20 @@ impl Runtime {
             app.notice("This session is already open.");
             return Ok(());
         }
-        let selected = if let Some(id) = id {
+        let (selected, saved_effort) = if let Some(id) = id {
             let session = self.store.session(id).await?;
             ensure!(
                 session.workspace == self.workspace.to_string_lossy(),
                 "session belongs to a different workspace"
             );
-            self.config.select_model(Some(&session.model))?
+            (
+                self.config.select_model(Some(&session.model))?,
+                session.reasoning_effort,
+            )
         } else {
-            self.config.select_model(None)?
+            (self.config.select_model(None)?, None)
         };
+        let reasoning = selected.select_reasoning(None, saved_effort.as_deref())?;
         let next = if let Some(id) = id {
             self.store.acquire(id).await?
         } else {
@@ -187,14 +238,23 @@ impl Runtime {
             self.approval_sender.clone(),
             &self.config,
         )?;
+        self.store
+            .set_session_profile(
+                next.id(),
+                &selected.name,
+                reasoning.map(ReasoningEffort::as_str),
+            )
+            .await?;
 
         self.writer = Some(next);
         self.tools = next_tools;
         self.client = next_client;
         self.selected = selected;
+        self.reasoning = reasoning;
         app.session_id = self.session_id().to_owned();
         app.model = self.selected.name.clone();
         app.context_tokens = self.selected.context_tokens;
+        app.reasoning = reasoning;
         app.scroll = 0;
         app.begin_restore();
         Ok(())
@@ -213,6 +273,7 @@ impl Runtime {
             u32::try_from(self.selected.max_output_tokens)
                 .context("max_output_tokens exceeds the model request limit")?,
         );
+        request.reasoning_effort = self.reasoning;
         let checkpoint = self
             .store
             .load_context_checkpoint(&session_id)

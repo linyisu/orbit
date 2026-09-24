@@ -55,6 +55,20 @@ impl ModelClient {
             return Err(ModelError::InvalidModel);
         }
 
+        let expected = match config.api_format {
+            ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
+            ApiFormat::OpenaiResponses => ReasoningAdapter::OpenaiResponses,
+            ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
+        };
+        if config
+            .reasoning_adapter
+            .is_some_and(|adapter| adapter != expected)
+        {
+            return Err(ModelError::Protocol(
+                "reasoning adapter does not match the configured API format".to_owned(),
+            ));
+        }
+
         let format = config.api_format;
         let suffix = match format {
             ApiFormat::OpenaiChatCompletions => "chat/completions",
@@ -163,15 +177,27 @@ impl ModelClient {
     ) -> Result<Response, ModelError> {
         let format = self.config.api_format;
         let (body, headers) = match format {
-            ApiFormat::OpenaiChatCompletions => {
-                crate::openai::chat_completions::encode(&self.config.model, request, stream)
-            }
-            ApiFormat::OpenaiResponses => {
-                crate::openai::responses::encode(&self.config.model, request, stream)
-            }
-            ApiFormat::AnthropicMessages => {
-                crate::anthropic::messages::encode(&self.config.model, request, stream)
-            }
+            ApiFormat::OpenaiChatCompletions => crate::openai::chat_completions::encode(
+                &self.config.model,
+                request,
+                self.config.reasoning_adapter,
+                &self.config.reasoning_extra,
+                stream,
+            ),
+            ApiFormat::OpenaiResponses => crate::openai::responses::encode(
+                &self.config.model,
+                request,
+                self.config.reasoning_adapter,
+                &self.config.reasoning_extra,
+                stream,
+            ),
+            ApiFormat::AnthropicMessages => crate::anthropic::messages::encode(
+                &self.config.model,
+                request,
+                self.config.reasoning_adapter,
+                &self.config.reasoning_extra,
+                stream,
+            ),
         };
 
         let mut builder = self
@@ -384,6 +410,8 @@ mod tests {
             api_key: Some("secret-value".to_owned()),
             model: "mock-model".to_owned(),
             timeout: Duration::from_secs(120),
+            reasoning_adapter: None,
+            reasoning_extra: serde_json::json!({}),
         };
         let debug = format!("{config:?}");
 
@@ -516,6 +544,8 @@ mod tests {
             api_key: api_key.map(str::to_owned),
             model: model.to_owned(),
             timeout: Duration::from_secs(5),
+            reasoning_adapter: None,
+            reasoning_extra: serde_json::json!({}),
         })
         .expect("client builds")
     }

@@ -12,12 +12,19 @@ use crate::{
     client::sse_stream,
     error::ModelError,
     types::{
-        ChatCompletion, ChatMessage, ChatRequest, ModelStream, StreamEvent, ToolCall,
-        ToolCallDelta, Usage,
+        ChatCompletion, ChatMessage, ChatRequest, ModelStream, ReasoningAdapter, StreamEvent,
+        ToolCall, ToolCallDelta, Usage,
     },
 };
 
-pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value, HeaderMap) {
+pub(crate) fn encode(
+    model: &str,
+    request: ChatRequest,
+    adapter: Option<ReasoningAdapter>,
+    extra: &Value,
+    stream: bool,
+) -> (Value, HeaderMap) {
+    let effort = request.reasoning_effort;
     let instructions = request
         .messages
         .iter()
@@ -91,7 +98,7 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
         })
         .collect::<Vec<_>>();
 
-    let body = json!({
+    let mut body = json!({
         "model": model,
         "instructions": instructions,
         "input": input,
@@ -100,6 +107,9 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
         "max_output_tokens": request.max_tokens,
         "stream": stream,
     });
+    if let (Some(effort), Some(ReasoningAdapter::OpenaiResponses)) = (effort, adapter) {
+        crate::reasoning::apply_openai_responses(&mut body, effort, extra);
+    }
 
     let mut headers = HeaderMap::new();
     headers.insert(

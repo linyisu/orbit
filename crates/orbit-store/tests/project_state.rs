@@ -170,7 +170,10 @@ async fn version_four_database_upgrades_without_losing_sessions() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE session_memories; DROP TABLE project_tasks; PRAGMA user_version = 4;",
+            "DROP TABLE session_memories;
+             DROP TABLE project_tasks;
+             ALTER TABLE sessions DROP COLUMN reasoning_effort;
+             PRAGMA user_version = 4;",
         )
         .unwrap();
     drop(connection);

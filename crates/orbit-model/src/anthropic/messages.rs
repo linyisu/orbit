@@ -10,7 +10,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{client::sse_stream, error::ModelError, types::*};
 
-pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value, HeaderMap) {
+pub(crate) fn encode(
+    model: &str,
+    request: ChatRequest,
+    adapter: Option<ReasoningAdapter>,
+    extra: &Value,
+    stream: bool,
+) -> (Value, HeaderMap) {
+    let effort = request.reasoning_effort;
     let system = request
         .messages
         .iter()
@@ -90,7 +97,7 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
         })
         .collect::<Vec<_>>();
 
-    let body = json!({
+    let mut body = json!({
         "model": model,
         "max_tokens": request.max_tokens.unwrap_or(4096),
         "system": system,
@@ -99,6 +106,9 @@ pub(crate) fn encode(model: &str, request: ChatRequest, stream: bool) -> (Value,
         "temperature": request.temperature,
         "stream": stream,
     });
+    if let (Some(effort), Some(ReasoningAdapter::AnthropicMessages)) = (effort, adapter) {
+        crate::reasoning::apply_anthropic_messages(&mut body, effort, extra);
+    }
 
     let mut headers = HeaderMap::new();
     headers.insert(

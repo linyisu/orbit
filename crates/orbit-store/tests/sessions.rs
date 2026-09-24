@@ -100,6 +100,49 @@ async fn changing_session_model_preserves_history_and_survives_reopen() {
 }
 
 #[tokio::test]
+async fn version_five_sessions_upgrade_with_reasoning_profile() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let writer = store.create(root.path(), "provider::model").await.unwrap();
+    let id = writer.id().to_owned();
+    drop(writer);
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE sessions DROP COLUMN reasoning_effort;
+             PRAGMA user_version = 5;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let upgraded = Store::open(&database).await.unwrap();
+    assert_eq!(
+        upgraded.session(&id).await.unwrap().model,
+        "provider::model"
+    );
+    assert_eq!(upgraded.session(&id).await.unwrap().reasoning_effort, None);
+    upgraded
+        .set_session_profile(&id, "provider::model", Some("high"))
+        .await
+        .unwrap();
+    drop(upgraded);
+
+    let reopened = Store::open(&database).await.unwrap();
+    assert_eq!(
+        reopened
+            .session(&id)
+            .await
+            .unwrap()
+            .reasoning_effort
+            .as_deref(),
+        Some("high")
+    );
+}
+
+#[tokio::test]
 async fn prevents_parallel_writers_and_repairs_interrupted_tool_projection() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path().join("sessions.db")).await.unwrap();
@@ -271,7 +314,7 @@ async fn upgrades_existing_session_database_without_losing_messages() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; DROP TABLE command_outputs; PRAGMA user_version = 1;",
+            "DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; DROP TABLE command_outputs; ALTER TABLE sessions DROP COLUMN reasoning_effort; PRAGMA user_version = 1;",
         )
         .unwrap();
     drop(connection);
@@ -312,7 +355,7 @@ async fn upgrades_version_two_command_outputs_to_verification_evidence_schema() 
 
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
-        .execute_batch("DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; PRAGMA user_version = 2;")
+        .execute_batch("DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; ALTER TABLE sessions DROP COLUMN reasoning_effort; PRAGMA user_version = 2;")
         .unwrap();
     drop(connection);
 
@@ -427,7 +470,7 @@ async fn upgrades_version_three_session_with_checkpoint_schema() {
     drop(store);
 
     let connection = rusqlite::Connection::open(&database).unwrap();
-    connection.execute_batch("DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; PRAGMA user_version = 3;").unwrap();
+    connection.execute_batch("DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; ALTER TABLE sessions DROP COLUMN reasoning_effort; PRAGMA user_version = 3;").unwrap();
     drop(connection);
 
     let upgraded = Store::open(&database).await.unwrap();

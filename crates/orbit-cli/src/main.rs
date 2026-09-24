@@ -23,7 +23,9 @@ use orbit_agent::{
 use orbit_model::{
     client::{ApiFormat, ModelClient},
     error::ModelError,
-    types::{ChatMessage, ChatRequest, ModelConfig, StreamEvent},
+    types::{
+        ChatMessage, ChatRequest, ModelConfig, ReasoningAdapter, ReasoningEffort, StreamEvent,
+    },
 };
 use orbit_store::Store;
 use orbit_tools::{InstructionSet, Workspace, load_for_target};
@@ -63,6 +65,9 @@ struct TuiArgs {
     #[arg(long)]
     model: Option<String>,
 
+    #[arg(long)]
+    reasoning: Option<ReasoningEffort>,
+
     #[arg(long, value_enum, default_value_t = ApprovalMode::Auto)]
     approval: ApprovalMode,
 
@@ -100,6 +105,9 @@ struct ChatArgs {
 
     #[arg(long)]
     model: Option<String>,
+
+    #[arg(long)]
+    reasoning: Option<ReasoningEffort>,
 
     #[arg(long, conflicts_with = "prompt")]
     prompt_file: Option<PathBuf>,
@@ -154,6 +162,16 @@ struct ModelProfile {
     id: String,
     context_tokens: Option<usize>,
     max_output_tokens: Option<usize>,
+    reasoning: Option<ReasoningProfile>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ReasoningProfile {
+    adapter: ReasoningAdapter,
+    efforts: Vec<ReasoningEffort>,
+    default: ReasoningEffort,
+    #[serde(default)]
+    extra: toml::Table,
 }
 
 #[derive(Clone, Debug)]
@@ -162,6 +180,30 @@ struct ModelOption {
     config: ModelConfig,
     context_tokens: usize,
     max_output_tokens: usize,
+    reasoning_efforts: Vec<ReasoningEffort>,
+    default_reasoning: Option<ReasoningEffort>,
+}
+
+impl ModelOption {
+    fn select_reasoning(
+        &self,
+        requested: Option<ReasoningEffort>,
+        saved: Option<&str>,
+    ) -> Result<Option<ReasoningEffort>> {
+        if let Some(requested) = requested {
+            ensure!(
+                self.reasoning_efforts.contains(&requested),
+                "model {} does not support reasoning effort {}",
+                self.name,
+                requested.as_str()
+            );
+            return Ok(Some(requested));
+        }
+        let restored = saved
+            .and_then(|value| value.parse::<ReasoningEffort>().ok())
+            .filter(|effort| self.reasoning_efforts.contains(effort));
+        Ok(restored.or(self.default_reasoning))
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -220,9 +262,13 @@ impl FileConfig {
                     api_key: Some(api_key.to_owned()),
                     model: model.to_owned(),
                     timeout: Duration::from_secs(timeout),
+                    reasoning_adapter: None,
+                    reasoning_extra: serde_json::json!({}),
                 },
                 context_tokens: self.context_tokens,
                 max_output_tokens: self.max_output_tokens,
+                reasoning_efforts: Vec::new(),
+                default_reasoning: None,
             });
         } else {
             ensure!(
@@ -265,6 +311,31 @@ impl FileConfig {
                             .any(|option: &ModelOption| option.name == name),
                         "duplicate model {name}"
                     );
+                    let reasoning = profile.reasoning.as_ref();
+                    if let Some(reasoning) = reasoning {
+                        let expected = match provider.api_format {
+                            ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
+                            ApiFormat::OpenaiResponses => ReasoningAdapter::OpenaiResponses,
+                            ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
+                        };
+                        ensure!(
+                            reasoning.adapter == expected,
+                            "{name}: reasoning adapter does not match API format"
+                        );
+                        ensure!(
+                            !reasoning.efforts.is_empty()
+                                && reasoning.efforts.contains(&reasoning.default),
+                            "{name}: reasoning efforts must include the default"
+                        );
+                        for (index, effort) in reasoning.efforts.iter().enumerate() {
+                            ensure!(
+                                !reasoning.efforts[..index].contains(effort),
+                                "{name}: repeated reasoning effort {}",
+                                effort.as_str()
+                            );
+                        }
+                        validate_reasoning_extra(&name, provider.api_format, &reasoning.extra)?;
+                    }
                     options.push(ModelOption {
                         name,
                         config: ModelConfig {
@@ -273,11 +344,20 @@ impl FileConfig {
                             api_key: Some(provider.api_key.clone()),
                             model: profile.id.clone(),
                             timeout: Duration::from_secs(provider.timeout_seconds),
+                            reasoning_adapter: reasoning.map(|profile| profile.adapter),
+                            reasoning_extra: reasoning
+                                .map(|profile| serde_json::to_value(&profile.extra))
+                                .transpose()?
+                                .unwrap_or_else(|| serde_json::json!({})),
                         },
                         context_tokens: profile.context_tokens.unwrap_or(self.context_tokens),
                         max_output_tokens: profile
                             .max_output_tokens
                             .unwrap_or(self.max_output_tokens),
+                        reasoning_efforts: reasoning
+                            .map(|profile| profile.efforts.clone())
+                            .unwrap_or_default(),
+                        default_reasoning: reasoning.map(|profile| profile.default),
                     });
                 }
             }
@@ -320,6 +400,42 @@ impl FileConfig {
             None => "no model configured".to_owned(),
         })
     }
+}
+
+fn validate_reasoning_extra(name: &str, format: ApiFormat, extra: &toml::Table) -> Result<()> {
+    for field in [
+        "model",
+        "messages",
+        "input",
+        "system",
+        "stream",
+        "tools",
+        "tool_choice",
+        "max_tokens",
+        "max_output_tokens",
+        "temperature",
+    ] {
+        ensure!(
+            !extra.contains_key(field),
+            "{name}: reasoning.extra cannot override {field}"
+        );
+    }
+    let overrides_effort = match format {
+        ApiFormat::OpenaiChatCompletions => extra.contains_key("reasoning_effort"),
+        ApiFormat::OpenaiResponses => extra
+            .get("reasoning")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|table| table.contains_key("effort")),
+        ApiFormat::AnthropicMessages => extra
+            .get("output_config")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|table| table.contains_key("effort")),
+    };
+    ensure!(
+        !overrides_effort,
+        "{name}: reasoning.extra cannot override the selected effort"
+    );
+    Ok(())
 }
 
 #[tokio::main]
@@ -448,6 +564,7 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     let instructions = startup_instructions(&workspace, &config_path, &database, instruction_home)?;
     let store = Store::open(&database).await?;
     let (approval_sender, approval_receiver) = orbit_tools::approval::channel();
+    let mut saved_effort = None;
     let (mut writer, mut history, checkpoint) = if let Some(id) = args.resume.as_deref() {
         let session = store.session(id).await?;
         ensure!(
@@ -457,6 +574,9 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
         );
         if args.model.is_none() {
             selected = file_config.select_model(Some(&session.model))?;
+        }
+        if args.model.is_none() || selected.name == session.model {
+            saved_effort = session.reasoning_effort;
         }
         let writer = store.acquire(id).await?;
         let history = store.load(id).await?.projected_history();
@@ -481,6 +601,7 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     let max_output_tokens = u32::try_from(selected.max_output_tokens)
         .context("max_output_tokens exceeds the model request limit")?;
     let client = ModelClient::new(selected.config.clone())?;
+    let reasoning = selected.select_reasoning(args.reasoning, saved_effort.as_deref())?;
 
     let tools = runtime::workspace_tools(
         &workspace,
@@ -495,6 +616,13 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
         },
     )?;
 
+    store
+        .set_session_profile(
+            writer.id(),
+            &selected.name,
+            reasoning.map(ReasoningEffort::as_str),
+        )
+        .await?;
     writer.begin(prompt.clone(), selected.name).await?;
     eprintln!("session {}", writer.id());
     history.push(ChatMessage::user(prompt));
@@ -502,6 +630,7 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
         project_state::projection(&store, &workspace.to_string_lossy(), writer.id()).await?;
     let mut request = coding_request(history, &instructions, state);
     request.max_tokens = Some(max_output_tokens);
+    request.reasoning_effort = reasoning;
     let context = ContextRuntime::new(context_config, checkpoint)
         .map_err(|message| anyhow::anyhow!(message))?;
     let agent = Agent::new(
@@ -717,6 +846,34 @@ mod tests {
                 .unwrap()
                 .name,
             "legacy"
+        );
+    }
+
+    #[test]
+    fn reasoning_profile_rejects_adapter_mismatch_and_request_field_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.toml");
+        let base = "[providers.local]\nbase_url = 'http://localhost/v1'\napi_key = 'test'\n[[providers.local.models]]\nid = 'model'\n[providers.local.models.reasoning]\nefforts = ['low', 'high']\ndefault = 'low'\n";
+        std::fs::write(&path, format!("{base}adapter = 'anthropic_messages'\n")).unwrap();
+        assert!(
+            FileConfig::load(&path)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("adapter does not match")
+        );
+
+        std::fs::write(
+            &path,
+            format!("{base}adapter = 'openai_chat'\n[providers.local.models.reasoning.extra]\nstream = false\n"),
+        )
+        .unwrap();
+        assert!(
+            FileConfig::load(&path)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("cannot override stream")
         );
     }
 

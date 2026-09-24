@@ -201,6 +201,7 @@ impl ContextRuntime {
                         tools: Vec::new(),
                         temperature: None,
                         max_tokens: Some(2048),
+                        reasoning_effort: None,
                     },
                     cancellation.clone(),
                 ),

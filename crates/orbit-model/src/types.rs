@@ -135,6 +135,56 @@ pub struct ChatRequest {
     pub tools: Vec<ToolDefinition>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+}
+
+impl ReasoningEffort {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+        }
+    }
+}
+
+impl std::str::FromStr for ReasoningEffort {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "minimal" => Ok(Self::Minimal),
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "xhigh" => Ok(Self::Xhigh),
+            _ => Err("reasoning effort must be none, minimal, low, medium, high, or xhigh"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningAdapter {
+    OpenaiChat,
+    OpenaiResponses,
+    AnthropicMessages,
 }
 
 impl ChatRequest {
@@ -189,6 +239,14 @@ pub struct ModelConfig {
     pub model: String,
     #[serde(with = "duration_seconds")]
     pub timeout: Duration,
+    #[serde(default)]
+    pub reasoning_adapter: Option<ReasoningAdapter>,
+    #[serde(default = "empty_reasoning_extra")]
+    pub reasoning_extra: Value,
+}
+
+fn empty_reasoning_extra() -> Value {
+    Value::Object(Default::default())
 }
 
 impl std::fmt::Debug for ModelConfig {
@@ -200,6 +258,7 @@ impl std::fmt::Debug for ModelConfig {
             .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
             .field("model", &self.model)
             .field("timeout", &self.timeout)
+            .field("reasoning_adapter", &self.reasoning_adapter)
             .finish()
     }
 }

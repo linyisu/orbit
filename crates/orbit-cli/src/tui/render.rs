@@ -250,11 +250,15 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 fn draw_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let session = app.session_id.chars().take(8).collect::<String>();
+    let model = app.reasoning.map_or_else(
+        || app.model.clone(),
+        |effort| format!("{} {}", app.model, effort.as_str()),
+    );
     let text = format!(
         " {}  |  {}  |  {}  |  {} tokens  |  session {}  |  Ctrl+C exit  PageUp/Down scroll",
         app.status,
         app.approval_mode.label(),
-        app.model,
+        model,
         app.context_tokens,
         session
     );

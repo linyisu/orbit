@@ -70,7 +70,7 @@ fn selected_provider_and_prompt_file_survive_chat_resume() {
     std::fs::write(
         &config,
         format!(
-            "default_provider = 'first'\n\n[providers.first]\nbase_url = 'http://127.0.0.1:9/v1'\napi_key = 'test'\n[[providers.first.models]]\nid = 'first'\n\n[providers.second]\nbase_url = 'http://{address}/v1'\napi_key = 'test'\n[[providers.second.models]]\nid = 'second'\n"
+            "default_provider = 'first'\n\n[providers.first]\nbase_url = 'http://127.0.0.1:9/v1'\napi_key = 'test'\n[[providers.first.models]]\nid = 'first'\n\n[providers.second]\nbase_url = 'http://{address}/v1'\napi_key = 'test'\n[[providers.second.models]]\nid = 'second'\n[providers.second.models.reasoning]\nadapter = 'openai_chat'\nefforts = ['low', 'high']\ndefault = 'low'\n[providers.second.models.reasoning.extra]\nenable_thinking = true\n"
         ),
     )
     .unwrap();
@@ -79,7 +79,15 @@ fn selected_provider_and_prompt_file_survive_chat_resume() {
         .current_dir(root.path())
         .args(["--config", config.to_str().unwrap()])
         .args(["--database", database.to_str().unwrap()])
-        .args(["chat", "--approval", "deny", "--model", "second::second"])
+        .args([
+            "chat",
+            "--approval",
+            "deny",
+            "--model",
+            "second::second",
+            "--reasoning",
+            "high",
+        ])
         .args(["--prompt-file", prompt_file.to_str().unwrap()])
         .output()
         .unwrap();
@@ -121,6 +129,9 @@ fn selected_provider_and_prompt_file_survive_chat_resume() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0]["model"], "second");
     assert_eq!(requests[1]["model"], "second");
+    assert_eq!(requests[0]["reasoning_effort"], "high");
+    assert_eq!(requests[1]["reasoning_effort"], "high");
+    assert_eq!(requests[0]["enable_thinking"], true);
     assert!(
         requests[0]["messages"]
             .to_string()
