@@ -959,7 +959,9 @@ dependencies = [
  "futures-core",
  "futures-util",
  "orbit-model",
+ "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -1005,6 +1007,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",
@@ -1043,6 +1046,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "toml",
 ]
 
 [[package]]

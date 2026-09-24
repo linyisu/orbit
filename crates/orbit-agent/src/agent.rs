@@ -10,7 +10,10 @@ use orbit_model::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{error::AgentError, events::AgentEvent, model::ModelBackend, tool::ToolRegistry};
+use crate::{
+    context::ContextRuntime, error::AgentError, events::AgentEvent, model::ModelBackend,
+    tool::ToolRegistry,
+};
 
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
@@ -39,6 +42,7 @@ pub struct Agent<B> {
     backend: B,
     tools: ToolRegistry,
     config: AgentConfig,
+    context: Option<ContextRuntime>,
 }
 
 impl<B> Agent<B>
@@ -50,7 +54,13 @@ where
             backend,
             tools,
             config,
+            context: None,
         }
+    }
+
+    pub fn with_context(mut self, context: ContextRuntime) -> Self {
+        self.context = Some(context);
+        self
     }
 
     pub async fn run(
@@ -140,6 +150,7 @@ where
         let mut history = request.messages;
         let mut turns = 0usize;
         let mut tool_calls = 0usize;
+        let mut context = self.context.clone();
 
         loop {
             if cancellation.is_cancelled() {
@@ -152,9 +163,26 @@ where
             turns += 1;
             emit(AgentEvent::TurnStarted { turn: turns }).await?;
 
+            let definitions = self.tools.definitions();
+            let mut model_messages = history.clone();
+            if let Some(runtime) = &mut context {
+                for _ in 0..64 {
+                    let step = runtime
+                        .prepare_step(&self.backend, &history, &definitions, cancellation.clone())
+                        .await?;
+                    model_messages = step.messages;
+                    if let Some(checkpoint) = step.checkpoint {
+                        emit(AgentEvent::ContextCheckpoint { checkpoint }).await?;
+                    }
+                    if !step.needs_more {
+                        break;
+                    }
+                }
+            }
+
             let model_request = ChatRequest {
-                messages: history.clone(),
-                tools: self.tools.definitions(),
+                messages: model_messages,
+                tools: definitions,
                 temperature: request.temperature,
                 max_tokens: request.max_tokens,
             };

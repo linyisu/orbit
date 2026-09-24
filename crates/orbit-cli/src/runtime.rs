@@ -4,8 +4,9 @@ use anyhow::Result;
 use orbit_agent::tool::ToolRegistry;
 use orbit_store::Store;
 use orbit_tools::{
-    EditFile, ListFiles, ReadCommandOutput, ReadFile, RunCommand, SearchText, WriteFile,
-    approval::ApprovalSender, workspace::Workspace,
+    EditFile, GitInspect, ListFiles, ProjectOverview, ReadCommandOutput, ReadFile, ReadHistory,
+    RunCommand, SearchHistory, SearchText, VerificationStatus, WriteFile, approval::ApprovalSender,
+    workspace::Workspace,
 };
 
 /// Every tool shares the same protected workspace and explicit approval channel.
@@ -31,7 +32,16 @@ pub fn workspace_tools(
     let mut tools = ToolRegistry::new();
     tools.register(ReadCommandOutput::new(store.clone(), session_id.to_owned()));
     tools.register(ReadFile::new(workspace.clone()));
+    tools.register(ReadHistory::new(store.clone(), session_id.to_owned()));
+    tools.register(SearchHistory::new(store.clone(), session_id.to_owned()));
     tools.register(ListFiles::new(workspace.clone()));
+    tools.register(GitInspect::new(workspace.clone()));
+    tools.register(ProjectOverview::new(workspace.clone()));
+    tools.register(VerificationStatus::new(
+        workspace.clone(),
+        store.clone(),
+        session_id.to_owned(),
+    ));
     tools.register(SearchText::new(workspace.clone()));
     tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
     tools.register(EditFile::new(workspace.clone(), approvals.clone()));
@@ -79,11 +89,16 @@ mod tests {
             names,
             [
                 "edit_file",
+                "git_inspect",
                 "list_files",
+                "project_overview",
                 "read_command_output",
                 "read_file",
+                "read_history",
                 "run_command",
+                "search_history",
                 "search_text",
+                "verification_status",
                 "write_file"
             ]
         );
@@ -302,6 +317,231 @@ mod tests {
             "{page}"
         );
         assert_eq!(page["has_more"], false);
+    }
+
+    #[tokio::test]
+    async fn verification_status_marks_command_stale_after_persistent_edit() {
+        let project = tempfile::tempdir().unwrap();
+        let config = project.path().join("config.toml");
+        std::fs::write(&config, "api_key = 'secret'\n").unwrap();
+        let database = project.path().join("sessions.db");
+        let store = Store::open(&database).await.unwrap();
+        let writer = store.create(project.path(), "test-model").await.unwrap();
+        let (approvals, receiver) = orbit_tools::approval::channel();
+        let tools = workspace_tools(
+            project.path(),
+            &config,
+            &database,
+            store.clone(),
+            writer.id(),
+            approvals,
+            None,
+        )
+        .unwrap();
+        let workspace = project.path().to_path_buf();
+        let approval_task = tokio::spawn(async move {
+            crate::approval::serve(receiver, crate::approval::ApprovalMode::Auto, &workspace).await;
+        });
+
+        tools
+            .execute(
+                ToolCall::function(
+                    "write",
+                    "write_file",
+                    json!({ "path": "main.txt", "content": "before\n" }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let command = tools
+            .execute(
+                ToolCall::function("run", "run_command", json!({ "command": "cat main.txt" })),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let command: serde_json::Value = serde_json::from_str(&command).unwrap();
+        assert_eq!(command["exit_code"], 0, "{command}");
+        let before = tools
+            .execute(
+                ToolCall::function("verify-1", "verification_status", json!({})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let before: serde_json::Value = serde_json::from_str(&before).unwrap();
+        assert_eq!(before["commands"][0]["source_state"], "current", "{before}");
+        assert_eq!(before["commands"][0]["output_id"], command["output_id"]);
+
+        tools
+            .execute(
+                ToolCall::function(
+                    "edit",
+                    "edit_file",
+                    json!({
+                        "path": "main.txt", "old_text": "before", "new_text": "after"
+                    }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let after = tools
+            .execute(
+                ToolCall::function("verify-2", "verification_status", json!({})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        approval_task.abort();
+        let after: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(after["commands"][0]["source_state"], "stale", "{after}");
+        assert_eq!(after["commands"][0]["succeeded"], true);
+        assert_ne!(before["current_snapshot_id"], after["current_snapshot_id"]);
+
+        let session_id = writer.id().to_owned();
+        drop(tools);
+        drop(writer);
+        drop(store);
+        let reopened = Store::open(&database).await.unwrap();
+        let records = reopened
+            .verification_records(&session_id, 20)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].output_id, command["output_id"]);
+    }
+
+    #[tokio::test]
+    async fn coding_workflow_connects_overview_edit_command_verification_and_git() {
+        use std::process::Command;
+
+        let project = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("/usr/bin/git")
+                .current_dir(project.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?} failed; stdout: {}; stderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.name", "Orbit test"]);
+        git(&["config", "user.email", "test@example.invalid"]);
+        std::fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = 'demo'\nversion = '0.1.0'\nedition = '2024'\n",
+        )
+        .unwrap();
+        std::fs::create_dir(project.path().join("src")).unwrap();
+        std::fs::write(
+            project.path().join("src/lib.rs"),
+            "pub fn answer() -> i32 { 1 }\n",
+        )
+        .unwrap();
+        git(&["add", "Cargo.toml", "src/lib.rs"]);
+        git(&["commit", "-qm", "initial"]);
+
+        let config = project.path().join("config.toml");
+        std::fs::write(&config, "api_key = 'private'\n").unwrap();
+        let database = project.path().join("sessions.db");
+        let store = Store::open(&database).await.unwrap();
+        let writer = store.create(project.path(), "model").await.unwrap();
+        let (approvals, receiver) = orbit_tools::approval::channel();
+        let tools = workspace_tools(
+            project.path(),
+            &config,
+            &database,
+            store,
+            writer.id(),
+            approvals,
+            None,
+        )
+        .unwrap();
+        let workspace = project.path().to_path_buf();
+        let approval_task = tokio::spawn(async move {
+            crate::approval::serve(receiver, crate::approval::ApprovalMode::Auto, &workspace).await;
+        });
+        let call =
+            |id: &str, name: &str, args: serde_json::Value| ToolCall::function(id, name, args);
+
+        let overview = tools
+            .execute(
+                call("overview", "project_overview", json!({ "query": "answer" })),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(overview.contains("Cargo.toml"), "{overview}");
+        let source = tools
+            .execute(
+                call("read", "read_file", json!({ "path": "src/lib.rs" })),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(source.contains("answer"), "{source}");
+        tools
+            .execute(
+                call(
+                    "edit",
+                    "edit_file",
+                    json!({
+                        "path": "src/lib.rs", "old_text": "{ 1 }", "new_text": "{ 2 }"
+                    }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let command = tools
+            .execute(
+                call(
+                    "run",
+                    "run_command",
+                    json!({ "command": "grep -q '{ 2 }' src/lib.rs" }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        approval_task.abort();
+        let command: serde_json::Value = serde_json::from_str(&command).unwrap();
+        assert_eq!(
+            command["exit_code"], 0,
+            "stdout: {}; stderr: {}",
+            command["stdout"], command["stderr"]
+        );
+        let verification = tools
+            .execute(
+                call("verify", "verification_status", json!({})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let verification: serde_json::Value = serde_json::from_str(&verification).unwrap();
+        assert_eq!(verification["commands"][0]["source_state"], "current");
+        let diff = tools
+            .execute(
+                call(
+                    "diff",
+                    "git_inspect",
+                    json!({ "view": "diff", "path": "src/lib.rs" }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(diff.contains("+pub fn answer() -> i32 { 2 }"), "{diff}");
+        assert!(!project.path().join(".git/index.lock").exists());
     }
 
     #[tokio::test]

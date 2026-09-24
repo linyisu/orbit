@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::session::{CanonicalMessage, Run, Session, Snapshot};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 4;
 const MAX_SESSION_OUTPUT_BYTES: i64 = 128 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -21,6 +21,41 @@ pub struct CommandOutputPage {
     pub offset: usize,
     pub retained_bytes: usize,
     pub total_bytes: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryPage {
+    pub message_id: i64,
+    pub sha256: String,
+    pub content: String,
+    pub offset: usize,
+    pub total_bytes: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryMatch {
+    pub message_id: i64,
+    pub sha256: String,
+    pub excerpt: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommandEvidence {
+    pub command: String,
+    pub input_snapshot_id: String,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct VerificationRecord {
+    pub output_id: String,
+    pub command: String,
+    pub input_snapshot_id: String,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Clone)]
@@ -120,6 +155,38 @@ impl Store {
                      CREATE INDEX command_outputs_session_created
                          ON command_outputs(session_id, created_at_ms, id);
                      PRAGMA user_version = 2;
+                     COMMIT;",
+                )?;
+            }
+
+            if version < 3 {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     CREATE TABLE command_evidence (
+                         output_id TEXT PRIMARY KEY REFERENCES command_outputs(id) ON DELETE CASCADE,
+                         command TEXT NOT NULL,
+                         input_snapshot_id TEXT NOT NULL,
+                         exit_code INTEGER,
+                         timed_out INTEGER NOT NULL,
+                         elapsed_ms INTEGER NOT NULL
+                     );
+                     PRAGMA user_version = 3;
+                     COMMIT;",
+                )?;
+            }
+
+            if version < 4 {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     CREATE TABLE context_checkpoints (
+                         session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                         through_message INTEGER NOT NULL,
+                         prefix_sha256 TEXT NOT NULL,
+                         payload TEXT NOT NULL
+                     );
+                     CREATE INDEX messages_session_digest
+                         ON messages(session_id, sha256);
+                     PRAGMA user_version = 4;
                      COMMIT;",
                 )?;
             }
@@ -295,12 +362,27 @@ impl Store {
         stderr: Vec<u8>,
         stdout_total_bytes: usize,
         stderr_total_bytes: usize,
+        evidence: Option<CommandEvidence>,
     ) -> Result<String> {
         validate_session_id(session_id)?;
         ensure!(
             stdout.len() <= 16 * 1024 * 1024 && stderr.len() <= 16 * 1024 * 1024,
             "command output exceeds retention limit"
         );
+        if let Some(evidence) = &evidence {
+            ensure!(
+                evidence.command.len() <= 16 * 1024,
+                "command evidence exceeds 16 KiB"
+            );
+            ensure!(
+                evidence.input_snapshot_id.len() == 64
+                    && evidence
+                        .input_snapshot_id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit()),
+                "invalid workspace fingerprint"
+            );
+        }
         let session_id = session_id.to_owned();
         self.access(move |connection| {
             let transaction = connection.transaction()?;
@@ -321,6 +403,22 @@ impl Store {
                     stderr_total_bytes as i64
                 ],
             )?;
+
+            if let Some(evidence) = evidence {
+                transaction.execute(
+                    "INSERT INTO command_evidence (
+                        output_id, command, input_snapshot_id, exit_code, timed_out, elapsed_ms
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        id,
+                        evidence.command,
+                        evidence.input_snapshot_id,
+                        evidence.exit_code,
+                        evidence.timed_out,
+                        evidence.elapsed_ms as i64
+                    ],
+                )?;
+            }
 
             loop {
                 let bytes: i64 = transaction.query_row(
@@ -343,6 +441,43 @@ impl Store {
 
             transaction.commit()?;
             Ok(id)
+        })
+        .await
+    }
+
+    pub async fn verification_records(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<VerificationRecord>> {
+        validate_session_id(session_id)?;
+        ensure!(
+            (1..=100).contains(&limit),
+            "verification limit must be 1–100"
+        );
+        let session_id = session_id.to_owned();
+        self.access(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT o.id, e.command, e.input_snapshot_id, e.exit_code,
+                        e.timed_out, e.elapsed_ms
+                 FROM command_outputs AS o
+                 JOIN command_evidence AS e ON e.output_id = o.id
+                 WHERE o.session_id=?1 ORDER BY o.created_at_ms DESC, o.rowid DESC
+                 LIMIT ?2",
+            )?;
+            statement
+                .query_map(params![session_id, limit as i64], |row| {
+                    Ok(VerificationRecord {
+                        output_id: row.get(0)?,
+                        command: row.get(1)?,
+                        input_snapshot_id: row.get(2)?,
+                        exit_code: row.get(3)?,
+                        timed_out: row.get(4)?,
+                        elapsed_ms: row.get::<_, i64>(5)? as u64,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
         })
         .await
     }
@@ -388,6 +523,170 @@ impl Store {
                 retained_bytes: retained_bytes as usize,
                 total_bytes: total_bytes as usize,
             })
+        })
+        .await
+    }
+
+    pub async fn save_context_checkpoint(
+        &self,
+        session_id: &str,
+        through_message: usize,
+        prefix_sha256: &str,
+        payload: &str,
+    ) -> Result<()> {
+        validate_session_id(session_id)?;
+        ensure!(
+            through_message > 0,
+            "checkpoint must cover at least one message"
+        );
+        ensure!(
+            prefix_sha256.len() == 64 && prefix_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "invalid checkpoint fingerprint"
+        );
+        ensure!(payload.len() <= 64 * 1024, "checkpoint exceeds size limit");
+        let session_id = session_id.to_owned();
+        let prefix_sha256 = prefix_sha256.to_owned();
+        let payload = payload.to_owned();
+        self.access(move |connection| {
+            connection.execute(
+                "INSERT INTO context_checkpoints(session_id, through_message, prefix_sha256, payload)
+                 VALUES(?1, ?2, ?3, ?4)
+                 ON CONFLICT(session_id) DO UPDATE SET
+                     through_message=excluded.through_message,
+                     prefix_sha256=excluded.prefix_sha256,
+                     payload=excluded.payload",
+                params![session_id, through_message as i64, prefix_sha256, payload],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn load_context_checkpoint(&self, session_id: &str) -> Result<Option<String>> {
+        validate_session_id(session_id)?;
+        let session_id = session_id.to_owned();
+        self.access(move |connection| {
+            connection
+                .query_row(
+                    "SELECT payload FROM context_checkpoints WHERE session_id=?1",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn read_history(
+        &self,
+        session_id: &str,
+        sha256: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<HistoryPage> {
+        validate_session_id(session_id)?;
+        ensure!(
+            sha256.len() == 64 && sha256.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "invalid history digest"
+        );
+        ensure!(
+            (1..=8192).contains(&limit),
+            "history limit must be 1–8192 bytes"
+        );
+        let session_id = session_id.to_owned();
+        let sha256 = sha256.to_owned();
+        self.access(move |connection| {
+            let record = connection
+                .query_row(
+                    "SELECT id, run_id, payload, sha256 FROM messages
+                     WHERE session_id=?1 AND sha256=?2 ORDER BY id LIMIT 1",
+                    params![session_id, sha256],
+                    canonical_row,
+                )
+                .optional()?
+                .context("history message not found in this session")?;
+            let message_id = record.0;
+            let digest = record.3.clone();
+            let payload = serde_json::to_string(&decode_message(record)?.message)?;
+            ensure!(
+                offset <= payload.len(),
+                "history offset exceeds message length"
+            );
+            ensure!(
+                payload.is_char_boundary(offset),
+                "history offset is not a UTF-8 boundary"
+            );
+            let mut end = offset.saturating_add(limit).min(payload.len());
+            while !payload.is_char_boundary(end) {
+                end -= 1;
+            }
+            Ok(HistoryPage {
+                message_id,
+                sha256: digest,
+                content: payload[offset..end].to_owned(),
+                offset,
+                total_bytes: payload.len(),
+            })
+        })
+        .await
+    }
+
+    pub async fn search_history(
+        &self,
+        session_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<HistoryMatch>> {
+        validate_session_id(session_id)?;
+        ensure!(
+            !query.trim().is_empty() && query.len() <= 200,
+            "history query must be 1–200 bytes"
+        );
+        ensure!(
+            (1..=20).contains(&limit),
+            "history search limit must be 1–20"
+        );
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+        let query = query.to_owned();
+        let session_id = session_id.to_owned();
+        self.access(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, run_id, payload, sha256 FROM messages
+                 WHERE session_id=?1 AND payload LIKE ?2 ESCAPE '\\' ORDER BY id DESC LIMIT ?3",
+            )?;
+            let records = statement
+                .query_map(params![session_id, pattern, limit as i64], canonical_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            records
+                .into_iter()
+                .map(|record| {
+                    let message_id = record.0;
+                    let sha256 = record.3.clone();
+                    let payload = record.2.clone();
+                    decode_message(record)?;
+                    let position = payload.find(&query).unwrap_or(0);
+                    let mut start = position.saturating_sub(100);
+                    while !payload.is_char_boundary(start) {
+                        start -= 1;
+                    }
+                    let mut end = position
+                        .saturating_add(query.len() + 180)
+                        .min(payload.len());
+                    while !payload.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    Ok(HistoryMatch {
+                        message_id,
+                        sha256,
+                        excerpt: payload[start..end].to_owned(),
+                    })
+                })
+                .collect()
         })
         .await
     }

@@ -1,13 +1,17 @@
 use std::{
     fs,
     io::{Read, Write},
-    os::unix::fs::{MetadataExt, PermissionsExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{MetadataExt, PermissionsExt},
+    },
     path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, Instant},
 };
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::{io::AsyncReadExt, process::Command};
 use tokio_util::sync::CancellationToken;
@@ -46,18 +50,22 @@ pub struct CommandResult {
     pub stderr_retained: Vec<u8>,
     pub timed_out: bool,
     pub sandbox: &'static str,
+    pub input_snapshot_id: String,
 }
 
 struct Snapshot {
     directory: TempDir,
     entries: usize,
     bytes: usize,
+    hasher: Sha256,
+    materialize: bool,
 }
 
 impl Snapshot {
     fn create(
         workspace: &Workspace,
         cancellation: &CancellationToken,
+        materialize: bool,
     ) -> Result<Self, RuntimeError> {
         let directory = tempfile::Builder::new()
             .prefix("orbit-command-")
@@ -69,9 +77,20 @@ impl Snapshot {
             directory,
             entries: 0,
             bytes: 0,
+            hasher: Sha256::new(),
+            materialize,
         };
         snapshot.copy_directory(workspace, Path::new(""), cancellation, 0)?;
         Ok(snapshot)
+    }
+
+    fn fingerprint(&self) -> String {
+        self.hasher
+            .clone()
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     fn copy_directory(
@@ -118,7 +137,12 @@ impl Snapshot {
                     Err(WorkspaceError::ProtectedPath) => continue,
                     Err(error) => return Err(error.into()),
                 }
-                fs::create_dir(&destination).map_err(failed)?;
+                if self.materialize {
+                    fs::create_dir(&destination).map_err(failed)?;
+                }
+                self.hasher.update(b"directory\0");
+                self.hasher.update(child.as_os_str().as_bytes());
+                self.hasher.update([0]);
                 self.copy_directory(workspace, &child, cancellation, depth + 1)?;
             } else if metadata.is_file() {
                 let mut source = match workspace.open_read(&child) {
@@ -136,14 +160,22 @@ impl Snapshot {
                     return Err(failed("workspace snapshot exceeds 64 MiB"));
                 }
                 self.bytes += content.len();
-                fs::write(&destination, content).map_err(failed)?;
-                let mode = if metadata.mode() & 0o111 == 0 {
-                    0o600
-                } else {
-                    0o700
-                };
-                fs::set_permissions(&destination, fs::Permissions::from_mode(mode))
-                    .map_err(failed)?;
+                self.hasher.update(b"file\0");
+                self.hasher.update(child.as_os_str().as_bytes());
+                self.hasher.update([0]);
+                self.hasher.update([u8::from(metadata.mode() & 0o111 != 0)]);
+                self.hasher.update((content.len() as u64).to_le_bytes());
+                self.hasher.update(&content);
+                if self.materialize {
+                    fs::write(&destination, content).map_err(failed)?;
+                    let mode = if metadata.mode() & 0o111 == 0 {
+                        0o600
+                    } else {
+                        0o700
+                    };
+                    fs::set_permissions(&destination, fs::Permissions::from_mode(mode))
+                        .map_err(failed)?;
+                }
             }
         }
         Ok(())
@@ -306,6 +338,18 @@ async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(
     ))
 }
 
+pub async fn fingerprint_workspace(
+    workspace: Workspace,
+    cancellation: CancellationToken,
+) -> Result<String, RuntimeError> {
+    let token = cancellation.clone();
+    tokio::task::spawn_blocking(move || {
+        Snapshot::create(&workspace, &token, false).map(|snapshot| snapshot.fingerprint())
+    })
+    .await
+    .map_err(failed)?
+}
+
 pub async fn run(
     workspace: Workspace,
     spec: CommandSpec,
@@ -332,9 +376,10 @@ pub async fn run(
     };
     let snapshot_token = cancellation.clone();
     let snapshot =
-        tokio::task::spawn_blocking(move || Snapshot::create(&workspace, &snapshot_token))
+        tokio::task::spawn_blocking(move || Snapshot::create(&workspace, &snapshot_token, true))
             .await
             .map_err(failed)??;
+    let input_snapshot_id = snapshot.fingerprint();
     let script = snapshot.directory.path().join("command.sh");
     let mut file = fs::File::create(&script).map_err(failed)?;
     file.write_all(spec.command.as_bytes()).map_err(failed)?;
@@ -404,5 +449,6 @@ pub async fn run(
         stderr_retained,
         timed_out,
         sandbox: "bubblewrap; disposable workspace snapshot; network allowed",
+        input_snapshot_id,
     })
 }

@@ -162,6 +162,7 @@ async fn command_output_pages_survive_resume_and_stay_in_their_session() {
             b"warning\n".to_vec(),
             25,
             8,
+            None,
         )
         .await
         .unwrap();
@@ -216,7 +217,9 @@ async fn upgrades_existing_session_database_without_losing_messages() {
 
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
-        .execute_batch("DROP TABLE command_outputs; PRAGMA user_version = 1;")
+        .execute_batch(
+            "DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; DROP TABLE command_outputs; PRAGMA user_version = 1;",
+        )
         .unwrap();
     drop(connection);
 
@@ -227,7 +230,7 @@ async fn upgrades_existing_session_database_without_losing_messages() {
         vec![ChatMessage::user("hello")]
     );
     let output_id = upgraded
-        .save_command_output(&id, b"ok".to_vec(), Vec::new(), 2, 0)
+        .save_command_output(&id, b"ok".to_vec(), Vec::new(), 2, 0, None)
         .await
         .unwrap();
     assert_eq!(
@@ -237,5 +240,162 @@ async fn upgrades_existing_session_database_without_losing_messages() {
             .unwrap()
             .content,
         b"ok"
+    );
+}
+
+#[tokio::test]
+async fn upgrades_version_two_command_outputs_to_verification_evidence_schema() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let writer = store.create(root.path(), "model-a").await.unwrap();
+    let session_id = writer.id().to_owned();
+    let output_id = store
+        .save_command_output(&session_id, b"ok".to_vec(), Vec::new(), 2, 0, None)
+        .await
+        .unwrap();
+    drop(writer);
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch("DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; PRAGMA user_version = 2;")
+        .unwrap();
+    drop(connection);
+
+    let upgraded = Store::open(&database).await.unwrap();
+    assert_eq!(
+        upgraded
+            .read_command_output(&session_id, &output_id, "stdout", 0, 8)
+            .await
+            .unwrap()
+            .content,
+        b"ok"
+    );
+    assert!(
+        upgraded
+            .verification_records(&session_id, 20)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn checkpoint_and_history_evidence_survive_resume_without_cross_session_access() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store.create(root.path(), "model-a").await.unwrap();
+    let session_id = writer.id().to_owned();
+    writer
+        .begin("review parser".to_owned(), "model-a".to_owned())
+        .await
+        .unwrap();
+    writer
+        .append(ChatMessage::assistant("修复 parser 边界条件"))
+        .await
+        .unwrap();
+    writer.finish("completed").await.unwrap();
+    let messages = store
+        .canonical_messages(&session_id, None, 10)
+        .await
+        .unwrap();
+    let digest = sha256_message(&messages[1].message);
+    let checkpoint = r#"{"version":1,"through":2}"#;
+    store
+        .save_context_checkpoint(&session_id, 2, &"a".repeat(64), checkpoint)
+        .await
+        .unwrap();
+    drop(writer);
+    drop(store);
+
+    let reopened = Store::open(&database).await.unwrap();
+    assert_eq!(
+        reopened
+            .load_context_checkpoint(&session_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(checkpoint)
+    );
+    let found = reopened
+        .search_history(&session_id, "parser", 10)
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 2);
+    assert!(found.iter().any(|hit| hit.sha256 == digest));
+    let page = reopened
+        .read_history(&session_id, &digest, 0, 8192)
+        .await
+        .unwrap();
+    assert!(page.content.contains("修复 parser"), "{}", page.content);
+    assert_eq!(page.total_bytes, page.content.len());
+
+    let other = reopened.create(root.path(), "model-b").await.unwrap();
+    let denied = reopened
+        .read_history(other.id(), &digest, 0, 100)
+        .await
+        .unwrap_err();
+    assert!(denied.to_string().contains("not found"), "{denied}");
+    assert!(
+        reopened
+            .search_history(other.id(), "parser", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        reopened
+            .load_context_checkpoint(other.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+fn sha256_message(message: &ChatMessage) -> String {
+    use sha2::{Digest, Sha256};
+    let payload = serde_json::to_string(message).unwrap();
+    Sha256::digest(payload.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[tokio::test]
+async fn upgrades_version_three_session_with_checkpoint_schema() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let writer = store.create(root.path(), "model-a").await.unwrap();
+    let id = writer.id().to_owned();
+    drop(writer);
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection.execute_batch("DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; PRAGMA user_version = 3;").unwrap();
+    drop(connection);
+
+    let upgraded = Store::open(&database).await.unwrap();
+    assert_eq!(upgraded.session(&id).await.unwrap().id, id);
+    assert!(
+        upgraded
+            .load_context_checkpoint(&id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    upgraded
+        .save_context_checkpoint(&id, 1, &"b".repeat(64), "{}")
+        .await
+        .unwrap();
+    assert_eq!(
+        upgraded
+            .load_context_checkpoint(&id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("{}")
     );
 }

@@ -19,4 +19,8 @@ pub enum AgentError {
     EventHandler(String),
     #[error("initial request must contain at least one message")]
     InvalidInitialRequest,
+    #[error(
+        "system instructions, current request, and tool definitions exceed the configured model context window"
+    )]
+    ContextBudget,
 }

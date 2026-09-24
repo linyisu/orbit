@@ -3,7 +3,7 @@ use std::{path::PathBuf, time::Duration};
 use orbit_agent::tool::{Tool, ToolError, ToolFuture};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::execution::{CommandSpec, run};
-use orbit_store::Store;
+use orbit_store::{CommandEvidence, Store};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -133,7 +133,7 @@ impl Tool for RunCommand {
             let mut result = run(
                 self.workspace.clone(),
                 CommandSpec {
-                    command: args.command,
+                    command: args.command.clone(),
                     timeout: Duration::from_secs(timeout_seconds),
                     rust_toolchain: self.rust_toolchain.clone(),
                 },
@@ -152,6 +152,13 @@ impl Tool for RunCommand {
                     std::mem::take(&mut result.stderr_retained),
                     result.stdout_total_bytes,
                     result.stderr_total_bytes,
+                    Some(CommandEvidence {
+                        command: args.command.clone(),
+                        input_snapshot_id: result.input_snapshot_id.clone(),
+                        exit_code: result.exit_code,
+                        timed_out: result.timed_out,
+                        elapsed_ms: result.elapsed_ms,
+                    }),
                 )
                 .await
                 .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;

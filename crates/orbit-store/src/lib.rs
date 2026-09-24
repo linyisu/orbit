@@ -2,4 +2,7 @@ pub mod session;
 pub mod store;
 
 pub use session::{CanonicalMessage, Run, Session, Snapshot};
-pub use store::{CommandOutputPage, SessionWriter, Store};
+pub use store::{
+    CommandEvidence, CommandOutputPage, HistoryMatch, HistoryPage, SessionWriter, Store,
+    VerificationRecord,
+};
