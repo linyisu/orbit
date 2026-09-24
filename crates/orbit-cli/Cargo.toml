@@ -13,6 +13,7 @@ clap.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
 ratatui.workspace = true
+pulldown-cmark.workspace = true
 orbit-agent = { path = "../orbit-agent" }
 orbit-model = { path = "../orbit-model" }
 orbit-store = { path = "../orbit-store" }

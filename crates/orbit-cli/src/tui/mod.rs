@@ -1,6 +1,7 @@
 mod app;
 mod commands;
 mod input;
+mod markdown;
 mod render;
 mod session_runtime;
 mod terminal;

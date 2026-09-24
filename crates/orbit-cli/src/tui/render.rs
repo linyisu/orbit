@@ -12,6 +12,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::app::{App, CachedEntry, Entry, EntryKind};
 use super::commands;
+use super::markdown;
 use orbit_tools::approval::ApprovalPreview;
 
 const ACCENT: Color = Color::Rgb(218, 139, 109);
@@ -132,6 +133,22 @@ fn draw_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn entry_lines(entry: &Entry, width: usize, selected: bool) -> Vec<Line<'static>> {
+    if matches!(entry.kind, EntryKind::Assistant | EntryKind::Thinking) {
+        let mut lines = markdown::render(
+            &entry.text,
+            width.saturating_sub(2),
+            entry.kind == EntryKind::Thinking,
+        )
+        .into_iter()
+        .map(|mut line| {
+            line.spans.insert(0, Span::raw("  "));
+            line
+        })
+        .collect::<Vec<_>>();
+        lines.push(Line::default());
+        return lines;
+    }
+
     let (prefix, color) = match entry.kind {
         EntryKind::User => ("> ", ACCENT),
         EntryKind::Assistant => ("  ", Color::Reset),
