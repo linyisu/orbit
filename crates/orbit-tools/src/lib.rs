@@ -3,6 +3,7 @@ pub mod edit_file;
 pub mod git_inspect;
 pub mod history;
 pub mod list_files;
+pub mod project_instructions;
 pub mod project_overview;
 pub mod read_command_output;
 pub mod read_file;
@@ -19,6 +20,9 @@ pub use edit_file::EditFile;
 pub use git_inspect::GitInspect;
 pub use history::{ReadHistory, SearchHistory};
 pub use list_files::ListFiles;
+pub use project_instructions::{
+    InstructionFile, InstructionSet, ProjectInstructions, load_for_target,
+};
 pub use project_overview::ProjectOverview;
 pub use read_command_output::ReadCommandOutput;
 pub use read_file::ReadFile;

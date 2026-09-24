@@ -4,9 +4,9 @@ use anyhow::Result;
 use orbit_agent::tool::ToolRegistry;
 use orbit_store::Store;
 use orbit_tools::{
-    EditFile, GitInspect, ListFiles, ProjectOverview, ReadCommandOutput, ReadFile, ReadHistory,
-    RunCommand, SearchHistory, SearchText, VerificationStatus, WriteFile, approval::ApprovalSender,
-    workspace::Workspace,
+    EditFile, GitInspect, ListFiles, ProjectInstructions, ProjectOverview, ReadCommandOutput,
+    ReadFile, ReadHistory, RunCommand, SearchHistory, SearchText, VerificationStatus, WriteFile,
+    approval::ApprovalSender, workspace::Workspace,
 };
 
 /// Every tool shares the same protected workspace and explicit approval channel.
@@ -37,6 +37,7 @@ pub fn workspace_tools(
     tools.register(ListFiles::new(workspace.clone()));
     tools.register(GitInspect::new(workspace.clone()));
     tools.register(ProjectOverview::new(workspace.clone()));
+    tools.register(ProjectInstructions::new(workspace.clone()));
     tools.register(VerificationStatus::new(
         workspace.clone(),
         store.clone(),
@@ -63,6 +64,11 @@ mod tests {
     async fn chat_tools_read_project_files_but_not_the_loaded_config() {
         let project = tempfile::tempdir().unwrap();
         std::fs::write(project.path().join("main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(
+            project.path().join("AGENTS.md"),
+            "Run cargo test before finishing.\n",
+        )
+        .unwrap();
         let config = project.path().join("config.toml");
         std::fs::write(&config, "api_key = 'secret'\n").unwrap();
 
@@ -91,6 +97,7 @@ mod tests {
                 "edit_file",
                 "git_inspect",
                 "list_files",
+                "project_instructions",
                 "project_overview",
                 "read_command_output",
                 "read_file",
@@ -111,6 +118,21 @@ mod tests {
             .await
             .unwrap();
         assert!(result.contains("fn main()"));
+        let rules = tools
+            .execute(
+                ToolCall::function(
+                    "rules-1",
+                    "project_instructions",
+                    json!({ "path": "main.rs" }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            rules.contains("Run cargo test before finishing."),
+            "{rules}"
+        );
 
         let denied = tools
             .execute(

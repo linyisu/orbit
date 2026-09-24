@@ -4,3 +4,7 @@ base_url = "https://api.openai.com/v1"
 api_key = ""
 model = "gpt-5.6-sol"
 timeout_seconds = 120
+context_tokens = 128000
+max_output_tokens = 4096
+# Optional user-level AGENTS.md directory; relative paths resolve beside this file.
+# instruction_home = "instructions"
