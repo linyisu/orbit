@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::session::{CanonicalMessage, Run, Session, Snapshot};
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const MAX_SESSION_OUTPUT_BYTES: i64 = 128 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -232,6 +232,23 @@ impl Store {
                     "BEGIN IMMEDIATE;
                      ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT;
                      PRAGMA user_version = 6;
+                     COMMIT;",
+                )?;
+            }
+
+            if version < 7 {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     CREATE TABLE model_token_samples (
+                         id INTEGER PRIMARY KEY,
+                         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                         model TEXT NOT NULL,
+                         estimated_input INTEGER NOT NULL CHECK(estimated_input > 0),
+                         actual_input INTEGER NOT NULL CHECK(actual_input > 0)
+                     );
+                     CREATE INDEX model_token_samples_lookup
+                         ON model_token_samples(session_id, model, id DESC);
+                     PRAGMA user_version = 7;
                      COMMIT;",
                 )?;
             }
@@ -769,6 +786,68 @@ impl Store {
                 )
                 .optional()
                 .map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn record_model_token_sample(
+        &self,
+        session_id: &str,
+        model: &str,
+        estimated_input: usize,
+        actual_input: u64,
+    ) -> Result<()> {
+        validate_session_id(session_id)?;
+        ensure!(!model.trim().is_empty(), "model name must be nonempty");
+        let estimated = i64::try_from(estimated_input)?;
+        let actual = i64::try_from(actual_input)?;
+        ensure!(estimated > 0 && actual > 0, "token usage must be positive");
+        let session_id = session_id.to_owned();
+        let model = model.to_owned();
+        self.access(move |connection| {
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "INSERT INTO model_token_samples(session_id, model, estimated_input, actual_input)
+                 VALUES(?1, ?2, ?3, ?4)",
+                params![session_id, model, estimated, actual],
+            )?;
+            transaction.execute(
+                "DELETE FROM model_token_samples
+                 WHERE session_id=?1 AND model=?2 AND id NOT IN (
+                     SELECT id FROM model_token_samples
+                     WHERE session_id=?1 AND model=?2 ORDER BY id DESC LIMIT 9
+                 )",
+                params![session_id, model],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn model_token_samples(
+        &self,
+        session_id: &str,
+        model: &str,
+    ) -> Result<Vec<(usize, u64)>> {
+        validate_session_id(session_id)?;
+        let session_id = session_id.to_owned();
+        let model = model.to_owned();
+        self.access(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT estimated_input, actual_input FROM model_token_samples
+                 WHERE session_id=?1 AND model=?2 ORDER BY id DESC LIMIT 9",
+            )?;
+            let rows = statement.query_map(params![session_id, model], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            let mut samples = Vec::new();
+            for row in rows {
+                let (estimated, actual) = row?;
+                samples.push((usize::try_from(estimated)?, u64::try_from(actual)?));
+            }
+            samples.reverse();
+            Ok(samples)
         })
         .await
     }

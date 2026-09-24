@@ -254,11 +254,14 @@ fn draw_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         || app.model.clone(),
         |effort| format!("{} {}", app.model, effort.as_str()),
     );
+    let context_percent = app.context_used_tokens.saturating_mul(100) / app.context_tokens.max(1);
     let text = format!(
-        " {}  |  {}  |  {}  |  {} tokens  |  session {}  |  Ctrl+C exit  PageUp/Down scroll",
+        " {}  |  {}  |  {}  |  {}% ({}/{}) tokens  |  session {}  |  Ctrl+C exit  PageUp/Down scroll",
         app.status,
         app.approval_mode.label(),
         model,
+        context_percent,
+        app.context_used_tokens,
         app.context_tokens,
         session
     );

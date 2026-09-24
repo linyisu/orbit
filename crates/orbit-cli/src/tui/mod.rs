@@ -59,6 +59,7 @@ pub async fn run(config_path: PathBuf, database: PathBuf, args: TuiArgs) -> Resu
     );
     app.approval_mode = args.approval;
     app.reasoning = runtime.reasoning();
+    app.context_used_tokens = runtime.context_usage().await?.0;
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     app.begin_restore();
     let mut restore = Some(start_restore(runtime.store.clone(), app.session_id.clone()));
@@ -198,6 +199,9 @@ pub async fn run(config_path: PathBuf, database: PathBuf, args: TuiArgs) -> Resu
                 }
                 app.running = false;
                 app.status = "Ready".to_owned();
+                if let Ok((used, _, _)) = runtime.context_usage().await {
+                    app.context_used_tokens = used;
+                }
                 dirty = true;
             }
             LoopEvent::Tick => {
@@ -524,10 +528,13 @@ async fn command(
         }
         "/context" => {
             match runtime.context_usage().await {
-                Ok((used, limit, checkpoint)) => app.notice(format!(
-                    "Estimated raw request: {used} / {limit} tokens · checkpoint: {}",
-                    if checkpoint { "saved" } else { "none" }
-                )),
+                Ok((used, limit, checkpoint)) => {
+                    app.context_used_tokens = used;
+                    app.notice(format!(
+                        "Estimated active request: {used} / {limit} tokens · checkpoint: {}",
+                        if checkpoint { "saved" } else { "none" }
+                    ));
+                }
                 Err(error) => app.error(error.to_string()),
             }
             Ok(false)

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use orbit_agent::{
     agent::{Agent, AgentConfig, AgentResult},
-    context::{ContextCheckpoint, ContextConfig, ContextRuntime, estimate_tokens},
+    context::{ContextCheckpoint, ContextConfig, ContextRuntime},
     error::AgentError,
     events::AgentEvent,
     model::ModelClientBackend,
@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     FileConfig, ModelOption, TuiArgs, coding_request, project_state, result_status, runtime,
-    startup_instructions,
+    startup_instructions, token_calibration,
 };
 
 use super::app::App;
@@ -186,6 +186,7 @@ impl Runtime {
         app.model = self.selected.name.clone();
         app.context_tokens = self.selected.context_tokens;
         app.reasoning = reasoning;
+        app.context_used_tokens = self.context_usage().await?.0;
         app.notice(format!("Model: {}", app.model));
         Ok(())
     }
@@ -279,6 +280,7 @@ impl Runtime {
         app.reasoning = reasoning;
         app.scroll = 0;
         app.begin_restore();
+        app.context_used_tokens = self.context_usage().await?.0;
         Ok(())
     }
 
@@ -306,6 +308,7 @@ impl Runtime {
             .load_context_checkpoint(&session_id)
             .await?
             .and_then(|payload| serde_json::from_str::<ContextCheckpoint>(&payload).ok());
+        let calibration = token_calibration(&self.store, &session_id, &self.selected.name).await?;
         let context = ContextRuntime::new(
             ContextConfig {
                 window_tokens: self.selected.context_tokens,
@@ -314,7 +317,8 @@ impl Runtime {
             },
             checkpoint,
         )
-        .map_err(|message| anyhow::anyhow!(message))?;
+        .map_err(|message| anyhow::anyhow!(message))?
+        .with_calibration(calibration);
         let mut writer = self.writer.take().context("session is already running")?;
         if let Err(error) = writer.begin_user(user, self.selected.name.clone()).await {
             self.writer = Some(writer);
@@ -333,12 +337,14 @@ impl Runtime {
         let cancellation = CancellationToken::new();
         let token = cancellation.clone();
         let store = self.store.clone();
+        let model_name = self.selected.name.clone();
         let task = tokio::spawn(async move {
             let result = agent
                 .run_with_agent_events(request, token, |event| {
                     let writer = &writer;
                     let store = &store;
                     let sender = &sender;
+                    let model_name = &model_name;
                     async move {
                         match &event {
                             AgentEvent::MessageCommitted { message } => {
@@ -359,6 +365,20 @@ impl Runtime {
                                     )
                                     .await
                                     .map_err(|error| AgentError::EventHandler(error.to_string()))?;
+                            }
+                            AgentEvent::ModelUsageObserved {
+                                local_estimate,
+                                actual_input_tokens: Some(actual),
+                                ..
+                            } => {
+                                let _ = store
+                                    .record_model_token_sample(
+                                        writer.id(),
+                                        model_name,
+                                        *local_estimate,
+                                        *actual,
+                                    )
+                                    .await;
                             }
                             _ => {}
                         }
@@ -391,13 +411,37 @@ impl Runtime {
             project_state::projection(&self.store, &self.workspace.to_string_lossy(), session_id)
                 .await?;
         let request = coding_request(snapshot.projected_history(), &self.instructions, state);
-        let used = estimate_tokens(&request.messages, &self.tools.definitions());
         let checkpoint = self
             .store
             .load_context_checkpoint(session_id)
             .await?
-            .is_some();
-        Ok((used, self.selected.context_tokens, checkpoint))
+            .and_then(|payload| serde_json::from_str::<ContextCheckpoint>(&payload).ok());
+        let calibration = token_calibration(&self.store, session_id, &self.selected.name).await?;
+        let context = ContextRuntime::new(
+            ContextConfig {
+                window_tokens: self.selected.context_tokens,
+                output_reserve: self.selected.max_output_tokens,
+                force_compact: false,
+            },
+            checkpoint.clone(),
+        )
+        .map_err(|message| anyhow::anyhow!(message))?
+        .with_calibration(calibration);
+        let definitions = self
+            .tools
+            .definitions()
+            .into_iter()
+            .filter(|definition| {
+                self.selected.supports_vision || definition.function.name != "read_image"
+            })
+            .collect::<Vec<_>>();
+        let used = context.estimate_provider_tokens(
+            &request.messages,
+            &definitions,
+            self.selected.supports_vision,
+        );
+        let active_checkpoint = context.has_valid_checkpoint(&request.messages);
+        Ok((used, self.selected.context_tokens, active_checkpoint))
     }
 
     pub(super) async fn start_compaction(&self, app: &mut App) -> Result<ActiveRun> {
@@ -412,6 +456,7 @@ impl Runtime {
             .load_context_checkpoint(&session_id)
             .await?
             .and_then(|payload| serde_json::from_str::<ContextCheckpoint>(&payload).ok());
+        let calibration = token_calibration(&self.store, &session_id, &self.selected.name).await?;
         let mut context = ContextRuntime::new(
             ContextConfig {
                 window_tokens: self.selected.context_tokens,
@@ -420,7 +465,8 @@ impl Runtime {
             },
             checkpoint,
         )
-        .map_err(|message| anyhow::anyhow!(message))?;
+        .map_err(|message| anyhow::anyhow!(message))?
+        .with_calibration(calibration);
         let backend = ModelClientBackend::new(self.client.clone());
         let definitions = self.tools.definitions();
         let store = self.store.clone();

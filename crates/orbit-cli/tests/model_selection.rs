@@ -52,6 +52,7 @@ fn selected_provider_and_prompt_file_survive_chat_resume() {
             requests.lock().unwrap().push(receive_request(&mut stream));
             let payload = concat!(
                 "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1234,\"completion_tokens\":2,\"total_tokens\":1236}}\n\n",
                 "data: [DONE]\n\n"
             );
             write!(
@@ -221,4 +222,22 @@ fn selected_provider_and_prompt_file_survive_chat_resume() {
             .contains("First line\\nSecond line")
     );
     assert!(requests[1]["messages"].to_string().contains("Continue"));
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let first_samples: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM model_token_samples WHERE session_id=?1 AND model='first::first'",
+            [session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let second_samples: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM model_token_samples WHERE session_id=?1 AND model='second::second'",
+            [session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(first_samples, 1);
+    assert_eq!(second_samples, 3);
 }

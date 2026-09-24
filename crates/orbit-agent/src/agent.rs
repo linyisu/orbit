@@ -190,9 +190,31 @@ where
                 max_tokens: request.max_tokens,
                 reasoning_effort: request.reasoning_effort,
             };
+            let local_estimate =
+                crate::context::estimate_tokens(&model_request.messages, &model_request.tools);
+            let estimated_input_tokens = context.as_ref().map_or(local_estimate, |runtime| {
+                runtime.calibrated_estimate(local_estimate)
+            });
+            emit(AgentEvent::ModelRequestPrepared {
+                estimated_input_tokens,
+            })
+            .await?;
             let completion = self
                 .collect_stream(model_request, cancellation.clone(), emit)
                 .await?;
+            let actual_input_tokens = completion
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.prompt_tokens);
+            if let Some(runtime) = &mut context {
+                runtime.observe_usage(local_estimate, actual_input_tokens);
+            }
+            emit(AgentEvent::ModelUsageObserved {
+                local_estimate,
+                estimated_input_tokens,
+                actual_input_tokens,
+            })
+            .await?;
             check_finish_reason(completion.finish_reason.as_deref())?;
 
             let assistant = completion.message;
@@ -922,9 +944,16 @@ mod tests {
             Some(AgentEvent::TurnStarted { turn: 1 })
         ));
         assert!(matches!(
-            events.get(1),
+            events.get(2),
             Some(AgentEvent::Model(StreamEvent::ReasoningDelta(text))) if text == "private reasoning"
         ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ModelUsageObserved {
+                actual_input_tokens: Some(12),
+                ..
+            }
+        )));
         assert!(matches!(
             events.last(),
             Some(AgentEvent::Completed {
@@ -980,15 +1009,19 @@ mod tests {
             events.as_slice(),
             [
                 AgentEvent::TurnStarted { turn: 1 },
+                AgentEvent::ModelRequestPrepared { .. },
                 AgentEvent::Model(_),
                 AgentEvent::Model(_),
+                AgentEvent::ModelUsageObserved { .. },
                 AgentEvent::MessageCommitted { .. },
                 AgentEvent::ToolStarted { .. },
                 AgentEvent::MessageCommitted { .. },
                 AgentEvent::ToolFailed { .. },
                 AgentEvent::TurnStarted { turn: 2 },
+                AgentEvent::ModelRequestPrepared { .. },
                 AgentEvent::Model(_),
                 AgentEvent::Model(_),
+                AgentEvent::ModelUsageObserved { .. },
                 AgentEvent::MessageCommitted { .. },
                 AgentEvent::Completed {
                     turns: 2,

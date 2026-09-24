@@ -75,6 +75,7 @@ pub struct App {
     pub reasoning: Option<ReasoningEffort>,
     pub pending_images: Vec<Attachment>,
     pub context_tokens: usize,
+    pub context_used_tokens: usize,
     pub running: bool,
     pub status: String,
     pub approval_mode: ApprovalMode,
@@ -108,6 +109,7 @@ impl App {
             reasoning: None,
             pending_images: Vec::new(),
             context_tokens,
+            context_used_tokens: 0,
             running: false,
             status: "Ready".to_owned(),
             approval_mode: ApprovalMode::Auto,
@@ -209,6 +211,20 @@ impl App {
 
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
+            AgentEvent::ModelRequestPrepared {
+                estimated_input_tokens,
+            } => {
+                self.context_used_tokens = estimated_input_tokens;
+            }
+            AgentEvent::ModelUsageObserved {
+                estimated_input_tokens,
+                actual_input_tokens,
+                ..
+            } => {
+                self.context_used_tokens = actual_input_tokens
+                    .and_then(|actual| usize::try_from(actual).ok())
+                    .unwrap_or(estimated_input_tokens);
+            }
             AgentEvent::TurnStarted { .. } => {
                 self.active_assistant = None;
                 self.active_thinking = None;
@@ -500,5 +516,22 @@ mod tests {
         assert_eq!(app.entries[0].text, "search_text  \"fallback\"  src");
         assert_eq!(app.entries[0].preview, "2 matches");
         assert!(app.entries[0].output.contains("\"line\": 1"));
+    }
+
+    #[test]
+    fn context_usage_moves_from_estimate_to_provider_reported_usage() {
+        let mut app = App::new("session".into(), "workspace".into(), "model".into(), 32_000);
+
+        app.apply(AgentEvent::ModelRequestPrepared {
+            estimated_input_tokens: 1_400,
+        });
+        assert_eq!(app.context_used_tokens, 1_400);
+
+        app.apply(AgentEvent::ModelUsageObserved {
+            local_estimate: 1_400,
+            estimated_input_tokens: 1_400,
+            actual_input_tokens: Some(2_000),
+        });
+        assert_eq!(app.context_used_tokens, 2_000);
     }
 }

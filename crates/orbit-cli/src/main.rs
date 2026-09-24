@@ -15,6 +15,7 @@ use approval::ApprovalMode;
 use clap::{Args, Parser, Subcommand};
 use orbit_agent::{
     agent::{Agent, AgentConfig},
+    calibration::TokenCalibration,
     context::{ContextCheckpoint, ContextConfig, ContextRuntime},
     error::AgentError,
     events::AgentEvent,
@@ -448,6 +449,18 @@ fn validate_reasoning_extra(name: &str, format: ApiFormat, extra: &toml::Table) 
     Ok(())
 }
 
+async fn token_calibration(
+    store: &Store,
+    session_id: &str,
+    model: &str,
+) -> Result<TokenCalibration> {
+    let mut calibration = TokenCalibration::default();
+    for (estimated, actual) in store.model_token_samples(session_id, model).await? {
+        calibration.observe(estimated, Some(actual));
+    }
+    Ok(calibration)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -615,6 +628,7 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     let max_output_tokens = u32::try_from(selected.max_output_tokens)
         .context("max_output_tokens exceeds the model request limit")?;
     let client = ModelClient::new(selected.config.clone())?;
+    let calibration = token_calibration(&store, writer.id(), &selected.name).await?;
     let reasoning = selected.select_reasoning(args.reasoning, saved_effort.as_deref())?;
     ensure!(
         args.images.is_empty() || selected.supports_vision,
@@ -646,7 +660,8 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
         attachments.push(store.save_image(writer.id(), image).await?);
     }
     let user = ChatMessage::user_with_attachments(prompt, attachments);
-    writer.begin_user(user.clone(), selected.name).await?;
+    let model_name = selected.name.clone();
+    writer.begin_user(user.clone(), model_name.clone()).await?;
     eprintln!("session {}", writer.id());
     history.push(user);
     let state =
@@ -655,7 +670,8 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     request.max_tokens = Some(max_output_tokens);
     request.reasoning_effort = reasoning;
     let context = ContextRuntime::new(context_config, checkpoint)
-        .map_err(|message| anyhow::anyhow!(message))?;
+        .map_err(|message| anyhow::anyhow!(message))?
+        .with_calibration(calibration);
     let agent = Agent::new(
         ModelClientBackend::new(client),
         tools,
@@ -677,6 +693,7 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
         .run_with_agent_events(request, CancellationToken::new(), |event| {
             let writer = &writer;
             let store = &store;
+            let model_name = &model_name;
             async move {
                 match event {
                     AgentEvent::MessageCommitted { message } => writer
@@ -695,6 +712,23 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
                             )
                             .await
                             .map_err(|error| AgentError::EventHandler(error.to_string()))?;
+                    }
+                    AgentEvent::ModelUsageObserved {
+                        local_estimate,
+                        actual_input_tokens: Some(actual),
+                        ..
+                    } => {
+                        if let Err(error) = store
+                            .record_model_token_sample(
+                                writer.id(),
+                                model_name,
+                                local_estimate,
+                                actual,
+                            )
+                            .await
+                        {
+                            eprintln!("token calibration was not saved: {error}");
+                        }
                     }
                     AgentEvent::Model(StreamEvent::TextDelta(text)) if streaming => {
                         print!("{text}");

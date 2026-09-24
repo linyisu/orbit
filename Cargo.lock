@@ -2089,6 +2089,7 @@ dependencies = [
  "orbit-store",
  "orbit-tools",
  "ratatui",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

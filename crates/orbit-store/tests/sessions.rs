@@ -47,6 +47,93 @@ async fn records_and_reopens_complete_session_history() {
 }
 
 #[tokio::test]
+async fn model_token_samples_are_bounded_session_scoped_and_durable() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let first = store
+        .create(root.path(), "provider-a::model")
+        .await
+        .unwrap();
+    let second = store
+        .create(root.path(), "provider-a::model")
+        .await
+        .unwrap();
+    let first_id = first.id().to_owned();
+
+    for index in 1..=12 {
+        store
+            .record_model_token_sample(first.id(), "provider-a::model", 100, index * 100)
+            .await
+            .unwrap();
+    }
+    store
+        .record_model_token_sample(first.id(), "provider-b::model", 200, 300)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .model_token_samples(second.id(), "provider-a::model")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(first);
+    drop(second);
+    drop(store);
+
+    let reopened = Store::open(&database).await.unwrap();
+    let samples = reopened
+        .model_token_samples(&first_id, "provider-a::model")
+        .await
+        .unwrap();
+    assert_eq!(samples.len(), 9);
+    assert_eq!(samples.first(), Some(&(100, 400)));
+    assert_eq!(samples.last(), Some(&(100, 1200)));
+    assert_eq!(
+        reopened
+            .model_token_samples(&first_id, "provider-b::model")
+            .await
+            .unwrap(),
+        vec![(200, 300)]
+    );
+}
+
+#[tokio::test]
+async fn upgrades_version_six_with_existing_messages_and_adds_usage_samples() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store.create(root.path(), "model-a").await.unwrap();
+    let id = writer.id().to_owned();
+    writer
+        .begin("hello".into(), "model-a".into())
+        .await
+        .unwrap();
+    writer.finish("completed").await.unwrap();
+    drop(writer);
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch("DROP TABLE model_token_samples; PRAGMA user_version = 6;")
+        .unwrap();
+    drop(connection);
+
+    let upgraded = Store::open(&database).await.unwrap();
+    upgraded
+        .record_model_token_sample(&id, "model-a", 100, 120)
+        .await
+        .unwrap();
+
+    assert_eq!(upgraded.load(&id).await.unwrap().messages.len(), 1);
+    assert_eq!(
+        upgraded.model_token_samples(&id, "model-a").await.unwrap(),
+        vec![(100, 120)]
+    );
+}
+
+#[tokio::test]
 async fn renaming_a_session_survives_reopen_and_preserves_history() {
     let root = tempfile::tempdir().unwrap();
     let database = root.path().join("sessions.db");
@@ -112,7 +199,8 @@ async fn version_five_sessions_upgrade_with_reasoning_profile() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
-            "ALTER TABLE sessions DROP COLUMN reasoning_effort;
+            "DROP TABLE model_token_samples;
+             ALTER TABLE sessions DROP COLUMN reasoning_effort;
              PRAGMA user_version = 5;",
         )
         .unwrap();
@@ -362,7 +450,15 @@ async fn upgrades_existing_session_database_without_losing_messages() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; DROP TABLE command_outputs; ALTER TABLE sessions DROP COLUMN reasoning_effort; PRAGMA user_version = 1;",
+            "DROP TABLE model_token_samples;
+             DROP TABLE session_memories;
+             DROP TABLE project_tasks;
+             DROP TABLE context_checkpoints;
+             DROP INDEX messages_session_digest;
+             DROP TABLE command_evidence;
+             DROP TABLE command_outputs;
+             ALTER TABLE sessions DROP COLUMN reasoning_effort;
+             PRAGMA user_version = 1;",
         )
         .unwrap();
     drop(connection);
@@ -403,7 +499,16 @@ async fn upgrades_version_two_command_outputs_to_verification_evidence_schema() 
 
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
-        .execute_batch("DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; ALTER TABLE sessions DROP COLUMN reasoning_effort; PRAGMA user_version = 2;")
+        .execute_batch(
+            "DROP TABLE model_token_samples;
+                        DROP TABLE session_memories;
+                        DROP TABLE project_tasks;
+                        DROP TABLE context_checkpoints;
+                        DROP INDEX messages_session_digest;
+                        DROP TABLE command_evidence;
+                        ALTER TABLE sessions DROP COLUMN reasoning_effort;
+                        PRAGMA user_version = 2;",
+        )
         .unwrap();
     drop(connection);
 
@@ -518,7 +623,17 @@ async fn upgrades_version_three_session_with_checkpoint_schema() {
     drop(store);
 
     let connection = rusqlite::Connection::open(&database).unwrap();
-    connection.execute_batch("DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; ALTER TABLE sessions DROP COLUMN reasoning_effort; PRAGMA user_version = 3;").unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE model_token_samples;
+                              DROP TABLE session_memories;
+                              DROP TABLE project_tasks;
+                              DROP TABLE context_checkpoints;
+                              DROP INDEX messages_session_digest;
+                              ALTER TABLE sessions DROP COLUMN reasoning_effort;
+                              PRAGMA user_version = 3;",
+        )
+        .unwrap();
     drop(connection);
 
     let upgraded = Store::open(&database).await.unwrap();

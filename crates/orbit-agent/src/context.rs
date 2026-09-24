@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::{error::AgentError, model::ModelBackend};
+use crate::{calibration::TokenCalibration, error::AgentError, model::ModelBackend};
 
 const SUMMARY_INPUT_BYTES: usize = 48 * 1024;
 const SUMMARY_MAX_BYTES: usize = 16 * 1024;
@@ -53,8 +53,8 @@ impl ContextConfig {
         Ok(())
     }
 
-    fn input_budget(&self) -> usize {
-        self.window_tokens.saturating_sub(self.output_reserve) * 84 / 100
+    fn input_budget(&self, calibration: &TokenCalibration) -> usize {
+        calibration.local_input_budget(self.window_tokens, self.output_reserve) * 84 / 100
     }
 }
 
@@ -63,6 +63,7 @@ pub struct ContextRuntime {
     config: ContextConfig,
     checkpoint: Option<ContextCheckpoint>,
     local_fallback: bool,
+    calibration: TokenCalibration,
 }
 
 pub struct ContextStep {
@@ -85,7 +86,49 @@ impl ContextRuntime {
             config,
             checkpoint,
             local_fallback,
+            calibration: TokenCalibration::default(),
         })
+    }
+
+    pub fn with_calibration(mut self, calibration: TokenCalibration) -> Self {
+        self.calibration = calibration;
+        self
+    }
+
+    pub fn has_valid_checkpoint(&self, history: &[ChatMessage]) -> bool {
+        self.checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint_matches(checkpoint, history))
+    }
+
+    pub fn estimate_provider_tokens(
+        &self,
+        history: &[ChatMessage],
+        tools: &[ToolDefinition],
+        supports_vision: bool,
+    ) -> usize {
+        let mut preview = self.clone();
+        if preview
+            .checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| !checkpoint_matches(checkpoint, history))
+        {
+            preview.checkpoint = None;
+        }
+        let budget = preview.config.input_budget(&preview.calibration);
+        let messages = fit_emergency(preview.project(history, tools, budget), tools, budget);
+        let messages = crate::agent::model_messages(&messages, supports_vision);
+        preview
+            .calibration
+            .estimate(estimate_tokens(&messages, tools))
+    }
+
+    pub fn calibrated_estimate(&self, local: usize) -> usize {
+        self.calibration.estimate(local)
+    }
+
+    pub fn observe_usage(&mut self, local: usize, actual: Option<u64>) {
+        self.calibration.observe(local, actual);
     }
 
     pub async fn prepare_step<B: ModelBackend>(
@@ -105,7 +148,7 @@ impl ContextRuntime {
         {
             self.checkpoint = None;
         }
-        let budget = self.config.input_budget();
+        let budget = self.config.input_budget(&self.calibration);
         let mut projected = self.project(history, tools, budget);
         let estimated = estimate_tokens(&projected, tools);
         let trigger = if self.config.force_compact {
@@ -597,6 +640,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn provider_usage_calibrates_projection_and_reduces_local_input_budget() {
+        let messages = vec![ChatMessage::system("system"), ChatMessage::user("question")];
+        let plain = ContextRuntime::new(config(), None).unwrap();
+        let mut calibration = TokenCalibration::default();
+        calibration.observe(100, Some(200));
+        let calibrated = ContextRuntime::new(config(), None)
+            .unwrap()
+            .with_calibration(calibration.clone());
+
+        assert_eq!(
+            calibrated.estimate_provider_tokens(&messages, &[], false),
+            plain.estimate_provider_tokens(&messages, &[], false) * 2
+        );
+        assert!(
+            config().input_budget(&calibration)
+                < config().input_budget(&TokenCalibration::default())
+        );
+    }
+
     #[tokio::test]
     async fn progressive_checkpoint_preserves_raw_history_and_reuses_it_after_resume() {
         let raw = history();
@@ -619,9 +682,13 @@ mod tests {
             }
         }
         let checkpoint = latest.expect("long history produces a checkpoint");
+        let resumed_preview = ContextRuntime::new(config(), Some(checkpoint.clone()))
+            .unwrap()
+            .estimate_provider_tokens(&raw, &[], false);
         assert_eq!(raw, original);
         assert!(checkpoint.through > 1);
         assert!(estimate_tokens(&projection, &[]) < estimate_tokens(&raw, &[]));
+        assert!(resumed_preview < estimate_tokens(&raw, &[]));
         assert!(projection.iter().any(|message| matches!(message, ChatMessage::System { content } if content.contains("repair parser"))));
         assert_eq!(projection.last(), raw.last());
 
@@ -709,7 +776,8 @@ mod tests {
         let requests = model.requests();
         assert_eq!(requests.len(), 2);
         assert!(
-            estimate_tokens(&requests[1].messages, &requests[1].tools) <= config().input_budget()
+            estimate_tokens(&requests[1].messages, &requests[1].tools)
+                <= config().input_budget(&TokenCalibration::default())
         );
     }
 
