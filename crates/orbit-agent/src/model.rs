@@ -40,17 +40,26 @@ pub trait ModelBackend: Send + Sync {
 #[derive(Clone)]
 pub struct ModelClientBackend {
     client: ModelClient,
+    vision_enabled: bool,
 }
 
 impl ModelClientBackend {
     pub fn new(client: ModelClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            vision_enabled: true,
+        }
+    }
+
+    pub fn with_vision_enabled(mut self, enabled: bool) -> Self {
+        self.vision_enabled = enabled;
+        self
     }
 }
 
 impl ModelBackend for ModelClientBackend {
     fn supports_vision(&self) -> bool {
-        self.client.config().supports_vision
+        self.vision_enabled && self.client.config().supports_vision
     }
 
     fn complete<'a>(

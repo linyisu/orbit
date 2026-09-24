@@ -47,7 +47,7 @@ fn selected_provider_and_prompt_file_survive_chat_resume() {
     let received = Arc::new(Mutex::new(Vec::new()));
     let requests = Arc::clone(&received);
     let server = std::thread::spawn(move || {
-        for _ in 0..4 {
+        for _ in 0..5 {
             let (mut stream, _) = listener.accept().unwrap();
             requests.lock().unwrap().push(receive_request(&mut stream));
             let payload = concat!(
@@ -182,10 +182,39 @@ fn selected_provider_and_prompt_file_survive_chat_resume() {
         String::from_utf8_lossy(&fourth.stdout),
         String::from_utf8_lossy(&fourth.stderr)
     );
+
+    let restricted = Command::new(env!("CARGO_BIN_EXE_orbit"))
+        .current_dir(root.path())
+        .args(["--config", config.to_str().unwrap()])
+        .args(["--database", database.to_str().unwrap()])
+        .args([
+            "chat",
+            "--approval",
+            "deny",
+            "--resume",
+            session_id,
+            "--disable",
+            "image",
+            "--disable",
+            "web",
+            "--disable",
+            "command",
+            "--disable",
+            "project-state",
+            "Restricted",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        restricted.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&restricted.stdout),
+        String::from_utf8_lossy(&restricted.stderr)
+    );
     server.join().unwrap();
 
     let requests = received.lock().unwrap();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert_eq!(requests[0]["model"], "second");
     assert_eq!(requests[1]["model"], "second");
     assert_eq!(requests[0]["reasoning_effort"], "high");
@@ -222,6 +251,42 @@ fn selected_provider_and_prompt_file_survive_chat_resume() {
             .contains("First line\\nSecond line")
     );
     assert!(requests[1]["messages"].to_string().contains("Continue"));
+    let restricted_request = &requests[4];
+    assert!(
+        !restricted_request["messages"]
+            .to_string()
+            .contains("data:image/png;base64,")
+    );
+    assert!(
+        restricted_request["messages"]
+            .to_string()
+            .contains("Image omitted")
+    );
+    assert!(
+        !restricted_request["messages"]
+            .to_string()
+            .contains("ORBIT_PROJECT_STATE_V1")
+    );
+    let restricted_tools = restricted_request["tools"]
+        .as_array()
+        .expect("tool definitions")
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    for name in [
+        "read_image",
+        "web_fetch",
+        "web_search",
+        "run_command",
+        "read_command_output",
+        "verification_status",
+        "task_list",
+        "memory_save",
+    ] {
+        assert!(!restricted_tools.contains(&name), "{name} was exposed");
+    }
+    assert!(restricted_tools.contains(&"read_file"));
+    assert!(restricted_tools.contains(&"read_history"));
 
     let connection = rusqlite::Connection::open(&database).unwrap();
     let first_samples: i64 = connection
@@ -239,5 +304,5 @@ fn selected_provider_and_prompt_file_survive_chat_resume() {
         )
         .unwrap();
     assert_eq!(first_samples, 1);
-    assert_eq!(second_samples, 3);
+    assert_eq!(second_samples, 4);
 }

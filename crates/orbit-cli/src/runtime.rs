@@ -12,10 +12,20 @@ use orbit_tools::{
     workspace::Workspace,
 };
 
-#[derive(Default)]
 pub struct WorkspaceToolOptions {
     pub rust_toolchain: Option<PathBuf>,
     pub web: WebConfig,
+    pub web_enabled: bool,
+}
+
+impl Default for WorkspaceToolOptions {
+    fn default() -> Self {
+        Self {
+            rust_toolchain: None,
+            web: WebConfig::default(),
+            web_enabled: true,
+        }
+    }
 }
 
 /// Every tool shares the same protected workspace and explicit approval channel.
@@ -66,8 +76,10 @@ pub fn workspace_tools(
         session_id.to_owned(),
     ));
     tools.register(SearchText::new(workspace.clone()));
-    tools.register(WebFetch::new(options.web.clone())?);
-    tools.register(WebSearch::new(options.web)?);
+    if options.web_enabled {
+        tools.register(WebFetch::new(options.web.clone())?);
+        tools.register(WebSearch::new(options.web)?);
+    }
     tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
     tools.register(EditFile::new(workspace.clone(), approvals.clone()));
     tools.register(

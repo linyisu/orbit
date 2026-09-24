@@ -540,6 +540,7 @@ fn tools_for(
         runtime::WorkspaceToolOptions {
             rust_toolchain: config.command.rust_toolchain.clone(),
             web: config.web.clone(),
+            web_enabled: true,
         },
     )
 }

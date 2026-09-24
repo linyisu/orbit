@@ -96,6 +96,13 @@ impl ToolRegistry {
         self.tools.contains_key(name)
     }
 
+    pub fn remove(&mut self, name: &str) -> bool {
+        let mut tools = (*self.tools).clone();
+        let removed = tools.remove(name).is_some();
+        self.tools = Arc::new(tools);
+        removed
+    }
+
     pub fn execute(&self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'static> {
         let future = self.execute_output(call, cancellation);
         Box::pin(async move { future.await.map(|output| output.content) })
@@ -234,6 +241,22 @@ mod tests {
             .expect("tool executes");
 
         assert_eq!(result, r#"{"value":"hello"}"#);
+    }
+
+    #[tokio::test]
+    async fn removed_tool_is_absent_from_definitions_and_execution() {
+        let mut registry = registry();
+
+        assert!(registry.remove("echo"));
+        assert!(!registry.remove("echo"));
+
+        assert!(!registry.contains("echo"));
+        assert!(registry.definitions().is_empty());
+        let error = registry
+            .execute(call("call-1", "echo", "{}"), CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error, ToolError::UnknownTool("echo".into()));
     }
 
     #[tokio::test]
