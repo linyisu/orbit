@@ -1,5 +1,11 @@
 # orbit-tools
 
+## web_fetch 浏览器验证
+
+`web_fetch` 先直接读取公共 HTTP(S) 页面。若服务器明确返回 Cloudflare 浏览器挑战，且已配置可信的 HTTP `[web].proxy`，工具会启动一个临时、无用户 Cookie 的 Firefox 无头会话，通过同一代理读取原网址。Firefox 必须已安装并位于 `PATH`；浏览器会执行页面脚本，读取到的内容仍是不可信网页数据。工具结果会标记 `retrieval_method: "isolated_browser"`。普通 401/403 不会自动绕过，浏览器验证失败也会明确报错。
+
+浏览器会话只接受公共 HTTP(S) 目标，最终网址须保持同源；代理是该路径的网络出口边界。每次调用使用新的临时浏览器配置，结束后关闭进程。联网回归测试可用 `ORBIT_WEB_TEST_PROXY=http://127.0.0.1:7897 cargo test -p orbit-tools web_fetch::tests::browser_challenge_reads_the_requested_wiki_page -- --ignored` 运行。
+
 当前提供 `Workspace`、文本读取工具 `read_file`、项目检索工具 `search_text`、Git 只读检查工具 `git_inspect`、图片读取工具 `read_image`、文档解析工具 `read_document`、全文写入工具 `write_file`、局部编辑工具 `edit_file` 和沙箱命令工具 `run_command`。默认自动执行沙箱命令，修改文件需确认；可用 `/mode ask|auto|yolo` 调整审批。`Workspace` 的根目录在 CLI 启动时取当前目录。
 
 ## search_text 项目检索
