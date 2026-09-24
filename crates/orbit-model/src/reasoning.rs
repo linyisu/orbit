@@ -60,7 +60,8 @@ pub(crate) fn apply_anthropic_messages(body: &mut Value, effort: ReasoningEffort
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ChatMessage, ChatRequest, ReasoningAdapter};
+    use crate::types::{Attachment, ChatMessage, ChatRequest, ReasoningAdapter};
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn none_overrides_provider_thinking_defaults() {
@@ -94,7 +95,8 @@ mod tests {
             Some(ReasoningAdapter::OpenaiChat),
             &json!({ "chat_template_kwargs": { "enable_thinking": true } }),
             false,
-        );
+        )
+        .unwrap();
         assert_eq!(chat["reasoning_effort"], "high");
         assert_eq!(chat["chat_template_kwargs"]["enable_thinking"], true);
 
@@ -104,7 +106,8 @@ mod tests {
             Some(ReasoningAdapter::OpenaiResponses),
             &json!({}),
             false,
-        );
+        )
+        .unwrap();
         assert_eq!(responses["reasoning"]["effort"], "high");
 
         let (anthropic, _) = crate::anthropic::messages::encode(
@@ -113,8 +116,65 @@ mod tests {
             Some(ReasoningAdapter::AnthropicMessages),
             &json!({}),
             false,
-        );
+        )
+        .unwrap();
         assert_eq!(anthropic["thinking"]["type"], "adaptive");
         assert_eq!(anthropic["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn image_blocks_use_each_provider_wire_shape() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("pixel.png");
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            1,
+            1,
+            image::Rgba([1, 2, 3, 255]),
+        ))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+        let bytes = png.into_inner();
+        std::fs::write(&path, &bytes).unwrap();
+        let sha256 = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let user = ChatMessage::user_with_attachments(
+            "What is this?",
+            vec![Attachment::Image {
+                name: "pixel.png".into(),
+                mime_type: "image/png".into(),
+                path,
+                sha256,
+            }],
+        );
+        let request = ChatRequest::new(vec![user]);
+
+        let (chat, _) = crate::openai::chat_completions::encode(
+            "model",
+            request.clone(),
+            None,
+            &json!({}),
+            false,
+        )
+        .unwrap();
+        let (responses, _) =
+            crate::openai::responses::encode("model", request.clone(), None, &json!({}), false)
+                .unwrap();
+        let (anthropic, _) =
+            crate::anthropic::messages::encode("model", request, None, &json!({}), false).unwrap();
+
+        assert!(
+            chat["messages"][0]["content"][1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        assert_eq!(responses["input"][0]["content"][1]["type"], "input_image");
+        assert_eq!(
+            anthropic["messages"][0]["content"][1]["source"]["media_type"],
+            "image/png"
+        );
     }
 }

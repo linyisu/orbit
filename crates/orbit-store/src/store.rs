@@ -1,12 +1,13 @@
 use std::{
     fs::{File, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, ensure};
-use orbit_model::types::ChatMessage;
+use orbit_model::types::{Attachment, ChatMessage, MAX_IMAGE_BYTES, image_mime};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 
@@ -247,6 +248,96 @@ impl Store {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub async fn save_image(&self, session_id: &str, source: &Path) -> Result<Attachment> {
+        validate_session_id(session_id)?;
+        self.session(session_id).await?;
+
+        let source = source.to_path_buf();
+        let attachment_root = self.path.with_extension("attachments");
+        let root = attachment_root.join(session_id);
+        tokio::task::spawn_blocking(move || {
+            let metadata = std::fs::metadata(&source)
+                .with_context(|| format!("failed to inspect image {}", source.display()))?;
+            ensure!(metadata.is_file(), "image path is not a regular file");
+            ensure!(
+                metadata.len() <= MAX_IMAGE_BYTES as u64,
+                "image exceeds 20 MiB"
+            );
+            let bytes = std::fs::read(&source)
+                .with_context(|| format!("failed to read image {}", source.display()))?;
+            ensure!(bytes.len() <= MAX_IMAGE_BYTES, "image exceeds 20 MiB");
+            let mime_type = image_mime(&bytes).context("unsupported image format")?;
+            let format = match mime_type {
+                "image/png" => image::ImageFormat::Png,
+                "image/jpeg" => image::ImageFormat::Jpeg,
+                "image/gif" => image::ImageFormat::Gif,
+                "image/webp" => image::ImageFormat::WebP,
+                _ => unreachable!("image_mime returns only supported formats"),
+            };
+            let mut reader = image::ImageReader::with_format(std::io::Cursor::new(&bytes), format);
+            let mut limits = image::Limits::default();
+            limits.max_image_width = Some(8192);
+            limits.max_image_height = Some(8192);
+            limits.max_alloc = Some(128 * 1024 * 1024);
+            reader.limits(limits);
+            reader.decode().context("image could not be decoded")?;
+            let sha256 = Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let name = source
+                .file_name()
+                .and_then(|value| value.to_str())
+                .context("image filename is not valid UTF-8")?
+                .to_owned();
+
+            if !attachment_root.exists() {
+                std::fs::create_dir(&attachment_root)?;
+            }
+            let attachment_root_metadata = std::fs::symlink_metadata(&attachment_root)?;
+            ensure!(
+                attachment_root_metadata.file_type().is_dir(),
+                "attachment root is not safe"
+            );
+            if !root.exists() {
+                std::fs::create_dir(&root)?;
+            }
+            let root_metadata = std::fs::symlink_metadata(&root)?;
+            ensure!(
+                root_metadata.file_type().is_dir(),
+                "attachment directory is not safe"
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&attachment_root, std::fs::Permissions::from_mode(0o700))?;
+                std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+            }
+            let path = root.join(format!("{sha256}.img"));
+            if !path.exists() {
+                let mut temporary = tempfile::NamedTempFile::new_in(&root)?;
+                temporary.write_all(&bytes)?;
+                temporary.as_file().sync_all()?;
+                match temporary.persist_noclobber(&path) {
+                    Ok(_) => {}
+                    Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.error.into()),
+                }
+                File::open(&root)?.sync_all()?;
+            }
+
+            let attachment = Attachment::Image {
+                name,
+                mime_type: mime_type.to_owned(),
+                path,
+                sha256,
+            };
+            attachment.image()?;
+            Ok(attachment)
+        })
+        .await?
     }
 
     pub(crate) async fn access<T, F>(&self, operation: F) -> Result<T>
@@ -817,9 +908,16 @@ impl SessionWriter {
     }
 
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
+        self.begin_user(ChatMessage::user(prompt), model).await
+    }
+
+    pub async fn begin_user(&mut self, user: ChatMessage, model: String) -> Result<()> {
         ensure!(self.active_run.is_none(), "a run is already active");
+        let ChatMessage::User { content, .. } = &user else {
+            anyhow::bail!("run must begin with a user message");
+        };
+        let title: String = content.chars().take(80).collect();
         let id = self.id.clone();
-        let user = ChatMessage::user(prompt.clone());
         let run = self
             .store
             .access(move |connection| {
@@ -831,7 +929,6 @@ impl SessionWriter {
                 )?;
                 let run = transaction.last_insert_rowid();
                 append_message(&transaction, &id, run, &user)?;
-                let title: String = prompt.chars().take(80).collect();
                 transaction.execute(
                     "UPDATE sessions SET model=?2, updated_at_ms=?3,
                      title=CASE WHEN title='' THEN ?4 ELSE title END WHERE id=?1",

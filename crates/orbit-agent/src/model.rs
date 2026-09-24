@@ -20,6 +20,10 @@ pub type StreamFuture<'a> =
     Pin<Box<dyn Future<Output = Result<ModelStream, ModelError>> + Send + 'a>>;
 
 pub trait ModelBackend: Send + Sync {
+    fn supports_vision(&self) -> bool {
+        false
+    }
+
     fn complete<'a>(
         &'a self,
         request: ChatRequest,
@@ -45,6 +49,10 @@ impl ModelClientBackend {
 }
 
 impl ModelBackend for ModelClientBackend {
+    fn supports_vision(&self) -> bool {
+        self.client.config().supports_vision
+    }
+
     fn complete<'a>(
         &'a self,
         request: ChatRequest,

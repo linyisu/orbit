@@ -198,7 +198,7 @@ impl ModelClient {
                 &self.config.reasoning_extra,
                 stream,
             ),
-        };
+        }?;
 
         let mut builder = self
             .http
@@ -412,6 +412,7 @@ mod tests {
             timeout: Duration::from_secs(120),
             reasoning_adapter: None,
             reasoning_extra: serde_json::json!({}),
+            supports_vision: false,
         };
         let debug = format!("{config:?}");
 
@@ -546,6 +547,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             reasoning_adapter: None,
             reasoning_extra: serde_json::json!({}),
+            supports_vision: false,
         })
         .expect("client builds")
     }

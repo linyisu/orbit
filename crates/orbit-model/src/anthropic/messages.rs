@@ -16,7 +16,7 @@ pub(crate) fn encode(
     adapter: Option<ReasoningAdapter>,
     extra: &Value,
     stream: bool,
-) -> (Value, HeaderMap) {
+) -> Result<(Value, HeaderMap), ModelError> {
     let effort = request.reasoning_effort;
     let system = request
         .messages
@@ -32,13 +32,25 @@ pub(crate) fn encode(
     for message in request.messages {
         match message {
             ChatMessage::System { .. } => {}
-            ChatMessage::User { content } => {
+            ChatMessage::User {
+                content,
+                attachments,
+            } => {
+                let mut blocks = vec![json!({ "type": "text", "text": content })];
+                for attachment in attachments {
+                    let (media_type, data) = attachment.image()?;
+                    blocks.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data,
+                        }
+                    }));
+                }
                 messages.push(json!({
                     "role": "user",
-                    "content": [{
-                        "type": "text",
-                        "text": content,
-                    }],
+                    "content": blocks,
                 }));
             }
             ChatMessage::Assistant {
@@ -121,7 +133,7 @@ pub(crate) fn encode(
     );
     headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
 
-    (body, headers)
+    Ok((body, headers))
 }
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {

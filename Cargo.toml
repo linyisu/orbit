@@ -15,10 +15,12 @@ edition = "2024"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
+base64 = "0.22.1"
 clap = { version = "4.5.48", features = ["derive", "env"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 globset = "0.4.18"
 html2text = "0.17.1"
+image = { version = "0.25.9", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 ignore = "0.4.33"
 regex = "1.13.1"
 roxmltree = "0.21.1"

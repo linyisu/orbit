@@ -1,8 +1,10 @@
-use std::{pin::Pin, time::Duration};
+use std::{path::PathBuf, pin::Pin, time::Duration};
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::{client::ApiFormat, error::ModelError};
 
@@ -16,6 +18,8 @@ pub enum ChatMessage {
     },
     User {
         content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<Attachment>,
     },
     Assistant {
         content: Option<String>,
@@ -38,6 +42,14 @@ impl ChatMessage {
     pub fn user(content: impl Into<String>) -> Self {
         Self::User {
             content: content.into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    pub fn user_with_attachments(content: impl Into<String>, attachments: Vec<Attachment>) -> Self {
+        Self::User {
+            content: content.into(),
+            attachments,
         }
     }
 
@@ -60,6 +72,75 @@ impl ChatMessage {
             tool_call_id: tool_call_id.into(),
             content: content.into(),
         }
+    }
+}
+
+pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Attachment {
+    Image {
+        name: String,
+        mime_type: String,
+        path: PathBuf,
+        sha256: String,
+    },
+}
+
+impl Attachment {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Image { name, .. } => name,
+        }
+    }
+
+    pub fn image(&self) -> Result<(&str, String), ModelError> {
+        match self {
+            Self::Image {
+                mime_type,
+                path,
+                sha256,
+                ..
+            } => {
+                let metadata = std::fs::symlink_metadata(path)
+                    .map_err(|error| ModelError::Attachment(error.to_string()))?;
+                if !metadata.is_file() || metadata.len() > MAX_IMAGE_BYTES as u64 {
+                    return Err(ModelError::Attachment(
+                        "stored image is invalid or too large".to_owned(),
+                    ));
+                }
+                let bytes = std::fs::read(path)
+                    .map_err(|error| ModelError::Attachment(error.to_string()))?;
+                if bytes.len() > MAX_IMAGE_BYTES
+                    || image_mime(&bytes) != Some(mime_type.as_str())
+                    || Sha256::digest(&bytes)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                        != *sha256
+                {
+                    return Err(ModelError::Attachment(
+                        "stored image failed integrity validation".to_owned(),
+                    ));
+                }
+                Ok((mime_type, STANDARD.encode(bytes)))
+            }
+        }
+    }
+}
+
+pub fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
     }
 }
 
@@ -243,6 +324,8 @@ pub struct ModelConfig {
     pub reasoning_adapter: Option<ReasoningAdapter>,
     #[serde(default = "empty_reasoning_extra")]
     pub reasoning_extra: Value,
+    #[serde(default)]
+    pub supports_vision: bool,
 }
 
 fn empty_reasoning_extra() -> Value {
@@ -259,6 +342,7 @@ impl std::fmt::Debug for ModelConfig {
             .field("model", &self.model)
             .field("timeout", &self.timeout)
             .field("reasoning_adapter", &self.reasoning_adapter)
+            .field("supports_vision", &self.supports_vision)
             .finish()
     }
 }

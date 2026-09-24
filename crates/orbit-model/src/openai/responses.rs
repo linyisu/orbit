@@ -23,7 +23,7 @@ pub(crate) fn encode(
     adapter: Option<ReasoningAdapter>,
     extra: &Value,
     stream: bool,
-) -> (Value, HeaderMap) {
+) -> Result<(Value, HeaderMap), ModelError> {
     let effort = request.reasoning_effort;
     let instructions = request
         .messages
@@ -40,13 +40,24 @@ pub(crate) fn encode(
     for message in request.messages {
         match message {
             ChatMessage::System { .. } => {}
-            ChatMessage::User { content } => {
+            ChatMessage::User {
+                content,
+                attachments,
+            } => {
+                let mut blocks = vec![json!({
+                    "type": "input_text",
+                    "text": content,
+                })];
+                for attachment in attachments {
+                    let (mime_type, data) = attachment.image()?;
+                    blocks.push(json!({
+                        "type": "input_image",
+                        "image_url": format!("data:{mime_type};base64,{data}"),
+                    }));
+                }
                 input.push(json!({
                     "role": "user",
-                    "content": [{
-                        "type": "input_text",
-                        "text": content,
-                    }],
+                    "content": blocks,
                 }));
             }
             ChatMessage::Assistant {
@@ -121,7 +132,7 @@ pub(crate) fn encode(
         }),
     );
 
-    (body, headers)
+    Ok((body, headers))
 }
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {

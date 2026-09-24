@@ -320,8 +320,22 @@ fn check_budget(
 }
 
 pub fn estimate_tokens(messages: &[ChatMessage], tools: &[ToolDefinition]) -> usize {
+    let image_tokens = messages
+        .iter()
+        .filter_map(|message| match message {
+            ChatMessage::User { attachments, .. } => Some(attachments.len()),
+            _ => None,
+        })
+        .sum::<usize>()
+        .saturating_mul(2048);
     serde_json::to_vec(&(messages, tools))
-        .map(|bytes| bytes.len().div_ceil(3).saturating_add(messages.len() * 8))
+        .map(|bytes| {
+            bytes
+                .len()
+                .div_ceil(3)
+                .saturating_add(messages.len() * 8)
+                .saturating_add(image_tokens)
+        })
         .unwrap_or(usize::MAX)
 }
 
@@ -415,7 +429,7 @@ fn fallback_state(prior: Option<&TaskState>, batch: &[ChatMessage]) -> TaskState
             .iter()
             .rev()
             .find_map(|message| match message {
-                ChatMessage::User { content } => Some(excerpt(content, 500)),
+                ChatMessage::User { content, .. } => Some(excerpt(content, 500)),
                 _ => None,
             })
             .unwrap_or_else(|| {
@@ -429,7 +443,7 @@ fn fallback_state(prior: Option<&TaskState>, batch: &[ChatMessage]) -> TaskState
         .take(4)
         .collect::<Vec<_>>();
     for message in recent_users.into_iter().rev() {
-        if let ChatMessage::User { content } = message {
+        if let ChatMessage::User { content, .. } = message {
             state.uncertainty.push(format!(
                 "Historical user request (verify status in archive): {}",
                 excerpt(content, 350)
@@ -477,7 +491,7 @@ fn fit_emergency(
         }
         let digest = source_digest(&messages[index]);
         match &mut messages[index] {
-            ChatMessage::User { content }
+            ChatMessage::User { content, .. }
             | ChatMessage::Assistant {
                 content: Some(content),
                 ..

@@ -23,11 +23,53 @@ pub(crate) fn encode(
     adapter: Option<ReasoningAdapter>,
     extra: &Value,
     stream: bool,
-) -> (Value, HeaderMap) {
+) -> Result<(Value, HeaderMap), ModelError> {
     let effort = request.reasoning_effort;
+    let mut messages = Vec::new();
+    for message in request.messages {
+        match message {
+            ChatMessage::System { content } => {
+                messages.push(json!({ "role": "system", "content": content }));
+            }
+            ChatMessage::User {
+                content,
+                attachments,
+            } => {
+                if attachments.is_empty() {
+                    messages.push(json!({ "role": "user", "content": content }));
+                } else {
+                    let mut blocks = vec![json!({ "type": "text", "text": content })];
+                    for attachment in attachments {
+                        let (mime_type, data) = attachment.image()?;
+                        blocks.push(json!({
+                            "type": "image_url",
+                            "image_url": { "url": format!("data:{mime_type};base64,{data}") }
+                        }));
+                    }
+                    messages.push(json!({ "role": "user", "content": blocks }));
+                }
+            }
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+            } => messages.push(json!({
+                "role": "assistant",
+                "content": content,
+                "tool_calls": tool_calls,
+            })),
+            ChatMessage::Tool {
+                tool_call_id,
+                content,
+            } => messages.push(json!({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": content,
+            })),
+        }
+    }
     let mut body = json!({
         "model": model,
-        "messages": request.messages,
+        "messages": messages,
         "tools": request.tools,
         "temperature": request.temperature,
         "max_tokens": request.max_tokens,
@@ -52,7 +94,7 @@ pub(crate) fn encode(
         }),
     );
 
-    (body, headers)
+    Ok((body, headers))
 }
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {

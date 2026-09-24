@@ -36,6 +36,7 @@ pub fn workspace_tools(
         workspace.protect(std::path::PathBuf::from(sidecar))?;
     }
     workspace.protect_opaque_runtime_root(database.with_extension("session-locks"))?;
+    workspace.protect_opaque_runtime_root(database.with_extension("attachments"))?;
 
     let mut tools = ToolRegistry::new();
     orbit_tools::project_state::register(

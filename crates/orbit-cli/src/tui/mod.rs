@@ -4,7 +4,10 @@ mod render;
 mod session_runtime;
 mod terminal;
 
-use std::{future::pending, path::PathBuf};
+use std::{
+    future::pending,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -494,6 +497,20 @@ async fn command(
             }
             Ok(false)
         }
+        "/attach" => {
+            let path = text.strip_prefix("/attach").unwrap_or("").trim();
+            if path.is_empty() {
+                app.error("Use /attach <image path>");
+            } else if let Err(error) = runtime.attach_image(Path::new(path), app).await {
+                app.error(error.to_string());
+            }
+            Ok(false)
+        }
+        "/detach" => {
+            app.pending_images.clear();
+            app.notice("Pending images cleared");
+            Ok(false)
+        }
         "/status" => {
             app.notice(format!(
                 "Session {}  |  model {}  |  reasoning {}  |  approval {}  |  workspace {}",
@@ -542,7 +559,7 @@ async fn command(
             Ok(false)
         }
         "/help" => {
-            app.notice("/new  /resume [id]  /sessions  /model [name]  /reasoning [level]  /rename <title>  /status  /context  /compact  /mode [auto|ask|deny]  /help  /exit");
+            app.notice("/new  /resume [id]  /sessions  /model [name]  /reasoning [level]  /attach <image>  /detach  /rename <title>  /status  /context  /compact  /mode [auto|ask|deny]  /help  /exit");
             app.notice("Enter sends · Shift+Enter adds a line · Tab selects a tool · Enter expands it · Shift+Tab changes approval mode · Ctrl+C cancels or exits");
             Ok(false)
         }

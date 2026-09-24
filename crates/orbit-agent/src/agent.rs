@@ -164,13 +164,13 @@ where
             emit(AgentEvent::TurnStarted { turn: turns }).await?;
 
             let definitions = self.tools.definitions();
-            let mut model_messages = history.clone();
+            let mut projected_messages = history.clone();
             if let Some(runtime) = &mut context {
                 for _ in 0..64 {
                     let step = runtime
                         .prepare_step(&self.backend, &history, &definitions, cancellation.clone())
                         .await?;
-                    model_messages = step.messages;
+                    projected_messages = step.messages;
                     if let Some(checkpoint) = step.checkpoint {
                         emit(AgentEvent::ContextCheckpoint { checkpoint }).await?;
                     }
@@ -181,7 +181,7 @@ where
             }
 
             let model_request = ChatRequest {
-                messages: model_messages,
+                messages: model_messages(&projected_messages, self.backend.supports_vision()),
                 tools: definitions,
                 temperature: request.temperature,
                 max_tokens: request.max_tokens,
@@ -321,6 +321,35 @@ where
     }
 }
 
+/// Adapt the provider request without changing persisted conversation history.
+pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<ChatMessage> {
+    let mut projected = history.to_vec();
+    let mut remaining = if supports_vision { 4 } else { 0 };
+    for message in projected.iter_mut().rev() {
+        let ChatMessage::User {
+            content,
+            attachments,
+        } = message
+        else {
+            continue;
+        };
+        let omitted = attachments.len().saturating_sub(remaining);
+        for attachment in attachments.drain(..omitted) {
+            let reason = if supports_vision {
+                "earlier image removed from this request to limit context"
+            } else {
+                "current model does not support image input"
+            };
+            content.push_str(&format!(
+                "\n[Image omitted: {reason}: {}]",
+                attachment.name()
+            ));
+        }
+        remaining = remaining.saturating_sub(attachments.len());
+    }
+    projected
+}
+
 async fn emit_completion<F, Fut>(
     completion: &ChatCompletion,
     emit: &mut F,
@@ -438,7 +467,7 @@ mod tests {
         model::MockModel,
         tool::{ClosureTool, ToolError},
     };
-    use orbit_model::types::{FunctionCall, ToolCall};
+    use orbit_model::types::{Attachment, FunctionCall, ToolCall};
     use serde_json::json;
 
     fn assistant_text(text: &str) -> ChatCompletion {
@@ -852,5 +881,65 @@ mod tests {
 
         assert!(matches!(error, AgentError::Cancelled));
         assert!(model.requests().is_empty());
+    }
+
+    #[test]
+    fn text_only_projection_omits_images_without_changing_canonical_history() {
+        let original = vec![ChatMessage::user_with_attachments(
+            "Describe the scene",
+            vec![Attachment::Image {
+                name: "scene.png".into(),
+                mime_type: "image/png".into(),
+                path: "/unread/provider-only.png".into(),
+                sha256: "digest".into(),
+            }],
+        )];
+
+        let text_only = model_messages(&original, false);
+        let vision = model_messages(&original, true);
+
+        assert!(matches!(
+            &text_only[0],
+            ChatMessage::User { content, attachments }
+                if attachments.is_empty() && content.contains("scene.png")
+        ));
+        assert_eq!(vision, original);
+        assert_eq!(
+            serde_json::to_value(&original).unwrap()[0]["attachments"][0]["name"],
+            "scene.png"
+        );
+    }
+
+    #[test]
+    fn vision_projection_keeps_only_the_four_most_recent_images() {
+        let history = (0..6)
+            .map(|index| {
+                ChatMessage::user_with_attachments(
+                    format!("image {index}"),
+                    vec![Attachment::Image {
+                        name: format!("{index}.png"),
+                        mime_type: "image/png".into(),
+                        path: format!("/unread/{index}.png").into(),
+                        sha256: "digest".into(),
+                    }],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let projected = model_messages(&history, true);
+        let retained = projected
+            .iter()
+            .filter_map(|message| match message {
+                ChatMessage::User { attachments, .. } => Some(attachments.len()),
+                _ => None,
+            })
+            .sum::<usize>();
+
+        assert_eq!(retained, 4);
+        assert!(
+            matches!(&projected[0], ChatMessage::User { content, attachments }
+            if attachments.is_empty() && content.contains("0.png"))
+        );
+        assert_eq!(history.len(), 6);
     }
 }

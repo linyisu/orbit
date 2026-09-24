@@ -29,6 +29,8 @@ pub enum ModelError {
     Protocol(String),
     #[error("model stream ended without a complete server-sent event")]
     IncompleteSseEvent,
+    #[error("image attachment error: {0}")]
+    Attachment(String),
 }
 
 impl ModelError {
@@ -43,6 +45,7 @@ impl ModelError {
             | Self::Decode(_)
             | Self::Protocol(_)
             | Self::IncompleteSseEvent => false,
+            Self::Attachment(_) => false,
         }
     }
 }

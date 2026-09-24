@@ -491,7 +491,7 @@ mod tests {
             "model".into(),
             128_000,
         );
-        app.submit(&"中文👩‍💻".repeat(120));
+        app.submit(&"中文👩‍💻".repeat(120), &[]);
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         assert!(app.scroll > 0);
     }
@@ -511,7 +511,7 @@ mod tests {
             128_000,
         );
         app.notice("stable history");
-        app.submit("prompt");
+        app.submit("prompt", &[]);
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let stable_lines = app.render_cache[0].as_ref().unwrap().lines.as_ptr();
 

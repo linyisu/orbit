@@ -109,6 +109,9 @@ struct ChatArgs {
     #[arg(long)]
     reasoning: Option<ReasoningEffort>,
 
+    #[arg(long = "image", value_name = "PATH")]
+    images: Vec<PathBuf>,
+
     #[arg(long, conflicts_with = "prompt")]
     prompt_file: Option<PathBuf>,
 
@@ -163,6 +166,8 @@ struct ModelProfile {
     context_tokens: Option<usize>,
     max_output_tokens: Option<usize>,
     reasoning: Option<ReasoningProfile>,
+    #[serde(default, alias = "vision")]
+    supports_vision: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -182,6 +187,7 @@ struct ModelOption {
     max_output_tokens: usize,
     reasoning_efforts: Vec<ReasoningEffort>,
     default_reasoning: Option<ReasoningEffort>,
+    supports_vision: bool,
 }
 
 impl ModelOption {
@@ -264,11 +270,13 @@ impl FileConfig {
                     timeout: Duration::from_secs(timeout),
                     reasoning_adapter: None,
                     reasoning_extra: serde_json::json!({}),
+                    supports_vision: false,
                 },
                 context_tokens: self.context_tokens,
                 max_output_tokens: self.max_output_tokens,
                 reasoning_efforts: Vec::new(),
                 default_reasoning: None,
+                supports_vision: false,
             });
         } else {
             ensure!(
@@ -349,6 +357,7 @@ impl FileConfig {
                                 .map(|profile| serde_json::to_value(&profile.extra))
                                 .transpose()?
                                 .unwrap_or_else(|| serde_json::json!({})),
+                            supports_vision: profile.supports_vision,
                         },
                         context_tokens: profile.context_tokens.unwrap_or(self.context_tokens),
                         max_output_tokens: profile
@@ -358,6 +367,7 @@ impl FileConfig {
                             .map(|profile| profile.efforts.clone())
                             .unwrap_or_default(),
                         default_reasoning: reasoning.map(|profile| profile.default),
+                        supports_vision: profile.supports_vision,
                     });
                 }
             }
@@ -543,6 +553,7 @@ fn startup_instructions(
 }
 
 async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result<()> {
+    ensure!(args.images.len() <= 4, "at most four images per message");
     ensure!(
         (1..=256).contains(&args.max_turns),
         "max_turns must be 1–256"
@@ -555,6 +566,9 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
     let file_config = FileConfig::load(&config_path)?;
     let prompt = read_prompt(&args)?;
     let mut selected = file_config.select_model(args.model.as_deref())?;
+    if !args.images.is_empty() && !selected.supports_vision && args.resume.is_none() {
+        anyhow::bail!("selected model does not support image input");
+    }
     let rust_toolchain = file_config.command.rust_toolchain.clone();
     let web = file_config.web.clone();
     let instruction_home = args
@@ -602,6 +616,10 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
         .context("max_output_tokens exceeds the model request limit")?;
     let client = ModelClient::new(selected.config.clone())?;
     let reasoning = selected.select_reasoning(args.reasoning, saved_effort.as_deref())?;
+    ensure!(
+        args.images.is_empty() || selected.supports_vision,
+        "selected model does not support image input"
+    );
 
     let tools = runtime::workspace_tools(
         &workspace,
@@ -623,9 +641,14 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
             reasoning.map(ReasoningEffort::as_str),
         )
         .await?;
-    writer.begin(prompt.clone(), selected.name).await?;
+    let mut attachments = Vec::new();
+    for image in &args.images {
+        attachments.push(store.save_image(writer.id(), image).await?);
+    }
+    let user = ChatMessage::user_with_attachments(prompt, attachments);
+    writer.begin_user(user.clone(), selected.name).await?;
     eprintln!("session {}", writer.id());
-    history.push(ChatMessage::user(prompt));
+    history.push(user);
     let state =
         project_state::projection(&store, &workspace.to_string_lossy(), writer.id()).await?;
     let mut request = coding_request(history, &instructions, state);

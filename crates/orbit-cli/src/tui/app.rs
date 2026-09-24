@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use orbit_agent::events::AgentEvent;
-use orbit_model::types::{ChatMessage, ReasoningEffort, StreamEvent, ToolCall};
+use orbit_model::types::{Attachment, ChatMessage, ReasoningEffort, StreamEvent, ToolCall};
 use orbit_store::Session;
 use orbit_tools::approval::ApprovalRequest;
 use ratatui::text::Line;
@@ -73,6 +73,7 @@ pub struct App {
     pub workspace: String,
     pub model: String,
     pub reasoning: Option<ReasoningEffort>,
+    pub pending_images: Vec<Attachment>,
     pub context_tokens: usize,
     pub running: bool,
     pub status: String,
@@ -105,6 +106,7 @@ impl App {
             workspace,
             model,
             reasoning: None,
+            pending_images: Vec::new(),
             context_tokens,
             running: false,
             status: "Ready".to_owned(),
@@ -132,8 +134,11 @@ impl App {
         self.entries.push(Entry::new(EntryKind::Error, text));
     }
 
-    pub fn submit(&mut self, prompt: &str) {
-        self.entries.push(Entry::new(EntryKind::User, prompt));
+    pub fn submit(&mut self, prompt: &str, attachments: &[Attachment]) {
+        self.entries.push(Entry::new(
+            EntryKind::User,
+            user_display(prompt, attachments),
+        ));
         self.running = true;
         self.status = "Thinking".to_owned();
         self.active_assistant = None;
@@ -142,6 +147,7 @@ impl App {
     }
 
     pub fn begin_restore(&mut self) {
+        self.pending_images.clear();
         self.entries.clear();
         self.render_cache.clear();
         self.active_assistant = None;
@@ -155,8 +161,14 @@ impl App {
     pub fn restore_page(&mut self, history: &[ChatMessage]) {
         for message in history {
             match message {
-                ChatMessage::User { content } => {
-                    self.entries.push(Entry::new(EntryKind::User, content));
+                ChatMessage::User {
+                    content,
+                    attachments,
+                } => {
+                    self.entries.push(Entry::new(
+                        EntryKind::User,
+                        user_display(content, attachments),
+                    ));
                 }
                 ChatMessage::Assistant {
                     content,
@@ -332,6 +344,18 @@ impl App {
     }
 }
 
+fn user_display(content: &str, attachments: &[Attachment]) -> String {
+    if attachments.is_empty() {
+        return content.to_owned();
+    }
+    let names = attachments
+        .iter()
+        .map(Attachment::name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{content}\n[images: {names}]")
+}
+
 fn tool_label(call: &ToolCall) -> String {
     let arguments = call.arguments_json().ok();
     if call.function.name == "search_text"
@@ -413,7 +437,7 @@ mod tests {
             "model".into(),
             128_000,
         );
-        app.submit("hello");
+        app.submit("hello", &[]);
         app.apply(AgentEvent::TurnStarted { turn: 1 });
         app.apply(AgentEvent::Model(StreamEvent::TextDelta("hel".into())));
         app.apply(AgentEvent::Model(StreamEvent::TextDelta("lo".into())));

@@ -1,6 +1,6 @@
 //! Session ownership and Agent execution for the interactive client.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use orbit_agent::{
@@ -179,6 +179,10 @@ impl Runtime {
         self.client = client;
         self.selected = selected;
         self.reasoning = reasoning;
+        if !self.selected.supports_vision && !app.pending_images.is_empty() {
+            app.pending_images.clear();
+            app.notice("Pending images cleared because this model does not support image input");
+        }
         app.model = self.selected.name.clone();
         app.context_tokens = self.selected.context_tokens;
         app.reasoning = reasoning;
@@ -202,6 +206,24 @@ impl Runtime {
         self.reasoning = reasoning;
         app.reasoning = reasoning;
         app.notice(format!("Reasoning: {}", effort.as_str()));
+        Ok(())
+    }
+
+    pub(super) async fn attach_image(&self, path: &Path, app: &mut App) -> Result<()> {
+        ensure!(
+            self.selected.supports_vision,
+            "selected model does not support image input"
+        );
+        ensure!(
+            app.pending_images.len() < 4,
+            "at most four images per message"
+        );
+        let attachment = self.store.save_image(self.session_id(), path).await?;
+        app.notice(format!(
+            "Image attached for next message: {}",
+            attachment.name()
+        ));
+        app.pending_images.push(attachment);
         Ok(())
     }
 
@@ -261,13 +283,18 @@ impl Runtime {
     }
 
     pub(super) async fn start_run(&mut self, prompt: String, app: &mut App) -> Result<ActiveRun> {
+        ensure!(
+            app.pending_images.is_empty() || self.selected.supports_vision,
+            "selected model does not support image input"
+        );
         let session_id = self.session_id().to_owned();
         let snapshot = self.store.load(&session_id).await?;
         let state =
             project_state::projection(&self.store, &self.workspace.to_string_lossy(), &session_id)
                 .await?;
         let mut history = snapshot.projected_history();
-        history.push(ChatMessage::user(prompt.clone()));
+        let user = ChatMessage::user_with_attachments(prompt.clone(), app.pending_images.clone());
+        history.push(user.clone());
         let mut request = coding_request(history, &self.instructions, state);
         request.max_tokens = Some(
             u32::try_from(self.selected.max_output_tokens)
@@ -289,10 +316,7 @@ impl Runtime {
         )
         .map_err(|message| anyhow::anyhow!(message))?;
         let mut writer = self.writer.take().context("session is already running")?;
-        if let Err(error) = writer
-            .begin(prompt.clone(), self.selected.name.clone())
-            .await
-        {
+        if let Err(error) = writer.begin_user(user, self.selected.name.clone()).await {
             self.writer = Some(writer);
             return Err(error);
         }
@@ -351,7 +375,8 @@ impl Runtime {
                 finish,
             }
         });
-        app.submit(&prompt);
+        let images = std::mem::take(&mut app.pending_images);
+        app.submit(&prompt, &images);
         Ok(ActiveRun {
             events,
             task,

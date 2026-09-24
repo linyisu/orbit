@@ -143,6 +143,54 @@ async fn version_five_sessions_upgrade_with_reasoning_profile() {
 }
 
 #[tokio::test]
+async fn image_attachment_survives_resume_and_detects_blob_tampering() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let source = root.path().join("scene.png");
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        1,
+        1,
+        image::Rgba([1, 2, 3, 255]),
+    ))
+    .write_to(&mut png, image::ImageFormat::Png)
+    .unwrap();
+    std::fs::write(&source, png.into_inner()).unwrap();
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store.create(root.path(), "vision").await.unwrap();
+    let id = writer.id().to_owned();
+
+    let invalid = root.path().join("invalid.png");
+    std::fs::write(&invalid, b"\x89PNG\r\n\x1a\ninvalid").unwrap();
+    assert!(store.save_image(&id, &invalid).await.is_err());
+
+    let attachment = store.save_image(&id, &source).await.unwrap();
+    writer
+        .begin_user(
+            ChatMessage::user_with_attachments("Describe this", vec![attachment.clone()]),
+            "vision".into(),
+        )
+        .await
+        .unwrap();
+    writer.finish("completed").await.unwrap();
+    std::fs::remove_file(&source).unwrap();
+    drop(writer);
+    drop(store);
+
+    let reopened = Store::open(&database).await.unwrap();
+    let snapshot = reopened.load(&id).await.unwrap();
+    let ChatMessage::User { attachments, .. } = &snapshot.projected_history()[0] else {
+        panic!("image user message expected");
+    };
+    assert_eq!(attachments, std::slice::from_ref(&attachment));
+    assert!(attachment.image().unwrap().1.starts_with("iVBOR"));
+
+    let orbit_model::types::Attachment::Image { path, .. } = &attachment;
+    std::fs::write(path, b"tampered").unwrap();
+    assert!(attachment.image().is_err());
+}
+
+#[tokio::test]
 async fn prevents_parallel_writers_and_repairs_interrupted_tool_projection() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path().join("sessions.db")).await.unwrap();
