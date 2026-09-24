@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::session::{CanonicalMessage, Run, Session, Snapshot};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const MAX_SESSION_OUTPUT_BYTES: i64 = 128 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -191,6 +191,41 @@ impl Store {
                 )?;
             }
 
+            if version < 5 {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     CREATE TABLE project_tasks (
+                         id INTEGER PRIMARY KEY,
+                         workspace TEXT NOT NULL,
+                         parent_id INTEGER REFERENCES project_tasks(id) ON DELETE SET NULL,
+                         title TEXT NOT NULL,
+                         details TEXT NOT NULL DEFAULT '',
+                         status TEXT NOT NULL DEFAULT 'pending'
+                             CHECK(status IN ('pending','in_progress','blocked','completed','cancelled')),
+                         priority INTEGER NOT NULL DEFAULT 0,
+                         created_at_ms INTEGER NOT NULL,
+                         updated_at_ms INTEGER NOT NULL
+                     );
+                     CREATE INDEX project_tasks_workspace
+                         ON project_tasks(workspace, status, priority DESC, id);
+                     CREATE TABLE session_memories (
+                         id INTEGER PRIMARY KEY,
+                         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                         category TEXT NOT NULL
+                             CHECK(category IN ('constraint','decision','fact','preference')),
+                         title TEXT NOT NULL,
+                         content TEXT NOT NULL,
+                         active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+                         created_at_ms INTEGER NOT NULL,
+                         updated_at_ms INTEGER NOT NULL
+                     );
+                     CREATE INDEX session_memories_session
+                         ON session_memories(session_id, active, updated_at_ms DESC, id DESC);
+                     PRAGMA user_version = 5;
+                     COMMIT;",
+                )?;
+            }
+
             Ok(connection)
         })
         .await??;
@@ -205,7 +240,7 @@ impl Store {
         &self.path
     }
 
-    async fn access<T, F>(&self, operation: F) -> Result<T>
+    pub(crate) async fn access<T, F>(&self, operation: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
@@ -294,6 +329,44 @@ impl Store {
                 )
                 .optional()?
                 .context("session not found")
+        })
+        .await
+    }
+
+    pub async fn rename_session(&self, id: &str, title: &str) -> Result<()> {
+        validate_session_id(id)?;
+        let title = title.trim();
+        ensure!(!title.is_empty(), "session title must not be empty");
+        ensure!(
+            title.chars().count() <= 120,
+            "session title must be at most 120 characters"
+        );
+        let id = id.to_owned();
+        let title = title.to_owned();
+        self.access(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET title=?2, updated_at_ms=?3 WHERE id=?1",
+                params![id, title, now_millis()],
+            )?;
+            ensure!(changed == 1, "session not found");
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn set_session_model(&self, id: &str, model: &str) -> Result<()> {
+        validate_session_id(id)?;
+        let model = model.trim();
+        ensure!(!model.is_empty(), "session model must not be empty");
+        let id = id.to_owned();
+        let model = model.to_owned();
+        self.access(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET model=?2, updated_at_ms=?3 WHERE id=?1",
+                params![id, model, now_millis()],
+            )?;
+            ensure!(changed == 1, "session not found");
+            Ok(())
         })
         .await
     }
@@ -879,7 +952,7 @@ fn private_file(path: &Path) -> Result<File> {
     Ok(options.open(path)?)
 }
 
-fn now_millis() -> i64 {
+pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

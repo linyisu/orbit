@@ -6,12 +6,30 @@ use std::{
 use clap::ValueEnum;
 use orbit_tools::approval::{ApprovalPreview, ApprovalReceiver};
 
-#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum ApprovalMode {
     Auto,
     #[default]
     Ask,
     Deny,
+}
+
+impl ApprovalMode {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Auto => Self::Ask,
+            Self::Ask => Self::Deny,
+            Self::Deny => Self::Auto,
+        }
+    }
 }
 
 fn workspace_local_file(path: &str, workspace: &Path) -> bool {
@@ -28,7 +46,7 @@ fn workspace_local_file(path: &str, workspace: &Path) -> bool {
         .is_ok_and(|resolved| resolved.starts_with(workspace))
 }
 
-fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
+pub(crate) fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
     match preview {
         ApprovalPreview::Write(write) => workspace_local_file(&write.path, workspace),
         ApprovalPreview::Command(_) => true,

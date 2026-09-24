@@ -1,0 +1,413 @@
+//! Session ownership and Agent execution for the interactive client.
+
+use std::path::PathBuf;
+
+use anyhow::{Context, Result, ensure};
+use orbit_agent::{
+    agent::{Agent, AgentConfig, AgentResult},
+    context::{ContextCheckpoint, ContextConfig, ContextRuntime, estimate_tokens},
+    error::AgentError,
+    events::AgentEvent,
+    model::ModelClientBackend,
+    tool::ToolRegistry,
+};
+use orbit_model::{client::ModelClient, types::ChatMessage};
+use orbit_store::{SessionWriter, Store};
+use orbit_tools::{InstructionSet, approval::ApprovalSender};
+use tokio::{sync::mpsc, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
+
+use crate::{
+    FileConfig, ModelOption, TuiArgs, coding_request, project_state, result_status, runtime,
+    startup_instructions,
+};
+
+use super::app::App;
+
+pub(super) type RunResult = Result<AgentResult, AgentError>;
+
+pub(super) enum RunOutcome {
+    Agent {
+        writer: SessionWriter,
+        result: RunResult,
+        finish: Result<()>,
+    },
+    Compaction(Result<CompactionProgress>),
+}
+
+pub(super) struct CompactionProgress {
+    pub(super) batches: usize,
+    pub(super) degraded: bool,
+    pub(super) complete: bool,
+}
+
+pub(super) struct ActiveRun {
+    pub(super) events: mpsc::Receiver<AgentEvent>,
+    pub(super) task: JoinHandle<RunOutcome>,
+    pub(super) cancellation: CancellationToken,
+}
+
+pub(super) struct Runtime {
+    config_path: PathBuf,
+    pub(super) workspace: PathBuf,
+    pub(super) config: FileConfig,
+    pub(super) store: Store,
+    client: ModelClient,
+    selected: ModelOption,
+    instructions: InstructionSet,
+    approval_sender: ApprovalSender,
+    pub(super) writer: Option<SessionWriter>,
+    tools: ToolRegistry,
+    max_turns: usize,
+    max_tool_calls: usize,
+}
+
+impl Runtime {
+    pub(super) async fn open(
+        config_path: PathBuf,
+        database: PathBuf,
+        args: &TuiArgs,
+        approval_sender: ApprovalSender,
+    ) -> Result<Self> {
+        ensure!(
+            (1..=256).contains(&args.max_turns),
+            "max_turns must be 1–256"
+        );
+        ensure!(
+            (1..=1024).contains(&args.max_tool_calls),
+            "max_tool_calls must be 1–1024"
+        );
+        let workspace = std::env::current_dir()?.canonicalize()?;
+        let config = FileConfig::load(&config_path)?;
+        let instructions = startup_instructions(
+            &workspace,
+            &config_path,
+            &database,
+            config.instruction_home.as_deref(),
+        )?;
+        let mut selected = config.select_model(args.model.as_deref())?;
+        let store = Store::open(database).await?;
+        let writer = if let Some(id) = args.resume.as_deref() {
+            let session = store.session(id).await?;
+            ensure!(
+                session.workspace == workspace.to_string_lossy(),
+                "session belongs to a different workspace"
+            );
+            if args.model.is_none() {
+                selected = config.select_model(Some(&session.model))?;
+            }
+            store.acquire(id).await?
+        } else {
+            store.create(&workspace, &selected.name).await?
+        };
+        let client = ModelClient::new(selected.config.clone())?;
+        let tools = tools_for(
+            &workspace,
+            &config_path,
+            &store,
+            writer.id(),
+            approval_sender.clone(),
+            &config,
+        )?;
+        if args.resume.is_some() && args.model.is_some() {
+            store.set_session_model(writer.id(), &selected.name).await?;
+        }
+
+        Ok(Self {
+            config_path,
+            workspace,
+            config,
+            store,
+            client,
+            selected,
+            instructions,
+            approval_sender,
+            writer: Some(writer),
+            tools,
+            max_turns: args.max_turns,
+            max_tool_calls: args.max_tool_calls,
+        })
+    }
+
+    pub(super) fn session_id(&self) -> &str {
+        self.writer
+            .as_ref()
+            .expect("session writer present while idle")
+            .id()
+    }
+
+    pub(super) fn selected_model(&self) -> &ModelOption {
+        &self.selected
+    }
+
+    pub(super) fn model_options(&self) -> Result<Vec<ModelOption>> {
+        self.config.model_options()
+    }
+
+    pub(super) async fn select_model(&mut self, name: &str, app: &mut App) -> Result<()> {
+        let selected = self.config.select_model(Some(name))?;
+        let client = ModelClient::new(selected.config.clone())?;
+        self.store
+            .set_session_model(self.session_id(), &selected.name)
+            .await?;
+        self.client = client;
+        self.selected = selected;
+        app.model = self.selected.name.clone();
+        app.context_tokens = self.selected.context_tokens;
+        app.notice(format!("Model: {}", app.model));
+        Ok(())
+    }
+
+    pub(super) async fn switch_session(&mut self, id: Option<&str>, app: &mut App) -> Result<()> {
+        if id.is_some_and(|id| id == self.session_id()) {
+            app.notice("This session is already open.");
+            return Ok(());
+        }
+        let selected = if let Some(id) = id {
+            let session = self.store.session(id).await?;
+            ensure!(
+                session.workspace == self.workspace.to_string_lossy(),
+                "session belongs to a different workspace"
+            );
+            self.config.select_model(Some(&session.model))?
+        } else {
+            self.config.select_model(None)?
+        };
+        let next = if let Some(id) = id {
+            self.store.acquire(id).await?
+        } else {
+            self.store.create(&self.workspace, &selected.name).await?
+        };
+        let next_client = ModelClient::new(selected.config.clone())?;
+        let next_tools = tools_for(
+            &self.workspace,
+            &self.config_path,
+            &self.store,
+            next.id(),
+            self.approval_sender.clone(),
+            &self.config,
+        )?;
+
+        self.writer = Some(next);
+        self.tools = next_tools;
+        self.client = next_client;
+        self.selected = selected;
+        app.session_id = self.session_id().to_owned();
+        app.model = self.selected.name.clone();
+        app.context_tokens = self.selected.context_tokens;
+        app.scroll = 0;
+        app.begin_restore();
+        Ok(())
+    }
+
+    pub(super) async fn start_run(&mut self, prompt: String, app: &mut App) -> Result<ActiveRun> {
+        let session_id = self.session_id().to_owned();
+        let snapshot = self.store.load(&session_id).await?;
+        let state =
+            project_state::projection(&self.store, &self.workspace.to_string_lossy(), &session_id)
+                .await?;
+        let mut history = snapshot.projected_history();
+        history.push(ChatMessage::user(prompt.clone()));
+        let mut request = coding_request(history, &self.instructions, state);
+        request.max_tokens = Some(
+            u32::try_from(self.selected.max_output_tokens)
+                .context("max_output_tokens exceeds the model request limit")?,
+        );
+        let checkpoint = self
+            .store
+            .load_context_checkpoint(&session_id)
+            .await?
+            .and_then(|payload| serde_json::from_str::<ContextCheckpoint>(&payload).ok());
+        let context = ContextRuntime::new(
+            ContextConfig {
+                window_tokens: self.selected.context_tokens,
+                output_reserve: self.selected.max_output_tokens,
+                force_compact: false,
+            },
+            checkpoint,
+        )
+        .map_err(|message| anyhow::anyhow!(message))?;
+        let mut writer = self.writer.take().context("session is already running")?;
+        if let Err(error) = writer
+            .begin(prompt.clone(), self.selected.name.clone())
+            .await
+        {
+            self.writer = Some(writer);
+            return Err(error);
+        }
+        let agent = Agent::new(
+            ModelClientBackend::new(self.client.clone()),
+            self.tools.clone(),
+            AgentConfig {
+                max_turns: self.max_turns,
+                max_tool_calls: self.max_tool_calls,
+            },
+        )
+        .with_context(context);
+        let (sender, events) = mpsc::channel(256);
+        let cancellation = CancellationToken::new();
+        let token = cancellation.clone();
+        let store = self.store.clone();
+        let task = tokio::spawn(async move {
+            let result = agent
+                .run_with_agent_events(request, token, |event| {
+                    let writer = &writer;
+                    let store = &store;
+                    let sender = &sender;
+                    async move {
+                        match &event {
+                            AgentEvent::MessageCommitted { message } => {
+                                writer
+                                    .append(message.clone())
+                                    .await
+                                    .map_err(|error| AgentError::EventHandler(error.to_string()))?;
+                            }
+                            AgentEvent::ContextCheckpoint { checkpoint } => {
+                                let payload = serde_json::to_string(checkpoint)
+                                    .map_err(|error| AgentError::EventHandler(error.to_string()))?;
+                                store
+                                    .save_context_checkpoint(
+                                        writer.id(),
+                                        checkpoint.through,
+                                        &checkpoint.prefix_sha256,
+                                        &payload,
+                                    )
+                                    .await
+                                    .map_err(|error| AgentError::EventHandler(error.to_string()))?;
+                            }
+                            _ => {}
+                        }
+                        let _ = sender.send(event).await;
+                        Ok(())
+                    }
+                })
+                .await;
+            let status = result_status(&result);
+            let finish = writer.finish(status).await;
+            RunOutcome::Agent {
+                writer,
+                result,
+                finish,
+            }
+        });
+        app.submit(&prompt);
+        Ok(ActiveRun {
+            events,
+            task,
+            cancellation,
+        })
+    }
+
+    pub(super) async fn context_usage(&self) -> Result<(usize, usize, bool)> {
+        let session_id = self.session_id();
+        let snapshot = self.store.load(session_id).await?;
+        let state =
+            project_state::projection(&self.store, &self.workspace.to_string_lossy(), session_id)
+                .await?;
+        let request = coding_request(snapshot.projected_history(), &self.instructions, state);
+        let used = estimate_tokens(&request.messages, &self.tools.definitions());
+        let checkpoint = self
+            .store
+            .load_context_checkpoint(session_id)
+            .await?
+            .is_some();
+        Ok((used, self.selected.context_tokens, checkpoint))
+    }
+
+    pub(super) async fn start_compaction(&self, app: &mut App) -> Result<ActiveRun> {
+        let session_id = self.session_id().to_owned();
+        let snapshot = self.store.load(&session_id).await?;
+        let state =
+            project_state::projection(&self.store, &self.workspace.to_string_lossy(), &session_id)
+                .await?;
+        let request = coding_request(snapshot.projected_history(), &self.instructions, state);
+        let checkpoint = self
+            .store
+            .load_context_checkpoint(&session_id)
+            .await?
+            .and_then(|payload| serde_json::from_str::<ContextCheckpoint>(&payload).ok());
+        let mut context = ContextRuntime::new(
+            ContextConfig {
+                window_tokens: self.selected.context_tokens,
+                output_reserve: self.selected.max_output_tokens,
+                force_compact: true,
+            },
+            checkpoint,
+        )
+        .map_err(|message| anyhow::anyhow!(message))?;
+        let backend = ModelClientBackend::new(self.client.clone());
+        let definitions = self.tools.definitions();
+        let store = self.store.clone();
+        let (sender, events) = mpsc::channel(64);
+        let cancellation = CancellationToken::new();
+        let token = cancellation.clone();
+        let task = tokio::spawn(async move {
+            let mut progress = CompactionProgress {
+                batches: 0,
+                degraded: false,
+                complete: false,
+            };
+            let result = async {
+                for _ in 0..64 {
+                    let step = context
+                        .prepare_step(&backend, &request.messages, &definitions, token.clone())
+                        .await
+                        .map_err(anyhow::Error::new)?;
+                    if let Some(checkpoint) = step.checkpoint {
+                        progress.degraded |= checkpoint.summary_degraded;
+                        let payload = serde_json::to_string(&checkpoint)?;
+                        store
+                            .save_context_checkpoint(
+                                &session_id,
+                                checkpoint.through,
+                                &checkpoint.prefix_sha256,
+                                &payload,
+                            )
+                            .await?;
+                        progress.batches += 1;
+                        let _ = sender
+                            .send(AgentEvent::ContextCheckpoint { checkpoint })
+                            .await;
+                    }
+                    if !step.needs_more {
+                        progress.complete = true;
+                        break;
+                    }
+                }
+                Ok(progress)
+            }
+            .await;
+            RunOutcome::Compaction(result)
+        });
+        app.running = true;
+        app.status = "Compacting context".to_owned();
+        app.notice("/compact");
+        Ok(ActiveRun {
+            events,
+            task,
+            cancellation,
+        })
+    }
+}
+
+fn tools_for(
+    workspace: &std::path::Path,
+    config_path: &std::path::Path,
+    store: &Store,
+    session_id: &str,
+    approvals: ApprovalSender,
+    config: &FileConfig,
+) -> Result<ToolRegistry> {
+    runtime::workspace_tools(
+        workspace,
+        config_path,
+        store.path(),
+        store.clone(),
+        session_id,
+        approvals,
+        runtime::WorkspaceToolOptions {
+            rust_toolchain: config.command.rust_toolchain.clone(),
+            web: config.web.clone(),
+        },
+    )
+}

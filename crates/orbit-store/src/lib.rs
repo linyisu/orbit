@@ -1,4 +1,5 @@
 pub mod session;
+pub mod state;
 pub mod store;
 
 pub use session::{CanonicalMessage, Run, Session, Snapshot};

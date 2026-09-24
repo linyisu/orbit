@@ -38,6 +38,12 @@ pub fn workspace_tools(
     workspace.protect_opaque_runtime_root(database.with_extension("session-locks"))?;
 
     let mut tools = ToolRegistry::new();
+    orbit_tools::project_state::register(
+        &mut tools,
+        store.clone(),
+        root.to_string_lossy().into_owned(),
+        session_id.to_owned(),
+    );
     tools.register(ReadCommandOutput::new(store.clone(), session_id.to_owned()));
     tools.register(ReadFile::new(workspace.clone()));
     tools.register(ReadHistory::new(store.clone(), session_id.to_owned()));
@@ -107,6 +113,10 @@ mod tests {
                 "edit_file",
                 "git_inspect",
                 "list_files",
+                "memory_forget",
+                "memory_list",
+                "memory_save",
+                "memory_search",
                 "project_instructions",
                 "project_overview",
                 "read_command_output",
@@ -115,6 +125,8 @@ mod tests {
                 "run_command",
                 "search_history",
                 "search_text",
+                "task_list",
+                "task_update",
                 "verification_status",
                 "web_fetch",
                 "web_search",

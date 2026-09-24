@@ -5,6 +5,7 @@ pub mod history;
 pub mod list_files;
 pub mod project_instructions;
 pub mod project_overview;
+pub mod project_state;
 pub mod read_command_output;
 pub mod read_file;
 pub mod run_command;

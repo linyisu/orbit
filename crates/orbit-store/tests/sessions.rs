@@ -47,6 +47,59 @@ async fn records_and_reopens_complete_session_history() {
 }
 
 #[tokio::test]
+async fn renaming_a_session_survives_reopen_and_preserves_history() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store.create(root.path(), "model-a").await.unwrap();
+    let id = writer.id().to_owned();
+
+    writer
+        .begin("original".into(), "model-a".into())
+        .await
+        .unwrap();
+    writer
+        .append(ChatMessage::assistant("answer"))
+        .await
+        .unwrap();
+    writer.finish("completed").await.unwrap();
+    store.rename_session(&id, "  custom title  ").await.unwrap();
+    drop(writer);
+    drop(store);
+
+    let reopened = Store::open(&database).await.unwrap();
+    let snapshot = reopened.load(&id).await.unwrap();
+    assert_eq!(snapshot.session.title, "custom title");
+    assert_eq!(snapshot.messages.len(), 2);
+    assert!(reopened.rename_session(&id, " ").await.is_err());
+}
+
+#[tokio::test]
+async fn changing_session_model_preserves_history_and_survives_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store.create(root.path(), "first::a").await.unwrap();
+    let id = writer.id().to_owned();
+    writer
+        .begin("hello".into(), "first::a".into())
+        .await
+        .unwrap();
+    writer.append(ChatMessage::assistant("hi")).await.unwrap();
+    writer.finish("completed").await.unwrap();
+
+    store.set_session_model(&id, "second::b").await.unwrap();
+    drop(writer);
+    drop(store);
+
+    let reopened = Store::open(&database).await.unwrap();
+    let snapshot = reopened.load(&id).await.unwrap();
+    assert_eq!(snapshot.session.model, "second::b");
+    assert_eq!(snapshot.projected_history().len(), 2);
+    assert!(reopened.set_session_model(&id, " ").await.is_err());
+}
+
+#[tokio::test]
 async fn prevents_parallel_writers_and_repairs_interrupted_tool_projection() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path().join("sessions.db")).await.unwrap();
@@ -218,7 +271,7 @@ async fn upgrades_existing_session_database_without_losing_messages() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; DROP TABLE command_outputs; PRAGMA user_version = 1;",
+            "DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; DROP TABLE command_outputs; PRAGMA user_version = 1;",
         )
         .unwrap();
     drop(connection);
@@ -259,7 +312,7 @@ async fn upgrades_version_two_command_outputs_to_verification_evidence_schema() 
 
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
-        .execute_batch("DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; PRAGMA user_version = 2;")
+        .execute_batch("DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; DROP TABLE command_evidence; PRAGMA user_version = 2;")
         .unwrap();
     drop(connection);
 
@@ -374,7 +427,7 @@ async fn upgrades_version_three_session_with_checkpoint_schema() {
     drop(store);
 
     let connection = rusqlite::Connection::open(&database).unwrap();
-    connection.execute_batch("DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; PRAGMA user_version = 3;").unwrap();
+    connection.execute_batch("DROP TABLE session_memories; DROP TABLE project_tasks; DROP TABLE context_checkpoints; DROP INDEX messages_session_digest; PRAGMA user_version = 3;").unwrap();
     drop(connection);
 
     let upgraded = Store::open(&database).await.unwrap();
