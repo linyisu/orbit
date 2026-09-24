@@ -15,6 +15,8 @@ pub enum AgentError {
     MaxToolCalls,
     #[error("agent was cancelled")]
     Cancelled,
+    #[error("event handler failed: {0}")]
+    EventHandler(String),
     #[error("initial request must contain at least one message")]
     InvalidInitialRequest,
 }

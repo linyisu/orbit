@@ -1,0 +1,455 @@
+use std::{
+    fs::{File, OpenOptions},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::{Context, Result, ensure};
+use orbit_model::types::ChatMessage;
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use sha2::{Digest, Sha256};
+
+use crate::session::{CanonicalMessage, Run, Session, Snapshot};
+
+const SCHEMA_VERSION: i64 = 1;
+
+#[derive(Clone)]
+pub struct Store {
+    connection: Arc<Mutex<Connection>>,
+    path: PathBuf,
+}
+
+/// The file lock prevents concurrent runs from writing to one session.
+/// SQLite transactions protect each individual log update.
+pub struct SessionWriter {
+    store: Store,
+    id: String,
+    _lock: File,
+    active_run: Option<i64>,
+}
+
+impl Store {
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = std::path::absolute(path)?;
+        let database = path.clone();
+        let connection = tokio::task::spawn_blocking(move || -> Result<Connection> {
+            let parent = database.parent().context("database path has no parent")?;
+            std::fs::create_dir_all(parent)?;
+            private_file(&database)?;
+
+            let connection = Connection::open(&database)?;
+            connection.busy_timeout(Duration::from_secs(3))?;
+            let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+            ensure!(
+                version == 0 || version == SCHEMA_VERSION,
+                "database schema {version} is incompatible with orbit-main schema {SCHEMA_VERSION}; select a different --database path"
+            );
+            if version == 0 {
+                let tables: i64 = connection.query_row(
+                    "SELECT count(*) FROM sqlite_master
+                     WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                ensure!(
+                    tables == 0,
+                    "database already contains an unrecognized schema; select a different --database path"
+                );
+            }
+            connection.execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 PRAGMA journal_mode = WAL;
+                 PRAGMA synchronous = FULL;",
+            )?;
+            if version == 0 {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     CREATE TABLE sessions (
+                         id TEXT PRIMARY KEY,
+                         workspace TEXT NOT NULL,
+                         model TEXT NOT NULL,
+                         title TEXT NOT NULL DEFAULT '',
+                         created_at_ms INTEGER NOT NULL,
+                         updated_at_ms INTEGER NOT NULL
+                     );
+                     CREATE INDEX sessions_workspace_updated
+                         ON sessions(workspace, updated_at_ms DESC, id DESC);
+                     CREATE TABLE runs (
+                         id INTEGER PRIMARY KEY,
+                         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                         status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'cancelled', 'interrupted')),
+                         started_at_ms INTEGER NOT NULL,
+                         finished_at_ms INTEGER
+                     );
+                     CREATE INDEX runs_session ON runs(session_id, id);
+                     CREATE TABLE messages (
+                         id INTEGER PRIMARY KEY,
+                         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                         run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                         payload TEXT NOT NULL,
+                         sha256 TEXT NOT NULL
+                     );
+                     CREATE INDEX messages_session ON messages(session_id, id);
+                     PRAGMA user_version = 1;
+                     COMMIT;",
+                )?;
+            }
+
+            Ok(connection)
+        })
+        .await??;
+
+        Ok(Self {
+            connection: Arc::new(Mutex::new(connection)),
+            path,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    async fn access<T, F>(&self, operation: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
+    {
+        let connection = self.connection.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = connection
+                .lock()
+                .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+            operation(&mut guard)
+        })
+        .await?
+    }
+
+    pub async fn create(&self, workspace: &Path, model: &str) -> Result<SessionWriter> {
+        let workspace = workspace.canonicalize()?.to_string_lossy().into_owned();
+        let model = model.to_owned();
+        let id = self
+            .access(move |connection| {
+                let transaction = connection.transaction()?;
+                let id: String =
+                    transaction
+                        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?;
+                let now = now_millis();
+                transaction.execute(
+                    "INSERT INTO sessions(id, workspace, model, created_at_ms, updated_at_ms)
+                     VALUES(?1, ?2, ?3, ?4, ?4)",
+                    params![id, workspace, model, now],
+                )?;
+                transaction.commit()?;
+                Ok(id)
+            })
+            .await?;
+
+        self.acquire(&id).await
+    }
+
+    pub async fn acquire(&self, id: &str) -> Result<SessionWriter> {
+        validate_session_id(id)?;
+        self.session(id).await?;
+
+        let lock_dir = self.path.with_extension("session-locks");
+        let lock_id = id.to_owned();
+        let lock = tokio::task::spawn_blocking(move || -> Result<File> {
+            std::fs::create_dir_all(&lock_dir)?;
+            let file = private_file(&lock_dir.join(lock_id))?;
+            file.try_lock().map_err(|error| match error {
+                std::fs::TryLockError::WouldBlock => {
+                    anyhow::anyhow!("session is already open in another Orbit process")
+                }
+                std::fs::TryLockError::Error(error) => anyhow::Error::new(error),
+            })?;
+            Ok(file)
+        })
+        .await??;
+
+        let session_id = id.to_owned();
+        self.access(move |connection| {
+            connection.execute(
+                "UPDATE runs SET status='interrupted', finished_at_ms=?2
+                 WHERE session_id=?1 AND status='running'",
+                params![session_id, now_millis()],
+            )?;
+            Ok(())
+        })
+        .await?;
+
+        Ok(SessionWriter {
+            store: self.clone(),
+            id: id.to_owned(),
+            _lock: lock,
+            active_run: None,
+        })
+    }
+
+    pub async fn session(&self, id: &str) -> Result<Session> {
+        validate_session_id(id)?;
+        let id = id.to_owned();
+        self.access(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, workspace, model, title, created_at_ms, updated_at_ms
+                     FROM sessions WHERE id=?1",
+                    [id],
+                    session_row,
+                )
+                .optional()?
+                .context("session not found")
+        })
+        .await
+    }
+
+    pub async fn list(&self, workspace: &Path) -> Result<Vec<Session>> {
+        let workspace = workspace.canonicalize()?.to_string_lossy().into_owned();
+        self.access(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, workspace, model, title, created_at_ms, updated_at_ms
+                 FROM sessions WHERE workspace=?1 ORDER BY updated_at_ms DESC, id DESC",
+            )?;
+            let sessions = statement
+                .query_map([workspace], session_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(sessions)
+        })
+        .await
+    }
+
+    pub async fn load(&self, id: &str) -> Result<Snapshot> {
+        validate_session_id(id)?;
+        let id = id.to_owned();
+        self.access(move |connection| {
+            let session = connection
+                .query_row(
+                    "SELECT id, workspace, model, title, created_at_ms, updated_at_ms
+                     FROM sessions WHERE id=?1",
+                    [&id],
+                    session_row,
+                )
+                .optional()?
+                .context("session not found")?;
+            let mut statement = connection.prepare(
+                "SELECT id, run_id, payload, sha256 FROM messages
+                 WHERE session_id=?1 ORDER BY id",
+            )?;
+            let messages = statement
+                .query_map([&id], canonical_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .map(decode_message)
+                .collect::<Result<Vec<_>>>()?;
+            let mut statement = connection.prepare(
+                "SELECT id, status, started_at_ms, finished_at_ms FROM runs
+                 WHERE session_id=?1 ORDER BY id",
+            )?;
+            let runs = statement
+                .query_map([&id], run_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            Ok(Snapshot {
+                session,
+                runs,
+                messages,
+            })
+        })
+        .await
+    }
+
+    pub async fn canonical_messages(
+        &self,
+        id: &str,
+        after_id: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<CanonicalMessage>> {
+        ensure!((1..=1000).contains(&limit), "message limit must be 1–1000");
+        validate_session_id(id)?;
+        let id = id.to_owned();
+        self.access(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, run_id, payload, sha256 FROM messages
+                 WHERE session_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
+            )?;
+            statement
+                .query_map(
+                    params![id, after_id.unwrap_or(0), limit as i64],
+                    canonical_row,
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .map(decode_message)
+                .collect()
+        })
+        .await
+    }
+}
+
+impl SessionWriter {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
+        ensure!(self.active_run.is_none(), "a run is already active");
+        let id = self.id.clone();
+        let user = ChatMessage::user(prompt.clone());
+        let run = self
+            .store
+            .access(move |connection| {
+                let transaction = connection.transaction()?;
+                transaction.execute(
+                    "INSERT INTO runs(session_id, status, started_at_ms)
+                     VALUES(?1, 'running', ?2)",
+                    params![id, now_millis()],
+                )?;
+                let run = transaction.last_insert_rowid();
+                append_message(&transaction, &id, run, &user)?;
+                let title: String = prompt.chars().take(80).collect();
+                transaction.execute(
+                    "UPDATE sessions SET model=?2, updated_at_ms=?3,
+                     title=CASE WHEN title='' THEN ?4 ELSE title END WHERE id=?1",
+                    params![id, model, now_millis(), title],
+                )?;
+                transaction.commit()?;
+                Ok(run)
+            })
+            .await?;
+        self.active_run = Some(run);
+        Ok(())
+    }
+
+    pub async fn append(&self, message: ChatMessage) -> Result<()> {
+        let run = self.active_run.context("no active run")?;
+        let id = self.id.clone();
+        self.store
+            .access(move |connection| {
+                let transaction = connection.transaction()?;
+                let status: String = transaction.query_row(
+                    "SELECT status FROM runs WHERE id=?1 AND session_id=?2",
+                    params![run, id],
+                    |row| row.get(0),
+                )?;
+                ensure!(status == "running", "run is no longer active");
+                append_message(&transaction, &id, run, &message)?;
+                transaction.execute(
+                    "UPDATE sessions SET updated_at_ms=?2 WHERE id=?1",
+                    params![id, now_millis()],
+                )?;
+                transaction.commit()?;
+                Ok(())
+            })
+            .await
+    }
+
+    pub async fn finish(&mut self, status: &str) -> Result<()> {
+        ensure!(
+            matches!(status, "completed" | "failed" | "cancelled"),
+            "invalid terminal status"
+        );
+        let run = self.active_run.context("no active run")?;
+        let id = self.id.clone();
+        let status = status.to_owned();
+        self.store
+            .access(move |connection| {
+                let transaction = connection.transaction()?;
+                let updated = transaction.execute(
+                    "UPDATE runs SET status=?3, finished_at_ms=?4
+                     WHERE id=?1 AND session_id=?2 AND status='running'",
+                    params![run, id, status, now_millis()],
+                )?;
+                ensure!(updated == 1, "run is no longer active");
+                transaction.commit()?;
+                Ok(())
+            })
+            .await?;
+        self.active_run = None;
+        Ok(())
+    }
+}
+
+fn append_message(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    run_id: i64,
+    message: &ChatMessage,
+) -> Result<()> {
+    let payload = serde_json::to_string(message)?;
+    transaction.execute(
+        "INSERT INTO messages(session_id, run_id, payload, sha256) VALUES(?1, ?2, ?3, ?4)",
+        params![session_id, run_id, payload, digest(&payload)],
+    )?;
+    Ok(())
+}
+
+fn canonical_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, i64, String, String)> {
+    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+}
+
+fn decode_message(record: (i64, i64, String, String)) -> Result<CanonicalMessage> {
+    let (id, run_id, payload, expected) = record;
+    ensure!(
+        digest(&payload) == expected,
+        "canonical message {id} failed integrity check"
+    );
+    Ok(CanonicalMessage {
+        id,
+        run_id,
+        message: serde_json::from_str(&payload)?,
+    })
+}
+
+fn digest(payload: &str) -> String {
+    Sha256::digest(payload.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
+    Ok(Session {
+        id: row.get(0)?,
+        workspace: row.get(1)?,
+        model: row.get(2)?,
+        title: row.get(3)?,
+        created_at_ms: row.get(4)?,
+        updated_at_ms: row.get(5)?,
+    })
+}
+
+fn run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
+    Ok(Run {
+        id: row.get(0)?,
+        status: row.get(1)?,
+        started_at_ms: row.get(2)?,
+        finished_at_ms: row.get(3)?,
+    })
+}
+
+fn validate_session_id(id: &str) -> Result<()> {
+    ensure!(
+        id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "invalid session ID"
+    );
+    Ok(())
+}
+
+fn private_file(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    Ok(options.open(path)?)
+}
+
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
+}

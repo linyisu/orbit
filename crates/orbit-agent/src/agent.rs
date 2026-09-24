@@ -180,6 +180,10 @@ where
             }
 
             history.push(assistant.clone());
+            emit(AgentEvent::MessageCommitted {
+                message: assistant.clone(),
+            })
+            .await?;
 
             if calls.is_empty() {
                 return Ok(AgentResult {
@@ -221,7 +225,9 @@ where
                         )
                     }
                 };
-                history.push(ChatMessage::tool(call.id, content));
+                let message = ChatMessage::tool(call.id, content);
+                history.push(message.clone());
+                emit(AgentEvent::MessageCommitted { message }).await?;
                 emit(event).await?;
             }
         }
@@ -742,17 +748,28 @@ mod tests {
 
         assert_eq!(plain.history, streamed.history);
         assert_eq!(plain_model.requests(), event_model.requests());
+        let committed = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::MessageCommitted { message } => Some(message.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(committed, streamed.history[1..]);
         assert!(matches!(
             events.as_slice(),
             [
                 AgentEvent::TurnStarted { turn: 1 },
                 AgentEvent::Model(_),
                 AgentEvent::Model(_),
+                AgentEvent::MessageCommitted { .. },
                 AgentEvent::ToolStarted { .. },
+                AgentEvent::MessageCommitted { .. },
                 AgentEvent::ToolFailed { .. },
                 AgentEvent::TurnStarted { turn: 2 },
                 AgentEvent::Model(_),
                 AgentEvent::Model(_),
+                AgentEvent::MessageCommitted { .. },
                 AgentEvent::Completed {
                     turns: 2,
                     tool_calls: 1

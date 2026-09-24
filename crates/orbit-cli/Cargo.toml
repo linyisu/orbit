@@ -12,6 +12,7 @@ anyhow.workspace = true
 clap.workspace = true
 orbit-agent = { path = "../orbit-agent" }
 orbit-model = { path = "../orbit-model" }
+orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
 serde.workspace = true
 tokio.workspace = true

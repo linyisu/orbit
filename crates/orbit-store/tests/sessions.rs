@@ -1,0 +1,149 @@
+use orbit_model::types::{ChatMessage, ToolCall};
+use orbit_store::Store;
+use serde_json::json;
+
+#[tokio::test]
+async fn records_and_reopens_complete_session_history() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("data/sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store.create(root.path(), "model-a").await.unwrap();
+    let id = writer.id().to_owned();
+
+    writer
+        .begin("find the bug".to_owned(), "model-a".to_owned())
+        .await
+        .unwrap();
+    writer
+        .append(ChatMessage::assistant("fixed"))
+        .await
+        .unwrap();
+    writer.finish("completed").await.unwrap();
+    drop(writer);
+    drop(store);
+
+    let reopened = Store::open(&database).await.unwrap();
+    let sessions = reopened.list(root.path()).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, id);
+    assert_eq!(sessions[0].title, "find the bug");
+    let snapshot = reopened.load(&id).await.unwrap();
+    assert_eq!(snapshot.runs[0].status, "completed");
+    assert_eq!(
+        snapshot.projected_history(),
+        vec![
+            ChatMessage::user("find the bug"),
+            ChatMessage::assistant("fixed")
+        ]
+    );
+
+    let first = reopened.canonical_messages(&id, None, 1).await.unwrap();
+    let second = reopened
+        .canonical_messages(&id, Some(first[0].id), 1)
+        .await
+        .unwrap();
+    assert_eq!(first[0].message, ChatMessage::user("find the bug"));
+    assert_eq!(second[0].message, ChatMessage::assistant("fixed"));
+}
+
+#[tokio::test]
+async fn prevents_parallel_writers_and_repairs_interrupted_tool_projection() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path().join("sessions.db")).await.unwrap();
+    let mut writer = store.create(root.path(), "model-a").await.unwrap();
+    let id = writer.id().to_owned();
+    let call = ToolCall::function("call-1", "read_file", json!({ "path": "main.rs" }));
+
+    writer
+        .begin("inspect".to_owned(), "model-a".to_owned())
+        .await
+        .unwrap();
+    writer
+        .append(ChatMessage::assistant_tool_calls(vec![call.clone()]))
+        .await
+        .unwrap();
+    let error = match store.acquire(&id).await {
+        Ok(_) => panic!("a second writer must not acquire the session"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("already open"), "{error}");
+    drop(writer);
+
+    let mut resumed = store.acquire(&id).await.unwrap();
+    let before = store.load(&id).await.unwrap();
+    assert_eq!(before.runs[0].status, "interrupted");
+    assert_eq!(before.messages.len(), 2);
+    let projected = before.projected_history();
+    assert_eq!(projected.len(), 3);
+    assert!(matches!(
+        &projected[2],
+        ChatMessage::Tool { tool_call_id, content }
+            if tool_call_id == "call-1" && content.contains("outcome is unknown")
+    ));
+
+    resumed
+        .begin("continue".to_owned(), "model-b".to_owned())
+        .await
+        .unwrap();
+    resumed
+        .append(ChatMessage::assistant("done"))
+        .await
+        .unwrap();
+    resumed.finish("completed").await.unwrap();
+
+    let after = store.load(&id).await.unwrap();
+    assert_eq!(after.runs.len(), 2);
+    assert_eq!(after.messages.len(), 4);
+    assert_eq!(after.session.model, "model-b");
+    assert_eq!(after.session.title, "inspect");
+    assert_eq!(
+        after.messages[1].message,
+        ChatMessage::assistant_tool_calls(vec![call])
+    );
+}
+
+#[tokio::test]
+async fn rejects_incompatible_schema_without_changing_it() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("legacy.db");
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch("PRAGMA user_version = 15;")
+        .unwrap();
+    drop(connection);
+
+    let error = match Store::open(&database).await {
+        Ok(_) => panic!("legacy schema must be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("incompatible"), "{error}");
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 15);
+}
+
+#[tokio::test]
+async fn rejects_unversioned_existing_schema_without_changing_journal_mode() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("unversioned.db");
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch("CREATE TABLE legacy_records (value TEXT);")
+        .unwrap();
+    drop(connection);
+
+    let error = match Store::open(&database).await {
+        Ok(_) => panic!("unversioned existing schema must be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("unrecognized schema"), "{error}");
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let mode: String = connection
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, "delete");
+}
