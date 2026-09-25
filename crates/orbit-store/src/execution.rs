@@ -8,6 +8,11 @@ use orbit_agent::{
 use orbit_model::types::ChatMessage;
 use rusqlite::params;
 use sha2::{Digest, Sha256};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+fn journal_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 pub(crate) struct Journal {
     pub store: Store,
@@ -26,12 +31,8 @@ impl Journal {
         let session = self.session.clone();
         // Keep queued facts until the SQLite transaction commits. A failed
         // checkpoint must not silently discard the only copy of new messages.
-        let events = self.pending.lock().expect("journal lock poisoned").clone();
-        let messages = self
-            .pending_messages
-            .lock()
-            .expect("message journal lock poisoned")
-            .clone();
+        let events = journal_lock(&self.pending).clone();
+        let messages = journal_lock(&self.pending_messages).clone();
         let event_count = events.len();
         let message_count = messages.len();
         let mut events = events;
@@ -67,14 +68,8 @@ impl Journal {
             transaction.commit()?;
             Ok(())
         }).await.map_err(|e|AgentError::Checkpoint(e.to_string()))?;
-        self.pending
-            .lock()
-            .expect("journal lock poisoned")
-            .drain(..event_count);
-        self.pending_messages
-            .lock()
-            .expect("message journal lock poisoned")
-            .drain(..message_count);
+        journal_lock(&self.pending).drain(..event_count);
+        journal_lock(&self.pending_messages).drain(..message_count);
         Ok(())
     }
 }
@@ -88,17 +83,11 @@ impl ExecutionJournal for Journal {
                 | AgentEvent::ToolFinished { .. }
                 | AgentEvent::ToolFailed { .. }
         ) {
-            self.pending
-                .lock()
-                .expect("journal lock poisoned")
-                .push(event);
+            journal_lock(&self.pending).push(event);
         }
     }
     fn record_message(&self, message: ChatMessage) {
-        self.pending_messages
-            .lock()
-            .expect("message journal lock poisoned")
-            .push(message);
+        journal_lock(&self.pending_messages).push(message);
     }
     fn flush(&self) -> CheckpointFuture<'_> {
         Box::pin(self.commit(None, None))

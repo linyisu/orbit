@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use orbit_agent::events::AgentEvent;
 use orbit_model::types::ChatMessage;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -298,6 +298,24 @@ impl Store {
         .await?
     }
 
+    /// Long history scans use a separate WAL reader so they do not hold the
+    /// process-wide writer connection while decoding potentially large logs.
+    pub(crate) async fn read_access<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Connection) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut connection = Connection::open_with_flags(
+                path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?;
+            connection.busy_timeout(Duration::from_secs(3))?;
+            operation(&mut connection)
+        })
+        .await?
+    }
+
     pub async fn create(
         &self,
         workspace: String,
@@ -339,7 +357,7 @@ impl Store {
 
     pub async fn load(&self, id: &str) -> Result<Snapshot> {
         let id = id.to_owned();
-        self.access(move |conn| {
+        self.read_access(move |conn| {
             // One read transaction prevents mixing a newly committed history with older events.
             let transaction = conn.transaction()?;
             let session = transaction
@@ -408,7 +426,7 @@ impl Store {
     /// non-Git directories and does not mix in pre-existing user changes.
     pub async fn workspace_changes(&self, session_id: &str) -> Result<Vec<WorkspaceChange>> {
         let session_id = session_id.to_owned();
-        self.access(move |conn| {
+        self.read_access(move |conn| {
             let undone = conn
                 .prepare("SELECT run_id,call_id,path FROM workspace_undos WHERE session_id=?1")?
                 .query_map([&session_id], |row| {
@@ -489,7 +507,7 @@ impl Store {
     /// that never reached the sandbox.
     pub async fn verification_records(&self, session_id: &str) -> Result<Vec<VerificationRecord>> {
         let session_id = session_id.to_owned();
-        self.access(move |conn| {
+        self.read_access(move |conn| {
             let mut statement = conn.prepare(
                 "SELECT r.id,r.status,e.payload
                  FROM runs r JOIN events e ON e.run_id=r.id
@@ -733,7 +751,8 @@ impl Store {
         }
         let project_id = project_id.to_owned();
         self.access(move |conn| {
-            let changed = conn.execute(
+            let transaction = conn.transaction()?;
+            let changed = transaction.execute(
                 "UPDATE project_tasks
                  SET title=COALESCE(?3,title), details=COALESCE(?4,details),
                      status=COALESCE(?5,status), priority=COALESCE(?6,priority), updated_at=unixepoch()
@@ -741,11 +760,13 @@ impl Store {
                 params![id, project_id, title, details, status.map(TaskStatus::as_str), priority],
             )?;
             ensure!(changed == 1, "task not found in this project");
-            conn.query_row(
+            let task = transaction.query_row(
                 "SELECT id,project_id,parent_id,title,details,status,priority,created_at,updated_at FROM project_tasks WHERE id=?1",
                 [id],
                 task_row,
-            ).map_err(Into::into)
+            )?;
+            transaction.commit()?;
+            Ok(task)
         }).await
     }
 
@@ -949,16 +970,19 @@ impl Store {
     ) -> Result<SessionMemory> {
         let session_id = session_id.to_owned();
         self.access(move |conn| {
-            let changed = conn.execute(
+            let transaction = conn.transaction()?;
+            let changed = transaction.execute(
                 "UPDATE session_memories SET active=?3,updated_at=unixepoch() WHERE id=?1 AND session_id=?2",
                 params![id, session_id, active],
             )?;
             ensure!(changed == 1, "memory not found in this session");
-            conn.query_row(
+            let memory = transaction.query_row(
                 "SELECT id,session_id,category,title,content,active,created_at,updated_at FROM session_memories WHERE id=?1",
                 [id],
                 memory_row,
-            ).map_err(Into::into)
+            )?;
+            transaction.commit()?;
+            Ok(memory)
         }).await
     }
 }
@@ -1243,4 +1267,46 @@ fn now_millis() -> i64 {
         .unwrap_or_default()
         .as_millis()
         .min(i64::MAX as u128) as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+
+    #[tokio::test]
+    async fn a_long_history_reader_does_not_block_the_writer_connection() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().join("sessions.db"))
+            .await
+            .unwrap();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, proceed) = std::sync::mpsc::channel();
+        let reader = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                store
+                    .read_access(move |conn| {
+                        let _: i64 = conn.query_row("SELECT 1", [], |row| row.get(0))?;
+                        let _ = started.send(());
+                        proceed.recv().unwrap();
+                        Ok(())
+                    })
+                    .await
+            })
+        };
+        ready.await.unwrap();
+
+        let written = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            store.access(|conn| {
+                conn.execute_batch("CREATE TABLE reader_concurrency(value INTEGER)")?;
+                Ok(())
+            }),
+        )
+        .await;
+        release.send(()).unwrap();
+
+        written.unwrap().unwrap();
+        reader.await.unwrap().unwrap();
+    }
 }

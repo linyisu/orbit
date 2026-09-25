@@ -23,6 +23,19 @@ pub(crate) fn migrate(conn: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
+fn affected_sessions(conn: &rusqlite::Connection, id: &str, path: &str) -> Result<Vec<String>> {
+    let mut query = conn.prepare(
+        "SELECT sessions.id FROM sessions
+         JOIN projects ON projects.id=sessions.project_id
+         WHERE projects.id=?1 OR projects.path=?2
+         ORDER BY sessions.id",
+    )?;
+    let sessions = query
+        .query_map(params![id, path], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(sessions)
+}
+
 impl Store {
     pub async fn projects(&self) -> Result<Vec<Project>> {
         self.access(|conn| {
@@ -137,33 +150,77 @@ impl Store {
         let directory = Directory::read(path.as_ref())?;
         let id = id.to_owned();
         let lock_dir = self.path().with_extension("session-locks");
-        self.access(move |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let old: Option<String> = tx.query_row("SELECT path FROM projects WHERE id=?1", [&id], |r| r.get(0)).optional()?.ok_or_else(|| anyhow::anyhow!("project not found"))?;
-            if let Some(old) = old.as_deref().filter(|old| *old != directory.path) {
-                ensure!(matches!(std::fs::metadata(old), Err(e) if e.kind() == std::io::ErrorKind::NotFound), "old project directory still exists or cannot be checked; refusing to merge a copy");
+        for _ in 0..3 {
+            let scan_id = id.clone();
+            let scan_path = directory.path.clone();
+            let session_ids = self
+                .read_access(move |conn| affected_sessions(conn, &scan_id, &scan_path))
+                .await?;
+
+            // Acquire file leases without holding the database mutex. Acquire
+            // takes leases before its final DB update, so the reverse order
+            // could incorrectly report an in-flight open as an active TUI.
+            let expected = session_ids.clone();
+            let lease_dir = lock_dir.clone();
+            let leases = tokio::task::spawn_blocking(move || -> Result<Vec<std::fs::File>> {
+                std::fs::create_dir_all(&lease_dir)?;
+                let mut leases = Vec::with_capacity(session_ids.len());
+                for session in session_ids {
+                    ensure!(
+                        session.len() == 32 && session.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                        "invalid stored session ID"
+                    );
+                    let file = crate::store::private_file(&lease_dir.join(session))?;
+                    file.try_lock()
+                        .context("project has an open session; close its TUI before linking")?;
+                    leases.push(file);
+                }
+                Ok(leases)
+            })
+            .await??;
+
+            let link_id = id.clone();
+            let link_path = directory.path.clone();
+            let identity = directory.identity.clone();
+            let strong = directory.strong;
+            let linked = self
+                .access(move |conn| {
+                    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    let actual = affected_sessions(&tx, &link_id, &link_path)?;
+                    if actual != expected {
+                        return Ok(None);
+                    }
+
+                    let old: Option<String> = tx
+                        .query_row("SELECT path FROM projects WHERE id=?1", [&link_id], |row| row.get(0))
+                        .optional()?
+                        .ok_or_else(|| anyhow::anyhow!("project not found"))?;
+                    if let Some(old) = old.as_deref().filter(|old| *old != link_path) {
+                        ensure!(
+                            matches!(std::fs::metadata(old), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+                            "old project directory still exists or cannot be checked; refusing to merge a copy"
+                        );
+                    }
+                    let others: i64 = tx.query_row(
+                        "SELECT count(*) FROM runs JOIN sessions ON sessions.id=runs.session_id JOIN projects ON projects.id=sessions.project_id WHERE projects.path=?1 AND projects.id<>?2",
+                        params![link_path, link_id],
+                        |row| row.get(0),
+                    )?;
+                    ensure!(others == 0, "this directory already has another project's conversations; refusing to merge histories");
+
+                    tx.execute("UPDATE projects SET path=NULL,identity=NULL,strong=0 WHERE path=?1 AND id<>?2", params![link_path,link_id])?;
+                    tx.execute("UPDATE projects SET path=?2,identity=?3,strong=?4,legacy=0 WHERE id=?1", params![link_id,link_path,identity,strong])?;
+                    tx.execute("INSERT OR IGNORE INTO project_paths(project_id,path) VALUES(?1,?2)", params![link_id,link_path])?;
+                    tx.commit()?;
+                    Ok(Some(Project { id: link_id, path: Some(link_path) }))
+                })
+                .await?;
+            drop(leases);
+            if let Some(project) = linked {
+                return Ok(project);
             }
-            let others: i64 = tx.query_row("SELECT count(*) FROM runs JOIN sessions ON sessions.id=runs.session_id JOIN projects ON projects.id=sessions.project_id WHERE projects.path=?1 AND projects.id<>?2", params![directory.path,id], |r| r.get(0))?;
-            ensure!(others == 0, "this directory already has another project's conversations; refusing to merge histories");
-            // Hold every affected writer lease through commit; do not interrupt runs.
-            let session_ids = {
-                let mut query = tx.prepare("SELECT sessions.id FROM sessions JOIN projects ON projects.id=sessions.project_id WHERE projects.id=?1 OR projects.path=?2")?;
-                query.query_map(params![id,directory.path], |r| r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?
-            };
-            std::fs::create_dir_all(&lock_dir)?;
-            let mut leases = Vec::new();
-            for session in session_ids {
-                ensure!(session.len() == 32 && session.bytes().all(|b| b.is_ascii_hexdigit()), "invalid stored session ID");
-                let file = crate::store::private_file(&lock_dir.join(session))?;
-                file.try_lock().context("project has an open session; close its TUI before linking")?;
-                leases.push(file);
-            }
-            tx.execute("UPDATE projects SET path=NULL,identity=NULL,strong=0 WHERE path=?1 AND id<>?2", params![directory.path,id])?;
-            tx.execute("UPDATE projects SET path=?2,identity=?3,strong=?4,legacy=0 WHERE id=?1", params![id,directory.path,directory.identity,directory.strong])?;
-            tx.execute("INSERT OR IGNORE INTO project_paths(project_id,path) VALUES(?1,?2)", params![id,directory.path])?;
-            tx.commit()?;
-            Ok(Project { id, path: Some(directory.path) })
-        }).await
+        }
+        anyhow::bail!("project sessions changed while linking; retry the operation")
     }
 
     /// IDs proven to be the same directory at a recorded path, including a

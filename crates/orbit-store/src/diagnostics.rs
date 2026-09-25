@@ -49,7 +49,7 @@ pub struct RunDiagnostic {
 impl Store {
     pub async fn diagnostics(&self, session_id: &str) -> Result<SessionDiagnostics> {
         let session_id = session_id.to_owned();
-        self.access(move |conn| {
+        self.read_access(move |conn| {
             conn.query_row("SELECT id FROM sessions WHERE id=?1", [&session_id], |_| {
                 Ok(())
             })
