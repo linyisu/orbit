@@ -279,7 +279,7 @@ fn composer_details(state: &UiState, width: usize) -> Vec<Line<'static>> {
         .reasoning_effort
         .map(|effort| effort.label())
         .unwrap_or("—");
-    fields.push(Span::styled(format!("󰧑 {effort}"), accent));
+    fields.push(Span::styled(effort, accent));
 
     let mut rows = Vec::new();
     let mut row = Line::default();
@@ -1590,7 +1590,7 @@ mod tests {
                 .flat_map(|y| (0..width).map(move |x| buffer[(x, y)].symbol()))
                 .collect();
 
-            for label in ["auto", "test-model", "provider", "高"] {
+            for label in ["auto", "test-model", "provider", "high"] {
                 assert!(metadata.contains(label), "{width}: {metadata:?}");
             }
 

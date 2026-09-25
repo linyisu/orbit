@@ -368,6 +368,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sends_max_effort_with_the_configured_thinking_mode() {
+        for extra in [json!({}), json!({ "thinking": { "type": "enabled" } })] {
+            let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
+            request.reasoning_effort = Some(ReasoningEffort::Max);
+
+            let (body, _) = encode(
+                "claude-test",
+                request,
+                Some(ReasoningAdapter::AnthropicMessages),
+                &extra,
+                true,
+            )
+            .unwrap();
+
+            assert_eq!(body["output_config"]["effort"], "max");
+            assert_eq!(
+                body["thinking"]["type"],
+                extra["thinking"]["type"].as_str().unwrap_or("adaptive")
+            );
+        }
+    }
+
+    #[test]
     fn includes_adaptive_thinking_effort_when_configured() {
         let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
         request.reasoning_effort = Some(ReasoningEffort::High);

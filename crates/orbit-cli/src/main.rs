@@ -1474,6 +1474,38 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default =
     }
 
     #[test]
+    fn anthropic_reasoning_profile_accepts_max_effort() {
+        let config: FileConfig = toml::from_str(
+            r#"default_provider = "anthropic"
+[providers.anthropic]
+api_format = "anthropic_messages"
+base_url = "https://anthropic.example"
+api_key = "test-key"
+[[providers.anthropic.models]]
+id = "claude-test"
+reasoning = { adapter = "anthropic_messages", efforts = ["low", "high", "max"], default = "max", extra = { thinking = { type = "enabled" } } }
+"#,
+        )
+        .unwrap();
+
+        let option = config.default_model_option().unwrap();
+
+        assert_eq!(
+            option.reasoning_efforts,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max
+            ]
+        );
+        assert_eq!(option.config.reasoning_effort, Some(ReasoningEffort::Max));
+        assert_eq!(
+            option.config.reasoning_adapter,
+            Some(ReasoningAdapter::AnthropicMessages)
+        );
+    }
+
+    #[test]
     fn reasoning_extra_cannot_replace_standard_request_fields() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");

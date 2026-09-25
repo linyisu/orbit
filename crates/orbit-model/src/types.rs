@@ -207,6 +207,7 @@ pub enum ReasoningEffort {
     Medium,
     High,
     Xhigh,
+    Max,
 }
 
 /// Wire adapter selected by a model capability profile.
@@ -227,6 +228,7 @@ impl ReasoningEffort {
             Self::Medium => "medium",
             Self::High => "high",
             Self::Xhigh => "xhigh",
+            Self::Max => "max",
         }
     }
 
@@ -236,14 +238,7 @@ impl ReasoningEffort {
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            Self::None => "不思考",
-            Self::Minimal => "极低",
-            Self::Low => "低",
-            Self::Medium => "中",
-            Self::High => "高",
-            Self::Xhigh => "极高",
-        }
+        self.as_str()
     }
 }
 
@@ -258,6 +253,7 @@ impl std::str::FromStr for ReasoningEffort {
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
             "xhigh" => Ok(Self::Xhigh),
+            "max" => Ok(Self::Max),
             _ => Err(()),
         }
     }
@@ -393,6 +389,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn max_effort_round_trips_without_becoming_xhigh() {
+        let effort: ReasoningEffort = "max".parse().unwrap();
+        let serialized = serde_json::to_string(&effort).unwrap();
+        let restored: ReasoningEffort = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(effort, ReasoningEffort::Max);
+        assert_eq!(effort.as_str(), "max");
+        assert_eq!(effort.label(), "max");
+        assert_eq!(serialized, "\"max\"");
+        assert_eq!(restored, effort);
+        assert_ne!(restored, ReasoningEffort::Xhigh);
+    }
+
+    #[test]
     fn test_reasoning_effort_parsing_and_labels() {
         assert_eq!(
             "none".parse::<ReasoningEffort>().unwrap(),
@@ -412,7 +422,7 @@ mod tests {
         );
 
         assert_eq!(ReasoningEffort::None.as_str(), "none");
-        assert_eq!(ReasoningEffort::None.label(), "不思考");
+        assert_eq!(ReasoningEffort::None.label(), "none");
 
         let serialized = serde_json::to_string(&ReasoningEffort::None).unwrap();
 
