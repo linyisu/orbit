@@ -56,7 +56,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 16,
+                version <= 17,
                 "database schema {version} is newer than this Orbit supports"
             );
 
@@ -312,6 +312,19 @@ impl Store {
                 }
 
                 connection.execute_batch("PRAGMA user_version=16;")?;
+            }
+
+            if version < 17 {
+                let has_boundary: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='workspace_since_run')",
+                    [], |row| row.get(0),
+                )?;
+
+                if !has_boundary {
+                    connection.execute_batch("ALTER TABLE sessions ADD COLUMN workspace_since_run INTEGER NOT NULL DEFAULT 0;")?;
+                }
+
+                connection.execute_batch("PRAGMA user_version=17;")?;
             }
 
             connection.execute_batch("COMMIT;")?;
@@ -631,7 +644,7 @@ impl Store {
             let mut statement = conn.prepare(
                 "SELECT r.id,r.status,e.payload
                  FROM runs r JOIN events e ON e.run_id=r.id
-                 WHERE r.session_id=?1 ORDER BY r.id,e.id",
+                 WHERE r.session_id=?1 AND r.id > (SELECT workspace_since_run FROM sessions WHERE id=?1) ORDER BY r.id,e.id",
             )?;
             let mut changes = Vec::new();
 
@@ -707,7 +720,7 @@ impl Store {
             let mut statement = conn.prepare(
                 "SELECT r.id,r.status,e.payload
                  FROM runs r JOIN events e ON e.run_id=r.id
-                 WHERE r.session_id=?1 ORDER BY r.id,e.id",
+                 WHERE r.session_id=?1 AND r.id > (SELECT workspace_since_run FROM sessions WHERE id=?1) ORDER BY r.id,e.id",
             )?;
             let mut records = Vec::new();
             let mut evidence_by_call = std::collections::HashMap::new();
@@ -1360,6 +1373,60 @@ fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMemory> {
 }
 
 impl SessionWriter {
+    /// Move only this locked session. Historical messages and events remain intact.
+    /// Write receipts from earlier workspaces must never be offered for undo here.
+    pub async fn move_to(
+        &self,
+        directory: &Path,
+        git_baseline: Option<serde_json::Value>,
+    ) -> Result<crate::types::Session> {
+        let project = self.store.resolve_project(directory).await?;
+        let path = directory.canonicalize()?.to_string_lossy().into_owned();
+        let id = self.id.clone();
+        let baseline = git_baseline
+            .map(|value| serde_json::to_string(&value))
+            .transpose()?;
+
+        self.store
+            .access(move |conn| {
+                let tx = conn.transaction()?;
+                let running: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM runs WHERE session_id=?1 AND status='running')",
+                    [&id],
+                    |row| row.get(0),
+                )?;
+                ensure!(!running, "cannot move a running session");
+
+                tx.execute(
+                    "UPDATE sessions SET project_id=?2,workspace=?3,
+                     workspace_since_run=COALESCE((SELECT MAX(id) FROM runs WHERE session_id=?1),0),
+                     updated_at=unixepoch() WHERE id=?1",
+                    params![id, project.id, path],
+                )?;
+                tx.execute(
+                    "DELETE FROM session_workspace_baselines WHERE session_id=?1",
+                    [&id],
+                )?;
+                tx.execute(
+                    "DELETE FROM session_git_baselines WHERE session_id=?1",
+                    [&id],
+                )?;
+
+                if let Some(payload) = baseline {
+                    tx.execute(
+                        "INSERT INTO session_git_baselines(session_id,payload) VALUES(?1,?2)",
+                        params![id, payload],
+                    )?;
+                }
+
+                tx.commit()?;
+                Ok(())
+            })
+            .await?;
+
+        self.store.session(&self.id).await
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }

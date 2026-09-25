@@ -210,7 +210,7 @@ async fn rejects_a_database_from_a_newer_schema() {
     let store = Store::open(db.path()).await.unwrap();
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=17").unwrap();
+    connection.execute_batch("PRAGMA user_version=18").unwrap();
     drop(connection);
 
     let error = Store::open(db.path())
@@ -1092,4 +1092,65 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace() {
+    let directory = tempfile::tempdir().unwrap();
+    let old = directory.path().join("old");
+    let new = directory.path().join("new");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::create_dir(&new).unwrap();
+    let store = Store::open(directory.path().join("store.db"))
+        .await
+        .unwrap();
+    let mut writer = store
+        .create(old.to_string_lossy().into_owned(), "mock".into(), false)
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    let history = vec![ChatMessage::user("keep my conversation")];
+    writer
+        .begin("change old project".into(), "mock".into())
+        .await
+        .unwrap();
+    assert!(writer.move_to(&new, None).await.is_err());
+    writer
+        .finish(
+            "completed",
+            vec![write_receipt("same.rs", None, "old content")],
+            Some(history.clone()),
+        )
+        .await
+        .unwrap();
+    let original = store.load(&id).await.unwrap();
+    assert_eq!(store.workspace_changes(&id).await.unwrap().len(), 1);
+
+    let moved = writer.move_to(&new, None).await.unwrap();
+
+    assert_eq!(moved.id, id);
+    assert_ne!(moved.project_id, original.session.project_id);
+    assert_eq!(moved.workspace, new.to_string_lossy());
+    let restored = store.load(&id).await.unwrap();
+    assert_eq!(restored.history, history);
+    assert_eq!(restored.runs.len(), original.runs.len());
+    assert_eq!(restored.runs[0].events.len(), original.runs[0].events.len());
+    assert!(store.workspace_changes(&id).await.unwrap().is_empty());
+
+    writer
+        .begin("change new project".into(), "mock".into())
+        .await
+        .unwrap();
+    writer
+        .finish(
+            "completed",
+            vec![write_receipt("same.rs", None, "new content")],
+            Some(history),
+        )
+        .await
+        .unwrap();
+
+    let changes = store.workspace_changes(&id).await.unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].change.after, "new content");
 }
