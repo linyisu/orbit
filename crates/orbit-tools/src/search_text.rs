@@ -19,6 +19,7 @@ const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SCANNED_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 const MAX_LINE_BYTES: usize = 4 * 1024;
+const MAX_QUERY_BYTES: usize = 4096;
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -80,7 +81,7 @@ impl Tool for SearchText {
                 "Large, binary and unreadable files are skipped; use read_file for full content after locating a match."
             ),
             json!({"type":"object","properties":{
-                "query":{"type":"string","description":"Search text. Literal unless regex=true: a|b means the literal pipe expression by default. For either term, use query=a|b AND regex=true. Do not add shell quotes or /regex/ delimiters."},
+                "query":{"type":"string","minLength":1,"maxLength":4096,"description":"Search text. Literal unless regex=true: a|b means the literal pipe expression by default. For either term, use query=a|b AND regex=true. Do not add shell quotes or /regex/ delimiters."},
                 "path":{"type":"string","default":".","description":"Workspace-relative directory or file, or outside path granted via request_capability"},
                 "regex":{"type":"boolean","default":false,"description":"false or omitted: exact literal substring matching, including | . * [ ] ^ $. true: interpret query as a Rust regular expression. REQUIRED for alternatives such as foo|bar; never inferred from query content."},
                 "case_sensitive":{"type":"boolean","default":false},
@@ -126,13 +127,14 @@ fn failed(error: impl std::fmt::Display) -> ToolError {
 
 fn validate(args: &Arguments) -> Result<(), ToolError> {
     if args.query.is_empty()
+        || args.query.len() > MAX_QUERY_BYTES
         || args.path.trim().is_empty()
         || !(1..=500).contains(&args.limit)
         || args.context_lines > 10
         || args.offset > MAX_VISITED
     {
         return Err(invalid(
-            "query and path must be nonempty; limit 1–500, context_lines 0–10, offset 0–20000",
+            "query must be 1–4096 bytes, path nonempty; limit 1–500, context_lines 0–10, offset 0–20000",
         ));
     }
     Ok(())

@@ -113,11 +113,17 @@ pub(crate) fn encode(
         "model": model,
         "instructions": instructions,
         "input": input,
-        "tools": tools,
-        "temperature": request.temperature,
-        "max_output_tokens": request.max_tokens,
         "stream": stream,
     });
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+    }
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(max_tokens) = request.max_tokens {
+        body["max_output_tokens"] = json!(max_tokens);
+    }
     if let (Some(effort), Some(crate::types::ReasoningAdapter::OpenaiResponses)) =
         (reasoning_effort, reasoning_adapter)
     {

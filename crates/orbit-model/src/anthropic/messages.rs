@@ -100,8 +100,31 @@ pub(crate) fn encode(
         }
     }
 
-    let tools = request.tools.into_iter().map(|tool| json!({"name": tool.function.name, "description": tool.function.description, "input_schema": tool.function.parameters})).collect::<Vec<_>>();
-    let mut body = json!({"model": model, "max_tokens": request.max_tokens.unwrap_or(4096), "system": system, "messages": messages, "tools": tools, "temperature": request.temperature, "stream": stream});
+    let tools = request
+        .tools
+        .into_iter()
+        .map(|tool| {
+            json!({
+                "name": tool.function.name,
+                "description": tool.function.description,
+                "input_schema": tool.function.parameters
+            })
+        })
+        .collect::<Vec<_>>();
+    // Anthropic requires max_tokens even when the caller leaves it unset.
+    let mut body = json!({
+        "model": model,
+        "max_tokens": request.max_tokens.unwrap_or(4096),
+        "system": system,
+        "messages": messages,
+        "stream": stream
+    });
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+    }
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
     if let (Some(effort), Some(ReasoningAdapter::AnthropicMessages)) =
         (reasoning_effort, reasoning_adapter)
     {

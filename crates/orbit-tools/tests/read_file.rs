@@ -65,6 +65,53 @@ async fn reads_numbered_unicode_lines_and_reports_remaining_content() {
 }
 
 #[tokio::test]
+async fn a_long_unicode_line_can_be_read_without_losing_its_tail() {
+    let root = Fixture::new();
+    let original = "汉".repeat(15_000);
+    fs::write(root.0.join("long.txt"), &original).unwrap();
+    let tool = root.tool();
+    let first = tool
+        .execute(
+            call(json!({ "path": "long.txt" })),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let first: Value = serde_json::from_str(&first).unwrap();
+
+    let second = tool
+        .execute(
+            call(json!({
+                "path": "long.txt",
+                "start_line": first["next_start_line"],
+                "start_char": first["next_start_char"]
+            })),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let second: Value = serde_json::from_str(&second).unwrap();
+    let reconstructed = format!(
+        "{}{}",
+        first["content"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("1: ")
+            .unwrap(),
+        second["content"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("1: ")
+            .unwrap()
+            .trim_end_matches('\n')
+    );
+
+    assert_eq!(reconstructed, original);
+    assert_eq!(first["truncated"], true);
+    assert_eq!(second["truncated"], false);
+}
+
+#[tokio::test]
 async fn rejects_escape_paths_symlinks_and_private_metadata() {
     let root = Fixture::new();
     let outside = Fixture::new();

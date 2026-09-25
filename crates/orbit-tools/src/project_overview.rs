@@ -603,6 +603,13 @@ fn bound(mut result: Value, budget: usize) -> Result<String, ToolError> {
         if dirs.as_array().is_some_and(|a| !a.is_empty()) {
             candidates.push(("directories", dirs.to_string().len()));
         }
+        if candidates.is_empty()
+            && let Some(languages) = result["inventory"]["languages"].as_object_mut()
+            && let Some(name) = languages.keys().max_by_key(|name| name.len()).cloned()
+        {
+            languages.remove(&name);
+            continue;
+        }
         let Some((largest, _)) = candidates.into_iter().max_by_key(|(_, bytes)| *bytes) else {
             return Err(ToolError::ExecutionFailed(
                 "overview metadata exceeds output budget; narrow the path".into(),
@@ -622,6 +629,23 @@ fn bound(mut result: Value, budget: usize) -> Result<String, ToolError> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn output_budget_can_trim_large_language_inventories() {
+        let languages = (0..100)
+            .map(|index| (format!("generated_language_{index:03}"), json!(1)))
+            .collect::<serde_json::Map<_, _>>();
+        let overview = json!({
+            "inventory": { "languages": languages, "files": 100, "directories": [] },
+            "truncated": { "output": false }
+        });
+
+        let result: Value = serde_json::from_str(&bound(overview, 256).unwrap()).unwrap();
+
+        assert_eq!(result["truncated"]["output"], true);
+        assert!(result["inventory"]["languages"].as_object().unwrap().len() < 100);
+    }
+
     fn put(root: &Path, path: &str, text: &str) {
         let path = root.join(path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();

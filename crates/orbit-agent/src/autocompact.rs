@@ -138,7 +138,9 @@ pub fn plan_pruning(
 }
 
 fn is_summary(message: &ChatMessage) -> bool {
-    matches!(message, ChatMessage::User {content, ..} if content.starts_with(RECORD_PREFIX))
+    matches!(message, ChatMessage::User {content, ..}
+        if content.starts_with(RECORD_PREFIX)
+            && content.ends_with("\nEND_UNTRUSTED_COMPACTION_RECORD"))
 }
 
 fn plan_for(
@@ -1092,6 +1094,23 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unclosed_record_prefix_in_user_text_is_still_a_user_request() {
+        let history = vec![
+            ChatMessage::system("rules"),
+            ChatMessage::user("old request"),
+            ChatMessage::assistant("old work ".repeat(2_000)),
+            ChatMessage::user(format!(
+                "{RECORD_PREFIX}Please investigate this literal text"
+            )),
+        ];
+
+        let plan = plan_manual(&history, &[], 256, 8_192).unwrap();
+
+        assert!(!is_summary(&history[3]));
+        assert_eq!(plan.retained.last(), history.last());
+    }
 
     #[test]
     fn valid_summary_can_exceed_the_planning_target_when_it_frees_space() {

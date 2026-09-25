@@ -426,8 +426,15 @@ impl Prepared {
         }
         // The rename has committed; do not turn a subsequent cancellation into a
         // misleading 'not written' result. Report directory sync separately.
-        let synced = parent.sync_all().is_ok();
-        Ok(json!({"path":self.preview.path,"written_bytes":self.preview.after.len(),"created":self.before.is_none(),"directory_synced":synced}).to_string())
+        let sync_error = parent.sync_all().err().map(|error| error.to_string());
+        Ok(json!({
+            "path": self.preview.path,
+            "written_bytes": self.preview.after.len(),
+            "created": self.before.is_none(),
+            "directory_synced": sync_error.is_none(),
+            "directory_sync_error": sync_error
+        })
+        .to_string())
     }
 }
 

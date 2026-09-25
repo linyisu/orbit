@@ -156,11 +156,36 @@ fn read(
     file.seek(std::io::SeekFrom::Start(arguments.offset))
         .map_err(failed)?;
     let remaining = total_bytes.saturating_sub(arguments.offset);
-    let mut bytes = vec![0; remaining.min(arguments.max_bytes as u64) as usize];
+    let mut bytes = vec![0; remaining.min(arguments.max_bytes.saturating_add(3) as u64) as usize];
     file.read_exact(&mut bytes).map_err(failed)?;
     if cancellation.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
+    let desired = bytes.len().min(arguments.max_bytes);
+    let valid_end = match std::str::from_utf8(&bytes) {
+        Ok(_) => bytes.len(),
+        Err(error) if error.error_len().is_none() && error.valid_up_to() >= desired => {
+            error.valid_up_to()
+        }
+        Err(_) => 0,
+    };
+    let page_len = match std::str::from_utf8(&bytes[..valid_end]) {
+        Ok(text) if desired < valid_end => {
+            let mut end = desired;
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == 0 {
+                end = desired;
+                while end < valid_end && !text.is_char_boundary(end) {
+                    end += 1;
+                }
+            }
+            end
+        }
+        _ => desired,
+    };
+    bytes.truncate(page_len);
     let next_offset = arguments.offset + bytes.len() as u64;
     Ok(json!({
         "output_id": arguments.output_id,
@@ -226,5 +251,42 @@ mod tests {
         assert_eq!(value["next_offset"], 3);
         assert_eq!(value["total_retained_bytes"], 6);
         assert_eq!(value["truncated"], true);
+    }
+
+    #[test]
+    fn unicode_pages_resume_on_character_boundaries() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("cmd-1-2-3.stdout"), "甲乙丙").unwrap();
+        let first: serde_json::Value = serde_json::from_str(
+            &read(
+                tmp.path().to_owned(),
+                Arguments {
+                    output_id: "cmd-1-2-3".into(),
+                    max_bytes: 4,
+                    ..Arguments::default()
+                },
+                CancellationToken::new(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let second: serde_json::Value = serde_json::from_str(
+            &read(
+                tmp.path().to_owned(),
+                Arguments {
+                    output_id: "cmd-1-2-3".into(),
+                    offset: first["next_offset"].as_u64().unwrap(),
+                    max_bytes: 4,
+                    ..Arguments::default()
+                },
+                CancellationToken::new(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(first["content"], "甲");
+        assert_eq!(second["content"], "乙");
+        assert_eq!(second["next_offset"], 6);
     }
 }

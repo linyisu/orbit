@@ -70,16 +70,20 @@ pub(crate) fn encode(
     let mut body = json!({
         "model": model,
         "messages": messages,
-        "tools": request.tools,
-        "temperature": request.temperature,
-        "max_tokens": request.max_tokens,
         "stream": stream,
-        "stream_options": if stream {
-            json!({ "include_usage": true })
-        } else {
-            Value::Null
-        },
     });
+    if !request.tools.is_empty() {
+        body["tools"] = json!(request.tools);
+    }
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(max_tokens) = request.max_tokens {
+        body["max_tokens"] = json!(max_tokens);
+    }
+    if stream {
+        body["stream_options"] = json!({ "include_usage": true });
+    }
     if let (Some(effort), Some(ReasoningAdapter::OpenaiChat)) =
         (reasoning_effort, reasoning_adapter)
     {
