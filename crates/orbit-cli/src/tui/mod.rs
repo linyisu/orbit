@@ -6,6 +6,7 @@ pub mod commands;
 mod dialogs;
 mod frames;
 pub mod input;
+mod languages;
 mod markdown;
 mod navigation;
 mod overlay;

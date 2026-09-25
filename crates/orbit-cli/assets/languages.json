@@ -1,0 +1,1691 @@
+{
+  "_comment": "文件说明：本对照表的语言 ID、显示名称和 aliases 完整摘自 Shiki 4.4.3 官方发布包的 bundledLanguagesInfo，来源为 https://unpkg.com/shiki@4.4.3/dist/langs-bundle-full-xQVO1Cek.mjs；上游项目为 https://github.com/shikijs/shiki，语言说明为 https://shiki.style/languages。text、ansi 特殊语言依据该语言说明补充。syntect 对应关系、compatibility_aliases 和 markdown 标记由 Orbit 维护，不属于 Shiki 上游数据；syntect 为 null 表示当前语法包不支持。source、version、sha256 记录原始来源、固定版本和源文件校验值；上游 MIT 许可证见同目录 LICENSE.shiki。",
+  "source": "https://unpkg.com/shiki@4.4.3/dist/langs-bundle-full-xQVO1Cek.mjs",
+  "version": "4.4.3",
+  "sha256": "14bb76ef90c09bea094fbfb84c8ae3292625b738d466f6be7b416d991f5c708b",
+  "notes": "Upstream IDs, names and aliases are preserved. syntect is an exact name in the bundled SyntaxSet; null means unsupported, not a similar-language substitute. compatibility_aliases preserves additional Orbit labels. Special languages follow https://shiki.style/languages. Update metadata and review syntax targets together.",
+  "languages": [
+    {
+      "id": "abap",
+      "name": "ABAP",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "actionscript-3",
+      "name": "ActionScript",
+      "aliases": [
+        "actionscript",
+        "as3"
+      ],
+      "syntect": "ActionScript"
+    },
+    {
+      "id": "ada",
+      "name": "Ada",
+      "syntect": "Ada",
+      "aliases": []
+    },
+    {
+      "id": "ahk",
+      "name": "AutoHotkey",
+      "aliases": [
+        "ahk1"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "ahk2",
+      "name": "AutoHotkey2",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "angular-html",
+      "name": "Angular HTML",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "angular-ts",
+      "name": "Angular TypeScript",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "apache",
+      "name": "Apache Conf",
+      "syntect": "Apache Conf",
+      "aliases": []
+    },
+    {
+      "id": "apex",
+      "name": "Apex",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "apl",
+      "name": "APL",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "applescript",
+      "name": "AppleScript",
+      "syntect": "AppleScript",
+      "aliases": []
+    },
+    {
+      "id": "ara",
+      "name": "Ara",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "asciidoc",
+      "name": "AsciiDoc",
+      "aliases": [
+        "adoc"
+      ],
+      "syntect": "AsciiDoc (Asciidoctor)"
+    },
+    {
+      "id": "asm",
+      "name": "Assembly",
+      "syntect": "x86_64 Assembly",
+      "aliases": []
+    },
+    {
+      "id": "astro",
+      "name": "Astro",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "awk",
+      "name": "AWK",
+      "syntect": "AWK",
+      "aliases": []
+    },
+    {
+      "id": "ballerina",
+      "name": "Ballerina",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "bat",
+      "name": "Batch File",
+      "aliases": [
+        "batch",
+        "cmd"
+      ],
+      "syntect": "Batch File"
+    },
+    {
+      "id": "beancount",
+      "name": "Beancount",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "berry",
+      "name": "Berry",
+      "aliases": [
+        "be"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "bibtex",
+      "name": "BibTeX",
+      "syntect": "BibTeX",
+      "aliases": []
+    },
+    {
+      "id": "bicep",
+      "name": "Bicep",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "bird2",
+      "name": "BIRD2 Configuration",
+      "aliases": [
+        "bird"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "blade",
+      "name": "Blade",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "bsl",
+      "name": "1C (Enterprise)",
+      "aliases": [
+        "1c"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "c",
+      "name": "C",
+      "syntect": "C",
+      "aliases": []
+    },
+    {
+      "id": "c3",
+      "name": "C3",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "cadence",
+      "name": "Cadence",
+      "aliases": [
+        "cdc"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "cairo",
+      "name": "Cairo",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "chapel",
+      "name": "Chapel",
+      "aliases": [
+        "chpl"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "clarity",
+      "name": "Clarity",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "clojure",
+      "name": "Clojure",
+      "aliases": [
+        "clj"
+      ],
+      "syntect": "Clojure"
+    },
+    {
+      "id": "cmake",
+      "name": "CMake",
+      "syntect": "CMake",
+      "aliases": []
+    },
+    {
+      "id": "cobol",
+      "name": "COBOL",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "codeowners",
+      "name": "CODEOWNERS",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "codeql",
+      "name": "CodeQL",
+      "aliases": [
+        "ql"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "coffee",
+      "name": "CoffeeScript",
+      "aliases": [
+        "coffeescript"
+      ],
+      "syntect": "CoffeeScript"
+    },
+    {
+      "id": "common-lisp",
+      "name": "Common Lisp",
+      "aliases": [
+        "lisp"
+      ],
+      "syntect": "Lisp"
+    },
+    {
+      "id": "coq",
+      "name": "Rocq",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "cpp",
+      "name": "C++",
+      "aliases": [
+        "c++"
+      ],
+      "syntect": "C++",
+      "compatibility_aliases": [
+        "cplusplus"
+      ]
+    },
+    {
+      "id": "crystal",
+      "name": "Crystal",
+      "syntect": "Crystal",
+      "aliases": []
+    },
+    {
+      "id": "csharp",
+      "name": "C#",
+      "aliases": [
+        "c#",
+        "cs"
+      ],
+      "syntect": "C#",
+      "compatibility_aliases": [
+        "c sharp",
+        "c-sharp"
+      ]
+    },
+    {
+      "id": "css",
+      "name": "CSS",
+      "syntect": "CSS",
+      "aliases": []
+    },
+    {
+      "id": "csv",
+      "name": "CSV",
+      "syntect": "Comma Separated Values",
+      "aliases": []
+    },
+    {
+      "id": "cue",
+      "name": "CUE",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "cypher",
+      "name": "Cypher",
+      "aliases": [
+        "cql"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "d",
+      "name": "D",
+      "syntect": "D",
+      "aliases": []
+    },
+    {
+      "id": "dart",
+      "name": "Dart",
+      "syntect": "Dart",
+      "aliases": []
+    },
+    {
+      "id": "dax",
+      "name": "DAX",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "desktop",
+      "name": "Desktop",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "diff",
+      "name": "Diff",
+      "syntect": "Diff",
+      "aliases": []
+    },
+    {
+      "id": "docker",
+      "name": "Dockerfile",
+      "aliases": [
+        "dockerfile"
+      ],
+      "syntect": "Dockerfile"
+    },
+    {
+      "id": "dotenv",
+      "name": "dotEnv",
+      "syntect": "DotENV",
+      "aliases": []
+    },
+    {
+      "id": "dream-maker",
+      "name": "Dream Maker",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "edge",
+      "name": "Edge",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "elixir",
+      "name": "Elixir",
+      "syntect": "Elixir",
+      "aliases": []
+    },
+    {
+      "id": "elm",
+      "name": "Elm",
+      "syntect": "Elm",
+      "aliases": []
+    },
+    {
+      "id": "emacs-lisp",
+      "name": "Emacs Lisp",
+      "aliases": [
+        "elisp"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "erb",
+      "name": "ERB",
+      "syntect": "HTML (Rails)",
+      "aliases": []
+    },
+    {
+      "id": "erlang",
+      "name": "Erlang",
+      "aliases": [
+        "erl"
+      ],
+      "syntect": "Erlang"
+    },
+    {
+      "id": "fennel",
+      "name": "Fennel",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "fish",
+      "name": "Fish",
+      "syntect": "Fish",
+      "aliases": []
+    },
+    {
+      "id": "fluent",
+      "name": "Fluent",
+      "aliases": [
+        "ftl"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "fortran-fixed-form",
+      "name": "Fortran (Fixed Form)",
+      "aliases": [
+        "f",
+        "for",
+        "f77"
+      ],
+      "syntect": "Fortran (Fixed Form)"
+    },
+    {
+      "id": "fortran-free-form",
+      "name": "Fortran (Free Form)",
+      "aliases": [
+        "f90",
+        "f95",
+        "f03",
+        "f08",
+        "f18"
+      ],
+      "syntect": "Fortran (Modern)"
+    },
+    {
+      "id": "fsharp",
+      "name": "F#",
+      "aliases": [
+        "f#",
+        "fs"
+      ],
+      "syntect": "F#"
+    },
+    {
+      "id": "gdresource",
+      "name": "GDResource",
+      "aliases": [
+        "tscn",
+        "tres"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "gdscript",
+      "name": "GDScript",
+      "aliases": [
+        "gd"
+      ],
+      "syntect": "GDScript (Godot Engine)"
+    },
+    {
+      "id": "gdshader",
+      "name": "GDShader",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "genie",
+      "name": "Genie",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "gherkin",
+      "name": "Gherkin",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "git-commit",
+      "name": "Git Commit Message",
+      "syntect": "Git Commit",
+      "aliases": []
+    },
+    {
+      "id": "git-rebase",
+      "name": "Git Rebase Message",
+      "syntect": "Git Rebase Todo",
+      "aliases": []
+    },
+    {
+      "id": "gleam",
+      "name": "Gleam",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "glimmer-js",
+      "name": "Glimmer JS",
+      "aliases": [
+        "gjs"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "glimmer-ts",
+      "name": "Glimmer TS",
+      "aliases": [
+        "gts"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "glsl",
+      "name": "GLSL",
+      "syntect": "GLSL",
+      "aliases": []
+    },
+    {
+      "id": "gn",
+      "name": "GN",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "gnuplot",
+      "name": "Gnuplot",
+      "syntect": "gnuplot",
+      "aliases": []
+    },
+    {
+      "id": "go",
+      "name": "Go",
+      "syntect": "Go",
+      "aliases": []
+    },
+    {
+      "id": "graphql",
+      "name": "GraphQL",
+      "aliases": [
+        "gql"
+      ],
+      "syntect": "GraphQL"
+    },
+    {
+      "id": "groovy",
+      "name": "Groovy",
+      "syntect": "Groovy",
+      "aliases": []
+    },
+    {
+      "id": "hack",
+      "name": "Hack",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "haml",
+      "name": "Ruby Haml",
+      "syntect": "Ruby Haml",
+      "aliases": []
+    },
+    {
+      "id": "handlebars",
+      "name": "Handlebars",
+      "aliases": [
+        "hbs"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "haskell",
+      "name": "Haskell",
+      "aliases": [
+        "hs"
+      ],
+      "syntect": "Haskell"
+    },
+    {
+      "id": "haxe",
+      "name": "Haxe",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "hcl",
+      "name": "HashiCorp HCL",
+      "syntect": "Terraform",
+      "aliases": []
+    },
+    {
+      "id": "hjson",
+      "name": "Hjson",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "hlsl",
+      "name": "HLSL",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "html",
+      "name": "HTML",
+      "syntect": "HTML",
+      "aliases": []
+    },
+    {
+      "id": "html-derivative",
+      "name": "HTML (Derivative)",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "http",
+      "name": "HTTP",
+      "syntect": "HTTP Request and Response",
+      "aliases": []
+    },
+    {
+      "id": "hurl",
+      "name": "Hurl",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "hxml",
+      "name": "HXML",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "hy",
+      "name": "Hy",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "imba",
+      "name": "Imba",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "ini",
+      "name": "INI",
+      "aliases": [
+        "properties"
+      ],
+      "syntect": "INI"
+    },
+    {
+      "id": "java",
+      "name": "Java",
+      "syntect": "Java",
+      "aliases": []
+    },
+    {
+      "id": "javascript",
+      "name": "JavaScript",
+      "aliases": [
+        "js",
+        "cjs",
+        "mjs"
+      ],
+      "syntect": "JavaScript",
+      "compatibility_aliases": [
+        "node",
+        "nodejs"
+      ]
+    },
+    {
+      "id": "jinja",
+      "name": "Jinja",
+      "syntect": "Jinja2",
+      "aliases": []
+    },
+    {
+      "id": "jison",
+      "name": "Jison",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "json",
+      "name": "JSON",
+      "syntect": "JSON",
+      "aliases": []
+    },
+    {
+      "id": "json5",
+      "name": "JSON5",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "jsonc",
+      "name": "JSON with Comments",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "jsonl",
+      "name": "JSON Lines",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "jsonnet",
+      "name": "Jsonnet",
+      "syntect": "jsonnet",
+      "aliases": []
+    },
+    {
+      "id": "jssm",
+      "name": "JSSM",
+      "aliases": [
+        "fsl"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "jsx",
+      "name": "JSX",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "julia",
+      "name": "Julia",
+      "aliases": [
+        "jl"
+      ],
+      "syntect": "Julia"
+    },
+    {
+      "id": "just",
+      "name": "Just",
+      "aliases": [
+        "justfile"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "kdl",
+      "name": "KDL",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "kotlin",
+      "name": "Kotlin",
+      "aliases": [
+        "kt",
+        "kts"
+      ],
+      "syntect": "Kotlin"
+    },
+    {
+      "id": "kusto",
+      "name": "Kusto",
+      "aliases": [
+        "kql"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "latex",
+      "name": "LaTeX",
+      "syntect": "LaTeX",
+      "aliases": []
+    },
+    {
+      "id": "lean",
+      "name": "Lean 4",
+      "aliases": [
+        "lean4"
+      ],
+      "syntect": "Lean 4"
+    },
+    {
+      "id": "less",
+      "name": "Less",
+      "syntect": "Less",
+      "aliases": []
+    },
+    {
+      "id": "liquid",
+      "name": "Liquid",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "llvm",
+      "name": "LLVM IR",
+      "syntect": "LLVM",
+      "aliases": []
+    },
+    {
+      "id": "log",
+      "name": "Log file",
+      "syntect": "log",
+      "aliases": []
+    },
+    {
+      "id": "logo",
+      "name": "Logo",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "lua",
+      "name": "Lua",
+      "syntect": "Lua",
+      "aliases": []
+    },
+    {
+      "id": "luau",
+      "name": "Luau",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "make",
+      "name": "Makefile",
+      "aliases": [
+        "makefile"
+      ],
+      "syntect": "Makefile"
+    },
+    {
+      "id": "markdown",
+      "name": "Markdown",
+      "aliases": [
+        "md"
+      ],
+      "syntect": "Markdown",
+      "compatibility_aliases": [
+        "commonmark",
+        "gfm"
+      ],
+      "markdown": true
+    },
+    {
+      "id": "marko",
+      "name": "Marko",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "matlab",
+      "name": "MATLAB",
+      "syntect": "MATLAB",
+      "aliases": []
+    },
+    {
+      "id": "mdc",
+      "name": "MDC",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "mdx",
+      "name": "MDX",
+      "syntect": null,
+      "aliases": [],
+      "markdown": true
+    },
+    {
+      "id": "mermaid",
+      "name": "Mermaid",
+      "aliases": [
+        "mmd"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "mipsasm",
+      "name": "MIPS Assembly",
+      "aliases": [
+        "mips"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "mojo",
+      "name": "Mojo",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "moonbit",
+      "name": "MoonBit",
+      "aliases": [
+        "mbt",
+        "mbti"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "move",
+      "name": "Move",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "narrat",
+      "name": "Narrat Language",
+      "aliases": [
+        "nar"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "nextflow",
+      "name": "Nextflow",
+      "aliases": [
+        "nf"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "nextflow-groovy",
+      "name": "Nextflow Groovy",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "nginx",
+      "name": "Nginx",
+      "syntect": "nginx",
+      "aliases": []
+    },
+    {
+      "id": "nim",
+      "name": "Nim",
+      "syntect": "Nim",
+      "aliases": []
+    },
+    {
+      "id": "nix",
+      "name": "Nix",
+      "syntect": "Nix",
+      "aliases": []
+    },
+    {
+      "id": "nsis",
+      "name": "NSIS",
+      "syntect": "NSIS",
+      "aliases": []
+    },
+    {
+      "id": "nushell",
+      "name": "nushell",
+      "aliases": [
+        "nu"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "objective-c",
+      "name": "Objective-C",
+      "aliases": [
+        "objc"
+      ],
+      "syntect": "Objective-C"
+    },
+    {
+      "id": "objective-cpp",
+      "name": "Objective-C++",
+      "syntect": "Objective-C++",
+      "aliases": []
+    },
+    {
+      "id": "ocaml",
+      "name": "OCaml",
+      "syntect": "OCaml",
+      "aliases": []
+    },
+    {
+      "id": "odin",
+      "name": "Odin",
+      "syntect": "Odin",
+      "aliases": []
+    },
+    {
+      "id": "openscad",
+      "name": "OpenSCAD",
+      "aliases": [
+        "scad"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "org",
+      "name": "Org Markup",
+      "syntect": "orgmode",
+      "aliases": []
+    },
+    {
+      "id": "pascal",
+      "name": "Pascal",
+      "syntect": "Pascal",
+      "aliases": []
+    },
+    {
+      "id": "perl",
+      "name": "Perl",
+      "syntect": "Perl",
+      "aliases": []
+    },
+    {
+      "id": "php",
+      "name": "PHP",
+      "syntect": "PHP",
+      "aliases": []
+    },
+    {
+      "id": "pkl",
+      "name": "Pkl",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "plsql",
+      "name": "PL/SQL",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "po",
+      "name": "Gettext PO",
+      "aliases": [
+        "pot",
+        "potx"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "polar",
+      "name": "Polar",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "postcss",
+      "name": "PostCSS",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "powerquery",
+      "name": "PowerQuery",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "powershell",
+      "name": "PowerShell",
+      "aliases": [
+        "ps",
+        "ps1",
+        "pwsh"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "prisma",
+      "name": "Prisma",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "prolog",
+      "name": "Prolog",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "proto",
+      "name": "Protocol Buffer 3",
+      "aliases": [
+        "protobuf"
+      ],
+      "syntect": "Protocol Buffer"
+    },
+    {
+      "id": "pug",
+      "name": "Pug",
+      "aliases": [
+        "jade"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "puppet",
+      "name": "Puppet",
+      "syntect": "Puppet",
+      "aliases": []
+    },
+    {
+      "id": "purescript",
+      "name": "PureScript",
+      "syntect": "PureScript",
+      "aliases": []
+    },
+    {
+      "id": "python",
+      "name": "Python",
+      "aliases": [
+        "py"
+      ],
+      "syntect": "Python",
+      "compatibility_aliases": [
+        "python3"
+      ]
+    },
+    {
+      "id": "qml",
+      "name": "QML",
+      "syntect": "QML",
+      "aliases": []
+    },
+    {
+      "id": "qmldir",
+      "name": "QML Directory",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "qss",
+      "name": "Qt Style Sheets",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "r",
+      "name": "R",
+      "syntect": "R",
+      "aliases": []
+    },
+    {
+      "id": "racket",
+      "name": "Racket",
+      "syntect": "Racket",
+      "aliases": []
+    },
+    {
+      "id": "raku",
+      "name": "Raku",
+      "aliases": [
+        "perl6"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "razor",
+      "name": "ASP.NET Razor",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "rbs",
+      "name": "RBS",
+      "aliases": [
+        "ruby-signature"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "reg",
+      "name": "Windows Registry Script",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "regexp",
+      "name": "RegExp",
+      "aliases": [
+        "regex"
+      ],
+      "syntect": "Regular Expression"
+    },
+    {
+      "id": "rel",
+      "name": "Rel",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "riscv",
+      "name": "RISC-V",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "ron",
+      "name": "RON",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "rosmsg",
+      "name": "ROS Interface",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "rst",
+      "name": "reStructuredText",
+      "syntect": "reStructuredText",
+      "aliases": []
+    },
+    {
+      "id": "ruby",
+      "name": "Ruby",
+      "aliases": [
+        "rb"
+      ],
+      "syntect": "Ruby"
+    },
+    {
+      "id": "rust",
+      "name": "Rust",
+      "aliases": [
+        "rs"
+      ],
+      "syntect": "Rust"
+    },
+    {
+      "id": "sas",
+      "name": "SAS",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "sass",
+      "name": "Sass",
+      "syntect": "Sass",
+      "aliases": []
+    },
+    {
+      "id": "scala",
+      "name": "Scala",
+      "syntect": "Scala",
+      "aliases": []
+    },
+    {
+      "id": "scheme",
+      "name": "Scheme",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "scss",
+      "name": "SCSS",
+      "syntect": "SCSS",
+      "aliases": []
+    },
+    {
+      "id": "sdbl",
+      "name": "1C (Query)",
+      "aliases": [
+        "1c-query"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "shaderlab",
+      "name": "ShaderLab",
+      "aliases": [
+        "shader"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "shellscript",
+      "name": "Shell",
+      "aliases": [
+        "bash",
+        "sh",
+        "shell",
+        "zsh"
+      ],
+      "syntect": "Bourne Again Shell (bash)"
+    },
+    {
+      "id": "shellsession",
+      "name": "Shell Session",
+      "aliases": [
+        "console"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "smalltalk",
+      "name": "GNU Smalltalk",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "smithy",
+      "name": "Smithy",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "solidity",
+      "name": "Solidity",
+      "syntect": "Solidity",
+      "aliases": []
+    },
+    {
+      "id": "soy",
+      "name": "Closure Templates",
+      "aliases": [
+        "closure-templates"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "sparql",
+      "name": "SPARQL",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "splunk",
+      "name": "Splunk Query Language",
+      "aliases": [
+        "spl"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "sql",
+      "name": "SQL",
+      "syntect": "SQL",
+      "aliases": []
+    },
+    {
+      "id": "ssh-config",
+      "name": "SSH Config",
+      "syntect": "SSH Config",
+      "aliases": []
+    },
+    {
+      "id": "stata",
+      "name": "Stata",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "stylus",
+      "name": "Stylus",
+      "aliases": [
+        "styl"
+      ],
+      "syntect": "Stylus"
+    },
+    {
+      "id": "surrealql",
+      "name": "SurrealQL",
+      "aliases": [
+        "surql"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "svelte",
+      "name": "Svelte",
+      "syntect": "Svelte",
+      "aliases": []
+    },
+    {
+      "id": "swift",
+      "name": "Swift",
+      "syntect": "Swift",
+      "aliases": []
+    },
+    {
+      "id": "system-verilog",
+      "name": "SystemVerilog",
+      "syntect": "SystemVerilog",
+      "aliases": []
+    },
+    {
+      "id": "systemd",
+      "name": "Systemd Units",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "talonscript",
+      "name": "TalonScript",
+      "aliases": [
+        "talon"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "tasl",
+      "name": "Tasl",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "tcl",
+      "name": "Tcl",
+      "syntect": "Tcl",
+      "aliases": []
+    },
+    {
+      "id": "templ",
+      "name": "Templ",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "terraform",
+      "name": "Terraform",
+      "aliases": [
+        "tf",
+        "tfvars"
+      ],
+      "syntect": "Terraform"
+    },
+    {
+      "id": "tex",
+      "name": "TeX",
+      "syntect": "TeX",
+      "aliases": []
+    },
+    {
+      "id": "toml",
+      "name": "TOML",
+      "syntect": "TOML",
+      "aliases": []
+    },
+    {
+      "id": "ts-tags",
+      "name": "TypeScript with Tags",
+      "aliases": [
+        "lit"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "tsv",
+      "name": "TSV",
+      "syntect": "Tab Separated Values",
+      "aliases": []
+    },
+    {
+      "id": "tsx",
+      "name": "TSX",
+      "syntect": "TypeScriptReact",
+      "aliases": []
+    },
+    {
+      "id": "turtle",
+      "name": "Turtle",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "twig",
+      "name": "Twig",
+      "syntect": "HTML (Twig)",
+      "aliases": []
+    },
+    {
+      "id": "typescript",
+      "name": "TypeScript",
+      "aliases": [
+        "ts",
+        "cts",
+        "mts"
+      ],
+      "syntect": "TypeScript"
+    },
+    {
+      "id": "typespec",
+      "name": "TypeSpec",
+      "aliases": [
+        "tsp"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "typst",
+      "name": "Typst",
+      "aliases": [
+        "typ"
+      ],
+      "syntect": "Typst"
+    },
+    {
+      "id": "v",
+      "name": "V",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "vala",
+      "name": "Vala",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "vb",
+      "name": "Visual Basic",
+      "syntect": "Visual Basic .NET",
+      "aliases": [],
+      "compatibility_aliases": [
+        "vb.net",
+        "vbnet",
+        "visual basic .net",
+        "visual basic.net",
+        "visualbasic",
+        "visualbasic.net"
+      ]
+    },
+    {
+      "id": "verilog",
+      "name": "Verilog",
+      "syntect": "Verilog",
+      "aliases": []
+    },
+    {
+      "id": "vhdl",
+      "name": "VHDL",
+      "syntect": "VHDL",
+      "aliases": []
+    },
+    {
+      "id": "viml",
+      "name": "Vim Script",
+      "aliases": [
+        "vim",
+        "vimscript"
+      ],
+      "syntect": "VimL"
+    },
+    {
+      "id": "vue",
+      "name": "Vue",
+      "syntect": "Vue Component",
+      "aliases": []
+    },
+    {
+      "id": "vue-html",
+      "name": "Vue HTML",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "vue-vine",
+      "name": "Vue Vine",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "vyper",
+      "name": "Vyper",
+      "aliases": [
+        "vy"
+      ],
+      "syntect": "Vyper"
+    },
+    {
+      "id": "wasm",
+      "name": "WebAssembly",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "wenyan",
+      "name": "Wenyan",
+      "aliases": [
+        "文言"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "wgsl",
+      "name": "WGSL",
+      "syntect": "WGSL",
+      "aliases": []
+    },
+    {
+      "id": "wikitext",
+      "name": "Wikitext",
+      "aliases": [
+        "mediawiki",
+        "wiki"
+      ],
+      "syntect": "MediaWiki"
+    },
+    {
+      "id": "wit",
+      "name": "WebAssembly Interface Types",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "wolfram",
+      "name": "Wolfram",
+      "aliases": [
+        "wl"
+      ],
+      "syntect": null
+    },
+    {
+      "id": "xml",
+      "name": "XML",
+      "syntect": "XML",
+      "aliases": []
+    },
+    {
+      "id": "xsl",
+      "name": "XSL",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "yaml",
+      "name": "YAML",
+      "aliases": [
+        "yml"
+      ],
+      "syntect": "YAML"
+    },
+    {
+      "id": "zenscript",
+      "name": "ZenScript",
+      "syntect": null,
+      "aliases": []
+    },
+    {
+      "id": "zig",
+      "name": "Zig",
+      "syntect": "Zig",
+      "aliases": []
+    }
+  ],
+  "special_languages": [
+    {
+      "id": "text",
+      "name": "Plain Text",
+      "aliases": [
+        "txt",
+        "plain"
+      ],
+      "compatibility_aliases": [
+        "plaintext"
+      ],
+      "syntect": "Plain Text"
+    },
+    {
+      "id": "ansi",
+      "name": "ANSI",
+      "aliases": [],
+      "syntect": null
+    }
+  ]
+}

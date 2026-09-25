@@ -6,25 +6,17 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use super::languages::{SYNTAXES, is_markdown_label, syntax_for_label};
 use std::sync::LazyLock;
 use syntect::{
     easy::HighlightLines,
     highlighting::{
         Color as SyntaxColor, HighlightState, StyleModifier, Theme, ThemeItem, ThemeSettings,
     },
-    parsing::{ParseState, SyntaxReference, SyntaxSet},
+    parsing::ParseState,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-
-// Link grammars at build time, not when the user first resumes a conversation.
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(|| {
-    syntect::dumps::from_uncompressed_data(include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/syntaxes.bin"
-    )))
-    .expect("valid compiled syntax bundle")
-});
 
 // Follow bat's scope-based themes with a restrained, readable palette.
 // Reference: https://github.com/sharkdp/bat/blob/master/assets/themes/ansi.tmTheme
@@ -573,60 +565,6 @@ fn wrap_cell(cell: &Line<'static>, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-/// Resolve standard names, common Markdown aliases, attributes and filenames.
-/// Ambiguous platform names (e.g. .NET) and unknown labels stay plain text.
-fn syntax_for_label(info: &str) -> Option<&'static SyntaxReference> {
-    let normalized = info
-        .trim()
-        .trim_matches(|c| c == '{' || c == '}')
-        .trim_start_matches('.')
-        .to_ascii_lowercase();
-    let full = normalized.strip_prefix("language-").unwrap_or(&normalized);
-    if let Some(syntax) = SYNTAXES.find_syntax_by_token(full) {
-        return Some(syntax);
-    }
-    let token = match full {
-        "visual basic" | "visual basic .net" | "visual basic.net" => "vb",
-        "c sharp" => "cs",
-        other => other.split_whitespace().next().unwrap_or(""),
-    };
-    let token = token.trim_start_matches('.');
-    let token = match token {
-        "csharp" | "c#" | "c-sharp" => "cs",
-        "vb.net" | "vbnet" | "visualbasic" | "visualbasic.net" => "vb",
-        "fsharp" | "f#" => "fs",
-        "c++" | "cplusplus" => "cpp",
-        "rs" => "rust",
-        "js" | "node" | "nodejs" => "javascript",
-        "py" | "python3" => "python",
-        "sh" | "shell" | "console" => "bash",
-        "ts" => "typescript",
-        "tsx" => "TypescriptReact",
-        "yml" => "yaml",
-        "text" | "txt" | "plaintext" => return Some(SYNTAXES.find_syntax_plain_text()),
-        other => other,
-    };
-    SYNTAXES.find_syntax_by_token(token).or_else(|| {
-        token
-            .rsplit_once('.')
-            .and_then(|(_, ext)| SYNTAXES.find_syntax_by_extension(ext))
-    })
-}
-
-fn is_markdown_label(info: &str) -> bool {
-    matches!(
-        info.trim()
-            .trim_matches(|c| c == '{' || c == '}')
-            .trim_start_matches('.')
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "markdown" | "md" | "mdx" | "commonmark" | "gfm"
-    )
-}
-
 fn is_fence_opening(marker: char, count: usize, trimmed: &str) -> bool {
     matches!(marker, '`' | '~')
         && count >= 3
@@ -1047,11 +985,11 @@ mod tests {
     #[test]
     fn recovers_model_style_strong_markers_next_to_cjk_text() {
         let value =
-            render(r#"4. **图一的技术质量明显"更认真"**：但这是一张**"我拍的我的鸟"**的记录照。"#);
+            render(r#"4. **图一的技术质量明显"更认真"**：但这是一张**"我拍的天空"**的记录照。"#);
 
         assert!(!value.to_string().contains("**"), "{value:?}");
         assert!(value.spans.iter().any(|span| {
-            span.content == "\"我拍的我的鸟\"" && span.style.add_modifier.contains(Modifier::BOLD)
+            span.content == "\"我拍的天空\"" && span.style.add_modifier.contains(Modifier::BOLD)
         }));
 
         let escaped = render(r"保留 \*\*字面量\*\*");
