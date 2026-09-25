@@ -30,6 +30,30 @@ pub(super) fn file_modal(state: &UiState) -> bool {
 pub fn handle(state: &mut UiState, event: Event) -> Action {
     let amount = match event {
         Event::Mouse(mouse) => {
+            if let Some((_, choice)) = state
+                .approval_options
+                .iter()
+                .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
+            {
+                match mouse.kind {
+                    MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                        state.approval_choice = *choice;
+                        if state.approval_shown {
+                            return if *choice == 0 {
+                                Action::Approve
+                            } else {
+                                Action::Deny
+                            };
+                        }
+                    }
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        state.approval_choice ^= 1
+                    }
+                    _ => {}
+                }
+                return Action::None;
+            }
+
             let amount = match mouse.kind {
                 MouseEventKind::ScrollUp => -(super::wheel::LINES as isize),
                 MouseEventKind::ScrollDown => super::wheel::LINES as isize,
@@ -308,7 +332,11 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     state.approval_shown = true;
 }
 
-fn draw_options(frame: &mut Frame<'_>, state: &UiState, area: Rect, hint: &str) {
+fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, hint: &str) {
+    state.approval_options = vec![
+        (Rect::new(area.x, area.y, 8, 1).intersection(area), 0),
+        (Rect::new(area.x + 11, area.y, 8, 1).intersection(area), 1),
+    ];
     let options = Line::from(vec![
         ratatui::text::Span::styled(
             "  允许  ",
@@ -447,6 +475,26 @@ pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clicking_a_visible_approval_option_confirms_it() {
+        use crossterm::event::{MouseButton, MouseEvent};
+        let mut state = UiState::new("model");
+        state.approval_options = vec![(Rect::new(2, 3, 8, 1), 0), (Rect::new(13, 3, 8, 1), 1)];
+        let click = |column| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row: 3,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+
+        assert_eq!(handle(&mut state, click(3)), Action::None);
+        state.approval_shown = true;
+        assert_eq!(handle(&mut state, click(3)), Action::Approve);
+        assert_eq!(handle(&mut state, click(14)), Action::Deny);
+    }
+
     use super::*;
     use crossterm::event::KeyEvent;
 

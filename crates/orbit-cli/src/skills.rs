@@ -119,6 +119,13 @@ impl Skills {
         self.entries.iter().find(|skill| skill.command == command)
     }
 
+    pub(crate) fn completions(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .map(|skill| (skill.command.clone(), skill.description.clone()))
+            .collect()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }

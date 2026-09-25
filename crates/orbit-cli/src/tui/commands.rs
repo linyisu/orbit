@@ -107,10 +107,12 @@ pub fn matching(input: &str) -> Vec<&'static Command> {
         return Vec::new();
     }
 
-    COMMANDS
-        .iter()
-        .filter(|command| command.name.starts_with(input))
-        .collect()
+    super::search::ranked(COMMANDS.iter(), |command| {
+        super::search::rank(
+            command.name.trim_start_matches('/'),
+            input.trim_start_matches('/'),
+        )
+    })
 }
 
 /// These commands only inspect or adjust local UI state. They may run while an
@@ -184,6 +186,24 @@ fn edit_distance(left: &str, right: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_search_accepts_subsequences_and_prioritizes_prefixes() {
+        assert_eq!(matching("/rsm")[0].name, "/resume");
+        assert_eq!(matching("/MDL")[0].name, "/model");
+        assert_eq!(matching("/mode")[0].name, "/model");
+        let matches = matching("/s");
+        let first_non_prefix = matches
+            .iter()
+            .position(|command| !command.name.starts_with("/s"))
+            .unwrap();
+        assert!(
+            matches[..first_non_prefix]
+                .iter()
+                .all(|command| command.name.starts_with("/s"))
+        );
+        assert!(matches.iter().any(|command| command.name == "/resume"));
+    }
 
     #[test]
     fn suggests_nearby_command_names() {

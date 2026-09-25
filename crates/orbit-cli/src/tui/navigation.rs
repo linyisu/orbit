@@ -2,6 +2,9 @@ use super::{
     app::{TranscriptItem, UiState},
     render,
 };
+use std::time::Instant;
+use unicode_width::UnicodeWidthStr;
+
 use crossterm::event::{Event, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
@@ -16,6 +19,8 @@ pub(super) struct Navigation {
     tooltip_area: Rect,
     targets: Vec<(u16, usize, String)>,
     hovered: Option<u16>,
+    preview_scroll: Option<(String, u16, Instant)>,
+    preview_tick: u128,
     show_latest: bool,
     first: usize,
     count: usize,
@@ -28,6 +33,17 @@ impl Navigation {
 
     pub(super) fn clear_hover(&mut self) {
         self.hovered = None;
+        self.preview_scroll = None;
+    }
+
+    pub(super) fn advance_preview(&mut self) -> bool {
+        let Some((_, _, since)) = &self.preview_scroll else {
+            return false;
+        };
+        let tick = since.elapsed().as_millis().saturating_sub(100) / 120;
+        let changed = tick != self.preview_tick;
+        self.preview_tick = tick;
+        changed
     }
 }
 
@@ -60,10 +76,13 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
         let hovered = hit.then_some(mouse.row);
         let changed = nav.hovered != hovered;
         nav.hovered = hovered;
+        if changed {
+            nav.preview_scroll = None;
+        }
         return Some(changed);
     }
     if !inside {
-        nav.hovered = None;
+        nav.clear_hover();
         return None;
     }
 
@@ -185,11 +204,32 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     };
 
     if let Some((y, text)) = tooltip {
-        let width = area.width.saturating_sub(5).min(52);
+        let width = (frame.area().width / 4)
+            .min(area.width.saturating_sub(5))
+            .min(text.width().min(u16::MAX as usize) as u16);
+        if width == 0 {
+            return;
+        }
+        let elapsed = if text.width() > width as usize {
+            if !nav
+                .preview_scroll
+                .as_ref()
+                .is_some_and(|(previous, old_width, _)| previous == &text && *old_width == width)
+            {
+                nav.preview_scroll = Some((text.clone(), width, Instant::now()));
+                nav.preview_tick = 0;
+            }
+            nav.preview_scroll
+                .as_ref()
+                .map(|(_, _, since)| since.elapsed())
+        } else {
+            nav.preview_scroll = None;
+            None
+        };
         let tooltip_area = Rect::new(nav.area.x.saturating_sub(width + 1), y, width, 1);
         super::overlay::clear(frame, tooltip_area);
         frame.render_widget(
-            Paragraph::new(render::fit_label(&text, width as usize, false)).style(
+            Paragraph::new(render::scrolling_title(&text, width as usize, elapsed)).style(
                 Style::default()
                     .fg(Color::Rgb(222, 218, 212))
                     .bg(Color::Rgb(48, 48, 52)),
@@ -197,6 +237,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
             tooltip_area,
         );
         nav.tooltip_area = tooltip_area;
+    } else {
+        nav.preview_scroll = None;
     }
 }
 
@@ -349,6 +391,43 @@ mod tests {
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
 
         assert_eq!(state.navigation.tooltip_area, Rect::default());
+    }
+
+    #[test]
+    fn preview_is_at_most_one_quarter_of_window_and_scrolls_long_text() {
+        let mut state = UiState::new("model");
+        state.transcript.push(TranscriptItem::User(
+            "abcdefghijklmnopqrstuvwxyz 中文预览内容".repeat(3),
+        ));
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut state))
+            .unwrap();
+        let (row, _, _) = state.navigation.targets[0].clone();
+        let column = state.navigation.area.x;
+        handle(&mut state, &mouse(MouseEventKind::Moved, column, row));
+        terminal
+            .draw(|frame| render::draw(frame, &mut state))
+            .unwrap();
+        let area = state.navigation.tooltip_area;
+        let before = terminal.backend().buffer()[(area.x, area.y)]
+            .symbol()
+            .to_owned();
+
+        assert_eq!(area.width, 22);
+        state.navigation.preview_scroll.as_mut().unwrap().2 =
+            Instant::now() - std::time::Duration::from_secs(1);
+        assert!(state.navigation.advance_preview());
+        terminal
+            .draw(|frame| render::draw(frame, &mut state))
+            .unwrap();
+        assert_ne!(
+            terminal.backend().buffer()[(area.x, area.y)].symbol(),
+            before
+        );
+
+        state.navigation.clear_hover();
+        assert!(!state.navigation.advance_preview());
     }
 
     #[test]

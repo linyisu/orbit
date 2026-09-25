@@ -3,6 +3,7 @@ mod approval;
 mod approval_diff;
 mod changes;
 pub mod commands;
+mod completion;
 mod dialogs;
 mod directory;
 mod editor;
@@ -14,6 +15,7 @@ mod navigation;
 mod overlay;
 mod permissions;
 pub mod render;
+mod search;
 mod selection;
 mod tabs;
 pub mod terminal;
@@ -163,6 +165,8 @@ pub async fn run(
         state.resume_loading = Some("正在显示会话历史…".into());
     }
 
+    state.completion_home = options.home.clone();
+    state.skill_completions = skills.completions();
     state.workspace = session.snapshot.session.workspace.clone();
     let mut move_notice = moved.then(|| format!("Moved to {}", state.workspace));
     if history_replay.is_none()
@@ -211,8 +215,15 @@ pub async fn run(
 
     let result: Result<()> = async {
         let mut dirty = true;
+        let mut completion_key = None;
 
         loop {
+            let key = (session.id().to_owned(), state.input.text.clone());
+            if completion_key.as_ref() != Some(&key) {
+                state.stored_completions = completion::stored(&state.input.text, &session).await.unwrap_or_default();
+                completion_key = Some(key);
+            }
+
             if state.compact_after_model_switch && task.is_none() && local_task.is_none() && resume_task.is_none() && history_replay.is_none() {
                 state.compact_after_model_switch = false;
                 refresh_context_usage(&mut state, &history, &tools);
@@ -313,7 +324,7 @@ pub async fn run(
             select! {
                 event = events.next() => {
                     let Some(event) = event else { break };
-                    let event = event?;
+                    let mut event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
 
                     if update_tab_hover(&event, &mut state, &tabs) {
@@ -354,6 +365,30 @@ pub async fn run(
                         dirty = true;
                         frames.request(time::Instant::now());
                         continue;
+                    }
+
+                    // Handle the overlay before any obscured transcript hit targets.
+                    if state.picker.is_none() && state.model_picker.is_none()
+                        && state.marketplace_dialog.is_none() && !state.show_help
+                        && state.approval.is_none()
+                        && let Event::Mouse(mouse) = &event
+                        && state.menu_area.contains((mouse.column, mouse.row).into())
+                        && !state.menu().is_empty()
+                    {
+                        completion::select_with_mouse(&mut state, mouse);
+                        let clicked = mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                            && state.menu_rows.iter().any(|(area, _)| area.contains((mouse.column, mouse.row).into()));
+                        if mouse.kind != MouseEventKind::Moved {
+                            dirty = true;
+                            frames.request(time::Instant::now());
+                        }
+                        if clicked {
+                            let candidate = &state.menu()[state.menu_index];
+                            let code = if candidate.name.starts_with("/cd ") { KeyCode::Tab } else { KeyCode::Enter };
+                            event = Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE));
+                        } else {
+                            continue;
+                        }
                     }
 
                     let context_hover_changed = !state.selection.dragging()
@@ -451,6 +486,7 @@ pub async fn run(
 
                         continue;
                     }
+
 
                     if let Event::Mouse(mouse) = &event
                         && mouse.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
@@ -954,6 +990,11 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    dirty |= state.navigation.advance_preview();
+                    if let Some(picker) = &mut state.picker {
+                        dirty |= picker.advance_title_scroll();
+                    }
+
                     if let Some((action, since)) = &state.tab_hover {
                         let elapsed = since.elapsed().as_millis();
                         let tick = match action {
@@ -2496,6 +2537,8 @@ fn resume_ui_shell(state: &UiState) -> UiState {
     restored.auto_compact = state.auto_compact;
     restored.max_output_tokens = state.max_output_tokens;
     restored.model_completions = state.model_completions.clone();
+    restored.completion_home = state.completion_home.clone();
+    restored.skill_completions = state.skill_completions.clone();
     restored.permission_mode = crate::tui::permissions::Mode::Auto;
     restored.supports_vision = state.supports_vision;
 
@@ -2705,41 +2748,6 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         state.menu_dismissed = true;
         return Action::None;
     }
-    if key.code == KeyCode::Tab && state.input.text.starts_with("/model ") {
-        let typed = state.input.text[7..].trim();
-        let current_provider = state.model.split_once("::").map(|(provider, _)| provider);
-        let matches = state
-            .model_completions
-            .iter()
-            .filter(|candidate| {
-                if typed.contains("::") {
-                    candidate.starts_with(typed)
-                } else {
-                    candidate.split_once("::").is_some_and(|(provider, model)| {
-                        model.starts_with(typed) && Some(provider) == current_provider
-                    })
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if !matches.is_empty() {
-            let index = state.model_completion_index % matches.len();
-            let completion = if typed.contains("::") {
-                matches[index].clone()
-            } else {
-                matches[index]
-                    .split_once("::")
-                    .map(|(_, model)| model)
-                    .unwrap_or(matches[index])
-                    .to_owned()
-            };
-
-            state.input.set(format!("/model {completion}"));
-            state.model_completion_index = state.model_completion_index.saturating_add(1);
-        }
-
-        return Action::None;
-    }
     if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::ALT) {
         return Action::PasteClipboard;
     }
@@ -2759,11 +2767,51 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 return Action::None;
             }
             KeyCode::Tab => {
-                state.input.set(menu[state.menu_index].name.to_owned());
+                let candidate = &menu[state.menu_index];
+                let suffix = if (candidate.continue_input && !candidate.name.starts_with("/cd "))
+                    || matches!(
+                        candidate.name.as_str(),
+                        "/cd"
+                            | "/mode"
+                            | "/model"
+                            | "/skill"
+                            | "/tasks"
+                            | "/memory"
+                            | "/diff"
+                            | "/undo"
+                    ) {
+                    " "
+                } else {
+                    ""
+                };
+                state.input.set(format!("{}{suffix}", candidate.name));
+                state.menu_index = 0;
                 return Action::None;
             }
             KeyCode::Enter if key.modifiers.is_empty() => {
-                state.input.set(menu[state.menu_index].name.to_owned());
+                let candidate = &menu[state.menu_index];
+                if candidate.continue_input && !candidate.name.starts_with("/cd ") {
+                    state.input.set(format!("{} ", candidate.name));
+                    state.menu_index = 0;
+                    return Action::None;
+                }
+                // An exact directory can be submitted even while its children are suggested.
+                let exact_directory =
+                    state
+                        .input
+                        .text
+                        .strip_prefix("/cd ")
+                        .is_some_and(|argument| {
+                            directory::resolve(
+                                argument,
+                                std::path::Path::new(&state.workspace),
+                                state.completion_home.as_deref(),
+                            )
+                            .is_ok()
+                        });
+                if !exact_directory || state.menu_index != 0 {
+                    state.input.set(candidate.name.clone());
+                }
             }
             _ => {}
         }
@@ -3155,6 +3203,37 @@ mod tests {
         ] {
             assert!(browser_url(value).is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn argument_menu_completes_without_executing_incomplete_commands() {
+        let mut state = UiState::new("one::fast");
+        state.model_completions = vec!["one::fast".into(), "two::fast".into()];
+        state.input.set("/model".into());
+
+        assert_eq!(
+            press(&mut state, KeyCode::Tab, KeyModifiers::NONE, false),
+            Action::None
+        );
+        assert_eq!(state.input.text, "/model ");
+        press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
+        assert_eq!(
+            press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
+            Action::Submit("/model two::fast".into())
+        );
+
+        state.input.set("/memory add f".into());
+        assert_eq!(
+            press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
+            Action::None
+        );
+        assert_eq!(state.input.text, "/memory add fact ");
+
+        state.input.set("/mode au".into());
+        assert_eq!(
+            press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
+            Action::Submit("/mode auto".into())
+        );
     }
 
     #[test]

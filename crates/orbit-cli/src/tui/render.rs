@@ -33,6 +33,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.ime_cursor = None;
     state.selection.reset_caret();
     state.input_area = Rect::default();
+    state.menu_area = Rect::default();
+    state.menu_rows.clear();
+    state.dialog_rows.clear();
+    state.approval_options.clear();
     state.attachment_areas.clear();
     state.tab_areas.clear();
     state.tab_close_areas.clear();
@@ -83,7 +87,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     }
 
     let panel_height = if !menu.is_empty() {
-        (menu.len().min(MAX_COMMAND_MENU_ITEMS) + 1) as u16
+        menu.len().min(MAX_COMMAND_MENU_ITEMS) as u16
     } else {
         0
     };
@@ -99,12 +103,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(approval_height),
-        Constraint::Length(
-            panel_height.min(
-                area.height
-                    .saturating_sub(input_height + attachment_height + 8),
-            ),
-        ),
+        Constraint::Length(0),
         Constraint::Length(input_height + attachment_height + details_height + 3),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -114,8 +113,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
     if home {
         let composer_height = input_height + attachment_height + details_height + 3;
-        let menu_height = panel_height.min(area.height.saturating_sub(composer_height + 10));
-        let group_height = 8 + menu_height + composer_height + 2;
+        let group_height = 8 + composer_height + 2;
         let x = area.x + area.width.saturating_sub(content_width) / 2;
         let y = area.y + area.height.saturating_sub(group_height) / 2;
         areas[0] = if state.tabs.len() > 1 {
@@ -125,11 +123,24 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         };
         areas[1] = Rect::new(x, y, content_width, 7);
         areas[2] = Rect::default();
-        areas[3] = Rect::new(x, y + 8, content_width, menu_height);
-        areas[4] = Rect::new(x, y + 8 + menu_height, content_width, composer_height);
+        areas[4] = Rect::new(x, y + 8, content_width, composer_height);
         areas[5] = Rect::new(x, areas[4].bottom(), content_width, 1);
         areas[6] = Rect::new(x, areas[5].bottom(), content_width, 1);
     }
+
+    let menu_height = panel_height.min(areas[4].y.saturating_sub(area.y + 1));
+    areas[3] = Rect::new(
+        areas[4].x,
+        areas[4].y - menu_height,
+        areas[4].width,
+        menu_height,
+    );
+    state.menu_area = Rect::new(
+        areas[3].x + 2,
+        areas[3].y,
+        areas[3].width.saturating_sub(4),
+        menu_height,
+    );
 
     draw_header(frame, state, areas[0]);
     draw_transcript(frame, state, areas[1]);
@@ -1488,48 +1499,58 @@ fn draw_composer(
     }
 }
 
-fn draw_panel(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
+fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     let menu = state.menu();
-    let visible = area.height.saturating_sub(1).max(1) as usize;
+
+    if menu.is_empty() || area.height == 0 || area.width <= 4 {
+        return;
+    }
+
+    let area = Rect {
+        x: area.x + 2,
+        width: area.width - 4,
+        ..area
+    };
+    let background = Style::default();
+    let visible = area.height as usize;
     // Keep keyboard focus near the middle while moving through a long menu.
-    // At the first and last page the list naturally rests against its edge.
     let max_first = menu.len().saturating_sub(visible);
     let first = state.menu_index.saturating_sub(visible / 2).min(max_first);
-    let lines = if !menu.is_empty() {
-        menu.iter()
-            .enumerate()
-            .skip(first)
-            .take(visible)
-            .map(|(index, command)| {
-                let selected = index == state.menu_index.min(menu.len() - 1);
 
-                Line::from(vec![
-                    Span::styled(
-                        format!(
-                            "  {} {:<width$}",
-                            if selected { "›" } else { " " },
-                            command.name,
-                            width = super::commands::COMMAND_NAME_WIDTH,
-                        ),
-                        Style::default().fg(if selected { ACCENT } else { MUTED }),
-                    ),
-                    Span::styled(
-                        command.description,
-                        Style::default().fg(if selected { ACCENT } else { MUTED }),
-                    ),
-                ])
-            })
-            .chain(std::iter::once(Line::from(muted(format!(
-                "    ↑↓ 选择 · Tab 补全 · Enter 执行 · Esc 关闭 · {}/{}",
-                state.menu_index.min(menu.len() - 1) + 1,
-                menu.len(),
-            )))))
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    super::overlay::clear(frame, area);
+    frame.render_widget(Block::default().style(background), area);
 
-    frame.render_widget(Paragraph::new(lines), area);
+    for (row, (index, command)) in menu
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(visible)
+        .enumerate()
+    {
+        state
+            .menu_rows
+            .push((Rect::new(area.x, area.y + row as u16, area.width, 1), index));
+        let selected = index == state.menu_index.min(menu.len() - 1);
+        let style = if selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            background.fg(MUTED)
+        };
+        let text = format!(
+            "   {:<width$} {}",
+            safe_output(command.display.as_deref().unwrap_or(&command.name)),
+            safe_output(&command.description),
+            width = super::commands::COMMAND_NAME_WIDTH,
+        );
+
+        frame.render_widget(
+            Paragraph::new(fit_label(&text, area.width as usize, false)).style(style),
+            Rect::new(area.x, area.y + row as u16, area.width, 1),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1677,6 +1698,42 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn editor_returns_to_home_until_the_draft_is_sent() {
+        let directory = tempfile::tempdir().unwrap();
+        let editor = super::super::editor::Editor::new("/bin/true".into());
+        let mut state = UiState::new("model");
+        state.tabs.push(SessionTab {
+            id: "new".into(),
+            title: "新会话".into(),
+            status: RunStatus::Idle,
+            active: true,
+        });
+        state.input.set("/editor".into());
+        state.input.take();
+        let text = editor
+            .edit("尚未发送的草稿\n第二行", directory.path())
+            .await
+            .unwrap();
+
+        state.restore_editor_draft(text);
+        let screen = render(&mut state, 140, 40);
+
+        assert!(state.transcript.is_empty());
+        assert_eq!(state.status, RunStatus::Idle);
+        assert!(state.input_area.x > 20);
+        assert!(state.input_area.y < 30);
+        assert!(screen.replace(' ', "").contains("尚未发送的草稿"));
+        assert_eq!(state.tabs.len(), 1);
+
+        let prompt = state.input.take().unwrap();
+        state.submit(prompt);
+        render(&mut state, 140, 40);
+        assert!(state.input_area.x < 20);
+        assert!(!state.transcript.is_empty());
+    }
+
     #[test]
     fn home_centers_composer_and_conversation_exposes_new_session_button() {
         let mut state = UiState::new("provider::model");
@@ -1816,40 +1873,42 @@ mod tests {
         assert!(!summary.starts_with("set -e"), "{summary}");
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn editor_returns_to_home_until_the_draft_is_sent() {
-        let directory = tempfile::tempdir().unwrap();
-        let editor = super::super::editor::Editor::new("/bin/true".into());
-        let mut state = UiState::new("model");
-        state.tabs.push(SessionTab {
-            id: "new".into(),
-            title: "新会话".into(),
-            status: RunStatus::Idle,
-            active: true,
-        });
-        state.input.set("/editor".into());
-        state.input.take();
-        let text = editor
-            .edit("尚未发送的草稿\n第二行", directory.path())
-            .await
-            .unwrap();
+    #[test]
+    fn command_menu_keeps_composer_anchored_and_highlights_the_entire_selection() {
+        for home in [false, true] {
+            let mut state = UiState::new("model");
 
-        state.restore_editor_draft(text);
-        let screen = render(&mut state, 140, 40);
+            if home {
+                state.tabs.push(SessionTab {
+                    id: "test".into(),
+                    title: "新会话".into(),
+                    active: true,
+                    status: RunStatus::Idle,
+                });
+            }
 
-        assert!(state.transcript.is_empty());
-        assert_eq!(state.status, RunStatus::Idle);
-        assert!(state.input_area.x > 20);
-        assert!(state.input_area.y < 30);
-        assert!(screen.replace(' ', "").contains("尚未发送的草稿"));
-        assert_eq!(state.tabs.len(), 1);
+            let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let input = state.input_area;
+            let viewport = state.selection.viewport;
+            let scroll = state.max_scroll;
+            state.input.set("/".into());
 
-        let prompt = state.input.take().unwrap();
-        state.submit(prompt);
-        render(&mut state, 140, 40);
-        assert!(state.input_area.x < 20);
-        assert!(!state.transcript.is_empty());
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+
+            assert_eq!(state.input_area, input);
+            assert_eq!(state.selection.viewport, viewport);
+            assert_eq!(state.max_scroll, scroll);
+            let buffer = terminal.backend().buffer();
+            let selected = buffer
+                .content
+                .iter()
+                .filter(|cell| cell.bg == ACCENT)
+                .map(|cell| cell.symbol().width())
+                .sum::<usize>();
+            let expected_width = if home { 82 } else { 96 };
+            assert_eq!(selected, expected_width);
+        }
     }
 
     #[test]
@@ -1861,14 +1920,12 @@ mod tests {
         assert!(first_page.contains("/new"));
         assert!(!first_page.contains("/tasks"));
 
-        let count = crate::tui::commands::COMMANDS.len();
-
-        assert!(first_page.contains(&format!("1/{count}")));
+        assert!(!first_page.contains("Tab 补全"));
 
         state.menu_index = 6;
         let middle_page = render(&mut state, 100, 20);
 
-        assert!(middle_page.contains("› /resume"));
+        assert!(middle_page.contains("  /resume"));
         assert!(!middle_page.contains("/new"));
 
         state.menu_index = state.menu().len() - 1;
@@ -1876,7 +1933,7 @@ mod tests {
 
         assert!(last_page.contains("/exit"));
         assert!(!last_page.contains("/new"));
-        assert!(last_page.contains(&format!("{count}/{count}")));
+        assert!(!last_page.contains("Esc 关闭"));
     }
 
     fn render(state: &mut UiState, width: u16, height: u16) -> String {

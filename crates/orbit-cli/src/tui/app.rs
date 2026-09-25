@@ -128,6 +128,11 @@ pub struct UiState {
     pub input_scroll: usize,
     pub input_width: usize,
     pub ime_cursor: Option<ratatui::layout::Position>,
+    pub stored_completions: Vec<super::completion::Candidate>,
+    pub menu_area: ratatui::layout::Rect,
+    pub menu_rows: Vec<(ratatui::layout::Rect, usize)>,
+    pub dialog_rows: Vec<(ratatui::layout::Rect, usize)>,
+    pub approval_options: Vec<(ratatui::layout::Rect, usize)>,
     pub menu_index: usize,
     pub menu_dismissed: bool,
     pub show_help: bool,
@@ -144,7 +149,9 @@ pub struct UiState {
     pub chosen_model: Option<String>,
     pub chosen_effort: Option<orbit_model::types::ReasoningEffort>,
     pub model_completions: Vec<String>,
-    pub model_completion_index: usize,
+    pub completion_home: Option<std::path::PathBuf>,
+    pub skill_completions: Vec<(String, String)>,
+    pub directory_completions: super::completion::DirectoryCache,
     pub expanded: Option<usize>,
     pub max_scroll: usize,
     pub(super) transcript_layout: super::transcript::TranscriptLayout,
@@ -219,6 +226,11 @@ impl UiState {
             input_scroll: 0,
             input_width: 74,
             ime_cursor: None,
+            stored_completions: Vec::new(),
+            menu_area: Default::default(),
+            menu_rows: Vec::new(),
+            dialog_rows: Vec::new(),
+            approval_options: Vec::new(),
             menu_index: 0,
             menu_dismissed: false,
             show_help: false,
@@ -235,7 +247,9 @@ impl UiState {
             chosen_model: None,
             chosen_effort: None,
             model_completions: Vec::new(),
-            model_completion_index: 0,
+            completion_home: None,
+            skill_completions: Vec::new(),
+            directory_completions: Default::default(),
             expanded: None,
             max_scroll: 0,
             transcript_layout: Default::default(),
@@ -433,17 +447,44 @@ impl UiState {
         matches!(self.status, RunStatus::Running | RunStatus::Cancelling)
     }
 
-    pub fn menu(&self) -> Vec<&'static super::commands::Command> {
+    pub fn menu(&self) -> Vec<super::completion::Candidate> {
         if self.menu_dismissed || self.resume_loading.is_some() {
-            Vec::new()
-        } else {
-            super::commands::matching(&self.input.text)
-                .into_iter()
-                .filter(|command| {
-                    !self.running() || super::commands::available_while_running(command.name)
-                })
-                .collect()
+            return Vec::new();
         }
+
+        let command = self.input.text.split_whitespace().next().unwrap_or("");
+        if self.running()
+            && self.input.text.contains(char::is_whitespace)
+            && !super::commands::available_while_running(command)
+        {
+            return Vec::new();
+        }
+
+        if let Some(argument) = self.input.text.strip_prefix("/cd ") {
+            return self.directory_completions.matching(
+                argument,
+                std::path::Path::new(&self.workspace),
+                self.completion_home.as_deref(),
+            );
+        }
+
+        if !self.stored_completions.is_empty() {
+            return self.stored_completions.clone();
+        }
+
+        super::completion::matching(
+            &self.input.text,
+            &self.model_completions,
+            &self.skill_completions,
+        )
+        .into_iter()
+        .filter(|candidate| {
+            !self.running()
+                || super::commands::available_while_running(
+                    candidate.name.split_whitespace().next().unwrap_or(""),
+                )
+        })
+        .collect()
     }
 
     pub fn active_elapsed(&self) -> std::time::Duration {

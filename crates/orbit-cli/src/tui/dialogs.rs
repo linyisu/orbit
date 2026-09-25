@@ -16,6 +16,8 @@ pub struct SessionPicker {
     query: String,
     selected: usize,
     pub error: Option<String>,
+    title_scroll: Option<(String, usize, std::time::Instant)>,
+    title_scroll_tick: u128,
 }
 
 #[derive(Debug)]
@@ -191,16 +193,16 @@ impl ModelPicker {
     }
 
     fn matches(&self) -> Vec<&ModelOption> {
-        let query = self.query.to_lowercase();
-
-        self.models
-            .iter()
-            .filter(|model| {
-                model.qualified_name().to_lowercase().contains(&query)
-                    || model.model.to_lowercase().contains(&query)
-                    || model.provider.to_lowercase().contains(&query)
-            })
-            .collect()
+        super::search::ranked(self.models.iter(), |model| {
+            [
+                model.qualified_name().as_str(),
+                &model.model,
+                &model.provider,
+            ]
+            .into_iter()
+            .filter_map(|text| super::search::rank(text, &self.query))
+            .min()
+        })
     }
 
     fn move_by(&mut self, down: bool) {
@@ -266,15 +268,57 @@ impl SessionPicker {
             query: String::new(),
             selected: 0,
             error: None,
+            title_scroll: None,
+            title_scroll_tick: 0,
         }
     }
 
+    fn prepare_title_scroll(&mut self, width: usize) -> Option<std::time::Duration> {
+        let title = self
+            .matches()
+            .get(self.selected)
+            .map(|session| (session.id.clone(), clean(&session.title)));
+        let Some((id, title)) = title.filter(|(_, title)| {
+            width > 0 && unicode_width::UnicodeWidthStr::width(title.as_str()) > width
+        }) else {
+            self.title_scroll = None;
+            return None;
+        };
+        let key = format!("{id}\n{title}");
+
+        if !self
+            .title_scroll
+            .as_ref()
+            .is_some_and(|(previous, previous_width, _)| {
+                previous == &key && *previous_width == width
+            })
+        {
+            self.title_scroll = Some((key, width, std::time::Instant::now()));
+            self.title_scroll_tick = 0;
+        }
+
+        self.title_scroll
+            .as_ref()
+            .map(|(_, _, since)| since.elapsed())
+    }
+
+    pub fn advance_title_scroll(&mut self) -> bool {
+        let Some((_, _, since)) = &self.title_scroll else {
+            return false;
+        };
+        let tick = since.elapsed().as_millis().saturating_sub(100) / 120;
+        let changed = tick != self.title_scroll_tick;
+        self.title_scroll_tick = tick;
+        changed
+    }
+
     fn matches(&self) -> Vec<&Session> {
-        let query = self.query.to_lowercase();
-        self.sessions
-            .iter()
-            .filter(|s| s.title.to_lowercase().contains(&query) || s.id.contains(&query))
-            .collect()
+        super::search::ranked(self.sessions.iter(), |session| {
+            [&session.title, &session.id]
+                .into_iter()
+                .filter_map(|text| super::search::rank(text, &self.query))
+                .min()
+        })
     }
 
     fn move_by(&mut self, down: bool) {
@@ -315,6 +359,37 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             state.marketplace_dialog = None;
             return None;
         }
+    }
+
+    if let Event::Mouse(mouse) = &event
+        && mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left)
+        && let Some((_, index)) = state
+            .dialog_rows
+            .iter()
+            .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
+    {
+        let index = *index;
+        if let Some(picker) = &mut state.picker {
+            picker.selected = index;
+            picker.error = None;
+        } else if let Some(picker) = &mut state.model_picker {
+            picker.selected = index;
+            picker.normalize_effort();
+        } else if let Some(dialog) = &mut state.marketplace_dialog {
+            if dialog.viewing_plugins {
+                dialog.selected_plugin = index;
+            } else {
+                dialog.selected_market = index;
+                dialog.selected_plugin = 0;
+            }
+        }
+        return handle(
+            state,
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )),
+        );
     }
 
     if let Some(picker) = &mut state.picker {
@@ -617,12 +692,19 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         }
 
         frame.render_widget(Paragraph::new(heading).wrap(Wrap { trim: false }), header);
+        let title_width = body.width.saturating_sub(2) as usize;
+        let title_elapsed = picker.prepare_title_scroll(title_width);
         let rows = picker.matches();
         let visible = (body.height as usize / 2).max(1);
         let first = picker.selected.saturating_sub(visible - 1);
         let mut lines = Vec::new();
 
         for (index, session) in rows.iter().enumerate().skip(first).take(visible) {
+            state.dialog_rows.push((
+                Rect::new(body.x, body.y + ((index - first) * 2) as u16, body.width, 2)
+                    .intersection(body),
+                index,
+            ));
             let selected = index == picker.selected;
             let style = if selected {
                 Style::default()
@@ -635,9 +717,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
             lines.push(Line::styled(
                 format!(
-                    "{} {}",
-                    if selected { "›" } else { " " },
-                    clean(&session.title)
+                    "  {}",
+                    super::render::scrolling_title(
+                        &clean(&session.title),
+                        title_width,
+                        if selected { title_elapsed } else { None },
+                    )
                 ),
                 style,
             ));
@@ -703,6 +788,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 previous_provider = Some(model.provider.as_str());
             }
 
+            state.dialog_rows.push((
+                Rect::new(body.x, body.y + lines.len() as u16, body.width, 1).intersection(body),
+                index,
+            ));
             let selected = index == picker.selected;
             let current = model.qualified_name() == picker.current;
             let ordinal = picker
@@ -722,8 +811,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
             lines.push(Line::styled(
                 format!(
-                    "{} {}. {}{}{}{}",
-                    if selected { "›" } else { " " },
+                    "  {}. {}{}{}{}",
                     ordinal,
                     model.model,
                     if model.supports_vision {
@@ -941,6 +1029,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             let mut entries = Vec::new();
 
             for (index, plugin) in market.plugins.iter().enumerate().skip(first).take(visible) {
+                state.dialog_rows.push((
+                    Rect::new(body.x, body.y + ((index - first) * 2) as u16, body.width, 2)
+                        .intersection(body),
+                    index,
+                ));
                 let selected = index == dialog.selected_plugin;
                 let style = if selected {
                     Style::default()
@@ -953,8 +1046,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
                 entries.push(Line::styled(
                     format!(
-                        "{} {}{}",
-                        if selected { "›" } else { " " },
+                        "  {}{}",
                         if dialog.is_enabled(market, plugin) {
                             "✓ "
                         } else {
@@ -1011,6 +1103,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 .skip(first)
                 .take(visible)
             {
+                state.dialog_rows.push((
+                    Rect::new(body.x, body.y + ((index - first) * 2) as u16, body.width, 2)
+                        .intersection(body),
+                    index,
+                ));
                 let selected = index == dialog.selected_market;
                 let style = if selected {
                     Style::default()
@@ -1021,14 +1118,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     Style::default().add_modifier(Modifier::BOLD)
                 };
 
-                entries.push(Line::styled(
-                    format!(
-                        "{} {}",
-                        if selected { "›" } else { " " },
-                        clean(&market.name)
-                    ),
-                    style,
-                ));
+                entries.push(Line::styled(format!("  {}", clean(&market.name)), style));
                 entries.push(Line::styled(
                     format!(
                         "  {} · {} 个插件",
@@ -1133,6 +1223,93 @@ mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
     use ratatui::{Terminal, backend::TestBackend};
+    #[test]
+    fn resume_search_ranks_titles_and_ids_with_the_shared_matching_rules() {
+        let mut picker = SessionPicker::new(vec![
+            session("one", "a-long-b-long-c"),
+            session("two", "项目 abc"),
+            session("three", "ABC 开头"),
+            session("aabbcc", "按编号查找"),
+        ]);
+        picker.query = "abc".into();
+
+        let ids = picker
+            .matches()
+            .iter()
+            .map(|session| session.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, ["three", "two", "one", "aabbcc"]);
+        picker.query = "项c".into();
+        assert_eq!(picker.matches()[0].id, "two");
+    }
+
+    #[test]
+    fn mouse_confirms_session_rows_and_wheel_only_changes_selection() {
+        use crossterm::event::{MouseButton, MouseEvent};
+        let mut state = UiState::new("model");
+        state.picker = Some(SessionPicker::new(vec![
+            session("a", "first"),
+            session("b", "second"),
+        ]));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| super::super::render::draw(frame, &mut state))
+            .unwrap();
+        let area = state
+            .dialog_rows
+            .iter()
+            .find(|(_, index)| *index == 1)
+            .unwrap()
+            .0;
+        let mut mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        assert_eq!(handle(&mut state, Event::Mouse(mouse)), Some("b".into()));
+        assert_eq!(state.picker.as_ref().unwrap().selected, 1);
+        mouse.kind = MouseEventKind::ScrollUp;
+        handle(&mut state, Event::Mouse(mouse));
+        assert_eq!(state.picker.as_ref().unwrap().selected, 0);
+    }
+
+    #[test]
+    fn selected_session_title_scrolls_and_resets_for_selection_search_and_width() {
+        use std::time::{Duration, Instant};
+
+        let mut picker = SessionPicker::new(vec![
+            session("first", "中文标题 abcdefghijklmnopqrstuvwxyz"),
+            session("second", "另一段很长的会话标题 abcdefghijklmnopqrstuvwxyz"),
+            session("short", "短标题"),
+        ]);
+        picker.prepare_title_scroll(12);
+        picker.title_scroll.as_mut().unwrap().2 = Instant::now() - Duration::from_secs(1);
+
+        assert!(picker.advance_title_scroll());
+        let elapsed = picker.prepare_title_scroll(12);
+        let title = &picker.sessions[0].title;
+        assert_ne!(
+            super::super::render::scrolling_title(title, 12, elapsed),
+            super::super::render::scrolling_title(title, 12, Some(Duration::ZERO)),
+        );
+
+        picker.move_by(true);
+        picker.prepare_title_scroll(12);
+        assert_eq!(picker.title_scroll_tick, 0);
+        picker.title_scroll.as_mut().unwrap().2 = Instant::now() - Duration::from_secs(1);
+        picker.prepare_title_scroll(14);
+        assert_eq!(picker.title_scroll_tick, 0);
+        assert!(picker.title_scroll.as_ref().unwrap().2.elapsed() < Duration::from_secs(1));
+
+        picker.query = "短标题".into();
+        picker.selected = 0;
+        assert!(picker.prepare_title_scroll(12).is_none());
+        assert!(!picker.advance_title_scroll());
+    }
+
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
     }
@@ -1252,7 +1429,7 @@ mod tests {
             state.model.clone(),
             Some(orbit_model::types::ReasoningEffort::Low),
         ));
-        // Cycling left from Low (which is at index 1 of [None, Low]) goes to None ("不思考")
+        // Cycling left from Low (which is at index 1 of [None, Low]) goes to None ("none")
         handle(&mut state, key(KeyCode::Left));
         handle(&mut state, key(KeyCode::Enter));
 
