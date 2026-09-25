@@ -33,7 +33,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.reset_caret();
     state.input_area = Rect::default();
     state.attachment_areas.clear();
-    let width = area.width.saturating_sub(6) as usize;
+    state.tab_areas.clear();
+    let width = area.width.saturating_sub(7) as usize;
     state.input_width = width;
     let (input_lines, cursor) = state.input.visual_lines(width);
     let input_height = input_lines
@@ -71,28 +72,35 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let areas = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(1),
-        Constraint::Length(1),
         Constraint::Length(approval_height),
-        Constraint::Length(input_height + attachment_height + 2),
         Constraint::Length(
             panel_height.min(
                 area.height
                     .saturating_sub(input_height + attachment_height + 8),
             ),
         ),
+        Constraint::Length(input_height + attachment_height + 2),
+        Constraint::Length(1),
         Constraint::Length(1),
     ])
     .split(area);
 
     draw_header(frame, state, areas[0]);
-    draw_transcript(frame, state, areas[1]);
-    draw_status(frame, state, areas[2]);
-    if state.approval.is_some() && !file_modal {
-        super::approval::draw_in(frame, state, areas[3]);
-        state.selection.approval = areas[3];
+    if areas[1].width >= 126 {
+        let content =
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(30)]).split(areas[1]);
+        draw_transcript(frame, state, content[0]);
+        draw_sidebar(frame, state, content[1]);
+    } else {
+        draw_transcript(frame, state, areas[1]);
     }
+    if state.approval.is_some() && !file_modal {
+        super::approval::draw_in(frame, state, areas[2]);
+        state.selection.approval = areas[2];
+    }
+    draw_panel(frame, state, areas[3]);
     draw_composer(frame, state, areas[4], input_lines, cursor);
-    draw_panel(frame, state, areas[5]);
+    draw_status(frame, state, areas[5]);
     let footer = footer_layout(state, areas[6].width as usize);
     state.context_details_visible = footer.context_details_visible;
     if let Some(offset) = footer.context_offset {
@@ -488,14 +496,133 @@ fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     state.link_tooltip_area = area;
 }
 
-fn draw_header(frame: &mut Frame<'_>, _state: &UiState, area: Rect) {
+fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             "   Orbit",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ))),
-        area,
+        Rect::new(area.x, area.y, area.width, 1),
     );
+    if area.height < 2 {
+        return;
+    }
+
+    let active_index = state.tabs.iter().position(|tab| tab.active).unwrap_or(0);
+    let mut labels = Vec::with_capacity(state.tabs.len());
+    for (index, tab) in state.tabs.iter().enumerate() {
+        let title = if tab.title.trim().is_empty() {
+            "新会话".to_owned()
+        } else {
+            safe_output(&tab.title)
+        };
+        labels.push(format!(" {} {} ", index + 1, fit_label(&title, 18, false)));
+    }
+
+    // Keep the selected tab visible when the terminal cannot fit the full row.
+    let budget = area.width.saturating_sub(4) as usize;
+    let mut start = 0;
+    while start < active_index
+        && labels[start..=active_index]
+            .iter()
+            .map(|label| label.width() + 1)
+            .sum::<usize>()
+            > budget
+    {
+        start += 1;
+    }
+    let mut x = area.x + 2;
+    for (index, tab) in state.tabs.iter().enumerate().skip(start) {
+        let available = area.right().saturating_sub(x + 1) as usize;
+        if available < 3 {
+            break;
+        }
+        let label = fit_label(&labels[index], available, false);
+        let width = label.width() as u16;
+        let rect = Rect::new(x, area.y + 1, width, 1);
+        let style = if tab.active {
+            Style::default()
+                .fg(ACCENT)
+                .bg(Color::Rgb(47, 43, 45))
+                .add_modifier(Modifier::BOLD)
+        } else if tab.status == RunStatus::Failed {
+            Style::default().fg(Color::Rgb(220, 111, 122))
+        } else {
+            Style::default().fg(Color::Rgb(177, 171, 171))
+        };
+        frame.render_widget(Paragraph::new(Span::styled(label, style)), rect);
+        state.tab_areas.push((rect, tab.id.clone()));
+        x = x.saturating_add(width + 1);
+    }
+}
+
+fn draw_sidebar(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(BORDER));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width < 4 || inner.height < 6 {
+        return;
+    }
+
+    let project = std::path::Path::new(&state.workspace)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&state.workspace);
+    let value_width = inner.width.saturating_sub(3) as usize;
+    let label = Style::default().fg(Color::Rgb(170, 163, 164));
+    let value = Style::default().fg(Color::Rgb(226, 220, 218));
+    let heading = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let title = state
+        .tabs
+        .iter()
+        .find(|tab| tab.active)
+        .map(|tab| tab.title.as_str())
+        .unwrap_or("新会话");
+    let lines = vec![
+        Line::from(Span::styled("  PROJECT", heading)),
+        Line::from(Span::styled(
+            format!("  {}", fit_label(&safe_output(project), value_width, true)),
+            value,
+        )),
+        Line::from(""),
+        Line::from(Span::styled("  SESSION", heading)),
+        Line::from(Span::styled(
+            format!("  {}", fit_label(&safe_output(title), value_width, false)),
+            value,
+        )),
+        Line::from(Span::styled(
+            format!("  {} 个标签", state.tabs.len()),
+            label,
+        )),
+        Line::from(""),
+        Line::from(Span::styled("  CONTEXT", heading)),
+        Line::from(Span::styled(
+            format!(
+                "  {} / {}",
+                context_percent_label(state),
+                compact_tokens(input_context_budget(state))
+            ),
+            value,
+        )),
+        Line::from(""),
+        Line::from(Span::styled("  MODEL", heading)),
+        Line::from(Span::styled(
+            format!(
+                "  {}",
+                fit_label(&safe_output(&state.model), value_width, false)
+            ),
+            value,
+        )),
+        Line::from(""),
+        Line::from(Span::styled("  Alt+1…9 切换标签", label)),
+        Line::from(Span::styled("  /new 新建 · /close 关闭", label)),
+    ];
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn wordmark() -> Vec<Line<'static>> {
@@ -1077,11 +1204,17 @@ fn draw_composer(
         ..area
     };
     let block = Block::default()
-        .borders(Borders::TOP | Borders::BOTTOM)
+        .borders(Borders::LEFT)
         .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(BORDER));
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(Color::Rgb(43, 40, 43)));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let inner = Rect {
+        y: inner.y.saturating_add(1),
+        height: inner.height.saturating_sub(2),
+        ..inner
+    };
     let attachment_height = u16::from(!state.attachments.is_empty());
     if attachment_height > 0 {
         if state
@@ -1216,7 +1349,27 @@ fn draw_panel(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::app::SessionTab;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
+        let mut state = UiState::new("model");
+        state.tabs = (0..5)
+            .map(|index| SessionTab {
+                id: format!("session-{index}"),
+                title: format!("Conversation {index}"),
+                status: RunStatus::Idle,
+                active: index == 4,
+            })
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+
+        assert!(state.tab_areas.iter().any(|(_, id)| id == "session-4"));
+        assert!(state.tab_areas.iter().all(|(area, _)| area.right() <= 40));
+    }
 
     #[test]
     fn tool_previews_bound_single_line_payloads_without_changing_results() {
@@ -1272,7 +1425,7 @@ mod tests {
         let count = crate::tui::commands::COMMANDS.len();
         assert!(first_page.contains(&format!("1/{count}")));
 
-        state.menu_index = 5;
+        state.menu_index = 6;
         let middle_page = render(&mut state, 100, 20);
         assert!(middle_page.contains("› /resume"));
         assert!(!middle_page.contains("/new"));
@@ -1747,7 +1900,7 @@ mod tests {
         let mut state = UiState::new("model");
         state.workspace = "/tmp/中文项目".into();
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        for (input, column) in [("", 4), ("你好", 8), ("你e\u{301}", 7), ("第一行\n你好", 8)]
+        for (input, column) in [("", 5), ("你好", 9), ("你e\u{301}", 8), ("第一行\n你好", 9)]
         {
             state.input.set(input.into());
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
@@ -1806,7 +1959,7 @@ mod tests {
                 .position(|(x, y, cell)| {
                     (*x, *y) == (caret.x + 1, caret.y)
                         && cell.symbol() == " "
-                        && cell.bg == Color::Reset
+                        && cell.bg == Color::Rgb(43, 40, 43)
                 })
                 .expect(
                     "the terminal needs an explicit reset of the erased wide glyph's trailing half",

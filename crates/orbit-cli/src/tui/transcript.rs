@@ -319,9 +319,8 @@ impl Entry {
     }
 
     fn framed_input(&mut self, text: &str, width: u16, icon: &str) {
-        // A complete frame lets user turns remain visually distinct after their
-        // contents wrap. Keep a plain fallback for terminals too narrow to
-        // draw the two side rails without stealing all useful text width.
+        // User turns sit on a quiet tinted rail, leaving the assistant's prose
+        // visually open. The content still wraps to the transcript width.
         if width < 9 {
             for (index, line) in text.lines().enumerate() {
                 self.push(
@@ -348,46 +347,31 @@ impl Entry {
             return;
         }
 
-        let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
-        // Nerd Font pictograms need an empty following cell to expand into in
-        // terminals such as kitty. Include that cell in the border width.
-        let icon_padding = if icon == super::COMMAND_ICON { " " } else { "" };
-        let top_label = format!("╭─{icon}{icon_padding}─");
-        let trailing = "─".repeat(usize::from(width) - top_label.width() - 1);
-        self.push(
-            Line::from(vec![
-                Span::styled("╭─", border),
-                Span::styled(
-                    format!("{icon}{icon_padding}"),
-                    border.add_modifier(ratatui::style::Modifier::BOLD),
-                ),
-                Span::styled(format!("─{trailing}╮"), border),
-            ]),
-            width,
-        );
-        let inner_width = width - 4;
+        let accent = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
+        let panel = ratatui::style::Style::default().bg(ratatui::style::Color::Rgb(43, 40, 43));
+        let content_style = panel.add_modifier(ratatui::style::Modifier::BOLD);
+        let inner_width = width - 5;
+        let mut first = true;
+        self.push(Line::from(""), width);
         for source in text.split('\n') {
-            let content = Line::from(Span::styled(
-                source.to_owned(),
-                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
-            ));
+            let content = Line::from(Span::styled(source.to_owned(), content_style));
             let (wrapped, _) = wrap_line(&content, inner_width);
             for line in wrapped {
                 let padding = usize::from(inner_width).saturating_sub(line.width());
-                let mut spans = vec![Span::styled("│ ", border)];
+                let marker = if first { icon } else { " " };
+                let mut spans = vec![
+                    Span::styled("▎", accent),
+                    Span::styled(
+                        format!(" {marker} "),
+                        panel.fg(ratatui::style::Color::Rgb(218, 139, 109)),
+                    ),
+                ];
                 spans.extend(line.spans);
-                spans.push(Span::raw(" ".repeat(padding)));
-                spans.push(Span::styled(" │", border));
+                spans.push(Span::styled(" ".repeat(padding + 1), panel));
                 self.push(Line::from(spans), width);
+                first = false;
             }
         }
-        self.push(
-            Line::from(Span::styled(
-                format!("╰{}╯", "─".repeat(usize::from(width) - 2)),
-                border,
-            )),
-            width,
-        );
         self.push(Line::from(""), width);
     }
 }
@@ -766,30 +750,30 @@ mod tests {
     }
 
     #[test]
-    fn commands_keep_the_user_frame_with_a_code_icon() {
+    fn commands_use_the_input_rail_with_a_code_icon() {
         let mut layout = TranscriptLayout::default();
         layout.update(&[TranscriptItem::Command("/compact".into())], None, 32);
         let rows = &layout.entries[0].rows;
+        assert_eq!(rows[0].line.to_string(), "");
         assert!(
-            rows[0]
+            rows[1]
                 .line
                 .to_string()
-                .starts_with(&format!("╭─{} ─", crate::tui::COMMAND_ICON))
+                .starts_with(&format!("▎ {} /compact", crate::tui::COMMAND_ICON))
         );
-        assert_eq!(rows[0].line.width(), 32);
-        assert!(rows[1].line.to_string().contains("/compact"));
+        assert_eq!(rows[1].line.width(), 32);
         assert!(rows.last().unwrap().line.to_string().is_empty());
     }
 
     #[test]
-    fn user_turn_marker_is_joined_to_the_top_border() {
+    fn user_turn_marker_stays_on_the_accent_rail() {
         let mut layout = TranscriptLayout::default();
         layout.update(&[TranscriptItem::User("问题".into())], None, 32);
         assert!(
-            layout.entries[0].rows[0]
+            layout.entries[0].rows[1]
                 .line
                 .to_string()
-                .starts_with("╭─❯─")
+                .starts_with("▎ ❯ 问题")
         );
     }
 
@@ -1019,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn user_turns_use_a_framed_bubble_and_wrap_inside_its_side_rails() {
+    fn user_turns_use_a_tinted_rail_and_wrap_within_the_viewport() {
         let mut layout = TranscriptLayout::default();
         layout.update(
             &[TranscriptItem::User(
@@ -1029,16 +1013,17 @@ mod tests {
             24,
         );
         let rows = &layout.entries[0].rows;
-        assert_eq!(
-            rows.first().unwrap().line.to_string().chars().next(),
-            Some('╭')
-        );
+        assert_eq!(rows.first().unwrap().line.to_string(), "");
         assert_eq!(rows.last().unwrap().line.to_string(), "");
         assert!(
             rows.iter()
-                .any(|row| row.line.to_string().starts_with("│ "))
+                .any(|row| row.line.to_string().starts_with("▎ ❯ "))
         );
-        assert!(rows.iter().any(|row| row.line.to_string().starts_with('╰')));
+        assert!(
+            rows.iter()
+                .skip(2)
+                .any(|row| row.line.to_string().starts_with("▎   "))
+        );
         assert!(rows.iter().all(|row| row.line.width() <= 24));
     }
 

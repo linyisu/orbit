@@ -321,6 +321,7 @@ impl SessionState {
         self.writer.id()
     }
 
+    #[cfg(test)]
     pub fn restore_ui(&self, state: &mut UiState) {
         let mut replay = HistoryReplay::default();
         while !replay.advance(&self.snapshot, state, usize::MAX, Duration::MAX) {}
@@ -455,11 +456,20 @@ impl SessionState {
         })
     }
 
+    #[cfg(test)]
     pub fn install_resume(&mut self, prepared: PreparedResume) {
-        self.writer = prepared.writer;
+        drop(self.swap_resume(prepared));
+    }
+
+    /// Replace the selected session while retaining the previous writer lease.
+    /// A TUI tab can later restore that lease without replaying or reacquiring it.
+    pub fn swap_resume(&mut self, prepared: PreparedResume) -> PreparedResume {
+        let previous = PreparedResume {
+            writer: std::mem::replace(&mut self.writer, prepared.writer),
+            snapshot: std::mem::replace(&mut self.snapshot, prepared.snapshot),
+            git_baseline: std::mem::replace(&mut self.git_baseline, prepared.git_baseline),
+        };
         self.journal = None;
-        self.snapshot = prepared.snapshot;
-        self.git_baseline = prepared.git_baseline;
         if let Some(ws) = &self.audit_workspace {
             ws.clear_session_grants();
         }
@@ -476,41 +486,33 @@ impl SessionState {
             .path()
             .with_extension("command-output")
             .join(self.id());
+        previous
     }
 
-    pub async fn new_session(&mut self, model: String) -> Result<()> {
+    pub async fn prepare_new(&self, model: String) -> Result<PreparedResume> {
         ensure!(!self.active, "cannot switch sessions during a run");
         let writer = self
             .store
             .create(self.snapshot.session.workspace.clone(), model, false)
             .await?;
         let snapshot = self.store.load(writer.id()).await?;
-        self.writer = writer;
-        self.journal = None;
-        self.snapshot = snapshot;
-        self.git_baseline = None;
-        if let Some(ws) = &self.audit_workspace {
-            ws.clear_session_grants();
+        let git_baseline =
+            orbit_tools::git_inspect::capture_baseline(Path::new(&snapshot.session.workspace));
+        if let Some(baseline) = &git_baseline {
+            self.store.save_git_baseline(writer.id(), baseline).await?;
         }
-        if let Some(baseline) =
-            orbit_tools::git_inspect::capture_baseline(Path::new(&self.snapshot.session.workspace))
-        {
-            self.store.save_git_baseline(self.id(), &baseline).await?;
-            self.git_baseline = Some(baseline);
-        }
-        *self.scratch.write().expect("scratch lock poisoned") = self
-            .store
-            .path()
-            .with_extension("workspaces")
-            .join(self.id());
-        *self
-            .command_output
-            .write()
-            .expect("command output lock poisoned") = self
-            .store
-            .path()
-            .with_extension("command-output")
-            .join(self.id());
+
+        Ok(PreparedResume {
+            writer,
+            snapshot,
+            git_baseline,
+        })
+    }
+
+    #[cfg(test)]
+    pub async fn new_session(&mut self, model: String) -> Result<()> {
+        let prepared = self.prepare_new(model).await?;
+        self.install_resume(prepared);
         if let Some(workspace) = self.audit_workspace.clone() {
             self.initialize_audit(workspace, self.audit_limits.clone())
                 .await?;

@@ -15,6 +15,14 @@ pub enum RunStatus {
     Cancelled,
 }
 
+#[derive(Clone, Debug)]
+pub struct SessionTab {
+    pub id: String,
+    pub title: String,
+    pub status: RunStatus,
+    pub active: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolStatus {
     Running,
@@ -49,6 +57,8 @@ pub enum TranscriptItem {
 
 #[derive(Debug)]
 pub struct UiState {
+    pub tabs: Vec<SessionTab>,
+    pub tab_areas: Vec<(ratatui::layout::Rect, String)>,
     pub(super) navigation: super::navigation::Navigation,
     pub approval: Option<orbit_tools::approval::ApprovalPreview>,
     pub approval_area: ratatui::layout::Rect,
@@ -138,6 +148,8 @@ impl UiState {
 
     pub fn new(model: impl Into<String>) -> Self {
         Self {
+            tabs: Vec::new(),
+            tab_areas: Vec::new(),
             navigation: Default::default(),
             approval: None,
             approval_area: ratatui::layout::Rect::default(),

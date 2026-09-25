@@ -12,6 +12,7 @@ mod overlay;
 mod permissions;
 pub mod render;
 mod selection;
+mod tabs;
 pub mod terminal;
 mod tool_display;
 mod transcript;
@@ -28,7 +29,9 @@ use std::{
 };
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use futures_util::StreamExt;
 use orbit_agent::{
     agent::{Agent, AgentConfig, AgentResult},
@@ -166,6 +169,7 @@ pub async fn run(
     )
     .await?;
     refresh_context_usage(&mut state, &history, &tools);
+    let mut tabs = tabs::Tabs::new(&session);
     let mut events = EventStream::new();
     let mut ticks = time::interval(Duration::from_millis(33));
     ticks.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -208,6 +212,14 @@ pub async fn run(
                 if id == session.id() {
                     state.transcript.push(TranscriptItem::CommandResult("当前已是该会话。".into()));
                     state.picker = None;
+                } else if task.is_some() || local_task.is_some() || history_replay.is_some() {
+                    state.transcript.push(TranscriptItem::CommandError(
+                        "当前响应或历史加载结束后才能切换标签。".into(),
+                    ));
+                } else if tabs.restore(&id, &mut session, &mut state, &mut model, &mut history) {
+                    memory_scope.set_session(session.id().into());
+                    state.picker = None;
+                    refresh_context_usage(&mut state, &history, &tools);
                 } else {
                     state.resume_loading = Some("正在读取会话…  Esc 取消".into());
                     if let Some(picker) = &mut state.picker { picker.error = None; }
@@ -225,6 +237,15 @@ pub async fn run(
                     let Some(event) = event else { break };
                     let event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+                    if resume_task.is_none()
+                        && history_replay.is_none()
+                        && let Some(id) = tab_target(&event, &state, &tabs)
+                    {
+                        state.resume_request = Some(id);
+                        dirty = true;
+                        frames.request(time::Instant::now());
+                        continue;
+                    }
                     if resume_task.is_some() || history_replay.is_some() {
                         match &event {
                             Event::Key(key) if key.kind != KeyEventKind::Release && key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) => break,
@@ -452,6 +473,43 @@ pub async fn run(
                                     .split_once(char::is_whitespace)
                                     .map_or(prompt.as_str(), |(command, _)| command);
                                 state.transcript.push(TranscriptItem::Command(prompt.clone()));
+                                if command == "/new" && prompt.trim() == "/new" {
+                                    if task.is_some() {
+                                        state.transcript.push(TranscriptItem::CommandError(
+                                            "当前响应结束后才能新建标签。".into(),
+                                        ));
+                                    } else if let Err(error) = new_tab(
+                                        &mut tabs, &mut session, &mut state, &mut model,
+                                        &mut history, CommandContext {
+                                            tools: &tools,
+                                            instructions: &instructions,
+                                            skills: &skills,
+                                            mcp_statuses: &mcp_statuses,
+                                            model_options: &model_options,
+                                            memory_scope: &memory_scope,
+                                        },
+                                    ).await {
+                                        state.transcript.push(TranscriptItem::CommandError(error.to_string()));
+                                    }
+                                    continue;
+                                }
+                                if command == "/close" && prompt.trim() == "/close" {
+                                    if task.is_some() || local_task.is_some() {
+                                        state.transcript.push(TranscriptItem::CommandError(
+                                            "当前操作结束后才能关闭标签。".into(),
+                                        ));
+                                    } else if tabs.close_active(
+                                        &mut session, &mut state, &mut model, &mut history,
+                                    ) {
+                                        memory_scope.set_session(session.id().into());
+                                        refresh_context_usage(&mut state, &history, &tools);
+                                    } else {
+                                        state.transcript.push(TranscriptItem::CommandError(
+                                            "至少保留一个标签。".into(),
+                                        ));
+                                    }
+                                    continue;
+                                }
                                 if command == "/undo" {
                                     if task.is_some() {
                                         state.transcript.push(TranscriptItem::CommandError(
@@ -657,13 +715,13 @@ pub async fn run(
                     state.resume_loading = None;
                     match result {
                         Ok(Ok((prepared, loaded_history))) => {
-                            session.install_resume(prepared);
-                            memory_scope.set_session(session.id().into());
-                            history = loaded_history;
                             let mut restored = resume_ui_shell(&state);
-                            restored.workspace = session.snapshot.session.workspace.clone();
+                            restored.workspace = prepared.snapshot.session.workspace.clone();
                             restored.resume_loading = Some("正在显示会话历史…".into());
-                            state = restored;
+                            let next_model = ModelClient::new(model.config().clone())?;
+                            tabs.activate(&mut session, &mut state, &mut model, &mut history,
+                                (prepared, restored, next_model, loaded_history));
+                            memory_scope.set_session(session.id().into());
                             restore_model_profile(&mut state, &mut model, &model_options, &session);
                             history_replay = Some(crate::session::HistoryReplay::default());
                         }
@@ -701,6 +759,7 @@ pub async fn run(
                     }
                 }
                 _ = time::sleep_until(frames.deadline()), if frames.pending() => {
+                    tabs.sync_ui(&mut state, &session);
                     terminal::draw_synchronized(&mut terminal, |frame| {
                         render::draw(frame, &mut state);
                         state.selection.paint(frame);
@@ -1046,6 +1105,94 @@ async fn compaction_source_history(
     Ok(restored)
 }
 
+fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<String> {
+    if state.approval.is_some()
+        || state.show_help
+        || state.picker.is_some()
+        || state.model_picker.is_some()
+        || state.marketplace_dialog.is_some()
+    {
+        return None;
+    }
+
+    match event {
+        Event::Key(key)
+            if key.kind != KeyEventKind::Release && key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            let KeyCode::Char(digit @ '1'..='9') = key.code else {
+                return None;
+            };
+            tabs.target(digit.to_digit(10)? as usize - 1)
+                .map(str::to_owned)
+        }
+        Event::Key(key)
+            if key.kind != KeyEventKind::Release
+                && key.code == KeyCode::Tab
+                && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            tabs.adjacent(
+                state.tabs.iter().find(|tab| tab.active)?.id.as_str(),
+                key.modifiers.contains(KeyModifiers::SHIFT),
+            )
+            .map(str::to_owned)
+        }
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => state
+            .tab_areas
+            .iter()
+            .find(|(area, _)| {
+                mouse.column >= area.x
+                    && mouse.column < area.right()
+                    && mouse.row >= area.y
+                    && mouse.row < area.bottom()
+            })
+            .map(|(_, id)| id.clone()),
+        _ => None,
+    }
+}
+
+async fn new_tab(
+    tabs: &mut tabs::Tabs,
+    session: &mut SessionState,
+    state: &mut UiState,
+    model: &mut ModelClient,
+    history: &mut Vec<ChatMessage>,
+    context: CommandContext<'_>,
+) -> Result<()> {
+    let prepared = session.prepare_new(state.model.clone()).await?;
+    let mut next_history = prepared.snapshot.history.clone();
+    crate::instructions::inject(&mut next_history, context.instructions);
+    context.skills.inject(&mut next_history);
+    crate::project_state::inject(
+        &mut next_history,
+        &session.store,
+        &prepared.snapshot.session.project_id,
+        &prepared.snapshot.session.id,
+    )
+    .await?;
+
+    let mut next_state = resume_ui_shell(state);
+    next_state.workspace = prepared.snapshot.session.workspace.clone();
+    next_state.reasoning_effort = state.reasoning_effort;
+    let next_model = ModelClient::new(model.config().clone())?;
+    tabs.activate(
+        session,
+        state,
+        model,
+        history,
+        (prepared, next_state, next_model, next_history),
+    );
+    context.memory_scope.set_session(session.id().into());
+    session
+        .set_model_profile(state.model.clone(), state.reasoning_effort)
+        .await?;
+    if let Some(workspace) = session.audit_workspace.clone() {
+        session
+            .initialize_audit(workspace, session.audit_limits.clone())
+            .await?;
+    }
+    Ok(())
+}
+
 async fn run_command(
     prompt: &str,
     state: &mut UiState,
@@ -1060,7 +1207,7 @@ async fn run_command(
         skills,
         mcp_statuses,
         model_options,
-        memory_scope,
+        memory_scope: _,
     } = context;
     let (command, argument) = prompt
         .split_once(char::is_whitespace)
@@ -1068,35 +1215,6 @@ async fn run_command(
     let argument = argument.trim();
     match command {
         "/exit" | "/quit" if argument.is_empty() => return Ok(true),
-        "/new" if argument.is_empty() => {
-            session.new_session(state.model.clone()).await?;
-            memory_scope.set_session(session.id().into());
-            session
-                .set_model_profile(state.model.clone(), state.reasoning_effort)
-                .await?;
-            history.clear();
-            crate::instructions::inject(history, instructions);
-            skills.inject(history);
-            crate::project_state::inject(
-                history,
-                &session.store,
-                &session.snapshot.session.project_id,
-                session.id(),
-            )
-            .await?;
-            let input = std::mem::take(&mut state.input);
-            let context_tokens = state.context_tokens;
-            let input_context_tokens = state.input_context_tokens;
-            let auto_compact = state.auto_compact;
-            let max_output_tokens = state.max_output_tokens;
-            *state = UiState::new(state.model.clone());
-            state.context_tokens = context_tokens;
-            state.input_context_tokens = input_context_tokens;
-            state.auto_compact = auto_compact;
-            state.max_output_tokens = max_output_tokens;
-            state.input = input;
-            session.restore_ui(state);
-        }
         "/rename" => {
             if argument.is_empty() {
                 state.transcript.push(TranscriptItem::CommandError(
@@ -2589,6 +2707,7 @@ mod tests {
     fn menu_selects_commands_and_busy_enter_routes_commands_locally() {
         let mut state = UiState::new("mock");
         state.input.insert("/");
+        press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
         press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
         assert_eq!(
             press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),

@@ -10,7 +10,11 @@ pub const COMMAND_NAME_WIDTH: usize = 14;
 pub const COMMANDS: &[Command] = &[
     Command {
         name: "/new",
-        description: "开始新会话；旧对话保留，可用 /resume 恢复",
+        description: "在新标签开始会话",
+    },
+    Command {
+        name: "/close",
+        description: "关闭当前标签；会话仍可通过 /resume 恢复",
     },
     Command {
         name: "/rename",
