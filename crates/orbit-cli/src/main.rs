@@ -80,6 +80,13 @@ enum ProjectCommand {
 #[derive(Debug, Subcommand)]
 enum SessionCommand {
     List,
+    /// Delete a closed session, its canonical history, and private sidecar files.
+    Delete {
+        id: String,
+        /// Confirm permanent deletion of this session.
+        #[arg(long)]
+        yes: bool,
+    },
     Show {
         id: String,
     },
@@ -609,6 +616,21 @@ async fn main() -> Result<()> {
                 orbit_store::store::Store::open(session::database_path(cli.database)?).await?;
             match command {
                 SessionCommand::List => println!("{}", session::list_text(&store).await?),
+                SessionCommand::Delete { id, yes } => {
+                    anyhow::ensure!(yes, "永久删除会话需要 --yes；请先确认会话 ID。");
+                    let deleted = store.delete_session(&id).await?;
+                    if let Err(error) = store.reclaim_unused_space().await {
+                        eprintln!("会话已删除，但数据库空间回收失败：{error}");
+                    }
+                    println!(
+                        "{}",
+                        if deleted {
+                            "会话及私有文件已删除。"
+                        } else {
+                            "会话不存在；同 ID 的私有残留文件已清理。"
+                        }
+                    );
+                }
                 SessionCommand::Compactions { id } => println!(
                     "{}",
                     serde_json::to_string_pretty(&store.compactions(&id).await?)?

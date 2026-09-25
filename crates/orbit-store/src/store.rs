@@ -434,6 +434,99 @@ impl Store {
         .await
     }
 
+    /// Explicitly remove one closed conversation and its private sidecar data.
+    /// No automatic retention policy deletes canonical history.
+    pub async fn delete_session(&self, id: &str) -> Result<bool> {
+        ensure!(
+            id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "invalid session ID"
+        );
+        let id = id.to_owned();
+        let path = self.path.clone();
+        let lock_path = path.with_extension("session-locks").join(&id);
+        let lease_path = lock_path.clone();
+        let lease = tokio::task::spawn_blocking(move || -> Result<File> {
+            let lock_root = path.with_extension("session-locks");
+            std::fs::create_dir_all(&lock_root)?;
+            ensure_real_directory_if_present(&lock_root)?;
+            let lock = private_file(&lease_path)?;
+            lock.try_lock()
+                .context("session is open; close it before deleting")?;
+            Ok(lock)
+        })
+        .await??;
+
+        let sidecar_path = self.path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            for extension in ["workspaces", "command-output", "artifacts"] {
+                let root = sidecar_path.with_extension(extension);
+                ensure_real_directory_if_present(&root)?;
+            }
+            Ok(())
+        })
+        .await??;
+
+        let session_id = id.clone();
+        let deleted = self
+            .access(move |conn| {
+                let transaction = conn.transaction()?;
+                let exists: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)",
+                    [&session_id],
+                    |row| row.get(0),
+                )?;
+                if exists {
+                    transaction.execute(
+                        "DELETE FROM events WHERE run_id IN (SELECT id FROM runs WHERE session_id=?1)",
+                        [&session_id],
+                    )?;
+                    transaction.execute("DELETE FROM runs WHERE session_id=?1", [&session_id])?;
+                    transaction.execute("DELETE FROM sessions WHERE id=?1", [&session_id])?;
+                }
+                transaction.commit()?;
+                Ok(exists)
+            })
+            .await?;
+
+        let cleanup_path = self.path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            for extension in ["workspaces", "command-output", "artifacts"] {
+                let root = cleanup_path.with_extension(extension);
+                if !ensure_real_directory_if_present(&root)? {
+                    continue;
+                }
+                let directory = root.join(&id);
+                match std::fs::symlink_metadata(&directory) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        std::fs::remove_file(&directory)?;
+                    }
+                    Ok(metadata) if metadata.is_dir() => {
+                        std::fs::remove_dir_all(&directory)?;
+                    }
+                    Ok(_) => {
+                        std::fs::remove_file(&directory)?;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            std::fs::remove_file(lock_path)?;
+            Ok(())
+        })
+        .await??;
+        drop(lease);
+        Ok(deleted)
+    }
+
+    /// Reclaim free SQLite pages after an explicit session deletion.
+    pub async fn reclaim_unused_space(&self) -> Result<()> {
+        self.access(|conn| {
+            conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
+            Ok(())
+        })
+        .await
+    }
+
     /// Return only actual successful `write_file` / `edit_file` commits. This
     /// reads the central event ledger rather than Git, so it remains useful in
     /// non-Git directories and does not mix in pre-existing user changes.
@@ -1273,6 +1366,21 @@ fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         updated_at: row.get(6)?,
         project_id: row.get(7)?,
     })
+}
+
+fn ensure_real_directory_if_present(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            ensure!(
+                metadata.is_dir(),
+                "private storage root is not a real directory: {}",
+                path.display()
+            );
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub(crate) fn private_file(path: &Path) -> std::io::Result<File> {

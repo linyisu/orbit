@@ -203,6 +203,34 @@ async fn rejects_a_database_from_a_newer_schema() {
 }
 
 #[tokio::test]
+async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let writer = store
+        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    for extension in ["workspaces", "command-output", "artifacts"] {
+        let sidecar = db.path().with_extension(extension).join(&id);
+        std::fs::create_dir_all(&sidecar).unwrap();
+        std::fs::write(sidecar.join("retained"), b"data").unwrap();
+    }
+
+    assert!(store.delete_session(&id).await.is_err());
+    assert!(store.load(&id).await.is_ok());
+    drop(writer);
+
+    assert!(store.delete_session(&id).await.unwrap());
+    assert!(store.load(&id).await.is_err());
+    for extension in ["workspaces", "command-output", "artifacts"] {
+        assert!(!db.path().with_extension(extension).join(&id).exists());
+    }
+    assert!(!store.delete_session(&id).await.unwrap());
+    store.reclaim_unused_space().await.unwrap();
+}
+
+#[tokio::test]
 async fn finalization_rolls_back_events_status_and_context_together() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
