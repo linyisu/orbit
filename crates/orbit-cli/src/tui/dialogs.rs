@@ -37,7 +37,7 @@ pub struct MarketplaceDialog {
     selected_market: usize,
     selected_plugin: usize,
     project_id: String,
-    enabled: std::collections::BTreeSet<(String, String)>,
+    enabled: std::collections::BTreeMap<(String, String), ProjectPlugin>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +67,15 @@ impl MarketplaceDialog {
             project_id,
             enabled: enabled
                 .into_iter()
-                .map(|plugin| (plugin.marketplace_source, plugin.plugin_name))
+                .map(|plugin| {
+                    (
+                        (
+                            plugin.marketplace_source.clone(),
+                            plugin.plugin_name.clone(),
+                        ),
+                        plugin,
+                    )
+                })
                 .collect(),
         }
     }
@@ -100,19 +108,28 @@ impl MarketplaceDialog {
 
     fn is_enabled(&self, market: &Marketplace, plugin: &crate::marketplaces::Plugin) -> bool {
         self.enabled
-            .contains(&(market.source.clone(), plugin.name.clone()))
+            .get(&(market.source.clone(), plugin.name.clone()))
+            .is_some_and(|configured| {
+                configured.marketplace_revision == market.revision
+                    && plugin.source.as_deref() == Some(configured.package_source.as_str())
+            })
     }
 
     fn selected_change(&self) -> Option<ProjectPluginChange> {
         let (market, plugin) = self.selected_plugin()?;
-        if self.is_enabled(market, plugin) {
+        let package = self.inspection.as_ref()?.as_ref().ok()?;
+        if self.is_enabled(market, plugin)
+            && self
+                .enabled
+                .get(&(market.source.clone(), plugin.name.clone()))
+                .is_some_and(|configured| configured.version == package.version)
+        {
             return Some(ProjectPluginChange::Disable {
                 project_id: self.project_id.clone(),
                 marketplace_source: market.source.clone(),
                 plugin_name: plugin.name.clone(),
             });
         }
-        let package = self.inspection.as_ref()?.as_ref().ok()?;
         let package_source = plugin.source.clone()?;
         Some(ProjectPluginChange::Enable(ProjectPlugin {
             project_id: self.project_id.clone(),
@@ -120,6 +137,7 @@ impl MarketplaceDialog {
             plugin_name: plugin.name.clone(),
             package_source,
             version: package.version.clone(),
+            marketplace_revision: market.revision.clone(),
             enabled_at: 0,
         }))
     }
@@ -1211,6 +1229,7 @@ mod tests {
                 name: "official".into(),
                 source: "owner/catalog".into(),
                 directory: "/catalog".into(),
+                revision: None,
                 plugins: vec![
                     crate::marketplaces::Plugin {
                         name: "review".into(),
@@ -1277,6 +1296,7 @@ mod tests {
             name: "official".into(),
             source: "owner/catalog".into(),
             directory: "/catalog".into(),
+            revision: None,
             plugins: vec![crate::marketplaces::Plugin {
                 name: "review".into(),
                 description: "Review pull requests".into(),
@@ -1322,6 +1342,7 @@ mod tests {
                 plugin_name: "review".into(),
                 package_source: "plugins/review".into(),
                 version: Some("1.2.3".into()),
+                marketplace_revision: None,
                 enabled_at: 0,
             }))
         );
@@ -1335,6 +1356,7 @@ mod tests {
             plugin_name: "review".into(),
             package_source: "plugins/review".into(),
             version: Some("1.2.3".into()),
+            marketplace_revision: None,
             enabled_at: 1,
         };
         let mut state = UiState::new("model");

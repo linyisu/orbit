@@ -23,6 +23,10 @@ pub(crate) struct Marketplace {
     pub name: String,
     pub source: String,
     pub directory: PathBuf,
+    /// The immutable commit acquired for a Git source. Local directories have
+    /// no revision because their owner can edit them in place.
+    #[serde(default)]
+    pub revision: Option<String>,
     pub plugins: Vec<Plugin>,
 }
 
@@ -102,6 +106,16 @@ fn enabled_skill_roots_from_markets(
                 .with_context(|| {
                     format!("市场 {} 已不在本地缓存中", configured.marketplace_source)
                 })?;
+            ensure!(
+                market.revision.is_some() || local_directory(&market.source).is_some(),
+                "市场 {} 的旧缓存未记录 Git 提交；请重新添加市场后启用",
+                market.source
+            );
+            ensure!(
+                configured.marketplace_revision == market.revision,
+                "市场 {} 的 Git 提交已变更；请重新检查后启用插件",
+                market.source
+            );
             let plugin = market
                 .plugins
                 .iter()
@@ -228,15 +242,17 @@ impl Store {
         let source = source.trim().to_owned();
         ensure!(!source.is_empty(), "marketplace source cannot be empty");
         fs::create_dir_all(&self.root)?;
-        let directory = if let Some(path) = local_directory(&source) {
-            path.canonicalize().with_context(|| {
+        let (directory, revision) = if let Some(path) = local_directory(&source) {
+            let directory = path.canonicalize().with_context(|| {
                 format!("failed to open marketplace directory {}", path.display())
-            })?
+            })?;
+            (directory, None)
         } else {
             self.clone_git_source(&source).await?
         };
         let mut market = parse_catalog(&directory)?;
         market.source = source;
+        market.revision = revision;
         let mut stored = StoredMarketplaces {
             marketplaces: self.list()?,
         };
@@ -252,7 +268,7 @@ impl Store {
         Ok(market)
     }
 
-    async fn clone_git_source(&self, source: &str) -> Result<PathBuf> {
+    async fn clone_git_source(&self, source: &str) -> Result<(PathBuf, Option<String>)> {
         let url = git_url(source)?;
         let target = self
             .root
@@ -287,6 +303,24 @@ impl Store {
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
+        let revision_output = Command::new("git")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .arg("-C")
+            .arg(&temporary)
+            .args(["rev-parse", "--verify", "HEAD"])
+            .output()
+            .await
+            .context("failed to inspect downloaded marketplace revision")?;
+        ensure!(
+            revision_output.status.success(),
+            "downloaded marketplace has no Git commit"
+        );
+        let revision = String::from_utf8(revision_output.stdout)?.trim().to_owned();
+        ensure!(
+            revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "downloaded marketplace has an invalid Git commit"
+        );
         // Validate before replacing a previously downloaded private copy. A bad
         // update must leave the last known catalogue untouched.
         if let Err(error) = parse_catalog(&temporary) {
@@ -312,7 +346,7 @@ impl Store {
         if replaced {
             fs::remove_dir_all(backup)?;
         }
-        Ok(target)
+        Ok((target, Some(revision)))
     }
 }
 
@@ -413,6 +447,7 @@ fn parse_catalog(directory: &Path) -> Result<Marketplace> {
         name: name.into(),
         source: String::new(),
         directory: directory.to_path_buf(),
+        revision: None,
         plugins,
     })
 }
@@ -561,6 +596,7 @@ mod tests {
             name: "market".into(),
             source: "local".into(),
             directory: market.to_path_buf(),
+            revision: None,
             plugins: vec![],
         };
         let plugin = Plugin {
@@ -594,6 +630,7 @@ mod tests {
             name: "market".into(),
             source: "owner/market".into(),
             directory: market_root,
+            revision: Some("a".repeat(40)),
             plugins: vec![Plugin {
                 name: "review".into(),
                 description: "Review".into(),
@@ -606,6 +643,7 @@ mod tests {
             plugin_name: "review".into(),
             package_source: "plugins/review".into(),
             version: Some("1.2.3".into()),
+            marketplace_revision: Some("a".repeat(40)),
             enabled_at: 0,
         };
 
@@ -618,11 +656,25 @@ mod tests {
 
         let stale = ProjectPlugin {
             version: Some("1.0.0".into()),
-            ..enabled
+            ..enabled.clone()
         };
-        let stale_roots = enabled_skill_roots_from_markets(&[stale], &[market]);
+        let stale_roots = enabled_skill_roots_from_markets(&[stale], std::slice::from_ref(&market));
         assert!(stale_roots.roots.is_empty());
         assert!(stale_roots.diagnostics[0].contains("重新检查后启用"));
+
+        let updated_market = Marketplace {
+            revision: Some("b".repeat(40)),
+            ..market.clone()
+        };
+        let unchanged_version = ProjectPlugin {
+            version: Some("1.2.3".into()),
+            marketplace_revision: Some("a".repeat(40)),
+            ..enabled
+        };
+        let updated_roots =
+            enabled_skill_roots_from_markets(&[unchanged_version], &[updated_market]);
+        assert!(updated_roots.roots.is_empty());
+        assert!(updated_roots.diagnostics[0].contains("Git 提交已变更"));
     }
 
     #[test]

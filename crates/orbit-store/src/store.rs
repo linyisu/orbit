@@ -47,7 +47,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 15,
+                version <= 16,
                 "database schema {version} is newer than this Orbit supports"
             );
             if version == 0 {
@@ -270,6 +270,19 @@ impl Store {
                      );
                      PRAGMA user_version=15;",
                 )?;
+            }
+            if version < 16 {
+                let has_revision: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('project_plugins') WHERE name='marketplace_revision')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if !has_revision {
+                    connection.execute_batch(
+                        "ALTER TABLE project_plugins ADD COLUMN marketplace_revision TEXT;",
+                    )?;
+                }
+                connection.execute_batch("PRAGMA user_version=16;")?;
             }
             connection.execute_batch("COMMIT;")?;
             Ok(Self {
@@ -777,7 +790,7 @@ impl Store {
         let project_id = project_id.to_owned();
         self.access(move |conn| {
             let mut statement = conn.prepare(
-                "SELECT project_id,marketplace_source,plugin_name,package_source,version,enabled_at
+                "SELECT project_id,marketplace_source,plugin_name,package_source,version,enabled_at,marketplace_revision
                  FROM project_plugins WHERE project_id=?1
                  ORDER BY enabled_at DESC, plugin_name, marketplace_source",
             )?;
@@ -802,11 +815,12 @@ impl Store {
             )?;
             ensure!(project_exists, "project not found");
             transaction.execute(
-                "INSERT INTO project_plugins(project_id,marketplace_source,plugin_name,package_source,version)
-                 VALUES(?1,?2,?3,?4,?5)
+                "INSERT INTO project_plugins(project_id,marketplace_source,plugin_name,package_source,version,marketplace_revision)
+                 VALUES(?1,?2,?3,?4,?5,?6)
                  ON CONFLICT(project_id,marketplace_source,plugin_name) DO UPDATE SET
                     package_source=excluded.package_source,
                     version=excluded.version,
+                    marketplace_revision=excluded.marketplace_revision,
                     enabled_at=unixepoch()",
                 params![
                     plugin.project_id,
@@ -814,10 +828,11 @@ impl Store {
                     plugin.plugin_name,
                     plugin.package_source,
                     plugin.version,
+                    plugin.marketplace_revision,
                 ],
             )?;
             let saved = transaction.query_row(
-                "SELECT project_id,marketplace_source,plugin_name,package_source,version,enabled_at
+                "SELECT project_id,marketplace_source,plugin_name,package_source,version,enabled_at,marketplace_revision
                  FROM project_plugins WHERE project_id=?1 AND marketplace_source=?2 AND plugin_name=?3",
                 params![plugin.project_id, plugin.marketplace_source, plugin.plugin_name],
                 project_plugin_row,
@@ -1019,6 +1034,12 @@ fn validate_project_plugin(plugin: &ProjectPlugin) -> Result<()> {
         );
         ensure!(version.len() <= 256, "plugin version exceeds 256 bytes");
     }
+    if let Some(revision) = &plugin.marketplace_revision {
+        ensure!(
+            revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "marketplace revision must be a Git commit ID"
+        );
+    }
     Ok(())
 }
 
@@ -1082,6 +1103,7 @@ fn project_plugin_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectPlugin
         package_source: row.get(3)?,
         version: row.get(4)?,
         enabled_at: row.get(5)?,
+        marketplace_revision: row.get(6)?,
     })
 }
 

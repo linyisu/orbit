@@ -191,7 +191,7 @@ async fn rejects_a_database_from_a_newer_schema() {
     let store = Store::open(db.path()).await.unwrap();
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=16").unwrap();
+    connection.execute_batch("PRAGMA user_version=17").unwrap();
     drop(connection);
 
     let error = Store::open(db.path())
@@ -310,6 +310,7 @@ async fn project_plugins_are_central_stable_and_independent_from_market_cache() 
             plugin_name: "reviewer".into(),
             package_source: "plugins/reviewer".into(),
             version: Some("1.2.3".into()),
+            marketplace_revision: Some("a".repeat(40)),
             enabled_at: 0,
         })
         .await
@@ -468,6 +469,15 @@ async fn project_memory_migration_keeps_only_unambiguous_session_ownership() {
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL DEFAULT 1,
                 updated_at INTEGER NOT NULL DEFAULT 1
+             );
+             CREATE TABLE project_plugins (
+                project_id TEXT NOT NULL,
+                marketplace_source TEXT NOT NULL,
+                plugin_name TEXT NOT NULL,
+                package_source TEXT NOT NULL,
+                version TEXT,
+                enabled_at INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY(project_id,marketplace_source,plugin_name)
              );
              PRAGMA user_version=9;",
         )

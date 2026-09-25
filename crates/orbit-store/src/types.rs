@@ -143,7 +143,7 @@ pub struct SessionMemory {
 /// A plugin package deliberately enabled for a stable project. Package files
 /// remain in Orbit's private data directory; this record never writes markers
 /// into the user's workspace. A session snapshot will later pin an exact
-/// package revision before tools or hooks can run.
+/// Git marketplace revisions are pinned when the package is enabled.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectPlugin {
     pub project_id: String,
@@ -151,6 +151,8 @@ pub struct ProjectPlugin {
     pub plugin_name: String,
     pub package_source: String,
     pub version: Option<String>,
+    #[serde(default)]
+    pub marketplace_revision: Option<String>,
     pub enabled_at: i64,
 }
 
