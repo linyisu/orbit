@@ -127,6 +127,9 @@ pub fn normalize_mount_target(target: &Path) -> Result<PathBuf, RuntimeError> {
     Ok(normalized)
 }
 
+/// Sandbox targets reserve all of /tmp because a user mount could replace the
+/// isolated temporary filesystem. This is intentionally stricter than host
+/// capability paths, where an explicitly approved /tmp/file can be accessed.
 pub fn is_reserved_mount_target(normalized_target: &Path) -> bool {
     const EXACT_RESERVED: &[&str] = &["/", "/opt", "/opt/orbit-cache"];
     const PREFIX_RESERVED: &[&str] = &[
@@ -162,6 +165,8 @@ pub fn is_reserved_mount_target(normalized_target: &Path) -> bool {
     false
 }
 
+/// Reserved host paths for external capabilities and mount sources. Unlike a
+/// sandbox mount target, a descendant of host /tmp may be granted explicitly.
 pub fn is_reserved_system_path(path: &Path) -> bool {
     const EXACT_RESERVED: &[&str] = &["/", "/tmp", "/orbit-command.sh", "/opt", "/opt/orbit-cache"];
     const PREFIX_RESERVED: &[&str] = &[

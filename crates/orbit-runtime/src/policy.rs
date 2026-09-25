@@ -421,11 +421,7 @@ impl PolicyEngine {
                 if let Ok(rel) = canon.strip_prefix(ws_canon) {
                     for component in rel.components() {
                         let name = component.as_os_str().to_string_lossy();
-                        if name == ".git"
-                            || name == ".env"
-                            || name.starts_with(".env.")
-                            || name.starts_with(".orbit-write-")
-                        {
+                        if crate::filesystem::path_security::is_protected_workspace_name(&name) {
                             return PolicyDecision::Denied(format!(
                                 "path '{}' is protected metadata and cannot be granted",
                                 canon.display()

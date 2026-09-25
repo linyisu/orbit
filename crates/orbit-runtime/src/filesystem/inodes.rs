@@ -110,10 +110,7 @@ pub(crate) fn is_reserved_workspace_inode(
             let meta = std::fs::symlink_metadata(&path).map_err(failed)?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            let reserved = name == ".git"
-                || name == ".env"
-                || name.starts_with(".env.")
-                || name.starts_with(".orbit-write-");
+            let reserved = super::path_security::is_protected_workspace_name(&name);
             if reserved {
                 if (meta.dev(), meta.ino()) == candidate {
                     return Ok(true);

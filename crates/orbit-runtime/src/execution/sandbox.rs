@@ -1042,10 +1042,8 @@ fn collect_masked_paths(
             let dev = meta.dev();
             let ino = meta.ino();
 
-            let is_protected_name = name == ".git"
-                || name == ".env"
-                || name.starts_with(".env.")
-                || name.starts_with(".orbit-write-");
+            let is_protected_name =
+                crate::filesystem::path_security::is_protected_workspace_name(&name);
 
             if is_protected_name {
                 protected_inodes.insert((dev, ino));

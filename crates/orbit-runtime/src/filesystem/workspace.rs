@@ -214,10 +214,7 @@ impl Workspace {
             match component {
                 Component::Normal(name) => {
                     let name_text = name.to_string_lossy();
-                    if matches!(name_text.as_ref(), ".git" | ".env")
-                        || name_text.starts_with(".env.")
-                        || name_text.starts_with(".orbit-write-")
-                    {
+                    if super::path_security::is_protected_workspace_name(&name_text) {
                         return Err(WorkspaceError::ProtectedPath);
                     }
                     parts.push(name);
@@ -375,10 +372,7 @@ impl Workspace {
                     .to_os_string();
 
                 let name_text = file_name.to_string_lossy();
-                if matches!(name_text.as_ref(), ".git" | ".env")
-                    || name_text.starts_with(".env.")
-                    || name_text.starts_with(".orbit-write-")
-                {
+                if super::path_security::is_protected_workspace_name(&name_text) {
                     return Err(WorkspaceError::ProtectedPath);
                 }
 

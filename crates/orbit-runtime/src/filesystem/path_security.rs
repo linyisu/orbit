@@ -5,6 +5,14 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+/// Metadata names Orbit never exposes or grants from a workspace. Keep the
+/// file API, capability policy, inode guard, and sandbox masks in sync.
+pub(crate) fn is_protected_workspace_name(name: &str) -> bool {
+    matches!(name, ".git" | ".env")
+        || name.starts_with(".env.")
+        || name.starts_with(".orbit-write-")
+}
+
 /// A normalized and canonicalized path representation that defends against
 /// relative traversal, symlink spoofing, and directory aliasing.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
