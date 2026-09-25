@@ -172,7 +172,7 @@ pub(crate) fn is_orbit_instruction(message: &ChatMessage) -> bool {
     matches!(message, ChatMessage::System { content } if content.starts_with(MESSAGE_PREFIX))
 }
 
-fn default_user_instruction_dir() -> Option<PathBuf> {
+pub(crate) fn default_user_instruction_dir() -> Option<PathBuf> {
     if let Some(path) = env::var_os("ORBIT_HOME").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(path));
     }

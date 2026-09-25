@@ -19,6 +19,16 @@ pub(super) struct Tabs {
 }
 
 impl Tabs {
+    pub fn has_other_tabs(&self) -> bool {
+        self.order.len() > 1
+    }
+
+    pub fn has_drafts(&self) -> bool {
+        self.parked
+            .values()
+            .any(|tab| !tab.state.input.text.is_empty() || !tab.state.attachments.is_empty())
+    }
+
     pub fn new(session: &SessionState) -> Self {
         Self {
             order: vec![session.id().to_owned()],

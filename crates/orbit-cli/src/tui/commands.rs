@@ -89,6 +89,14 @@ pub const COMMANDS: &[Command] = &[
         description: "ask 逐次确认 · auto 工作区编辑与离线只读命令 · YOLO 自动确认",
     },
     Command {
+        name: "/cd",
+        description: "将当前会话移动到另一项目；用法 /cd <路径>",
+    },
+    Command {
+        name: "/editor",
+        description: "使用外部编辑器编写草稿；保存返回后按 Enter 发送",
+    },
+    Command {
         name: "/exit",
         description: "退出 Orbit",
     },

@@ -68,11 +68,14 @@ fn restore() {
 
 impl TerminalGuard {
     pub fn enter() -> anyhow::Result<(Self, AppTerminal)> {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            restore();
-            previous(info);
-        }));
+        static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
+        PANIC_HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                restore();
+                previous(info);
+            }));
+        });
         enable_raw_mode()?;
         let guard = Self;
         let mut stdout = io::stdout();
@@ -94,6 +97,29 @@ impl TerminalGuard {
 
         Ok((guard, terminal))
     }
+}
+
+pub fn suspend() {
+    restore();
+}
+
+pub fn resume(terminal: &mut AppTerminal) -> io::Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture,
+        Hide
+    )?;
+    stdout.write_all(b"\x1b[?1002l\x1b[?1003h\x1b[?1007s\x1b[?1007l")?;
+    stdout.flush()?;
+    let (width, height) = terminal_size()?;
+    *terminal = fixed_terminal(io::stdout(), Rect::new(0, 0, width, height))?;
+    prime_full_redraw(terminal);
+
+    Ok(())
 }
 
 impl Drop for TerminalGuard {

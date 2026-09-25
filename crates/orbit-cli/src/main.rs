@@ -690,11 +690,97 @@ async fn main() -> Result<()> {
     }
 }
 
+pub(crate) struct TuiOptions {
+    config: PathBuf,
+    database: PathBuf,
+    allow_mcp_start: bool,
+    home: Option<PathBuf>,
+    config_home: Option<PathBuf>,
+    instruction_dir: Option<PathBuf>,
+    editor_command: String,
+}
+
+pub(crate) struct PreparedTui {
+    session: session::SessionState,
+    resources: TuiResources,
+}
+
+pub(crate) struct TuiResources {
+    model: ModelClient,
+    model_name: String,
+    tools: orbit_agent::tool::ToolRegistry,
+    undo_writer: orbit_tools::write_file::WriteFile,
+    approvals: orbit_tools::approval::ApprovalReceiver,
+    budget: tui::RequestBudget,
+    workspace: orbit_runtime::filesystem::Workspace,
+    command_limits: orbit_tools::run_command::CommandLimits,
+    moved: bool,
+}
+
 async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs) -> Result<()> {
-    let instructions = instructions::load_current();
-    let database = session::database_path(database)?;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let options = TuiOptions {
+        config: std::path::absolute(config_path)?,
+        database: session::database_path(database)?,
+        allow_mcp_start: args.allow_mcp_start,
+        config_home: std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|path| path.join(".config"))),
+        home,
+        instruction_dir: instructions::default_user_instruction_dir(),
+        editor_command: std::env::var("VISUAL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                std::env::var("EDITOR")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .unwrap_or_else(|| "vi".into()),
+    };
+    let mut prepared = prepare_tui(&options, &std::env::current_dir()?, args.resume).await?;
+
+    while let Some(next) = tui::run(prepared, &options).await? {
+        prepared = next;
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn prepare_tui(
+    options: &TuiOptions,
+    directory: &std::path::Path,
+    resume: Option<String>,
+) -> Result<PreparedTui> {
+    let config = FileConfig::load(&options.config)?;
+    let model = config.default_model_option()?.qualified_name();
+    let mut session =
+        session::SessionState::open_in(options.database.clone(), resume, model, directory).await?;
+    let resources = prepare_tui_resources(options, directory, &session).await?;
+    session
+        .initialize_audit(
+            resources.workspace.clone(),
+            resources.command_limits.clone(),
+        )
+        .await?;
+
+    Ok(PreparedTui { session, resources })
+}
+
+pub(crate) async fn prepare_tui_resources(
+    options: &TuiOptions,
+    directory: &std::path::Path,
+    session: &session::SessionState,
+) -> Result<TuiResources> {
+    let config_path = &options.config;
+    let instructions = instructions::load_for(
+        directory,
+        options.instruction_dir.as_deref(),
+        instructions::MAX_INSTRUCTION_BYTES,
+    );
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
-    let file_config = FileConfig::load(&config_path)?;
+    let file_config = FileConfig::load(config_path)?;
     let model_options = file_config.model_options()?;
     let default_model = file_config.default_model_option()?;
     let agent_config = file_config.agent_config();
@@ -706,37 +792,37 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     let context_tokens = default_model.context_tokens;
     let input_context_tokens = default_model.input_context_tokens;
     let client = ModelClient::new(default_model.config)?;
-    let mut session =
-        session::SessionState::open(database, args.resume, model_name.clone()).await?;
-    let enabled_plugins = session
-        .store
-        .project_plugins(&session.snapshot.session.project_id)
-        .await?;
+    let target_project = session.store.resolve_project(directory).await?;
+    let enabled_plugins = session.store.project_plugins(&target_project.id).await?;
     let plugin_skill_roots = crate::marketplaces::enabled_skill_roots(&enabled_plugins);
-    let skills = skills::Skills::discover_current_with_plugin_roots(plugin_skill_roots.roots);
+    let skills = skills::Skills::discover_with_plugin_roots(
+        directory,
+        options.home.clone(),
+        options.config_home.clone(),
+        plugin_skill_roots.roots,
+    );
     let undo_writer = runtime::workspace_writer(
-        &config_path,
+        directory,
+        config_path,
         session.store.path(),
         approvals.clone(),
         Some(file_config.permissions.clone()),
     )?;
     let runtime = runtime::workspace_tools(
-        &config_path,
+        directory,
+        config_path,
         Some(session.store.path()),
         Some(approvals),
         command_limits,
         web,
         mcp,
-        args.allow_mcp_start,
+        options.allow_mcp_start,
         Some(session.scratch.clone()),
         Some(session.command_output.clone()),
         Some(file_config.permissions.clone()),
     )
     .await?;
-    session
-        .initialize_audit(runtime.workspace.clone(), runtime.command_limits.clone())
-        .await?;
-    let audit_workspace = runtime.workspace;
+    let audit_workspace = runtime.workspace.clone();
     let mut tools = runtime.tools;
     let memory_scope = project_state::MemoryScope::new(session.id().into());
     verification::register(
@@ -744,20 +830,22 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         session.store.clone(),
         memory_scope.clone(),
         audit_workspace,
-        runtime.command_limits,
+        runtime.command_limits.clone(),
     );
     history::register(&mut tools, session.store.clone(), memory_scope.clone());
     project_state::register(&mut tools, session.store.clone(), memory_scope.clone());
     skills.register_tool(&mut tools);
 
-    tui::run(
-        client,
+    Ok(TuiResources {
+        moved: false,
+        workspace: runtime.workspace,
+        command_limits: runtime.command_limits,
+        model: client,
         model_name,
         tools,
-        session,
         undo_writer,
-        approval_receiver,
-        tui::RequestBudget {
+        approvals: approval_receiver,
+        budget: tui::RequestBudget {
             context_tokens,
             input_context_tokens,
             max_output_tokens,
@@ -772,8 +860,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
             mcp_statuses: runtime.mcp_statuses,
             memory_scope,
         },
-    )
-    .await
+    })
 }
 
 async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -> Result<()> {
@@ -857,6 +944,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     };
 
     let runtime = runtime::workspace_tools(
+        &std::env::current_dir()?,
         &config_path,
         Some(session.store.path()),
         approvals,
@@ -1241,6 +1329,73 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
 mod config_tests {
     use super::*;
     use orbit_agent::tool::{ClosureTool, ToolRegistry};
+
+    #[tokio::test]
+    async fn project_resources_follow_the_destination_without_changing_process_cwd() {
+        let directory = tempfile::tempdir().unwrap();
+        let original_cwd = std::env::current_dir().unwrap();
+        let old = directory.path().join("old");
+        let new = directory.path().join("new");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::create_dir(&new).unwrap();
+        std::fs::write(new.join("AGENTS.md"), "destination-specific instructions").unwrap();
+        std::fs::write(old.join("marker.txt"), "old project").unwrap();
+        std::fs::write(new.join("marker.txt"), "new project").unwrap();
+        let config = directory.path().join("config.toml");
+        std::fs::write(
+            &config,
+            r#"default_provider = "test"
+[providers.test]
+base_url = "http://127.0.0.1:1/v1"
+api_key = "test-only"
+[[providers.test.models]]
+id = "test"
+"#,
+        )
+        .unwrap();
+        let options = TuiOptions {
+            config,
+            database: directory.path().join("test.db"),
+            allow_mcp_start: false,
+            home: None,
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        let prepared = prepare_tui(&options, &old, None).await.unwrap();
+        let id = prepared.session.id().to_owned();
+
+        let resources = prepare_tui_resources(&options, &new, &prepared.session)
+            .await
+            .unwrap();
+        let output = resources
+            .tools
+            .execute(
+                orbit_model::types::ToolCall::function(
+                    "read",
+                    "read_file",
+                    serde_json::json!({ "path": "marker.txt" }),
+                ),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(output.content.contains("new project"), "{output:?}");
+        assert!(
+            resources
+                .budget
+                .instructions
+                .content
+                .contains("destination-specific instructions")
+        );
+        assert_eq!(prepared.session.id(), id);
+        assert_eq!(
+            prepared.session.snapshot.session.workspace,
+            old.to_string_lossy()
+        );
+        assert_eq!(std::env::current_dir().unwrap(), original_cwd);
+    }
 
     #[test]
     fn provider_debug_redacts_credentials() {

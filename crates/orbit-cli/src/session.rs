@@ -231,11 +231,17 @@ impl SessionState {
     }
 
     pub async fn open(path: PathBuf, resume: Option<String>, model: String) -> Result<Self> {
+        Self::open_in(path, resume, model, &std::env::current_dir()?).await
+    }
+
+    pub async fn open_in(
+        path: PathBuf,
+        resume: Option<String>,
+        model: String,
+        directory: &Path,
+    ) -> Result<Self> {
         let store = Store::open(path).await?;
-        let workspace = std::env::current_dir()?
-            .canonicalize()?
-            .to_string_lossy()
-            .into_owned();
+        let workspace = directory.canonicalize()?.to_string_lossy().into_owned();
         let project = store.resolve_project(&workspace).await?;
         let creating = resume.is_none();
         let writer = if let Some(id) = resume {
@@ -288,6 +294,25 @@ impl SessionState {
             active: false,
             journal: None,
         })
+    }
+
+    pub async fn move_to(
+        &mut self,
+        workspace: orbit_runtime::filesystem::Workspace,
+        limits: orbit_tools::run_command::CommandLimits,
+    ) -> Result<()> {
+        ensure!(!self.active, "请先结束当前响应再移动会话");
+        let baseline = orbit_tools::git_inspect::capture_baseline(workspace.root());
+        let session = self
+            .writer
+            .move_to(workspace.root(), baseline.clone())
+            .await?;
+
+        self.snapshot.session = session;
+        self.git_baseline = baseline;
+        self.audit_workspace = Some(workspace);
+        self.audit_limits = limits;
+        Ok(())
     }
 
     pub async fn initialize_audit(

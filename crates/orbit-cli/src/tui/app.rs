@@ -230,6 +230,13 @@ impl UiState {
         }
     }
 
+    pub fn restore_editor_draft(&mut self, text: String) {
+        self.input.set(text);
+        self.selection.clear();
+        self.menu_index = 0;
+        self.menu_dismissed = true;
+    }
+
     pub fn submit(&mut self, prompt: String) {
         self.transcript.push(TranscriptItem::User(prompt));
         self.begin_run();

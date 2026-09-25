@@ -1673,6 +1673,41 @@ mod tests {
         assert!(!summary.starts_with("set -e"), "{summary}");
     }
 
+    #[tokio::test]
+    async fn editor_returns_to_home_until_the_draft_is_sent() {
+        let directory = tempfile::tempdir().unwrap();
+        let editor = super::super::editor::Editor::new("/bin/true".into());
+        let mut state = UiState::new("model");
+        state.tabs.push(SessionTab {
+            id: "new".into(),
+            title: "新会话".into(),
+            status: RunStatus::Idle,
+            active: true,
+        });
+        state.input.set("/editor".into());
+        state.input.take();
+        let text = editor
+            .edit("尚未发送的草稿\n第二行", directory.path())
+            .await
+            .unwrap();
+
+        state.restore_editor_draft(text);
+        let screen = render(&mut state, 140, 40);
+
+        assert!(state.transcript.is_empty());
+        assert_eq!(state.status, RunStatus::Idle);
+        assert!(state.input_area.x > 20);
+        assert!(state.input_area.y < 30);
+        assert!(screen.replace(' ', "").contains("尚未发送的草稿"));
+        assert_eq!(state.tabs.len(), 1);
+
+        let prompt = state.input.take().unwrap();
+        state.submit(prompt);
+        render(&mut state, 140, 40);
+        assert!(state.input_area.x < 20);
+        assert!(!state.transcript.is_empty());
+    }
+
     #[test]
     fn command_menu_limits_visible_items_and_tracks_selection() {
         let mut state = UiState::new("model");

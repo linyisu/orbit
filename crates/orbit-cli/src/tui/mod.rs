@@ -4,6 +4,8 @@ mod approval_diff;
 mod changes;
 pub mod commands;
 mod dialogs;
+mod directory;
+mod editor;
 mod frames;
 pub mod input;
 mod languages;
@@ -113,14 +115,24 @@ pub struct RequestBudget {
 }
 
 pub async fn run(
-    mut model: ModelClient,
-    model_name: String,
-    tools: ToolRegistry,
-    mut session: SessionState,
-    undo_writer: orbit_tools::write_file::WriteFile,
-    mut approvals: orbit_tools::approval::ApprovalReceiver,
-    budget: RequestBudget,
-) -> Result<()> {
+    setup: crate::PreparedTui,
+    options: &crate::TuiOptions,
+) -> Result<Option<crate::PreparedTui>> {
+    let crate::PreparedTui {
+        mut session,
+        resources,
+    } = setup;
+    let crate::TuiResources {
+        mut model,
+        model_name,
+        tools,
+        undo_writer,
+        mut approvals,
+        budget,
+        moved,
+        ..
+    } = resources;
+    let mut next_workspace = None;
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut state = UiState::new(model_name);
     let RequestBudget {
@@ -156,6 +168,12 @@ pub async fn run(
     }
 
     state.workspace = session.snapshot.session.workspace.clone();
+    let mut move_notice = moved.then(|| format!("Moved to {}", state.workspace));
+    if history_replay.is_none()
+        && let Some(notice) = move_notice.take()
+    {
+        state.transcript.push(TranscriptItem::CommandResult(notice));
+    }
 
     for diagnostic in plugin_skill_diagnostics {
         state.transcript.push(TranscriptItem::Notice(format!(
@@ -176,6 +194,7 @@ pub async fn run(
     .await?;
     refresh_context_usage(&mut state, &history, &tools);
     let mut tabs = tabs::Tabs::new(&session);
+    let editor = editor::Editor::new(options.editor_command.clone());
     let mut events = EventStream::new();
     let mut ticks = time::interval(Duration::from_millis(33));
     ticks.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -585,6 +604,55 @@ pub async fn run(
                                     .split_once(char::is_whitespace)
                                     .map_or(prompt.as_str(), |(command, _)| command);
 
+                                if command == "/cd" {
+                                    if task.is_some() || marketplace_task.is_some() || tabs.has_drafts() || !state.attachments.is_empty() {
+                                        state.transcript.push(TranscriptItem::CommandError("请先结束运行，并处理各标签中未发送的草稿和附件。".into()));
+                                        continue;
+                                    }
+
+                                    if tabs.has_other_tabs() {
+                                        state.transcript.push(TranscriptItem::CommandError("移动会话前请先关闭其他标签；它们仍可通过 /resume 恢复。".into()));
+                                        continue;
+                                    }
+
+                                    let argument = prompt.split_once(char::is_whitespace).map_or("", |(_, text)| text.trim());
+                                    match directory::resolve(argument, std::path::Path::new(&state.workspace), options.home.as_deref()) {
+                                        Ok(path) if path == std::path::Path::new(&state.workspace) => {}
+                                        Ok(path) => match crate::prepare_tui_resources(options, &path, &session).await {
+                                            Ok(mut prepared) => {
+                                                match session.move_to(prepared.workspace.clone(), prepared.command_limits.clone()).await {
+                                                    Ok(()) => { prepared.moved = true; next_workspace = Some(prepared); break; }
+                                                    Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("无法移动会话：{error:#}"))),
+                                                }
+                                            }
+                                            Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("无法切换目录：{error:#}"))),
+                                        },
+                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("{error:#}"))),
+                                    }
+                                    continue;
+                                }
+                                if command == "/editor" {
+                                    if task.is_some() {
+                                        state.transcript.push(TranscriptItem::CommandError("请等待当前响应结束后再打开编辑器。".into()));
+                                        continue;
+                                    }
+
+                                    let draft = prompt.split_once(char::is_whitespace).map_or("", |(_, text)| text).to_owned();
+                                    state.input.set(draft.clone());
+                                    drop(events);
+                                    terminal::suspend();
+                                    let edited = editor.edit(&draft, std::path::Path::new(&state.workspace)).await;
+                                    terminal::resume(&mut terminal)?;
+                                    events = EventStream::new();
+
+                                    match edited {
+                                        Ok(text) => state.restore_editor_draft(text),
+                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("{error:#}"))),
+                                    }
+                                    state.selection.clear();
+                                    state.menu_dismissed = true;
+                                    continue;
+                                }
                                 if !matches!(command, "/resume" | "/sessions") {
                                     state.transcript.push(TranscriptItem::Command(prompt.clone()));
                                 }
@@ -908,6 +976,9 @@ pub async fn run(
                         if done {
                             history_replay = None;
                             state.resume_loading = None;
+                            if let Some(notice) = move_notice.take() {
+                                state.transcript.push(TranscriptItem::CommandResult(notice));
+                            }
                             refresh_context_usage(&mut state, &history, &tools);
                         } else {
                             state.resume_loading = Some(format!("正在显示会话历史…  {}/{}", replay.completed_runs(), session.snapshot.runs.len()));
@@ -979,7 +1050,9 @@ pub async fn run(
 
     let saved = session.close().await;
 
-    result.and(saved)
+    result.and(saved)?;
+
+    Ok(next_workspace.map(|resources| crate::PreparedTui { session, resources }))
 }
 
 fn apply_live_event(event: AgentEvent, state: &mut UiState) {
@@ -2129,12 +2202,12 @@ fn attachment_path(argument: &str) -> std::path::PathBuf {
     trimmed.into()
 }
 
-fn resolved_image_path(value: &str) -> Option<PathBuf> {
+fn resolved_image_path(value: &str, directory: &std::path::Path) -> Option<PathBuf> {
     let path = attachment_path(value);
     let path = if path.is_absolute() {
         path
     } else {
-        std::env::current_dir().ok()?.join(path)
+        directory.join(path)
     };
 
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
@@ -2144,8 +2217,8 @@ fn resolved_image_path(value: &str) -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
-fn pasted_image_paths(text: &str) -> Option<Vec<PathBuf>> {
-    if let Some(path) = resolved_image_path(text) {
+fn pasted_image_paths(text: &str, directory: &std::path::Path) -> Option<Vec<PathBuf>> {
+    if let Some(path) = resolved_image_path(text, directory) {
         return Some(vec![path]);
     }
 
@@ -2153,7 +2226,7 @@ fn pasted_image_paths(text: &str) -> Option<Vec<PathBuf>> {
     {
         let paths = shlex::split(text)?
             .into_iter()
-            .map(|part| resolved_image_path(&part))
+            .map(|part| resolved_image_path(&part, directory))
             .collect::<Option<Vec<_>>>()?;
         (!paths.is_empty()).then_some(paths)
     }
@@ -2325,7 +2398,12 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
         ClipboardPayload::Files(files) => {
             let images = files
                 .iter()
-                .filter_map(|path| resolved_image_path(&path.to_string_lossy()))
+                .filter_map(|path| {
+                    resolved_image_path(
+                        &path.to_string_lossy(),
+                        std::path::Path::new(&state.workspace),
+                    )
+                })
                 .collect::<Vec<_>>();
 
             if images.len() == files.len() {
@@ -2341,7 +2419,7 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
             }
         }
         ClipboardPayload::Text(text) => {
-            if let Some(paths) = pasted_image_paths(&text) {
+            if let Some(paths) = pasted_image_paths(&text, std::path::Path::new(&state.workspace)) {
                 attach_paths(state, session, paths)?;
             } else {
                 state.input.insert(&text);
@@ -2539,7 +2617,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         if text.is_empty() {
             return Action::PasteClipboard;
         }
-        if let Some(paths) = pasted_image_paths(&text) {
+        if let Some(paths) = pasted_image_paths(&text, std::path::Path::new(&state.workspace)) {
             return Action::AttachPaths(paths);
         }
 
@@ -3199,7 +3277,10 @@ mod tests {
 
         let file_url = url::Url::from_file_path(&image).unwrap().to_string();
 
-        assert_eq!(pasted_image_paths(&file_url), Some(vec![image]));
+        assert_eq!(
+            pasted_image_paths(&file_url, temp.path()),
+            Some(vec![image])
+        );
     }
 
     #[test]

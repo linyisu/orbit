@@ -20,6 +20,7 @@ pub struct WorkspaceRuntime {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn workspace_tools(
+    directory: &Path,
     config: &Path,
     database: Option<&Path>,
     approvals: Option<ApprovalSender>,
@@ -31,7 +32,13 @@ pub async fn workspace_tools(
     command_output: Option<orbit_tools::run_command::CommandOutputDirectory>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
 ) -> Result<WorkspaceRuntime> {
-    let workspace = protected_workspace(config, database, permissions, command_limits.network)?;
+    let workspace = protected_workspace(
+        directory,
+        config,
+        database,
+        permissions,
+        command_limits.network,
+    )?;
     let mut tools = ToolRegistry::new();
     tools.register(ReadFile::new(workspace.clone()));
     tools.register(ReadDocument::new(workspace.clone()));
@@ -105,6 +112,7 @@ pub async fn workspace_tools(
 }
 
 pub fn workspace_writer(
+    directory: &Path,
     config: &Path,
     database: &Path,
     approvals: ApprovalSender,
@@ -112,6 +120,7 @@ pub fn workspace_writer(
 ) -> Result<WriteFile> {
     Ok(WriteFile::new(
         protected_workspace(
+            directory,
             config,
             Some(database),
             permissions,
@@ -122,12 +131,13 @@ pub fn workspace_writer(
 }
 
 fn protected_workspace(
+    directory: &Path,
     config: &Path,
     database: Option<&Path>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
     network: orbit_runtime::capability::NetworkPolicy,
 ) -> Result<Workspace> {
-    let mut workspace = Workspace::new(std::env::current_dir()?)?;
+    let mut workspace = Workspace::new(directory)?;
     workspace.protect(config)?;
 
     if let Some(database) = database {

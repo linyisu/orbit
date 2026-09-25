@@ -73,7 +73,7 @@ impl Skills {
         Self::discover_with_plugin_roots(cwd, home, config_home, Vec::new())
     }
 
-    fn discover_with_plugin_roots(
+    pub(crate) fn discover_with_plugin_roots(
         cwd: &Path,
         home: Option<PathBuf>,
         config_home: Option<PathBuf>,
