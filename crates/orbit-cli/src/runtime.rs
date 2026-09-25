@@ -35,27 +35,32 @@ pub async fn workspace_tools(
     let mut tools = ToolRegistry::new();
     tools.register(ReadFile::new(workspace.clone()));
     tools.register(ReadDocument::new(workspace.clone()));
+
     if let Some(database) = database {
         tools.register(ReadImage::new(
             workspace.clone(),
             ImageAssets::for_database(database),
         ));
     }
+
     tools.register(ListFiles::new(workspace.clone()));
     tools.register(SearchText::new(workspace.clone()));
     tools.register(orbit_tools::project_overview::ProjectOverview::new(
         workspace.clone(),
     ));
     tools.register(GitInspect::new(workspace.clone()));
+
     if let Some(database) = database {
         tools.register(orbit_tools::git_export_patch::GitExportPatch::new(
             workspace.clone(),
             database.with_extension("artifacts"),
         ));
     }
+
     tools.register(orbit_tools::web_fetch::WebFetch::new(web.clone())?);
     tools.register(orbit_tools::web_fetch::WebSearch::new(web)?);
     let mcp_approvals = approvals.clone();
+
     if let Some(approvals) = approvals {
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
@@ -68,10 +73,12 @@ pub async fn workspace_tools(
                     database.with_extension("artifacts"),
                 ));
             }
+
             command.with_scratch(scratch)
         } else {
             command
         };
+
         if let Some(command_output) = command_output {
             tools.register(ReadCommandOutput::new(command_output.clone()));
             tools.register(command.with_output_directory(command_output));
@@ -79,6 +86,7 @@ pub async fn workspace_tools(
             tools.register(command);
         }
     }
+
     let mcp_statuses = orbit_tools::mcp::register(
         &mut tools,
         &mcp,
@@ -87,6 +95,7 @@ pub async fn workspace_tools(
         allow_mcp_start,
     )
     .await;
+
     Ok(WorkspaceRuntime {
         workspace,
         command_limits,
@@ -120,18 +129,22 @@ fn protected_workspace(
 ) -> Result<Workspace> {
     let mut workspace = Workspace::new(std::env::current_dir()?)?;
     workspace.protect(config)?;
+
     if let Some(database) = database {
         workspace.protect(database)?;
         workspace.protect_opaque_runtime_root(database.with_extension("session-locks"))?;
         workspace.protect_opaque_runtime_root(database.with_extension("workspaces"))?;
         workspace.protect_opaque_runtime_root(database.with_extension("command-output"))?;
         workspace.protect_opaque_runtime_root(database.with_extension("artifacts"))?;
+
         for suffix in ["-wal", "-shm", "-journal"] {
             let mut sidecar = database.as_os_str().to_os_string();
             sidecar.push(suffix);
             workspace.protect(std::path::PathBuf::from(sidecar))?;
         }
     }
+
     workspace.configure_policy(permissions.unwrap_or_default(), network)?;
+
     Ok(workspace)
 }

@@ -8,8 +8,9 @@ use orbit_model::types::{ChatCompletion, ChatMessage, ToolCall};
 use tokio_util::sync::CancellationToken;
 
 fn call(id: &str, name: &str, path: &str) -> ToolCall {
-    ToolCall::function(id, name, serde_json::json!({"path":path}))
+    ToolCall::function(id, name, serde_json::json!({ "path": path }))
 }
+
 fn summary() -> TaskSummary {
     TaskSummary {
         goal: "修复任务，不修改测试".into(),
@@ -21,6 +22,7 @@ fn summary() -> TaskSummary {
         uncertainty: vec!["测试尚未运行".into()],
     }
 }
+
 fn backend() -> MockModel {
     MockModel::new((0..20).map(|_| ChatCompletion {
         id: None,
@@ -67,6 +69,7 @@ fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() 
         },
     ];
     let activity = FileActivity::from_events(&events);
+
     assert_eq!(
         activity.read.iter().cloned().collect::<Vec<_>>(),
         ["source.rs"]
@@ -75,6 +78,7 @@ fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() 
         activity.written.iter().cloned().collect::<Vec<_>>(),
         ["source.rs"]
     );
+
     let history = vec![
         ChatMessage::assistant_tool_calls(vec![read, edit]),
         ChatMessage::tool(
@@ -84,6 +88,7 @@ fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() 
         ChatMessage::tool("e", r#"{"path":"source.rs","written_bytes":0}"#),
         ChatMessage::assistant("I also wrote secret.txt"),
     ];
+
     assert_eq!(FileActivity::from_history(&history), activity);
 }
 
@@ -91,7 +96,9 @@ fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() 
 fn structured_summary_rejects_missing_fields_and_accepts_fenced_json() {
     assert!(TaskSummary::parse("a vague summary").is_err());
     assert!(TaskSummary::parse(r#"{"goal":"missing sections"}"#).is_err());
+
     let valid = summary();
+
     assert_eq!(
         TaskSummary::parse(&format!(
             "```json\n{}\n```",
@@ -100,8 +107,10 @@ fn structured_summary_rejects_missing_fields_and_accepts_fenced_json() {
         .unwrap(),
         valid
     );
+
     let mut empty = valid;
     empty.goal = " ".into();
+
     assert!(TaskSummary::parse(&serde_json::to_string(&empty).unwrap()).is_err());
     assert_eq!(
         TaskSummary::parse_model_response(&format!(
@@ -123,7 +132,7 @@ async fn repeated_compaction_and_event_reload_keep_confirmed_files_and_cut_metad
     );
     let mut history=vec![ChatMessage::system("system"),ChatMessage::user("exact current goal"),
         ChatMessage::assistant_tool_calls(vec![call("r","read_file","large.rs")]),
-        ChatMessage::tool("r",serde_json::json!({"path":"large.rs","total_lines":100,"content":"detail ".repeat(2600)}).to_string()),
+        ChatMessage::tool("r",serde_json::json!({ "path": "large.rs", "total_lines": 100, "content": "detail ".repeat(2600) }).to_string()),
         ChatMessage::assistant_tool_calls(vec![call("last","read_file","recent.rs")]),
         ChatMessage::tool("last",r#"{"path":"recent.rs","total_lines":1,"content":"recent"}"#)];
     let plan = autocompact::plan(&history, &[], 1000, 8000)
@@ -132,18 +141,22 @@ async fn repeated_compaction_and_event_reload_keep_confirmed_files_and_cut_metad
     let first = autocompact::execute(&backend(), plan, &[], 1000, 8000, CancellationToken::new())
         .await
         .unwrap();
+
     assert_eq!(first.record.source_messages, 6);
     assert_eq!(first.record.retained_from, 4);
     assert_eq!(first.record.pinned_user, Some(1));
     assert_eq!(first.record.summary, summary());
+
     let serialized = serde_json::to_string(&AgentEvent::CompactionRecorded {
         record: first.record.clone(),
     })
     .unwrap();
     let event: AgentEvent = serde_json::from_str(&serialized).unwrap();
     let reloaded = FileActivity::from_events([&event]);
+
     assert!(reloaded.written.contains("original.rs"));
     assert!(reloaded.read.contains("large.rs"));
+
     history = first.history;
     history.extend([
         ChatMessage::assistant("more data ".repeat(2000)),
@@ -161,6 +174,7 @@ async fn repeated_compaction_and_event_reload_keep_confirmed_files_and_cut_metad
     )
     .await
     .unwrap();
+
     assert_eq!(second.record.files, reloaded);
     assert!(
         serde_json::to_string(&second.history)
@@ -183,6 +197,7 @@ async fn manual_compaction_uses_same_structure_and_records_its_boundary() {
     let result = context::compact(&backend(), history, &[], 32000, CancellationToken::new())
         .await
         .unwrap();
+
     assert_eq!(
         result.record.mode,
         orbit_agent::memory::CompactionMode::Manual

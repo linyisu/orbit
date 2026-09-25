@@ -30,10 +30,7 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
             ToolCall::function(
                 "test",
                 "run_command",
-                json!({
-                    "command": "echo 'direct execution' > /workspace/output.txt",
-                    "workspace_access": "read_write"
-                }),
+                json!({ "command": "echo 'direct execution' > /workspace/output.txt", "workspace_access": "read_write" }),
             ),
             CancellationToken::new(),
         )
@@ -45,22 +42,27 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
 
     let output = task.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
     assert_eq!(value["exit_code"], 0);
 
     let evidence = output
         .verification
         .expect("verification evidence should be present");
+
     assert!(!evidence.input.digest.is_empty());
     assert!(!evidence.writable_snapshot);
     assert!(evidence.isolation.contains("capability policy sandbox"));
+
     let post_output = evidence
         .output
         .expect("output fingerprint should be present");
+
     assert!(!post_output.digest.is_empty());
     assert_ne!(post_output.digest, evidence.input.digest);
     assert!(post_output.files.contains_key("output.txt"));
 
     let created = ws_temp.path().join("output.txt");
+
     assert!(created.is_file());
     assert_eq!(
         fs::read_to_string(created).unwrap().trim(),
@@ -84,9 +86,7 @@ async fn run_command_defaults_to_read_only_workspace() {
             ToolCall::function(
                 "test",
                 "run_command",
-                json!({
-                    "command": "echo 'should fail' > /workspace/readonly.txt"
-                }),
+                json!({ "command": "echo 'should fail' > /workspace/readonly.txt" }),
             ),
             CancellationToken::new(),
         )
@@ -94,6 +94,7 @@ async fn run_command_defaults_to_read_only_workspace() {
     });
 
     let request = receiver.recv().await.unwrap();
+
     match &request.preview {
         approval::ApprovalPreview::Command(preview) => {
             assert_eq!(
@@ -103,14 +104,17 @@ async fn run_command_defaults_to_read_only_workspace() {
         }
         _ => panic!("expected command preview"),
     }
+
     request.decision.send(true).unwrap();
 
     let output = task.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
     // Writing to read-only workspace fails
     assert_ne!(value["exit_code"], 0);
 
     let created = ws_temp.path().join("readonly.txt");
+
     assert!(!created.exists());
 }
 
@@ -134,6 +138,7 @@ async fn run_command_respects_session_grants_for_outside_paths() {
     let script_fail = format!("echo 'should fail' > {}", outside_file.display());
     let task_fail = tokio::spawn({
         let tool = tool.clone();
+
         async move {
             tool.execute(
                 ToolCall::function("test", "run_command", json!({ "command": script_fail })),
@@ -148,6 +153,7 @@ async fn run_command_respects_session_grants_for_outside_paths() {
 
     let output = task_fail.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
     assert_ne!(value["exit_code"], 0);
 
     // 2. With grant: writing to outside file succeeds
@@ -177,6 +183,7 @@ async fn run_command_respects_session_grants_for_outside_paths() {
 
     let output2 = task_ok.await.unwrap().unwrap();
     let value2: serde_json::Value = serde_json::from_str(&output2.content).unwrap();
+
     assert_eq!(value2["exit_code"], 0);
 
     assert_eq!(
@@ -201,10 +208,7 @@ async fn run_command_rejects_deprecated_writable_snapshot_flag() {
             ToolCall::function(
                 "legacy_call",
                 "run_command",
-                json!({
-                    "command": "echo 'snapshot compat' > /workspace/legacy.txt",
-                    "writable_snapshot": true
-                }),
+                json!({ "command": "echo 'snapshot compat' > /workspace/legacy.txt", "writable_snapshot": true }),
             ),
             CancellationToken::new(),
         )
@@ -262,6 +266,7 @@ async fn run_command_masks_protected_files_and_git_directory_even_with_read_writ
 
     // Verify secrets were not leaked into stdout
     let stdout = value["stdout"].as_str().unwrap_or("");
+
     assert!(!stdout.contains("SECRET_ENV_KEY"));
     assert!(!stdout.contains("SECRET_GIT_CONFIG"));
     assert!(!stdout.contains("SECRET_CONFIG_DATA"));
@@ -296,9 +301,11 @@ async fn run_command_succeeds_when_protecting_deep_opaque_runtime_root() {
     let temp_storage = tempfile::tempdir().unwrap();
     let external_storage = temp_storage.path().join("orbit.workspaces");
     let mut curr = external_storage.clone();
+
     for i in 0..35 {
         curr = curr.join(format!("level_{i}"));
     }
+
     fs::create_dir_all(&curr).unwrap();
     fs::write(curr.join("deep.txt"), "deep content").unwrap();
 
@@ -314,10 +321,7 @@ async fn run_command_succeeds_when_protecting_deep_opaque_runtime_root() {
             ToolCall::function(
                 "test",
                 "run_command",
-                json!({
-                    "command": "echo 'opaque root safe'",
-                    "workspace_access": "read_write"
-                }),
+                json!({ "command": "echo 'opaque root safe'", "workspace_access": "read_write" }),
             ),
             CancellationToken::new(),
         )
@@ -329,6 +333,7 @@ async fn run_command_succeeds_when_protecting_deep_opaque_runtime_root() {
 
     let output = task.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
     assert_eq!(value["exit_code"], 0);
     assert!(
         value["stdout"]
@@ -357,7 +362,7 @@ async fn run_command_masks_hardlink_to_file_inside_external_opaque_root() {
             ToolCall::function(
                 "opaque_alias",
                 "run_command",
-                json!({"command": "cat /workspace/alias.txt"}),
+                json!({ "command": "cat /workspace/alias.txt" }),
             ),
             CancellationToken::new(),
         )
@@ -366,6 +371,7 @@ async fn run_command_masks_hardlink_to_file_inside_external_opaque_root() {
     receiver.recv().await.unwrap().decision.send(true).unwrap();
     let output = task.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
     assert_eq!(value["stdout"], "");
     assert_eq!(fs::read_to_string(&secret).unwrap(), "PRIVATE_RUNTIME_DATA");
 }
@@ -387,7 +393,7 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
     let tool = RunCommand::with_limits(workspace, sender, limits);
     let task = tokio::spawn(async move {
         tool.execute(
-            ToolCall::function("scan_limit", "run_command", json!({"command": "true"})),
+            ToolCall::function("scan_limit", "run_command", json!({ "command": "true" })),
             CancellationToken::new(),
         )
         .await
@@ -395,9 +401,12 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
     receiver.recv().await.unwrap().decision.send(true).unwrap();
     let output = task.await.unwrap().unwrap();
     let result: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
     assert_eq!(result["exit_code"], 0);
     assert!(output.verification.is_none());
+
     let warning = result["verification_error"].as_str().unwrap();
+
     assert!(warning.contains("input workspace fingerprint unavailable"));
     assert!(warning.contains("output workspace fingerprint unavailable"));
 }

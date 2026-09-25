@@ -89,6 +89,7 @@ pub(crate) fn enabled_skill_roots(enabled: &[ProjectPlugin]) -> EnabledSkillRoot
             };
         }
     };
+
     enabled_skill_roots_from_markets(enabled, &markets)
 }
 
@@ -98,6 +99,7 @@ fn enabled_skill_roots_from_markets(
 ) -> EnabledSkillRoots {
     let mut roots = Vec::new();
     let mut diagnostics = Vec::new();
+
     for configured in enabled {
         let result = (|| -> Result<PathBuf> {
             let market = markets
@@ -117,6 +119,7 @@ fn enabled_skill_roots_from_markets(
                 market.source
             );
             verify_git_checkout(market)?;
+
             let plugin = market
                 .plugins
                 .iter()
@@ -138,8 +141,10 @@ fn enabled_skill_roots_from_markets(
                 configured.version.as_deref().unwrap_or("未声明"),
                 package.version.as_deref().unwrap_or("未声明")
             );
+
             Ok(package.directory.join("skills"))
         })();
+
         match result {
             Ok(root) if root.is_dir() => roots.push(root),
             Ok(_) => {}
@@ -148,8 +153,10 @@ fn enabled_skill_roots_from_markets(
             }
         }
     }
+
     roots.sort();
     roots.dedup();
+
     EnabledSkillRoots { roots, diagnostics }
 }
 
@@ -171,6 +178,7 @@ pub(crate) fn inspect_plugin(market: &Marketplace, plugin: &Plugin) -> Result<Pl
         metadata.is_file() && metadata.len() <= MAX_MANIFEST_BYTES,
         "plugin manifest must be a regular file up to 64 KiB"
     );
+
     let manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)
         .with_context(|| format!("invalid plugin JSON in {}", manifest_path.display()))?;
     let name = manifest
@@ -184,6 +192,7 @@ pub(crate) fn inspect_plugin(market: &Marketplace, plugin: &Plugin) -> Result<Pl
         "plugin manifest name {name:?} does not match marketplace entry {:?}",
         plugin.name
     );
+
     let description = optional_text(&manifest, "description", "plugin manifest")?;
     let version = optional_text(&manifest, "version", "plugin manifest")?;
     let skills = declared_markdown_files(&package.join("skills"), "SKILL.md")?;
@@ -192,6 +201,7 @@ pub(crate) fn inspect_plugin(market: &Marketplace, plugin: &Plugin) -> Result<Pl
     let declares_hooks =
         package.join("hooks/hooks.json").is_file() || manifest.get("hooks").is_some();
     let declares_mcp = package.join(".mcp.json").is_file() || manifest.get("mcpServers").is_some();
+
     Ok(PluginPackage {
         name: name.into(),
         version,
@@ -231,17 +241,20 @@ impl Store {
         if !self.index.exists() {
             return Ok(Vec::new());
         }
+
         let stored: StoredMarketplaces = serde_json::from_slice(
             &fs::read(&self.index)
                 .with_context(|| format!("failed to read {}", self.index.display()))?,
         )
         .with_context(|| format!("failed to parse {}", self.index.display()))?;
+
         Ok(stored.marketplaces)
     }
 
     async fn add(&self, source: String) -> Result<Marketplace> {
         let source = source.trim().to_owned();
         ensure!(!source.is_empty(), "marketplace source cannot be empty");
+
         fs::create_dir_all(&self.root)?;
         let (directory, revision) = if let Some(path) = local_directory(&source) {
             let directory = path.canonicalize().with_context(|| {
@@ -251,6 +264,7 @@ impl Store {
         } else {
             self.clone_git_source(&source).await?
         };
+
         let mut market = parse_catalog(&directory)?;
         market.source = source;
         market.revision = revision;
@@ -266,6 +280,7 @@ impl Store {
             .sort_by(|left, right| left.name.cmp(&right.name));
         let encoded = serde_json::to_vec_pretty(&stored)?;
         fs::write(&self.index, encoded)?;
+
         Ok(market)
     }
 
@@ -295,12 +310,14 @@ impl Store {
             .output()
             .await
             .context("failed to start git while downloading marketplace")?;
+
         if !output.status.success() {
             bail!(
                 "marketplace download failed: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
+
         let revision_output = Command::new("git")
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
@@ -314,14 +331,17 @@ impl Store {
             revision_output.status.success(),
             "downloaded marketplace has no Git commit"
         );
+
         let revision = String::from_utf8(revision_output.stdout)?.trim().to_owned();
         ensure!(
             revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
             "downloaded marketplace has an invalid Git commit"
         );
+
         // Each acquisition keeps its own checkout. An update cannot replace
         // files already selected by another live session.
         parse_catalog(temporary)?;
+
         Ok((download.keep(), Some(revision)))
     }
 }
@@ -335,6 +355,7 @@ fn verify_git_checkout(market: &Marketplace) -> Result<()> {
     let Some(expected) = market.revision.as_deref() else {
         return Ok(());
     };
+
     let command = |args: &[&str]| -> Result<std::process::Output> {
         std::process::Command::new("git")
             .env_clear()
@@ -358,6 +379,7 @@ fn verify_git_checkout(market: &Marketplace) -> Result<()> {
         String::from_utf8(head.stdout)?.trim() == expected,
         "cached marketplace Git commit no longer matches its enabled revision"
     );
+
     let status = command(&[
         "status",
         "--porcelain",
@@ -373,6 +395,7 @@ fn verify_git_checkout(market: &Marketplace) -> Result<()> {
         status.stdout.is_empty(),
         "cached marketplace files changed after download; add the marketplace again"
     );
+
     Ok(())
 }
 
@@ -385,9 +408,11 @@ fn git_url(source: &str) -> Result<String> {
     {
         return Ok(format!("https://github.com/{source}.git"));
     }
+
     let parsed = url::Url::parse(source).context(
         "marketplace source must be a local directory, GitHub owner/repo, or HTTPS git URL",
     )?;
+
     if parsed.scheme() != "https"
         || parsed.host_str().is_none()
         || !parsed.username().is_empty()
@@ -395,6 +420,7 @@ fn git_url(source: &str) -> Result<String> {
     {
         bail!("marketplace URL must be an HTTPS URL without embedded credentials");
     }
+
     Ok(source.into())
 }
 
@@ -413,15 +439,18 @@ fn parse_catalog(directory: &Path) -> Result<Marketplace> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .trim();
+
     if !valid_name(name) {
         bail!("marketplace name must use letters, digits, _ or - and be at most 64 characters");
     }
+
     let entries = raw
         .get("plugins")
         .and_then(serde_json::Value::as_array)
         .context("marketplace has no plugins array")?;
     let mut names = BTreeSet::new();
     let mut plugins = Vec::with_capacity(entries.len());
+
     for (index, entry) in entries.iter().enumerate() {
         let object = entry
             .as_object()
@@ -440,12 +469,14 @@ fn parse_catalog(directory: &Path) -> Result<Marketplace> {
             names.insert(plugin_name.to_owned()),
             "marketplace contains duplicate plugin name {plugin_name}"
         );
+
         let description = match object.get("description") {
             Some(value) => value
                 .as_str()
                 .with_context(|| format!("plugin {plugin_name} has a non-text description"))?,
             None => "未提供说明",
         };
+
         let source = match object.get("source") {
             Some(value) => {
                 let source = value
@@ -454,16 +485,19 @@ fn parse_catalog(directory: &Path) -> Result<Marketplace> {
                     .with_context(|| format!("plugin {plugin_name} has a non-text source"))?;
                 validate_relative_package_source(source)
                     .with_context(|| format!("plugin {plugin_name} has an unsafe source"))?;
+
                 Some(source.to_owned())
             }
             None => None,
         };
+
         plugins.push(Plugin {
             name: plugin_name.into(),
             description: description.trim().chars().take(240).collect(),
             source,
         });
     }
+
     Ok(Marketplace {
         name: name.into(),
         source: String::new(),
@@ -489,11 +523,13 @@ fn resolve_package_path(market_root: &Path, source: &str) -> Result<PathBuf> {
         package.is_dir(),
         "plugin package source must be a directory"
     );
+
     Ok(package)
 }
 
 fn validate_relative_package_source(source: &str) -> Result<()> {
     ensure!(!source.is_empty(), "source cannot be empty");
+
     let path = Path::new(source);
     ensure!(
         !path.is_absolute(),
@@ -504,6 +540,7 @@ fn validate_relative_package_source(source: &str) -> Result<()> {
             .all(|component| matches!(component, Component::CurDir | Component::Normal(_))),
         "source cannot contain parent, root, or platform prefix components"
     );
+
     Ok(())
 }
 
@@ -532,11 +569,13 @@ fn declared_markdown_files(directory: &Path, required_file: &str) -> Result<Vec<
         "{} must be a directory",
         directory.display()
     );
+
     let mut names = fs::read_dir(directory)?
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
+
             if required_file == ".md" {
                 (path.is_file() && name.ends_with(".md")).then_some(name)
             } else {
@@ -545,6 +584,7 @@ fn declared_markdown_files(directory: &Path, required_file: &str) -> Result<Vec<
         })
         .collect::<Vec<_>>();
     names.sort();
+
     Ok(names)
 }
 
@@ -577,6 +617,7 @@ mod tests {
             .args(args)
             .output()
             .unwrap();
+
         assert!(
             output.status.success(),
             "git {:?} failed:\nstdout: {}\nstderr: {}",
@@ -584,6 +625,7 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 
@@ -605,6 +647,7 @@ mod tests {
             .add(market.to_string_lossy().into_owned())
             .await
             .unwrap();
+
         assert_eq!(registered.name, "team-tools");
         assert_eq!(registered.plugins[0].name, "review");
         assert_eq!(
@@ -679,6 +722,7 @@ mod tests {
             source: Some("./plugins/review".into()),
         };
         let inspected = inspect_plugin(&market, &plugin).unwrap();
+
         assert_eq!(inspected.version.as_deref(), Some("1.2.3"));
         assert_eq!(inspected.skills, ["check"]);
         assert_eq!(inspected.commands, ["review.md"]);
@@ -734,6 +778,7 @@ mod tests {
             std::slice::from_ref(&enabled),
             std::slice::from_ref(&market),
         );
+
         assert_eq!(roots.roots, vec![package.join("skills")]);
         assert!(roots.diagnostics.is_empty());
 
@@ -742,6 +787,7 @@ mod tests {
             ..enabled.clone()
         };
         let stale_roots = enabled_skill_roots_from_markets(&[stale], std::slice::from_ref(&market));
+
         assert!(stale_roots.roots.is_empty());
         assert!(stale_roots.diagnostics[0].contains("重新检查后启用"));
 
@@ -758,6 +804,7 @@ mod tests {
             std::slice::from_ref(&unchanged_version),
             &[updated_market],
         );
+
         assert!(updated_roots.roots.is_empty());
         assert!(updated_roots.diagnostics[0].contains("Git 提交已变更"));
 
@@ -767,6 +814,7 @@ mod tests {
         )
         .unwrap();
         let tampered_roots = enabled_skill_roots_from_markets(&[unchanged_version], &[market]);
+
         assert!(tampered_roots.roots.is_empty());
         assert!(tampered_roots.diagnostics[0].contains("changed after download"));
     }
@@ -780,6 +828,7 @@ mod tests {
             r#"{"name":"market","plugins":[{"name":"same"},{"name":"same"}]}"#,
         )
         .unwrap();
+
         assert!(parse_catalog(temp.path()).is_err());
 
         fs::write(
@@ -787,6 +836,7 @@ mod tests {
             r#"{"name":"market","plugins":[{"description":"no name"}]}"#,
         )
         .unwrap();
+
         assert!(parse_catalog(temp.path()).is_err());
 
         fs::write(
@@ -794,12 +844,14 @@ mod tests {
             r#"{"name":"market","plugins":[{"name":"safe","source":"../escape"}]}"#,
         )
         .unwrap();
+
         assert!(parse_catalog(temp.path()).is_err());
     }
 
     #[test]
     fn rejects_packages_outside_the_marketplace() {
         let temp = tempfile::tempdir().unwrap();
+
         assert!(resolve_package_path(temp.path(), "../outside").is_err());
     }
 

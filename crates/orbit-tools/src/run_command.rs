@@ -5,6 +5,7 @@ use std::{
 };
 
 pub type ScratchDirectory = Arc<RwLock<PathBuf>>;
+
 pub type CommandOutputDirectory = crate::read_command_output::CommandOutputDirectory;
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
@@ -136,8 +137,10 @@ impl CommandLimits {
         {
             return Err("max_scan_mib must be 1..1024 and max_scan_entries 1..100000");
         }
+
         self.process_limits.validate()?;
         let mut names = std::collections::BTreeSet::new();
+
         for cache in &self.dependency_caches {
             if cache.name.is_empty()
                 || cache.name.len() > 48
@@ -153,6 +156,7 @@ impl CommandLimits {
                 );
             }
         }
+
         if self.dependency_caches.len() > 16
             || self.verification_commands.len() > 16
             || self.verification_commands.iter().any(|(name, cmd)| {
@@ -167,6 +171,7 @@ impl CommandLimits {
                 "at most 16 caches and 16 named verification commands; commands must be nonempty and at most 4096 bytes",
             );
         }
+
         Ok(())
     }
 }
@@ -189,10 +194,12 @@ impl RunCommand {
             output_directory: None,
         }
     }
+
     pub fn with_scratch(mut self, scratch: ScratchDirectory) -> Self {
         self.scratch = Some(scratch);
         self
     }
+
     pub fn with_output_directory(mut self, output_directory: CommandOutputDirectory) -> Self {
         self.output_directory = Some(output_directory);
         self
@@ -219,10 +226,7 @@ impl Tool for RunCommand {
             json!({
                 "type": "object",
                 "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The shell command to execute"
-                    },
+                    "command": { "type": "string", "description": "The shell command to execute" },
                     "workspace_access": {
                         "type": "string",
                         "enum": ["read", "read_write"],
@@ -251,6 +255,7 @@ impl Tool for RunCommand {
             let timeout_seconds = args
                 .timeout_seconds
                 .unwrap_or(self.limits.default_timeout_seconds);
+
             if args.command.trim().is_empty()
                 || args.command.contains('\0')
                 || !(1..=self.limits.max_timeout_seconds).contains(&timeout_seconds)
@@ -260,19 +265,24 @@ impl Tool for RunCommand {
                     self.limits.max_timeout_seconds
                 )));
             }
+
             let (sender, receiver) = oneshot::channel();
+
             if args.writable_snapshot {
                 return Err(invalid(
                     "'writable_snapshot' is deprecated. Orbit executes directly in the workspace with protected path masking. For workspace write access, specify 'workspace_access': 'read_write'.",
                 ));
             }
+
             let workspace_access = args.workspace_access;
             let network_allowed = self.workspace.policy().network_policy().is_allowed();
             let mut external_capabilities = Vec::new();
             let mut external_write = false;
+
             for r in &self.workspace.policy().effective_policy().persistent_read {
                 external_capabilities.push(format!("{} (ro, persistent)", r.canonical().display()));
             }
+
             for rw in &self
                 .workspace
                 .policy()
@@ -283,20 +293,24 @@ impl Tool for RunCommand {
                 external_capabilities
                     .push(format!("{} (rw, persistent)", rw.canonical().display()));
             }
+
             if let Ok(store) = self.workspace.policy().session_grants().read() {
                 for grant in store.grants() {
                     external_write |= grant.write;
                     let mode = if grant.write { "rw" } else { "ro" };
+
                     external_capabilities.push(format!(
                         "{} ({mode}, session)",
                         grant.path.canonical().display()
                     ));
                 }
             }
+
             for cache in &self.limits.dependency_caches {
                 external_capabilities
                     .push(format!("{} (ro, dependency cache)", cache.path.display()));
             }
+
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     command: args.command.clone(),
@@ -318,11 +332,13 @@ impl Tool for RunCommand {
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
                 answer = receiver => answer.unwrap_or(false),
             };
+
             if !approved {
                 return Err(ToolError::ExecutionFailed(
                     "user denied command; do not retry without a new user request".into(),
                 ));
             }
+
             let scratch = self
                 .scratch
                 .as_ref()
@@ -337,6 +353,7 @@ impl Tool for RunCommand {
                 }
                 None => None,
             };
+
             let pre_scan = match orbit_runtime::execution::scan_workspace_summary(
                 self.workspace.clone(),
                 cancellation.clone(),
@@ -394,12 +411,14 @@ impl Tool for RunCommand {
                 Ok((fingerprint, _, _)) => Some(fingerprint),
                 Err(error) => {
                     let warning = format!("output workspace fingerprint unavailable: {error}");
+
                     if let Some(existing) = &mut verification_error {
                         existing.push_str("; ");
                         existing.push_str(&warning);
                     } else {
                         verification_error = Some(warning);
                     }
+
                     None
                 }
             };
@@ -407,8 +426,10 @@ impl Tool for RunCommand {
             if let Some(evidence) = result.verification.as_mut() {
                 evidence.output = post_fingerprint;
             }
+
             result.verification_error = verification_error;
             let evidence = result.verification.take();
+
             serde_json::to_string(&result)
                 .map(|content| {
                     let mut output = ToolOutput::text(content);
@@ -434,11 +455,13 @@ mod configuration_tests {
     #[test]
     fn configurable_environment_rejects_ambiguous_mounts_and_invalid_budgets() {
         let limits: CommandLimits = toml::from_str("max_scan_mib=128\nmax_scan_entries=20000\ndependency_caches=[{name='cargo',path='/offline/cargo'}]\n[verification_commands]\ntest='cargo test --offline'\n").unwrap();
+
         assert!(limits.validate().is_ok());
         assert_eq!(limits.max_scan_mib, 128);
         assert_eq!(limits.max_scan_entries, 20000);
 
         let offline: CommandLimits = toml::from_str("network='deny'").unwrap();
+
         assert_eq!(
             offline.network,
             orbit_runtime::capability::NetworkPolicy::Deny
@@ -448,24 +471,34 @@ mod configuration_tests {
         let legacy: CommandLimits =
             toml::from_str("snapshot_mib=256\nsnapshot_entries=30000\nwritable_snapshot_mib=512\n")
                 .unwrap();
+
         assert!(legacy.validate().is_ok());
         assert_eq!(legacy.max_scan_mib, 256);
         assert_eq!(legacy.max_scan_entries, 30000);
 
         let mut bad = limits.clone();
         bad.max_scan_mib = 0;
+
         assert!(bad.validate().is_err());
+
         let mut bad = limits.clone();
         bad.process_limits.max_memory_bytes = 1024; // < 16 MiB
+
         assert!(bad.validate().is_err());
+
         let mut bad = limits.clone();
         bad.dependency_caches.push(bad.dependency_caches[0].clone());
+
         assert!(bad.validate().is_err());
+
         let mut bad = limits.clone();
         bad.dependency_caches[0].name = "../escape".into();
+
         assert!(bad.validate().is_err());
+
         let mut bad = limits;
         bad.dependency_caches[0].path = "relative".into();
+
         assert!(bad.validate().is_err());
     }
 
@@ -477,6 +510,7 @@ mod configuration_tests {
         let tool = RunCommand::new(workspace, sender);
         let def = tool.definition();
         let props = def.function.parameters["properties"].as_object().unwrap();
+
         assert!(props.contains_key("command"));
         assert!(props.contains_key("workspace_access"));
         assert!(props.contains_key("timeout_seconds"));

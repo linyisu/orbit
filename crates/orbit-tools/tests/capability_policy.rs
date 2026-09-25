@@ -20,6 +20,7 @@ fn session_grants_are_isolated_and_ephemeral() {
 
     // 1. First runtime session
     let engine1 = PolicyEngine::new(workspace.clone());
+
     assert_eq!(
         engine1.check_filesystem(&cap),
         PolicyDecision::NeedsApproval(vec![cap.clone()])
@@ -30,11 +31,13 @@ fn session_grants_are_isolated_and_ephemeral() {
         EnvironmentId::Local,
         resolved_external,
     ));
+
     assert_eq!(engine1.check_filesystem(&cap), PolicyDecision::Granted);
 
     // 2. New runtime session started (e.g. restart / new session)
     // The previous SessionGrantStore is dropped. New engine must NOT inherit session 1 grants.
     let engine2 = PolicyEngine::new(workspace);
+
     assert_eq!(
         engine2.check_filesystem(&cap),
         PolicyDecision::NeedsApproval(vec![cap])
@@ -61,12 +64,14 @@ fn persistent_workspace_policy_grants_configured_external_paths() {
     fs::write(&cache_file, "bytes").unwrap();
 
     let cache_read = FilesystemCapability::local_read(&cache_file);
+
     assert_eq!(
         engine.check_filesystem(&cache_read),
         PolicyDecision::Granted
     );
 
     let cache_write = FilesystemCapability::local_write(&cache_file);
+
     assert!(matches!(
         engine.check_filesystem(&cache_write),
         PolicyDecision::NeedsApproval(_)
@@ -119,6 +124,7 @@ fn remote_environment_capabilities_are_isolated_from_local() {
     // Even if path looks like a workspace path, a Remote capability is not Local workspace
     let remote_cap =
         FilesystemCapability::new(remote_env.clone(), &local_path, FilesystemAccess::Read);
+
     assert!(matches!(
         engine.check_filesystem(&remote_cap),
         PolicyDecision::NeedsApproval(_)
@@ -139,6 +145,7 @@ fn remote_environment_capabilities_are_isolated_from_local() {
         &local_path,
         FilesystemAccess::Read,
     );
+
     assert!(matches!(
         engine.check_filesystem(&other_remote_cap),
         PolicyDecision::NeedsApproval(_)

@@ -56,7 +56,9 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
             width,
         });
     }
+
     let mut quote_end = None;
+
     for (index, span) in line.spans.iter().enumerate() {
         if span.content == "▎ " {
             quote_end = Some(index);
@@ -64,6 +66,7 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
             break;
         }
     }
+
     if let Some(end) = quote_end {
         let prefix = line.spans.drain(..=end).collect::<Vec<_>>();
         let width = prefix.iter().map(Span::width).sum::<usize>() as u16;
@@ -74,6 +77,7 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
             width,
         });
     }
+
     let marker = line
         .spans
         .iter()
@@ -87,6 +91,7 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
         .map(|(index, _)| index)?;
     let prefix = line.spans.drain(..=marker).collect::<Vec<_>>();
     let width = prefix.iter().map(Span::width).sum::<usize>() as u16;
+
     Some(Gutter {
         first: Line::from(prefix),
         continuation: Line::from(" ".repeat(width as usize)),
@@ -97,12 +102,14 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
 fn slice_line(line: &Line<'static>, range: Range<usize>) -> Line<'static> {
     let mut spans = Vec::new();
     let mut offset = 0;
+
     for span in &line.spans {
         let start = offset;
         let end = start + span.content.len();
         offset = end;
         let from = range.start.max(start);
         let to = range.end.min(end);
+
         if from < to {
             spans.push(Span::styled(
                 span.content[from - start..to - start].to_owned(),
@@ -110,6 +117,7 @@ fn slice_line(line: &Line<'static>, range: Range<usize>) -> Line<'static> {
             ));
         }
     }
+
     Line {
         style: line.style,
         alignment: line.alignment,
@@ -121,37 +129,46 @@ fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
     if text.is_empty() || width == 0 {
         return std::iter::once_with(|| 0..0).collect();
     }
+
     let opportunities = linebreaks(text)
         .map(|(index, _)| index)
         .collect::<HashSet<_>>();
     let mut ranges = Vec::new();
     let mut start = 0;
+
     while start < text.len() {
         let mut used = 0;
         let mut hard_end = start;
         let mut allowed = None;
         let mut overflowed = false;
+
         for (relative, grapheme) in text[start..].grapheme_indices(true) {
             let end = start + relative + grapheme.len();
             let size = grapheme.width();
+
             if used + size > usize::from(width) && hard_end > start {
                 overflowed = true;
                 break;
             }
+
             used += size;
             hard_end = end;
+
             if opportunities.contains(&end) {
                 allowed = Some(end);
             }
         }
+
         if !overflowed || hard_end == text.len() {
             ranges.push(start..text.len());
             break;
         }
+
         let end = allowed.filter(|end| *end > start).unwrap_or(hard_end);
         ranges.push(start..end);
         start = end;
     }
+
     ranges
 }
 
@@ -166,18 +183,23 @@ pub(super) fn wrap_line(
         .cloned()
         .map(|range| slice_line(line, range))
         .collect();
+
     (lines, ranges)
 }
 
 fn byte_at_column(text: &str, range: &Range<usize>, column: u16) -> Option<usize> {
     let mut used = 0;
+
     for (relative, grapheme) in text.get(range.clone())?.grapheme_indices(true) {
         let width = grapheme.width() as u16;
+
         if column < used + width {
             return Some(range.start + relative);
         }
+
         used += width;
     }
+
     None
 }
 
@@ -215,8 +237,10 @@ impl Entry {
             if link.end <= removed {
                 return false;
             }
+
             link.start = link.start.saturating_sub(removed);
             link.end = link.end.saturating_sub(removed);
+
             true
         });
         let content_width = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
@@ -238,14 +262,17 @@ impl Entry {
         if self.observed_bytes == Some(text.len()) {
             return;
         }
+
         if self.observed_bytes.is_some_and(|len| text.len() < len) {
             *self = Self::default();
         }
+
         self.rows.truncate(self.stable_rows);
         self.height = self.rows.last().map_or(0, |row| row.start + row.height);
         let mut code = self.code.clone();
         let mut index = self.logical_index;
         let mut consumed = self.parsed_bytes;
+
         while consumed < text.len() {
             if !thinking
                 && code.is_none()
@@ -254,8 +281,10 @@ impl Entry {
                 for line in lines {
                     self.push(line, width);
                 }
+
                 index += text[consumed..consumed + bytes].lines().count();
                 consumed += bytes;
+
                 // A partial next row (even just "| ") can temporarily end the parser's
                 // table. Do not freeze it until a complete terminating line arrives.
                 if text[consumed..]
@@ -268,8 +297,10 @@ impl Entry {
                     self.logical_index = index;
                     self.code = code.clone();
                 }
+
                 continue;
             }
+
             let part = text[consumed..].split_inclusive('\n').next().unwrap();
             let complete = part.ends_with('\n');
             let line = if complete {
@@ -279,20 +310,24 @@ impl Entry {
             } else {
                 part
             };
+
             let was_code = code.is_some();
             let rendered = if thinking {
                 render::thinking_line(line, index, &mut code)
             } else {
                 render::assistant_line(line, index, &mut code)
             };
+
             let links = if !was_code {
                 super::markdown::links(line, &rendered)
             } else {
                 Default::default()
             };
+
             self.push_with_links(rendered, width, links);
             index += 1;
             consumed += part.len();
+
             if complete && (thinking || code.is_some() || !line.contains('|')) {
                 self.stable_rows = self.rows.len();
                 self.parsed_bytes = consumed;
@@ -300,6 +335,7 @@ impl Entry {
                 self.code = code.clone();
             }
         }
+
         // Every completed-looking streamed section owns exactly one trailing
         // blank row. This keeps reasoning distinct from the following tool or
         // final answer without relying on the next transcript entry to know
@@ -307,6 +343,7 @@ impl Entry {
         if !text.is_empty() {
             self.push(Line::from(""), width);
         }
+
         self.observed_bytes = Some(text.len());
     }
 
@@ -344,6 +381,7 @@ impl Entry {
                     width,
                 );
             }
+
             self.push(Line::from(""), width);
             return;
         }
@@ -352,6 +390,7 @@ impl Entry {
         // Nerd Font pictograms need an empty following cell to expand into in
         // terminals such as kitty. Include that cell in the border width.
         let icon_padding = if icon == super::COMMAND_ICON { " " } else { "" };
+
         let top_label = format!("╭─{icon}{icon_padding}─");
         let trailing = "─".repeat(usize::from(width) - top_label.width() - 1);
         self.push(
@@ -366,12 +405,14 @@ impl Entry {
             width,
         );
         let inner_width = width - 4;
+
         for source in text.split('\n') {
             let content = Line::from(Span::styled(
                 source.to_owned(),
                 ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
             ));
             let (wrapped, _) = wrap_line(&content, inner_width);
+
             for line in wrapped {
                 let padding = usize::from(inner_width).saturating_sub(line.width());
                 let mut spans = vec![Span::styled("│ ", border)];
@@ -381,6 +422,7 @@ impl Entry {
                 self.push(Line::from(spans), width);
             }
         }
+
         self.push(
             Line::from(Span::styled(
                 format!("╰{}╯", "─".repeat(usize::from(width) - 2)),
@@ -425,6 +467,7 @@ impl TranscriptLayout {
         let wrapped = relative
             .saturating_sub(row.start)
             .min(row.ranges.len().saturating_sub(1));
+
         Some(TranscriptAnchor {
             entry: entry_index,
             row: row_index,
@@ -440,6 +483,7 @@ impl TranscriptLayout {
             .partition_point(|range| range.start <= anchor.byte)
             .saturating_sub(1)
             .min(row.ranges.len().saturating_sub(1));
+
         Some(entry.end.saturating_sub(entry.height) + row.start + wrapped)
     }
 
@@ -453,18 +497,23 @@ impl TranscriptLayout {
             self.dirty_from = 0;
             self.width = width;
         }
+
         if self.expanded != expanded {
             for index in self.expanded.into_iter().chain(expanded) {
                 self.invalidate_from(index);
             }
+
             self.expanded = expanded;
         }
+
         if width == 0 {
             return;
         }
+
         let first = self.dirty_from.min(self.entries.len());
         self.entries.resize_with(items.len(), Entry::default);
         let mut end = first.checked_sub(1).map_or(0, |i| self.entries[i].end);
+
         for (relative, (entry, item)) in self.entries[first..]
             .iter_mut()
             .zip(&items[first..])
@@ -486,6 +535,7 @@ impl TranscriptLayout {
                     let toggle = matches!(item, TranscriptItem::Tool(_)).then(|| {
                         super::tool_display::toggle_line(expanded == Some(first + relative), width)
                     });
+
                     for line in render::transcript_lines_at_width(
                         std::slice::from_ref(item),
                         expanded == Some(first + relative),
@@ -495,13 +545,16 @@ impl TranscriptLayout {
                         if toggle.as_ref() == Some(&line) {
                             entry.tool_toggles.push(entry.rows.len());
                         }
+
                         entry.push(line, width);
                     }
                 }
             }
+
             end += entry.height;
             entry.end = end;
         }
+
         self.dirty_from = items.len();
     }
 
@@ -539,12 +592,15 @@ impl TranscriptLayout {
         if !area.contains(point.into()) {
             return None;
         }
+
         let absolute = offset + usize::from(point.1 - area.y);
         let index = self.entries.partition_point(|entry| entry.end <= absolute);
         let entry = self.entries.get(index)?;
+
         if !matches!(items.get(index), Some(TranscriptItem::Tool(_))) {
             return None;
         }
+
         let relative = absolute - (entry.end - entry.height);
         let row = entry
             .tool_toggles
@@ -552,6 +608,7 @@ impl TranscriptLayout {
             .filter_map(|i| entry.rows.get(*i))
             .find(|row| row.start <= relative && relative < row.start + row.height)?;
         let column = usize::from(point.0 - area.x);
+
         (column >= 4 && column < row.line.width()).then_some(index)
     }
 
@@ -563,6 +620,7 @@ impl TranscriptLayout {
         if !area.contains(point.into()) {
             return None;
         }
+
         let absolute_row = offset + (point.1 - area.y) as usize;
         let entry = self.entries.iter().find(|entry| entry.end > absolute_row)?;
         let entry_start = entry.end - entry.height;
@@ -575,6 +633,7 @@ impl TranscriptLayout {
         let wrapped = absolute_row - entry_start - row.start;
         let range = row.ranges.get(wrapped)?;
         let byte = byte_at_column(&row.line.to_string(), range, column)?;
+
         row.links
             .iter()
             .find(|link| link.start <= byte && byte < link.end)
@@ -593,19 +652,23 @@ impl TranscriptLayout {
     ) {
         let mut y = area.y;
         let first = self.entries.partition_point(|entry| entry.end <= offset);
+
         for entry in &self.entries[first..] {
             let start = entry.end - entry.height;
             let relative = offset.saturating_sub(start);
             let first_row = entry
                 .rows
                 .partition_point(|row| row.start + row.height <= relative);
+
             for row in &entry.rows[first_row..] {
                 if y >= area.bottom() {
                     return;
                 }
+
                 let skip = relative.saturating_sub(row.start);
                 let height = (row.height - skip).min((area.bottom() - y) as usize) as u16;
                 let gutter_width = row.gutter.as_ref().map_or(0, |gutter| gutter.width);
+
                 if let Some(gutter) = &row.gutter {
                     for dy in 0..height {
                         let first = skip == 0 && dy == 0;
@@ -620,6 +683,7 @@ impl TranscriptLayout {
                         .render(Rect::new(area.x, y + dy, gutter_width, 1), buffer);
                     }
                 }
+
                 for (dy, line) in row
                     .wrapped
                     .iter()
@@ -637,6 +701,7 @@ impl TranscriptLayout {
                         buffer,
                     );
                 }
+
                 y += height;
             }
         }
@@ -651,6 +716,7 @@ mod tests {
     #[test]
     fn wrapped_thinking_and_code_keep_gutters_even_when_scrolled_mid_line() {
         let text = "中文 words 👋 words ".repeat(80);
+
         for (item, marker) in [
             (TranscriptItem::Thinking(text.clone()), "┊"),
             (
@@ -665,6 +731,7 @@ mod tests {
                 .draw(|frame| layout.draw(frame, frame.area(), 3))
                 .unwrap();
             let buffer = terminal.backend().buffer();
+
             for y in 0..6 {
                 assert_eq!(buffer[(0, y)].symbol(), " ");
                 assert_eq!(buffer[(1, y)].symbol(), " ");
@@ -680,17 +747,21 @@ mod tests {
         let mut layout = TranscriptLayout::default();
         layout.update(&[TranscriptItem::Assistant(answer.into())], None, 24);
         let rows = &layout.entries[0].rows;
+
         for (index, marker) in ["1. ", "2. ", "• "].into_iter().enumerate() {
             let gutter = rows[index].gutter.as_ref().unwrap();
+
             assert!(gutter.first.to_string().contains(marker));
             assert_eq!(gutter.first.width(), gutter.continuation.width());
             assert!(!rows[index].line.to_string().is_empty());
         }
+
         let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
         terminal
             .draw(|frame| layout.draw(frame, frame.area(), 0))
             .unwrap();
         let buffer = terminal.backend().buffer();
+
         assert_eq!(buffer[(2, 0)].symbol(), "1");
         assert_ne!(buffer[(5, 0)].symbol(), " ");
         assert_eq!(buffer[(2, 1)].symbol(), " ");
@@ -709,6 +780,7 @@ mod tests {
             20,
         );
         let row = &layout.entries[0].rows[0];
+
         assert_eq!(row.gutter.as_ref().unwrap().first.to_string(), "  ☐ ");
         assert_eq!(
             row.gutter.as_ref().unwrap().first.width(),
@@ -734,6 +806,7 @@ mod tests {
                     .map(|url| (x, y, url.to_owned()))
             })
         });
+
         assert_eq!(
             target.as_ref().map(|(_, _, url)| url.as_str()),
             Some("https://example.com/orbit")
@@ -747,6 +820,7 @@ mod tests {
             None,
             area.width,
         );
+
         assert!((area.y..area.bottom()).all(|y| {
             (area.x..area.right()).all(|x| code_layout.link_at(area, 0, (x, y)).is_none())
         }));
@@ -761,6 +835,7 @@ mod tests {
             32,
         );
         let rows = &layout.entries[0].rows;
+
         assert_eq!(rows[0].line.to_string(), "  状态");
         assert_eq!(rows[1].line.to_string(), "  第二行细节");
     }
@@ -770,6 +845,7 @@ mod tests {
         let mut layout = TranscriptLayout::default();
         layout.update(&[TranscriptItem::Command("/compact".into())], None, 32);
         let rows = &layout.entries[0].rows;
+
         assert!(
             rows[0]
                 .line
@@ -785,6 +861,7 @@ mod tests {
     fn user_turn_marker_is_joined_to_the_top_border() {
         let mut layout = TranscriptLayout::default();
         layout.update(&[TranscriptItem::User("问题".into())], None, 32);
+
         assert!(
             layout.entries[0].rows[0]
                 .line
@@ -805,6 +882,7 @@ mod tests {
             40,
         );
         let thinking = &layout.entries[0];
+
         assert!(thinking.rows.last().unwrap().line.to_string().is_empty());
         assert_eq!(layout.entries[1].rows[0].line.to_string(), "  final answer");
     }
@@ -822,13 +900,16 @@ mod tests {
         );
         let row = &layout.entries[0].rows[1];
         let gutter = row.gutter.as_ref().unwrap();
+
         assert_eq!(gutter.first.to_string(), "  ┊ │ ");
         assert_eq!(gutter.continuation.to_string(), "  ┊ │ ");
         assert!(row.height > 1);
+
         let mut terminal = Terminal::new(TestBackend::new(22, 5)).unwrap();
         terminal
             .draw(|frame| layout.draw(frame, frame.area(), 0))
             .unwrap();
+
         for y in 1..5 {
             assert_eq!(terminal.backend().buffer()[(2, y)].symbol(), "┊");
             assert_eq!(terminal.backend().buffer()[(4, y)].symbol(), "│");
@@ -839,6 +920,7 @@ mod tests {
     fn unicode_line_breaks_fill_cjk_rows_and_quotes_keep_a_continuous_rail() {
         let source = "前缀 + 杂乱客厅背景 后文";
         let ranges = wrap_ranges(source, 10);
+
         assert!(source[ranges[0].clone()].width() >= 9);
         assert!(ranges.len() >= 2);
 
@@ -853,13 +935,16 @@ mod tests {
         );
         let row = &layout.entries[0].rows[0];
         let gutter = row.gutter.as_ref().unwrap();
+
         assert_eq!(gutter.first.to_string(), "  ▎ ");
         assert_eq!(gutter.continuation.to_string(), "  ▎ ");
         assert!(row.height > 1);
+
         let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
         terminal
             .draw(|frame| layout.draw(frame, frame.area(), 0))
             .unwrap();
+
         for y in 0..5 {
             assert_eq!(terminal.backend().buffer()[(2, y)].symbol(), "▎");
         }
@@ -894,6 +979,7 @@ mod tests {
         let source = "| # | 语言 | 特性 |\n|---|---|---|\n| 1 | **Python** | `complex` |\n| 2 | C | restrict |\n| 3 | C++ | 模板 |\n\n后文\n";
         let mut text = String::new();
         let mut layout = TranscriptLayout::default();
+
         for ch in source.chars() {
             text.push(ch);
             let items = [TranscriptItem::Assistant(text.clone())];
@@ -908,6 +994,7 @@ mod tests {
                     .map(|r| r.line.clone())
                     .collect::<Vec<_>>()
             };
+
             assert_eq!(lines(&layout), lines(&fresh), "input: {text:?}");
         }
     }
@@ -916,6 +1003,7 @@ mod tests {
     fn streamed_tables_match_fresh_layout_through_split_delimiters_and_resize() {
         let mut text = String::new();
         let mut layout = TranscriptLayout::default();
+
         for chunk in [
             "intro\n| 名称 | 数量 |\n",
             "| ---",
@@ -932,13 +1020,18 @@ mod tests {
             layout.update(&items, None, 35);
             let mut fresh = TranscriptLayout::default();
             fresh.update(&items, None, 35);
+
             assert_eq!(layout.height(), fresh.height());
+
             let actual: Vec<_> = layout.entries[0].rows.iter().map(|r| &r.line).collect();
             let expected: Vec<_> = fresh.entries[0].rows.iter().map(|r| &r.line).collect();
+
             assert_eq!(actual, expected, "source: {text}");
         }
+
         for width in [12, 60] {
             layout.update(&[TranscriptItem::Assistant(text.clone())], None, width);
+
             assert!(layout.height() > 0);
         }
     }
@@ -947,6 +1040,7 @@ mod tests {
     fn incremental_layout_matches_fresh_layout_for_unicode_wrapping_and_split_fences() {
         let mut layout = TranscriptLayout::default();
         let mut items = vec![TranscriptItem::Assistant(String::new())];
+
         for chunk in [
             "你好 e\u{301} words words",
             " **加",
@@ -960,13 +1054,17 @@ mod tests {
             let TranscriptItem::Assistant(text) = &mut items[0] else {
                 unreachable!()
             };
+
             text.push_str(chunk);
             layout.invalidate_from(0);
+
             for width in [17] {
                 layout.update(&items, None, width);
                 let mut reference = TranscriptLayout::default();
                 reference.update(&items, None, width);
+
                 assert_eq!(layout.height(), reference.height());
+
                 for offset in 0..layout.height() {
                     let mut actual = Terminal::new(TestBackend::new(width, 5)).unwrap();
                     actual.draw(|f| layout.draw(f, f.area(), offset)).unwrap();
@@ -974,6 +1072,7 @@ mod tests {
                     expected
                         .draw(|f| reference.draw(f, f.area(), offset))
                         .unwrap();
+
                     assert_eq!(
                         actual.backend().buffer(),
                         expected.backend().buffer(),
@@ -991,6 +1090,7 @@ mod tests {
             TranscriptItem::Assistant("answer words ".repeat(80)),
         ];
         let mut layout = TranscriptLayout::default();
+
         for (width, expanded) in [
             (80, None),
             (20, None),
@@ -1001,7 +1101,9 @@ mod tests {
             layout.update(&items, expanded, width);
             let expected =
                 Paragraph::new(render::transcript_lines(&items, false)).wrap(Wrap { trim: false });
+
             assert_eq!(layout.height(), expected.line_count(width));
+
             let offset = layout.height().saturating_sub(6);
             let mut actual_terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
             actual_terminal
@@ -1011,6 +1113,7 @@ mod tests {
             expected_terminal
                 .draw(|f| f.render_widget(expected.clone().scroll((offset as u16, 0)), f.area()))
                 .unwrap();
+
             assert_eq!(
                 actual_terminal.backend().buffer(),
                 expected_terminal.backend().buffer()
@@ -1029,6 +1132,7 @@ mod tests {
             24,
         );
         let rows = &layout.entries[0].rows;
+
         assert_eq!(
             rows.first().unwrap().line.to_string().chars().next(),
             Some('╭')
@@ -1048,28 +1152,35 @@ mod tests {
         let mut layout = TranscriptLayout::default();
         layout.update(&items, None, 100);
         let stable = layout.entries[0].rows[500].line.spans[0].content.as_ptr();
+
         for _ in 0..30 {
             let TranscriptItem::Assistant(text) = &mut items[0] else {
                 unreachable!()
             };
+
             text.push_str("stream delta ");
             layout.invalidate_from(0);
             layout.update(&items, None, 100);
+
             assert_eq!(
                 stable,
                 layout.entries[0].rows[500].line.spans[0].content.as_ptr()
             );
         }
+
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let started = std::time::Instant::now();
+
         for offset in (0..10000).step_by(100) {
             layout.update(&items, None, 100);
             terminal.draw(|f| layout.draw(f, f.area(), offset)).unwrap();
         }
+
         eprintln!(
             "100 scroll frames over 10000 lines: {:?}",
             started.elapsed()
         );
+
         assert_eq!(
             stable,
             layout.entries[0].rows[500].line.spans[0].content.as_ptr()

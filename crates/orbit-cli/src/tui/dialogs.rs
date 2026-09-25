@@ -118,6 +118,7 @@ impl MarketplaceDialog {
     fn selected_change(&self) -> Option<ProjectPluginChange> {
         let (market, plugin) = self.selected_plugin()?;
         let package = self.inspection.as_ref()?.as_ref().ok()?;
+
         if self.is_enabled(market, plugin)
             && self
                 .enabled
@@ -130,7 +131,9 @@ impl MarketplaceDialog {
                 plugin_name: plugin.name.clone(),
             });
         }
+
         let package_source = plugin.source.clone()?;
+
         Some(ProjectPluginChange::Enable(ProjectPlugin {
             project_id: self.project_id.clone(),
             marketplace_source: market.source.clone(),
@@ -177,6 +180,7 @@ impl ModelPicker {
             .iter()
             .position(|model| model.qualified_name() == current)
             .unwrap_or_default();
+
         Self {
             models,
             query: String::new(),
@@ -185,8 +189,10 @@ impl ModelPicker {
             effort,
         }
     }
+
     fn matches(&self) -> Vec<&ModelOption> {
         let query = self.query.to_lowercase();
+
         self.models
             .iter()
             .filter(|model| {
@@ -196,6 +202,7 @@ impl ModelPicker {
             })
             .collect()
     }
+
     fn move_by(&mut self, down: bool) {
         let count = self.matches().len();
         self.selected = if down {
@@ -205,19 +212,24 @@ impl ModelPicker {
         };
         self.normalize_effort();
     }
+
     fn selected_efforts(&self) -> Vec<orbit_model::types::ReasoningEffort> {
         let matches = self.matches();
         let Some(model) = matches.get(self.selected) else {
             return Vec::new();
         };
+
         model.reasoning_efforts.clone()
     }
+
     fn cycle_effort(&mut self, forward: bool) {
         let efforts = self.selected_efforts();
+
         if efforts.is_empty() {
             self.effort = None;
             return;
         }
+
         let index = efforts
             .iter()
             .position(|effort| Some(*effort) == self.effort)
@@ -227,11 +239,13 @@ impl ModelPicker {
         } else {
             (index + efforts.len() - 1) % efforts.len()
         };
+
         self.effort = Some(efforts[next]);
     }
 
     fn normalize_effort(&mut self) {
         let efforts = self.selected_efforts();
+
         if efforts.is_empty() {
             self.effort = None;
         } else if !efforts.iter().any(|effort| Some(*effort) == self.effort) {
@@ -244,6 +258,7 @@ impl ModelPicker {
         }
     }
 }
+
 impl SessionPicker {
     pub fn new(sessions: Vec<Session>) -> Self {
         Self {
@@ -253,6 +268,7 @@ impl SessionPicker {
             error: None,
         }
     }
+
     fn matches(&self) -> Vec<&Session> {
         let query = self.query.to_lowercase();
         self.sessions
@@ -260,6 +276,7 @@ impl SessionPicker {
             .filter(|s| s.title.to_lowercase().contains(&query) || s.id.contains(&query))
             .collect()
     }
+
     fn move_by(&mut self, down: bool) {
         let count = self.matches().len();
         self.selected = if down {
@@ -275,6 +292,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         if key.kind == KeyEventKind::Release {
             return None;
         }
+
         if key.code == KeyCode::Esc
             && let Some(dialog) = &mut state.marketplace_dialog
         {
@@ -287,6 +305,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 return None;
             }
         }
+
         if key.code == KeyCode::Esc
             || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
         {
@@ -297,6 +316,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             return None;
         }
     }
+
     if let Some(picker) = &mut state.picker {
         match event {
             Event::Key(key) => match key.code {
@@ -384,6 +404,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 }
                 KeyCode::Up if !dialog.adding => dialog.move_market(false),
                 KeyCode::Down if !dialog.adding => dialog.move_market(true),
+
                 KeyCode::Char('a')
                     if !dialog.adding
                         && !key
@@ -392,6 +413,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 {
                     dialog.adding = true
                 }
+
                 KeyCode::Char('e')
                     if dialog.inspection.as_ref().is_some_and(Result::is_ok)
                         && !key
@@ -403,6 +425,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                         state.marketplace_dialog = None;
                     }
                 }
+
                 KeyCode::Enter if dialog.viewing_plugins && dialog.inspection.is_none() => {
                     dialog.inspect_selected_plugin()
                 }
@@ -410,16 +433,20 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     dialog.viewing_plugins = true
                 }
                 KeyCode::Enter if !dialog.adding => dialog.adding = true,
+
                 KeyCode::Enter => {
                     let source = dialog.source.trim();
+
                     if !source.is_empty() {
                         state.pending_marketplace_source = Some(source.into());
                         state.marketplace_dialog = None;
                     }
                 }
+
                 KeyCode::Backspace if dialog.adding => {
                     dialog.source.pop();
                 }
+
                 KeyCode::Char(c)
                     if dialog.adding
                         && !key
@@ -428,11 +455,14 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 {
                     dialog.source.push(c)
                 }
+
                 _ => {}
             },
+
             Event::Paste(text) if dialog.adding => dialog
                 .source
                 .extend(text.chars().filter(|c| !c.is_control())),
+
             Event::Mouse(mouse)
                 if mouse.kind == MouseEventKind::ScrollUp
                     && dialog.inspection.is_none()
@@ -440,6 +470,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             {
                 dialog.move_plugin(false)
             }
+
             Event::Mouse(mouse)
                 if mouse.kind == MouseEventKind::ScrollDown
                     && dialog.inspection.is_none()
@@ -447,6 +478,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             {
                 dialog.move_plugin(true)
             }
+
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp && !dialog.adding => {
                 dialog.move_market(false)
             }
@@ -475,6 +507,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             _ => {}
         }
     }
+
     None
 }
 
@@ -492,6 +525,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     {
         return;
     }
+
     state.selection.clear();
     let full = frame.area();
     let width = full.width.saturating_sub(4).min(96);
@@ -512,6 +546,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         "Orbit 帮助"
     };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Rgb(218, 139, 109)));
@@ -530,6 +565,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         inner.height.saturating_sub(4),
     );
     let footer = Rect::new(header.x, inner.bottom().saturating_sub(2), header.width, 2);
+
     if let Some(picker) = &mut state.picker {
         let feedback = picker.error.as_deref().or(state.resume_loading.as_deref());
         let feedback_rows = feedback.map_or(0, |text| {
@@ -568,6 +604,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             ),
             Line::from(format!("{search}▏")),
         ];
+
         if let Some(feedback) = feedback {
             heading.push(Line::styled(
                 clean(feedback),
@@ -578,11 +615,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 }),
             ));
         }
+
         frame.render_widget(Paragraph::new(heading).wrap(Wrap { trim: false }), header);
         let rows = picker.matches();
         let visible = (body.height as usize / 2).max(1);
         let first = picker.selected.saturating_sub(visible - 1);
         let mut lines = Vec::new();
+
         for (index, session) in rows.iter().enumerate().skip(first).take(visible) {
             let selected = index == picker.selected;
             let style = if selected {
@@ -593,6 +632,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             } else {
                 Style::default()
             };
+
             lines.push(Line::styled(
                 format!(
                     "{} {}",
@@ -606,6 +646,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 Style::default().fg(Color::Rgb(170, 170, 170)),
             ));
         }
+
         if lines.is_empty() {
             lines.push(Line::from(if picker.sessions.is_empty() {
                 "暂无其他可恢复会话。/new 后可在这里找回之前的对话。"
@@ -613,6 +654,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 "没有匹配的会话。"
             }));
         }
+
         frame.render_widget(Paragraph::new(lines), body);
         let detail = format!("{} 个会话 · 按最近更新排序", rows.len());
         frame.render_widget(
@@ -649,6 +691,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         let first = picker.selected.saturating_sub(visible - 1);
         let mut lines = Vec::new();
         let mut previous_provider = None;
+
         for (index, model) in rows.iter().enumerate().skip(first).take(visible) {
             if previous_provider != Some(model.provider.as_str()) {
                 lines.push(Line::styled(
@@ -659,6 +702,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 ));
                 previous_provider = Some(model.provider.as_str());
             }
+
             let selected = index == picker.selected;
             let current = model.qualified_name() == picker.current;
             let ordinal = picker
@@ -675,6 +719,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             } else {
                 Style::default()
             };
+
             lines.push(Line::styled(
                 format!(
                     "{} {}. {}{}{}{}",
@@ -696,9 +741,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 style,
             ));
         }
+
         if lines.is_empty() {
             lines.push(Line::from("没有匹配的模型。"));
         }
+
         frame.render_widget(Paragraph::new(lines), body);
         let effort = picker
             .effort
@@ -747,6 +794,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             frame.render_widget(Paragraph::new("Enter 下载 · Esc 取消"), footer);
         } else if let Some(inspection) = &dialog.inspection {
             state.ime_cursor = None;
+
             match inspection {
                 Ok(package) => {
                     let version = package
@@ -834,6 +882,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     ];
                     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
                 }
+
                 Err(error) => {
                     frame.render_widget(
                         Paragraph::new(Line::styled(
@@ -850,6 +899,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     );
                 }
             }
+
             frame.render_widget(
                 Paragraph::new(
                     if dialog
@@ -870,6 +920,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             let Some(market) = dialog.selected_market() else {
                 return;
             };
+
             frame.render_widget(
                 Paragraph::new(vec![
                     Line::styled(
@@ -888,6 +939,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             let visible = (body.height as usize / 2).max(1);
             let first = dialog.selected_plugin.saturating_sub(visible - 1);
             let mut entries = Vec::new();
+
             for (index, plugin) in market.plugins.iter().enumerate().skip(first).take(visible) {
                 let selected = index == dialog.selected_plugin;
                 let style = if selected {
@@ -898,6 +950,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 } else {
                     Style::default().add_modifier(Modifier::BOLD)
                 };
+
                 entries.push(Line::styled(
                     format!(
                         "{} {}{}",
@@ -923,9 +976,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     Style::default().fg(Color::Rgb(170, 170, 170)),
                 ));
             }
+
             if entries.is_empty() {
                 entries.push(Line::from("这个市场没有声明插件。"));
             }
+
             frame.render_widget(Paragraph::new(entries), body);
             frame.render_widget(
                 Paragraph::new(format!(
@@ -948,6 +1003,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             let visible = (body.height as usize / 2).max(1);
             let first = dialog.selected_market.saturating_sub(visible - 1);
             let mut entries = Vec::new();
+
             for (index, market) in dialog
                 .marketplaces
                 .iter()
@@ -964,6 +1020,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 } else {
                     Style::default().add_modifier(Modifier::BOLD)
                 };
+
                 entries.push(Line::styled(
                     format!(
                         "{} {}",
@@ -985,9 +1042,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     Style::default().fg(Color::Rgb(170, 170, 170)),
                 ));
             }
+
             if entries.is_empty() {
                 entries.push(Line::from("尚未添加市场。"));
             }
+
             frame.render_widget(Paragraph::new(entries), body);
             frame.render_widget(
                 Paragraph::new(format!(
@@ -1054,6 +1113,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 })
                 .collect()
         };
+
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
         state.help_scroll = state.help_scroll.min(
             paragraph
@@ -1107,8 +1167,11 @@ mod tests {
             session("def", "目标任务"),
         ]));
         handle(&mut state, Event::Paste("目标".into()));
+
         assert_eq!(handle(&mut state, key(KeyCode::Enter)), Some("def".into()));
+
         handle(&mut state, key(KeyCode::Esc));
+
         assert!(state.picker.is_none());
         assert_eq!(state.input.text, "draft");
     }
@@ -1148,6 +1211,7 @@ mod tests {
         handle(&mut state, Event::Paste("astra".into()));
         handle(&mut state, key(KeyCode::Right));
         handle(&mut state, key(KeyCode::Enter));
+
         assert!(state.model_picker.is_none());
         assert_eq!(state.chosen_model.as_deref(), Some("openai::gpt-6-astra"));
         assert_eq!(
@@ -1191,6 +1255,7 @@ mod tests {
         // Cycling left from Low (which is at index 1 of [None, Low]) goes to None ("不思考")
         handle(&mut state, key(KeyCode::Left));
         handle(&mut state, key(KeyCode::Enter));
+
         assert!(state.model_picker.is_none());
         assert_eq!(
             state.chosen_effort,
@@ -1215,6 +1280,7 @@ mod tests {
         ));
         handle(&mut state, key(KeyCode::Left));
         handle(&mut state, key(KeyCode::Enter));
+
         assert_eq!(
             state.chosen_effort,
             Some(orbit_model::types::ReasoningEffort::Low)
@@ -1248,13 +1314,16 @@ mod tests {
         ));
 
         handle(&mut state, key(KeyCode::Enter));
+
         assert!(
             state
                 .marketplace_dialog
                 .as_ref()
                 .is_some_and(|dialog| dialog.viewing_plugins)
         );
+
         handle(&mut state, key(KeyCode::Down));
+
         assert_eq!(
             state
                 .marketplace_dialog
@@ -1262,7 +1331,9 @@ mod tests {
                 .map(|dialog| dialog.selected_plugin),
             Some(1)
         );
+
         handle(&mut state, key(KeyCode::Esc));
+
         assert!(
             state
                 .marketplace_dialog
@@ -1385,6 +1456,7 @@ mod tests {
     fn help_has_its_own_panel_and_all_shortcuts_are_reachable() {
         let mut state = UiState::new("model");
         state.show_help = true;
+
         for (width, height) in [(80, 24), (40, 14), (24, 10)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
@@ -1395,13 +1467,18 @@ mod tests {
                 .iter()
                 .map(|c| c.symbol())
                 .collect();
+
             assert!(text.contains("Orbit"));
         }
+
         handle(&mut state, key(KeyCode::Right));
+
         assert!(state.help_keys);
+
         for _ in 0..100 {
             handle(&mut state, key(KeyCode::Down));
         }
+
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         let text: String = terminal
@@ -1411,9 +1488,12 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
+
         assert!(text.contains("?"));
         assert!(!text.contains("/help"));
+
         handle(&mut state, key(KeyCode::Esc));
+
         assert!(!state.show_help);
     }
 
@@ -1423,6 +1503,7 @@ mod tests {
         let mut picker = SessionPicker::new(vec![session("abc", "目标会话")]);
         picker.error = Some("该会话已在其他 Orbit 窗口或进程中打开，请先关闭后再恢复。".into());
         state.picker = Some(picker);
+
         for width in [40, 80, 120] {
             let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
@@ -1435,12 +1516,15 @@ mod tests {
                     cell.fg == Color::Rgb(235, 135, 135) && !cell.symbol().trim().is_empty()
                 })
                 .collect();
+
             assert!(!error_cells.is_empty());
             assert!(error_cells.iter().all(|(i, _)| i / usize::from(width) < 8));
+
             let text = error_cells
                 .iter()
                 .map(|(_, cell)| cell.symbol())
                 .collect::<String>();
+
             assert!(text.contains("已在其他Orbit"), "{text}");
             assert!(state.picker.is_some());
         }
@@ -1461,6 +1545,7 @@ mod tests {
                 })
                 .collect::<String>()
         };
+
         assert!(!text_at(1).contains('恢'));
         assert!(text_at(2).contains('恢'), "{}", text_at(2));
         assert!(text_at(1).contains('─'));
@@ -1488,6 +1573,7 @@ mod tests {
                         width.saturating_sub(4).min(96),
                         24,
                     );
+
                     for query in ["", "中文"] {
                         let mut picker = SessionPicker::new(vec![session("abc", "中文会话")]);
                         picker.query = query.into();
@@ -1499,6 +1585,7 @@ mod tests {
                             })
                             .unwrap();
                         let buffer = terminal.backend().buffer();
+
                         for y in area.y + 1..area.bottom() - 1 {
                             for x in [area.x, area.right() - 1] {
                                 assert_eq!(
@@ -1509,6 +1596,7 @@ mod tests {
                             }
                         }
                     }
+
                     state.picker = None;
                     terminal
                         .draw(|frame| {
@@ -1516,15 +1604,19 @@ mod tests {
                             draw(frame, &mut state);
                         })
                         .unwrap();
+
                     use ratatui::buffer::CellWidth;
+
                     for y in 0..30 {
                         let mut x = 0;
+
                         while x < width {
                             assert_eq!(
                                 terminal.backend().buffer()[(x, y)],
                                 original[(x, y)],
                                 "restored visible cell at ({x},{y})"
                             );
+
                             x += original[(x, y)].cell_width().max(1);
                         }
                     }

@@ -58,6 +58,7 @@ impl ModelClient {
                 "max_retries must be between 0 and 5".to_owned(),
             ));
         }
+
         if let Some(adapter) = config.reasoning_adapter {
             let compatible = matches!(
                 (config.api_format, adapter),
@@ -72,6 +73,7 @@ impl ModelClient {
                     ReasoningAdapter::AnthropicMessages
                 )
             );
+
             if !compatible {
                 return Err(ModelError::Protocol(
                     "reasoning adapter does not match the configured API format".into(),
@@ -99,6 +101,7 @@ impl ModelClient {
         }
 
         let host = endpoint.host_str().unwrap_or_default();
+
         if (host.starts_with("sk-") && !host.contains('.') && host.len() > 20)
             || config
                 .api_key
@@ -214,6 +217,7 @@ impl ModelClient {
                 crate::anthropic::messages::stream(response, self.config.timeout, cancellation)
             }
         };
+
         Ok((stream, retries))
     }
 
@@ -226,6 +230,7 @@ impl ModelClient {
         if request.reasoning_effort.is_none() {
             request.reasoning_effort = self.config.reasoning_effort;
         }
+
         let format = self.config.api_format;
         let (body, headers) = match format {
             ApiFormat::OpenaiChatCompletions => crate::openai::chat_completions::encode(
@@ -255,6 +260,7 @@ impl ModelClient {
             let result = self
                 .send_once(&body, &headers, format, cancellation.clone())
                 .await;
+
             match result {
                 Ok(response) => return Ok((response, u32::from(attempt))),
                 Err(error) if error.is_retryable() && attempt < self.config.max_retries => {
@@ -267,6 +273,7 @@ impl ModelClient {
                 Err(error) => return Err(error),
             }
         }
+
         unreachable!("retry loop returns on every final attempt")
     }
 
@@ -450,13 +457,16 @@ where
     F: Fn(&str) -> Result<Vec<StreamEvent>, ModelError>,
 {
     let value: serde_json::Value = serde_json::from_str(data)?;
+
     if let Some(error) = upstream_error(&value) {
         return Err(error);
     }
+
     let terminal = matches!(
         value["type"].as_str(),
         Some("response.completed" | "response.incomplete" | "message_stop")
     );
+
     Ok((decode(data)?, terminal))
 }
 
@@ -471,12 +481,14 @@ pub(crate) fn upstream_error(value: &serde_json::Value) -> Option<ModelError> {
                 .and_then(|response| response.get("error"))
                 .filter(|error| !error.is_null())
         });
+
     if error.is_none()
         && !matches!(kind, Some("error" | "response.failed"))
         && value["status"] != "failed"
     {
         return None;
     }
+
     let message = error
         .and_then(|error| {
             error
@@ -495,6 +507,7 @@ pub(crate) fn upstream_error(value: &serde_json::Value) -> Option<ModelError> {
         .or_else(|| value["id"].as_str())
         .map(|id| format!(" [response {id}]"))
         .unwrap_or_default();
+
     Some(ModelError::Upstream {
         message: code
             .map(|code| format!("{code}: {message}"))
@@ -522,6 +535,7 @@ pub(crate) fn sse_data(frame: &str) -> Option<String> {
             if !data.is_empty() {
                 data.push('\n');
             }
+
             data.push_str(value.trim_start());
         }
     }
@@ -537,6 +551,7 @@ pub(crate) fn truncate_body(body: &str, limit: usize) -> String {
     }
 
     let mut result = body[..end].to_owned();
+
     if end < body.len() {
         result.push('…');
     }
@@ -590,10 +605,7 @@ mod tests {
     #[test]
     fn recognizes_context_limit_before_truncating_a_long_error_body() {
         let body = serde_json::json!({
-            "error": {
-                "code": "context_length_exceeded",
-                "message": "x".repeat(4_000)
-            }
+            "error": { "code": "context_length_exceeded", "message": "x".repeat(4_000) }
         })
         .to_string();
         let error = crate::error::ModelError::Http {
@@ -639,6 +651,7 @@ mod tests {
                 ..Default::default()
             };
             let error = super::ModelClient::new(config).unwrap_err().to_string();
+
             assert!(error.contains("base URL is invalid"));
             assert!(!error.contains("sk-not-a-real-secret"));
             assert!(!error.contains("private-password"));
@@ -705,6 +718,7 @@ mod tests {
         assert_eq!(completion.message, ChatMessage::assistant("hello"));
 
         let request = request.await;
+
         assert!(request.starts_with("post /chat/completions http/1.1"));
         assert!(request.contains("authorization: bearer openai-key"));
         assert!(request.contains("\"model\":\"mock-model\""));
@@ -737,6 +751,7 @@ mod tests {
         assert_eq!(completion.finish_reason.as_deref(), Some("stop"));
 
         let request = request.await;
+
         assert!(request.starts_with("post /responses http/1.1"));
         assert!(request.contains("authorization: bearer responses-key"));
         assert!(request.contains("\"instructions\":\"be concise\""));
@@ -760,6 +775,7 @@ mod tests {
         let mut thinking = String::new();
         let mut input_tokens = None;
         let mut finished = false;
+
         while let Some(event) = stream.next().await {
             match event.unwrap() {
                 StreamEvent::ReasoningDelta(text) => thinking.push_str(&text),
@@ -768,17 +784,20 @@ mod tests {
                     usage,
                 } => {
                     let usage = usage.unwrap();
+
                     if finish_reason.is_none() {
                         input_tokens = usage.prompt_tokens;
                     } else {
                         assert_eq!(finish_reason.as_deref(), Some("max_tokens"));
                         assert_eq!(usage.completion_tokens, Some(16384));
+
                         finished = true;
                     }
                 }
                 _ => panic!("unexpected event"),
             }
         }
+
         assert_eq!(thinking, "first reasoning");
         assert_eq!(input_tokens, Some(321));
         assert!(finished);
@@ -811,6 +830,7 @@ mod tests {
         );
 
         let request = request.await;
+
         assert!(request.starts_with("post /messages http/1.1"));
         assert!(request.contains("x-api-key: anthropic-key"));
         assert!(request.contains("anthropic-version: 2023-06-01"));
@@ -872,14 +892,26 @@ mod tests {
     #[test]
     fn reports_error_envelopes_in_all_stream_formats() {
         for value in [
-            serde_json::json!({"error": {"message": "overloaded", "code": "upstream_error"}}),
-            serde_json::json!({"type": "error", "error": {"type": "overloaded_error", "message": "overloaded"}}),
-            serde_json::json!({"type": "response.failed", "response": {"id": "resp-test", "error": {"code": "upstream_error", "message": "overloaded"}}}),
+            serde_json::json!({
+                "error": { "message": "overloaded", "code": "upstream_error" }
+            }),
+            serde_json::json!({
+                "type": "error",
+                "error": { "type": "overloaded_error", "message": "overloaded" }
+            }),
+            serde_json::json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp-test",
+                    "error": { "code": "upstream_error", "message": "overloaded" }
+                }
+            }),
         ] {
             let error = decode_sse_data(&value.to_string(), &|_| {
                 panic!("failed responses must not reach the normal decoder")
             })
             .unwrap_err();
+
             assert!(
                 matches!(error, ModelError::Upstream { message, .. } if message.contains("overloaded"))
             );
@@ -902,9 +934,11 @@ mod tests {
             .unwrap();
         time::timeout(Duration::from_millis(300), async {
             let mut completed = false;
+
             while let Some(event) = events.next().await {
                 completed |= matches!(event.unwrap(), StreamEvent::Completed { .. });
             }
+
             assert!(completed);
         })
         .await
@@ -934,6 +968,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap_err();
+
         assert!(matches!(error, ModelError::Timeout { stage, .. } if stage.contains("JSON body")));
     }
 
@@ -941,9 +976,11 @@ mod tests {
     async fn active_stream_can_run_longer_than_the_idle_timeout() {
         let mut chunks =
             vec![b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n".to_vec()];
+
         for _ in 0..30 {
             chunks.push(b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"},\"finish_reason\":null}]}\n\n".to_vec());
         }
+
         chunks.push(b"data: [DONE]\n\n".to_vec());
         let (url, _) = test_server_chunks(chunks).await;
         let timeout = Duration::from_millis(200);
@@ -959,10 +996,13 @@ mod tests {
             .unwrap();
         let started = time::Instant::now();
         let mut count = 0;
+
         while let Some(event) = events.next().await {
             assert!(matches!(event.unwrap(), StreamEvent::ReasoningDelta(_)));
+
             count += 1;
         }
+
         assert_eq!(count, 30);
         assert!(started.elapsed() > timeout);
     }
@@ -989,6 +1029,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap_err();
+
         assert!(
             matches!(error, ModelError::Timeout { stage, .. } if stage.contains("8 body bytes received previously, 0 model events"))
         );
@@ -1012,11 +1053,13 @@ mod tests {
             .await
             .unwrap();
         let mut text = String::new();
+
         while let Some(event) = stream.next().await {
             if let StreamEvent::TextDelta(delta) = event.unwrap() {
                 text.push_str(&delta);
             }
         }
+
         assert_eq!(text, "中文");
     }
 
@@ -1047,13 +1090,17 @@ mod tests {
             )
             .await
             .unwrap();
+
         assert_eq!(retries, 1);
+
         let mut text = String::new();
+
         while let Some(event) = stream.next().await {
             if let StreamEvent::TextDelta(delta) = event.unwrap() {
                 text.push_str(&delta);
             }
         }
+
         assert_eq!(text, "recovered");
         assert_eq!(requests.await.expect("request count"), 2);
     }
@@ -1100,24 +1147,31 @@ mod tests {
 
         tokio::spawn(async move {
             let mut requests = 0;
+
             for response in responses {
                 let (mut socket, _) = listener.accept().await.expect("accept request");
                 let mut bytes = Vec::new();
                 let mut buffer = [0_u8; 4096];
+
                 loop {
                     let count = socket.read(&mut buffer).await.expect("read request");
+
                     if count == 0 {
                         break;
                     }
+
                     bytes.extend_from_slice(&buffer[..count]);
+
                     if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
                         break;
                     }
                 }
+
                 requests += 1;
                 socket.write_all(&response).await.expect("write response");
                 let _ = socket.shutdown().await;
             }
+
             let _ = sender.send(requests);
         });
 
@@ -1142,11 +1196,13 @@ mod tests {
 
             loop {
                 let count = socket.read(&mut buffer).await.expect("read request");
+
                 if count == 0 {
                     break;
                 }
 
                 bytes.extend_from_slice(&buffer[..count]);
+
                 if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
                     break;
                 }
@@ -1156,6 +1212,7 @@ mod tests {
                 socket.write_all(chunk).await.expect("write response");
                 time::sleep(Duration::from_millis(10)).await;
             }
+
             time::sleep(hold).await;
             let _ = socket.shutdown().await;
             let _ = sender.send(String::from_utf8_lossy(&bytes).to_ascii_lowercase());

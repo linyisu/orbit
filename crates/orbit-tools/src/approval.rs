@@ -44,11 +44,13 @@ pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
     let Some(root) = workspace.canonicalize().ok() else {
         return false;
     };
+
     let candidate = if parent.is_absolute() {
         parent.to_path_buf()
     } else {
         root.join(parent)
     };
+
     candidate
         .canonicalize()
         .is_ok_and(|resolved| resolved.starts_with(root))
@@ -104,6 +106,7 @@ pub struct ApprovalRequest {
 }
 
 pub type ApprovalSender = mpsc::Sender<ApprovalRequest>;
+
 pub type ApprovalReceiver = mpsc::Receiver<ApprovalRequest>;
 
 pub fn channel() -> (ApprovalSender, ApprovalReceiver) {
@@ -119,6 +122,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("src")).unwrap();
+
         assert!(workspace_local_file("src/ui.rs", root.path()));
         assert!(workspace_local_file(
             root.path().join("src/ui.rs").to_str().unwrap(),
@@ -129,9 +133,11 @@ mod tests {
             outside.path().join("data.txt").to_str().unwrap(),
             root.path()
         ));
+
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(outside.path(), root.path().join("linked")).unwrap();
+
             assert!(!workspace_local_file("linked/data.txt", root.path()));
         }
     }

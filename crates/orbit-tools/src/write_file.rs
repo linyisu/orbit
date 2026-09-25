@@ -22,6 +22,7 @@ use crate::approval::{
 use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 
 const MAX_BYTES: usize = 1024 * 1024;
+
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Deserialize)]
@@ -44,6 +45,7 @@ impl WriteFile {
             approvals,
         }
     }
+
     pub(crate) async fn edit(
         &self,
         path: String,
@@ -64,6 +66,7 @@ impl WriteFile {
                 failed("edit requires an existing file; use write_file to create one")
             })?;
             let after = transform(before)?;
+
             if after.len() > MAX_BYTES || after.contains('\0') {
                 return Err(failed(
                     "edited content must be UTF-8 text without NUL, at most 1 MiB",
@@ -72,11 +75,14 @@ impl WriteFile {
             if after == before {
                 return Err(failed("edit makes no change"));
             }
+
             prepared.preview.after = after;
+
             Ok::<_, ToolError>(prepared)
         })
         .await
         .map_err(failed)??;
+
         prepared
             .approve_and_commit(&self.approvals, cancellation)
             .await
@@ -103,20 +109,24 @@ impl WriteFile {
                         content: before,
                     },
                 )?;
+
                 if prepared.preview.before.as_deref() != Some(expected.as_str()) {
                     return Err(failed(
                         "cannot undo: current file differs from Orbit's checkpoint; it was changed after the recorded write",
                     ));
                 }
+
                 Ok::<_, ToolError>(prepared)
             })
             .await
             .map_err(failed)??;
+
             prepared
                 .approve_and_commit(&self.approvals, cancellation)
                 .await
                 .map(|output| {
-                    json!({"path":change.path,"restored":true,"created_file_removed":false,"result":output.content}).to_string()
+                    json!({ "path": change.path, "restored": true, "created_file_removed": false, "result": output.content })
+                    .to_string()
                 })
         } else {
             self.delete_created(change, cancellation).await
@@ -136,11 +146,13 @@ impl WriteFile {
             tokio::task::spawn_blocking(move || DeletePrepared::new(workspace, path, expected))
                 .await
                 .map_err(failed)??;
+
         prepared
             .approve_and_commit(&self.approvals, cancellation)
             .await
             .map(|result| {
-                json!({"path":change.path,"restored":true,"created_file_removed":true,"result":result}).to_string()
+                json!({ "path": change.path, "restored": true, "created_file_removed": true, "result": result })
+                .to_string()
             })
     }
 }
@@ -171,6 +183,7 @@ impl DeletePrepared {
                 "cannot undo: current file differs from Orbit's checkpoint; it was changed after the recorded write",
             ));
         }
+
         Ok(Self {
             workspace,
             path,
@@ -203,9 +216,11 @@ impl DeletePrepared {
             _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
             answer = receiver => answer.unwrap_or(false),
         };
+
         if !approved {
             return Err(failed("user denied undo; no file was changed"));
         }
+
         tokio::task::spawn_blocking(move || self.commit(cancellation))
             .await
             .map_err(failed)?
@@ -219,21 +234,26 @@ impl DeletePrepared {
             .open_granted_write_parent(path)
             .map_err(failed)?;
         let parent_metadata = parent.metadata().map_err(failed)?;
+
         if (parent_metadata.dev(), parent_metadata.ino()) != self.parent {
             return Err(failed(
                 "cannot undo: parent directory changed; request a new preview",
             ));
         }
+
         let (current, text) = snapshot(&self.workspace, &self.path)?;
+
         if current.as_ref() != Some(&self.before) || text.as_deref() != Some(self.text.as_str()) {
             return Err(failed(
                 "cannot undo: current file differs from Orbit's checkpoint; it was changed after the recorded write",
             ));
         }
+
         check_cancelled(&cancellation)?;
         unlinkat(&parent, &name, AtFlags::empty()).map_err(failed)?;
         let synced = parent.sync_all().is_ok();
-        Ok(json!({"path":self.path,"deleted":true,"directory_synced":synced}).to_string())
+
+        Ok(json!({ "path": self.path, "deleted": true, "directory_synced": synced }).to_string())
     }
 }
 
@@ -242,7 +262,15 @@ impl Tool for WriteFile {
         ToolDefinition::function(
             "write_file",
             "Create or intentionally replace a whole UTF-8 file; prefer edit_file for localized changes to existing files. Write a file in an existing workspace directory (or outside path granted via request_capability) under the selected approval policy. Auto mode allows workspace-local edits; external writes still require approval. Use relative paths or granted outside paths. Old and new content must each be at most 1 MiB. Symlinks, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
-            json!({"type":"object", "properties":{"path":{"type":"string"},"content":{"type":"string"}}, "required":["path","content"],"additionalProperties":false}),
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "content": { "type": "string" }
+                },
+                "required": ["path", "content"],
+                "additionalProperties": false
+            }),
         )
     }
 
@@ -254,6 +282,7 @@ impl Tool for WriteFile {
                     message: e.to_string(),
                 }
             })?;
+
             if args.path.trim().is_empty()
                 || args.content.len() > MAX_BYTES
                 || args.content.contains('\0')
@@ -262,11 +291,13 @@ impl Tool for WriteFile {
                     "path must be nonempty and content must be UTF-8 text without NUL, at most 1 MiB",
                 ));
             }
+
             check_cancelled(&cancellation)?;
             let workspace = self.workspace.clone();
             let prepared = tokio::task::spawn_blocking(move || Prepared::new(workspace, args))
                 .await
                 .map_err(failed)??;
+
             prepared
                 .approve_and_commit(&self.approvals, cancellation)
                 .await
@@ -285,6 +316,7 @@ struct Fingerprint {
 
 fn fingerprint(file: &File) -> Result<Fingerprint, ToolError> {
     let metadata = file.metadata().map_err(failed)?;
+
     Ok(Fingerprint {
         device: metadata.dev(),
         inode: metadata.ino(),
@@ -308,6 +340,7 @@ impl Prepared {
             .map_err(failed)?;
         let metadata = parent.metadata().map_err(failed)?;
         let (before, text) = snapshot(&workspace, &args.path)?;
+
         Ok(Self {
             workspace,
             preview: WritePreview {
@@ -342,11 +375,13 @@ impl Prepared {
             _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
             answer = receiver => answer.unwrap_or(false),
         };
+
         if !approved {
             return Err(failed(
                 "user denied write; do not retry without a new user request",
             ));
         }
+
         check_cancelled(&cancellation)?;
         // Once the blocking commit starts, await its actual result rather than report
         // cancellation while a detached write may still be completing.
@@ -355,6 +390,7 @@ impl Prepared {
             before: prepared.preview.before.clone(),
             after: prepared.preview.after.clone(),
         };
+
         tokio::task::spawn_blocking(move || prepared.commit(cancellation))
             .await
             .map_err(failed)?
@@ -369,11 +405,13 @@ impl Prepared {
             .authorize_write_parent(path)
             .map_err(failed)?;
         let metadata = parent.metadata().map_err(failed)?;
+
         if (metadata.dev(), metadata.ino()) != self.parent {
             return Err(failed(
                 "write conflict: parent directory changed; request a new preview",
             ));
         }
+
         let temp_name = format!(
             ".orbit-write-{}-{}",
             std::process::id(),
@@ -393,9 +431,11 @@ impl Prepared {
         };
         file.write_all(self.preview.after.as_bytes())
             .map_err(failed)?;
+
         if let Some(before) = &self.before {
             fchmod(&file, Mode::from_bits_truncate(before.mode & 0o777)).map_err(failed)?;
         }
+
         file.sync_all().map_err(failed)?;
         let (now, text) = snapshot(&self.workspace, &self.preview.path)?;
         let (current_parent, _) = self
@@ -403,6 +443,7 @@ impl Prepared {
             .open_granted_write_parent(path)
             .map_err(failed)?;
         let current = current_parent.metadata().map_err(failed)?;
+
         if now != self.before
             || text != self.preview.before
             || (current.dev(), current.ino()) != self.parent
@@ -411,7 +452,9 @@ impl Prepared {
                 "write conflict: file changed after preview; request a new preview",
             ));
         }
+
         check_cancelled(&cancellation)?;
+
         if self.before.is_none() {
             renameat_with(
                 &parent,
@@ -424,9 +467,11 @@ impl Prepared {
         } else {
             renameat(&parent, temp_name.as_str(), &parent, &name).map_err(failed)?;
         }
+
         // The rename has committed; do not turn a subsequent cancellation into a
         // misleading 'not written' result. Report directory sync separately.
         let sync_error = parent.sync_all().err().map(|error| error.to_string());
+
         Ok(json!({
             "path": self.preview.path,
             "written_bytes": self.preview.after.len(),
@@ -442,6 +487,7 @@ struct TempFile<'a> {
     parent: &'a File,
     name: &'a str,
 }
+
 impl Drop for TempFile<'_> {
     fn drop(&mut self) {
         let _ = unlinkat(self.parent, self.name, AtFlags::empty());
@@ -459,25 +505,31 @@ fn snapshot(
         }
         Err(error) => return Err(failed(error)),
     };
+
     if file.metadata().map_err(failed)?.nlink() != 1 {
         return Err(failed("refusing to replace a hard-linked file"));
     }
+
     let before = fingerprint(&file)?;
     let mut bytes = Vec::new();
     (&file)
         .take(MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(failed)?;
+
     if bytes.len() > MAX_BYTES {
         return Err(failed("existing file exceeds the 1 MiB write limit"));
     }
+
     let text = String::from_utf8(bytes).map_err(|_| failed("existing file is not UTF-8 text"))?;
+
     if text.contains('\0') {
         return Err(failed("existing file contains binary data"));
     }
     if fingerprint(&file)? != before {
         return Err(failed("file changed while preparing preview"));
     }
+
     Ok((Some(before), Some(text)))
 }
 

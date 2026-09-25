@@ -29,25 +29,25 @@ pub(crate) fn encode(
         .join("\n\n");
 
     let mut messages: Vec<Value> = Vec::new();
+
     for message in request.messages {
         match message {
             ChatMessage::System { .. } => {}
+
             ChatMessage::User {
                 content,
                 attachments,
             } => {
-                let mut blocks = vec![json!({"type": "text", "text": content})];
+                let mut blocks = vec![json!({ "type": "text", "text": content })];
+
                 for attachment in attachments {
                     let (media_type, data) = attachment.image()?;
                     blocks.push(json!({
                         "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": data,
-                        }
+                        "source": { "type": "base64", "media_type": media_type, "data": data }
                     }));
                 }
+
                 if let Some(last) = messages.last_mut().filter(|message| {
                     message["role"] == "user"
                         && message["content"].as_array().is_some_and(|content| {
@@ -61,26 +61,35 @@ pub(crate) fn encode(
                         .expect("user content blocks")
                         .extend(blocks);
                 } else {
-                    messages.push(json!({"role": "user", "content": blocks}));
+                    messages.push(json!({ "role": "user", "content": blocks }));
                 }
             }
+
             ChatMessage::Assistant {
                 content,
                 tool_calls,
             } => {
                 let mut blocks = Vec::new();
+
                 if let Some(content) = content {
-                    blocks.push(json!({"type": "text", "text": content}));
+                    blocks.push(json!({ "type": "text", "text": content }));
                 }
-                blocks.extend(tool_calls.into_iter().map(|call| json!({"type": "tool_use", "id": call.id, "name": call.function.name, "input": serde_json::from_str::<Value>(&call.function.arguments).unwrap_or_else(|_| json!({}))})));
-                messages.push(json!({"role": "assistant", "content": blocks}));
+
+                blocks.extend(tool_calls.into_iter().map(|call| json!({
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.function.name,
+                    "input": serde_json::from_str::<Value>(&call.function.arguments).unwrap_or_else(|_| json!({}))
+                })));
+                messages.push(json!({ "role": "assistant", "content": blocks }));
             }
+
             ChatMessage::Tool {
                 tool_call_id,
                 content,
             } => {
-                let block =
-                    json!({"type":"tool_result", "tool_use_id":tool_call_id, "content":content});
+                let block = json!({ "type": "tool_result", "tool_use_id": tool_call_id, "content": content });
+
                 // All results for one assistant tool batch must be in the very
                 // next user message, not separate messages per tool result.
                 if let Some(last) = messages.last_mut().filter(|m| {
@@ -94,7 +103,7 @@ pub(crate) fn encode(
                         .expect("result blocks")
                         .push(block);
                 } else {
-                    messages.push(json!({"role":"user", "content":[block]}));
+                    messages.push(json!({ "role": "user", "content": [block] }));
                 }
             }
         }
@@ -104,11 +113,7 @@ pub(crate) fn encode(
         .tools
         .into_iter()
         .map(|tool| {
-            json!({
-                "name": tool.function.name,
-                "description": tool.function.description,
-                "input_schema": tool.function.parameters
-            })
+            json!({ "name": tool.function.name, "description": tool.function.description, "input_schema": tool.function.parameters })
         })
         .collect::<Vec<_>>();
     // Anthropic requires max_tokens even when the caller leaves it unset.
@@ -119,12 +124,15 @@ pub(crate) fn encode(
         "messages": messages,
         "stream": stream
     });
+
     if !tools.is_empty() {
         body["tools"] = json!(tools);
     }
+
     if let Some(temperature) = request.temperature {
         body["temperature"] = json!(temperature);
     }
+
     if let (Some(effort), Some(ReasoningAdapter::AnthropicMessages)) =
         (reasoning_effort, reasoning_adapter)
     {
@@ -147,9 +155,11 @@ pub(crate) fn encode(
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {
     let value: Value = response.json().await?;
+
     if let Some(error) = crate::client::upstream_error(&value) {
         return Err(error);
     }
+
     let payload: AnthropicResponse = serde_json::from_value(value)?;
     let mut text = String::new();
     let mut calls = Vec::new();
@@ -200,6 +210,7 @@ pub(crate) fn stream(
                     });
                 }
             }
+
             "content_block_start" => {
                 if let Some(block) = event.content_block {
                     match block.kind.as_str() {
@@ -227,6 +238,7 @@ pub(crate) fn stream(
                     }
                 }
             }
+
             "content_block_delta" => {
                 if let Some(delta) = event.delta {
                     match delta.kind.as_deref() {
@@ -254,6 +266,7 @@ pub(crate) fn stream(
                     }
                 }
             }
+
             "message_delta" => {
                 if let Some(delta) = event.delta {
                     events.push(StreamEvent::Completed {
@@ -262,6 +275,7 @@ pub(crate) fn stream(
                     });
                 }
             }
+
             _ => {}
         }
 
@@ -365,6 +379,7 @@ mod tests {
             true,
         )
         .unwrap();
+
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert_eq!(body["output_config"]["effort"], "high");
     }
@@ -377,10 +392,13 @@ mod tests {
             "gateway-name",
             request,
             Some(ReasoningAdapter::AnthropicMessages),
-            &json!({"thinking": {"type": "enabled"}}),
+            &json!({
+                "thinking": { "type": "enabled" }
+            }),
             true,
         )
         .unwrap();
+
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["output_config"]["effort"], "high");
     }
@@ -393,10 +411,13 @@ mod tests {
             "gateway-name",
             request,
             Some(ReasoningAdapter::AnthropicMessages),
-            &json!({"output_config": {"provider_option": true}}),
+            &json!({
+                "output_config": { "provider_option": true }
+            }),
             true,
         )
         .unwrap();
+
         assert_eq!(body["output_config"]["effort"], "high");
         assert_eq!(body["output_config"]["provider_option"], true);
     }
@@ -408,8 +429,8 @@ mod tests {
             ChatRequest::new(vec![
                 ChatMessage::user("read two files"),
                 ChatMessage::assistant_tool_calls(vec![
-                    ToolCall::function("a", "read_file", json!({"path":"a"})),
-                    ToolCall::function("b", "read_file", json!({"path":"b"})),
+                    ToolCall::function("a", "read_file", json!({ "path": "a" })),
+                    ToolCall::function("b", "read_file", json!({ "path": "b" })),
                 ]),
                 ChatMessage::tool("a", "first"),
                 ChatMessage::tool("b", "tool error: not found"),
@@ -418,7 +439,7 @@ mod tests {
                 ChatMessage::assistant_tool_calls(vec![ToolCall::function(
                     "c",
                     "read_file",
-                    json!({"path":"c"}),
+                    json!({ "path": "c" }),
                 )]),
                 ChatMessage::tool("c", "third"),
             ]),
@@ -428,9 +449,12 @@ mod tests {
         )
         .unwrap();
         let messages = body["messages"].as_array().unwrap();
+
         assert_eq!(messages.len(), 7);
         assert_eq!(messages[2]["role"], "user");
+
         let results = messages[2]["content"].as_array().unwrap();
+
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["tool_use_id"], "a");
         assert_eq!(results[1]["tool_use_id"], "b");
@@ -459,6 +483,7 @@ mod tests {
             true,
         )
         .unwrap();
+
         assert_eq!(body["messages"][0]["content"][1]["type"], "image");
         assert_eq!(
             body["messages"][0]["content"][1]["source"]["media_type"],
@@ -477,7 +502,7 @@ mod tests {
                 ChatMessage::assistant_tool_calls(vec![ToolCall::function(
                     "image-call",
                     "read_image",
-                    json!({"path":"scene.png"}),
+                    json!({ "path": "scene.png" }),
                 )]),
                 ChatMessage::tool("image-call", r#"{"loaded":true}"#),
                 ChatMessage::user_with_attachments(
@@ -495,6 +520,7 @@ mod tests {
         )
         .unwrap();
         let messages = body["messages"].as_array().unwrap();
+
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1]["content"][0]["type"], "tool_result");
         assert_eq!(messages[1]["content"][1]["type"], "text");
@@ -507,12 +533,17 @@ mod cache_usage_tests {
     use super::*;
     #[test]
     fn context_usage_includes_cache_reads_and_writes_but_missing_input_stays_unknown() {
-        let usage:Usage=serde_json::from_value::<AnthropicUsage>(serde_json::json!({"input_tokens":12,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"output_tokens":9})).unwrap().into();
+        let usage: Usage = serde_json::from_value::<AnthropicUsage>(serde_json::json!({ "input_tokens": 12, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200, "output_tokens": 9 }))
+        .unwrap()
+        .into();
+
         assert_eq!(usage.prompt_tokens, Some(1212));
+
         let tail: Usage =
-            serde_json::from_value::<AnthropicUsage>(serde_json::json!({"output_tokens":10}))
+            serde_json::from_value::<AnthropicUsage>(serde_json::json!({ "output_tokens": 10 }))
                 .unwrap()
                 .into();
+
         assert_eq!(tail.prompt_tokens, None);
     }
 }

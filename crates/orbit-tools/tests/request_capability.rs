@@ -32,6 +32,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
         )
         .await
         .unwrap_err();
+
     assert!(initial_err.to_string().contains("permission denied"));
 
     // 2. Request capability
@@ -41,11 +42,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
             ToolCall::function(
                 "call_2",
                 "request_capability",
-                json!({
-                    "path": req_file,
-                    "access": "read",
-                    "reason": "Need to inspect external configuration data"
-                }),
+                json!({ "path": req_file, "access": "read", "reason": "Need to inspect external configuration data" }),
             ),
             CancellationToken::new(),
         )
@@ -53,6 +50,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
     });
 
     let request = receiver.recv().await.unwrap();
+
     match &request.preview {
         approval::ApprovalPreview::Capability(preview) => {
             assert_eq!(
@@ -71,6 +69,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
 
     let output = task.await.unwrap().unwrap();
     let result_json: Value = serde_json::from_str(&output.content).unwrap();
+
     assert_eq!(result_json["status"], "granted");
     assert_eq!(result_json["access"], "read");
 
@@ -88,6 +87,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
         .unwrap();
 
     let read_json: Value = serde_json::from_str(&read_output.content).unwrap();
+
     assert_eq!(read_json["content"], "1: external secret contents\n");
 }
 
@@ -107,16 +107,13 @@ async fn request_capability_handles_user_denial_and_cancellation() {
     let req_file = outside_file.display().to_string();
     let task = tokio::spawn({
         let tool = tool.clone();
+
         async move {
             tool.execute(
                 ToolCall::function(
                     "call_deny",
                     "request_capability",
-                    json!({
-                        "path": req_file,
-                        "access": "write",
-                        "reason": "Want to edit system files"
-                    }),
+                    json!({ "path": req_file, "access": "write", "reason": "Want to edit system files" }),
                 ),
                 CancellationToken::new(),
             )
@@ -128,6 +125,7 @@ async fn request_capability_handles_user_denial_and_cancellation() {
     request.decision.send(false).unwrap();
 
     let err = task.await.unwrap().unwrap_err();
+
     assert!(err.to_string().contains("permission denied"));
 
     // 2. Cancellation
@@ -141,11 +139,7 @@ async fn request_capability_handles_user_denial_and_cancellation() {
             ToolCall::function(
                 "call_cancel",
                 "request_capability",
-                json!({
-                    "path": outside_file.display().to_string(),
-                    "access": "read",
-                    "reason": "cancelled"
-                }),
+                json!({ "path": outside_file.display().to_string(), "access": "read", "reason": "cancelled" }),
             ),
             token,
         )
@@ -171,16 +165,13 @@ async fn request_capability_validates_arguments() {
             ToolCall::function(
                 "bad_path",
                 "request_capability",
-                json!({
-                    "path": "   ",
-                    "access": "read",
-                    "reason": "test"
-                }),
+                json!({ "path": "   ", "access": "read", "reason": "test" }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
+
     assert!(err.to_string().contains("path must not be empty"));
 
     // Invalid access
@@ -189,16 +180,13 @@ async fn request_capability_validates_arguments() {
             ToolCall::function(
                 "bad_access",
                 "request_capability",
-                json!({
-                    "path": "/tmp",
-                    "access": "execute",
-                    "reason": "test"
-                }),
+                json!({ "path": "/tmp", "access": "execute", "reason": "test" }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
+
     assert!(
         err2.to_string()
             .contains("access must be 'read' or 'read_write'")
@@ -210,16 +198,13 @@ async fn request_capability_validates_arguments() {
             ToolCall::function(
                 "bad_reason",
                 "request_capability",
-                json!({
-                    "path": "/tmp",
-                    "access": "read",
-                    "reason": "  "
-                }),
+                json!({ "path": "/tmp", "access": "read", "reason": "  " }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
+
     assert!(err3.to_string().contains("reason must not be empty"));
 }
 
@@ -241,11 +226,7 @@ async fn request_capability_supports_read_write_access() {
             ToolCall::function(
                 "call_rw",
                 "request_capability",
-                json!({
-                    "path": req_file,
-                    "access": "read_write",
-                    "reason": "Modify external config"
-                }),
+                json!({ "path": req_file, "access": "read_write", "reason": "Modify external config" }),
             ),
             CancellationToken::new(),
         )
@@ -253,6 +234,7 @@ async fn request_capability_supports_read_write_access() {
     });
 
     let request = receiver.recv().await.unwrap();
+
     match &request.preview {
         approval::ApprovalPreview::Capability(preview) => {
             assert_eq!(
@@ -269,6 +251,7 @@ async fn request_capability_supports_read_write_access() {
 
     let output = task.await.unwrap().unwrap();
     let result_json: Value = serde_json::from_str(&output.content).unwrap();
+
     assert_eq!(result_json["status"], "granted");
     assert_eq!(result_json["access"], "read and write");
 }

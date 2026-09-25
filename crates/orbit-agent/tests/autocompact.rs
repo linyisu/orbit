@@ -32,9 +32,11 @@ fn answer(text: &str) -> ChatCompletion {
         usage: None,
     }
 }
+
 fn call(id: &str) -> ChatMessage {
     ChatMessage::assistant_tool_calls(vec![ToolCall::function(id, "read", serde_json::json!({}))])
 }
+
 fn long_task() -> Vec<ChatMessage> {
     vec![
         ChatMessage::system("Never modify tests."),
@@ -45,6 +47,7 @@ fn long_task() -> Vec<ChatMessage> {
         ChatMessage::tool("recent", "recent result"),
     ]
 }
+
 fn prose_task() -> Vec<ChatMessage> {
     vec![
         ChatMessage::system("Never modify tests."),
@@ -53,12 +56,15 @@ fn prose_task() -> Vec<ChatMessage> {
         ChatMessage::user("Continue with the current task."),
     ]
 }
+
 fn assert_paired(history: &[ChatMessage]) {
     let mut pending = std::collections::HashSet::new();
+
     for message in history {
         match message {
             ChatMessage::Assistant { tool_calls, .. } => {
                 assert!(pending.is_empty());
+
                 for call in tool_calls {
                     assert!(pending.insert(call.id.clone()));
                 }
@@ -67,6 +73,7 @@ fn assert_paired(history: &[ChatMessage]) {
             _ => assert!(pending.is_empty()),
         }
     }
+
     assert!(pending.is_empty());
 }
 
@@ -80,6 +87,7 @@ async fn single_long_task_keeps_exact_goal_system_and_latest_tool_batch() {
     let compacted = autocompact::execute(&backend, plan, &[], 1000, 8000, CancellationToken::new())
         .await
         .unwrap();
+
     assert_eq!(compacted.history[0], original[0]);
     assert_eq!(
         compacted.history[2..],
@@ -89,15 +97,21 @@ async fn single_long_task_keeps_exact_goal_system_and_latest_tool_batch() {
             original[5].clone()
         ]
     );
+
     let ChatMessage::User { content, .. } = &compacted.history[1] else {
         panic!("compaction record must remain a user-level data message");
     };
+
     assert!(content.starts_with("BEGIN_UNTRUSTED_COMPACTION_RECORD\n"));
     assert!(content.ends_with("END_UNTRUSTED_COMPACTION_RECORD"));
+
     assert_paired(&compacted.history);
+
     assert!(compacted.after_tokens < compacted.before_tokens);
+
     for request in backend.requests() {
         assert!(request.tools.is_empty());
+
         check_budget(
             &request.messages,
             &[],
@@ -125,9 +139,11 @@ async fn multiple_turns_keep_two_recent_turns_and_no_user_data_is_promoted_to_sy
     let compacted = autocompact::execute(&backend, plan, &[], 1000, 8000, CancellationToken::new())
         .await
         .unwrap();
+
     assert_eq!(compacted.history[0], history[0]);
     assert!(matches!(compacted.history[1], ChatMessage::User { .. }));
     assert_eq!(compacted.history[2..], history[3..]);
+
     assert_paired(&compacted.history);
 }
 
@@ -141,7 +157,9 @@ async fn huge_unicode_history_is_chunked_without_oversized_summary_requests() {
     let result = autocompact::execute(&backend, plan, &[], 1000, 8000, CancellationToken::new())
         .await
         .unwrap();
+
     assert!(backend.requests().len() > 2);
+
     for request in backend.requests() {
         check_budget(
             &request.messages,
@@ -151,6 +169,7 @@ async fn huge_unicode_history_is_chunked_without_oversized_summary_requests() {
         )
         .unwrap();
     }
+
     assert_paired(&result.history);
 }
 
@@ -174,11 +193,14 @@ async fn large_context_uses_bounded_summary_fragments() {
     .await
     .unwrap();
     let requests = backend.requests();
+
     assert!(
         requests.len() > 1,
         "large context should use several fragments"
     );
+
     let first_tokens = estimate_tokens(&requests[0].messages, &[]);
+
     assert!(first_tokens <= 4_096, "first summary batch should be small");
     assert!(
         requests[1..]
@@ -186,15 +208,18 @@ async fn large_context_uses_bounded_summary_fragments() {
             .any(|request| estimate_tokens(&request.messages, &[]) > first_tokens),
         "quick successful requests should permit larger later batches"
     );
+
     for request in requests {
         let ChatMessage::User { content, .. } = &request.messages[1] else {
             panic!("summary request must carry its fragment as user data");
         };
+
         assert!(serde_json::from_str::<serde_json::Value>(content).is_ok());
         assert!(
             estimate_tokens(&request.messages, &[]) <= 32_768,
             "summary request exceeded its token budget"
         );
+
         check_budget(
             &request.messages,
             &[],
@@ -203,6 +228,7 @@ async fn large_context_uses_bounded_summary_fragments() {
         )
         .unwrap();
     }
+
     assert!(compacted.after_tokens < compacted.before_tokens);
 }
 
@@ -216,6 +242,7 @@ async fn invalid_summary_and_cancellation_preserve_history() {
         message: call("unexpected"),
         ..answer("")
     };
+
     for response in [
         answer(""),
         truncated,
@@ -232,13 +259,16 @@ async fn invalid_summary_and_cancellation_preserve_history() {
             CancellationToken::new(),
         )
         .await;
+
         assert!(result.is_err());
         assert_eq!(history, original);
     }
+
     let token = CancellationToken::new();
     token.cancel();
     let backend = MockModel::new([]);
     let plan = autocompact::plan(&history, &[], 1000, 8000).unwrap();
+
     assert!(
         autocompact::execute(&backend, plan, &[], 1000, 8000, token)
             .await
@@ -263,12 +293,15 @@ async fn invalid_local_summary_gets_one_schema_repair_request() {
     let result = autocompact::execute(&backend, plan, &[], 1_000, 8_000, CancellationToken::new())
         .await
         .unwrap();
+
     assert_eq!(
         result.record.strategy,
         orbit_agent::memory::CompactionStrategy::Summary
     );
     assert!(!result.record.fallback);
+
     let requests = backend.requests();
+
     assert!(requests.len() >= 2);
     assert!(
         matches!(&requests[1].messages[0], ChatMessage::System { content } if content.contains("last response did not satisfy"))
@@ -297,11 +330,14 @@ async fn truncated_summary_retries_with_a_smaller_source_batch() {
     )
     .await
     .unwrap();
+
     assert_eq!(
         result.record.strategy,
         orbit_agent::memory::CompactionStrategy::Summary
     );
+
     let requests = backend.requests();
+
     assert!(requests.len() > 2);
     assert!(
         estimate_tokens(&requests[2].messages, &[]) < estimate_tokens(&requests[1].messages, &[]),
@@ -326,6 +362,7 @@ async fn automatic_compaction_preserves_history_after_a_retryable_summary_failur
     let result =
         autocompact::execute_automatic(&backend, plan, &[], 1000, 8000, CancellationToken::new())
             .await;
+
     assert!(matches!(
         result,
         Err(orbit_agent::error::AgentError::CompactionFailed {
@@ -341,6 +378,7 @@ async fn automatic_compaction_preserves_history_after_a_retryable_summary_failur
 fn never_splits_pending_tool_batches_or_truncates_an_uncompressible_request() {
     let mut history = long_task();
     history.pop();
+
     assert!(autocompact::plan(&history, &[], 1000, 8000).is_none());
     assert!(
         autocompact::plan(&[ChatMessage::user("huge ".repeat(20000))], &[], 1000, 8000).is_none()
@@ -365,7 +403,7 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
         tools.register(ClosureTool::new(
             "read",
             "read evidence",
-            serde_json::json!({"type":"object"}),
+            serde_json::json!({ "type": "object" }),
             |_, _| async { Ok("x".repeat(7000)) },
         ));
         let agent = Agent::new(
@@ -386,9 +424,11 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
                 .await
                 .unwrap();
             let mut events = Vec::new();
+
             while let Some(event) = rx.recv().await {
                 events.push(event);
             }
+
             assert_eq!(
                 events
                     .iter()
@@ -396,6 +436,7 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
                     .count(),
                 1
             );
+
             let completed_tool = events
                 .iter()
                 .position(|e| matches!(e, AgentEvent::ToolFinished { .. }))
@@ -404,16 +445,20 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
                 .iter()
                 .position(|e| matches!(e, AgentEvent::ContextCompacted { .. }))
                 .unwrap();
+
             assert!(completed_tool < compacted);
+
             result
         } else {
             agent.run(request, CancellationToken::new()).await.unwrap()
         };
+
         assert_eq!(result.turns, 2);
         assert_eq!(result.tool_calls, 1);
         assert!(backend.requests().len() >= 2);
         assert!(result.history.contains(&history[1]));
         assert!(!result.history.contains(&history[3]));
+
         assert_paired(&result.history);
     }
 }
@@ -421,7 +466,9 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
 #[tokio::test]
 async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compaction() {
     let history = prose_task();
+
     assert!(estimate_tokens(&history, &[]) + 1000 < 8000);
+
     for enabled in [false, true] {
         let backend = MockModel::new(if enabled {
             vec![answer(""), answer(""), answer("Still works")]
@@ -442,6 +489,7 @@ async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compact
         request.max_tokens = Some(1000);
         let result = agent.run(request, CancellationToken::new()).await.unwrap();
         let requests = backend.requests();
+
         if enabled {
             assert_eq!(requests.len(), 3);
             assert_eq!(requests[2].messages, history);
@@ -456,15 +504,19 @@ async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compact
 #[tokio::test]
 async fn cancellation_interrupts_a_summary_backend_that_does_not_poll_the_token() {
     use orbit_agent::model::{CompletionFuture, ModelBackend, StreamFuture};
+
     struct Waiting;
+
     impl ModelBackend for Waiting {
         fn complete<'a>(&'a self, _: ChatRequest, _: CancellationToken) -> CompletionFuture<'a> {
             Box::pin(std::future::pending())
         }
+
         fn stream<'a>(&'a self, _: ChatRequest, _: CancellationToken) -> StreamFuture<'a> {
             Box::pin(std::future::pending())
         }
     }
+
     let token = CancellationToken::new();
     let plan = autocompact::plan(&long_task(), &[], 1000, 8000).unwrap();
     let cancel = token.clone();
@@ -478,6 +530,7 @@ async fn cancellation_interrupts_a_summary_backend_that_does_not_poll_the_token(
         .await
         .unwrap()
         .unwrap();
+
     assert!(matches!(
         result,
         Err(orbit_agent::error::AgentError::Cancelled)
@@ -499,7 +552,7 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
     tools.register(ClosureTool::new(
         "read",
         "read",
-        serde_json::json!({"type":"object"}),
+        serde_json::json!({ "type": "object" }),
         |_, _| async { Ok("small result".into()) },
     ));
     let agent = Agent::new(
@@ -514,6 +567,7 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
     let mut request = ChatRequest::new(prose_task());
     request.max_tokens = Some(1000);
     let result = agent.run(request, CancellationToken::new()).await.unwrap();
+
     assert_eq!(result.tool_calls, 1);
     assert_eq!(backend.requests().len(), 4);
     assert_eq!(backend.requests().iter().filter(|r| matches!(r.messages.first(),Some(ChatMessage::System{content}) if content.starts_with(orbit_agent::context::SUMMARY_PROMPT))).count(), 2);
@@ -552,6 +606,7 @@ async fn failed_over_limit_summary_uses_retrievable_archive_projection() {
             .contains("read_history archive_id=1")
     );
     assert!(backend.requests().len() >= 2);
+
     for request in backend.requests() {
         check_budget(
             &request.messages,
@@ -565,6 +620,7 @@ async fn failed_over_limit_summary_uses_retrievable_archive_projection() {
 
 #[derive(Default)]
 struct Archive(std::sync::Mutex<Vec<Vec<ChatMessage>>>);
+
 impl orbit_agent::archive::ContextArchive for Archive {
     fn save<'a>(&'a self, messages: &'a [ChatMessage]) -> orbit_agent::archive::ArchiveFuture<'a> {
         Box::pin(async move {
@@ -576,6 +632,7 @@ impl orbit_agent::archive::ContextArchive for Archive {
 
 #[derive(Default)]
 struct ProgressArchive(std::sync::Mutex<Option<orbit_agent::memory::SummaryProgress>>);
+
 impl orbit_agent::archive::ContextArchive for ProgressArchive {
     fn save<'a>(&'a self, _: &'a [ChatMessage]) -> orbit_agent::archive::ArchiveFuture<'a> {
         Box::pin(async { Ok("read_history archive_id=1".into()) })
@@ -632,6 +689,7 @@ async fn manual_compaction_archives_when_format_repair_still_fails() {
     )
     .await
     .unwrap();
+
     assert_eq!(backend.requests().len(), 2);
     assert_eq!(
         result.record.strategy,
@@ -652,6 +710,7 @@ async fn manual_compaction_keeps_summarizing_after_two_timeouts() {
         compaction::CompactionSettings,
         memory::{CompactionMode, CompactionStrategy},
     };
+
     let history = vec![
         ChatMessage::system("Keep the API stable"),
         ChatMessage::user("Fix the parser ".repeat(1_500)),
@@ -699,6 +758,7 @@ async fn manual_compaction_keeps_summarizing_after_two_timeouts() {
     )
     .await
     .unwrap();
+
     assert_eq!(result.record.strategy, CompactionStrategy::Summary);
     assert!(!result.record.fallback);
     assert!(result.after_tokens < result.before_tokens);
@@ -708,8 +768,10 @@ async fn manual_compaction_keeps_summarizing_after_two_timeouts() {
     );
     assert!(result.history.iter().any(|message| matches!(message, ChatMessage::User { content, .. } if content == "Continue the current task")));
     assert!(result.history.iter().any(|message| matches!(message, ChatMessage::User { content, .. } if content.contains("Parser investigation summarized"))));
+
     assert_paired(&result.history);
     let requests = backend.requests();
+
     assert!(requests.len() >= 3);
     assert!(
         estimate_tokens(&requests[1].messages, &[]) < estimate_tokens(&requests[0].messages, &[])
@@ -722,6 +784,7 @@ async fn manual_compaction_keeps_summarizing_after_two_timeouts() {
 #[tokio::test]
 async fn manual_compaction_does_not_report_success_without_a_summary() {
     use orbit_agent::{compaction::CompactionSettings, memory::CompactionMode};
+
     let history = vec![
         ChatMessage::system("Keep the API stable"),
         ChatMessage::user("Fix the parser ".repeat(1_500)),
@@ -763,6 +826,7 @@ async fn manual_compaction_does_not_report_success_without_a_summary() {
         &settings,
     )
     .await;
+
     assert!(result.is_err());
     assert_eq!(
         archive.0.lock().unwrap().as_slice(),
@@ -800,12 +864,15 @@ async fn successful_summary_batches_resume_after_later_provider_failure() {
     )
     .await;
     let first_projection = first_result.unwrap();
+
     assert_eq!(
         first_projection.record.strategy,
         orbit_agent::memory::CompactionStrategy::ArchiveProjection
     );
     assert!(first_projection.history.iter().any(|message| matches!(message, ChatMessage::User { content, .. } if content.contains("First batch accepted") && content.contains("read_history archive_id=1"))));
+
     let saved = archive.0.lock().unwrap().clone().unwrap();
+
     assert!(saved.next_record > 0 || saved.next_byte_offset > 0);
     assert_eq!(saved.summary.goal, "First batch accepted");
 
@@ -824,7 +891,9 @@ async fn successful_summary_batches_resume_after_later_provider_failure() {
     let ChatMessage::User { content, .. } = &resumed.requests()[0].messages[1] else {
         panic!("summary input should be JSON user data");
     };
+
     let input: serde_json::Value = serde_json::from_str(content).unwrap();
+
     assert!(
         input["previous_summary"]
             .as_str()
@@ -842,6 +911,7 @@ fn tool_heavy_task() -> Vec<ChatMessage> {
         ChatMessage::system("Never change the tests"),
         ChatMessage::user("Fix the parser; preserve the public API"),
     ];
+
     for i in 0..16 {
         messages.push(ChatMessage::assistant(format!("Inspect batch {i}")));
         messages.push(call(&format!("call-{i}")));
@@ -854,6 +924,7 @@ fn tool_heavy_task() -> Vec<ChatMessage> {
             ),
         ));
     }
+
     messages
 }
 
@@ -881,6 +952,7 @@ async fn tool_heavy_history_reclaims_over_seventy_percent_without_a_model_call()
         backend.requests().len(),
         started.elapsed()
     );
+
     assert!(backend.requests().is_empty());
     assert_eq!(
         compacted.record.strategy,
@@ -888,8 +960,11 @@ async fn tool_heavy_history_reclaims_over_seventy_percent_without_a_model_call()
     );
     assert!(compacted.after_tokens < compacted.before_tokens * 3 / 10);
     assert_eq!(archive.0.lock().unwrap()[0], history);
+
     assert_paired(&compacted.history);
+
     assert_eq!(compacted.history.last(), history.last());
+
     for (before, after) in history.iter().zip(&compacted.history) {
         if matches!(
             before,
@@ -898,7 +973,9 @@ async fn tool_heavy_history_reclaims_over_seventy_percent_without_a_model_call()
             assert_eq!(before, after);
         }
     }
+
     let shortened = serde_json::to_string(&compacted.history).unwrap();
+
     assert!(shortened.contains("failure-0"));
     assert!(shortened.contains("read_history archive_id=1"));
 }
@@ -908,8 +985,10 @@ async fn agent_prunes_archived_tools_before_the_summary_threshold() {
     let history = tool_heavy_task();
     let before = estimate_tokens(&history, &[]);
     let context_tokens = before.saturating_mul(100) / 70 + 4_096;
+
     assert!(before >= (context_tokens - 4_096) * 60 / 100);
     assert!(before < (context_tokens - 4_096) * 85 / 100);
+
     let backend = MockModel::new([ChatCompletion {
         id: None,
         model: None,
@@ -931,6 +1010,7 @@ async fn agent_prunes_archived_tools_before_the_summary_threshold() {
         .run(ChatRequest::new(history.clone()), CancellationToken::new())
         .await
         .unwrap();
+
     assert_eq!(
         result.history.last(),
         Some(&ChatMessage::assistant("Continue"))
@@ -969,28 +1049,36 @@ async fn archived_projection_reduces_summary_work_and_keeps_valid_record_json() 
     )
     .await
     .unwrap();
+
     assert_eq!(
         compacted.record.strategy,
         orbit_agent::memory::CompactionStrategy::Summary
     );
     assert!(compacted.record.summary_input_tokens < 120_000);
+
     for request in backend.requests() {
         let ChatMessage::User { content, .. } = &request.messages[1] else {
             panic!()
         };
+
         let data: serde_json::Value = serde_json::from_str(content).unwrap();
+
         assert!(data["records"].is_array());
+
         for record in data["records"].as_array().unwrap() {
             assert!(record["source_message"].is_number());
         }
     }
+
     assert_eq!(archive.0.lock().unwrap()[0], history);
+
     assert_paired(&compacted.history);
 }
 
 #[tokio::test]
 async fn archive_failure_prevents_any_lossy_projection_or_model_request() {
     struct Broken;
+
     impl orbit_agent::archive::ContextArchive for Broken {
         fn save<'a>(&'a self, _: &'a [ChatMessage]) -> orbit_agent::archive::ArchiveFuture<'a> {
             Box::pin(async {
@@ -1000,8 +1088,10 @@ async fn archive_failure_prevents_any_lossy_projection_or_model_request() {
             })
         }
     }
+
     let history = tool_heavy_task();
     let backend = MockModel::new([]);
+
     assert!(
         autocompact::execute_with_archive(
             &backend,
@@ -1033,10 +1123,12 @@ async fn manual_compaction_handles_a_single_long_task_with_the_same_budget() {
     )
     .await
     .unwrap();
+
     assert_eq!(
         compacted.record.mode,
         orbit_agent::memory::CompactionMode::Manual
     );
+
     assert_paired(&compacted.history);
 }
 
@@ -1060,11 +1152,13 @@ async fn replay_archived_tool_pruning() {
     )
     .await
     .unwrap();
+
     assert_eq!(
         compacted.record.strategy,
         orbit_agent::memory::CompactionStrategy::ToolPruning
     );
     assert_eq!(archive.0.lock().unwrap()[0], history);
+
     assert_paired(&compacted.history);
     println!(
         "local replay: {} -> {} estimated tokens; {} model requests; {:?}",
@@ -1079,6 +1173,7 @@ async fn replay_archived_tool_pruning() {
 #[ignore = "set ORBIT_REPLAY_HISTORY to a locally exported ChatMessage array"]
 async fn replay_manual_compaction_when_summary_is_unavailable() {
     use orbit_agent::{compaction::CompactionSettings, memory::CompactionMode};
+
     let path = std::env::var("ORBIT_REPLAY_HISTORY").unwrap();
     let history: Vec<ChatMessage> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let settings = CompactionSettings::default();
@@ -1108,7 +1203,9 @@ async fn replay_manual_compaction_when_summary_is_unavailable() {
         &settings,
     )
     .await;
+
     assert!(result.is_err());
+
     println!(
         "local replay: manual summary did not complete after {} model requests",
         backend.requests().len()
@@ -1118,6 +1215,7 @@ async fn replay_manual_compaction_when_summary_is_unavailable() {
 #[tokio::test]
 async fn repeated_compaction_carries_prior_constraints_errors_and_verification_as_source() {
     use orbit_agent::memory::TaskSummary;
+
     let summary = TaskSummary {
         goal: "fix parser".into(),
         constraints: vec!["keep API parse_v2 unchanged".into()],
@@ -1156,6 +1254,7 @@ async fn repeated_compaction_carries_prior_constraints_errors_and_verification_a
     let second = autocompact::execute(&backend, plan, &[], 4096, 64000, CancellationToken::new())
         .await
         .unwrap();
+
     for fact in [
         &summary.constraints[0],
         &summary.remaining[0],
@@ -1168,7 +1267,9 @@ async fn repeated_compaction_carries_prior_constraints_errors_and_verification_a
         );
         assert!(second.summary.contains(fact));
     }
+
     assert_paired(&second.history);
+
     assert!(
         matches!(&second.history[0],ChatMessage::System {content} if content.contains("Never change"))
     );

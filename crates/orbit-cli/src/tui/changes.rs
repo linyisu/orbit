@@ -13,9 +13,12 @@ pub fn list(changes: &[WorkspaceChange]) -> String {
     if changes.is_empty() {
         return "当前会话还没有 Orbit 成功写入的文件。".into();
     }
+
     let mut output = String::from("Orbit 变更\n");
+
     for (index, record) in changes.iter().enumerate() {
         use std::fmt::Write;
+
         let kind = if record.undone {
             "已回退"
         } else if record.change.before.is_some() {
@@ -23,6 +26,7 @@ pub fn list(changes: &[WorkspaceChange]) -> String {
         } else {
             "新建"
         };
+
         let _ = writeln!(
             output,
             "{}. {} · {} · {} · run {} {}",
@@ -34,9 +38,11 @@ pub fn list(changes: &[WorkspaceChange]) -> String {
             record.run_status
         );
     }
+
     output.push_str(
         "\n/diff <路径> 可查看最近一次该路径写入的检查点差异；/undo [路径] 可在确认后回退。\n",
     );
+
     output
 }
 
@@ -48,6 +54,7 @@ pub fn diff(changes: &[WorkspaceChange], path: &str) -> String {
     else {
         return format!("当前会话没有 {path} 的 Orbit 写入检查点。先运行 /changes 查看路径。");
     };
+
     let before = record.change.before.as_deref().unwrap_or_default();
     let text = TextDiff::configure()
         .timeout(Duration::from_millis(250))
@@ -60,14 +67,18 @@ pub fn diff(changes: &[WorkspaceChange], path: &str) -> String {
         .to_string();
     let (text, truncated) = truncate_chars(text, MAX_DIFF_CHARS);
     let status = if record.undone { " · 已回退" } else { "" };
+
     let mut output = format!(
         "检查点：{} · {} · run {} {}{}\n{}",
         record.change.path, record.tool, record.run_id, record.run_status, status, text
     );
+
     if truncated {
         output.push_str("\n… 差异显示已截断；检查点全文仍在本地会话数据库中。\n");
     }
+
     output.push_str("\n这是该次 Orbit 写入前后的快照；当前文件可能已被后续操作修改。\n");
+
     output
 }
 
@@ -75,6 +86,7 @@ fn truncate_chars(value: String, limit: usize) -> (String, bool) {
     if value.chars().count() <= limit {
         return (value, false);
     }
+
     (value.chars().take(limit).collect(), true)
 }
 
@@ -105,8 +117,11 @@ mod tests {
             record("src/a.rs", Some("old\n"), "mid\n"),
             record("src/a.rs", Some("mid\n"), "new\n"),
         ];
+
         assert!(list(&changes).contains("src/a.rs"));
+
         let rendered = diff(&changes, "src/a.rs");
+
         assert!(rendered.contains("-mid"));
         assert!(rendered.contains("+new"));
         assert!(!rendered.contains("old"));

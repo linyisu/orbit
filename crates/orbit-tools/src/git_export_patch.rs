@@ -29,7 +29,11 @@ impl Tool for GitExportPatch {
         ToolDefinition::function(
             "git_export_patch",
             "Export the complete uncommitted Git worktree patch, including new files, to an Orbit-private artifact for the user to apply or commit. Does not stage, commit or write .git. Requires an existing repository with a HEAD commit at the workspace root; for a new non-Git project, write generated files to /scratch and use export_artifact instead. Returns the host path and SHA-256. The patch is limited to 4 MiB.",
-            json!({"type":"object","properties":{},"additionalProperties":false}),
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
         )
     }
 
@@ -40,12 +44,14 @@ impl Tool for GitExportPatch {
                     tool: "git_export_patch".into(),
                     message: error.to_string(),
                 })?;
+
             if arguments != json!({}) {
                 return Err(ToolError::InvalidArguments {
                     tool: "git_export_patch".into(),
                     message: "this tool takes no arguments".into(),
                 });
             }
+
             let workspace = self.workspace.root().to_path_buf();
             let artifact_directory = self.artifact_directory.clone();
             let token = cancellation.clone();
@@ -53,7 +59,9 @@ impl Tool for GitExportPatch {
                 if token.is_cancelled() {
                     return Err(ToolError::Cancelled);
                 }
+
                 let patch = working_tree_patch(&workspace)?;
+
                 if token.is_cancelled() {
                     return Err(ToolError::Cancelled);
                 }
@@ -62,12 +70,15 @@ impl Tool for GitExportPatch {
                         "worktree has no patch to export".into(),
                     ));
                 }
+
                 use std::os::unix::fs::DirBuilderExt;
+
                 std::fs::DirBuilder::new()
                     .recursive(true)
                     .mode(0o700)
                     .create(&artifact_directory)
                     .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+
                 if !std::fs::symlink_metadata(&artifact_directory)
                     .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
                     .is_dir()
@@ -76,6 +87,7 @@ impl Tool for GitExportPatch {
                         "artifact storage must be a real directory".into(),
                     ));
                 }
+
                 let mut file = tempfile::Builder::new()
                     .prefix("orbit-patch-")
                     .suffix(".patch")
@@ -84,14 +96,17 @@ impl Tool for GitExportPatch {
                 file.write_all(patch.as_bytes())
                     .and_then(|_| file.as_file().sync_all())
                     .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+
                 if token.is_cancelled() {
                     return Err(ToolError::Cancelled);
                 }
+
                 let (_, path) = file
                     .keep()
                     .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+
                 Ok::<_, ToolError>(ToolOutput::text(
-                    json!({"path":path,"bytes":patch.len(),"sha256":orbit_runtime::execution::content_hash(patch.as_bytes())}).to_string(),
+                    json!({ "path": path, "bytes": patch.len(), "sha256": orbit_runtime::execution::content_hash(patch.as_bytes()) }).to_string(),
                 ))
             });
             tokio::select! {
@@ -118,6 +133,7 @@ mod tests {
                 .args(args)
                 .status()
                 .unwrap();
+
             assert!(status.success());
         };
         git(&["init", "-q"]);
@@ -146,6 +162,7 @@ mod tests {
             .unwrap();
         let value: serde_json::Value = serde_json::from_str(&result.content).unwrap();
         let patch = fs::read_to_string(value["path"].as_str().unwrap()).unwrap();
+
         assert!(patch.contains("new content"));
         assert_eq!(value["bytes"], patch.len());
         assert!(root.path().join(".git").is_dir());

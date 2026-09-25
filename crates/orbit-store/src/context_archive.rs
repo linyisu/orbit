@@ -17,7 +17,9 @@ impl Store {
         archive_id: i64,
     ) -> Result<Vec<ChatMessage>> {
         ensure!(archive_id > 0, "invalid history archive ID");
+
         let session_id = session_id.to_owned();
+
         self.access(move |conn| {
             let exists: bool = conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM context_archives WHERE id=?1 AND session_id=?2)",
@@ -25,14 +27,17 @@ impl Store {
                 |row| row.get(0),
             )?;
             ensure!(exists, "history archive not found in this session");
+
             let mut stmt = conn.prepare(
                 "SELECT payload FROM context_archive_messages WHERE archive_id=?1 ORDER BY ordinal",
             )?;
             let rows = stmt.query_map(params![archive_id], |row| row.get::<_, String>(0))?;
             let mut messages = Vec::new();
+
             for row in rows {
                 messages.push(serde_json::from_str(&row?)?);
             }
+
             Ok(messages)
         })
         .await
@@ -48,6 +53,7 @@ impl Store {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
+
         self.access(move |conn| {
             let tx = conn.transaction()?;
             tx.execute(
@@ -60,17 +66,21 @@ impl Store {
                 params![session_id, fingerprint],
                 |row| row.get(0),
             )?;
+
             if !inserted {
                 tx.commit()?;
                 return Ok(id);
             }
+
             {
                 let mut insert = tx.prepare("INSERT INTO context_archive_messages(archive_id,ordinal,payload) VALUES (?1,?2,?3)")?;
+
                 for (index, message) in messages.iter().enumerate() {
                     insert.execute(params![id, index as i64, message])?;
                 }
             }
             tx.commit()?;
+
             Ok(id)
         }).await
     }
@@ -104,10 +114,13 @@ impl Store {
                 .is_none_or(|q| !q.is_empty() && q.len() <= 512),
             "history query must contain 1–512 bytes"
         );
+
         let session = session_id.to_owned();
+
         self.access(move |conn| {
             let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM context_archives WHERE id=?1 AND session_id=?2)", params![archive_id,session], |r| r.get(0))?;
             ensure!(exists, "history archive not found in this session");
+
             // SQL performs slicing: do not load the entire snapshot to show a
             // few hits. Query previews begin near the first matching text.
             let mut stmt = conn.prepare("SELECT ordinal,length(payload),substr(payload,?5+1,?6),
@@ -120,18 +133,29 @@ impl Store {
             let mut rows = stmt.query(params![archive_id, message.map(|i| i as i64), after_message.map(|i| i as i64).unwrap_or(-1), query, offset as i64, length as i64])?;
             let mut items = Vec::new();
             let mut has_more = false;
+
             while let Some(row) = rows.next()? {
                 if items.len() == 8 { has_more = true; break; }
+
                 let index: i64 = row.get(0)?;
                 let total = row.get::<_, i64>(1)? as usize;
                 let hit: i64 = row.get(3)?;
                 let start = if query.is_some() { hit.saturating_sub(120).max(0) as usize } else { offset };
+
                 let text: String = row.get(if query.is_some() {4} else {2})?;
                 let next = start + text.chars().count();
-                items.push(json!({"message":index,"serialized_message":text,"offset":start,"total_characters":total,"next_offset":(next < total).then_some(next)}));
+                items.push(json!({
+                    "message": index,
+                    "serialized_message": text,
+                    "offset": start,
+                    "total_characters": total,
+                    "next_offset": (next < total).then_some(next)
+                }));
             }
+
             let next_message = if has_more { items.last().map(|i| i["message"].clone()) } else { None };
-            Ok(json!({"archive_id":archive_id,"source_kind":"untrusted_session_history","items":items,"next_after_message":next_message}))
+
+            Ok(json!({ "archive_id": archive_id, "source_kind": "untrusted_session_history", "items": items, "next_after_message": next_message }))
         }).await
     }
 }
@@ -161,12 +185,15 @@ mod tests {
             ),
         ];
         let archive = store.archive_context(owner.id(), &history).await.unwrap();
+
         assert_eq!(
             store.archive_context(owner.id(), &history).await.unwrap(),
             archive,
             "repeated compaction of one source must preserve archive references"
         );
+
         let reopened = Store::open(path).await.unwrap();
+
         assert_eq!(
             reopened
                 .load_context_archive(owner.id(), archive)
@@ -187,6 +214,7 @@ mod tests {
                 .await
                 .is_err()
         );
+
         let hit = reopened
             .read_context_archive(
                 owner.id(),
@@ -199,14 +227,17 @@ mod tests {
             )
             .await
             .unwrap();
+
         assert!(
             hit["items"][0]["serialized_message"]
                 .as_str()
                 .unwrap()
                 .contains("错误证据")
         );
+
         let mut recovered = String::new();
         let mut offset = 0;
+
         loop {
             let page = reopened
                 .read_context_archive(owner.id(), archive, Some(1), None, None, offset, 300)
@@ -214,11 +245,13 @@ mod tests {
                 .unwrap();
             let item = &page["items"][0];
             recovered.push_str(item["serialized_message"].as_str().unwrap());
+
             match item["next_offset"].as_u64() {
                 Some(next) => offset = next as usize,
                 None => break,
             }
         }
+
         assert_eq!(
             serde_json::from_str::<ChatMessage>(&recovered).unwrap(),
             history[1]

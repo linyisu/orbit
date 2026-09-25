@@ -59,6 +59,7 @@ async fn session_grants_are_ephemeral_and_clearable() {
     let persistent_file = persistent_temp.path().join("model.bin");
     fs::write(&persistent_file, "weights").unwrap();
     let persistent_cap = FilesystemCapability::local_read(&persistent_file);
+
     assert_eq!(
         workspace.policy().check_filesystem(&persistent_cap),
         PolicyDecision::Granted
@@ -66,6 +67,7 @@ async fn session_grants_are_ephemeral_and_clearable() {
 
     // 7. Workspace paths remain always granted
     let ws_cap = FilesystemCapability::local_read_write(ws_temp.path().join("src/lib.rs"));
+
     assert_eq!(
         workspace.policy().check_filesystem(&ws_cap),
         PolicyDecision::Granted
@@ -73,6 +75,7 @@ async fn session_grants_are_ephemeral_and_clearable() {
 
     // 8. A fresh workspace starts with an empty session grant store
     let fresh_workspace = Workspace::new(ws_temp.path()).unwrap();
+
     assert!(matches!(
         fresh_workspace.policy().check_filesystem(&cap),
         PolicyDecision::NeedsApproval(_)

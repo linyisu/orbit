@@ -27,10 +27,10 @@
 
 - `/resume` 打开当前项目、相同运行模式的历史会话列表，按最近更新排序。输入标题或 ID 筛选，↑↓ 或滚轮选择，Enter 恢复，Esc 返回；`/sessions` 是同一入口。
 - `/resume <完整 ID>` 直接恢复。当前会话和无历史的空会话不列入选择器。运行中的任务必须先结束或取消，不能直接切换。
-- 切换先校验项目和模式，再取得目标会话的独占锁并加载上下文，成功后才释放当前会话。不存在、跨项目、模式不匹配或已被其他进程占用时保留当前会话，不重跑旧工具。
-- 恢复沿用当前 API 配置；若会话保存的模型仍在配置中，会恢复该模型和思考强度，并采用该模型当前声明的上下文窗口。审批模式回到 auto。历史记录与输入历史从目标会话重建，后续消息追加到原会话 ID。
+- 切换先校验项目和模式，再取得目标会话的独占锁并加载上下文，成功后将当前会话保留在原标签中；没有历史、草稿和附件的空标签会被复用。关闭标签才释放其会话锁。不存在、跨项目、模式不匹配或已被其他进程占用时保留当前会话，不重跑旧工具。
+- 恢复沿用当前 API 配置；若会话保存的模型仍在配置中，会恢复该模型和思考强度，并采用该模型当前声明的上下文窗口。从数据库恢复的会话审批模式回到 auto；切换已经打开的标签则保留该标签的模式。历史记录与输入历史从目标会话重建，后续消息追加到原会话 ID。
 
-`/` 直接显示可用命令；已移除 `/help` 命令，空输入时 `?` 仍可查看快捷键。新对话页只显示 Orbit ASCII 标志；底栏显示权限模式、上下文圆环、模型和思考强度。
+`/` 直接显示可用命令；已移除 `/help` 命令，空输入时 `?` 仍可查看快捷键。空会话页居中显示 Orbit ASCII 标志和输入框。输入框透明，上下为橙色横线；权限模式、模型、供应商和思考强度显示在框内底部，项目路径与上下文占用显示在外侧底栏。顶部标签可切换会话，悬停显示关闭按钮，长标题悬停后滚动，点击加号新建会话。关闭标签不会删除历史；关闭最后一个标签后回到空会话。
 
 ## 中断与引导
 
@@ -54,7 +54,7 @@ context_tokens = 128000
 reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
 ```
 
-`context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文圆环和自动压缩都采用它。若供应商将输入窗口和输出上限分开计算，可在模型档案改用 `input_context_tokens`；它表示完整可用输入窗口，Orbit 不会再从中扣除 `max_output_tokens`，并将两者相加作为本地请求预算。可用思考值包括：`none`（不思考）、`minimal`、`low`、`medium`、`high` 和 `xhigh`。TUI 选模型（`/model`）时，凡是配置了思考能力的模型均可随时通过 `←/→` 选择“不思考”。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`（选择“不思考”时置为 disabled 并省去 effort）。模型可通过 `supports_vision = true`（或 `vision = true`）显式声明多模态视觉能力；未声明时默认为纯文本模型，自动隐藏 `read_image` 工具并对历史图片内容进行平滑降级。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，但不能覆盖模型、流式传输、工具、输出预算、温度或已配置的思考强度。未写 `reasoning` 时，Orbit 不发送任何思考参数。
+`context_tokens` 是模型总窗口，覆盖顶层的默认值，必须大于 `max_output_tokens`；模型切换、`/compact`、上下文占用和自动压缩都采用它。若供应商将输入窗口和输出上限分开计算，可在模型档案改用 `input_context_tokens`；它表示完整可用输入窗口，Orbit 不会再从中扣除 `max_output_tokens`，并将两者相加作为本地请求预算。可用思考值包括：`none`（不思考）、`minimal`、`low`、`medium`、`high` 和 `xhigh`。TUI 选模型（`/model`）时，凡是配置了思考能力的模型均可随时通过 `←/→` 选择“不思考”。`adapter` 描述请求格式而不描述品牌：`openai_chat` 写 Chat Completions 的 `reasoning_effort`，`openai_responses` 写 Responses 的 `reasoning.effort`，`anthropic_messages` 写 Messages 的 `thinking` 与 `output_config.effort`（选择“不思考”时置为 disabled 并省去 effort）。模型可通过 `supports_vision = true`（或 `vision = true`）显式声明多模态视觉能力；未声明时默认为纯文本模型，自动隐藏 `read_image` 工具，并仅在模型请求副本中将历史图片投影为文字占位，数据库中的原始附件保持不变。模型档案可在 `extra` 中写中转站要求的额外 JSON 字段；它会合并到该模型的请求中，但不能覆盖模型、流式传输、工具、输出预算、温度或已配置的思考强度。未写 `reasoning` 时，Orbit 不发送任何思考参数。
 
 `/compact` 与自动整理共用预算和安全切点，单个长任务也可整理。先把原文保存到 Orbit 中央数据库，再生成增量摘要；只有摘要完整才显示成功。自动整理可以先精简旧工具输出，手动命令则始终尝试模型摘要。近期工作和当前用户要求原样保留，模型可通过 `read_history` 检索归档原文。手动摘要失败或取消时保留原上下文和已完成的批次，下次可继续。
 

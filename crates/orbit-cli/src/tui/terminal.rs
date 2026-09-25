@@ -33,6 +33,7 @@ fn prime_full_redraw<B: Backend>(terminal: &mut Terminal<B>) {
     for cell in &mut terminal.current_buffer_mut().content {
         cell.set_bg(ratatui::style::Color::Rgb(1, 2, 3));
     }
+
     terminal.swap_buffers();
 }
 
@@ -46,6 +47,7 @@ fn draw_buffer<B: Backend>(
     }
     terminal.flush()?;
     terminal.swap_buffers();
+
     Backend::flush(terminal.backend_mut())
 }
 
@@ -89,6 +91,7 @@ impl TerminalGuard {
         stdout.flush()?;
         let (width, height) = terminal_size()?;
         let terminal = fixed_terminal(stdout, Rect::new(0, 0, width, height))?;
+
         Ok((guard, terminal))
     }
 }
@@ -109,6 +112,7 @@ pub fn draw_synchronized(
     let draw = (|| {
         let actual: Rect = terminal.size()?.into();
         let previous = terminal.get_frame().area();
+
         if actual != previous {
             // Fullscreen autoresize calls Clear(All). Recreate a fixed viewport
             // at the new size so dragging remains immediate without blank frames.
@@ -117,6 +121,7 @@ pub fn draw_synchronized(
             let old = std::mem::replace(terminal, replacement);
             drop(old);
         }
+
         draw_buffer(terminal, render)
     })();
     let end = terminal
@@ -124,6 +129,7 @@ pub fn draw_synchronized(
         .execute(EndSynchronizedUpdate)
         .map(drop);
     draw?;
+
     end
 }
 
@@ -137,6 +143,7 @@ pub fn anchor_cursor<B: ratatui::backend::Backend>(
         terminal.set_cursor_position(position)?;
         terminal.backend_mut().flush()?;
     }
+
     Ok(())
 }
 

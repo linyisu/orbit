@@ -44,54 +44,32 @@ pub(crate) fn encode(
                 content,
                 attachments,
             } => {
-                let mut blocks = vec![json!({
-                    "type": "input_text",
-                    "text": content,
-                })];
+                let mut blocks = vec![json!({ "type": "input_text", "text": content })];
+
                 for attachment in attachments {
                     let (mime_type, data) = attachment.image()?;
-                    blocks.push(json!({
-                        "type": "input_image",
-                        "image_url": format!("data:{mime_type};base64,{data}"),
-                    }));
+                    blocks.push(json!({ "type": "input_image", "image_url": format!("data:{mime_type};base64,{data}") }));
                 }
-                input.push(json!({
-                    "role": "user",
-                    "content": blocks,
-                }));
+
+                input.push(json!({ "role": "user", "content": blocks }));
             }
             ChatMessage::Assistant {
                 content,
                 tool_calls,
             } => {
                 if let Some(content) = content {
-                    input.push(json!({
-                        "role": "assistant",
-                        "content": [{
-                            "type": "output_text",
-                            "text": content,
-                        }],
-                    }));
+                    input.push(json!({ "role": "assistant", "content": [{ "type": "output_text", "text": content }] }));
                 }
 
                 for call in tool_calls {
-                    input.push(json!({
-                        "type": "function_call",
-                        "call_id": call.id,
-                        "name": call.function.name,
-                        "arguments": call.function.arguments,
-                    }));
+                    input.push(json!({ "type": "function_call", "call_id": call.id, "name": call.function.name, "arguments": call.function.arguments }));
                 }
             }
             ChatMessage::Tool {
                 tool_call_id,
                 content,
             } => {
-                input.push(json!({
-                    "type": "function_call_output",
-                    "call_id": tool_call_id,
-                    "output": content,
-                }));
+                input.push(json!({ "type": "function_call_output", "call_id": tool_call_id, "output": content }));
             }
         }
     }
@@ -104,26 +82,26 @@ pub(crate) fn encode(
                 "type": "function",
                 "name": tool.function.name,
                 "description": tool.function.description,
-                "parameters": tool.function.parameters,
+                "parameters": tool.function.parameters
             })
         })
         .collect::<Vec<_>>();
 
-    let mut body = json!({
-        "model": model,
-        "instructions": instructions,
-        "input": input,
-        "stream": stream,
-    });
+    let mut body =
+        json!({ "model": model, "instructions": instructions, "input": input, "stream": stream });
+
     if !tools.is_empty() {
         body["tools"] = json!(tools);
     }
+
     if let Some(temperature) = request.temperature {
         body["temperature"] = json!(temperature);
     }
+
     if let Some(max_tokens) = request.max_tokens {
         body["max_output_tokens"] = json!(max_tokens);
     }
+
     if let (Some(effort), Some(crate::types::ReasoningAdapter::OpenaiResponses)) =
         (reasoning_effort, reasoning_adapter)
     {
@@ -145,9 +123,11 @@ pub(crate) fn encode(
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {
     let value: Value = response.json().await?;
+
     if let Some(error) = crate::client::upstream_error(&value) {
         return Err(error);
     }
+
     let payload: ResponsesResponse = serde_json::from_value(value)?;
     let (text, calls) = output_parts(payload.output_text.as_deref(), &payload.output);
 
@@ -269,6 +249,7 @@ mod input_tests {
             true,
         )
         .unwrap();
+
         assert_eq!(body["reasoning"]["effort"], "high");
     }
 
@@ -292,6 +273,7 @@ mod input_tests {
             true,
         )
         .unwrap();
+
         assert_eq!(body["input"][0]["content"][1]["type"], "input_image");
         assert!(
             body["input"][0]["content"][1]["image_url"]

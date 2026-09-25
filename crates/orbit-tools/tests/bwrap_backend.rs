@@ -38,6 +38,7 @@ async fn backend_executes_in_workspace_directly_with_write_access() {
     assert_eq!(result.exit_code, Some(0));
 
     let created_file = ws_path.join("result.txt");
+
     assert!(created_file.is_file());
     assert_eq!(
         fs::read_to_string(created_file).unwrap().trim(),

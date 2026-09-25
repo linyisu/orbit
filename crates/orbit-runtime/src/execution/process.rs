@@ -60,24 +60,28 @@ impl MountSpec {
 
     pub fn validate(&self) -> Result<(), RuntimeError> {
         let normalized = self.normalized_target()?;
+
         if is_reserved_mount_target(&normalized) {
             return Err(failed(format!(
                 "mount target '{}' is a reserved runtime path",
                 self.target.display()
             )));
         }
+
         let canonical_source = self.source.canonicalize().map_err(|e| {
             failed(format!(
                 "configured mount source '{}' must exist: {e}",
                 self.source.display()
             ))
         })?;
+
         if !canonical_source.exists() {
             return Err(failed(format!(
                 "configured mount source '{}' must exist",
                 self.source.display()
             )));
         }
+
         Ok(())
     }
 }
@@ -89,7 +93,9 @@ pub fn normalize_mount_target(target: &Path) -> Result<PathBuf, RuntimeError> {
             target.display()
         )));
     }
+
     use std::os::unix::ffi::OsStrExt;
+
     for seg in target.as_os_str().as_bytes().split(|&b| b == b'/') {
         if seg == b"." || seg == b".." {
             return Err(failed(format!(
@@ -98,8 +104,10 @@ pub fn normalize_mount_target(target: &Path) -> Result<PathBuf, RuntimeError> {
             )));
         }
     }
+
     let mut normalized = PathBuf::from("/");
     let mut has_normal = false;
+
     for component in target.components() {
         match component {
             std::path::Component::RootDir => {}
@@ -121,9 +129,11 @@ pub fn normalize_mount_target(target: &Path) -> Result<PathBuf, RuntimeError> {
             }
         }
     }
+
     if !has_normal {
         return Err(failed("mount target cannot be root '/'"));
     }
+
     Ok(normalized)
 }
 
@@ -224,6 +234,7 @@ impl ProcessLimits {
         if self.max_open_files < 16 {
             return Err("process max_open_files must be at least 16");
         }
+
         Ok(())
     }
 }
@@ -319,9 +330,11 @@ impl OutputLog {
             .create(directory)
             .map_err(failed)?;
         let metadata = std::fs::symlink_metadata(directory).map_err(failed)?;
+
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(failed("command output directory must be a real directory"));
         }
+
         prune_output_directory(directory)?;
         let id = format!(
             "cmd-{}-{}-{}",
@@ -340,6 +353,7 @@ impl OutputLog {
                 return Err(error);
             }
         };
+
         Ok(Self {
             id,
             stdout: tokio::fs::File::from_std(stdout),
@@ -358,6 +372,7 @@ impl OutputLog {
 
 fn create_output_file(path: &Path) -> Result<std::fs::File, RuntimeError> {
     use std::os::unix::fs::OpenOptionsExt;
+
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -372,6 +387,7 @@ fn prune_output_directory(directory: &Path) -> Result<(), RuntimeError> {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let metadata = std::fs::symlink_metadata(entry.path()).ok()?;
+
             (metadata.is_file() && entry.file_name().to_string_lossy().starts_with("cmd-"))
                 .then_some((
                     entry.path(),
@@ -384,14 +400,17 @@ fn prune_output_directory(directory: &Path) -> Result<(), RuntimeError> {
         .collect::<Vec<_>>();
     let mut total = entries.iter().map(|(_, size, _)| *size).sum::<u64>();
     entries.sort_by_key(|(_, _, modified)| *modified);
+
     for (path, size, _) in entries {
         if total
             <= MAX_RETAINED_OUTPUT_PER_SESSION.saturating_sub(2 * MAX_RETAINED_OUTPUT_PER_STREAM)
         {
             break;
         }
+
         std::fs::remove_file(path).map_err(failed)?;
         total = total.saturating_sub(size);
     }
+
     Ok(())
 }

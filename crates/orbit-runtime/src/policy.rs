@@ -42,6 +42,7 @@ impl FilesystemGrant {
     pub fn merge(&mut self, other: &Self) {
         self.read |= other.read || other.write;
         self.write |= other.write;
+
         if self.write {
             self.read = true;
         }
@@ -88,6 +89,7 @@ impl SessionGrantStore {
             }
 
             self.filesystem.push(new_grant.clone());
+
             new_grant
         };
 
@@ -98,6 +100,7 @@ impl SessionGrantStore {
             {
                 return true;
             }
+
             let is_child_redundant = existing.path.is_subpath_of(&grant_to_check.path)
                 && (!existing.read || grant_to_check.read)
                 && (!existing.write || grant_to_check.write);
@@ -216,6 +219,7 @@ impl PolicyEngine {
                              resolved: &ResolvedPath|
          -> Result<(), RuntimeError> {
             let canon = resolved.canonical();
+
             if !canon.exists() {
                 return Err(failed(format!(
                     "persistent permission path '{}' does not exist",
@@ -240,10 +244,12 @@ impl PolicyEngine {
                     p.display()
                 )));
             }
+
             Ok(())
         };
 
         let mut persistent_read = Vec::new();
+
         for p in permissions.read {
             let resolved = ResolvedPath::resolve(&p, Some(base_dir)).map_err(|e| {
                 failed(format!(
@@ -256,6 +262,7 @@ impl PolicyEngine {
         }
 
         let mut persistent_read_write = Vec::new();
+
         for p in permissions.read_write {
             let resolved = ResolvedPath::resolve(&p, Some(base_dir)).map_err(|e| {
                 failed(format!(
@@ -278,6 +285,7 @@ impl PolicyEngine {
             for ro in &persistent_read {
                 let rw_c = rw.canonical();
                 let ro_c = ro.canonical();
+
                 if rw_c == ro_c || rw_c.starts_with(ro_c) || ro_c.starts_with(rw_c) {
                     return Err(failed(format!(
                         "persistent permissions conflict: read_write path '{}' overlaps with read path '{}'; read and read_write ranges cannot overlap",
@@ -330,6 +338,7 @@ impl PolicyEngine {
             .protected_paths
             .write()
             .expect("protected_paths lock poisoned");
+
         if !guard.contains(&path) {
             guard.push(path);
         }
@@ -368,6 +377,7 @@ impl PolicyEngine {
         } else {
             None
         };
+
         let resolved = match ResolvedPath::resolve(&capability.path, base_dir) {
             Ok(p) => p,
             Err(e) => return PolicyDecision::Denied(format!("invalid path: {e}")),
@@ -399,6 +409,7 @@ impl PolicyEngine {
                 .protected_paths
                 .read()
                 .expect("protected_paths lock poisoned");
+
             for p in protected_guard.iter() {
                 if canon == p || canon.starts_with(p) {
                     return PolicyDecision::Denied(format!(
@@ -421,6 +432,7 @@ impl PolicyEngine {
                 if let Ok(rel) = canon.strip_prefix(ws_canon) {
                     for component in rel.components() {
                         let name = component.as_os_str().to_string_lossy();
+
                         if crate::filesystem::path_security::is_protected_workspace_name(&name) {
                             return PolicyDecision::Denied(format!(
                                 "path '{}' is protected metadata and cannot be granted",
@@ -429,6 +441,7 @@ impl PolicyEngine {
                         }
                     }
                 }
+
                 return PolicyDecision::Granted;
             }
 
@@ -476,14 +489,17 @@ impl PolicyEngine {
 fn normalize_resolved_paths(paths: &mut Vec<ResolvedPath>) {
     paths.sort_by_key(|p| p.canonical().components().count());
     let mut normalized: Vec<ResolvedPath> = Vec::new();
+
     for p in paths.drain(..) {
         let is_covered = normalized
             .iter()
             .any(|existing| p.canonical().starts_with(existing.canonical()));
+
         if !is_covered {
             normalized.push(p);
         }
     }
+
     *paths = normalized;
 }
 
@@ -499,12 +515,14 @@ mod tests {
         let engine = PolicyEngine::new(workspace);
 
         let inside_read = FilesystemCapability::local_read(tmp.path().join("src/main.rs"));
+
         assert_eq!(
             engine.check_filesystem(&inside_read),
             PolicyDecision::Granted
         );
 
         let inside_write = FilesystemCapability::local_write(tmp.path().join("target/output.bin"));
+
         assert_eq!(
             engine.check_filesystem(&inside_write),
             PolicyDecision::Granted
@@ -541,6 +559,7 @@ mod tests {
 
         // Writing to the same file still requires approval
         let cap_write = FilesystemCapability::local_write(&external_file);
+
         assert!(matches!(
             engine.check_filesystem(&cap_write),
             PolicyDecision::NeedsApproval(_)
@@ -563,6 +582,7 @@ mod tests {
 
         let child_read =
             FilesystemCapability::local_read(tmp_models.path().join("llama").join("weights.bin"));
+
         assert_eq!(
             engine.check_filesystem(&child_read),
             PolicyDecision::Granted
@@ -571,6 +591,7 @@ mod tests {
         // Child write still needs approval
         let child_write =
             FilesystemCapability::local_write(tmp_models.path().join("llama").join("weights.bin"));
+
         assert!(matches!(
             engine.check_filesystem(&child_write),
             PolicyDecision::NeedsApproval(_)
@@ -602,14 +623,17 @@ mod tests {
             EnvironmentId::Local,
             child.clone(),
         ));
+
         assert_eq!(store.grants().len(), 1);
 
         // 2. Add broader parent grant R -> replaces redundant child
         store.grant(FilesystemGrant::read_only(EnvironmentId::Local, parent));
+
         assert_eq!(store.grants().len(), 1);
 
         // 3. Adding child R again is ignored as redundant
         store.grant(FilesystemGrant::read_only(EnvironmentId::Local, child));
+
         assert_eq!(store.grants().len(), 1);
     }
 
@@ -624,6 +648,7 @@ mod tests {
 
         // Requesting the parent / ancestor directory of workspace
         let cap = FilesystemCapability::local_read(tmp.path());
+
         match engine.check_filesystem(&cap) {
             PolicyDecision::Denied(reason) => {
                 assert!(reason.contains("ancestor of the workspace"));
@@ -646,6 +671,7 @@ mod tests {
 
         // 1. Requesting the protected file directly is denied
         let cap_direct = FilesystemCapability::local_read(&secret);
+
         match engine.check_filesystem(&cap_direct) {
             PolicyDecision::Denied(reason) => {
                 assert!(reason.contains("inside protected path"));
@@ -655,6 +681,7 @@ mod tests {
 
         // 2. Requesting the parent directory containing the protected file is denied
         let cap_parent = FilesystemCapability::local_read(tmp_ext.path());
+
         match engine.check_filesystem(&cap_parent) {
             PolicyDecision::Denied(reason) => {
                 assert!(reason.contains("contains protected path"));
@@ -681,6 +708,7 @@ mod tests {
             "/dev/null",
         ] {
             let cap = FilesystemCapability::local_read(Path::new(reserved));
+
             assert!(
                 matches!(engine.check_filesystem(&cap), PolicyDecision::Denied(_)),
                 "expected {reserved} to be denied"
@@ -702,6 +730,7 @@ mod tests {
             read: vec![tmp_ext.path().join("nonexistent")],
             read_write: Vec::new(),
         };
+
         assert!(
             PolicyEngine::try_with_permissions(ws.clone(), perms_nonexistent, NetworkPolicy::Allow)
                 .is_err()
@@ -712,6 +741,7 @@ mod tests {
             read: vec![tmp_ws.path().parent().unwrap().to_path_buf()],
             read_write: Vec::new(),
         };
+
         assert!(
             PolicyEngine::try_with_permissions(ws.clone(), perms_ancestor, NetworkPolicy::Allow)
                 .is_err()
@@ -722,6 +752,7 @@ mod tests {
             read: vec![tmp_ws.path().join("src")],
             read_write: Vec::new(),
         };
+
         assert!(
             PolicyEngine::try_with_permissions(ws.clone(), perms_inside, NetworkPolicy::Allow)
                 .is_err()
@@ -738,6 +769,7 @@ mod tests {
             PolicyEngine::try_with_permissions(ws.clone(), perms_overlap, NetworkPolicy::Allow)
                 .unwrap_err()
                 .to_string();
+
         assert!(err.contains("overlaps with read path"));
 
         // 5. Redundant paths normalized
@@ -749,6 +781,7 @@ mod tests {
         };
         let engine =
             PolicyEngine::try_with_permissions(ws, perms_redundant, NetworkPolicy::Allow).unwrap();
+
         assert_eq!(engine.effective_policy().persistent_read_write.len(), 1);
     }
 }

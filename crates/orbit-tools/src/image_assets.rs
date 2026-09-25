@@ -30,12 +30,14 @@ impl ImageAssets {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
+
         self.import_bytes(name, bytes)
     }
 
     pub fn import_bytes(&self, name: impl Into<String>, bytes: Vec<u8>) -> Result<Attachment> {
         ensure!(!bytes.is_empty(), "图片是空文件");
         ensure!(bytes.len() <= MAX_IMAGE_BYTES, "图片不能超过 20 MiB");
+
         let (bytes, mime_type, extension) = normalize_image(bytes)?;
         let digest = Sha256::digest(&bytes);
         let hash = digest
@@ -47,10 +49,12 @@ impl ImageAssets {
             !self.directory.symlink_metadata()?.file_type().is_symlink(),
             "图片存储目录不能是符号链接"
         );
+
         let destination = self.directory.join(format!("{hash}.{extension}"));
         let valid_existing = std::fs::read(&destination)
             .ok()
             .is_some_and(|existing| Sha256::digest(existing) == digest);
+
         if !valid_existing {
             let nonce = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)?
@@ -60,19 +64,24 @@ impl ImageAssets {
                 .join(format!(".{hash}.{}.{nonce}.tmp", std::process::id()));
             let mut options = OpenOptions::new();
             options.create_new(true).write(true);
+
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt;
+
                 options.mode(0o600);
             }
             let mut file = options.open(&temporary)?;
             file.write_all(&bytes)?;
             file.sync_all()?;
+
             if destination.exists() {
                 std::fs::remove_file(&destination)?;
             }
+
             std::fs::rename(&temporary, &destination)?;
         }
+
         Ok(Attachment::Image {
             name: name.into(),
             mime_type: mime_type.into(),
@@ -95,6 +104,7 @@ impl ImageAssets {
         image::DynamicImage::ImageRgba8(image)
             .write_to(&mut png, image::ImageFormat::Png)
             .context("无法编码剪贴板图片")?;
+
         self.import_bytes(name, png.into_inner())
     }
 }
@@ -117,6 +127,7 @@ fn normalize_image(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str, &'static st
     use image::{GenericImageView, ImageFormat, ImageReader};
 
     const MAX_EDGE: u32 = 2048;
+
     let (mime_type, extension) =
         image_type(&bytes).context("只支持 PNG、JPEG、GIF 和 WebP 图片；扩展名不能代替真实格式")?;
     let format = match mime_type {
@@ -126,6 +137,7 @@ fn normalize_image(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str, &'static st
         "image/webp" => ImageFormat::WebP,
         _ => unreachable!(),
     };
+
     let image = ImageReader::with_format(std::io::Cursor::new(&bytes), format)
         .decode()
         .context("图片内容损坏或无法解码")?;
@@ -134,10 +146,12 @@ fn normalize_image(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str, &'static st
     if width <= MAX_EDGE && height <= MAX_EDGE {
         return Ok((bytes, mime_type, extension));
     }
+
     let resized = image.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Lanczos3);
     let mut output = std::io::Cursor::new(Vec::new());
     resized
         .write_to(&mut output, ImageFormat::Png)
         .context("无法编码缩小后的图片")?;
+
     Ok((output.into_inner(), "image/png", "png"))
 }

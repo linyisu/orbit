@@ -58,6 +58,7 @@ impl ModelError {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
             return false;
         };
+
         [
             value["error"]["code"].as_str(),
             value["error"]["type"].as_str(),

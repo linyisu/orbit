@@ -38,6 +38,7 @@ impl ResolvedPath {
                 Some(b) => b.to_path_buf(),
                 None => std::env::current_dir()?,
             };
+
             normalize_lexical(&base_dir.join(requested_ref))
         };
 
@@ -132,6 +133,7 @@ fn normalize_lexical(path: &Path) -> PathBuf {
                     components.pop();
                     continue;
                 }
+
                 components.push(Component::ParentDir);
             }
             Component::Normal(name) => components.push(Component::Normal(name)),
@@ -152,6 +154,7 @@ mod tests {
         std::fs::write(&file_path, "content").unwrap();
 
         let resolved_file = ResolvedPath::resolve(&file_path, None).unwrap();
+
         assert_eq!(
             resolved_file.canonical(),
             std::fs::canonicalize(&file_path).unwrap()
@@ -159,6 +162,7 @@ mod tests {
         assert_eq!(resolved_file.requested(), &file_path);
 
         let resolved_dir = ResolvedPath::resolve(tmp.path(), None).unwrap();
+
         assert!(resolved_file.is_subpath_of(&resolved_dir));
     }
 
@@ -220,6 +224,7 @@ mod tests {
         let resolved = ResolvedPath::resolve(&traversal, None).unwrap();
 
         let expected = std::fs::canonicalize(&nested).unwrap().join("file.txt");
+
         assert_eq!(resolved.canonical(), expected);
     }
 }

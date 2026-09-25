@@ -61,6 +61,7 @@ impl WorkspaceScanLimits {
         {
             return Err("max_scan_mib must be 1..1024 and max_scan_entries 1..100000");
         }
+
         Ok(())
     }
 }
@@ -114,6 +115,7 @@ impl Snapshot {
         } else {
             None
         };
+
         let mut snapshot = Self {
             fingerprint: WorkspaceFingerprint::default(),
             limits,
@@ -134,6 +136,7 @@ impl Snapshot {
             ))
             .map_err(failed)?,
         );
+
         Ok(snapshot)
     }
 
@@ -150,8 +153,10 @@ impl Snapshot {
         if depth > 64 {
             return Err(failed("workspace snapshot exceeds 64 directory levels"));
         }
+
         for name in workspace.directory_entries(relative).map_err(failed)? {
             self.visited += 1;
+
             if self.visited > self.limits.max_scan_entries {
                 return Err(failed(format!(
                     "workspace snapshot exceeds {} entries",
@@ -168,11 +173,14 @@ impl Snapshot {
                 self.skipped += 1;
                 continue;
             }
+
             let path = relative.join(name);
             let destination = self.directory.as_ref().map(|d| d.path().join(&path));
+
             match workspace.open_read(&path) {
                 Ok(file) => {
                     use std::os::unix::fs::PermissionsExt;
+
                     let executable =
                         file.metadata().map_err(failed)?.permissions().mode() & 0o111 != 0;
                     let available = (self.limits.max_scan_mib * MIB).saturating_sub(self.bytes);
@@ -180,12 +188,14 @@ impl Snapshot {
                     file.take(available as u64 + 1)
                         .read_to_end(&mut content)
                         .map_err(failed)?;
+
                     if content.len() > available {
                         return Err(failed(format!(
                             "workspace snapshot exceeds {} MiB; no command was started",
                             self.limits.max_scan_mib
                         )));
                     }
+
                     self.bytes += content.len();
                     self.fingerprint.files.insert(
                         path.to_str().ok_or_else(|| {
@@ -196,6 +206,7 @@ impl Snapshot {
                             executable,
                         },
                     );
+
                     if let Some(destination) = destination {
                         std::fs::write(&destination, content).map_err(failed)?;
                         std::fs::set_permissions(
@@ -204,8 +215,10 @@ impl Snapshot {
                         )
                         .map_err(failed)?;
                     }
+
                     self.files += 1;
                 }
+
                 Err(WorkspaceError::NotFile) => {
                     if workspace.directory_entries(&path).is_ok() {
                         self.fingerprint.directories.push(
@@ -213,18 +226,22 @@ impl Snapshot {
                                 failed("workspace snapshot paths must be valid UTF-8; no command was started")
                             })?.to_owned(),
                         );
+
                         if let Some(destination) = destination {
                             std::fs::create_dir(destination).map_err(failed)?;
                         }
+
                         self.copy_directory(workspace, &path, token, depth + 1)?;
                     } else {
                         self.skipped += 1;
                     }
                 }
+
                 Err(WorkspaceError::ProtectedPath | WorkspaceError::Io(_)) => self.skipped += 1,
                 Err(error) => return Err(failed(error)),
             }
         }
+
         Ok(())
     }
 }
@@ -300,7 +317,9 @@ impl BwrapSandboxBackend {
         })?;
 
         use std::os::unix::fs::MetadataExt;
+
         let metadata = bwrap_path.metadata().map_err(failed)?;
+
         if !metadata.is_file() || metadata.mode() & 0o6000 != 0 {
             return Err(failed(
                 "sandbox unavailable: setuid/setgid Bubblewrap is not supported",
@@ -336,6 +355,7 @@ impl PlaceholderGuard {
 impl Drop for PlaceholderGuard {
     fn drop(&mut self) {
         use std::os::unix::fs::MetadataExt;
+
         for item in &self.0 {
             match item {
                 Placeholder::File { path, dev, ino } => {
@@ -345,6 +365,7 @@ impl Drop for PlaceholderGuard {
                             && meta.is_file()
                             && meta.len() == 0
                     });
+
                     if matches {
                         let _ = std::fs::remove_file(path);
                     }
@@ -353,6 +374,7 @@ impl Drop for PlaceholderGuard {
                     let matches = std::fs::symlink_metadata(path).is_ok_and(|meta| {
                         meta.dev() == *dev && meta.ino() == *ino && meta.is_dir()
                     });
+
                     if matches {
                         let _ = std::fs::remove_dir(path);
                     }
@@ -405,6 +427,7 @@ impl BwrapSandboxBackend {
                 "--tmpfs",
                 "/workspace",
             ]);
+
             HashSet::new()
         } else {
             if spec.read_only_workspace {
@@ -420,6 +443,7 @@ impl BwrapSandboxBackend {
                 spec.read_only_workspace,
                 placeholder_guard,
             )?;
+
             for (container_path, is_dir) in masked {
                 if let Some(path_str) = container_path.to_str() {
                     if is_dir {
@@ -429,6 +453,7 @@ impl BwrapSandboxBackend {
                     }
                 }
             }
+
             inodes
         };
 
@@ -512,6 +537,7 @@ impl SandboxBackend for BwrapSandboxBackend {
                             MountAccess::ReadOnly => "ro",
                             MountAccess::ReadWrite => "rw",
                         };
+
                         format!("{}: {access}", target.display())
                     })
                     .collect(),
@@ -531,6 +557,7 @@ impl SandboxBackend for BwrapSandboxBackend {
             .await;
 
             drop(placeholder_guard);
+
             result
         })
     }
@@ -590,6 +617,7 @@ fn seccomp_filter() -> Result<std::fs::File, RuntimeError> {
     .map_err(failed)?;
     let program: BpfProgram = filter.try_into().map_err(failed)?;
     let mut file = tempfile::tempfile().map_err(failed)?;
+
     for instruction in program {
         file.write_all(&instruction.code.to_ne_bytes())
             .map_err(failed)?;
@@ -598,7 +626,9 @@ fn seccomp_filter() -> Result<std::fs::File, RuntimeError> {
         file.write_all(&instruction.k.to_ne_bytes())
             .map_err(failed)?;
     }
+
     file.rewind().map_err(failed)?;
+
     Ok(file)
 }
 
@@ -630,10 +660,12 @@ fn mount_system_paths(command: &mut Command, network: NetworkPolicy) {
 
 fn is_opaque_runtime_root(path: &Path, opaque_runtime_roots: &[PathBuf]) -> bool {
     let path_canon = path.canonicalize().ok();
+
     opaque_runtime_roots.iter().any(|root| {
         if path == root || path.starts_with(root) {
             return true;
         }
+
         if let Some(ref pc) = path_canon {
             if pc == root || pc.starts_with(root) {
                 return true;
@@ -642,6 +674,7 @@ fn is_opaque_runtime_root(path: &Path, opaque_runtime_roots: &[PathBuf]) -> bool
                 return pc == &rc || pc.starts_with(&rc);
             }
         }
+
         false
     })
 }
@@ -666,6 +699,7 @@ fn mount_capabilities(
     let mut scanned_opaque_roots = HashSet::new();
     let mut validate_cap = |canonical: &Path| -> Result<(), RuntimeError> {
         use std::os::unix::fs::MetadataExt;
+
         if crate::execution::process::is_reserved_system_path(canonical) {
             return Err(failed(format!(
                 "capability target '{}' is a reserved runtime path",
@@ -684,6 +718,7 @@ fn mount_capabilities(
                 canonical.display()
             )));
         }
+
         for p in protected_paths {
             if p.starts_with(canonical) || canonical.starts_with(p) {
                 return Err(failed(format!(
@@ -693,6 +728,7 @@ fn mount_capabilities(
                 )));
             }
         }
+
         if let Ok(meta) = std::fs::symlink_metadata(canonical) {
             if meta.is_file() && meta.nlink() > 1 {
                 collect_opaque_inodes_for_dev(
@@ -702,17 +738,21 @@ fn mount_capabilities(
                     &mut scanned_opaque_roots,
                 )?;
             }
+
             if protected_inodes.contains(&(meta.dev(), meta.ino())) {
                 return Err(failed(format!(
                     "capability target '{}' is a hardlink alias of a protected path",
                     canonical.display()
                 )));
             }
+
             if meta.is_dir() && !meta.file_type().is_symlink() {
                 let mut queue = VecDeque::from([(canonical.to_path_buf(), 0usize)]);
                 let mut visited = 0usize;
+
                 const MAX_CAP_SCAN_ENTRIES: usize = 10_000;
                 const MAX_CAP_SCAN_DEPTH: usize = 16;
+
                 while let Some((curr, depth)) = queue.pop_front() {
                     let entries = std::fs::read_dir(&curr).map_err(|e| {
                         failed(format!(
@@ -720,6 +760,7 @@ fn mount_capabilities(
                             curr.display()
                         ))
                     })?;
+
                     for entry in entries {
                         let entry = entry.map_err(|e| {
                             failed(format!(
@@ -728,18 +769,21 @@ fn mount_capabilities(
                             ))
                         })?;
                         visited += 1;
+
                         if visited > MAX_CAP_SCAN_ENTRIES {
                             return Err(failed(format!(
                                 "capability directory '{}' exceeds maximum scan limit of {MAX_CAP_SCAN_ENTRIES} entries",
                                 canonical.display()
                             )));
                         }
+
                         let em = entry.path().symlink_metadata().map_err(|e| {
                             failed(format!(
                                 "failed to inspect entry in capability directory '{}': {e}",
                                 entry.path().display()
                             ))
                         })?;
+
                         if em.is_file() && em.nlink() > 1 {
                             collect_opaque_inodes_for_dev(
                                 em.dev(),
@@ -748,6 +792,7 @@ fn mount_capabilities(
                                 &mut scanned_opaque_roots,
                             )?;
                         }
+
                         if protected_inodes.contains(&(em.dev(), em.ino())) {
                             return Err(failed(format!(
                                 "capability directory '{}' contains hardlink to protected path at '{}'",
@@ -755,6 +800,7 @@ fn mount_capabilities(
                                 entry.path().display()
                             )));
                         }
+
                         if em.is_dir() && !em.file_type().is_symlink() {
                             if depth >= MAX_CAP_SCAN_DEPTH {
                                 return Err(failed(format!(
@@ -763,17 +809,20 @@ fn mount_capabilities(
                                     entry.path().display()
                                 )));
                             }
+
                             queue.push_back((entry.path(), depth + 1));
                         }
                     }
                 }
             }
         }
+
         Ok(())
     };
 
     for path in &policy.persistent_read_write {
         let canonical = path.canonical();
+
         if canonical.exists() {
             validate_cap(canonical)?;
             command.arg("--bind").arg(canonical).arg(canonical);
@@ -782,6 +831,7 @@ fn mount_capabilities(
 
     for path in &policy.persistent_read {
         let canonical = path.canonical();
+
         if canonical.exists() {
             validate_cap(canonical)?;
             command.arg("--ro-bind").arg(canonical).arg(canonical);
@@ -792,8 +842,10 @@ fn mount_capabilities(
         for grant in store.grants() {
             if grant.environment.is_local() {
                 let canonical = grant.path.canonical();
+
                 if canonical.exists() {
                     validate_cap(canonical)?;
+
                     if grant.write {
                         command.arg("--bind").arg(canonical).arg(canonical);
                     } else if grant.read {
@@ -832,9 +884,11 @@ fn collect_masked_paths(
     let mut protected_inodes = HashSet::new();
 
     let mut all_protected = protected_paths.to_vec();
+
     if !read_only_workspace {
         for name in [".git", ".env", ".env.local"] {
             let candidate = ws_target.join(name);
+
             if !all_protected.contains(&candidate) {
                 all_protected.push(candidate);
             }
@@ -864,20 +918,25 @@ fn collect_masked_paths(
         match std::fs::symlink_metadata(protected) {
             Ok(meta) => {
                 protected_inodes.insert((meta.dev(), meta.ino()));
+
                 if meta.is_dir() && !meta.file_type().is_symlink() {
                     let should_scan_descendants =
                         is_inside_ws || !is_opaque_runtime_root(protected, opaque_runtime_roots);
+
                     if should_scan_descendants {
                         collect_dir_inodes(protected, &mut protected_inodes)?;
                     }
                 }
+
                 if let Some(rel) = rel.filter(|r| !r.as_os_str().is_empty()) {
                     let container_path = Path::new("/workspace").join(rel);
+
                     if seen.insert(container_path.clone()) {
                         masked.push((container_path, meta.is_dir()));
                     }
                 }
             }
+
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // When workspace is read-only, bwrap mounts with --ro-bind; container cannot create any files.
                 // When workspace is read-write, create a guarded placeholder so bwrap can mask it.
@@ -886,11 +945,14 @@ fn collect_masked_paths(
                 } else {
                     None
                 };
+
                 if let Some(rel) = target_rel {
                     let container_path = Path::new("/workspace").join(rel);
+
                     if let Some(parent) = protected.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
+
                     if is_protected_directory(protected, opaque_runtime_roots) {
                         match std::fs::create_dir(protected) {
                             Ok(()) => {
@@ -906,6 +968,7 @@ fn collect_masked_paths(
                                     ino: meta.ino(),
                                 });
                                 protected_inodes.insert((meta.dev(), meta.ino()));
+
                                 if seen.insert(container_path.clone()) {
                                     masked.push((container_path, true));
                                 }
@@ -918,6 +981,7 @@ fn collect_masked_paths(
                                     ))
                                 })?;
                                 protected_inodes.insert((meta.dev(), meta.ino()));
+
                                 if seen.insert(container_path.clone()) {
                                     masked.push((container_path, meta.is_dir()));
                                 }
@@ -945,6 +1009,7 @@ fn collect_masked_paths(
                                     ino: meta.ino(),
                                 });
                                 protected_inodes.insert((meta.dev(), meta.ino()));
+
                                 if seen.insert(container_path.clone()) {
                                     masked.push((container_path, false));
                                 }
@@ -957,6 +1022,7 @@ fn collect_masked_paths(
                                     ))
                                 })?;
                                 protected_inodes.insert((meta.dev(), meta.ino()));
+
                                 if seen.insert(container_path.clone()) {
                                     masked.push((container_path, meta.is_dir()));
                                 }
@@ -971,6 +1037,7 @@ fn collect_masked_paths(
                     }
                 }
             }
+
             Err(e) => {
                 return Err(failed(format!(
                     "failed to inspect protected path '{}': {e}",
@@ -991,6 +1058,7 @@ fn collect_masked_paths(
 
     while let Some((rel, depth)) = queue.pop_front() {
         count += 1;
+
         if count > MAX_SCAN_DIRS {
             return Err(failed(format!(
                 "workspace directory count exceeds {MAX_SCAN_DIRS} while scanning protected paths; refusing to start sandbox"
@@ -1048,12 +1116,15 @@ fn collect_masked_paths(
             if is_protected_name {
                 protected_inodes.insert((dev, ino));
                 let container_path = Path::new("/workspace").join(&child_rel);
+
                 if seen.insert(container_path.clone()) {
                     masked.push((container_path, is_dir && !is_symlink));
                 }
+
                 if is_dir && !is_symlink {
                     collect_dir_inodes(&child_host, &mut protected_inodes)?;
                 }
+
                 continue;
             }
 
@@ -1076,12 +1147,15 @@ fn collect_masked_paths(
     // an external opaque root. Inspect such roots on demand, avoiding a full
     // scan for ordinary workspaces and internal-only hardlinks.
     let mut visible_links = HashMap::new();
+
     for entry in &files_to_check {
         if entry.is_file && entry.nlink > 1 {
             *visible_links.entry((entry.dev, entry.ino)).or_insert(0u64) += 1;
         }
     }
+
     let mut scanned_opaque_roots = HashSet::new();
+
     for entry in &files_to_check {
         if entry.is_file
             && entry.nlink > 1
@@ -1104,6 +1178,7 @@ fn collect_masked_paths(
     for entry in files_to_check {
         if protected_inodes.contains(&(entry.dev, entry.ino)) {
             let container_path = Path::new("/workspace").join(&entry.relative);
+
             if seen.insert(container_path.clone()) {
                 masked.push((container_path, entry.is_dir));
             }
@@ -1113,12 +1188,14 @@ fn collect_masked_paths(
     // Filter so that if a parent directory is already masked with tmpfs, child paths are omitted
     let mut filtered = Vec::new();
     masked.sort_by_key(|(p, _)| p.components().count());
+
     for (path, is_dir) in masked {
         let is_covered = filtered
             .iter()
             .any(|(parent, parent_is_dir): &(PathBuf, bool)| {
                 *parent_is_dir && path.starts_with(parent) && &path != parent
             });
+
         if !is_covered {
             filtered.push((path, is_dir));
         }
@@ -1129,6 +1206,7 @@ fn collect_masked_paths(
 
 pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result<(), RuntimeError> {
     let mut normalized_targets = Vec::with_capacity(mounts.len());
+
     for mount in mounts {
         mount.validate()?;
         validate_mount_source(&mount.source, policy)?;
@@ -1139,6 +1217,7 @@ pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result
         for j in (i + 1)..normalized_targets.len() {
             let ti = &normalized_targets[i];
             let tj = &normalized_targets[j];
+
             if ti == tj {
                 return Err(failed(format!("duplicate mount target '{}'", ti.display())));
             }
@@ -1153,12 +1232,15 @@ pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result
     }
 
     let mut capability_paths: Vec<PathBuf> = Vec::new();
+
     for path in &policy.persistent_read_write {
         capability_paths.push(path.canonical().to_path_buf());
     }
+
     for path in &policy.persistent_read {
         capability_paths.push(path.canonical().to_path_buf());
     }
+
     if let Ok(store) = policy.session_grants.read() {
         for grant in store.grants() {
             if grant.environment.is_local() {
@@ -1184,6 +1266,7 @@ pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result
 
 fn validate_mount_source(source: &Path, policy: &EffectivePolicy) -> Result<PathBuf, RuntimeError> {
     let canonical = source.canonicalize().map_err(failed)?;
+
     if crate::execution::process::is_reserved_system_path(&canonical) {
         return Err(failed(format!(
             "mount source '{}' is a reserved system path",
@@ -1195,6 +1278,7 @@ fn validate_mount_source(source: &Path, policy: &EffectivePolicy) -> Result<Path
         .protected_paths
         .read()
         .map_err(|_| failed("protected path policy lock is poisoned"))?;
+
     for path in protected.iter() {
         if canonical.starts_with(path) || path.starts_with(&canonical) {
             return Err(failed(format!(
@@ -1204,6 +1288,7 @@ fn validate_mount_source(source: &Path, policy: &EffectivePolicy) -> Result<Path
             )));
         }
     }
+
     Ok(canonical)
 }
 
@@ -1215,6 +1300,7 @@ fn mount_toolchain_and_mounts(
 ) -> Result<(), RuntimeError> {
     if let Some(path) = rust_toolchain {
         let path = path.canonicalize().map_err(failed)?;
+
         if !path.join("bin/rustc").is_file()
             || !path.join("bin/cargo").is_file()
             || !path.join("lib/rustlib").is_dir()
@@ -1229,12 +1315,14 @@ fn mount_toolchain_and_mounts(
 
     for mount in mounts {
         let path = validate_mount_source(&mount.source, policy)?;
+
         if !path.exists() {
             return Err(failed(format!(
                 "configured mount source '{}' must exist",
                 mount.source.display()
             )));
         }
+
         let target = mount.normalized_target()?;
 
         match mount.access {
@@ -1272,6 +1360,7 @@ fn mount_scratch_and_tmp(
         }
 
         let home = path.join("home");
+
         match std::fs::symlink_metadata(&home) {
             Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
                 return Err(failed("scratch home must be a regular directory"));
@@ -1397,31 +1486,40 @@ async fn capture(
     let mut tail = VecDeque::with_capacity(MAX_OUTPUT);
     let mut total = 0u64;
     let mut buffer = [0; 4096];
+
     loop {
         let count = pipe.read(&mut buffer).await?;
+
         if count == 0 {
             let mut bytes: Vec<u8> = tail.into();
+
             if total > MAX_OUTPUT as u64 {
                 let partial = bytes.iter().take_while(|b| **b & 0xc0 == 0x80).count();
                 bytes.drain(..partial);
             }
+
             if let Some(file) = retained.as_mut() {
                 file.flush().await?;
             }
+
             return Ok(Captured {
                 bytes,
                 total,
                 retained_truncated: retaining && total > MAX_RETAINED_OUTPUT_PER_STREAM,
             });
         }
+
         total = total.saturating_add(count as u64);
+
         if let Some(file) = retained.as_mut() {
             let prior = total.saturating_sub(count as u64);
+
             if prior < MAX_RETAINED_OUTPUT_PER_STREAM {
                 let allowed = (MAX_RETAINED_OUTPUT_PER_STREAM - prior).min(count as u64) as usize;
                 file.write_all(&buffer[..allowed]).await?;
             }
         }
+
         let overflow = (tail.len() + count).saturating_sub(MAX_OUTPUT);
         tail.drain(..overflow);
         tail.extend(&buffer[..count]);
@@ -1466,6 +1564,7 @@ async fn run_child_process(
                 child.wait().await
             },
         }?;
+
         Ok::<_, std::io::Error>((status, timed_out, cancelled))
     };
 
@@ -1530,6 +1629,7 @@ pub async fn run_configured(
     if token.is_cancelled() {
         return Err(RuntimeError::Cancelled);
     }
+
     let copy_token = token.clone();
     let snapshot_limits = scan_limits.clone();
     let scan_workspace = workspace.clone();
@@ -1538,6 +1638,7 @@ pub async fn run_configured(
     })
     .await
     .map_err(failed)??;
+
     if token.is_cancelled() {
         return Err(RuntimeError::Cancelled);
     }
@@ -1600,6 +1701,7 @@ pub async fn run_configured(
                     MountAccess::ReadOnly => "ro",
                     MountAccess::ReadWrite => "rw",
                 };
+
                 format!("{}: {access}", target.display())
             })
             .collect(),
@@ -1702,6 +1804,7 @@ pub async fn run_with_resources_and_output(
 ) -> Result<CommandResult, RuntimeError> {
     let scan_limits = WorkspaceScanLimits::default();
     let process_limits = ProcessLimits::default();
+
     #[allow(deprecated)]
     run_configured(
         workspace,
@@ -1728,12 +1831,17 @@ mod tests {
     async fn capture_keeps_bounded_unicode_tail_and_counts_all_output() {
         let data = format!("{}FINAL", "中文".repeat(20_000));
         let result = capture(data.as_bytes(), None).await.unwrap();
+
         assert_eq!(result.total, data.len() as u64);
         assert!(result.bytes.len() <= MAX_OUTPUT);
+
         let tail = String::from_utf8(result.bytes).unwrap();
+
         assert!(tail.ends_with("FINAL"));
         assert!(data.ends_with(&tail));
+
         let short = capture(b"small".as_slice(), None).await.unwrap();
+
         assert_eq!(short.bytes, b"small");
         assert_eq!(short.total, 5);
     }
@@ -1747,6 +1855,7 @@ mod tests {
         let result = capture(b"first\nsecond\n".as_slice(), Some(stdout))
             .await
             .unwrap();
+
         assert!(!result.retained_truncated);
         assert_eq!(result.total, 13);
         assert_eq!(
@@ -1825,6 +1934,7 @@ mod tests {
     fn test_mount_spec_validation() {
         let dir = tempfile::tempdir().unwrap();
         let valid_mount = MountSpec::read_only(dir.path(), "/opt/orbit-cache/packages");
+
         assert!(valid_mount.validate().is_ok());
 
         // Non-existent source
@@ -1832,14 +1942,17 @@ mod tests {
             dir.path().join("does_not_exist"),
             "/opt/orbit-cache/packages",
         );
+
         assert!(bad_source.validate().is_err());
 
         // Reserved target
         let reserved_mount = MountSpec::read_only(dir.path(), "/workspace");
+
         assert!(reserved_mount.validate().is_err());
 
         // Relative target
         let relative_mount = MountSpec::read_only(dir.path(), "opt/orbit-cache/packages");
+
         assert!(relative_mount.validate().is_err());
     }
 
@@ -1857,6 +1970,7 @@ mod tests {
             MountSpec::read_write(dir2.path(), "/mnt/data"),
         ];
         let err = validate_mounts(&duplicates, &policy).unwrap_err();
+
         assert!(err.to_string().contains("duplicate mount target"));
 
         // Overlapping targets
@@ -1865,6 +1979,7 @@ mod tests {
             MountSpec::read_write(dir2.path(), "/mnt/data/subdir"),
         ];
         let err = validate_mounts(&overlapping, &policy).unwrap_err();
+
         assert!(
             err.to_string()
                 .contains("conflicting or overlapping mount targets")
@@ -1875,6 +1990,7 @@ mod tests {
             MountSpec::read_only(dir1.path(), "/mnt/data1"),
             MountSpec::read_write(dir2.path(), "/mnt/data2"),
         ];
+
         assert!(validate_mounts(&non_overlapping, &policy).is_ok());
     }
 
@@ -1914,6 +2030,7 @@ mod tests {
         // Mount target collides with capability path
         let collides = vec![MountSpec::read_only(mount_src.path(), &cap_canonical)];
         let err = validate_mounts(&collides, &policy).unwrap_err();
+
         assert!(
             err.to_string()
                 .contains("conflicts or overlaps with active capability grant")
@@ -1925,6 +2042,7 @@ mod tests {
             cap_canonical.join("sub"),
         )];
         let err = validate_mounts(&subpath, &policy).unwrap_err();
+
         assert!(
             err.to_string()
                 .contains("conflicts or overlaps with active capability grant")
@@ -1935,6 +2053,7 @@ mod tests {
             mount_src.path(),
             "/opt/orbit-cache/cargo",
         )];
+
         assert!(validate_mounts(&valid, &policy).is_ok());
     }
 
@@ -1967,9 +2086,11 @@ mod tests {
                     MountAccess::ReadOnly => "ro",
                     MountAccess::ReadWrite => "rw",
                 };
+
                 format!("{}: {access}", target.display())
             })
             .collect();
+
         assert_eq!(
             formatted,
             vec![
@@ -2023,6 +2144,7 @@ mod tests {
                 &mut guard,
             )
             .unwrap();
+
             assert!(!nonexistent_file.exists());
             assert!(!nonexistent_dir.exists());
 
@@ -2060,6 +2182,7 @@ mod tests {
                 &mut guard,
             )
             .unwrap();
+
             assert!(nonexistent_file.is_file());
             assert!(nonexistent_dir.is_dir());
 
@@ -2088,6 +2211,7 @@ mod tests {
             );
 
             drop(guard);
+
             // After drop, placeholders are removed!
             assert!(!nonexistent_file.exists());
             assert!(!nonexistent_dir.exists());
@@ -2150,6 +2274,7 @@ mod tests {
             );
 
             drop(guard);
+
             // Cleaned up after drop
             assert!(!fresh_ws.path().join(".git").exists());
             assert!(!fresh_ws.path().join(".env").exists());
@@ -2232,6 +2357,7 @@ mod tests {
             std::slice::from_ref(&opaque),
         )
         .unwrap_err();
+
         assert!(
             error
                 .to_string()
@@ -2243,16 +2369,19 @@ mod tests {
     fn test_collect_dir_inodes_rejects_depth_exceeding_limit() {
         let temp = tempfile::tempdir().unwrap();
         let mut curr = temp.path().to_path_buf();
+
         // Create 34 nested directory levels (exceeding MAX_PROTECTED_DIR_DEPTH = 32)
         for i in 0..34 {
             curr = curr.join(format!("dir_{i}"));
         }
+
         std::fs::create_dir_all(&curr).unwrap();
         let file = curr.join("secret.txt");
         std::fs::write(&file, "leak").unwrap();
 
         let mut inodes = HashSet::new();
         let err = collect_dir_inodes(temp.path(), &mut inodes).unwrap_err();
+
         assert!(
             err.to_string()
                 .contains("depth exceeds maximum limit of 32")
@@ -2264,10 +2393,12 @@ mod tests {
         let ws_dir = tempfile::tempdir().unwrap();
         let cap_dir = tempfile::tempdir().unwrap();
         let mut curr = cap_dir.path().to_path_buf();
+
         // Create 18 nested directory levels (exceeding MAX_CAP_SCAN_DEPTH = 16)
         for i in 0..18 {
             curr = curr.join(format!("sub_{i}"));
         }
+
         std::fs::create_dir_all(&curr).unwrap();
         let file = curr.join("data.txt");
         std::fs::write(&file, "hello").unwrap();
@@ -2289,6 +2420,7 @@ mod tests {
             &[],
         )
         .unwrap_err();
+
         assert!(
             err.to_string()
                 .contains("depth exceeds maximum limit of 16")
@@ -2306,14 +2438,17 @@ mod tests {
         let storage_parent = tempfile::tempdir().unwrap();
         let external_storage = storage_parent.path().join("orbit.workspaces");
         let mut curr = external_storage.clone();
+
         for i in 0..35 {
             curr = curr.join(format!("level_{i}"));
         }
+
         std::fs::create_dir_all(&curr).unwrap();
         std::fs::write(curr.join("deep.txt"), "content").unwrap();
 
         // Verify that direct collect_dir_inodes on external_storage WOULD fail closed
         let mut test_inodes = HashSet::new();
+
         assert!(collect_dir_inodes(&external_storage, &mut test_inodes).is_err());
 
         let mut guard = PlaceholderGuard::new();
@@ -2326,6 +2461,7 @@ mod tests {
         )
         .unwrap();
         let ext_meta = std::fs::symlink_metadata(&external_storage).unwrap();
+
         assert!(inodes.contains(&(ext_meta.dev(), ext_meta.ino())));
         assert!(
             masked
@@ -2353,6 +2489,7 @@ mod tests {
             &mut guard,
         )
         .unwrap_err();
+
         assert!(error.to_string().contains("depth exceeds maximum limit"));
     }
 
@@ -2389,6 +2526,7 @@ mod tests {
         // The secret files inside external directory MUST be collected into protected_inodes
         let secret_meta1 = std::fs::symlink_metadata(&secret_file).unwrap();
         let secret_meta2 = std::fs::symlink_metadata(&nested_secret_file).unwrap();
+
         assert!(
             inodes.contains(&(secret_meta1.dev(), secret_meta1.ino())),
             "descendant file inside external protected directory must be tracked in protected_inodes"
@@ -2446,6 +2584,7 @@ mod tests {
         .unwrap();
 
         let meta = std::fs::symlink_metadata(&secret).unwrap();
+
         assert!(
             inodes.contains(&(meta.dev(), meta.ino())),
             "descendant of user directory named *.workspaces must be scanned when not registered as opaque runtime root"

@@ -346,6 +346,7 @@ fn validate_reasoning_extra(model: &str, api_format: ApiFormat, extra: &toml::Ta
             );
         }
     }
+
     let conflicts_effort = match api_format {
         ApiFormat::OpenaiChatCompletions => extra.contains_key("reasoning_effort"),
         ApiFormat::OpenaiResponses => extra
@@ -357,9 +358,11 @@ fn validate_reasoning_extra(model: &str, api_format: ApiFormat, extra: &toml::Ta
             .and_then(toml::Value::as_table)
             .is_some_and(|output| output.contains_key("effort")),
     };
+
     if conflicts_effort {
         bail!("model {model:?}: reasoning.extra may not override the configured reasoning effort");
     }
+
     Ok(())
 }
 
@@ -386,6 +389,7 @@ impl FileConfig {
         {
             bail!("max_output_tokens must be positive and smaller than context_tokens");
         }
+
         for (name, provider) in &config.providers {
             if name.trim().is_empty()
                 || provider.base_url.trim().is_empty()
@@ -403,7 +407,9 @@ impl FileConfig {
                 );
             }
         }
+
         let options = config.model_options()?;
+
         if !options
             .iter()
             .any(|option| option.provider == config.default_provider && option.default_for_provider)
@@ -413,18 +419,22 @@ impl FileConfig {
                 config.default_provider
             );
         }
+
         for (name, provider) in &config.providers {
             let mut models = std::collections::BTreeSet::new();
+
             for model in &provider.models {
                 if !models.insert(&model.id) {
                     bail!("provider {name:?} contains duplicate model {:?}", model.id);
                 }
+
                 if let Some(reasoning) = &model.reasoning {
                     let expected = match provider.api_format {
                         ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
                         ApiFormat::OpenaiResponses => ReasoningAdapter::OpenaiResponses,
                         ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
                     };
+
                     if reasoning.adapter != expected {
                         bail!(
                             "model {:?}: reasoning adapter must match its provider API format",
@@ -439,6 +449,7 @@ impl FileConfig {
                             model.id
                         );
                     }
+
                     for (index, effort) in reasoning.efforts.iter().enumerate() {
                         if reasoning.efforts[..index].contains(effort) {
                             bail!(
@@ -447,14 +458,17 @@ impl FileConfig {
                             );
                         }
                     }
+
                     validate_reasoning_extra(&model.id, provider.api_format, &reasoning.extra)?;
                 }
+
                 let input_context_tokens = model.input_context_tokens.unwrap_or_else(|| {
                     model
                         .context_tokens
                         .unwrap_or(config.context_tokens)
                         .saturating_sub(config.max_output_tokens as usize)
                 });
+
                 if input_context_tokens < 8192 {
                     bail!(
                         "model {:?}: input context window must be at least 8192 tokens",
@@ -463,7 +477,9 @@ impl FileConfig {
                 }
             }
         }
+
         config.compaction.validate().map_err(anyhow::Error::msg)?;
+
         if let Some(name) = &config.compaction.model {
             anyhow::ensure!(
                 config
@@ -473,8 +489,10 @@ impl FileConfig {
                 "compaction.model must name a configured provider::model"
             );
         }
+
         config.command.validate().map_err(anyhow::Error::msg)?;
         config.mcp.validate()?;
+
         Ok(config)
     }
 
@@ -483,6 +501,7 @@ impl FileConfig {
             settings: self.compaction.clone(),
             backend: None,
         };
+
         if let Some(name) = &self.compaction.model {
             let choice = self
                 .model_options()?
@@ -507,6 +526,7 @@ impl FileConfig {
                 ModelClient::new(choice.config)?,
             )));
         }
+
         Ok(runtime)
     }
 
@@ -521,6 +541,7 @@ impl FileConfig {
 
     fn model_options(&self) -> Result<Vec<tui::ModelOption>> {
         let mut options = Vec::new();
+
         for (name, provider) in &self.providers {
             for (index, model) in provider.models.iter().enumerate() {
                 let input_context_tokens = model.input_context_tokens.unwrap_or_else(|| {
@@ -562,6 +583,7 @@ impl FileConfig {
                 });
             }
         }
+
         Ok(options)
     }
 
@@ -589,9 +611,11 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Chat(args) => chat(cli.config, cli.database, args).await,
         Command::Tui(args) => run_tui(cli.config, cli.database, args).await,
+
         Command::Projects { command } => {
             let store =
                 orbit_store::store::Store::open(session::database_path(cli.database)?).await?;
+
             match command {
                 ProjectCommand::List => {
                     for project in store.projects().await? {
@@ -611,11 +635,14 @@ async fn main() -> Result<()> {
                     );
                 }
             }
+
             Ok(())
         }
+
         Command::Sessions { command } => {
             let store =
                 orbit_store::store::Store::open(session::database_path(cli.database)?).await?;
+
             match command {
                 SessionCommand::List => println!("{}", session::list_text(&store).await?),
                 SessionCommand::Storage => {
@@ -631,9 +658,11 @@ async fn main() -> Result<()> {
                 SessionCommand::Delete { id, yes } => {
                     anyhow::ensure!(yes, "永久删除会话需要 --yes；请先确认会话 ID。");
                     let deleted = store.delete_session(&id).await?;
+
                     if let Err(error) = store.reclaim_unused_space().await {
                         eprintln!("会话已删除，但数据库空间回收失败：{error}");
                     }
+
                     println!(
                         "{}",
                         if deleted {
@@ -655,6 +684,7 @@ async fn main() -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&store.load(&id).await?)?)
                 }
             }
+
             Ok(())
         }
     }
@@ -719,6 +749,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
     history::register(&mut tools, session.store.clone(), memory_scope.clone());
     project_state::register(&mut tools, session.store.clone(), memory_scope.clone());
     skills.register_tool(&mut tools);
+
     tui::run(
         client,
         model_name,
@@ -748,9 +779,11 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
 async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -> Result<()> {
     let prompt = read_chat_prompt(&args)?;
     let disabled = args.disabled.iter().copied().collect::<BTreeSet<_>>();
+
     if capability_is_disabled(&disabled, ChatCapability::Image) && !args.images.is_empty() {
         bail!("--image cannot be used when the image capability is disabled");
     }
+
     let file_config = FileConfig::load(&config_path)?;
     let database = session::database_path(database)?;
 
@@ -772,12 +805,14 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         &file_config,
         args.model.as_deref().or(saved_model.as_deref()),
     )?;
+
     if !selected_model.supports_vision && !args.images.is_empty() {
         bail!(
             "--image cannot be used because model {:?} does not support image input",
             selected_model.qualified_name()
         );
     }
+
     let model_name = selected_model.qualified_name();
     let agent_config = file_config.agent_config_for(selected_model.context_tokens);
     let client = ModelClient::new(selected_model.config.clone())?;
@@ -793,8 +828,10 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             .project_plugins(&session.snapshot.session.project_id)
             .await?;
         let plugin_skill_roots = marketplaces::enabled_skill_roots(&enabled_plugins);
+
         skills::Skills::discover_current_with_plugin_roots(plugin_skill_roots.roots)
     };
+
     let instructions = instructions::load_current();
     let attachments = args
         .images
@@ -814,9 +851,11 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
                         .send(mode.allows(&request.preview, &approval_workspace));
                 }
             });
+
             (Some(sender), Some(task))
         }
     };
+
     let runtime = runtime::workspace_tools(
         &config_path,
         Some(session.store.path()),
@@ -834,6 +873,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         Some(file_config.permissions.clone()),
     )
     .await?;
+
     if !capability_is_disabled(&disabled, ChatCapability::Files)
         && !capability_is_disabled(&disabled, ChatCapability::Command)
     {
@@ -841,6 +881,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             .initialize_audit(runtime.workspace.clone(), runtime.command_limits.clone())
             .await?;
     }
+
     let audit_workspace = runtime.workspace;
     let mut tools = runtime.tools;
     verification::register(
@@ -850,6 +891,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         audit_workspace,
         runtime.command_limits,
     );
+
     if !capability_is_disabled(&disabled, ChatCapability::History) {
         history::register(
             &mut tools,
@@ -857,26 +899,33 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             project_state::MemoryScope::new(session.id().into()),
         );
     }
+
     if !capability_is_disabled(&disabled, ChatCapability::ProjectState) {
         let memory_scope = project_state::MemoryScope::new(session.id().into());
         project_state::register(&mut tools, session.store.clone(), memory_scope);
     }
+
     if !capability_is_disabled(&disabled, ChatCapability::Skills) {
         skills.register_tool(&mut tools);
     }
+
     disable_chat_capabilities(&mut tools, &disabled);
+
     if !selected_model.supports_vision {
         tools.remove("read_image");
     }
+
     if capability_is_disabled(&disabled, ChatCapability::Files) {
         tools.remove("verification_status");
     }
 
     let mut messages = session.snapshot.history.clone();
     instructions::inject(&mut messages, &instructions);
+
     if !capability_is_disabled(&disabled, ChatCapability::Skills) {
         skills.inject(&mut messages);
     }
+
     if !capability_is_disabled(&disabled, ChatCapability::ProjectState) {
         project_state::inject(
             &mut messages,
@@ -886,6 +935,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         )
         .await?;
     }
+
     messages.push(ChatMessage::user_with_attachments(
         prompt.clone(),
         attachments,
@@ -905,12 +955,14 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     let mut agent = Agent::new(ModelClientBackend::new(client), tools, agent_config)
         .with_file_activity(files)
         .with_compaction(file_config.compaction_runtime()?);
+
     if archive_enabled {
         agent = agent.with_context_archive(std::sync::Arc::new(history::SessionArchive::new(
             session.store.clone(),
             session.id().into(),
         )));
     }
+
     session.begin(prompt, model_name.clone()).await?;
     agent = agent
         .with_calibration(model_name.clone(), session.calibration(&model_name))
@@ -926,14 +978,17 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     });
 
     let mut interrupted = false;
+
     loop {
         let event = tokio::select! {
             event = receiver.recv() => event,
             signal = tokio::signal::ctrl_c() => {
                 signal.context("failed to listen for Ctrl+C")?;
+
                 if interrupted {
                     std::process::exit(130);
                 }
+
                 interrupted = true;
                 cancellation.cancel();
                 eprintln!("正在取消…");
@@ -941,6 +996,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             }
         };
         let Some(event) = event else { break };
+
         report_chat_event(&event, args.stream)?;
     }
 
@@ -950,13 +1006,16 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             if let Some(task) = approval_task {
                 task.abort();
             }
+
             session.finish("failed", None).await?;
             return Err(error.into());
         }
     };
+
     if let Some(task) = approval_task {
         task.abort();
     }
+
     let result = match outcome {
         Ok(result) => result,
         Err(AgentError::Cancelled) if interrupted => {
@@ -969,10 +1028,12 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             return Err(error.into());
         }
     };
+
     let answer = match &result.final_message {
         ChatMessage::Assistant { content, .. } => content.clone().unwrap_or_default(),
         _ => String::new(),
     };
+
     session.finish("completed", Some(result.history)).await?;
 
     if let Some(instance_id) = &args.swe_instance_id {
@@ -1011,9 +1072,11 @@ fn read_chat_prompt(args: &ChatArgs) -> Result<String> {
             .with_context(|| format!("failed to read prompt file {}", path.display()))?,
         (None, None) => bail!("provide a prompt or --prompt-file"),
     };
+
     if prompt.trim().is_empty() {
         bail!("prompt must not be empty");
     }
+
     Ok(prompt)
 }
 
@@ -1021,21 +1084,27 @@ fn select_chat_model(config: &FileConfig, requested: Option<&str>) -> Result<tui
     let Some(requested) = requested else {
         return config.default_model_option();
     };
+
     let requested = requested.trim();
+
     if requested.is_empty() {
         bail!("model must not be empty");
     }
+
     let options = config.model_options()?;
+
     if requested.contains("::") {
         return options
             .into_iter()
             .find(|option| option.qualified_name() == requested)
             .ok_or_else(|| anyhow::anyhow!("model {requested:?} is not configured"));
     }
+
     let matches = options
         .into_iter()
         .filter(|option| option.model == requested)
         .collect::<Vec<_>>();
+
     match matches.as_slice() {
         [option] => Ok(option.clone()),
         [] => bail!("model {requested:?} is not configured"),
@@ -1050,22 +1119,28 @@ fn disable_chat_capabilities(
     if capability_is_disabled(disabled, ChatCapability::History) {
         tools.remove("read_history");
     }
+
     if capability_is_disabled(disabled, ChatCapability::Web) {
         tools.remove("web_search");
         tools.remove("web_fetch");
     }
+
     if capability_is_disabled(disabled, ChatCapability::Mcp) {
         tools.remove_prefix("mcp__");
     }
+
     if capability_is_disabled(disabled, ChatCapability::Skills) {
         tools.remove("load_skill");
     }
+
     if capability_is_disabled(disabled, ChatCapability::Image) {
         tools.remove("read_image");
     }
+
     if capability_is_disabled(disabled, ChatCapability::Document) {
         tools.remove("read_document");
     }
+
     if capability_is_disabled(disabled, ChatCapability::Files) {
         for name in [
             "read_file",
@@ -1077,23 +1152,28 @@ fn disable_chat_capabilities(
             tools.remove(name);
         }
     }
+
     if capability_is_disabled(disabled, ChatCapability::Git) {
         tools.remove("git_inspect");
         tools.remove("git_export_patch");
     }
+
     if capability_is_disabled(disabled, ChatCapability::Write) {
         tools.remove("write_file");
         tools.remove("edit_file");
     }
+
     if capability_is_disabled(disabled, ChatCapability::Capability) {
         tools.remove("request_capability");
     }
+
     if capability_is_disabled(disabled, ChatCapability::Command) {
         tools.remove("run_command");
         tools.remove("read_command_output");
         tools.remove("export_artifact");
         tools.remove("verification_status");
     }
+
     if capability_is_disabled(disabled, ChatCapability::ProjectState) {
         for name in [
             "task_list",
@@ -1125,6 +1205,7 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
             _ => {}
         }
     }
+
     match event {
         AgentEvent::CompactionStarted => {}
         AgentEvent::ContextCompacted {
@@ -1152,6 +1233,7 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
         AgentEvent::Failed { error } => eprintln!("agent failed: {error}"),
         _ => {}
     }
+
     Ok(())
 }
 
@@ -1180,6 +1262,7 @@ mod config_tests {
     #[test]
     fn chat_capability_filter_removes_groups_before_request_assembly() {
         let mut tools = ToolRegistry::new();
+
         for name in [
             "read_file",
             "project_overview",
@@ -1198,6 +1281,7 @@ mod config_tests {
                 |_, _| async { Ok::<_, orbit_agent::tool::ToolError>("ok".into()) },
             ));
         }
+
         let disabled = [
             ChatCapability::Files,
             ChatCapability::Web,
@@ -1209,6 +1293,7 @@ mod config_tests {
         .into_iter()
         .collect();
         disable_chat_capabilities(&mut tools, &disabled);
+
         assert!(!tools.contains("read_file"));
         assert!(!tools.contains("project_overview"));
         assert!(!tools.contains("request_capability"));
@@ -1223,6 +1308,7 @@ mod config_tests {
     #[test]
     fn disabled_commands_hide_audit_and_export_tools() {
         let mut tools = ToolRegistry::new();
+
         for name in [
             "run_command",
             "read_command_output",
@@ -1236,13 +1322,16 @@ mod config_tests {
                 |_, _| async { Ok::<_, orbit_agent::tool::ToolError>("unused".into()) },
             ));
         }
+
         disable_chat_capabilities(&mut tools, &[ChatCapability::Command].into_iter().collect());
+
         assert!(tools.definitions().is_empty());
     }
 
     #[test]
     fn disabled_git_hides_patch_export_as_well_as_inspection() {
         let mut tools = ToolRegistry::new();
+
         for name in ["git_inspect", "git_export_patch"] {
             tools.register(ClosureTool::new(
                 name,
@@ -1251,7 +1340,9 @@ mod config_tests {
                 |_, _| async { Ok::<_, orbit_agent::tool::ToolError>("unused".into()) },
             ));
         }
+
         disable_chat_capabilities(&mut tools, &[ChatCapability::Git].into_iter().collect());
+
         assert!(tools.definitions().is_empty());
     }
 
@@ -1265,12 +1356,15 @@ id = "test"
 "#;
         let input = format!("default_provider = \"test\"\n{provider}");
         let config: FileConfig = toml::from_str(&input).unwrap();
+
         assert_eq!(config.context_tokens, 128000);
         assert!(config.auto_compact);
+
         let disabled: FileConfig = toml::from_str(&format!(
             "default_provider = \"test\"\nauto_compact = false\n{provider}"
         ))
         .unwrap();
+
         assert!(!disabled.agent_config().auto_compact);
         assert_eq!(config.max_output_tokens, 32000);
         assert_eq!(config.providers["test"].timeout_seconds, 600);
@@ -1279,7 +1373,9 @@ id = "test"
         assert_eq!(config.agent_config().max_tool_calls, 500);
         assert_eq!(config.command.default_timeout_seconds, 120);
         assert_eq!(config.command.max_timeout_seconds, 600);
+
         let config: FileConfig = toml::from_str(&format!("default_provider = \"test\"\ncontext_tokens = 1000000\nmax_output_tokens = 64000\nmax_turns = 75\nmax_tool_calls = 500\n[command]\ndefault_timeout_seconds = 300\nmax_timeout_seconds = 1800\n{provider}")).unwrap();
+
         assert_eq!(config.agent_config().max_turns, 75);
         assert_eq!(config.agent_config().max_tool_calls, 500);
         assert_eq!(config.max_output_tokens, 64000);
@@ -1304,6 +1400,7 @@ id = "deepseek-reasoner"
         )
         .unwrap();
         let options = config.model_options().unwrap();
+
         assert_eq!(options.len(), 2);
         assert_eq!(options[0].model, "deepseek-chat");
         assert!(options[0].default_for_provider);
@@ -1333,6 +1430,7 @@ id = "shared"
 "#,
         )
         .unwrap();
+
         assert_eq!(
             select_chat_model(&config, Some("two::shared"))
                 .unwrap()
@@ -1363,6 +1461,7 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default =
         )
         .unwrap();
         let option = config.default_model_option().unwrap();
+
         assert_eq!(
             option.reasoning_efforts,
             vec![ReasoningEffort::Low, ReasoningEffort::High]
@@ -1392,6 +1491,7 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default =
         )
         .unwrap();
         let error = FileConfig::load(&path).unwrap_err().to_string();
+
         assert!(error.contains("reasoning.extra") && error.contains("stream"));
     }
 
@@ -1416,6 +1516,7 @@ input_context_tokens = 224000
         )
         .unwrap();
         let options = config.model_options().unwrap();
+
         assert_eq!(options[0].context_tokens, 64_000);
         assert_eq!(options[0].input_context_tokens, 32_000);
         assert_eq!(options[1].context_tokens, 128_000);
@@ -1437,6 +1538,7 @@ input_context_tokens = 224000
         fs::write(&path, include_str!("../../../config.example.toml")).unwrap();
         let config = FileConfig::load(&path).unwrap();
         let models = config.model_options().unwrap();
+
         assert_eq!(models.len(), 4);
         assert!(
             models
@@ -1459,6 +1561,7 @@ id = "other-model"
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
         fs::write(&path, duplicate).unwrap();
+
         assert!(FileConfig::load(&path).is_err());
 
         fs::write(
@@ -1472,6 +1575,7 @@ id = "other-model"
 "#,
         )
         .unwrap();
+
         assert!(FileConfig::load(&path).is_err());
 
         fs::write(
@@ -1486,6 +1590,7 @@ reasoning = { adapter = "openai_chat", efforts = ["high", "high"], default = "hi
 "#,
         )
         .unwrap();
+
         assert!(FileConfig::load(&path).is_err());
     }
 
@@ -1509,6 +1614,7 @@ api_key = "test-key"
 id = "model-1"
 "#;
         let config: FileConfig = toml::from_str(input).unwrap();
+
         assert_eq!(config.permissions.read, vec![PathBuf::from("/tmp/data")]);
         assert_eq!(
             config.permissions.read_write,

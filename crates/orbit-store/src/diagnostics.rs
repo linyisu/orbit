@@ -49,6 +49,7 @@ pub struct RunDiagnostic {
 impl Store {
     pub async fn diagnostics(&self, session_id: &str) -> Result<SessionDiagnostics> {
         let session_id = session_id.to_owned();
+
         self.read_access(move |conn| {
             conn.query_row("SELECT id FROM sessions WHERE id=?1", [&session_id], |_| {
                 Ok(())
@@ -67,6 +68,7 @@ impl Store {
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let mut diagnostics = Vec::with_capacity(runs.len());
+
             for (run_id, status, elapsed_ms) in runs {
                 let mut events = conn.prepare(
                     "SELECT payload,created_at_ms FROM events WHERE run_id=?1 ORDER BY id",
@@ -78,6 +80,7 @@ impl Store {
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 diagnostics.push(summarize(run_id, status, elapsed_ms, events));
             }
+
             Ok(SessionDiagnostics {
                 session_id,
                 runs: diagnostics,
@@ -119,19 +122,24 @@ fn summarize(
     };
     let mut compaction_records = 0;
     let mut compaction_statuses = 0;
+
     for (payload, timestamp) in events {
         if let Some(timestamp) = timestamp {
             result.first_event_at_ms.get_or_insert(timestamp);
             result.last_event_at_ms = Some(timestamp);
         }
+
         let Ok(event) = serde_json::from_str::<AgentEvent>(&payload) else {
             result.event_decode_failures += 1;
             continue;
         };
+
         match event {
             AgentEvent::TurnStarted { .. } => result.turns += 1,
+
             AgentEvent::Model(event) => {
                 result.model_events += 1;
+
                 match event {
                     StreamEvent::TextDelta(text) => result.text_characters += text.chars().count(),
                     StreamEvent::ReasoningDelta(text) => {
@@ -145,36 +153,43 @@ fn summarize(
                     StreamEvent::ToolCallDelta(_) => {}
                 }
             }
+
             AgentEvent::ToolStarted { .. } => result.tool_started += 1,
             AgentEvent::ToolFinished { .. } => result.tool_finished += 1,
             AgentEvent::ToolFailed { error, .. } => {
                 result.tool_failed += 1;
                 result.failure = Some(error);
             }
+
             AgentEvent::CompactionRecorded { record } => {
                 compaction_records += 1;
+
                 if record.fallback {
                     result.compaction_fallback = record
                         .fallback_reason
                         .or_else(|| Some("旧记录未保存回退原因".into()));
                 }
             }
+
             AgentEvent::ContextCompacted {
                 fallback,
                 fallback_reason,
                 ..
             } => {
                 compaction_statuses += 1;
+
                 if fallback {
                     result.compaction_fallback =
                         fallback_reason.or_else(|| Some("旧记录未保存回退原因".into()));
                 }
             }
+
             AgentEvent::CompactionFailed { error, .. } => {
                 result.compaction_failures += 1;
                 result.failure = Some(error);
             }
             AgentEvent::Failed { error } => result.failure = Some(error),
+
             AgentEvent::RequestMetrics {
                 estimated_input,
                 retries,
@@ -188,10 +203,12 @@ fn summarize(
                     .saturating_add(u64::from(retries.unwrap_or(0)));
                 result.model_elapsed_ms = result.model_elapsed_ms.saturating_add(elapsed_ms);
                 result.latest_estimated_input = Some(estimated_input);
+
                 if usage.is_some() {
                     result.usage = usage;
                 }
             }
+
             AgentEvent::VerificationRecorded { .. }
             | AgentEvent::ContextUsage { .. }
             | AgentEvent::Completed { .. }
@@ -199,10 +216,12 @@ fn summarize(
             | AgentEvent::Cancelled => {}
         }
     }
+
     // A successful compaction emits both an audit record and a UI-status
     // event. They describe one operation, not two. Keep support for older
     // sessions that have only the status event.
     result.compactions = compaction_records.max(compaction_statuses);
+
     result
 }
 
@@ -210,9 +229,12 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
     if diagnostics.runs.is_empty() {
         return "该会话尚无运行记录。".into();
     }
+
     let mut output = format!("会话诊断\n{} 次运行\n", diagnostics.runs.len());
+
     for run in &diagnostics.runs {
         use std::fmt::Write;
+
         let elapsed = run
             .elapsed_ms
             .map(format_duration)
@@ -237,6 +259,7 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
                 String::new()
             },
         );
+
         if run.requests > 0 {
             let _ = writeln!(
                 output,
@@ -247,6 +270,7 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
                 run.latest_estimated_input.unwrap_or(0)
             );
         }
+
         if let Some(usage) = &run.usage {
             let _ = writeln!(
                 output,
@@ -262,12 +286,15 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
                     .map_or_else(|| "未提供".into(), |value| value.to_string()),
             );
         }
+
         if let Some(error) = &run.failure {
             let _ = writeln!(output, "  最后异常：{error}");
         }
+
         if let Some(reason) = &run.compaction_fallback {
             let _ = writeln!(output, "  最近整理回退：{reason}");
         }
+
         if run.event_decode_failures > 0 {
             let _ = writeln!(
                 output,
@@ -276,6 +303,7 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
             );
         }
     }
+
     output
 }
 
@@ -283,6 +311,7 @@ fn format_duration(milliseconds: u64) -> String {
     if milliseconds < 1_000 {
         return format!("{milliseconds}ms");
     }
+
     format!("{:.1}s", milliseconds as f64 / 1_000.0)
 }
 
@@ -309,7 +338,7 @@ mod tests {
             .unwrap();
         let id = writer.id().to_owned();
         writer.begin("inspect".into(), "test".into()).await.unwrap();
-        let call = ToolCall::function("call", "read_file", json!({"path":"missing"}));
+        let call = ToolCall::function("call", "read_file", json!({ "path": "missing" }));
         writer
             .append(vec![
                 AgentEvent::TurnStarted { turn: 1 },
@@ -341,6 +370,7 @@ mod tests {
             .await
             .unwrap();
         let run = &store.diagnostics(&id).await.unwrap().runs[0];
+
         assert_eq!(run.turns, 1);
         assert_eq!(run.reasoning_characters, 3);
         assert_eq!(run.tool_started, 1);

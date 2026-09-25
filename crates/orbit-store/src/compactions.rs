@@ -24,6 +24,7 @@ impl Store {
     ) -> Result<Option<SummaryProgress>> {
         let session_id = session_id.to_owned();
         let fingerprint = fingerprint.to_owned();
+
         self.access(move |conn| {
             let payload: Option<String> = conn
                 .query_row(
@@ -32,6 +33,7 @@ impl Store {
                     |row| row.get(0),
                 )
                 .optional()?;
+
             payload.map(|value| serde_json::from_str(&value).map_err(Into::into)).transpose()
         })
         .await
@@ -51,8 +53,10 @@ impl Store {
                     .all(|byte| byte.is_ascii_hexdigit()),
             "invalid compaction progress identity"
         );
+
         let session_id = session_id.to_owned();
         let progress = progress.clone();
+
         self.access(move |conn| {
             let transaction = conn.transaction()?;
             let old: Option<String> = transaction
@@ -62,6 +66,7 @@ impl Store {
                     |row| row.get(0),
                 )
                 .optional()?;
+
             if let Some(old) = old {
                 let old: SummaryProgress = serde_json::from_str(&old)?;
                 ensure!(
@@ -70,6 +75,7 @@ impl Store {
                     "compaction progress cannot move backwards"
                 );
             }
+
             transaction.execute(
                 "INSERT INTO compaction_progress(session_id,source_fingerprint,payload)
                  VALUES(?1,?2,?3) ON CONFLICT(session_id,source_fingerprint)
@@ -81,6 +87,7 @@ impl Store {
                 ],
             )?;
             transaction.commit()?;
+
             Ok(())
         })
         .await
@@ -88,15 +95,18 @@ impl Store {
 
     pub async fn compactions(&self, session_id: &str) -> Result<Vec<StoredCompaction>> {
         let id = session_id.to_owned();
+
         self.access(move |conn| {
             conn.query_row("SELECT id FROM sessions WHERE id=?1", [&id], |_| Ok(()))?;
             let mut query = conn.prepare("SELECT e.id,e.run_id,r.status,json_extract(e.payload,'$.CompactionRecorded.record') FROM events e JOIN runs r ON r.id=e.run_id WHERE r.session_id=?1 AND json_type(e.payload,'$.CompactionRecorded.record')='object' ORDER BY e.id")?;
             let rows = query.query_map([id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?)))?;
             let mut records = Vec::new();
+
             for row in rows {
                 let (event_id, run_id, run_status, record) = row?;
                 records.push(StoredCompaction { event_id, run_id, run_status, record: serde_json::from_str(&record)? });
             }
+
             Ok(records)
         }).await
     }
@@ -150,6 +160,7 @@ mod tests {
             .await
             .unwrap();
         let reopened = Store::open(path).await.unwrap();
+
         assert_eq!(
             reopened
                 .load_compaction_progress(owner.id(), &progress.source_fingerprint)
@@ -164,8 +175,10 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+
         let mut backwards = progress;
         backwards.next_byte_offset = 0;
+
         assert!(
             reopened
                 .save_compaction_progress(owner.id(), &backwards)

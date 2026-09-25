@@ -86,7 +86,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/mode",
-        description: "ask 逐次确认 · auto 自动命令 · YOLO 自动修改和命令",
+        description: "ask 逐次确认 · auto 工作区编辑与离线只读命令 · YOLO 自动确认",
     },
     Command {
         name: "/exit",
@@ -130,6 +130,7 @@ pub fn suggestion(input: &str) -> Option<&'static Command> {
         .split_once(char::is_whitespace)
         .map_or(input, |(name, _)| name);
     let typed_len = typed.chars().count();
+
     COMMANDS
         .iter()
         .map(|command| (command, edit_distance(typed, command.name)))
@@ -144,13 +145,16 @@ fn edit_distance(left: &str, right: &str) -> usize {
     let right: Vec<_> = right.chars().collect();
     let mut before_previous: Vec<usize> = (0..=right.len()).collect();
     let mut previous = before_previous.clone();
+
     for (left_index, left_char) in left.iter().enumerate() {
         let mut current = Vec::with_capacity(right.len() + 1);
         current.push(left_index + 1);
+
         for (right_index, right_char) in right.iter().enumerate() {
             let mut distance = (previous[right_index + 1] + 1)
                 .min(current[right_index] + 1)
                 .min(previous[right_index] + usize::from(left_char != right_char));
+
             if left_index > 0
                 && right_index > 0
                 && left_char == &right[right_index - 1]
@@ -158,11 +162,14 @@ fn edit_distance(left: &str, right: &str) -> usize {
             {
                 distance = distance.min(before_previous[right_index] + 1);
             }
+
             current.push(distance);
         }
+
         before_previous = previous;
         previous = current;
     }
+
     previous[right.len()]
 }
 

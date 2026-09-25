@@ -25,7 +25,9 @@ impl Store {
             (1..=1000).contains(&limit),
             "message page must contain 1–1000 entries"
         );
+
         let session_id = session_id.to_owned();
+
         self.access(move |conn| {
             conn.query_row("SELECT id FROM sessions WHERE id=?1", [&session_id], |_| {
                 Ok(())
@@ -51,6 +53,7 @@ impl Store {
                 },
             )?;
             let mut messages = Vec::new();
+
             for row in rows {
                 let (id, run_id, payload, expected) = row?;
                 let actual = Sha256::digest(payload.as_bytes())
@@ -61,12 +64,14 @@ impl Store {
                     actual == expected,
                     "canonical message {id} failed integrity check"
                 );
+
                 messages.push(CanonicalMessage {
                     id,
                     run_id,
                     message: serde_json::from_str(&payload)?,
                 });
             }
+
             Ok((legacy_gap, messages))
         })
         .await
@@ -142,6 +147,7 @@ mod tests {
 
         let reopened = Store::open(path).await.unwrap();
         let (legacy_gap, messages) = reopened.canonical_messages(&id, None, 10).await.unwrap();
+
         assert!(!legacy_gap);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].message, user);
@@ -190,6 +196,7 @@ mod tests {
             .unwrap();
 
         let (legacy_gap, messages) = store.canonical_messages(&id, None, 10).await.unwrap();
+
         assert!(!legacy_gap);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].message, ChatMessage::user("hello"));
@@ -202,6 +209,7 @@ mod tests {
         let store = Store::open(directory.path().join("orbit.db"))
             .await
             .unwrap();
+
         assert!(store.canonical_messages("missing", None, 10).await.is_err());
     }
 
@@ -221,7 +229,7 @@ mod tests {
             .unwrap();
         let id = writer.id().to_owned();
         writer.begin("check".into(), "model".into()).await.unwrap();
-        let call = ToolCall::function("call-1", "echo", serde_json::json!({"value":"ok"}));
+        let call = ToolCall::function("call-1", "echo", serde_json::json!({ "value": "ok" }));
         let model = MockModel::new(vec![
             ChatCompletion {
                 id: None,
@@ -242,7 +250,7 @@ mod tests {
         tools.register(ClosureTool::new(
             "echo",
             "Echo a value",
-            serde_json::json!({"type":"object"}),
+            serde_json::json!({ "type": "object" }),
             |arguments, _| async move {
                 Ok(arguments["value"].as_str().unwrap_or_default().to_owned())
             },
@@ -261,6 +269,7 @@ mod tests {
             .await
             .unwrap();
         let (_, messages) = store.canonical_messages(&id, None, 10).await.unwrap();
+
         assert_eq!(messages.len(), 4);
         assert_eq!(
             messages[1].message,

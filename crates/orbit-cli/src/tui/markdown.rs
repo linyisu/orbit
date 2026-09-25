@@ -25,12 +25,14 @@ static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(|| {
     )))
     .expect("valid compiled syntax bundle")
 });
+
 // Follow bat's scope-based themes with a restrained, readable palette.
 // Reference: https://github.com/sharkdp/bat/blob/master/assets/themes/ansi.tmTheme
 // Keep semantic distinctions with light, low-saturation colors. Comments stay
 // readable on translucent terminals; punctuation uses the warm base foreground.
 static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
     let color = |r, g, b| SyntaxColor { r, g, b, a: 255 };
+
     Theme {
         name: Some("Orbit restrained".into()),
         settings: ThemeSettings {
@@ -73,6 +75,7 @@ static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
         ..Default::default()
     }
 });
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CodeFence {
     delimiter: char,
@@ -81,6 +84,7 @@ pub(super) struct CodeFence {
     nested_fences: Vec<(char, usize)>,
     state: (HighlightState, ParseState),
 }
+
 pub(super) type Fence = Option<CodeFence>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +93,7 @@ pub(super) struct LinkTarget {
     pub end: usize,
     pub url: String,
 }
+
 const ACCENT: Color = Color::Rgb(218, 139, 109);
 const SECONDARY: Color = Color::Rgb(170, 170, 170);
 // Inline syntax follows the terminal's text-first hierarchy. Avoid opaque
@@ -105,6 +110,7 @@ pub(super) fn mark_style(style: Style) -> Style {
 /// and prose such as `thing.example` should not unexpectedly become actions.
 fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
     let mut found: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+
     for (start, _) in text.match_indices("http").chain(text.match_indices("www.")) {
         if start > 0
             && text[..start]
@@ -114,11 +120,14 @@ fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
         {
             continue;
         }
+
         let remainder = &text[start..];
         let prefixed = remainder.starts_with("www.");
+
         if !remainder.starts_with("http://") && !remainder.starts_with("https://") && !prefixed {
             continue;
         }
+
         let mut end = start
             + remainder
                 .find(|ch: char| {
@@ -129,6 +138,7 @@ fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
                         )
                 })
                 .unwrap_or(remainder.len());
+
         while text[..end].chars().next_back().is_some_and(|ch| {
             matches!(
                 ch,
@@ -137,18 +147,21 @@ fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
         }) {
             end -= text[..end].chars().next_back().unwrap().len_utf8();
         }
+
         while text[..end].ends_with(')')
             && text[start..end].chars().filter(|&ch| ch == ')').count()
                 > text[start..end].chars().filter(|&ch| ch == '(').count()
         {
             end -= 1;
         }
+
         let visible = &text[start..end];
         let target = if prefixed {
             format!("https://{visible}")
         } else {
             visible.to_owned()
         };
+
         if url::Url::parse(&target).is_ok_and(|url| {
             matches!(url.scheme(), "http" | "https")
                 && url.host().is_some()
@@ -161,8 +174,10 @@ fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
             found.push((start..end, target));
         }
     }
+
     found.sort_by_key(|(range, _)| range.start);
     found.dedup_by(|left, right| left.0 == right.0);
+
     found
 }
 
@@ -173,12 +188,15 @@ fn push_marked_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style, re
     }
 
     let mut rest = text;
+
     while let Some(open) = rest.find("==") {
         let after_open = &rest[open + 2..];
         let Some(close) = after_open.find("==") else {
             break;
         };
+
         let content = &after_open[..close];
+
         if content.is_empty()
             || content.starts_with(char::is_whitespace)
             || content.ends_with(char::is_whitespace)
@@ -188,12 +206,15 @@ fn push_marked_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style, re
             rest = &rest[split..];
             continue;
         }
+
         if open > 0 {
             spans.push(Span::styled(rest[..open].to_owned(), style));
         }
+
         spans.push(Span::styled(content.to_owned(), mark_style(style)));
         rest = &after_open[close + 2..];
     }
+
     if !rest.is_empty() {
         spans.push(Span::styled(rest.to_owned(), style));
     }
@@ -206,10 +227,12 @@ fn push_text_with_bare_links(
     recover_mark: bool,
 ) {
     let mut cursor = 0;
+
     for (range, _) in bare_urls(text) {
         if range.start < cursor {
             continue;
         }
+
         push_marked_text(spans, &text[cursor..range.start], style, recover_mark);
         spans.push(Span::styled(
             text[range.clone()].to_owned(),
@@ -219,6 +242,7 @@ fn push_text_with_bare_links(
         ));
         cursor = range.end;
     }
+
     push_marked_text(spans, &text[cursor..], style, recover_mark);
 }
 
@@ -233,13 +257,17 @@ fn push_text_with_cjk_strong(
         push_text_with_bare_links(spans, text, style, recover_mark);
         return;
     }
+
     let mut rest = text;
+
     while let Some(open) = rest.find("**") {
         let after_open = &rest[open + 2..];
         let Some(close) = after_open.find("**") else {
             break;
         };
+
         let content = &after_open[..close];
+
         if content.is_empty()
             || content.starts_with(char::is_whitespace)
             || content.ends_with(char::is_whitespace)
@@ -249,9 +277,11 @@ fn push_text_with_cjk_strong(
             rest = &rest[split..];
             continue;
         }
+
         if open > 0 {
             push_text_with_bare_links(spans, &rest[..open], style, recover_mark);
         }
+
         push_text_with_bare_links(
             spans,
             content,
@@ -260,6 +290,7 @@ fn push_text_with_cjk_strong(
         );
         rest = &after_open[close + 2..];
     }
+
     if !rest.is_empty() {
         push_text_with_bare_links(spans, rest, style, recover_mark);
     }
@@ -269,7 +300,9 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
     if !recover {
         return;
     }
+
     let mut open = start;
+
     while open + 1 < spans.len() {
         if spans[open].content != "*" || spans[open + 1].content != "*" {
             open += 1;
@@ -280,6 +313,7 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
         else {
             break;
         };
+
         let first = spans[open + 2..close]
             .iter()
             .find_map(|span| span.content.chars().next());
@@ -287,15 +321,19 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
             .iter()
             .rev()
             .find_map(|span| span.content.chars().next_back());
+
         if first.is_none_or(char::is_whitespace) || last.is_none_or(char::is_whitespace) {
             open += 2;
             continue;
         }
+
         spans.drain(close..close + 2);
         spans.drain(open..open + 2);
+
         for span in &mut spans[open..close - 2] {
             span.style = span.style.add_modifier(Modifier::BOLD);
         }
+
         open = close - 2;
     }
 }
@@ -306,6 +344,7 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
 pub(super) fn links(source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
     let mut active: Option<(String, String)> = None;
     let mut parsed = Vec::new();
+
     for event in Parser::new_ext(
         source,
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
@@ -334,8 +373,10 @@ pub(super) fn links(source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
             _ => {}
         }
     }
+
     let text = rendered.to_string();
     let mut cursor = 0;
+
     parsed
         .into_iter()
         .filter_map(|(label, url)| {
@@ -353,12 +394,15 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
     if !source.lines().next()?.contains('|') {
         return None;
     }
+
     let mut events = Parser::new_ext(source, Options::ENABLE_TABLES).into_offset_iter();
     let (Event::Start(Tag::Table(alignments)), _) = events.next()? else {
         return None;
     };
+
     let mut rows: Vec<Vec<Line<'static>>> = Vec::new();
     let mut end = 0;
+
     for (event, range) in events {
         match event {
             Event::Start(Tag::TableHead | Tag::TableRow) => rows.push(Vec::new()),
@@ -376,15 +420,19 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
             _ => {}
         }
     }
+
     if end == 0 || rows.is_empty() {
         return None;
     }
+
     let cols = alignments.len();
     let available = usize::from(width).saturating_sub(3 * cols + 3);
+
     // On narrow terminals use labelled cells rather than losing columns/content.
     if available < cols * 3 {
         return Some((end, labelled_table_rows(&rows)));
     }
+
     let mut widths: Vec<usize> = (0..cols)
         .map(|i| {
             rows.iter()
@@ -395,12 +443,15 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
                 .max(3)
         })
         .collect();
+
     while widths.iter().sum::<usize>() > available {
         let Some(i) = (0..cols).max_by_key(|&i| widths[i]) else {
             break;
         };
+
         widths[i] -= 1;
     }
+
     let border = |left: &str, join: &str, right: &str| {
         Line::styled(
             format!(
@@ -415,14 +466,17 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
         )
     };
     let mut lines = vec![border("┌", "┬", "┐")];
+
     for (r, row) in rows.iter().enumerate() {
         let cells: Vec<_> = row
             .iter()
             .zip(&widths)
             .map(|(cell, w)| wrap_cell(cell, *w))
             .collect();
+
         for n in 0..cells.iter().map(Vec::len).max().unwrap_or(1) {
             let mut spans = vec![Span::styled("  │", Style::default().fg(SECONDARY))];
+
             for i in 0..cols {
                 let cell = cells
                     .get(i)
@@ -435,32 +489,41 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
                     pulldown_cmark::Alignment::Center => padding / 2,
                     _ => 0,
                 };
+
                 spans.push(Span::raw(" ".repeat(left + 1)));
                 spans.extend(cell.spans.into_iter().map(|mut span| {
                     if r == 0 {
                         span.style = span.style.add_modifier(Modifier::BOLD).fg(ACCENT);
                     }
+
                     span
                 }));
                 spans.push(Span::raw(" ".repeat(padding - left + 1)));
                 spans.push(Span::styled("│", Style::default().fg(SECONDARY)));
             }
+
             lines.push(Line::from(spans));
         }
+
         if r + 1 < rows.len() {
             let mut separator = border("├", "┼", "┤");
+
             if r > 0 {
                 separator.style = Style::default().fg(Color::Rgb(115, 115, 115));
             }
+
             lines.push(separator);
         }
     }
+
     lines.push(border("└", "┴", "┘"));
+
     Some((end, lines))
 }
 
 fn labelled_table_rows(rows: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+
     for row in rows.iter().skip(1) {
         for (i, cell) in row.iter().enumerate() {
             let heading = rows[0]
@@ -474,24 +537,30 @@ fn labelled_table_rows(rows: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
             spans.extend(cell.spans.clone());
             lines.push(Line::from(spans));
         }
+
         lines.push(Line::from(""));
     }
+
     if lines.is_empty() {
         lines.extend(rows[0].iter().cloned());
     }
+
     lines
 }
 
 fn wrap_cell(cell: &Line<'static>, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![Line::default()];
     let mut used = 0;
+
     for span in &cell.spans {
         for grapheme in span.content.graphemes(true) {
             let size = grapheme.width();
+
             if used + size > width && used > 0 {
                 lines.push(Line::default());
                 used = 0;
             }
+
             lines
                 .last_mut()
                 .unwrap()
@@ -500,6 +569,7 @@ fn wrap_cell(cell: &Line<'static>, width: usize) -> Vec<Line<'static>> {
             used += size;
         }
     }
+
     lines
 }
 
@@ -568,12 +638,14 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
     let trimmed = source.trim_start();
     let marker = trimmed.chars().next().unwrap_or(' ');
     let count = trimmed.chars().take_while(|c| *c == marker).count();
+
     if let Some(code) = fence {
         // Models frequently show a Markdown document inside a Markdown fence,
         // using ordinary triple fences rather than a longer outer delimiter.
         // Preserve those nested fences as source so their closing marker cannot
         // accidentally terminate the surrounding example.
         let mut closed_nested_fence = false;
+
         if code.markdown_source {
             if let Some(&(delimiter, length)) = code.nested_fences.last() {
                 if marker == delimiter && count >= length && trimmed[count..].trim().is_empty() {
@@ -584,6 +656,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                 code.nested_fences.push((marker, count));
             }
         }
+
         if !closed_nested_fence
             && marker == code.delimiter
             && count >= code.length
@@ -593,9 +666,11 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             *fence = None;
             return Line::styled("  └─", Style::default().fg(SECONDARY));
         }
+
         let mut highlighter =
             HighlightLines::from_state(&CODE_THEME, code.state.0.clone(), code.state.1.clone());
         let mut spans = vec![Span::styled("  │ ", Style::default().fg(SECONDARY))];
+
         match highlighter.highlight_line(source, &SYNTAXES) {
             Ok(tokens) => spans.extend(tokens.into_iter().map(|(style, text)| {
                 let c = style.foreground;
@@ -606,6 +681,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             })),
             Err(_) => spans.push(Span::raw(source.to_owned())),
         }
+
         code.state = highlighter.state();
         return Line::from(spans);
     }
@@ -635,11 +711,14 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             Style::default().fg(SECONDARY),
         );
     }
+
     let mut spans = vec![Span::raw("  ")];
     let indent = source.len() - trimmed.len();
+
     if indent > 0 {
         spans.push(Span::raw(source[..indent].to_owned()));
     }
+
     let beginning = spans.len();
     let mut style = Style::default();
     let mut stack = Vec::new();
@@ -647,6 +726,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
     let mut links: Vec<(usize, String)> = Vec::new();
     let recover_cjk_strong = !trimmed.contains(r"\**") && !trimmed.contains(r"\*\*");
     let recover_mark = !trimmed.contains(r"\==");
+
     for event in Parser::new_ext(
         trimmed,
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
@@ -654,6 +734,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
         match event {
             Event::Start(tag) => {
                 stack.push(style);
+
                 match tag {
                     Tag::Heading { .. } => style = style.fg(ACCENT).add_modifier(Modifier::BOLD),
                     Tag::Strong => style = style.add_modifier(Modifier::BOLD),
@@ -676,14 +757,17 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                     _ => {}
                 }
             }
+
             Event::End(tag) => {
                 style = stack.pop().unwrap_or_default();
+
                 if matches!(
                     tag,
                     pulldown_cmark::TagEnd::Link | pulldown_cmark::TagEnd::Image
                 ) && let Some((start, url)) = links.pop()
                 {
                     let label: String = spans[start..].iter().map(|s| s.content.as_ref()).collect();
+
                     if !url.is_empty() && label != url {
                         spans.push(Span::styled(
                             format!(" ({url})"),
@@ -692,6 +776,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                     }
                 }
             }
+
             Event::Text(text) => {
                 push_text_with_cjk_strong(
                     &mut spans,
@@ -701,6 +786,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                     recover_mark,
                 );
             }
+
             Event::Html(text) | Event::InlineHtml(text) => {
                 spans.push(Span::styled(text.into_string(), style))
             }
@@ -712,8 +798,10 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                 "────────────────────────",
                 Style::default().fg(SECONDARY),
             )),
+
             Event::TaskListMarker(done) => {
                 let checkbox = if done { "☑ " } else { "☐ " };
+
                 if let Some(marker) = spans.iter_mut().rev().find(|span| {
                     span.content == "• "
                         || span.content.strip_suffix(". ").is_some_and(|number| {
@@ -726,15 +814,19 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                     spans.push(Span::styled(checkbox, style.fg(ACCENT)));
                 }
             }
+
             Event::SoftBreak | Event::HardBreak => {}
             _ => {}
         }
     }
+
     recover_split_strong(&mut spans, beginning, recover_cjk_strong);
+
     // Reference definitions and incomplete constructs must never disappear.
     if spans.len() == beginning && !trimmed.is_empty() {
         spans.push(Span::raw(trimmed.to_owned()));
     }
+
     Line::from(spans)
 }
 
@@ -756,6 +848,7 @@ mod tests {
         ] {
             assert_eq!(syntax_for_label(label).unwrap().name, "C#", "{label}");
         }
+
         for label in [
             "vb",
             "VB.NET",
@@ -770,11 +863,14 @@ mod tests {
                 "{label}"
             );
         }
+
         for label in ["typescript", "ts", "tsx", "toml", "Dockerfile", "python3"] {
             assert!(syntax_for_label(label).is_some(), "{label}");
         }
+
         assert!(syntax_for_label(".NET").is_none());
         assert!(syntax_for_label("invented-language").is_none());
+
         for (label, sample) in [
             (
                 "csharp",
@@ -786,11 +882,13 @@ mod tests {
             line(&format!("```{label}"), 0, &mut fence);
             let rendered = line(sample, 1, &mut fence);
             let mut colors = Vec::new();
+
             for span in rendered.spans.iter().skip(1) {
                 if !colors.contains(&span.style.fg) {
                     colors.push(span.style.fg);
                 }
             }
+
             assert!(colors.len() >= 3, "{label}: {rendered:?}");
             assert_eq!(rendered.to_string(), format!("  │ {sample}"));
         }
@@ -805,12 +903,15 @@ mod tests {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
+
         assert!(rendered.contains("中文"), "{rendered}");
         assert!(rendered.contains("a|b"), "{rendered}");
         assert!(!rendered.contains("**") && !rendered.contains('`'));
         assert!(source[end..].contains("后文"));
         assert!(lines.iter().all(|line| line.width() <= 28));
+
         let (_, narrow) = table(source, 10).unwrap();
+
         assert!(narrow.iter().any(|l| l.to_string().contains("名称:")));
         assert!(table("normal | text\nnot a separator", 80).is_none());
     }
@@ -836,19 +937,24 @@ mod tests {
         let mut fence = None;
         line("```rust", 0, &mut fence);
         let code = line("let answer = 42; // comment", 1, &mut fence);
+
         assert_eq!(code.to_string(), "  │ let answer = 42; // comment");
         assert!(
             code.spans
                 .windows(2)
                 .any(|s| s[0].style.fg != s[1].style.fg)
         );
+
         line("/* comment", 2, &mut fence);
         let middle = line("still a comment", 3, &mut fence);
         let mut fresh = None;
         line("```rust", 0, &mut fresh);
+
         assert_ne!(middle, line("still a comment", 1, &mut fresh));
+
         line("```", 4, &mut fence);
         line("```unknown_language", 5, &mut fence);
+
         assert_eq!(
             line("中文 **raw**", 6, &mut fence).to_string(),
             "  │ 中文 **raw**"
@@ -861,6 +967,7 @@ mod tests {
     #[test]
     fn formats_inline_styles_without_modifying_code_or_urls() {
         let value = render("**重点**，*斜体*，~~删除~~，`**原样**` [文档](https://example.com)");
+
         assert_eq!(
             value.to_string(),
             "  重点，斜体，删除，**原样** 文档 (https://example.com)"
@@ -891,6 +998,7 @@ mod tests {
     #[test]
     fn renders_mark_extension_without_touching_code_or_escaped_source() {
         let value = render("正常 ==重点== 与 `==代码==`");
+
         assert_eq!(value.to_string(), "  正常 重点 与 ==代码==");
         assert!(value.spans.iter().any(|span| {
             span.content == "重点"
@@ -909,6 +1017,7 @@ mod tests {
     fn recognizes_and_styles_bare_safe_web_links() {
         let source = "访问 https://example.com/docs?from=orbit，或 www.rust-lang.org/learn。`https://code.invalid`";
         let rendered = render(source);
+
         assert_eq!(
             rendered
                 .spans
@@ -939,11 +1048,14 @@ mod tests {
     fn recovers_model_style_strong_markers_next_to_cjk_text() {
         let value =
             render(r#"4. **图一的技术质量明显"更认真"**：但这是一张**"我拍的我的鸟"**的记录照。"#);
+
         assert!(!value.to_string().contains("**"), "{value:?}");
         assert!(value.spans.iter().any(|span| {
             span.content == "\"我拍的我的鸟\"" && span.style.add_modifier.contains(Modifier::BOLD)
         }));
+
         let escaped = render(r"保留 \*\*字面量\*\*");
+
         assert_eq!(escaped.to_string(), "  保留 **字面量**");
         assert!(
             escaped
@@ -967,23 +1079,31 @@ mod tests {
     #[test]
     fn code_fences_require_matching_delimiter_and_length() {
         let mut fence = None;
+
         assert_eq!(line("````rust", 0, &mut fence).to_string(), "  ┌─ rust");
         assert_eq!(line("```", 1, &mut fence).to_string(), "  │ ```");
         assert_eq!(line("**code**", 2, &mut fence).to_string(), "  │ **code**");
+
         line("````", 3, &mut fence);
+
         assert_eq!(fence, None);
+
         line("~~~python", 4, &mut fence);
+
         assert_eq!(
             fence.as_ref().map(|f| (f.delimiter, f.length)),
             Some(('~', 3))
         );
+
         line("~~~~", 5, &mut fence);
+
         assert_eq!(fence, None);
     }
 
     #[test]
     fn outer_fence_keeps_nested_markdown_as_source() {
         let mut fence = None;
+
         assert_eq!(
             line("````markdown", 0, &mut fence).to_string(),
             "  ┌─ markdown"
@@ -1007,6 +1127,7 @@ mod tests {
     fn markdown_examples_recover_nested_triple_fences() {
         let mut fence = None;
         line("```markdown", 0, &mut fence);
+
         assert_eq!(
             line("```python", 1, &mut fence).to_string(),
             "  │ ```python"

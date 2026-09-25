@@ -32,6 +32,7 @@ pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolErr
             "browser verification requires an unauthenticated HTTP [web].proxy",
         ));
     }
+
     let host = proxy
         .host_str()
         .ok_or_else(|| failed("web.proxy has no host"))?;
@@ -85,41 +86,54 @@ pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolErr
                     return Ok::<String, ToolError>(endpoint.to_owned());
                 }
             }
+
             Err(failed("Firefox exited before WebDriver BiDi started"))
         }).await.map_err(|_| failed("Firefox browser startup timed out"))??;
+
         if !endpoint.starts_with("ws://127.0.0.1:") && !endpoint.starts_with("ws://[::1]:") {
             return Err(failed("Firefox reported a non-local WebDriver endpoint"));
         }
+
         let (mut socket, _) = connect_async(format!("{endpoint}/session"))
             .await.map_err(|error| failed(format!("Firefox WebDriver connection failed: {error}")))?;
-        command(&mut socket, 1, "session.new", json!({"capabilities":{"alwaysMatch":{"browserName":"firefox"}}})).await?;
-        let created = command(&mut socket, 2, "browsingContext.create", json!({"type":"tab"})).await?;
+        command(&mut socket, 1, "session.new", json!({
+            "capabilities": {
+                "alwaysMatch": { "browserName": "firefox" }
+            }
+        })).await?;
+        let created = command(&mut socket, 2, "browsingContext.create", json!({ "type": "tab" })).await?;
         let context = created["context"].as_str().ok_or_else(|| failed("Firefox did not create a tab"))?;
-        command(&mut socket, 3, "browsingContext.navigate", json!({"context":context,"url":url.as_str(),"wait":"complete"})).await?;
+        command(&mut socket, 3, "browsingContext.navigate", json!({ "context": context, "url": url.as_str(), "wait": "complete" })).await?;
         let evaluated = command(&mut socket, 4, "script.evaluate", json!({
-            "expression":"JSON.stringify({title:document.title,text:(document.body?.innerText||'').slice(0,2097153),url:location.href})",
-            "target":{"context":context},
-            "awaitPromise":false
+            "expression": "JSON.stringify({title:document.title,text:(document.body?.innerText||'').slice(0,2097153),url:location.href})",
+            "target": { "context": context },
+            "awaitPromise": false
         })).await?;
         let value = evaluated["result"]["value"].as_str()
             .ok_or_else(|| failed("Firefox returned no readable page text"))?;
         let data: Value = serde_json::from_str(value).map_err(failed)?;
         let final_url = checked_url(data["url"].as_str().ok_or_else(|| failed("Firefox returned no final URL"))?)?;
+
         if final_url.origin() != url.origin() {
             return Err(failed("browser verification redirected to a different origin"));
         }
+
         let title = data["title"].as_str().unwrap_or("").to_owned();
         let text = data["text"].as_str().ok_or_else(|| failed("Firefox returned no page body"))?.to_owned();
+
         if text.len() > MAX_BODY {
             return Err(failed("browser page exceeds 2 MiB text limit"));
         }
         if title.contains("请稍候") || title.contains("Just a moment") {
             return Err(failed("Firefox could not complete the site's browser challenge"));
         }
+
         let _ = socket.close(None).await;
+
         Ok(BrowserPage { url: final_url, title, text })
     }.await;
     let _ = child.kill().await;
+
     result
 }
 
@@ -133,18 +147,21 @@ async fn command(
 ) -> Result<Value, ToolError> {
     socket
         .send(Message::Text(
-            json!({"id":id,"method":method,"params":params})
+            json!({ "id": id, "method": method, "params": params })
                 .to_string()
                 .into(),
         ))
         .await
         .map_err(failed)?;
+
     while let Some(message) = socket.next().await {
         let message = message.map_err(failed)?;
         let Message::Text(text) = message else {
             continue;
         };
+
         let reply: Value = serde_json::from_str(&text).map_err(failed)?;
+
         if reply["id"].as_u64() != Some(id) {
             continue;
         }
@@ -154,7 +171,9 @@ async fn command(
                 reply["message"].as_str().unwrap_or("unknown error")
             )));
         }
+
         return Ok(reply["result"].clone());
     }
+
     Err(failed(format!("Firefox closed before {method} completed")))
 }

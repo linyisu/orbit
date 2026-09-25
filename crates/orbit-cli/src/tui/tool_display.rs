@@ -1,5 +1,6 @@
 //! Presentation-only views. Never rewrite tool results used by the model or store.
 mod structured;
+
 use std::{collections::BTreeMap, ops::Range};
 
 use ratatui::{
@@ -38,8 +39,10 @@ pub(super) fn search_summary(arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(arguments) else {
         return String::new();
     };
+
     let query = super::render::compact_preview(value["query"].as_str().unwrap_or_default(), 100);
     let path = super::render::compact_preview(value["path"].as_str().unwrap_or("."), 100);
+
     format!("{} {path}", Value::String(query))
 }
 
@@ -61,14 +64,17 @@ pub(super) fn git_summary(arguments: &str) -> String {
 // Use the search tool's literal/regex and Unicode case-folding semantics.
 fn matcher(value: &Value) -> Option<Regex> {
     let query = value["query"].as_str()?;
+
     if query.is_empty() {
         return None;
     }
+
     let pattern = if value["regex"].as_bool() == Some(true) {
         query.to_owned()
     } else {
         regex::escape(query)
     };
+
     RegexBuilder::new(&pattern)
         .case_insensitive(value["case_sensitive"].as_bool() != Some(true))
         .build()
@@ -81,9 +87,11 @@ fn marked_source(text: &str, matcher: Option<&Regex>) -> (String, Vec<Range<usiz
     let Some(matcher) = matcher else {
         return (safe_output(text), vec![]);
     };
+
     let mut rendered = String::new();
     let mut ranges = Vec::new();
     let mut offset = 0;
+
     for hit in matcher.find_iter(text).filter(|hit| !hit.is_empty()) {
         rendered.push_str(&safe_output(&text[offset..hit.start()]));
         let start = rendered.len();
@@ -91,31 +99,39 @@ fn marked_source(text: &str, matcher: Option<&Regex>) -> (String, Vec<Range<usiz
         ranges.push(start..rendered.len());
         offset = hit.end();
     }
+
     rendered.push_str(&safe_output(&text[offset..]));
+
     (rendered, ranges)
 }
 
 fn source_spans(text: &str, marks: &[Range<usize>], range: Range<usize>) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut offset = range.start;
+
     for mark in marks {
         let start = mark.start.max(range.start);
         let end = mark.end.min(range.end);
+
         if start >= end {
             continue;
         }
+
         if offset < start {
             spans.push(Span::raw(text[offset..start].to_owned()));
         }
+
         spans.push(Span::styled(
             text[start..end].to_owned(),
             super::markdown::mark_style(Style::default()),
         ));
         offset = end;
     }
+
     if offset < range.end {
         spans.push(Span::raw(text[offset..range.end].to_owned()));
     }
+
     spans
 }
 
@@ -123,6 +139,7 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
     if row.status != ToolStatus::Finished {
         return None;
     }
+
     match row.name.as_str() {
         "list_files" => structured::files(row, expanded, width),
         "git_inspect" => structured::git(row, expanded, width),
@@ -160,6 +177,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         .join(" / ");
     let mut text = vec![format!("{} 个文件  {languages}", inventory["files"])];
     let manifests = value["manifests"].as_array()?;
+
     for manifest in manifests.iter().take(if expanded { usize::MAX } else { 3 }) {
         text.push(format!(
             "{}{}",
@@ -169,6 +187,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 .map(|name| format!("  {name}"))
                 .unwrap_or_default()
         ));
+
         if expanded {
             for (key, label) in [
                 ("declared_scripts", "声明的脚本"),
@@ -184,14 +203,17 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                     text.push(format!("  {label}：{detail}"));
                 }
             }
+
             if manifest["parsed"] == false {
                 text.push("  未解析构建配置，请读取原文件确认。".into());
             }
+
             if manifest["truncated"] == true {
                 text.push("  部分配置已省略，请读取原文件。".into());
             }
         }
     }
+
     if expanded {
         for directory in value["inventory"]["directories"].as_array()? {
             text.push(format!(
@@ -200,11 +222,13 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 directory["files"]
             ));
         }
+
         for (key, label) in [("test_files", "测试"), ("instruction_files", "项目规则")] {
             for file in value[key].as_array()? {
                 text.push(format!("{label}  {}", file.as_str().unwrap_or_default()));
             }
         }
+
         for (key, label) in [("relevant_files", "任务相关"), ("references", "引用候选")] {
             if let Some(items) = value[key].as_array() {
                 for item in items {
@@ -213,6 +237,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                     } else {
                         String::new()
                     };
+
                     text.push(format!(
                         "{label}  {}{location}",
                         item["path"].as_str().unwrap_or_default()
@@ -220,6 +245,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 }
             }
         }
+
         for symbol in value["symbols"].as_array()? {
             text.push(format!(
                 "符号候选  {}:{}  {}",
@@ -229,10 +255,13 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             ));
         }
     }
+
     if value["truncated"].as_object()?.values().any(|v| v == true) {
         text.push("部分内容未纳入概览，可缩小目录范围继续查看。".into());
     }
+
     let mut out = Vec::new();
+
     for line in text {
         if expanded && width > 4 {
             let (wrapped, _) =
@@ -246,7 +275,9 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             note(&mut out, &line, width);
         }
     }
+
     out.push(toggle_line(expanded, width));
+
     Some(out)
 }
 
@@ -259,6 +290,7 @@ fn memory(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
         "preference" => "偏好",
         category => category,
     };
+
     let content = memory["content"].as_str()?;
     let mut out = Vec::new();
     let id = memory["id"]
@@ -271,21 +303,26 @@ fn memory(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
         width,
     );
     let mut omitted = false;
+
     for (index, line) in content.lines().enumerate() {
         if !expanded && index >= 3 {
             omitted = true;
             break;
         }
+
         let text = safe_output(line);
         let available = usize::from(width).saturating_sub(4);
+
         if expanded && available > 0 {
             let mut chunk = String::new();
             let mut used = 0;
+
             for glyph in text.graphemes(true) {
                 if used + glyph.width() > available && !chunk.is_empty() {
                     out.push(Line::from(format!("    {}", std::mem::take(&mut chunk))));
                     used = 0;
                 }
+
                 if glyph.width() > available {
                     chunk.push('…');
                     used += 1;
@@ -294,6 +331,7 @@ fn memory(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
                     used += glyph.width();
                 }
             }
+
             out.push(Line::from(format!("    {chunk}")));
         } else {
             omitted |= text.width() > available;
@@ -303,9 +341,11 @@ fn memory(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
             )));
         }
     }
+
     if expanded || omitted {
         out.push(toggle_line(expanded, width));
     }
+
     Some(out)
 }
 
@@ -316,16 +356,21 @@ fn clipped(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
+
     let mut out = String::new();
     let mut used = 0;
+
     for glyph in text.graphemes(true) {
         if used + glyph.width() > width - 1 {
             break;
         }
+
         out.push_str(glyph);
         used += glyph.width();
     }
+
     out.push('…');
+
     out
 }
 
@@ -348,10 +393,12 @@ fn source(
     let prefix = format!("    {number:>digits$} │ ");
     let available = usize::from(width).saturating_sub(prefix.width());
     let (text, marks) = marked_source(text, matcher);
+
     if available == 0 {
         note(out, &format!("{number}: {text}"), width);
         return;
     }
+
     let style = Style::default().fg(if matcher.is_some() { ACCENT } else { SECONDARY });
     let mut push = |range: Range<usize>, continuation: bool, leading: bool, trailing: bool| {
         let mut spans = vec![Span::styled(
@@ -362,18 +409,24 @@ fn source(
             },
             style,
         )];
+
         if leading {
             spans.push(Span::raw("…"));
         }
+
         spans.extend(source_spans(&text, &marks, range));
+
         if trailing {
             spans.push(Span::raw("…"));
         }
+
         out.push(Line::from(spans));
     };
+
     if !expanded {
         // A search preview should show the hit, even deep inside a long line.
         let mut start = 0;
+
         if let Some(first) = marks.first()
             && text[..first.end].width() >= available
         {
@@ -382,16 +435,20 @@ fn source(
                 .take_while(|(offset, _)| *offset <= first.start)
                 .collect();
             let mut context_width = 0;
+
             for (offset, glyph) in before.into_iter().rev() {
                 if offset < first.start {
                     context_width += glyph.width();
                 }
+
                 if context_width > available / 4 {
                     break;
                 }
+
                 start = offset;
             }
         }
+
         let budget = available.saturating_sub(usize::from(start > 0));
         let truncated = text[start..].width() > budget;
         let preview = clipped(&text[start..], budget);
@@ -404,19 +461,23 @@ fn source(
         push(start..end, false, start > 0, truncated && budget > 0);
         return;
     }
+
     // Wrap by display cells, preserving indentation and keeping wide/combining
     // graphemes intact. Continuations have a blank line-number gutter.
     let mut start = 0;
     let mut used = 0;
     let mut continuation = false;
+
     for (offset, glyph) in text.grapheme_indices(true) {
         let size = glyph.width();
+
         if used + size > available && offset > start {
             push(start..offset, continuation, false, false);
             start = offset;
             continuation = true;
             used = 0;
         }
+
         if size > available {
             push(offset..offset, continuation, false, true);
             start = offset + glyph.len();
@@ -426,6 +487,7 @@ fn source(
             used += size;
         }
     }
+
     if start < text.len() || !continuation {
         push(start..text.len(), continuation, false, false);
     }
@@ -436,12 +498,14 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
     let matcher = matcher(value);
     // Merge overlapping context and multiple matches on the same source line.
     let mut files: BTreeMap<&str, BTreeMap<u64, (&str, bool)>> = BTreeMap::new();
+
     for hit in matches {
         let path = hit["path"].as_str()?;
         let line = hit["line"].as_u64()?;
         let text = hit["text"].as_str()?;
         let rows = files.entry(path).or_default();
         rows.insert(line, (text, true));
+
         if expanded && let Some(context) = hit["context"].as_array() {
             for item in context {
                 rows.entry(item["line"].as_u64()?)
@@ -449,6 +513,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
             }
         }
     }
+
     let total_rows: usize = files.values().map(BTreeMap::len).sum();
     // Share one gutter across all files in the result, including large lines.
     let digits = files
@@ -474,22 +539,28 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
         width,
     );
     let mut shown = 0;
+
     for (path, rows) in files {
         if !expanded && shown >= 3 {
             break;
         }
+
         if shown > 0 {
             out.push(Line::default());
         }
+
         note(&mut out, path, width);
         let mut previous = None;
+
         for (line, (text, matched)) in rows {
             if !expanded && shown >= 3 {
                 break;
             }
+
             if previous.is_some_and(|last| line > last + 1) {
                 out.push(Line::default());
             }
+
             source(
                 &mut out,
                 line,
@@ -503,6 +574,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
             shown += 1;
         }
     }
+
     if shown < total_rows {
         note(
             &mut out,
@@ -510,15 +582,19 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
             width,
         );
     }
+
     if value["has_more"].as_bool() == Some(true) {
         note(&mut out, "还有更多匹配，当前结果未全部返回", width);
     }
+
     if value["scan_truncated"].as_bool() == Some(true) {
         note(&mut out, "搜索达到扫描上限，部分文件尚未搜索", width);
     }
+
     if expanded || shown < total_rows || clipped_source || has_context {
         out.push(toggle_line(expanded, width));
     }
+
     Some(out)
 }
 
@@ -534,18 +610,23 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
         })
         .collect::<Option<_>>()?;
     let mut out = Vec::new();
+
     if rows.is_empty() {
         note(&mut out, "文件为空", width);
         return Some(out);
     }
+
     note(&mut out, &format!("第 {start}–{end} 行"), width);
     let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
+
     for (number, text) in rows.iter().take(if expanded { usize::MAX } else { 4 }) {
         source(&mut out, *number, digits, text, None, expanded, width);
     }
+
     if !expanded && rows.len() > 4 {
         note(&mut out, &format!("… 另有 {} 行", rows.len() - 4), width);
     }
+
     if expanded
         || rows.len() > 4
         || rows.iter().any(|(_, text)| {
@@ -554,6 +635,7 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     {
         out.push(toggle_line(expanded, width));
     }
+
     Some(out)
 }
 
@@ -564,13 +646,20 @@ mod tests {
 
     #[test]
     fn overview_preview_has_readable_evidence_and_expand_controls() {
-        let value = json!({"inventory":{"files":3,"languages":{"Rust":2},"directories":[{"path":"src","files":2}]},
-            "manifests":[{"path":"Cargo.toml","package":"example","parsed":true,
-                "verification_candidates":[{"argv":["cargo","test"]}]}],
-            "test_files":["tests/check.rs"],"instruction_files":[],
-            "symbols":[{"path":"src/lib.rs","line":3,"name":"parse"}],
-            "truncated":{"scan":false,"content":false,"output":false}});
+        let value = json!({
+            "inventory": {
+                "files": 3,
+                "languages": { "Rust": 2 },
+                "directories": [{ "path": "src", "files": 2 }]
+            },
+            "manifests": [{ "path": "Cargo.toml", "package": "example", "parsed": true, "verification_candidates": [{ "argv": ["cargo", "test"] }] }],
+            "test_files": ["tests/check.rs"],
+            "instruction_files": [],
+            "symbols": [{ "path": "src/lib.rs", "line": 3, "name": "parse" }],
+            "truncated": { "scan": false, "content": false, "output": false }
+        });
         let tool = row("project_overview", value);
+
         for width in [1, 20, 80] {
             for expanded in [false, true] {
                 assert!(
@@ -581,12 +670,14 @@ mod tests {
                 );
             }
         }
+
         let expanded = lines(&tool, true, 80)
             .unwrap()
             .iter()
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
+
         assert!(expanded.contains("待验证入口"));
         assert!(expanded.contains("src/lib.rs:3  parse"));
         assert!(expanded.contains("[收起]"));
@@ -618,21 +709,32 @@ mod tests {
         );
         let mut tool = row(
             "memory_save",
-            json!({"memory":{
-            "id":12,"active":true,"category":"fact","title":"审查记录","content":content
-        },"source_kind":"session_memory"}),
+            json!({
+                "memory": {
+                    "id": 12,
+                    "active": true,
+                    "category": "fact",
+                    "title": "审查记录",
+                    "content": content
+                },
+                "source_kind": "session_memory"
+            }),
         );
         tool.arguments =
-            json!({"title":"审查记录","category":"fact","content":content}).to_string();
+            json!({ "title": "审查记录", "category": "fact", "content": content }).to_string();
         let original = tool.output.clone();
+
         assert_eq!(memory_summary(&tool.arguments), "审查记录");
+
         let preview = lines(&tool, false, 60).unwrap();
+
         assert!(
             preview[0]
                 .to_string()
                 .contains("已保存 · 事实 · 当前会话 · #12")
         );
         assert!(preview.last().unwrap().to_string().contains("[展开]"));
+
         for width in [0, 1, 5, 30, 80] {
             for expanded in [false, true] {
                 assert!(
@@ -643,11 +745,13 @@ mod tests {
                 );
             }
         }
+
         let expanded = lines(&tool, true, 60).unwrap();
         let actual: String = expanded[1..expanded.len() - 1]
             .iter()
             .map(|line| line.to_string().strip_prefix("    ").unwrap().to_owned())
             .collect();
+
         assert_eq!(actual, content.lines().collect::<String>());
         assert_eq!(tool.output, original);
     }
@@ -663,15 +767,16 @@ mod tests {
 
     #[test]
     fn search_title_includes_query_and_scope_even_before_results_arrive() {
-        let mut tool = row("search_text", json!({"matches":[]}));
+        let mut tool = row("search_text", json!({ "matches": [] }));
         tool.arguments =
-            json!({"query":"workspace snapshot", "path":"crates/orbit-tools/src"}).to_string();
+            json!({ "query": "workspace snapshot", "path": "crates/orbit-tools/src" }).to_string();
         tool.status = ToolStatus::Running;
         let view = super::super::render::transcript_lines_at_width(
             &[super::super::app::TranscriptItem::Tool(tool)],
             false,
             120,
         );
+
         assert!(
             view[0]
                 .to_string()
@@ -683,19 +788,19 @@ mod tests {
     #[test]
     fn highlighting_follows_literal_regex_case_and_unicode_search_rules() {
         for (config, text, expected) in [
-            (json!({"query":"a.b"}), "a.b A.B axb", "a.bA.B"),
+            (json!({ "query": "a.b" }), "a.b A.B axb", "a.bA.B"),
             (
-                json!({"query":"a.b", "case_sensitive":true}),
+                json!({ "query": "a.b", "case_sensitive": true }),
                 "a.b A.B axb",
                 "a.b",
             ),
             (
-                json!({"query":"a.b", "regex":true}),
+                json!({ "query": "a.b", "regex": true }),
                 "a.b A.B axb",
                 "a.bA.Baxb",
             ),
             (
-                json!({"query":r"中文\s+value", "regex":true}),
+                json!({ "query": r"中文\s+value", "regex": true }),
                 "前缀：中文\tVALUE 后缀",
                 "中文    VALUE",
             ),
@@ -703,26 +808,32 @@ mod tests {
             let pattern = matcher(&config).unwrap();
             let mut view = vec![];
             source(&mut view, 1, 4, text, Some(&pattern), true, 80);
+
             assert_eq!(highlighted(&view), expected);
         }
-        assert!(matcher(&json!({"query":"[", "regex":true})).is_none());
+
+        assert!(matcher(&json!({ "query": "[", "regex": true })).is_none());
     }
 
     #[test]
     fn highlight_survives_wrapping_and_focuses_long_line_previews() {
-        let pattern = matcher(&json!({"query":"^ABCDEFGH$", "regex":true})).unwrap();
+        let pattern = matcher(&json!({ "query": "^ABCDEFGH$", "regex": true })).unwrap();
         let mut view = vec![];
         source(&mut view, 123, 4, "ABCDEFGH", Some(&pattern), true, 15);
+
         assert_eq!(view.len(), 2);
         assert_eq!(highlighted(&view), "ABCDEFGH");
         assert!(view.iter().all(|line| line.width() <= 15));
 
-        let pattern = matcher(&json!({"query":"TARGET"})).unwrap();
+        let pattern = matcher(&json!({ "query": "TARGET" })).unwrap();
         let text = format!("{} TARGET {}", "中文".repeat(50), "suffix".repeat(10));
+
         for width in [11, 12, 32, 80] {
             let mut view = vec![];
             source(&mut view, 1, 4, &text, Some(&pattern), false, width);
+
             assert!(view.iter().all(|line| line.width() <= usize::from(width)));
+
             if width >= 32 {
                 assert_eq!(highlighted(&view), "TARGET");
             }
@@ -733,13 +844,29 @@ mod tests {
     fn search_groups_files_and_merges_overlapping_context_without_mutating_results() {
         let row = row(
             "search_text",
-            json!({"matches": [
-            {"path":"src/main.rs", "line":12, "column":1, "text":"let first = 1;",
-             "context":[{"line":11,"text":"fn main() {"}, {"line":13,"text":"let second = 2;"}]},
-            {"path":"src/main.rs", "line":13, "column":1, "text":"let second = 2;",
-             "context":[{"line":12,"text":"let first = 1;"}]},
-            {"path":"src/main.rs", "line":13, "column":5, "text":"let second = 2;", "context":[]}
-        ], "has_more":true, "scan_truncated":true}),
+            json!({
+                "matches": [{
+                    "path": "src/main.rs",
+                    "line": 12,
+                    "column": 1,
+                    "text": "let first = 1;",
+                    "context": [{ "line": 11, "text": "fn main() {" }, { "line": 13, "text": "let second = 2;" }]
+                }, {
+                    "path": "src/main.rs",
+                    "line": 13,
+                    "column": 1,
+                    "text": "let second = 2;",
+                    "context": [{ "line": 12, "text": "let first = 1;" }]
+                }, {
+                    "path": "src/main.rs",
+                    "line": 13,
+                    "column": 5,
+                    "text": "let second = 2;",
+                    "context": []
+                }],
+                "has_more": true,
+                "scan_truncated": true
+            }),
         );
         let original = row.output.clone();
         let view = lines(&row, true, 80).unwrap();
@@ -748,6 +875,7 @@ mod tests {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
+
         assert!(text.contains("3 处匹配 · 1 个文件"));
         assert_eq!(text.matches("src/main.rs").count(), 1);
         assert_eq!(text.matches("let first = 1;").count(), 1);
@@ -764,38 +892,56 @@ mod tests {
         let source = "    中文👩‍💻e\u{301}\tlet value = 123456789;".repeat(3);
         let row = row(
             "read_file",
-            json!({"content":format!("744: {source}\n745: end\n"),
-            "start_line":744,"end_line":745,"total_lines":745,"truncated":false}),
+            json!({
+                "content": format!("744: {source}\n745: end\n"),
+                "start_line": 744,
+                "end_line": 745,
+                "total_lines": 745,
+                "truncated": false
+            }),
         );
+
         for width in [0, 1, 9, 12, 32, 80] {
             for expanded in [false, true] {
                 let view = lines(&row, expanded, width).unwrap();
+
                 assert!(view.iter().all(|line| line.width() <= usize::from(width)));
             }
         }
+
         let collapsed = lines(&row, false, 32).unwrap();
+
         assert_eq!(collapsed.len(), 4);
         assert!(collapsed[1].to_string().ends_with('…'));
+
         let expanded = lines(&row, true, 32).unwrap();
         let reconstructed = expanded[1..expanded.len() - 2]
             .iter()
             .map(|line| {
                 let text = line.to_string();
+
                 assert!(text.starts_with("     744 │ ") || text.starts_with("         │ "));
+
                 text.split_once("│ ").unwrap().1.to_owned()
             })
             .collect::<String>();
+
         assert_eq!(reconstructed, safe_output(&source));
+
         // File length must not shift the rail between adjacent tool previews.
         for end in [4, 92, 168, 1024] {
             let file = self::row(
                 "read_file",
                 json!({
-                    "content":"1: first\n2: second\n", "start_line":1,
-                    "end_line":end, "total_lines":end, "truncated":false
+                    "content": "1: first\n2: second\n",
+                    "start_line": 1,
+                    "end_line": end,
+                    "total_lines": end,
+                    "truncated": false
                 }),
             );
             let view = lines(&file, false, 80).unwrap();
+
             assert_eq!(view[1].to_string(), "       1 │ first");
             assert_eq!(view[2].to_string(), "       2 │ second");
         }
@@ -803,17 +949,22 @@ mod tests {
 
     #[test]
     fn empty_search_and_invalid_or_failed_results_stay_distinct() {
-        let empty = row("search_text", json!({"matches":[]}));
+        let empty = row("search_text", json!({ "matches": [] }));
+
         assert!(
             lines(&empty, false, 80).unwrap()[0]
                 .to_string()
                 .contains("0 处匹配")
         );
-        let mut invalid = row("read_file", json!({"error":"cannot read"}));
+
+        let mut invalid = row("read_file", json!({ "error": "cannot read" }));
+
         assert!(lines(&invalid, false, 80).is_none());
+
         invalid.name = "search_text".into();
         invalid.output = "tool execution failed: denied".into();
         invalid.status = ToolStatus::Failed;
+
         assert!(lines(&invalid, false, 80).is_none());
     }
 }

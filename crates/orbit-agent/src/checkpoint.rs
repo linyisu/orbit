@@ -12,12 +12,14 @@ pub struct ExecutionCheckpoint {
     pub in_flight: Option<String>,
     pub attachments: Vec<Attachment>,
 }
+
 impl ExecutionCheckpoint {
     /// Reconcile an interrupted batch without replaying any operation. An
     /// in-flight operation may have committed before its receipt was saved.
     pub fn recovered_history(&self) -> (Vec<ChatMessage>, usize) {
         let mut history = self.history.clone();
         let mut unresolved = 0;
+
         if let Some(index) = history
             .iter()
             .rposition(|m| matches!(m, ChatMessage::Assistant { .. }))
@@ -25,6 +27,7 @@ impl ExecutionCheckpoint {
             let ChatMessage::Assistant { tool_calls, .. } = &history[index] else {
                 unreachable!()
             };
+
             let missing: Vec<_> = tool_calls
                 .iter()
                 .filter(|call| {
@@ -34,6 +37,7 @@ impl ExecutionCheckpoint {
                 })
                 .cloned()
                 .collect();
+
             for call in missing {
                 unresolved += 1;
                 let message = if self.in_flight.as_deref() == Some(&call.id) {
@@ -41,20 +45,24 @@ impl ExecutionCheckpoint {
                 } else {
                     "Execution interrupted before this tool started. It was NOT executed. Re-evaluate whether it is still needed; this message is a recovery status, not a tool result."
                 };
+
                 history.push(ChatMessage::tool(call.id, message));
             }
         }
+
         if !self.attachments.is_empty() {
             history.push(ChatMessage::user_with_attachments(
                 "Recovered attachments returned by completed tools.",
                 self.attachments.clone(),
             ));
         }
+
         (history, unresolved)
     }
 }
 
 pub type CheckpointFuture<'a> = Pin<Box<dyn Future<Output = Result<(), AgentError>> + Send + 'a>>;
+
 pub trait ExecutionJournal: Send + Sync {
     fn record(&self, event: AgentEvent);
     /// Queue a newly produced canonical conversation message. The next save

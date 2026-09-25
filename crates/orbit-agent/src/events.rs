@@ -80,11 +80,15 @@ mod tests {
     fn old_tool_events_without_changes_remain_readable() {
         let event: AgentEvent = serde_json::from_value(serde_json::json!({
             "ToolFinished": {
-                "call": {"id":"call-1","function":{"name":"write_file","arguments":"{}"}},
-                "content":"{\"path\":\"a.txt\"}"
+                "call": {
+                    "id": "call-1",
+                    "function": { "name": "write_file", "arguments": "{}" }
+                },
+                "content": "{\"path\":\"a.txt\"}"
             }
         }))
         .unwrap();
+
         assert!(matches!(event, AgentEvent::ToolFinished { changes, .. } if changes.is_empty()));
     }
 }

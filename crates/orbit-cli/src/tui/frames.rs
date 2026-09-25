@@ -43,15 +43,23 @@ mod tests {
         let mut frames = Frames::default();
         let now = Instant::now();
         frames.request(now);
+
         assert_eq!(frames.deadline(), now);
+
         frames.drawn(now);
+
         for micros in 1..1000 {
             frames.request(now + Duration::from_micros(micros));
         }
+
         assert_eq!(frames.deadline(), now + MIN_FRAME_INTERVAL);
+
         frames.drawn(now + MIN_FRAME_INTERVAL);
+
         assert!(!frames.pending());
+
         frames.request(now + Duration::from_millis(20));
+
         assert_eq!(frames.deadline(), now + Duration::from_millis(20));
     }
 }

@@ -6,7 +6,9 @@ use orbit_store::types::{MemoryCategory, ProjectPlugin, TaskStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
 struct Database(std::path::PathBuf);
+
 impl Database {
     fn new() -> Self {
         Self(std::env::temp_dir().join(format!(
@@ -15,15 +17,18 @@ impl Database {
             NEXT.fetch_add(1, Ordering::Relaxed)
         )))
     }
+
     fn path(&self) -> std::path::PathBuf {
         self.0.join("test.db")
     }
 }
+
 impl Drop for Database {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
 fn text(value: &str) -> AgentEvent {
     AgentEvent::Model(StreamEvent::TextDelta(value.into()))
 }
@@ -45,14 +50,9 @@ fn command_receipt(command: &str, exit_code: i32) -> AgentEvent {
         call: ToolCall::function(
             "command-1",
             "run_command",
-            serde_json::json!({"command":command}),
+            serde_json::json!({ "command": command }),
         ),
-        content: serde_json::json!({
-            "exit_code":exit_code,
-            "timed_out":false,
-            "cancelled":false,
-            "elapsed_ms":42,
-        })
+        content: serde_json::json!({ "exit_code": exit_code, "timed_out": false, "cancelled": false, "elapsed_ms": 42 })
         .to_string(),
         changes: Vec::new(),
     }
@@ -86,11 +86,14 @@ async fn restart_preserves_event_order_and_successful_context() {
     drop(store);
     let store = Store::open(db.path()).await.unwrap();
     let snapshot = store.load(&id).await.unwrap();
+
     assert_eq!(snapshot.history, history);
     assert_eq!(snapshot.runs[0].events.len(), 3);
+
     for (event, expected) in snapshot.runs[0].events.iter().zip(["一", "二", "三"]) {
         assert!(matches!(event, AgentEvent::Model(StreamEvent::TextDelta(t)) if t == expected));
     }
+
     assert_eq!(snapshot.runs[1].status, "cancelled");
     assert!(snapshot.runs.iter().all(|run| run.elapsed_ms.is_some()));
     assert_eq!(store.list().await.unwrap()[0].title, "你好");
@@ -118,17 +121,27 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
         .await
         .unwrap();
     let changes = store.workspace_changes(&id).await.unwrap();
+
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].tool, "write_file");
     assert_eq!(changes[0].change.before.as_deref(), Some("old"));
     assert_eq!(changes[0].change.after, "new");
     assert!(!changes[0].undone);
+
     store.record_workspace_undo(&id, &changes[0]).await.unwrap();
+
     assert!(store.workspace_changes(&id).await.unwrap()[0].undone);
-    let baseline = serde_json::json!({"branch":{"oid":"abc"},"entries":[]});
+
+    let baseline = serde_json::json!({
+        "branch": { "oid": "abc" },
+        "entries": []
+    });
     store.save_git_baseline(&id, &baseline).await.unwrap();
+
     assert_eq!(store.git_baseline(&id).await.unwrap(), Some(baseline));
+
     let verification = store.verification_records(&id).await.unwrap();
+
     assert_eq!(verification.len(), 1);
     assert_eq!(verification[0].command, "cargo test");
     assert_eq!(verification[0].exit_code, Some(0));
@@ -150,11 +163,14 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
         .await
         .unwrap();
     writer.append(vec![text("partial")]).await.unwrap();
+
     assert!(other.acquire(&id).await.is_err());
     assert_eq!(other.load(&id).await.unwrap().runs[0].status, "running");
+
     drop(writer);
     let _writer = other.acquire(&id).await.unwrap();
     let snapshot = other.load(&id).await.unwrap();
+
     assert_eq!(snapshot.runs[0].status, "interrupted");
     assert_eq!(snapshot.runs[0].events.len(), 1);
     assert!(snapshot.history.is_empty());
@@ -170,18 +186,21 @@ async fn invalid_finish_keeps_run_recoverable_and_migration_can_be_replayed() {
         .await
         .unwrap();
     writer.begin("prompt".into(), "mock".into()).await.unwrap();
+
     assert!(writer.finish("completed", vec![], None).await.is_err());
     assert!(writer.finish("failed", vec![], Some(vec![])).await.is_err());
     assert_eq!(
         store.load(writer.id()).await.unwrap().runs[0].status,
         "running"
     );
+
     writer.finish("failed", vec![], None).await.unwrap();
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
     connection.execute_batch("PRAGMA user_version=14").unwrap();
     drop(connection);
+
     assert!(Store::open(db.path()).await.is_ok());
 }
 
@@ -212,14 +231,18 @@ async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
         .unwrap();
     let id = writer.id().to_owned();
     let usage = store.session_storage_usage().await.unwrap();
+
     assert_eq!(usage.len(), 1);
     assert_eq!(usage[0].id, id);
     assert!(usage[0].payload_bytes > 0);
+
     writer.begin("prompt".into(), "mock".into()).await.unwrap();
     writer.append(vec![text("stored event")]).await.unwrap();
     writer.finish("failed", Vec::new(), None).await.unwrap();
     let with_event = store.session_storage_usage().await.unwrap();
+
     assert!(with_event[0].payload_bytes > usage[0].payload_bytes);
+
     for extension in ["workspaces", "command-output", "artifacts"] {
         let sidecar = db.path().with_extension(extension).join(&id);
         std::fs::create_dir_all(&sidecar).unwrap();
@@ -228,15 +251,19 @@ async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
 
     assert!(store.delete_session(&id).await.is_err());
     assert!(store.load(&id).await.is_ok());
+
     drop(writer);
 
     assert!(store.delete_session(&id).await.unwrap());
     assert!(store.load(&id).await.is_err());
     assert!(store.session_storage_usage().await.unwrap().is_empty());
+
     for extension in ["workspaces", "command-output", "artifacts"] {
         assert!(!db.path().with_extension(extension).join(&id).exists());
     }
+
     assert!(!store.delete_session(&id).await.unwrap());
+
     store.reclaim_unused_space().await.unwrap();
 }
 
@@ -251,6 +278,7 @@ async fn finalization_rolls_back_events_status_and_context_together() {
     writer.begin("prompt".into(), "mock".into()).await.unwrap();
     let connection = rusqlite::Connection::open(db.path()).unwrap();
     connection.execute_batch("CREATE TRIGGER reject_history BEFORE UPDATE OF history ON sessions BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;").unwrap();
+
     assert!(
         writer
             .finish(
@@ -261,10 +289,13 @@ async fn finalization_rolls_back_events_status_and_context_together() {
             .await
             .is_err()
     );
+
     let snapshot = store.load(writer.id()).await.unwrap();
+
     assert!(snapshot.history.is_empty());
     assert!(snapshot.runs[0].events.is_empty());
     assert_eq!(snapshot.runs[0].status, "running");
+
     connection
         .execute_batch("DROP TRIGGER reject_history")
         .unwrap();
@@ -276,6 +307,7 @@ async fn finalization_rolls_back_events_status_and_context_together() {
         )
         .await
         .unwrap();
+
     assert_eq!(
         store.load(writer.id()).await.unwrap().runs[0].events.len(),
         1
@@ -310,9 +342,12 @@ async fn project_rename_preserves_history_without_markers_and_copy_is_separate()
         .await
         .unwrap();
     drop(writer);
+
     assert_eq!(std::fs::read_dir(&old).unwrap().count(), 1);
+
     std::fs::rename(&old, &moved).unwrap();
     let renamed = store.resolve_project(&moved).await.unwrap();
+
     if std::fs::metadata(&moved).unwrap().created().is_ok() && cfg!(any(unix, windows)) {
         assert_eq!(renamed.id, project.id);
         assert_eq!(
@@ -322,12 +357,18 @@ async fn project_rename_preserves_history_without_markers_and_copy_is_separate()
     } else {
         store.link_project(&project.id, &moved).await.unwrap();
     }
+
     std::fs::create_dir(&copy).unwrap();
     std::fs::copy(moved.join("user.txt"), copy.join("user.txt")).unwrap();
+
     assert_ne!(store.resolve_project(&copy).await.unwrap().id, project.id);
+
     std::fs::create_dir(&old).unwrap();
+
     assert_ne!(store.resolve_project(&old).await.unwrap().id, project.id);
+
     std::fs::write(moved.join("user.txt"), "changed").unwrap();
+
     assert_eq!(store.resolve_project(&moved).await.unwrap().id, project.id);
     assert_eq!(store.load(&session).await.unwrap().runs[0].events.len(), 1);
     assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 1);
@@ -353,14 +394,18 @@ async fn project_plugins_are_central_stable_and_independent_from_market_cache() 
         })
         .await
         .unwrap();
+
     assert!(enabled.enabled_at > 0);
     assert_eq!(store.project_plugins(&project.id).await.unwrap().len(), 1);
     assert_eq!(std::fs::read_dir(&original).unwrap().count(), 0);
 
     std::fs::rename(&original, &renamed).unwrap();
     let same_project = store.resolve_project(&renamed).await.unwrap();
+
     assert_eq!(same_project.id, project.id);
+
     let plugins = store.project_plugins(&same_project.id).await.unwrap();
+
     assert_eq!(plugins[0].plugin_name, "reviewer");
     assert_eq!(plugins[0].package_source, "plugins/reviewer");
     assert!(
@@ -406,22 +451,30 @@ async fn explicit_link_rejects_copies_active_writers_and_populated_destinations(
         .await
         .unwrap();
     let session = writer.id().to_owned();
+
     assert!(store.link_project(&project.id, &new).await.is_err());
+
     std::fs::remove_dir(&old).unwrap();
+
     assert!(store.link_project(&project.id, &new).await.is_err());
     assert_eq!(
         store.load(&session).await.unwrap().session.workspace,
         old.to_str().unwrap()
     );
+
     drop(writer);
     let empty = store.resolve_project(&new).await.unwrap();
+
     assert_ne!(empty.id, project.id);
+
     store.link_project(&project.id, &new).await.unwrap();
+
     assert_eq!(store.resolve_project(&new).await.unwrap().id, project.id);
     assert_eq!(
         store.load(&session).await.unwrap().session.workspace,
         new.to_str().unwrap()
     );
+
     let destination = db.0.join("populated");
     std::fs::create_dir(&destination).unwrap();
     let mut other = store
@@ -435,6 +488,7 @@ async fn explicit_link_rejects_copies_active_writers_and_populated_destinations(
     other.finish("failed", vec![], None).await.unwrap();
     drop(other);
     std::fs::remove_dir(&new).unwrap();
+
     assert!(store.link_project(&project.id, &destination).await.is_err());
 }
 
@@ -474,14 +528,17 @@ async fn schema_one_migration_preserves_sessions_runs_and_context() {
     drop(connection);
     let store = Store::open(db.path()).await.unwrap();
     let snapshot = store.load(&id).await.unwrap();
+
     assert_eq!(snapshot.history, history);
     assert_eq!(snapshot.runs[0].events.len(), 1);
     assert_eq!(
         store.resolve_project(&db.0).await.unwrap().id,
         snapshot.session.project_id
     );
+
     drop(store);
     let reopened = Store::open(db.path()).await.unwrap();
+
     assert_eq!(
         reopened.load(&id).await.unwrap().session.project_id,
         snapshot.session.project_id
@@ -544,6 +601,7 @@ async fn project_memory_migration_keeps_only_unambiguous_session_ownership() {
 
     let store = Store::open(db.path()).await.unwrap();
     let first = store.session_memories("first", true).await.unwrap();
+
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].title, "Attributed");
     assert!(
@@ -553,7 +611,9 @@ async fn project_memory_migration_keeps_only_unambiguous_session_ownership() {
             .unwrap()
             .is_empty()
     );
+
     let only = store.session_memories("only", true).await.unwrap();
+
     assert_eq!(only.len(), 1);
     assert_eq!(only[0].title, "Single session");
 }
@@ -561,6 +621,7 @@ async fn project_memory_migration_keeps_only_unambiguous_session_ownership() {
 #[tokio::test]
 async fn compaction_audit_survives_failure_without_publishing_failed_context() {
     use orbit_agent::memory::{CompactionMode, CompactionRecord, FileActivity, TaskSummary};
+
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
@@ -609,23 +670,28 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
         }])
         .await
         .unwrap();
+
     assert_eq!(
         store.compactions(&id).await.unwrap()[0].run_status,
         "running"
     );
+
     writer.finish("failed", vec![], None).await.unwrap();
     drop(writer);
     drop(store);
     let store = Store::open(db.path()).await.unwrap();
     let records = store.compactions(&id).await.unwrap();
+
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].record, record);
     assert_eq!(records[0].run_status, "failed");
     assert_eq!(store.load(&id).await.unwrap().history, original);
+
     let mut writer = store.acquire(&id).await.unwrap();
     writer.begin("retry".into(), "mock".into()).await.unwrap();
     let connection = rusqlite::Connection::open(db.path()).unwrap();
     connection.execute_batch("CREATE TRIGGER reject_history BEFORE UPDATE OF history ON sessions BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+
     assert!(
         writer
             .finish(
@@ -693,6 +759,7 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
         )
         .await
         .unwrap();
+
     assert_eq!(updated.status, TaskStatus::InProgress);
 
     let memory = store
@@ -704,6 +771,7 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
         )
         .await
         .unwrap();
+
     assert!(memory.active);
     assert_eq!(store.tasks(&project.id, false).await.unwrap().len(), 2);
     assert_eq!(
@@ -714,6 +782,7 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
             .len(),
         1
     );
+
     let preference = store
         .remember_in_session(
             &first_session,
@@ -736,6 +805,7 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
         .search_session_memories(&first_session, "Chinese progress", 8)
         .await
         .unwrap();
+
     assert_eq!(search.first().map(|memory| memory.id), Some(preference.id));
     assert!(
         store
@@ -762,10 +832,13 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
 
     std::fs::rename(&old, &moved).unwrap();
     let renamed = store.resolve_project(&moved).await.unwrap();
+
     if renamed.id != project.id {
         store.link_project(&project.id, &moved).await.unwrap();
     }
+
     let tasks = store.tasks(&project.id, false).await.unwrap();
+
     assert_eq!(
         tasks
             .iter()
@@ -783,11 +856,14 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
         .set_session_memory_active(&first_session, memory.id, false)
         .await
         .unwrap();
+
     assert!(!inactive.active);
+
     store
         .set_session_memory_active(&first_session, preference.id, false)
         .await
         .unwrap();
+
     assert!(
         store
             .session_memories(&first_session, false)
@@ -816,6 +892,7 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
 #[tokio::test]
 async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
     use orbit_agent::checkpoint::ExecutionCheckpoint;
+
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
@@ -875,6 +952,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store.acquire(&id).await.unwrap();
     let restored = store.load(&id).await.unwrap();
+
     assert_eq!(&restored.history[..3], &history);
     assert!(
         matches!(&restored.history[3], ChatMessage::Tool {content,..} if content.contains("UNKNOWN"))
@@ -889,13 +967,16 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
         restored.runs[0].events[1],
         AgentEvent::ToolFinished { .. }
     ));
+
     // A restart before the next initial checkpoint must not discard recovery.
     writer
         .begin("continue".into(), "mock".into())
         .await
         .unwrap();
     writer.finish("cancelled", vec![], None).await.unwrap();
+
     assert_eq!(store.load(&id).await.unwrap().history, restored.history);
+
     writer
         .begin("continue".into(), "mock".into())
         .await
@@ -909,6 +990,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
         .finish("completed", vec![], Some(complete.clone()))
         .await
         .unwrap();
+
     assert_eq!(store.load(&id).await.unwrap().history, complete);
     assert!(store.load(&id).await.unwrap().recovery.is_none());
     assert!(
@@ -932,6 +1014,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
 #[tokio::test]
 async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped() {
     use orbit_runtime::verification::{VerificationEvidence, WorkspaceFingerprint};
+
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
@@ -954,14 +1037,17 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         )
         .await
         .unwrap();
+
     assert_eq!(
         store.workspace_baseline(&id).await.unwrap().unwrap(),
         baseline
     );
+
     let other = store
         .create(db.0.display().to_string(), "mock".into(), false)
         .await
         .unwrap();
+
     assert!(
         store
             .workspace_baseline(other.id())
@@ -969,6 +1055,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
             .unwrap()
             .is_none()
     );
+
     writer.begin("verify".into(), "mock".into()).await.unwrap();
     let evidence = VerificationEvidence {
         input: baseline,
@@ -995,6 +1082,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         .await
         .unwrap();
     let records = store.verification_records(&id).await.unwrap();
+
     assert_eq!(records[0].evidence, Some(evidence));
     assert_eq!(records[0].exit_code, Some(1));
     assert!(

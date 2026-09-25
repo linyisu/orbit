@@ -22,15 +22,37 @@ pub fn register(
     workspace: Workspace,
     limits: orbit_tools::run_command::CommandLimits,
 ) {
-    tools.register(ClosureTool::new("verification_status",
-        "Inspect this session's actual command evidence and compare input file fingerprints with the current filtered workspace. Call after final edits before reporting verification. A zero exit code is not proof of tests; input_unchanged only compares source inputs, not mutable system tools/caches/scratch or modifications made inside a writable sandbox. Also classifies per-path changes against the session baseline and Orbit receipts. Old sessions without evidence remain unknown. Does not execute commands or change files.",
-        json!({"type":"object","properties":{},"additionalProperties":false}),move |args,token| {
-            let store=store.clone();let id=scope.session_id();let workspace=workspace.clone();let limits=limits.clone();
-            async move {if !args.as_object().is_some_and(|a|a.is_empty()) {return Err(ToolError::InvalidArguments{tool:"verification_status".into(),message:"no arguments expected".into()});}
-                report(&store,&id,workspace,token,limits).await.map(|r|r.to_string()).map_err(|e|ToolError::ExecutionFailed(e.to_string()))
+    tools.register(ClosureTool::new(
+        "verification_status",
+        "Inspect this session's actual command evidence and compare input file fingerprints with the current filtered workspace. Call after final edits before reporting verification. A zero exit code is not proof of tests; input_unchanged means the current workspace matches the recorded input or post-command output fingerprint; it does not verify mutable system tools, caches, scratch, or external state. Also classifies per-path changes against the session baseline and Orbit receipts. Old sessions without evidence remain unknown. Does not execute commands or change files.",
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }),
+        move |args, token| {
+            let store = store.clone();
+            let id = scope.session_id();
+            let workspace = workspace.clone();
+            let limits = limits.clone();
+
+            async move {
+                if !args.as_object().is_some_and(|a| a.is_empty()) {
+                    return Err(ToolError::InvalidArguments {
+                        tool: "verification_status".into(),
+                        message: "no arguments expected".into(),
+                    });
+                }
+
+                report(&store, &id, workspace, token, limits)
+                    .await
+                    .map(|r| r.to_string())
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
             }
-        }));
+        },
+    ));
 }
+
 pub async fn report(
     store: &Store,
     id: &str,
@@ -44,7 +66,9 @@ pub async fn report(
         store.workspace_changes(id),
         store.verification_records(id)
     )?;
+
     let mut result = compare(&current, baseline.as_ref(), &changes, &commands);
+
     while orbit_agent::context::estimate_tokens(
         &[orbit_model::types::ChatMessage::tool(
             "verification_status",
@@ -58,14 +82,18 @@ pub async fn report(
         } else {
             "commands"
         };
+
         if result[key].as_array_mut().unwrap().pop().is_none() {
             break;
         }
+
         let omitted = format!("{key}_omitted");
         result[&omitted] = json!(result[&omitted].as_u64().unwrap_or(0) + 1);
     }
+
     Ok(result)
 }
+
 fn compare(
     current: &WorkspaceFingerprint,
     baseline: Option<&WorkspaceFingerprint>,
@@ -85,6 +113,7 @@ fn compare(
                         .as_ref()
                         .is_some_and(|o| o.digest == current.digest);
                     let matches_input = e.input.digest == current.digest;
+
                     if matches_output || matches_input {
                         "input_unchanged"
                     } else {
@@ -92,10 +121,12 @@ fn compare(
                     }
                 }
             };
+
             let snapshot_id = record
                 .evidence
                 .as_ref()
                 .map(|e| e.output.as_ref().unwrap_or(&e.input).digest.as_str());
+
             json!({
                 "run": record.run_id,
                 "command": record.command.chars().take(512).collect::<String>(),
@@ -112,15 +143,18 @@ fn compare(
                     "rust_toolchain": e.rust_toolchain,
                     "writable_snapshot": e.writable_snapshot,
                     "persistent_scratch": e.persistent_scratch,
-                    "mounts": e.mounts,
+                    "mounts": e.mounts
                 }))
             })
         })
         .collect();
+
     let mut paths = std::collections::BTreeSet::new();
+
     for c in changes {
         paths.insert(c.change.path.clone());
     }
+
     if let Some(baseline) = baseline {
         for path in baseline.files.keys().chain(current.files.keys()) {
             if baseline.files.get(path) != current.files.get(path) {
@@ -128,23 +162,77 @@ fn compare(
             }
         }
     }
+
     let total = paths.len();
-    let paths:Vec<_>=paths.into_iter().take(100).map(|path| {
-        let first=changes.iter().find(|c|c.change.path==path);
-        let last=changes.iter().rev().find(|c|c.change.path==path);
-        let current_hash=current.files.get(&path).map(|f|f.sha256.clone());
-        let baseline_hash=baseline.and_then(|b|b.files.get(&path)).map(|f|f.sha256.clone());
-        let first_before=first.and_then(|c|c.change.before.as_ref().map(|s|content_hash(s.as_bytes())));
-        let last_expected=last.and_then(|c| if c.undone {c.change.before.as_ref().map(|s|content_hash(s.as_bytes()))} else {Some(content_hash(c.change.after.as_bytes()))});
-        let origin=if last.is_some() && current_hash==last_expected {"content_matches_orbit_receipt"} else if last.is_some() {"content_modified_after_orbit"} else {"external_change"};
-        json!({"path":path,"origin":origin,"baseline_available":baseline.is_some(),"changed_from_baseline":baseline.map(|b|b.files.get(&path)!=current.files.get(&path)),"executable_changed":baseline.map(|b|b.files.get(&path).map(|f|f.executable)!=current.files.get(&path).map(|f|f.executable)),"external_before_first_orbit_write":baseline.and(first).map(|_|baseline_hash!=first_before),"baseline_sha256":baseline_hash,"first_orbit_before_sha256":first_before,"last_orbit_expected_sha256":last_expected,"current_sha256":current_hash})
-    }).collect();
-    json!({"snapshot_id":current.digest,"baseline_available":baseline.is_some(),"command_count":commands.len(),"commands":records,"commands_omitted":commands.len().saturating_sub(20),"changes":paths,"changes_omitted":total.saturating_sub(100),"limitations":"Source fingerprints cover the same filtered snapshot as run_command, not ignored runtime directories or external system state. Commands may mutate disposable copies and scratch. Inspect the command and its output before claiming tests passed; stale or unknown evidence does not verify current edits."})
+    let paths: Vec<_> = paths
+        .into_iter()
+        .take(100)
+        .map(|path| {
+            let first = changes.iter().find(|c| c.change.path == path);
+            let last = changes.iter().rev().find(|c| c.change.path == path);
+            let current_hash = current.files.get(&path).map(|f| f.sha256.clone());
+            let baseline_hash = baseline
+                .and_then(|b| b.files.get(&path))
+                .map(|f| f.sha256.clone());
+            let first_before =
+                first.and_then(|c| c.change.before.as_ref().map(|s| content_hash(s.as_bytes())));
+            let last_expected = last.and_then(|c| {
+                if c.undone {
+                    c.change.before.as_ref().map(|s| content_hash(s.as_bytes()))
+                } else {
+                    Some(content_hash(c.change.after.as_bytes()))
+                }
+            });
+
+            let origin = if last.is_some() && current_hash == last_expected {
+                "content_matches_orbit_receipt"
+            } else if last.is_some() {
+                "content_modified_after_orbit"
+            } else {
+                "external_change"
+            };
+
+            let changed_from_baseline =
+                baseline.map(|b| b.files.get(&path) != current.files.get(&path));
+            let executable_changed = baseline.map(|b| {
+                b.files.get(&path).map(|f| f.executable)
+                    != current.files.get(&path).map(|f| f.executable)
+            });
+            let external_before_first_orbit_write =
+                baseline.and(first).map(|_| baseline_hash != first_before);
+
+            json!({
+                "path": path,
+                "origin": origin,
+                "baseline_available": baseline.is_some(),
+                "changed_from_baseline": changed_from_baseline,
+                "executable_changed": executable_changed,
+                "external_before_first_orbit_write": external_before_first_orbit_write,
+                "baseline_sha256": baseline_hash,
+                "first_orbit_before_sha256": first_before,
+                "last_orbit_expected_sha256": last_expected,
+                "current_sha256": current_hash
+            })
+        })
+        .collect();
+
+    json!({
+        "snapshot_id": current.digest,
+        "baseline_available": baseline.is_some(),
+        "command_count": commands.len(),
+        "commands": records,
+        "commands_omitted": commands.len().saturating_sub(20),
+        "changes": paths,
+        "changes_omitted": total.saturating_sub(100),
+        "limitations": "Source fingerprints cover the same filtered workspace as run_command, not ignored runtime directories or external system state. Commands with workspace_access=read_write modify the real workspace; scratch may also persist between commands. Inspect the command and its output before claiming tests passed; stale or unknown evidence does not verify current edits."
+    })
 }
+
 pub async fn summary(session: &crate::session::SessionState) -> String {
     let Some(workspace) = session.audit_workspace.clone() else {
         return "输入版本  未记录".into();
     };
+
     match report(
         &session.store,
         session.id(),
@@ -164,6 +252,7 @@ pub async fn summary(session: &crate::session::SessionState) -> String {
                 .iter()
                 .filter(|r| r["input_state"] == "stale")
                 .count();
+
             format!(
                 "输入版本  最近 {} 条命令：输入未变 {} · 已过期 {} · 未记录 {}",
                 entries.len(),
@@ -180,6 +269,7 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
     let Some(workspace) = session.audit_workspace.clone() else {
         return String::new();
     };
+
     match report(
         &session.store,
         session.id(),
@@ -191,21 +281,26 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
     {
         Ok(value) => {
             use std::fmt::Write;
+
             let mut text = String::from("\n当前文件核对\n");
+
             if value["baseline_available"] != true {
                 text.push_str("旧会话未保存开始时的文件基线。\n");
             }
+
             for row in value["changes"].as_array().unwrap() {
                 let state = match row["origin"].as_str().unwrap_or_default() {
                     "content_matches_orbit_receipt" => "内容与 Orbit 检查点一致",
                     "content_modified_after_orbit" => "内容已偏离 Orbit 检查点",
                     _ => "会话开始后发生的外部变更",
                 };
+
                 let prior = if row["external_before_first_orbit_write"] == true {
                     "；首次 Orbit 写入前已有外部改动"
                 } else {
                     ""
                 };
+
                 let _ = writeln!(
                     text,
                     "{}  {}{}",
@@ -214,11 +309,14 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
                     prior
                 );
             }
+
             if value["changes_omitted"].as_u64().unwrap_or(0) > 0 {
                 text.push_str("部分路径未列出，请缩小检查范围。\n");
             }
+
             text
         }
+
         Err(error) => format!("\n当前文件无法核对：{error}"),
     }
 }
@@ -284,6 +382,7 @@ mod tests {
             std::slice::from_ref(&change),
             std::slice::from_ref(&command),
         );
+
         assert_eq!(same["commands"][0]["input_state"], "input_unchanged");
 
         // When command itself modified workspace, e.output matches current workspace digest
@@ -314,24 +413,29 @@ mod tests {
             &[],
             std::slice::from_ref(&command_with_output),
         );
+
         assert_eq!(compared["commands"][0]["input_state"], "input_unchanged");
         assert_eq!(compared["commands"][0]["snapshot_id"], "modified_digest");
         assert_eq!(
             same["changes"][0]["external_before_first_orbit_write"],
             true
         );
+
         let changed = compare(
             &current,
             Some(&baseline),
             &[change],
             std::slice::from_ref(&command),
         );
+
         assert_eq!(changed["commands"][0]["input_state"], "stale");
         assert_eq!(
             changed["changes"][0]["origin"],
             "content_modified_after_orbit"
         );
+
         command.evidence = None;
+
         assert_eq!(
             compare(&current, None, &[], &[command])["commands"][0]["input_state"],
             "unknown"

@@ -47,11 +47,13 @@ impl Cache {
             .to_string()
             .len()
             .max(4);
+
         for op in diff.ops() {
             let old = op.old_range();
             let new = op.new_range();
             let equal = op.tag() == DiffTag::Equal;
             let len = old.len().max(new.len());
+
             for index in 0..len {
                 if equal && !full && len > 8 && (3..len - 3).contains(&index) {
                     if index == 3 {
@@ -65,8 +67,10 @@ impl Cache {
                             Style::default().fg(FOLDED_COLOR),
                         ));
                     }
+
                     continue;
                 }
+
                 let left = (index < old.len())
                     .then(|| (old.start + index + 1, diff.old_slices()[old.start + index]));
                 let right = (index < new.len())
@@ -80,6 +84,7 @@ impl Cache {
                 cache.right.extend(right);
             }
         }
+
         cache
     }
 }
@@ -93,6 +98,7 @@ fn side(
     let Some((number, text)) = content else {
         return vec![Line::default()];
     };
+
     let text = safe_output(text.strip_suffix('\n').unwrap_or(text));
     let style = Style::default().fg(match marker {
         '-' => Color::Rgb(218, 139, 139),
@@ -101,13 +107,16 @@ fn side(
     });
     let prefix = format!("{marker}{number:>digits$} │ ");
     let prefix_width = digits + 4;
+
     if usize::from(width) <= prefix_width {
         return vec![Line::styled(
             fit_label(&format!("{prefix}{text}"), width as usize, false),
             style,
         )];
     }
+
     let (wrapped, _) = wrap_line(&Line::styled(text, style), width - prefix_width as u16);
+
     wrapped
         .into_iter()
         .enumerate()
@@ -119,6 +128,7 @@ fn side(
                     style,
                 );
             }
+
             line.spans.insert(
                 0,
                 Span::styled(
@@ -130,6 +140,7 @@ fn side(
                     style,
                 ),
             );
+
             line
         })
         .collect()
@@ -147,12 +158,15 @@ mod tests {
             (20, 20),
             true,
         );
+
         assert_eq!(diff.left.len(), diff.right.len());
+
         let position = |rows: &[Line<'static>]| {
             rows.iter()
                 .position(|line| line.to_string().contains("tail"))
                 .unwrap()
         };
+
         assert_eq!(position(&diff.left), position(&diff.right));
         assert!(
             diff.left
@@ -170,7 +184,9 @@ mod tests {
                 .iter()
                 .any(|line| line.to_string().starts_with("+   3 │ "))
         );
+
         let deleted = Cache::new("a\nb\nc\n", "a\nc\n", (30, 30), true);
+
         assert_eq!(deleted.left[2].to_string().split("│ ").last(), Some("c"));
         assert_eq!(deleted.right[2].to_string().split("│ ").last(), Some("c"));
         assert!(deleted.right[1].to_string().is_empty());
@@ -182,12 +198,15 @@ mod tests {
         let after = format!("{}new\n", "unchanged\n".repeat(100));
         let folded = Cache::new(&before, &after, (40, 40), false);
         let full = Cache::new(&before, &after, (40, 40), true);
+
         assert!(folded.left.len() < full.left.len());
+
         let folded_row = folded
             .left
             .iter()
             .find(|line| line.to_string().contains("行未改动"))
             .unwrap();
+
         assert_eq!(folded_row.style.fg, Some(FOLDED_COLOR));
         assert!(
             !folded
@@ -210,7 +229,9 @@ mod tests {
         );
         assert!(folded.matches(&before, &after, (40, 40), false));
         assert!(!folded.matches(&before, &after, (30, 40), false));
+
         let one_side_missing_newline = Cache::new("before\n", "after", (40, 40), false);
+
         assert_eq!(
             one_side_missing_newline.left.len(),
             one_side_missing_newline.right.len()
@@ -221,9 +242,11 @@ mod tests {
                 .iter()
                 .any(|line| line.to_string().contains("末尾"))
         );
+
         for width in [0, 1, 8, 9, 20] {
             for (a, b) in [("", "新内容\u{1b}\t\n"), ("old", ""), ("", "")] {
                 let diff = Cache::new(a, b, (width, width), true);
+
                 assert_eq!(diff.left.len(), diff.right.len());
                 assert!(
                     diff.left

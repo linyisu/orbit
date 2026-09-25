@@ -38,6 +38,7 @@ impl Instructions {
             .map(|source| source.path.display().to_string())
             .collect::<Vec<_>>()
             .join("\n");
+
         if self.omitted.is_empty() {
             if loaded.is_empty() {
                 "未找到".into()
@@ -66,6 +67,7 @@ impl Instructions {
                     self.omitted.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(", ")
                 )
             };
+
             format!(
                 "{MESSAGE_PREFIX}以下是用户提供的项目指令。请和当前用户请求一起遵守；后面的文件比前面的文件更具体。\n\n{}{}",
                 self.content, omitted
@@ -78,6 +80,7 @@ impl Instructions {
 /// A sibling `AGENTS.override.md` takes precedence over `AGENTS.md` at each level.
 pub(crate) fn load_current() -> Instructions {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
     load_for(
         &cwd,
         default_user_instruction_dir().as_deref(),
@@ -87,6 +90,7 @@ pub(crate) fn load_current() -> Instructions {
 
 pub(crate) fn load_for(cwd: &Path, user_dir: Option<&Path>, max_bytes: usize) -> Instructions {
     let mut candidates = Vec::new();
+
     if let Some(dir) = user_dir
         && let Some(candidate) = instruction_file(dir)
     {
@@ -100,6 +104,7 @@ pub(crate) fn load_for(cwd: &Path, user_dir: Option<&Path>, max_bytes: usize) ->
         .map(Path::to_path_buf)
         .collect::<Vec<_>>();
     directories.reverse();
+
     for directory in directories {
         if let Some(candidate) = instruction_file(&directory) {
             candidates.push(candidate);
@@ -109,9 +114,11 @@ pub(crate) fn load_for(cwd: &Path, user_dir: Option<&Path>, max_bytes: usize) ->
     let mut result = Instructions::default();
     let mut selected = vec![false; candidates.len()];
     let mut used = 0usize;
+
     for (index, (path, content)) in candidates.iter().enumerate().rev() {
         let size = formatted_instruction(path, content).len();
         let separator = if used == 0 { 0 } else { 2 };
+
         if used.saturating_add(separator).saturating_add(size) <= max_bytes {
             selected[index] = true;
             used += separator + size;
@@ -120,13 +127,16 @@ pub(crate) fn load_for(cwd: &Path, user_dir: Option<&Path>, max_bytes: usize) ->
             result.omitted.push(path.clone());
         }
     }
+
     for (index, (path, content)) in candidates.into_iter().enumerate() {
         if !selected[index] {
             continue;
         }
+
         if !result.content.is_empty() {
             result.content.push_str("\n\n");
         }
+
         result
             .content
             .push_str(&formatted_instruction(&path, &content));
@@ -135,7 +145,9 @@ pub(crate) fn load_for(cwd: &Path, user_dir: Option<&Path>, max_bytes: usize) ->
             bytes: content.len(),
         });
     }
+
     result.omitted.reverse();
+
     result
 }
 
@@ -145,10 +157,12 @@ pub(crate) fn inject(history: &mut Vec<ChatMessage>, instructions: &Instructions
     history.retain(|message| {
         !matches!(message, ChatMessage::System { content } if content.starts_with(MESSAGE_PREFIX) || content.starts_with(CORE_MESSAGE_PREFIX))
     });
+
     history.insert(
         0,
         ChatMessage::system(format!("{CORE_MESSAGE_PREFIX}{CORE_PROMPT}")),
     );
+
     if let Some(message) = instructions.prompt() {
         history.insert(1, ChatMessage::system(message));
     }
@@ -162,18 +176,21 @@ fn default_user_instruction_dir() -> Option<PathBuf> {
     if let Some(path) = env::var_os("ORBIT_HOME").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(path));
     }
+
     #[cfg(target_os = "macos")]
     {
         return env::var_os("HOME")
             .map(PathBuf::from)
             .map(|home| home.join("Library/Application Support/orbit"));
     }
+
     #[cfg(windows)]
     {
         return env::var_os("APPDATA")
             .map(PathBuf::from)
             .map(|base| base.join("orbit"));
     }
+
     #[cfg(all(not(target_os = "macos"), not(windows)))]
     {
         let base = env::var_os("XDG_CONFIG_HOME")
@@ -198,6 +215,7 @@ fn instruction_file(directory: &Path) -> Option<(PathBuf, String)> {
     let Ok(content) = fs::read_to_string(&path) else {
         return None;
     };
+
     Some((path, content))
 }
 
@@ -241,6 +259,7 @@ mod tests {
         write(&nested.join("AGENTS.override.md"), "nested override");
 
         let loaded = load_for(&nested, Some(&user), MAX_INSTRUCTION_BYTES);
+
         assert_eq!(
             loaded
                 .sources
@@ -268,6 +287,7 @@ mod tests {
         write(&root.join("AGENTS.md"), "too long");
 
         let loaded = load_for(&root, None, 3);
+
         assert!(loaded.content.is_empty());
         assert!(loaded.sources.is_empty());
         assert!(loaded.truncated);
@@ -311,8 +331,10 @@ mod tests {
             ChatMessage::system(format!("{MESSAGE_PREFIX}stale")),
             ChatMessage::user("hello"),
         ];
+
         inject(&mut history, &instructions);
         inject(&mut history, &instructions);
+
         assert_eq!(history.len(), 4);
         assert!(
             matches!(&history[0], ChatMessage::System { content } if content.starts_with(CORE_MESSAGE_PREFIX))

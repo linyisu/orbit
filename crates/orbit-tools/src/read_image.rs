@@ -59,14 +59,17 @@ impl Tool for ReadImage {
                     "current model does not support image input".into(),
                 ));
             }
+
             let arguments: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|error| invalid(error.to_string()))?;
+
             if arguments.path.trim().is_empty() {
                 return Err(invalid("path must be nonempty"));
             }
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
+
             let mut file = self
                 .workspace
                 .authorize_read(Path::new(&arguments.path))
@@ -76,6 +79,7 @@ impl Tool for ReadImage {
                 .take(MAX_IMAGE_BYTES as u64 + 1)
                 .read_to_end(&mut bytes)
                 .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+
             if bytes.len() > MAX_IMAGE_BYTES {
                 return Err(ToolError::ExecutionFailed(
                     "image exceeds the 20 MiB read limit".into(),
@@ -84,6 +88,7 @@ impl Tool for ReadImage {
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
+
             let name = Path::new(&arguments.path)
                 .file_name()
                 .unwrap_or_default()
@@ -93,13 +98,10 @@ impl Tool for ReadImage {
                 .assets
                 .import_bytes(name, bytes)
                 .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+
             Ok(ToolOutput::with_attachments(
-                json!({
-                    "path": arguments.path,
-                    "loaded": true,
-                    "source_kind": "local_image"
-                })
-                .to_string(),
+                json!({ "path": arguments.path, "loaded": true, "source_kind": "local_image" })
+                    .to_string(),
                 vec![attachment],
             ))
         })
@@ -132,13 +134,16 @@ mod tests {
         );
         let output = tool
             .execute(
-                ToolCall::function("image-1", "read_image", json!({"path":"scene.png"})),
+                ToolCall::function("image-1", "read_image", json!({ "path": "scene.png" })),
                 CancellationToken::new(),
             )
             .await
             .unwrap();
+
         assert_eq!(output.attachments.len(), 1);
+
         let orbit_model::types::Attachment::Image { path, .. } = &output.attachments[0];
+
         assert!(path.starts_with(data.path().join("orbit.attachments")));
         assert_eq!(std::fs::read_dir(workspace.path()).unwrap().count(), 1);
     }
@@ -154,11 +159,12 @@ mod tests {
         .with_enabled(false);
         let err = tool
             .execute(
-                ToolCall::function("image-1", "read_image", json!({"path":"scene.png"})),
+                ToolCall::function("image-1", "read_image", json!({ "path": "scene.png" })),
                 CancellationToken::new(),
             )
             .await
             .unwrap_err();
+
         assert!(
             matches!(err, ToolError::ExecutionFailed(msg) if msg.contains("does not support image input"))
         );

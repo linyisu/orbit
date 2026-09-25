@@ -123,9 +123,11 @@ impl ToolRegistry {
     pub fn remove(&mut self, name: &str) -> bool {
         let mut tools = (*self.tools).clone();
         let removed = tools.remove(name).is_some();
+
         if removed {
             self.tools = Arc::new(tools);
         }
+
         removed
     }
 
@@ -135,9 +137,11 @@ impl ToolRegistry {
         let before = tools.len();
         tools.retain(|name, _| !name.starts_with(prefix));
         let removed = before.saturating_sub(tools.len());
+
         if removed != 0 {
             self.tools = Arc::new(tools);
         }
+
         removed
     }
 
@@ -148,6 +152,7 @@ impl ToolRegistry {
             .map(|tool| tool.definition())
             .collect::<Vec<_>>();
         definitions.sort_by(|left, right| left.function.name.cmp(&right.function.name));
+
         definitions
     }
 
@@ -236,6 +241,7 @@ where
         let arguments = call
             .arguments_json()
             .expect("ToolRegistry validates arguments before execution");
+
         Box::pin(async move {
             (self.execute)(arguments, cancellation)
                 .await
@@ -269,6 +275,7 @@ mod tests {
             json!({ "type": "object" }),
             |arguments, _cancellation| async move { Ok(arguments.to_string()) },
         ));
+
         registry
     }
 
@@ -315,6 +322,7 @@ mod tests {
             json!({}),
             |_, _| async { Ok("ok".into()) },
         ));
+
         assert!(registry.remove("echo"));
         assert!(!registry.contains("echo"));
         assert_eq!(registry.remove_prefix("mcp__files__"), 2);
@@ -337,12 +345,14 @@ mod tests {
             .execute(call("", "echo", "{}"), CancellationToken::new())
             .await
             .expect_err("empty call IDs must fail");
+
         assert_eq!(empty_id, ToolError::EmptyCallId);
 
         let empty_name = registry()
             .execute(call("call-1", "", "{}"), CancellationToken::new())
             .await
             .expect_err("empty tool names must fail");
+
         assert_eq!(empty_name, ToolError::EmptyToolName);
     }
 

@@ -80,17 +80,35 @@ impl Tool for SearchText {
                 "Results have path, 1-based line/column, text and surrounding lines. Paginate matches with offset/next_offset. ",
                 "Large, binary and unreadable files are skipped; use read_file for full content after locating a match."
             ),
-            json!({"type":"object","properties":{
-                "query":{"type":"string","minLength":1,"maxLength":4096,"description":"Search text. Literal unless regex=true: a|b means the literal pipe expression by default. For either term, use query=a|b AND regex=true. Do not add shell quotes or /regex/ delimiters."},
-                "path":{"type":"string","default":".","description":"Workspace-relative directory or file, or outside path granted via request_capability"},
-                "regex":{"type":"boolean","default":false,"description":"false or omitted: exact literal substring matching, including | . * [ ] ^ $. true: interpret query as a Rust regular expression. REQUIRED for alternatives such as foo|bar; never inferred from query content."},
-                "case_sensitive":{"type":"boolean","default":false},
-                "glob":{"type":"string","description":"Optional glob filter, for example **/*.rs"},
-                "context_lines":{"type":"integer","minimum":0,"maximum":10,"default":0},
-                "offset":{"type":"integer","minimum":0,"maximum":20000,"default":0},
-                "limit":{"type":"integer","minimum":1,"maximum":500,"default":100},
-                "include_hidden":{"type":"boolean","default":false}
-            },"required":["query"],"additionalProperties":false}),
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096,
+                        "description": "Search text. Literal unless regex=true: a|b means the literal pipe expression by default. For either term, use query=a|b AND regex=true. Do not add shell quotes or /regex/ delimiters."
+                    },
+                    "path": {
+                        "type": "string",
+                        "default": ".",
+                        "description": "Workspace-relative directory or file, or outside path granted via request_capability"
+                    },
+                    "regex": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "false or omitted: exact literal substring matching, including | . * [ ] ^ $. true: interpret query as a Rust regular expression. REQUIRED for alternatives such as foo|bar; never inferred from query content."
+                    },
+                    "case_sensitive": { "type": "boolean", "default": false },
+                    "glob": { "type": "string", "description": "Optional glob filter, for example **/*.rs" },
+                    "context_lines": { "type": "integer", "minimum": 0, "maximum": 10, "default": 0 },
+                    "offset": { "type": "integer", "minimum": 0, "maximum": 20000, "default": 0 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 },
+                    "include_hidden": { "type": "boolean", "default": false }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
         )
     }
 
@@ -99,12 +117,15 @@ impl Tool for SearchText {
             let arguments: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|error| invalid(error.to_string()))?;
             validate(&arguments)?;
+
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
+
             let workspace = self.workspace.clone();
             let token = cancellation.clone();
             let task = tokio::task::spawn_blocking(move || search(workspace, arguments, token));
+
             tokio::select! {
                 _ = cancellation.cancelled() => Err(ToolError::Cancelled),
                 result = task => result.map_err(failed)?,
@@ -137,6 +158,7 @@ fn validate(args: &Arguments) -> Result<(), ToolError> {
             "query must be 1–4096 bytes, path nonempty; limit 1–500, context_lines 0–10, offset 0–20000",
         ));
     }
+
     Ok(())
 }
 
@@ -174,9 +196,11 @@ fn search(
             let Ok(relative) = entry.path().strip_prefix(filter_workspace.root()) else {
                 return false;
             };
+
             let within_scope = filter_scope_clone.as_os_str().is_empty()
                 || relative.starts_with(&filter_scope_clone)
                 || filter_scope_clone.starts_with(relative);
+
             within_scope
                 && (relative.as_os_str().is_empty()
                     || filter_workspace.checked_relative(relative).is_ok())
@@ -197,6 +221,7 @@ fn search(
         if token.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
+
         let entry = match entry {
             Ok(entry) => entry,
             Err(_) => {
@@ -204,6 +229,7 @@ fn search(
                 continue;
             }
         };
+
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }
@@ -211,6 +237,7 @@ fn search(
             scan_truncated = true;
             break 'files;
         }
+
         visited += 1;
 
         let (relative_or_path, file_result) = if is_external {
@@ -225,10 +252,13 @@ fn search(
                     continue;
                 }
             };
+
             if !filter_scope.as_os_str().is_empty() && !relative.starts_with(&filter_scope) {
                 continue;
             }
+
             let file = workspace.open_read(&relative);
+
             (relative, file)
         };
 
@@ -246,6 +276,7 @@ fn search(
                 continue;
             }
         };
+
         let file_size = match file.metadata() {
             Ok(metadata) => metadata.len(),
             Err(_) => {
@@ -253,16 +284,20 @@ fn search(
                 continue;
             }
         };
+
         if file_size > MAX_FILE_BYTES || scanned_bytes.saturating_add(file_size) > MAX_SCANNED_BYTES
         {
             scan_truncated = true;
             break;
         }
+
         let mut bytes = Vec::with_capacity(file_size as usize);
+
         if file.read_to_end(&mut bytes).is_err() {
             skipped_files += 1;
             continue;
         }
+
         scanned_bytes += bytes.len() as u64;
         scanned_files += 1;
         let text = match String::from_utf8(bytes) {
@@ -272,16 +307,21 @@ fn search(
                 continue;
             }
         };
+
         let lines: Vec<_> = text.lines().collect();
+
         for (line_index, line) in lines.iter().enumerate() {
             if token.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
+
             for found in matcher.find_iter(line) {
                 matched += 1;
+
                 if matched <= args.offset {
                     continue;
                 }
+
                 let entry = match_entry(
                     &relative_or_path,
                     line_index,
@@ -291,10 +331,12 @@ fn search(
                     &args,
                 );
                 let size = entry.to_string().len() + 1;
+
                 if matches.len() == args.limit || output_bytes + size > MAX_OUTPUT_BYTES - 1024 {
                     has_more = true;
                     break 'files;
                 }
+
                 output_bytes += size;
                 matches.push(entry);
             }
@@ -311,13 +353,14 @@ fn search(
         "has_more": has_more,
         "scan_truncated": scan_truncated,
         "scanned_files": scanned_files,
-        "skipped_files": skipped_files,
+        "skipped_files": skipped_files
     })
     .to_string())
 }
 
 fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
     let target_path = Path::new(path);
+
     if target_path
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -341,6 +384,7 @@ fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
                     "path must name a readable workspace file or directory",
                 ));
             }
+
             Ok(SearchScope::Workspace(relative))
         }
         Err(WorkspaceError::ProtectedPath) => {
@@ -348,6 +392,7 @@ fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
         }
         Err(_) => {
             let canonical = target_path.canonicalize().map_err(failed)?;
+
             match workspace.authorize_directory(&canonical) {
                 Ok(_) => Ok(SearchScope::External(canonical)),
                 Err(WorkspaceError::NotDirectory) => match workspace.authorize_read(&canonical) {
@@ -368,13 +413,16 @@ fn compile_pattern(args: &Arguments) -> Result<Regex, ToolError> {
     } else {
         regex::escape(&args.query)
     };
+
     let regex = RegexBuilder::new(&pattern)
         .case_insensitive(!args.case_sensitive)
         .build()
         .map_err(|error| invalid(format!("invalid search pattern: {error}")))?;
+
     if regex.is_match("") {
         return Err(invalid("search pattern must not match an empty string"));
     }
+
     Ok(regex)
 }
 
@@ -400,14 +448,15 @@ fn match_entry(
     let end = (line_index + args.context_lines + 1).min(lines.len());
     let surrounding = (start..end)
         .filter(|index| *index != line_index)
-        .map(|index| json!({"line":index + 1,"text":bounded_line(lines[index])}))
+        .map(|index| json!({ "line": index + 1, "text": bounded_line(lines[index]) }))
         .collect::<Vec<_>>();
+
     json!({
         "path": path.to_string_lossy(),
         "line": line_index + 1,
         "column": line[..byte_column].chars().count() + 1,
         "text": bounded_line(line),
-        "context": surrounding,
+        "context": surrounding
     })
 }
 
@@ -415,9 +464,12 @@ fn bounded_line(text: &str) -> String {
     if text.len() <= MAX_LINE_BYTES {
         return text.to_owned();
     }
+
     let mut end = MAX_LINE_BYTES.saturating_sub('…'.len_utf8());
+
     while !text.is_char_boundary(end) {
         end -= 1;
     }
+
     format!("{}…", &text[..end])
 }

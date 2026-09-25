@@ -26,64 +26,63 @@ pub(crate) fn encode(
 ) -> Result<(Value, HeaderMap), ModelError> {
     let reasoning_effort = request.reasoning_effort;
     let mut messages = Vec::new();
+
     for message in request.messages {
         match message {
             ChatMessage::System { content } => {
-                messages.push(json!({"role":"system", "content":content}));
+                messages.push(json!({ "role": "system", "content": content }));
             }
             ChatMessage::User {
                 content,
                 attachments,
             } => {
                 if attachments.is_empty() {
-                    messages.push(json!({"role":"user", "content":content}));
+                    messages.push(json!({ "role": "user", "content": content }));
                 } else {
-                    let mut blocks = vec![json!({"type":"text", "text":content})];
+                    let mut blocks = vec![json!({ "type": "text", "text": content })];
+
                     for attachment in attachments {
                         let (mime_type, data) = attachment.image()?;
                         blocks.push(json!({
-                            "type":"image_url",
-                            "image_url":{"url":format!("data:{mime_type};base64,{data}")}
+                            "type": "image_url",
+                            "image_url": { "url": format!("data:{mime_type};base64,{data}") }
                         }));
                     }
-                    messages.push(json!({"role":"user", "content":blocks}));
+
+                    messages.push(json!({ "role": "user", "content": blocks }));
                 }
             }
             ChatMessage::Assistant {
                 content,
                 tool_calls,
-            } => messages.push(json!({
-                "role":"assistant",
-                "content":content,
-                "tool_calls":tool_calls,
-            })),
+            } => messages
+                .push(json!({ "role": "assistant", "content": content, "tool_calls": tool_calls })),
             ChatMessage::Tool {
                 tool_call_id,
                 content,
-            } => messages.push(json!({
-                "role":"tool",
-                "tool_call_id":tool_call_id,
-                "content":content,
-            })),
+            } => messages
+                .push(json!({ "role": "tool", "tool_call_id": tool_call_id, "content": content })),
         }
     }
-    let mut body = json!({
-        "model": model,
-        "messages": messages,
-        "stream": stream,
-    });
+
+    let mut body = json!({ "model": model, "messages": messages, "stream": stream });
+
     if !request.tools.is_empty() {
         body["tools"] = json!(request.tools);
     }
+
     if let Some(temperature) = request.temperature {
         body["temperature"] = json!(temperature);
     }
+
     if let Some(max_tokens) = request.max_tokens {
         body["max_tokens"] = json!(max_tokens);
     }
+
     if stream {
         body["stream_options"] = json!({ "include_usage": true });
     }
+
     if let (Some(effort), Some(ReasoningAdapter::OpenaiChat)) =
         (reasoning_effort, reasoning_adapter)
     {
@@ -105,9 +104,11 @@ pub(crate) fn encode(
 
 pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompletion, ModelError> {
     let value: Value = response.json().await?;
+
     if let Some(error) = crate::client::upstream_error(&value) {
         return Err(error);
     }
+
     let payload: WireCompletionResponse = serde_json::from_value(value)?;
     let choice = payload.choices.into_iter().next().ok_or_else(|| {
         crate::client::invalid_response("OpenAI response did not contain choices")
@@ -257,6 +258,7 @@ mod input_tests {
             true,
         )
         .unwrap();
+
         assert_eq!(body["reasoning_effort"], "high");
     }
 
@@ -268,10 +270,11 @@ mod input_tests {
             "renamed-by-gateway",
             request,
             Some(ReasoningAdapter::OpenaiChat),
-            &json!({"enable_thinking": true}),
+            &json!({ "enable_thinking": true }),
             true,
         )
         .unwrap();
+
         assert_eq!(body["enable_thinking"], true);
     }
 
@@ -283,10 +286,13 @@ mod input_tests {
             "gateway-name",
             request,
             Some(ReasoningAdapter::OpenaiChat),
-            &json!({"thinking": {"type": "enabled"}}),
+            &json!({
+                "thinking": { "type": "enabled" }
+            }),
             true,
         )
         .unwrap();
+
         assert_eq!(body["thinking"]["type"], "enabled");
     }
 
@@ -310,6 +316,7 @@ mod input_tests {
             true,
         )
         .unwrap();
+
         assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
         assert!(
             body["messages"][0]["content"][1]["image_url"]["url"]

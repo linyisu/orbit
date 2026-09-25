@@ -58,6 +58,7 @@ impl Tool for ReadDocument {
         Box::pin(async move {
             let arguments: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|error| invalid(error.to_string()))?;
+
             if arguments.path.trim().is_empty() || !(1..=MAX_CHARS).contains(&arguments.max_chars) {
                 return Err(invalid(format!(
                     "path must be nonempty and max_chars must be between 1 and {MAX_CHARS}"
@@ -66,8 +67,10 @@ impl Tool for ReadDocument {
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
+
             let workspace = self.workspace.clone();
             let token = cancellation.clone();
+
             tokio::task::spawn_blocking(move || convert(workspace, arguments, token))
                 .await
                 .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
@@ -97,6 +100,7 @@ fn convert(
         .take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(ToolError::ExecutionFailed(format!(
             "document exceeds the {} MiB read limit",
@@ -106,6 +110,7 @@ fn convert(
     if cancellation.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
+
     let format = anydoc::Format::from_bytes(&bytes)
         .or_else(|| anydoc::Format::from_path(path))
         .ok_or_else(|| {
@@ -115,17 +120,20 @@ fn convert(
         ToolError::ExecutionFailed(format!("document conversion failed: {error}"))
     })?;
     let total_chars = markdown.chars().count();
+
     if arguments.start_char > total_chars {
         return Err(invalid(format!(
             "start_char exceeds converted document length ({total_chars} characters)"
         )));
     }
+
     let content: String = markdown
         .chars()
         .skip(arguments.start_char)
         .take(arguments.max_chars)
         .collect();
     let next = arguments.start_char + content.chars().count();
+
     Ok(json!({
         "path": arguments.path,
         "format": format!("{format:?}").to_ascii_lowercase(),
@@ -156,11 +164,12 @@ mod tests {
         let call = ToolCall::function(
             "doc-1",
             "read_document",
-            json!({"path":"data.csv", "max_chars":12}),
+            json!({ "path": "data.csv", "max_chars": 12 }),
         );
         let first: serde_json::Value =
             serde_json::from_str(&tool.execute(call, CancellationToken::new()).await.unwrap())
                 .unwrap();
+
         assert_eq!(first["source_kind"], "local_document_markdown");
         assert_eq!(first["truncated"], true);
         assert!(first["next_start_char"].as_u64().unwrap() > 0);

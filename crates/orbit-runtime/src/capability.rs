@@ -120,10 +120,12 @@ mod tests {
     #[test]
     fn environment_id_formatting_and_checks() {
         let local = EnvironmentId::local();
+
         assert!(local.is_local());
         assert_eq!(local.to_string(), "local");
 
         let remote = EnvironmentId::Remote("gpu-server".into());
+
         assert!(!remote.is_local());
         assert_eq!(remote.to_string(), "remote:gpu-server");
     }
@@ -131,6 +133,7 @@ mod tests {
     #[test]
     fn capability_construction() {
         let cap = FilesystemCapability::local_read("/data/models");
+
         assert_eq!(cap.environment, EnvironmentId::Local);
         assert_eq!(cap.path, PathBuf::from("/data/models"));
         assert_eq!(cap.access, FilesystemAccess::Read);
@@ -141,6 +144,7 @@ mod tests {
         assert_eq!(cap.access.description(), "read");
 
         let cap_rw = FilesystemCapability::local_read_write("/data/output");
+
         assert_eq!(cap_rw.access, FilesystemAccess::ReadWrite);
         assert!(cap_rw.access.allows_read());
         assert!(cap_rw.access.allows_write());
@@ -149,14 +153,20 @@ mod tests {
         assert_eq!(cap_rw.access.description(), "read and write");
 
         let cap_write = FilesystemCapability::local_write("/data/output");
+
         assert_eq!(cap_write.access, FilesystemAccess::ReadWrite);
 
         // Serde test: "read_write" and "write" alias
         let parsed_rw: FilesystemAccess = serde_json::from_str("\"read_write\"").unwrap();
+
         assert_eq!(parsed_rw, FilesystemAccess::ReadWrite);
+
         let parsed_alias: FilesystemAccess = serde_json::from_str("\"write\"").unwrap();
+
         assert_eq!(parsed_alias, FilesystemAccess::ReadWrite);
+
         let parsed_r: FilesystemAccess = serde_json::from_str("\"read\"").unwrap();
+
         assert_eq!(parsed_r, FilesystemAccess::Read);
     }
 }

@@ -15,6 +15,7 @@ pub fn estimate_tokens(messages: &[ChatMessage], tools: &[ToolDefinition]) -> us
             _ => 0,
         })
         .sum::<usize>();
+
     serde_json::to_vec(&(messages, tools))
         .map(|bytes| {
             bytes
@@ -33,9 +34,11 @@ pub fn check_budget(
     limit: usize,
 ) -> Result<(), AgentError> {
     let estimated = estimate_tokens(messages, tools).saturating_add(output_reserve);
+
     if estimated > limit {
         return Err(AgentError::ContextBudget { estimated, limit });
     }
+
     Ok(())
 }
 
@@ -99,6 +102,7 @@ pub async fn compact_with_archive<B: ModelBackend>(
 ) -> Result<CompactedContext, AgentError> {
     let runtime = crate::compaction::CompactionRuntime::default()
         .for_input_window(limit.saturating_sub(output));
+
     compact_configured(
         backend,
         history,
@@ -128,6 +132,7 @@ pub async fn compact_configured(
     if cancellation.is_cancelled() {
         return Err(AgentError::Cancelled);
     }
+
     let plan = crate::autocompact::plan_configured(
         &history,
         tools,
@@ -142,6 +147,7 @@ pub async fn compact_configured(
         )
     })?
     .with_files(files);
+
     crate::autocompact::execute_configured(
         runtime.backend.as_deref().unwrap_or(backend),
         plan,
@@ -176,7 +182,7 @@ mod tests {
                 tool_calls: vec![ToolCall::function(
                     "call-1",
                     "read_file",
-                    serde_json::json!({"path":"file"}),
+                    serde_json::json!({ "path": "file" }),
                 )],
             },
             ChatMessage::tool("call-1", "result"),
@@ -223,6 +229,7 @@ mod tests {
         )
         .await
         .unwrap();
+
         assert_eq!(result.history[0], original[0]);
         assert!(matches!(result.history[1], ChatMessage::User { .. }));
         assert_eq!(result.history[2..], original[3..]);
@@ -244,6 +251,7 @@ mod tests {
                 CancellationToken::new(),
             )
             .await;
+
             assert!(result.is_err());
         }
     }
@@ -258,6 +266,7 @@ mod tests {
                 ..Default::default()
             },
         );
+
         assert!(matches!(
             agent
                 .run(
@@ -267,8 +276,10 @@ mod tests {
                 .await,
             Err(AgentError::ContextBudget { .. })
         ));
+
         let token = CancellationToken::new();
         token.cancel();
+
         assert!(matches!(
             compact(&model("summary", "stop"), history(), &[], 32000, token).await,
             Err(AgentError::Cancelled)
@@ -288,6 +299,7 @@ mod tests {
     #[tokio::test]
     async fn budget_is_checked_again_after_tool_output_before_next_model_call() {
         use crate::tool::ClosureTool;
+
         let backend = MockModel::new(vec![ChatCompletion {
             id: None,
             model: None,
@@ -302,7 +314,7 @@ mod tests {
         tools.register(ClosureTool::new(
             "large",
             "large result",
-            serde_json::json!({"type":"object"}),
+            serde_json::json!({ "type": "object" }),
             |_, _| async { Ok("x".repeat(20_000)) },
         ));
         let agent = Agent::new(
@@ -313,6 +325,7 @@ mod tests {
                 ..Default::default()
             },
         );
+
         assert!(matches!(
             agent
                 .run(

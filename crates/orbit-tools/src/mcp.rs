@@ -83,7 +83,9 @@ impl McpConfig {
             if server.command.trim().is_empty() || server.timeout_seconds == 0 {
                 bail!("MCP server {name:?} must set a command and a positive timeout_seconds");
             }
+
             let mut names = std::collections::BTreeSet::new();
+
             for key in server.env.keys() {
                 if matches!(
                     key.as_str(),
@@ -95,12 +97,14 @@ impl McpConfig {
                     );
                 }
             }
+
             for tool in &server.tools {
                 if tool.trim().is_empty() || !names.insert(tool) {
                     bail!("MCP server {name:?} has an empty or duplicate tool allowlist entry");
                 }
             }
         }
+
         Ok(())
     }
 }
@@ -124,6 +128,7 @@ pub async fn register(
     allow_start: bool,
 ) -> Vec<McpServerStatus> {
     let mut statuses = Vec::new();
+
     for (name, config) in &config.servers {
         if !config.enabled {
             statuses.push(McpServerStatus {
@@ -152,6 +157,7 @@ pub async fn register(
             });
             continue;
         }
+
         match StdioClient::start(name, config, workspace).await {
             Ok((client, definitions)) => {
                 let filtered = definitions
@@ -166,6 +172,7 @@ pub async fn register(
                     .collect::<Vec<_>>();
                 let count = filtered.len();
                 let client = Arc::new(Mutex::new(client));
+
                 for definition in filtered {
                     registry.register(McpTool {
                         exposed_name: exposed_name(name, &definition.name),
@@ -175,6 +182,7 @@ pub async fn register(
                         approvals: approvals.clone(),
                     });
                 }
+
                 statuses.push(McpServerStatus {
                     name: name.clone(),
                     detail: if config.tools.is_empty() {
@@ -194,6 +202,7 @@ pub async fn register(
             }),
         }
     }
+
     statuses
 }
 
@@ -230,6 +239,7 @@ impl Tool for McpTool {
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
+
             let arguments = call
                 .arguments_json()
                 .map_err(|error| ToolError::InvalidArguments {
@@ -255,11 +265,13 @@ impl Tool for McpTool {
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
                 answer = receiver => answer.unwrap_or(false),
             };
+
             if !approved {
                 return Err(ToolError::ExecutionFailed(
                     "MCP tool call was not approved; do not retry automatically".into(),
                 ));
             }
+
             let mut client = self.client.lock().await;
             let result = client
                 .call_tool(&self.definition.name, arguments, cancellation)
@@ -267,6 +279,7 @@ impl Tool for McpTool {
                 .map_err(|error| {
                     ToolError::ExecutionFailed(format!("MCP {}: {error}", self.server))
                 })?;
+
             Ok(ToolOutput::text(result.to_string()))
         })
     }
@@ -331,16 +344,20 @@ impl StdioClient {
                 "initialize",
                 json!({
                     "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": { "roots": { "listChanged": false } },
+                    "capabilities": {
+                        "roots": { "listChanged": false }
+                    },
                     "clientInfo": { "name": "orbit", "version": env!("CARGO_PKG_VERSION") }
                 }),
                 CancellationToken::new(),
             )
             .await
             .context("MCP initialize failed")?;
+
         if initialized.get("capabilities").is_none() {
             bail!("MCP initialize response has no capabilities");
         }
+
         client
             .notify("notifications/initialized", json!({}))
             .await?;
@@ -355,6 +372,7 @@ impl StdioClient {
             .iter()
             .filter_map(parse_tool)
             .collect::<Vec<_>>();
+
         Ok((client, tools))
     }
 
@@ -372,6 +390,7 @@ impl StdioClient {
             )
             .await?;
         let content = result.get("content").cloned().unwrap_or_else(|| json!([]));
+
         Ok(json!({
             "server_result": content,
             "is_error": result.get("isError").and_then(Value::as_bool).unwrap_or(false),
@@ -393,6 +412,7 @@ impl StdioClient {
         if self.poisoned {
             bail!("MCP connection is unusable after a previous protocol or timeout error");
         }
+
         let id = self.next_id;
         self.next_id += 1;
         self.write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
@@ -401,22 +421,27 @@ impl StdioClient {
         let response = async {
             loop {
                 let message = self.read().await?;
+
                 if message.get("id") == Some(&json!(id)) {
                     if let Some(error) = message.get("error") {
                         bail!("server returned {error}");
                     }
+
                     return message
                         .get("result")
                         .cloned()
                         .context("response has no result");
                 }
+
                 if message.get("method").and_then(Value::as_str) == Some("roots/list")
                     && let Some(request_id) = message.get("id").cloned()
                 {
                     self.write(json!({
                         "jsonrpc": "2.0",
                         "id": request_id,
-                        "result": { "roots": [{ "uri": file_uri(&self.workspace), "name": self.workspace.file_name().and_then(|name| name.to_str()).unwrap_or("workspace") }] }
+                        "result": {
+                            "roots": [{ "uri": file_uri(&self.workspace), "name": self.workspace.file_name().and_then(|name| name.to_str()).unwrap_or("workspace") }]
+                        }
                     })).await?;
                 }
             }
@@ -428,21 +453,26 @@ impl StdioClient {
                     .and_then(|response| response)
             },
         };
+
         if outcome.is_err() {
             self.poisoned = true;
             let _ = self._child.start_kill();
         }
+
         outcome
     }
 
     async fn write(&mut self, value: Value) -> Result<()> {
         let encoded = serde_json::to_vec(&value)?;
+
         if encoded.len() > MAX_MESSAGE_BYTES {
             bail!("MCP request exceeds the 4 MiB protocol limit");
         }
+
         self.stdin.write_all(&encoded).await?;
         self.stdin.write_all(b"\n").await?;
         self.stdin.flush().await?;
+
         Ok(())
     }
 
@@ -457,13 +487,16 @@ async fn read_protocol_line<R: AsyncBufRead + Unpin>(
 ) -> Result<Value> {
     loop {
         let available = reader.fill_buf().await?;
+
         if available.is_empty() {
             bail!("server closed its stdout");
         }
+
         let end = available
             .iter()
             .position(|byte| *byte == b'\n')
             .map_or(available.len(), |position| position + 1);
+
         if pending.len().saturating_add(end) > MAX_MESSAGE_BYTES {
             bail!("MCP response exceeds the 4 MiB protocol limit");
         }
@@ -471,6 +504,7 @@ async fn read_protocol_line<R: AsyncBufRead + Unpin>(
         let complete = available[end - 1] == b'\n';
         pending.extend_from_slice(&available[..end]);
         reader.consume(end);
+
         if complete {
             let line = std::mem::take(pending);
             return serde_json::from_slice(&line)
@@ -481,13 +515,16 @@ async fn read_protocol_line<R: AsyncBufRead + Unpin>(
 
 fn parse_tool(value: &Value) -> Option<RemoteTool> {
     let name = value.get("name")?.as_str()?.trim();
+
     if !valid_component(name) {
         return None;
     }
+
     let schema = value
         .get("inputSchema")
         .cloned()
         .unwrap_or_else(|| json!({ "type": "object" }));
+
     (schema.is_object()).then(|| RemoteTool {
         name: name.to_owned(),
         description: value
@@ -547,6 +584,7 @@ mod tests {
             read_protocol_line(&mut reader, &mut pending),
         )
         .await;
+
         assert!(timed_out.is_err());
         assert_eq!(pending, b"{\"id\":");
 
@@ -609,6 +647,7 @@ done"#
         )
         .unwrap();
         config.validate().unwrap();
+
         assert!(!config.servers["files"].enabled);
         assert_eq!(exposed_name("files", "read_file"), "mcp__files__read_file");
     }
@@ -623,6 +662,7 @@ done"#
             "#,
         )
         .unwrap();
+
         assert!(config.validate().unwrap_err().to_string().contains("stdio"));
     }
 
@@ -676,8 +716,10 @@ done
             let ApprovalPreview::Mcp(preview) = request.preview else {
                 panic!("expected MCP approval");
             };
+
             assert_eq!(preview.server, "fixture");
             assert_eq!(preview.tool, "echo");
+
             request.decision.send(true).unwrap();
         });
         let statuses = register(
@@ -688,7 +730,9 @@ done
             true,
         )
         .await;
+
         assert_eq!(statuses[0].tool_count, 1, "{statuses:?}");
+
         let output = registry
             .execute(
                 ToolCall::function("call", "mcp__fixture__echo", json!({ "message": "hello" })),
@@ -697,6 +741,7 @@ done
             .await
             .unwrap();
         approval.await.unwrap();
+
         assert!(output.content.contains("\"text\":\"ok\""));
     }
 
@@ -712,6 +757,7 @@ done
         .unwrap();
         let mut registry = ToolRegistry::new();
         let statuses = register(&mut registry, &config, Path::new("/tmp"), None, false).await;
+
         assert_eq!(statuses[0].detail, "需要审批通道；未启动");
         assert!(registry.definitions().is_empty());
     }

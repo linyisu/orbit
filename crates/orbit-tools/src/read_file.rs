@@ -26,6 +26,7 @@ struct ReadArguments {
 fn first_line() -> usize {
     1
 }
+
 fn default_limit() -> usize {
     200
 }
@@ -63,6 +64,7 @@ impl Tool for ReadFile {
         Box::pin(async move {
             let arguments: ReadArguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|error| invalid(error.to_string()))?;
+
             if arguments.path.trim().is_empty()
                 || arguments.start_line == 0
                 || !(1..=500).contains(&arguments.max_lines)
@@ -74,9 +76,11 @@ impl Tool for ReadFile {
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
+
             let workspace = self.workspace.clone();
             let token = cancellation.clone();
             let task = tokio::task::spawn_blocking(move || read(workspace, arguments, token));
+
             tokio::select! {
                 _ = cancellation.cancelled() => Err(ToolError::Cancelled),
                 result = task => result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?,
@@ -104,6 +108,7 @@ fn read(
     file.take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+
     if cancellation.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
@@ -112,14 +117,18 @@ fn read(
             "file exceeds the 1 MiB read limit".into(),
         ));
     }
+
     let text = String::from_utf8(bytes)
         .map_err(|_| ToolError::ExecutionFailed("file is not UTF-8 text".into()))?;
+
     if text.contains('\0') {
         return Err(ToolError::ExecutionFailed(
             "binary files are not supported".into(),
         ));
     }
+
     let lines: Vec<_> = text.lines().collect();
+
     if arguments.start_line > lines.len().max(1) {
         return Err(invalid(format!(
             "start_line exceeds file length ({} lines)",
@@ -133,9 +142,11 @@ fn read(
     {
         return Err(invalid("start_char exceeds the selected line length"));
     }
+
     let mut content = String::new();
     let mut end_line = arguments.start_line.saturating_sub(1);
     let mut continuation = None;
+
     for (index, line) in lines
         .iter()
         .enumerate()
@@ -147,9 +158,11 @@ fn read(
         } else {
             0
         };
+
         let line = line.chars().skip(skipped).collect::<String>();
         let prefix = format!("{}: ", index + 1);
         let available = MAX_OUTPUT_BYTES.saturating_sub(content.len());
+
         if prefix.len() + line.len() + 1 > available {
             if available <= prefix.len() {
                 continuation = Some((index + 1, skipped));
@@ -158,26 +171,32 @@ fn read(
 
             let mut end = 0;
             let mut characters = 0;
+
             for character in line.chars() {
                 if end + character.len_utf8() > available - prefix.len() {
                     break;
                 }
+
                 end += character.len_utf8();
                 characters += 1;
             }
+
             content.push_str(&prefix);
             content.push_str(&line[..end]);
             end_line = index + 1;
             continuation = Some((index + 1, skipped + characters));
             break;
         }
+
         content.push_str(&prefix);
         content.push_str(&line);
         content.push('\n');
         end_line = index + 1;
     }
+
     let continuation =
         continuation.or_else(|| (end_line < lines.len()).then_some((end_line + 1, 0)));
+
     Ok(json!({
         "path": arguments.path,
         "start_line": arguments.start_line,
@@ -187,7 +206,7 @@ fn read(
         "truncated": continuation.is_some(),
         "next_start_line": continuation.map(|(line, _)| line),
         "next_start_char": continuation.map(|(_, character)| character),
-        "content": content,
+        "content": content
     })
     .to_string())
 }

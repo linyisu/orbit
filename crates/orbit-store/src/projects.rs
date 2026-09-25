@@ -20,6 +20,7 @@ pub(crate) fn migrate(conn: &rusqlite::Connection) -> Result<()> {
     UPDATE sessions SET project_id=(SELECT id FROM projects WHERE path=sessions.workspace);
     CREATE INDEX sessions_project ON sessions(project_id);
     PRAGMA user_version=2;")?;
+
     Ok(())
 }
 
@@ -33,6 +34,7 @@ fn affected_sessions(conn: &rusqlite::Connection, id: &str, path: &str) -> Resul
     let sessions = query
         .query_map(params![id, path], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+
     Ok(sessions)
 }
 
@@ -40,6 +42,7 @@ impl Store {
     pub async fn projects(&self) -> Result<Vec<Project>> {
         self.access(|conn| {
             let mut query = conn.prepare("SELECT id,path FROM projects ORDER BY path,id")?;
+
             Ok(query
                 .query_map([], |row| {
                     Ok(Project {
@@ -54,6 +57,7 @@ impl Store {
 
     pub async fn resolve_project(&self, path: impl AsRef<Path>) -> Result<Project> {
         let directory = Directory::read(path.as_ref())?;
+
         self.access(move |conn| {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             // An unchanged inode and birth time at the same recorded path is
@@ -61,6 +65,7 @@ impl Store {
             // Prefer the project with the established session history if an
             // older build already created a duplicate for the new device.
             let mut matches = Vec::new();
+
             if directory.strong {
                 let mut query = tx.prepare(
                     "SELECT p.id,p.identity,p.strong,pp.project_id IS NOT NULL,
@@ -78,10 +83,13 @@ impl Store {
                         row.get::<_, i64>(4)?,
                     ))
                 })?;
+
                 for row in rows {
                     let (id, identity, strong, same_path, sessions) = row?;
                     let Some(identity) = identity else { continue };
+
                     let exact = directory.identity.as_deref() == Some(identity.as_str());
+
                     if strong
                         && (exact
                             || (same_path
@@ -94,6 +102,7 @@ impl Store {
                     }
                 }
             }
+
             matches.sort_by(|a, b| {
                 b.1.cmp(&a.1)
                     .then_with(|| b.2.cmp(&a.2))
@@ -123,6 +132,7 @@ impl Store {
             } else {
                 new_project(&tx)?
             };
+
             // Preserve the previous project and its sessions when its old path is reused.
             tx.execute(
                 "UPDATE projects SET path=NULL WHERE path=?1 AND id<>?2",
@@ -137,6 +147,7 @@ impl Store {
                 params![id, directory.path],
             )?;
             tx.commit()?;
+
             Ok(Project {
                 id,
                 path: Some(directory.path),
@@ -150,6 +161,7 @@ impl Store {
         let directory = Directory::read(path.as_ref())?;
         let id = id.to_owned();
         let lock_dir = self.path().with_extension("session-locks");
+
         for _ in 0..3 {
             let scan_id = id.clone();
             let scan_path = directory.path.clone();
@@ -165,16 +177,19 @@ impl Store {
             let leases = tokio::task::spawn_blocking(move || -> Result<Vec<std::fs::File>> {
                 std::fs::create_dir_all(&lease_dir)?;
                 let mut leases = Vec::with_capacity(session_ids.len());
+
                 for session in session_ids {
                     ensure!(
                         session.len() == 32 && session.bytes().all(|byte| byte.is_ascii_hexdigit()),
                         "invalid stored session ID"
                     );
+
                     let file = crate::store::private_file(&lease_dir.join(session))?;
                     file.try_lock()
                         .context("project has an open session; close its TUI before linking")?;
                     leases.push(file);
                 }
+
                 Ok(leases)
             })
             .await??;
@@ -187,6 +202,7 @@ impl Store {
                 .access(move |conn| {
                     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                     let actual = affected_sessions(&tx, &link_id, &link_path)?;
+
                     if actual != expected {
                         return Ok(None);
                     }
@@ -195,12 +211,14 @@ impl Store {
                         .query_row("SELECT path FROM projects WHERE id=?1", [&link_id], |row| row.get(0))
                         .optional()?
                         .ok_or_else(|| anyhow::anyhow!("project not found"))?;
+
                     if let Some(old) = old.as_deref().filter(|old| *old != link_path) {
                         ensure!(
                             matches!(std::fs::metadata(old), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
                             "old project directory still exists or cannot be checked; refusing to merge a copy"
                         );
                     }
+
                     let others: i64 = tx.query_row(
                         "SELECT count(*) FROM runs JOIN sessions ON sessions.id=runs.session_id JOIN projects ON projects.id=sessions.project_id WHERE projects.path=?1 AND projects.id<>?2",
                         params![link_path, link_id],
@@ -212,14 +230,17 @@ impl Store {
                     tx.execute("UPDATE projects SET path=?2,identity=?3,strong=?4,legacy=0 WHERE id=?1", params![link_id,link_path,identity,strong])?;
                     tx.execute("INSERT OR IGNORE INTO project_paths(project_id,path) VALUES(?1,?2)", params![link_id,link_path])?;
                     tx.commit()?;
+
                     Ok(Some(Project { id: link_id, path: Some(link_path) }))
                 })
                 .await?;
             drop(leases);
+
             if let Some(project) = linked {
                 return Ok(project);
             }
         }
+
         anyhow::bail!("project sessions changed while linking; retry the operation")
     }
 
@@ -227,6 +248,7 @@ impl Store {
     /// duplicate created after the mount's device number changed.
     pub async fn equivalent_project_ids(&self, project_id: &str) -> Result<Vec<String>> {
         let project_id = project_id.to_owned();
+
         self.access(move |conn| {
             let (identity, strong): (Option<String>, bool) = conn.query_row(
                 "SELECT identity,strong FROM projects WHERE id=?1",
@@ -239,6 +261,7 @@ impl Store {
             if !strong {
                 return Ok(vec![project_id]);
             }
+
             let mut query = conn.prepare(
                 "SELECT DISTINCT p.id,p.identity,p.strong
                  FROM project_paths source
@@ -247,6 +270,7 @@ impl Store {
                  WHERE source.project_id=?1",
             )?;
             let mut ids = Vec::new();
+
             for row in query.query_map([&project_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -255,6 +279,7 @@ impl Store {
                 ))
             })? {
                 let (id, candidate, candidate_strong) = row?;
+
                 if candidate_strong
                     && candidate
                         .as_deref()
@@ -263,9 +288,11 @@ impl Store {
                     ids.push(id);
                 }
             }
+
             if !ids.contains(&project_id) {
                 ids.push(project_id);
             }
+
             Ok(ids)
         })
         .await
@@ -285,6 +312,7 @@ mod tests {
             .await
             .unwrap();
         let original = store.resolve_project(&workspace).await.unwrap();
+
         for _ in 0..2 {
             drop(
                 store
@@ -293,6 +321,7 @@ mod tests {
                     .unwrap(),
             );
         }
+
         let original_id = original.id.clone();
         let workspace_text = workspace.display().to_string();
         store
@@ -320,12 +349,14 @@ mod tests {
                     "INSERT INTO sessions(id,workspace,model,demo,title,project_id) VALUES('new-session',?1,'model',0,'new','duplicate')",
                     [&workspace_text],
                 )?;
+
                 Ok(())
             })
             .await
             .unwrap();
 
         let related = store.equivalent_project_ids("duplicate").await.unwrap();
+
         assert!(related.contains(&original.id));
         assert!(related.contains(&"duplicate".to_owned()));
         assert_eq!(

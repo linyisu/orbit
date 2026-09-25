@@ -87,12 +87,15 @@ impl InputState {
 
     pub fn take(&mut self) -> Option<String> {
         let value = self.text.trim().to_owned();
+
         if value.is_empty() {
             return None;
         }
+
         self.history.push(value.clone());
         self.clear();
         self.draft.clear();
+
         Some(value)
     }
 
@@ -100,9 +103,11 @@ impl InputState {
         if self.history.is_empty() {
             return;
         }
+
         if self.history_index.is_none() {
             self.draft = self.text.clone();
         }
+
         let index = self
             .history_index
             .unwrap_or(self.history.len())
@@ -115,6 +120,7 @@ impl InputState {
         let Some(index) = self.history_index else {
             return;
         };
+
         if index + 1 >= self.history.len() {
             self.history_index = None;
             self.set(self.draft.clone());
@@ -133,7 +139,9 @@ impl InputState {
         } else {
             row.checked_sub(1)
         };
+
         let desired = self.preferred_column.unwrap_or(column);
+
         if let Some(target) = target
             && let Some(&(index, _, _)) = positions
                 .iter()
@@ -152,6 +160,7 @@ impl InputState {
     pub fn move_to(&mut self, column: usize, row: usize, width: usize) {
         let (_, positions) = self.layout(width);
         let last_row = positions.last().unwrap().2;
+
         if let Some(&(index, _, _)) = positions
             .iter()
             .filter(|p| p.2 == row.min(last_row))
@@ -174,13 +183,17 @@ impl InputState {
         let mut lines = vec![String::new()];
         let mut positions = Vec::new();
         let mut column = 0;
+
         for (index, grapheme) in self.text.grapheme_indices(true) {
             let size = grapheme.width();
+
             if grapheme != "\n" && column + size > width {
                 lines.push(String::new());
                 column = 0;
             }
+
             positions.push((index, column, lines.len() - 1));
+
             if grapheme == "\n" {
                 lines.push(String::new());
                 column = 0;
@@ -189,11 +202,14 @@ impl InputState {
                 column += size;
             }
         }
+
         if column == width {
             lines.push(String::new());
             column = 0;
         }
+
         positions.push((self.text.len(), column, lines.len() - 1));
+
         (lines, positions)
     }
 }
@@ -207,11 +223,14 @@ mod tests {
         let mut input = InputState::default();
         input.insert("你好👩‍💻");
         input.backspace();
+
         assert_eq!(input.text, "你好");
         assert_eq!(input.take().as_deref(), Some("你好"));
+
         input.insert("draft");
         input.history_up();
         input.history_down();
+
         assert_eq!(input.text, "draft");
     }
 
@@ -221,17 +240,26 @@ mod tests {
         input.history.push("old prompt".into());
         input.set("你好ab\nx\n世界cd".into());
         input.move_vertical(false, 20);
+
         assert_eq!(input.visual_lines(20).1, (1, 1));
+
         input.move_vertical(false, 20);
+
         assert_eq!(input.visual_lines(20).1, (6, 0));
+
         input.move_vertical(true, 20);
         input.move_vertical(true, 20);
+
         assert_eq!(input.visual_lines(20).1, (6, 2));
+
         input.move_vertical(false, 20);
         input.move_vertical(false, 20);
         input.move_vertical(false, 20);
+
         assert_eq!(input.text, "old prompt");
+
         input.move_vertical(true, 20);
+
         assert_eq!(input.text, "你好ab\nx\n世界cd");
     }
 
@@ -239,18 +267,29 @@ mod tests {
     fn vertical_navigation_uses_wrapped_rows_and_grapheme_boundaries() {
         let mut input = InputState::default();
         input.set("你好e\u{301}👩‍💻xy".into());
+
         assert_eq!(input.visual_lines(4).1, (1, 2));
+
         input.move_vertical(false, 4);
+
         assert_eq!(input.visual_lines(4).1, (1, 1));
         assert_eq!(&input.text[input.cursor..], "👩‍💻xy");
+
         input.move_vertical(false, 4);
+
         assert_eq!(input.cursor, 0); // ties choose the preceding boundary
+
         input.move_vertical(true, 4);
+
         assert_eq!(input.visual_lines(4).1, (1, 1));
+
         input.move_right(); // reset the preferred column after horizontal movement
         input.move_vertical(false, 4);
+
         assert_eq!(input.visual_lines(4).1, (2, 0));
+
         input.backspace();
+
         assert!(input.text.starts_with("好"));
     }
 
@@ -259,12 +298,19 @@ mod tests {
         let mut input = InputState::default();
         input.set("你好e\u{301}👩‍💻xy\nlast".into());
         input.move_to(1, 0, 4);
+
         assert_eq!(input.cursor, 0);
+
         input.move_to(2, 0, 4);
+
         assert_eq!(input.cursor, "你".len());
+
         input.move_to(1, 1, 4);
+
         assert_eq!(&input.text[input.cursor..], "👩‍💻xy\nlast");
+
         input.move_to(50, 50, 4);
+
         assert_eq!(input.cursor, input.text.len());
     }
 
@@ -273,6 +319,7 @@ mod tests {
         let mut input = InputState::default();
         input.insert("你好ab\n世界");
         let (lines, cursor) = input.visual_lines(4);
+
         assert_eq!(lines, ["你好", "ab", "世界", ""]);
         assert_eq!(cursor, (0, 3));
     }

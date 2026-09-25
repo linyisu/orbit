@@ -8,8 +8,10 @@ use crate::error::AgentError;
 use crate::memory::SummaryProgress;
 
 pub type ArchiveFuture<'a> = Pin<Box<dyn Future<Output = Result<String, AgentError>> + Send + 'a>>;
+
 pub type ProgressLoadFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<SummaryProgress>, AgentError>> + Send + 'a>>;
+
 pub type ProgressSaveFuture<'a> = Pin<Box<dyn Future<Output = Result<(), AgentError>> + Send + 'a>>;
 
 pub trait ContextArchive: Send + Sync {

@@ -38,7 +38,9 @@ fn open_canonical_parent_stepwise(canonical_parent: &Path) -> Result<File, Works
     if !canonical_parent.is_absolute() {
         return Err(WorkspaceError::InvalidPath);
     }
+
     let mut current = File::open("/")?;
+
     for component in canonical_parent.components() {
         match component {
             Component::RootDir => {}
@@ -61,6 +63,7 @@ fn open_canonical_parent_stepwise(canonical_parent: &Path) -> Result<File, Works
             _ => return Err(WorkspaceError::InvalidPath),
         }
     }
+
     Ok(current)
 }
 
@@ -77,6 +80,7 @@ impl Workspace {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, WorkspaceError> {
         let path = root.as_ref().canonicalize()?;
         let root = File::open(&path)?;
+
         if !root.metadata()?.is_dir() {
             return Err(WorkspaceError::NotDirectory);
         }
@@ -125,10 +129,13 @@ impl Workspace {
         let resolved = ResolvedPath::resolve(&self.path, None).map_err(WorkspaceError::Io)?;
         let policy = PolicyEngine::try_with_permissions(resolved, permissions, network)
             .map_err(|e| WorkspaceError::PermissionDenied(e.to_string()))?;
+
         for p in &self.protected {
             policy.add_protected_path(p.clone());
         }
+
         let effective = policy.effective_policy();
+
         for p in &self.protected {
             for grant in effective
                 .persistent_read
@@ -136,6 +143,7 @@ impl Workspace {
                 .chain(effective.persistent_read_write.iter())
             {
                 let canon = grant.canonical();
+
                 if canon.starts_with(p) || p.starts_with(canon) {
                     return Err(WorkspaceError::PermissionDenied(format!(
                         "persistent permission '{}' conflicts with protected path '{}'",
@@ -145,7 +153,9 @@ impl Workspace {
                 }
             }
         }
+
         self.policy = policy;
+
         Ok(())
     }
 
@@ -161,18 +171,21 @@ impl Workspace {
                 } else {
                     return Err(WorkspaceError::InvalidPath);
                 };
+
                 parent_canon.join(path.file_name().ok_or(WorkspaceError::InvalidPath)?)
             }
             Err(error) => return Err(error.into()),
         };
 
         let effective = self.policy.effective_policy();
+
         for grant in effective
             .persistent_read
             .iter()
             .chain(effective.persistent_read_write.iter())
         {
             let canon = grant.canonical();
+
             if canon.starts_with(&resolved) || resolved.starts_with(canon) {
                 return Err(WorkspaceError::PermissionDenied(format!(
                     "protected path '{}' conflicts with persistent permission '{}'",
@@ -181,6 +194,7 @@ impl Workspace {
                 )));
             }
         }
+
         Ok(resolved)
     }
 
@@ -210,24 +224,29 @@ impl Workspace {
 
     pub fn checked_relative(&self, path: &Path) -> Result<PathBuf, WorkspaceError> {
         let mut parts = Vec::new();
+
         for component in path.components() {
             match component {
                 Component::Normal(name) => {
                     let name_text = name.to_string_lossy();
+
                     if super::path_security::is_protected_workspace_name(&name_text) {
                         return Err(WorkspaceError::ProtectedPath);
                     }
+
                     parts.push(name);
                 }
                 Component::CurDir => {}
                 _ => return Err(WorkspaceError::InvalidPath),
             }
         }
+
         if parts.is_empty() {
             return Err(WorkspaceError::InvalidPath);
         }
 
         let relative = parts.iter().collect::<PathBuf>();
+
         if self
             .protected
             .iter()
@@ -242,6 +261,7 @@ impl Workspace {
     pub fn write_parent(&self, path: &Path) -> Result<(File, std::ffi::OsString), WorkspaceError> {
         let relative = self.checked_relative(path)?;
         let mut directory = self.root.try_clone()?;
+
         for name in relative.parent().ok_or(WorkspaceError::InvalidPath)?.iter() {
             directory = File::from(
                 openat(
@@ -253,6 +273,7 @@ impl Workspace {
                 .map_err(io::Error::from)?,
             );
         }
+
         Ok((
             directory,
             relative
@@ -267,6 +288,7 @@ impl Workspace {
             self.root.try_clone()?
         } else {
             let (parent, name) = self.write_parent(path)?;
+
             File::from(
                 openat(
                     &parent,
@@ -283,20 +305,24 @@ impl Workspace {
                 })?,
             )
         };
+
         Ok(directory)
     }
 
     fn check_protected_metadata(&self, metadata: &std::fs::Metadata) -> Result<(), WorkspaceError> {
         let mut protected_inodes = HashSet::new();
+
         for protected in &self.protected {
             let other = match std::fs::symlink_metadata(protected) {
                 Ok(other) => other,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(WorkspaceError::Io(error)),
             };
+
             if metadata.dev() == other.dev() && metadata.ino() == other.ino() {
                 return Err(WorkspaceError::ProtectedPath);
             }
+
             if metadata.is_file()
                 && metadata.nlink() > 1
                 && other.is_dir()
@@ -306,6 +332,7 @@ impl Workspace {
                     .map_err(|error| WorkspaceError::PermissionDenied(error.to_string()))?;
             }
         }
+
         if protected_inodes.contains(&(metadata.dev(), metadata.ino())) {
             return Err(WorkspaceError::ProtectedPath);
         }
@@ -316,6 +343,7 @@ impl Workspace {
         {
             return Err(WorkspaceError::ProtectedPath);
         }
+
         Ok(())
     }
 
@@ -325,6 +353,7 @@ impl Workspace {
                 return Err(WorkspaceError::ProtectedPath);
             }
         }
+
         Ok(())
     }
 
@@ -341,6 +370,7 @@ impl Workspace {
             Err(WorkspaceError::PermissionDenied(err)) => {
                 Err(WorkspaceError::PermissionDenied(err))
             }
+
             Err(WorkspaceError::InvalidPath) => {
                 let resolved =
                     ResolvedPath::resolve(path, Some(&self.path)).map_err(WorkspaceError::Io)?;
@@ -352,6 +382,7 @@ impl Workspace {
                     path: canonical.to_path_buf(),
                     access: crate::capability::FilesystemAccess::ReadWrite,
                 };
+
                 match self.policy.check_filesystem(&cap) {
                     crate::policy::PolicyDecision::Granted => {}
                     crate::policy::PolicyDecision::NeedsApproval(_) => {
@@ -372,15 +403,18 @@ impl Workspace {
                     .to_os_string();
 
                 let name_text = file_name.to_string_lossy();
+
                 if super::path_security::is_protected_workspace_name(&name_text) {
                     return Err(WorkspaceError::ProtectedPath);
                 }
 
                 let parent_file = open_canonical_parent_stepwise(parent_path)?;
                 let parent_meta = parent_file.metadata()?;
+
                 if !parent_meta.is_dir() {
                     return Err(WorkspaceError::NotDirectory);
                 }
+
                 self.check_protected_metadata(&parent_meta)?;
 
                 Ok((parent_file, file_name))
@@ -398,13 +432,16 @@ impl Workspace {
             Err(WorkspaceError::PermissionDenied(err)) => {
                 Err(WorkspaceError::PermissionDenied(err))
             }
+
             Err(WorkspaceError::InvalidPath) => {
                 let resolved =
                     ResolvedPath::resolve(path, Some(&self.path)).map_err(WorkspaceError::Io)?;
                 let canonical = resolved.canonical().to_path_buf();
+
                 if !canonical.metadata()?.is_dir() {
                     return Err(WorkspaceError::NotDirectory);
                 }
+
                 self.check_protected_path(&canonical)?;
 
                 let cap = crate::capability::FilesystemCapability {
@@ -412,6 +449,7 @@ impl Workspace {
                     path: canonical.clone(),
                     access: crate::capability::FilesystemAccess::Read,
                 };
+
                 match self.policy.check_filesystem(&cap) {
                     crate::policy::PolicyDecision::Granted => {}
                     crate::policy::PolicyDecision::NeedsApproval(_) => {
@@ -427,10 +465,13 @@ impl Workspace {
 
                 let dir = open_canonical_parent_stepwise(&canonical)?;
                 let meta = dir.metadata()?;
+
                 if !meta.is_dir() {
                     return Err(WorkspaceError::NotDirectory);
                 }
+
                 self.check_protected_metadata(&meta)?;
+
                 Ok(dir)
             }
         }
@@ -466,19 +507,25 @@ impl Workspace {
         directory: &File,
     ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
         use std::os::unix::ffi::OsStrExt;
+
         let entries = rustix::fs::Dir::read_from(directory).map_err(io::Error::from)?;
         let mut names = Vec::new();
+
         for entry in entries {
             let entry = entry.map_err(io::Error::from)?;
             let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes());
+
             if name != "." && name != ".." {
                 names.push(name.to_owned());
             }
+
             if names.len() > 10_000 {
                 return Err(io::Error::other("directory exceeds 10000 entries").into());
             }
         }
+
         names.sort();
+
         Ok(names)
     }
 
@@ -496,24 +543,32 @@ impl Workspace {
         // Each component is opened relative to an already-open directory, never via a
         // canonicalize-then-open path that could follow a swapped symlink.
         let mut directory = self.root.try_clone()?;
+
         for (index, name) in parts.iter().enumerate() {
             let last = index + 1 == parts.len();
             let mut flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
+
             if !last {
                 flags |= OFlags::DIRECTORY;
             }
+
             let fd = openat(&directory, *name, flags, Mode::empty()).map_err(io::Error::from)?;
             let file = File::from(fd);
+
             if last {
                 let metadata = file.metadata()?;
+
                 if !metadata.is_file() {
                     return Err(WorkspaceError::NotFile);
                 }
+
                 self.check_protected_metadata(&metadata)?;
                 return Ok(file);
             }
+
             directory = file;
         }
+
         Err(WorkspaceError::InvalidPath)
     }
 
@@ -527,6 +582,7 @@ impl Workspace {
             Err(WorkspaceError::PermissionDenied(err)) => {
                 Err(WorkspaceError::PermissionDenied(err))
             }
+
             Err(WorkspaceError::InvalidPath) => {
                 let resolved =
                     ResolvedPath::resolve(path, Some(&self.path)).map_err(WorkspaceError::Io)?;
@@ -538,6 +594,7 @@ impl Workspace {
                     path: canonical.clone(),
                     access: crate::capability::FilesystemAccess::Read,
                 };
+
                 match self.policy.check_filesystem(&cap) {
                     crate::policy::PolicyDecision::Granted => {}
                     crate::policy::PolicyDecision::NeedsApproval(_) => {
@@ -556,9 +613,11 @@ impl Workspace {
 
                 let parent_file = open_canonical_parent_stepwise(parent_path)?;
                 let parent_meta = parent_file.metadata()?;
+
                 if !parent_meta.is_dir() {
                     return Err(WorkspaceError::NotDirectory);
                 }
+
                 self.check_protected_metadata(&parent_meta)?;
 
                 let fd = openat(
@@ -570,11 +629,13 @@ impl Workspace {
                 .map_err(io::Error::from)?;
                 let file = File::from(fd);
                 let metadata = file.metadata()?;
+
                 if !metadata.is_file() {
                     return Err(WorkspaceError::NotFile);
                 }
 
                 let canon_meta = canonical.metadata()?;
+
                 if metadata.dev() != canon_meta.dev() || metadata.ino() != canon_meta.ino() {
                     return Err(WorkspaceError::Io(io::Error::other(
                         "file inode changed during open",
@@ -582,6 +643,7 @@ impl Workspace {
                 }
 
                 self.check_protected_metadata(&metadata)?;
+
                 Ok(file)
             }
         }
@@ -609,6 +671,7 @@ mod tests {
 
         let mut workspace = Workspace::new(ws_dir.path()).unwrap();
         workspace.protect_opaque_runtime_root(&opaque).unwrap();
+
         assert!(matches!(
             workspace.open_read(Path::new("alias.txt")),
             Err(WorkspaceError::ProtectedPath)
@@ -625,6 +688,7 @@ mod tests {
         std::fs::hard_link(&private_file, ws_dir.path().join("alias.txt")).unwrap();
 
         let workspace = Workspace::new(ws_dir.path()).unwrap();
+
         assert!(matches!(
             workspace.open_read(Path::new("alias.txt")),
             Err(WorkspaceError::ProtectedPath)
@@ -650,6 +714,7 @@ mod tests {
             .configure_policy(perms, NetworkPolicy::Allow)
             .unwrap_err()
             .to_string();
+
         assert!(err.contains("conflicts with protected path"));
 
         // 2. protect() fails if persistent permission is already configured
@@ -663,6 +728,7 @@ mod tests {
 
         let sub_secret = other_outside.path().join("secret.db");
         let err2 = ws2.protect(&sub_secret).unwrap_err().to_string();
+
         assert!(err2.contains("conflicts with persistent permission"));
     }
 
@@ -685,6 +751,7 @@ mod tests {
         ws.configure_policy(initial_perms, NetworkPolicy::Deny)
             .unwrap();
         let valid_canonical = valid_dir.path().canonicalize().unwrap();
+
         assert_eq!(
             ws.policy().effective_policy().persistent_read[0].canonical(),
             valid_canonical
@@ -698,10 +765,12 @@ mod tests {
         let err = ws
             .configure_policy(bad_perms, NetworkPolicy::Allow)
             .unwrap_err();
+
         assert!(err.to_string().contains("conflicts with protected path"));
 
         // 3. Verify that self.policy was NOT mutated
         let current_policy = ws.policy().effective_policy();
+
         assert_eq!(current_policy.persistent_read.len(), 1);
         assert_eq!(
             current_policy.persistent_read[0].canonical(),

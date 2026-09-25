@@ -27,9 +27,11 @@ fn merge_extra(body: &mut Value, extra: &Value) {
 pub(crate) fn apply_openai_chat(body: &mut Value, effort: ReasoningEffort, extra: &Value) {
     if effort == ReasoningEffort::None {
         merge_extra(body, extra);
+
         if body.get("enable_thinking").is_some() {
             body["enable_thinking"] = json!(false);
         }
+
         if let Some(kwargs) = body
             .get_mut("chat_template_kwargs")
             .and_then(Value::as_object_mut)
@@ -37,6 +39,7 @@ pub(crate) fn apply_openai_chat(body: &mut Value, effort: ReasoningEffort, extra
         {
             kwargs.insert("enable_thinking".into(), json!(false));
         }
+
         body["reasoning_effort"] = json!("none");
     } else {
         body["reasoning_effort"] = json!(effort);
@@ -45,20 +48,21 @@ pub(crate) fn apply_openai_chat(body: &mut Value, effort: ReasoningEffort, extra
 }
 
 pub(crate) fn apply_openai_responses(body: &mut Value, effort: ReasoningEffort, extra: &Value) {
-    body["reasoning"] = json!({"effort": effort});
+    body["reasoning"] = json!({ "effort": effort });
     merge_extra(body, extra);
 }
 
 pub(crate) fn apply_anthropic_messages(body: &mut Value, effort: ReasoningEffort, extra: &Value) {
     if effort == ReasoningEffort::None {
         merge_extra(body, extra);
-        body["thinking"] = json!({"type": "disabled"});
+        body["thinking"] = json!({ "type": "disabled" });
+
         if let Some(obj) = body.as_object_mut() {
             obj.remove("output_config");
         }
     } else {
-        body["thinking"] = json!({"type": "adaptive"});
-        body["output_config"] = json!({"effort": effort});
+        body["thinking"] = json!({ "type": "adaptive" });
+        body["output_config"] = json!({ "effort": effort });
         merge_extra(body, extra);
     }
 }
@@ -73,8 +77,9 @@ mod tests {
         apply_openai_chat(
             &mut body,
             ReasoningEffort::None,
-            &json!({"enable_thinking": true}),
+            &json!({ "enable_thinking": true }),
         );
+
         assert_eq!(body["reasoning_effort"], "none");
         assert_eq!(body["enable_thinking"], false);
     }
@@ -83,6 +88,7 @@ mod tests {
     fn test_apply_openai_responses_none() {
         let mut body = json!({});
         apply_openai_responses(&mut body, ReasoningEffort::None, &json!({}));
+
         assert_eq!(body["reasoning"]["effort"], "none");
     }
 
@@ -92,8 +98,11 @@ mod tests {
         apply_anthropic_messages(
             &mut body,
             ReasoningEffort::None,
-            &json!({"thinking": {"type": "enabled"}}),
+            &json!({
+                "thinking": { "type": "enabled" }
+            }),
         );
+
         assert_eq!(body["thinking"]["type"], "disabled");
         assert!(body.get("output_config").is_none());
     }

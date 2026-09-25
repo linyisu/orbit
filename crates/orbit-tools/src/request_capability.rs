@@ -43,19 +43,13 @@ impl Tool for RequestCapability {
             json!({
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path outside the workspace (e.g. '~/.cargo' or '/tmp/build')"
-                    },
+                    "path": { "type": "string", "description": "Path outside the workspace (e.g. '~/.cargo' or '/tmp/build')" },
                     "access": {
                         "type": "string",
                         "enum": ["read", "read_write"],
                         "description": "Requested access level: 'read' for read-only, 'read_write' for read and write"
                     },
-                    "reason": {
-                        "type": "string",
-                        "description": "Explanation to the user for why this access is necessary"
-                    }
+                    "reason": { "type": "string", "description": "Explanation to the user for why this access is necessary" }
                 },
                 "required": ["path", "access", "reason"],
                 "additionalProperties": false
@@ -120,9 +114,11 @@ impl Tool for RequestCapability {
                     })
                     .to_string(),
                 )),
+
                 PolicyDecision::Denied(reason) => Err(ToolError::ExecutionFailed(format!(
                     "permission permanently denied: {reason}"
                 ))),
+
                 PolicyDecision::NeedsApproval(caps) => {
                     if cancellation.is_cancelled() {
                         return Err(ToolError::Cancelled);
@@ -175,11 +171,7 @@ impl Tool for RequestCapability {
                     }
 
                     Ok(ToolOutput::text(
-                        json!({
-                            "status": "granted",
-                            "path": resolved.canonical().display().to_string(),
-                            "access": capability.access.description()
-                        })
+                        json!({ "status": "granted", "path": resolved.canonical().display().to_string(), "access": capability.access.description() })
                         .to_string(),
                     ))
                 }

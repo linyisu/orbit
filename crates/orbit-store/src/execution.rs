@@ -21,6 +21,7 @@ pub(crate) struct Journal {
     pub pending: std::sync::Mutex<Vec<AgentEvent>>,
     pub pending_messages: std::sync::Mutex<Vec<ChatMessage>>,
 }
+
 impl Journal {
     async fn commit(
         &self,
@@ -41,15 +42,18 @@ impl Journal {
             let transaction=conn.transaction()?;
             let active:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND session_id=?2 AND status='running')",params![run,session],|r|r.get(0))?;
             ensure!(active,"checkpoint writer no longer owns an active run");
+
             if let Some(checkpoint)=checkpoint {
                 transaction.execute("INSERT INTO execution_checkpoints(run_id,payload) VALUES(?1,?2) ON CONFLICT(run_id) DO UPDATE SET payload=excluded.payload",params![run,serde_json::to_string(&checkpoint)?])?;
             }
+
             if !messages.is_empty() {
                 let first_ordinal: i64 = transaction.query_row(
                     "SELECT COALESCE(MAX(ordinal)+1,0) FROM session_messages WHERE run_id=?1",
                     [run],
                     |row| row.get(0),
                 )?;
+
                 for (ordinal, message) in (first_ordinal..).zip(messages) {
                     let payload = serde_json::to_string(&message)?;
                     let sha256 = Sha256::digest(payload.as_bytes())
@@ -62,17 +66,22 @@ impl Journal {
                     )?;
                 }
             }
+
             for event in events {
                 transaction.execute("INSERT INTO events(run_id,payload,created_at_ms) VALUES(?1,?2,CAST(unixepoch('subsec') * 1000 AS INTEGER))",params![run,serde_json::to_string(&event)?])?;
             }
+
             transaction.commit()?;
+
             Ok(())
         }).await.map_err(|e|AgentError::Checkpoint(e.to_string()))?;
         journal_lock(&self.pending).drain(..event_count);
         journal_lock(&self.pending_messages).drain(..message_count);
+
         Ok(())
     }
 }
+
 impl ExecutionJournal for Journal {
     fn record(&self, event: AgentEvent) {
         // These receipts were already committed together with their context
@@ -86,12 +95,15 @@ impl ExecutionJournal for Journal {
             journal_lock(&self.pending).push(event);
         }
     }
+
     fn record_message(&self, message: ChatMessage) {
         journal_lock(&self.pending_messages).push(message);
     }
+
     fn flush(&self) -> CheckpointFuture<'_> {
         Box::pin(self.commit(None, None))
     }
+
     fn save<'a>(
         &'a self,
         checkpoint: ExecutionCheckpoint,

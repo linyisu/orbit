@@ -26,17 +26,20 @@ async fn command_denial_and_cancellation_do_not_start_a_process() {
     let tool = RunCommand::new(workspace.clone(), sender);
     let task = tokio::spawn(async move {
         tool.execute(
-            ToolCall::function("run", "run_command", json!({"command":"echo no"})),
+            ToolCall::function("run", "run_command", json!({ "command": "echo no" })),
             CancellationToken::new(),
         )
         .await
     });
     let request = receiver.recv().await.unwrap();
+
     assert!(matches!(
         request.preview,
         approval::ApprovalPreview::Command(_)
     ));
+
     request.decision.send(false).unwrap();
+
     assert!(
         task.await
             .unwrap()
@@ -44,19 +47,21 @@ async fn command_denial_and_cancellation_do_not_start_a_process() {
             .to_string()
             .contains("denied")
     );
+
     let (sender, mut receiver) = approval::channel();
     let tool = RunCommand::new(workspace, sender);
     let token = CancellationToken::new();
     let clone = token.clone();
     let task = tokio::spawn(async move {
         tool.execute(
-            ToolCall::function("run", "run_command", json!({"command":"echo no"})),
+            ToolCall::function("run", "run_command", json!({ "command": "echo no" })),
             clone,
         )
         .await
     });
     let _request = receiver.recv().await.unwrap();
     token.cancel();
+
     assert!(task.await.unwrap().is_err());
 }
 
@@ -65,13 +70,14 @@ async fn validates_command_parameters_before_approval() {
     let (_root, workspace) = fixture();
     let (sender, mut receiver) = approval::channel();
     let tool = RunCommand::new(workspace, sender);
+
     for args in [
-        json!({"command":""}),
-        json!({"command":"echo hi","timeout_seconds":0}),
-        json!({"command":"echo hi","timeout_seconds":601}),
-        json!({"command":"echo hi","writable_snapshot":"yes"}),
-        json!({"command":"x\u{0000}"}),
-        json!({"command":"echo hi","unknown":true}),
+        json!({ "command": "" }),
+        json!({ "command": "echo hi", "timeout_seconds": 0 }),
+        json!({ "command": "echo hi", "timeout_seconds": 601 }),
+        json!({ "command": "echo hi", "writable_snapshot": "yes" }),
+        json!({ "command": "x\u{0000}" }),
+        json!({ "command": "echo hi", "unknown": true }),
     ] {
         assert!(
             tool.execute(
@@ -99,6 +105,7 @@ async fn reads_snapshot_but_cannot_write_project_or_read_protected_files() {
     fs::create_dir(root.path().join(".git")).unwrap();
     fs::write(root.path().join(".git/config"), "secret").unwrap();
     let result = sandbox::run(workspace,"pwd; cat source.txt; test ! -e .env && test ! -e private.db && test ! -e alias && test ! -e outside && test ! -e .git && test ! -e nested/.env.local || exit 9; echo changed > source.txt; test \"$(cat source.txt)\" = 'hello sandbox'".into(),Duration::from_secs(10),CancellationToken::new()).await.unwrap();
+
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stdout.contains("/workspace\nhello sandbox"));
     assert!(result.stderr.contains("Read-only file system"));
@@ -128,6 +135,7 @@ async fn isolates_host_files_network_environment_and_processes() {
     )
     .await
     .unwrap();
+
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stdout.contains("network blocked"));
 }
@@ -148,6 +156,7 @@ async fn timeout_stops_background_descendants_and_closes_pipes() {
     .await
     .expect("must terminate descendants")
     .unwrap();
+
     assert!(result.timed_out, "{result:?}");
 }
 
@@ -168,6 +177,7 @@ async fn cancellation_stops_a_running_command() {
     .await
     .unwrap()
     .unwrap();
+
     assert!(result.cancelled, "{result:?}");
 }
 
@@ -183,12 +193,14 @@ async fn verbose_output_does_not_kill_commands_and_preserves_final_status() {
     )
     .await
     .unwrap();
+
     assert!(result.output_truncated);
     assert!(result.stdout.len() <= 32768);
     assert_eq!(result.exit_code, Some(7));
     assert!(result.elapsed_ms <= 5_000);
     assert!(result.stdout.ends_with("FINAL_OK"));
     assert_eq!(result.stdout_total_bytes, 100009);
+
     let result = sandbox::run(
         workspace,
         "printf out; printf err >&2; exit 7".into(),
@@ -197,6 +209,7 @@ async fn verbose_output_does_not_kill_commands_and_preserves_final_status() {
     )
     .await
     .unwrap();
+
     assert_eq!(result.exit_code, Some(7));
     assert_eq!(result.stdout, "out");
     assert_eq!(result.stderr, "err");
@@ -215,6 +228,7 @@ async fn writable_snapshot_builds_without_changing_host_and_discards_outputs() {
     let result = sandbox::run_with_options(workspace.clone(),
         "set -e; mkdir build; cc main.c -o build/program; ./build/program; echo edited > source.txt; test ! -e .env; test ! -e /home; test ! -e /orbit-source/.env; test $(stat -f -c %T /workspace) = tmpfs; echo changed > /orbit-source/source.txt".into(),
         Duration::from_secs(20), CancellationToken::new(), true).await.unwrap();
+
     assert_ne!(result.exit_code, Some(0), "{result:?}"); // Attempt to modify the source mount fails.
     assert!(result.stdout.contains("built safely"), "{result:?}");
     assert!(
@@ -226,6 +240,7 @@ async fn writable_snapshot_builds_without_changing_host_and_discards_outputs() {
         "hello sandbox\n"
     );
     assert!(!root.path().join("build").exists());
+
     let second = sandbox::run_with_options(
         workspace,
         "test ! -e build && test \"$(cat source.txt)\" = 'hello sandbox'".into(),
@@ -235,6 +250,7 @@ async fn writable_snapshot_builds_without_changing_host_and_discards_outputs() {
     )
     .await
     .unwrap();
+
     assert_eq!(second.exit_code, Some(0));
 }
 
@@ -263,6 +279,7 @@ async fn writable_workspace_has_a_total_size_limit() {
         None,
         None,
     ).await.unwrap();
+
     assert_ne!(result.exit_code, Some(0));
     assert!(
         result.stderr.contains("No space left on device"),
@@ -273,7 +290,9 @@ async fn writable_workspace_has_a_total_size_limit() {
 #[tokio::test]
 async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
     use orbit_tools::approval::ApprovalPreview;
+
     use orbit_tools::run_command::CommandLimits;
+
     let (_root, workspace) = fixture();
     let (tx, mut rx) = approval::channel();
     let tool = RunCommand::with_limits(
@@ -286,21 +305,23 @@ async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
             ..Default::default()
         },
     );
+
     assert!(
         tool.execute(
             ToolCall::function(
                 "bad",
                 "run_command",
-                json!({"command":"true", "timeout_seconds":1801})
+                json!({ "command": "true", "timeout_seconds": 1801 })
             ),
             CancellationToken::new()
         )
         .await
         .is_err()
     );
+
     let task = tokio::spawn(async move {
         tool.execute(
-            ToolCall::function("run", "run_command", json!({"command":"true"})),
+            ToolCall::function("run", "run_command", json!({ "command": "true" })),
             CancellationToken::new(),
         )
         .await
@@ -309,8 +330,11 @@ async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
     let ApprovalPreview::Command(preview) = request.preview else {
         panic!("command preview")
     };
+
     assert_eq!(preview.timeout_seconds, 300);
+
     request.decision.send(false).unwrap();
+
     assert!(task.await.unwrap().is_err());
     assert!(
         CommandLimits {
@@ -336,6 +360,7 @@ async fn process_limits_keep_memory_and_descriptor_bounds() {
     )
     .await
     .unwrap();
+
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "4194304\n1024\n");
 }
@@ -355,6 +380,7 @@ async fn seccomp_rejects_ptrace_without_blocking_normal_processes() {
         .arg(root.path().join("seccomp_probe"))
         .output()
         .unwrap();
+
     assert!(
         compiled.status.success(),
         "stdout: {}\nstderr: {}",
@@ -387,6 +413,7 @@ async fn command_stderr_with_a_bwrap_prefix_is_a_normal_program_failure() {
     )
     .await
     .unwrap();
+
     assert_eq!(result.exit_code, Some(7));
     assert_eq!(result.stderr, "bwrap: ordinary program error\n");
 }
@@ -406,6 +433,7 @@ async fn commands_larger_than_os_argument_limit_run_from_private_script() {
         )
         .await
         .unwrap();
+
         assert_eq!(result.exit_code, Some(0), "{result:?}");
         assert_eq!(result.stdout, "LONG_COMMAND_OK");
         assert!(!root.path().join("orbit-command.sh").exists());
@@ -424,6 +452,7 @@ async fn infinite_output_is_bounded_and_still_obeys_timeout() {
     )
     .await
     .unwrap();
+
     assert!(result.timed_out);
     assert!(result.output_truncated);
     assert!(result.stdout.len() <= 32768);
@@ -438,7 +467,7 @@ async fn large_commands_reach_approval_without_an_arbitrary_tool_size_limit() {
     let expected = command.clone();
     let task = tokio::spawn(async move {
         tool.execute(
-            ToolCall::function("long", "run_command", json!({"command":command})),
+            ToolCall::function("long", "run_command", json!({ "command": command })),
             CancellationToken::new(),
         )
         .await
@@ -450,8 +479,11 @@ async fn large_commands_reach_approval_without_an_arbitrary_tool_size_limit() {
     let orbit_tools::approval::ApprovalPreview::Command(preview) = request.preview else {
         panic!("command preview");
     };
+
     assert_eq!(preview.command, expected);
+
     request.decision.send(false).unwrap();
+
     assert!(
         task.await
             .unwrap()
@@ -475,6 +507,7 @@ async fn configured_rust_toolchain_compiles_and_runs_without_host_home() {
     let result = sandbox::run_with_toolchain(workspace,
         "rustc main.rs -o /tmp/rust-test && /tmp/rust-test && cargo --version && test ! -e /tmp/home/.cargo/credentials.toml && test ! -e /opt/orbit-rust/../.cargo && test ! -w /opt/orbit-rust/bin/rustc".into(),
         Duration::from_secs(30), CancellationToken::new(), false, Some(std::path::Path::new(&toolchain))).await.unwrap();
+
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stdout.contains("RUST_OK=3628800"));
     assert!(!root.path().join("rust-test").exists());
@@ -487,6 +520,7 @@ async fn scratch_persists_between_commands_and_is_separate_from_tmp_and_other_se
     let data = tempfile::tempdir().unwrap();
     let first = data.path().join("session-one");
     let second = data.path().join("session-two");
+
     for (directory, script) in [
         (
             &first,
@@ -516,9 +550,11 @@ async fn scratch_persists_between_commands_and_is_separate_from_tmp_and_other_se
         )
         .await
         .unwrap();
+
         assert_eq!(result.exit_code, Some(0), "{result:?}");
         assert!(result.scratch.is_some());
     }
+
     assert!(!root.path().join("state").exists());
     assert_eq!(
         fs::read_to_string(first.join("state")).unwrap(),
@@ -534,6 +570,7 @@ async fn scratch_persists_between_commands_and_is_separate_from_tmp_and_other_se
 #[ignore = "requires Linux user namespaces"]
 async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
     use orbit_tools::run_command::{CommandLimits, DependencyCache};
+
     let (root, workspace) = fixture();
     let cache = tempfile::tempdir().unwrap();
     fs::write(cache.path().join("package.txt"), "offline dependency").unwrap();
@@ -570,14 +607,18 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
     )
     .await
     .unwrap();
+
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stdout.contains("offline dependency"));
+
     let evidence_mounts = result.verification.unwrap().mounts;
+
     assert_eq!(
         evidence_mounts,
         vec!["/opt/orbit-cache/packages: ro".to_string()]
     );
     assert!(!evidence_mounts[0].contains(cache.path().to_str().unwrap()));
+
     fs::write(root.path().join("large.bin"), vec![0; 1024 * 1024 + 1]).unwrap();
     let error = sandbox::run_configured(
         workspace,
@@ -594,5 +635,6 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
     )
     .await
     .unwrap_err();
+
     assert!(error.to_string().contains("exceeds 1 MiB"));
 }

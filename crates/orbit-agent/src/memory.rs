@@ -20,6 +20,7 @@ impl FileActivity {
         let Some(path) = value.get("path").and_then(|v| v.as_str()) else {
             return;
         };
+
         match call.function.name.as_str() {
             "read_file"
                 if value.get("content").is_some_and(|v| v.is_string())
@@ -44,10 +45,12 @@ impl FileActivity {
     pub fn from_history(history: &[ChatMessage]) -> Self {
         let mut files = Self::default();
         let mut calls = BTreeMap::new();
+
         for message in history {
             match message {
                 ChatMessage::Assistant { tool_calls, .. } => {
                     calls.clear();
+
                     for call in tool_calls {
                         calls.insert(call.id.clone(), call);
                     }
@@ -65,11 +68,13 @@ impl FileActivity {
                 }
             }
         }
+
         files
     }
 
     pub fn from_events<'a>(events: impl IntoIterator<Item = &'a AgentEvent>) -> Self {
         let mut files = Self::default();
+
         for event in events {
             match event {
                 AgentEvent::ToolFinished { call, content, .. } => files.observe(call, content),
@@ -77,6 +82,7 @@ impl FileActivity {
                 _ => {}
             }
         }
+
         files
     }
 }
@@ -115,11 +121,13 @@ impl TaskSummary {
             .unwrap_or(text)
             .trim();
         let summary: Self = serde_json::from_str(text).map_err(|_| AgentError::Compaction("summary must contain the required structured task fields; original context preserved".into()))?;
+
         if summary.goal.trim().is_empty() {
             return Err(AgentError::Compaction(
                 "summary goal is empty; original context preserved".into(),
             ));
         }
+
         Ok(summary)
     }
 
@@ -130,17 +138,20 @@ impl TaskSummary {
         if let Ok(summary) = Self::parse(text) {
             return Ok(summary);
         }
+
         // The model output is capped by the caller, and only a small number of
         // candidate objects are worth trying. Bound parsing work on prose or
         // code-heavy malformed output.
         for (start, _) in text.match_indices('{').take(32) {
             let mut values = serde_json::Deserializer::from_str(&text[start..]).into_iter::<Self>();
+
             if let Some(Ok(summary)) = values.next()
                 && !summary.goal.trim().is_empty()
             {
                 return Ok(summary);
             }
         }
+
         Err(AgentError::Compaction(
             "summary must contain the required structured task fields; original context preserved"
                 .into(),
@@ -149,6 +160,7 @@ impl TaskSummary {
 
     pub fn render(&self) -> String {
         let mut text = format!("目标\n{}", self.goal);
+
         for (title, items) in [
             ("约束", &self.constraints),
             ("决策", &self.decisions),
@@ -158,6 +170,7 @@ impl TaskSummary {
             ("不确定事项", &self.uncertainty),
         ] {
             text.push_str(&format!("\n\n{title}\n"));
+
             if items.is_empty() {
                 text.push_str("未记录");
             } else {
@@ -170,6 +183,7 @@ impl TaskSummary {
                 );
             }
         }
+
         text
     }
 }

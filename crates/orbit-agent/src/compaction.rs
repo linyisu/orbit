@@ -16,6 +16,7 @@ pub struct CompactionSettings {
     pub manual_request_timeout_seconds: u64,
     pub manual_total_timeout_seconds: u64,
 }
+
 impl Default for CompactionSettings {
     fn default() -> Self {
         Self {
@@ -29,6 +30,7 @@ impl Default for CompactionSettings {
         }
     }
 }
+
 impl CompactionSettings {
     pub fn validate(&self) -> Result<(), &'static str> {
         if !(1024..=1_000_000).contains(&self.max_input_tokens)
@@ -55,6 +57,7 @@ impl CompactionSettings {
         }) {
             return Err("compaction.model must be a configured provider::model");
         }
+
         Ok(())
     }
 }
@@ -64,12 +67,15 @@ pub struct CompactionRuntime {
     pub settings: CompactionSettings,
     pub backend: Option<Arc<dyn ModelBackend>>,
 }
+
 impl CompactionRuntime {
     pub fn for_input_window(&self, input: usize) -> Self {
         let mut runtime = self.clone();
+
         if runtime.backend.is_none() {
             runtime.settings.max_input_tokens = runtime.settings.max_input_tokens.min(input);
         }
+
         runtime
     }
 }
@@ -85,6 +91,7 @@ pub enum CompactionFailureKind {
     InsufficientReduction,
     Archive,
 }
+
 impl CompactionFailureKind {
     pub fn label(self) -> &'static str {
         match self {

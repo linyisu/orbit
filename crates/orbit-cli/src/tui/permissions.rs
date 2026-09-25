@@ -18,6 +18,7 @@ impl Mode {
             _ => None,
         }
     }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Ask => "ask",
@@ -25,6 +26,7 @@ impl Mode {
             Self::Yolo => "YOLO",
         }
     }
+
     pub fn next(self) -> Self {
         match self {
             Self::Ask => Self::Auto,
@@ -32,6 +34,7 @@ impl Mode {
             Self::Yolo => Self::Ask,
         }
     }
+
     pub fn allows(self, preview: &ApprovalPreview, workspace: &Path) -> bool {
         match self {
             Self::Ask => false,
@@ -39,11 +42,12 @@ impl Mode {
             Self::Yolo => true,
         }
     }
+
     pub fn description(self) -> &'static str {
         match self {
             Self::Ask => "ask：文件修改、沙箱命令、MCP 调用和外部权限逐次确认",
             Self::Auto => {
-                "auto：工作区文件工具和离线只读命令自动执行；联网、Shell 写入和外部权限需确认"
+                "auto：工作区文件工具和离线只读命令自动执行；联网命令、Shell 写入、MCP 和外部权限需确认"
             }
             Self::Yolo => "YOLO：全部操作自动确认通过（沙箱和权限边界限制不变）",
         }
@@ -100,12 +104,14 @@ mod tests {
             access: FilesystemAccess::ReadWrite,
             reason: "testing".into(),
         });
+
         assert!(!Mode::Ask.allows(&cmd_read, root));
         assert!(!Mode::Ask.allows(&cmd_rw, root));
         assert!(!Mode::Ask.allows(&write, root));
         assert!(!Mode::Ask.allows(&capability, root));
         assert!(!Mode::Auto.allows(&cmd_read, root));
         assert!(!Mode::Auto.allows(&cmd_rw, root));
+
         let offline_read = ApprovalPreview::Command(CommandPreview {
             network_allowed: false,
             ..match cmd_read.clone() {
@@ -113,6 +119,7 @@ mod tests {
                 _ => unreachable!(),
             }
         });
+
         assert!(Mode::Auto.allows(&offline_read, root));
         assert!(Mode::Auto.allows(&write, root));
         assert!(Mode::Auto.allows(&delete, root));
@@ -125,6 +132,7 @@ mod tests {
         assert!(Mode::Yolo.allows(&delete, root));
         assert!(Mode::Yolo.allows(&mcp, root));
         assert!(Mode::Yolo.allows(&capability, root));
+
         let outside = ApprovalPreview::Write(WritePreview {
             path: workspace
                 .path()
@@ -136,7 +144,9 @@ mod tests {
             before: None,
             after: "text".into(),
         });
+
         assert!(!Mode::Auto.allows(&outside, root));
+
         let external_command = ApprovalPreview::Command(CommandPreview {
             command: "write outside".into(),
             timeout_seconds: 30,
@@ -145,6 +155,7 @@ mod tests {
             external_capabilities: Vec::new(),
             external_write: true,
         });
+
         assert!(!Mode::Auto.allows(&external_command, root));
         assert_eq!(Mode::default(), Mode::Auto);
         assert_eq!(Mode::Auto.next().next().next(), Mode::Auto);

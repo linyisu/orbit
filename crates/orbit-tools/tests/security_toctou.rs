@@ -32,16 +32,19 @@ async fn protected_files_and_hardlinks_cannot_be_accessed_even_with_capability()
 
     // open_granted_read must reject protected path
     let err = workspace.open_granted_read(&secret).unwrap_err();
+
     assert!(matches!(err, WorkspaceError::ProtectedPath));
 
     // Hard link to the secret must also be rejected
     let link = ext_temp.path().join("link_to_secret.key");
     fs::hard_link(&secret, &link).unwrap();
     let err_link = workspace.open_granted_read(&link).unwrap_err();
+
     assert!(matches!(err_link, WorkspaceError::ProtectedPath));
 
     // Writing to protected path must also be rejected
     let err_write = workspace.open_granted_write_parent(&secret).unwrap_err();
+
     assert!(matches!(err_write, WorkspaceError::ProtectedPath));
 
     // ReadFile tool must also reject it
@@ -57,6 +60,7 @@ async fn protected_files_and_hardlinks_cannot_be_accessed_even_with_capability()
         )
         .await
         .unwrap_err();
+
     assert!(tool_err.to_string().contains("blocked"));
 }
 
@@ -98,5 +102,6 @@ async fn ungranted_symlink_pointing_outside_is_blocked() {
             CancellationToken::new(),
         )
         .await;
+
     assert!(write_err.is_err());
 }

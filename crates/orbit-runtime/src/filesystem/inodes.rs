@@ -15,6 +15,7 @@ pub(crate) fn collect_dir_inodes(
 ) -> Result<(), RuntimeError> {
     let mut queue = VecDeque::from([(dir.to_path_buf(), 0usize)]);
     let mut visited = 0usize;
+
     const MAX_PROTECTED_DIR_ENTRIES: usize = 20_000;
     const MAX_PROTECTED_DIR_DEPTH: usize = 32;
 
@@ -29,6 +30,7 @@ pub(crate) fn collect_dir_inodes(
                 )));
             }
         };
+
         for entry in entries {
             let entry = entry.map_err(|e| {
                 failed(format!(
@@ -37,12 +39,14 @@ pub(crate) fn collect_dir_inodes(
                 ))
             })?;
             visited += 1;
+
             if visited > MAX_PROTECTED_DIR_ENTRIES {
                 return Err(failed(format!(
                     "protected directory '{}' exceeds maximum scan limit of {MAX_PROTECTED_DIR_ENTRIES} entries",
                     dir.display()
                 )));
             }
+
             let meta = entry.path().symlink_metadata().map_err(|e| {
                 failed(format!(
                     "failed to inspect protected entry '{}': {e}",
@@ -50,6 +54,7 @@ pub(crate) fn collect_dir_inodes(
                 ))
             })?;
             protected_inodes.insert((meta.dev(), meta.ino()));
+
             if meta.is_dir() && !meta.file_type().is_symlink() {
                 if depth >= MAX_PROTECTED_DIR_DEPTH {
                     return Err(failed(format!(
@@ -58,10 +63,12 @@ pub(crate) fn collect_dir_inodes(
                         entry.path().display()
                     )));
                 }
+
                 queue.push_back((entry.path(), depth + 1));
             }
         }
     }
+
     Ok(())
 }
 
@@ -79,10 +86,12 @@ pub(crate) fn collect_opaque_inodes_for_dev(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(failed(error)),
         };
+
         if metadata.dev() == device && metadata.is_dir() && scanned.insert(root.clone()) {
             collect_dir_inodes(root, protected_inodes)?;
         }
     }
+
     Ok(())
 }
 
@@ -95,26 +104,32 @@ pub(crate) fn is_reserved_workspace_inode(
 ) -> Result<bool, RuntimeError> {
     let mut queue = VecDeque::from([(root.to_path_buf(), 0usize)]);
     let mut visited = 0usize;
+
     const MAX_SCAN_ENTRIES: usize = 100_000;
     const MAX_SCAN_DEPTH: usize = 32;
 
     while let Some((directory, depth)) = queue.pop_front() {
         let entries = std::fs::read_dir(&directory).map_err(failed)?;
+
         for entry in entries {
             let entry = entry.map_err(failed)?;
             visited += 1;
+
             if visited > MAX_SCAN_ENTRIES {
                 return Err(failed("reserved path scan exceeded 100000 entries"));
             }
+
             let path = entry.path();
             let meta = std::fs::symlink_metadata(&path).map_err(failed)?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
             let reserved = super::path_security::is_protected_workspace_name(&name);
+
             if reserved {
                 if (meta.dev(), meta.ino()) == candidate {
                     return Ok(true);
                 }
+
                 if meta.is_dir() {
                     let mut descendants = HashSet::new();
                     collect_dir_inodes(&path, &mut descendants)?;
@@ -122,15 +137,19 @@ pub(crate) fn is_reserved_workspace_inode(
                         return Ok(true);
                     }
                 }
+
                 continue;
             }
+
             if meta.is_dir() && !meta.file_type().is_symlink() {
                 if depth >= MAX_SCAN_DEPTH {
                     return Err(failed("reserved path scan exceeded 32 directory levels"));
                 }
+
                 queue.push_back((path, depth + 1));
             }
         }
     }
+
     Ok(false)
 }

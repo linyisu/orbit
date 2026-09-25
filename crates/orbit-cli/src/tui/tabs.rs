@@ -49,6 +49,7 @@ impl Tabs {
         } else {
             (index + 1) % self.order.len()
         };
+
         self.target(next)
     }
 
@@ -77,6 +78,7 @@ impl Tabs {
         state.tab_hover_tick = 0;
 
         let next_id = session.id().to_owned();
+
         if !self.contains(&next_id) {
             self.order.push(next_id);
         }
@@ -93,6 +95,7 @@ impl Tabs {
         let Some(parked) = self.parked.remove(id) else {
             return false;
         };
+
         self.activate(
             session,
             state,
@@ -100,6 +103,7 @@ impl Tabs {
             history,
             (parked.prepared, parked.state, parked.model, parked.history),
         );
+
         true
     }
 
@@ -107,7 +111,9 @@ impl Tabs {
         if self.parked.remove(id).is_none() {
             return false;
         }
+
         self.order.retain(|item| item != id);
+
         true
     }
 
@@ -129,6 +135,7 @@ impl Tabs {
         self.restore(&next_id, session, state, model, history);
         self.parked.remove(&current_id);
         self.order.retain(|id| id != &current_id);
+
         true
     }
 
@@ -146,6 +153,7 @@ impl Tabs {
                         parked.state.status.clone(),
                     )
                 };
+
                 Some(SessionTab {
                     id: id.clone(),
                     title: title.clone(),
@@ -164,6 +172,7 @@ mod tests {
     #[tokio::test]
     async fn plus_click_requests_a_new_tab_and_dialogs_block_it() {
         use super::super::{TabAction, tab_target};
+
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
         let dir = tempfile::tempdir().unwrap();
@@ -181,6 +190,7 @@ mod tests {
         });
 
         assert_eq!(tab_target(&event, &state, &tabs), Some(TabAction::New));
+
         state
             .tab_areas
             .push((ratatui::layout::Rect::new(2, 0, 15, 1), "first".into()));
@@ -193,11 +203,14 @@ mod tests {
             row: 0,
             modifiers: KeyModifiers::NONE,
         });
+
         assert_eq!(
             tab_target(&close, &state, &tabs),
             Some(TabAction::Close("first".into()))
         );
+
         state.show_help = true;
+
         assert_eq!(tab_target(&event, &state, &tabs), None);
         assert_eq!(tab_target(&close, &state, &tabs), None);
     }
@@ -211,9 +224,13 @@ mod tests {
         let first_id = session.id().to_owned();
         let mut tabs = Tabs::new(&session);
         let mut state = UiState::new("mock");
+
         assert_eq!(tabs.empty_tab(&session, &state), Some(first_id.clone()));
+
         state.input.set("first draft".into());
+
         assert_eq!(tabs.empty_tab(&session, &state), None);
+
         let mut model = ModelClient::new(Default::default()).unwrap();
         let mut history = vec![ChatMessage::user("first message")];
 

@@ -28,7 +28,9 @@ impl Wheel {
             // Do not accumulate a backlog: stopping the wheel stops the viewport.
             return false;
         }
+
         self.last = Some((mouse.kind, now));
+
         true
     }
 }
@@ -53,11 +55,13 @@ mod tests {
         let now = Instant::now();
         let up = wheel(MouseEventKind::ScrollUp);
         let mut moved = 0;
+
         for millis in 0..40 {
             if filter.accept(&up, now + Duration::from_millis(millis)) {
                 moved += LINES;
             }
         }
+
         assert_eq!(moved, 8);
         assert!(filter.accept(
             &wheel(MouseEventKind::ScrollDown),
@@ -78,10 +82,13 @@ mod tests {
         let mut filter = Wheel::default();
         let now = Instant::now();
         let up = wheel(MouseEventKind::ScrollUp);
+
         for tick in 0..5 {
             assert!(filter.accept(&up, now + Duration::from_millis(tick * 80)));
         }
+
         let key = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
         assert!(filter.accept(&key, now + Duration::from_millis(321)));
         assert!(filter.accept(&up, now + Duration::from_millis(322)));
     }

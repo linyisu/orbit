@@ -57,6 +57,7 @@ use self::{
 };
 
 type RunTask = JoinHandle<Result<AgentResult, AgentError>>;
+
 type ResumeTask = JoinHandle<Result<(crate::session::PreparedResume, Vec<ChatMessage>)>>;
 
 struct StartedRun {
@@ -148,15 +149,19 @@ pub async fn run(
         .collect();
     let mut history_replay =
         (!session.snapshot.runs.is_empty()).then(crate::session::HistoryReplay::default);
+
     if history_replay.is_some() {
         state.resume_loading = Some("正在显示会话历史…".into());
     }
+
     state.workspace = session.snapshot.session.workspace.clone();
+
     for diagnostic in plugin_skill_diagnostics {
         state.transcript.push(TranscriptItem::Notice(format!(
             "插件 Skill 未载入：{diagnostic}"
         )));
     }
+
     restore_model_profile(&mut state, &mut model, &model_options, &session);
     let mut history = session.snapshot.history.clone();
     crate::instructions::inject(&mut history, &instructions);
@@ -190,24 +195,29 @@ pub async fn run(
 
     let result: Result<()> = async {
         let mut dirty = true;
+
         loop {
             if state.compact_after_model_switch && task.is_none() && local_task.is_none() && resume_task.is_none() && history_replay.is_none() {
                 state.compact_after_model_switch = false;
                 refresh_context_usage(&mut state, &history, &tools);
+
                 if needs_model_switch_compaction(&state) {
                     let target_context = state.context_tokens;
                     let started = start_agent_run("/compact".into(), Vec::new(), true,
                         &mut state, &mut session, &history, &model, &tools,
                         target_context,
                         auto_compact, max_output_tokens, max_turns, max_tool_calls, &compaction).await;
+
                     match started {
                         Ok(started) => { receiver=Some(started.receiver); cancellation=Some(started.cancellation); task=Some(started.task); }
                         Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
                     }
+
                     dirty = true;
                     frames.request(time::Instant::now());
                 }
             }
+
             if std::mem::take(&mut state.new_tab_request) {
                 if task.is_some() || local_task.is_some() || resume_task.is_some() || history_replay.is_some() {
                     state.transcript.push(TranscriptItem::CommandError(
@@ -226,9 +236,11 @@ pub async fn run(
                 ).await {
                     state.transcript.push(TranscriptItem::CommandError(error.to_string()));
                 }
+
                 dirty = true;
                 frames.request(time::Instant::now());
             }
+
             if let Some(id) = state.close_tab_request.take() {
                 if id != session.id() {
                     tabs.close_parked(&id);
@@ -245,12 +257,15 @@ pub async fn run(
                         Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
                     }
                 }
+
                 state.tab_hover = None;
                 dirty = true;
                 frames.request(time::Instant::now());
             }
+
             if let Some(id) = state.resume_request.take() {
                 let empty_tab = tabs.empty_tab(&session, &state);
+
                 if id == session.id() {
                     state.picker = None;
                 } else if task.is_some() || local_task.is_some() || history_replay.is_some() {
@@ -259,30 +274,37 @@ pub async fn run(
                     ));
                 } else if tabs.restore(&id, &mut session, &mut state, &mut model, &mut history) {
                     if let Some(id) = empty_tab { tabs.close_parked(&id); }
+
                     memory_scope.set_session(session.id().into());
                     state.picker = None;
                     refresh_context_usage(&mut state, &history, &tools);
                 } else {
                     state.resume_loading = Some("正在读取会话…  Esc 取消".into());
+
                     if let Some(picker) = &mut state.picker { picker.error = None; }
+
                     let store = session.store.clone();
                     let project = session.snapshot.session.project_id.clone();
                     let instructions = instructions.clone();
                     let skills = skills.clone();
                     resume_task = Some(tokio::spawn(load_resume(store, project, id, instructions, skills)));
                 }
+
                 dirty = true;
                 frames.request(time::Instant::now());
             }
+
             select! {
                 event = events.next() => {
                     let Some(event) = event else { break };
                     let event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+
                     if update_tab_hover(&event, &mut state, &tabs) {
                         dirty = true;
                         frames.request(time::Instant::now());
                     }
+
                     if resume_task.is_none()
                         && history_replay.is_none()
                         && let Some(action) = tab_target(&event, &state, &tabs)
@@ -292,6 +314,7 @@ pub async fn run(
                             TabAction::New => state.new_tab_request = true,
                             TabAction::Close(id) => state.close_tab_request = Some(id),
                         }
+
                         dirty = true;
                         frames.request(time::Instant::now());
                         continue;
@@ -301,6 +324,7 @@ pub async fn run(
                             Event::Key(key) if key.kind != KeyEventKind::Release && key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) => break,
                             Event::Key(key) if key.kind != KeyEventKind::Release && key.code == KeyCode::Esc && resume_task.is_some() => {
                                 if let Some(task) = resume_task.take() { task.abort(); }
+
                                 state.resume_loading = None;
                             }
                             Event::Key(key) if key.code == KeyCode::PageUp => state.scroll_up(10),
@@ -310,10 +334,12 @@ pub async fn run(
                             Event::Resize(_, _) => {},
                             _ => continue,
                         }
+
                         dirty = true;
                         frames.request(time::Instant::now());
                         continue;
                     }
+
                     let context_hover_changed = !state.selection.dragging()
                         && matches!(render::handle_context_hover(&mut state, &event), Some(true));
                     let link_hover_changed = !state.selection.dragging()
@@ -323,20 +349,25 @@ pub async fn run(
                         && state.model_picker.is_none()
                         && state.marketplace_dialog.is_none()
                         && matches!(render::handle_link_hover(&mut state, &event), Some(true));
+
                     if !state.selection.dragging() && !approval::file_modal(&state) && !state.show_help && state.picker.is_none() && state.model_picker.is_none() && state.marketplace_dialog.is_none()
                         && let Some(changed) = navigation::handle(&mut state, &event) {
                         if changed || context_hover_changed || link_hover_changed { dirty = true; frames.request(time::Instant::now()); }
+
                         continue;
                     }
                     if context_hover_changed || link_hover_changed { dirty = true; frames.request(time::Instant::now()); continue; }
                     // Unused pointer motion must not trigger full-frame redraws.
                     if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) { continue; }
+
                     dirty = true;
                     frames.request(time::Instant::now());
+
                     if state.show_help || state.picker.is_some() || state.model_picker.is_some() || state.marketplace_dialog.is_some() {
                         if let Some(id) = dialogs::handle(&mut state, event) {
                             state.resume_request = Some(id);
                         }
+
                         if let Some(name) = state.chosen_model.take()
                             && let Err(error) = select_model(
                                 &name,
@@ -349,15 +380,18 @@ pub async fn run(
                         {
                             state.transcript.push(TranscriptItem::Error(error.to_string()));
                         }
+
                         if let Some(source) = state.pending_marketplace_source.take() {
                             state.transcript.push(TranscriptItem::Command(format!("/plugins add {source}")));
                             state.transcript.push(TranscriptItem::Notice("正在下载并检查插件市场…".into()));
                             marketplace_task = Some(tokio::spawn(crate::marketplaces::add_current(source)));
                         }
+
                         if let Some(change) = state.pending_project_plugin_change.take() {
                             match change {
                                 dialogs::ProjectPluginChange::Enable(plugin) => {
                                     let name = plugin.plugin_name.clone();
+
                                     match session.store.enable_project_plugin(plugin).await {
                                         Ok(_) => state.transcript.push(TranscriptItem::CommandResult(format!(
                                             "已为当前项目启用 {name}。插件包保存在 Orbit 数据目录；通过校验的 Skill 会在下次启动时按需可用，命令、Hook 与 MCP 不会自动执行。"
@@ -392,8 +426,10 @@ pub async fn run(
                                 },
                             }
                         }
+
                         continue;
                     }
+
                     if let Event::Mouse(mouse) = &event
                         && mouse.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
                         && mouse.modifiers.contains(KeyModifiers::CONTROL) {
@@ -402,20 +438,24 @@ pub async fn run(
                         } else {
                             state.max_scroll.saturating_sub(state.scroll)
                         };
+
                         if let Some(url) = state
                             .transcript_layout
                             .link_at(state.selection.viewport, offset, (mouse.column, mouse.row))
                             .map(str::to_owned)
                         {
                             state.selection.clear();
+
                             if let Err(error) = open_link_in_browser(&url) {
                                 state.transcript.push(TranscriptItem::Error(format!(
                                     "无法打开链接：{error}"
                                 )));
                             }
+
                             continue;
                         }
                     }
+
                     if let Event::Mouse(mouse) = &event
                         && mouse.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
                         && focus_attachment_at(&mut state, mouse.column, mouse.row) {
@@ -426,6 +466,7 @@ pub async fn run(
                         && toggle_tool_at(&mut state, (x, y)) {
                         continue;
                     }
+
                     if let Some((x, y)) = state.selection.click(&event)
                         && state.input_area.contains((x, y).into()) {
                         state.attachment_cursor = None;
@@ -433,8 +474,10 @@ pub async fn run(
                             (y - state.input_area.y) as usize + state.input_scroll,
                             state.input_width);
                     }
+
                     if state.selection.handle(&event)? {
                         if state.selection.transcript_drag() { state.follow_bottom = false; }
+
                         terminal::draw_synchronized(&mut terminal, |frame| {
                             if !state.selection.draw_frozen(frame) {
                                 render::draw(frame, &mut state);
@@ -450,6 +493,7 @@ pub async fn run(
                         if state.selection.dragging() { keyboard_action(&mut state, event, task.is_some() || local_task.is_some()); }
                         else if pending.is_some() { approval::handle(&mut state, event); }
                         else { keyboard_action(&mut state, event, task.is_some() || local_task.is_some()); }
+
                         continue;
                     }
                     if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release) {
@@ -460,34 +504,45 @@ pub async fn run(
                         match approval::handle(&mut state, event) {
                             approval::Action::Approve => {
                                 if let Some(request) = pending.take() { let _ = request.decision.send(true); }
+
                                 state.approval = None;
                                 state.resume_clock();
                             }
                             approval::Action::Deny => {
                                 if let Some(request) = pending.take() { let _ = request.decision.send(false); }
+
                                 state.approval = None;
                                 state.resume_clock();
                             }
                             approval::Action::Cancel => {
                                 if let Some(request) = pending.take() { let _ = request.decision.send(false); }
+
                                 state.approval = None;
                                 state.resume_clock();
                                 state.cancel();
+
                                 if let Some(token) = &cancellation { token.cancel(); }
+
                                 if let Some(token) = &local_cancellation { token.cancel(); }
                             }
                             approval::Action::None => {}
                         }
+
                         continue;
                     }
+
                     match keyboard_action(&mut state, event, task.is_some() || local_task.is_some()) {
                         Action::Quit => break,
                         Action::Redraw => terminal.clear()?,
+
                         Action::Cancel => {
                             state.cancel();
+
                             if let Some(token) = &cancellation { token.cancel(); }
+
                             if let Some(token) = &local_cancellation { token.cancel(); }
                         }
+
                         Action::Steer(guidance) => {
                             if local_task.is_some() {
                                 state.transcript.push(TranscriptItem::CommandError(
@@ -495,10 +550,13 @@ pub async fn run(
                                 ));
                                 continue;
                             }
+
                             pending_guidance.push(guidance);
                             state.cancel();
+
                             if let Some(token) = &cancellation { token.cancel(); }
                         }
+
                         Action::AttachPaths(paths) => {
                             if let Err(error) = attach_paths(&mut state, &session, paths) {
                                 state.transcript.push(TranscriptItem::Error(error.to_string()));
@@ -509,6 +567,7 @@ pub async fn run(
                                 state.transcript.push(TranscriptItem::Error(error.to_string()));
                             }
                         }
+
                         Action::Submit(prompt) => {
                             if local_task.is_some() {
                                 state.transcript.push(TranscriptItem::Command(prompt));
@@ -517,14 +576,18 @@ pub async fn run(
                                 ));
                                 continue;
                             }
+
                             let compacting = prompt.trim() == "/compact";
+
                             if prompt.starts_with('/') {
                                 let command = prompt
                                     .split_once(char::is_whitespace)
                                     .map_or(prompt.as_str(), |(command, _)| command);
+
                                 if !matches!(command, "/resume" | "/sessions") {
                                     state.transcript.push(TranscriptItem::Command(prompt.clone()));
                                 }
+
                                 if command == "/new" && prompt.trim() == "/new" {
                                     state.new_tab_request = true;
                                     continue;
@@ -540,6 +603,7 @@ pub async fn run(
                                         ));
                                         continue;
                                     }
+
                                     let argument = prompt
                                         .split_once(char::is_whitespace)
                                         .map_or("", |(_, argument)| argument.trim());
@@ -561,6 +625,7 @@ pub async fn run(
                                         }));
                                         continue;
                                     };
+
                                     let token = CancellationToken::new();
                                     let writer = undo_writer.clone();
                                     let task_token = token.clone();
@@ -574,6 +639,7 @@ pub async fn run(
                                             .map_err(|error| orbit_agent::tool::ToolError::ExecutionFailed(format!(
                                                 "undo completed but its audit record could not be saved: {error}"
                                             )))?;
+
                                         Ok(result)
                                     }));
                                     local_cancellation = Some(token);
@@ -594,20 +660,24 @@ pub async fn run(
                                         ));
                                         continue;
                                     }
+
                                     match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, skills: &skills, mcp_statuses: &mcp_statuses, model_options: &model_options, memory_scope: &memory_scope }).await {
                                         Ok(true) => break,
                                         Ok(false) => refresh_context_usage(&mut state, &history, &tools),
                                         Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
                                     }
+
                                     continue;
                                 }
                             }
+
                             let attachments = if compacting {
                                 Vec::new()
                             } else {
                                 state.attachment_cursor = None;
                                 std::mem::take(&mut state.attachments)
                             };
+
                             active_context = (!compacting).then(|| {
                                 ChatMessage::user_with_attachments(prompt.clone(), attachments.clone())
                             });
@@ -633,6 +703,7 @@ pub async fn run(
                             cancellation = Some(started.cancellation);
                             task = Some(started.task);
                         }
+
                         Action::None => {}
                     }
                 }
@@ -642,6 +713,7 @@ pub async fn run(
                         let _ = request.decision.send(true);
                         continue;
                     }
+
                     state.selection = Default::default();
                     state.approval = Some(request.preview.clone());
                     state.approval_scroll = 0;
@@ -655,6 +727,7 @@ pub async fn run(
                 }
                 event = async { receiver.as_mut().unwrap().recv().await }, if receiver.is_some() => {
                     dirty = true;
+
                     match event {
                         Some(event) => { apply_live_event(event, &mut state); },
                         None => receiver = None,
@@ -664,11 +737,14 @@ pub async fn run(
                     dirty = true;
                     task = None;
                     pending = None;
+
                     if state.approval.take().is_some() { state.selection = Default::default(); }
+
                     // Drain the completed run before accepting another prompt or clearing history.
                     if let Some(rx) = receiver.as_mut() {
                         while let Ok(event) = rx.try_recv() { apply_live_event(event, &mut state); }
                     }
+
                     let (status, final_event, completed_history) = match result {
                         Ok(Ok(result)) if matches!(&result.final_message, ChatMessage::Assistant { content, tool_calls } if content.as_deref().unwrap_or_default().trim().is_empty() && tool_calls.is_empty()) => {
                             ("failed", AgentEvent::Failed { error: "模型已结束响应，但未返回回答或工具调用；请检查服务端返回内容。".into() }, None)
@@ -683,7 +759,9 @@ pub async fn run(
                         Ok(Err(error)) => ("failed", AgentEvent::Failed { error: error.to_string() }, None),
                         Err(error) => ("failed", AgentEvent::Failed { error: format!("后台任务中断：{error}") }, None),
                     };
+
                     session.finish(status, completed_history.clone()).await?;
+
                     if completed_history.is_some() || session.snapshot.recovery.is_some() {
                         history = session.snapshot.history.clone();
                         active_context = None;
@@ -697,11 +775,13 @@ pub async fn run(
                         )
                         .await?;
                     }
+
                     refresh_context_usage(&mut state, &history, &tools);
                     state.apply(final_event);
                     task = None;
                     receiver = None;
                     cancellation = None;
+
                     if !pending_guidance.is_empty() {
                         let guidance = pending_guidance.join("\n\n");
                         pending_guidance.clear();
@@ -736,6 +816,7 @@ pub async fn run(
                 result = async { resume_task.as_mut().unwrap().await }, if resume_task.is_some() => {
                     resume_task = None;
                     state.resume_loading = None;
+
                     match result {
                         Ok(Ok((prepared, loaded_history))) => {
                             let empty_tab = tabs.empty_tab(&session, &state);
@@ -745,17 +826,28 @@ pub async fn run(
                             let next_model = ModelClient::new(model.config().clone())?;
                             tabs.activate(&mut session, &mut state, &mut model, &mut history,
                                 (prepared, restored, next_model, loaded_history));
+
                             if let Some(id) = empty_tab { tabs.close_parked(&id); }
+
                             memory_scope.set_session(session.id().into());
                             restore_model_profile(&mut state, &mut model, &model_options, &session);
                             history_replay = Some(crate::session::HistoryReplay::default());
                         }
                         result => {
-                            let message = match result { Ok(Err(error)) => error.to_string(), Err(error) => format!("恢复会话失败：{error}"), _ => unreachable!() };
-                            if let Some(picker) = &mut state.picker { picker.error = Some(message); }
-                            else { state.transcript.push(TranscriptItem::CommandError(message)); }
+                            let message = match result {
+                                Ok(Err(error)) => error.to_string(),
+                                Err(error) => format!("恢复会话失败：{error}"),
+                                _ => unreachable!(),
+                            };
+
+                            if let Some(picker) = &mut state.picker {
+                                picker.error = Some(message);
+                            } else {
+                                state.transcript.push(TranscriptItem::CommandError(message));
+                            }
                         }
                     }
+
                     dirty = true;
                     frames.request(time::Instant::now());
                 }
@@ -763,6 +855,7 @@ pub async fn run(
                     dirty = true;
                     local_task = None;
                     local_cancellation = None;
+
                     match result {
                         Ok(Ok(result)) => state.transcript.push(TranscriptItem::CommandResult(format_undo_result(&result))),
                         Ok(Err(error)) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
@@ -772,6 +865,7 @@ pub async fn run(
                 result = async { marketplace_task.as_mut().unwrap().await }, if marketplace_task.is_some() => {
                     dirty = true;
                     marketplace_task = None;
+
                     match result {
                         Ok(Ok(market)) => state.transcript.push(TranscriptItem::CommandResult(format!(
                             "已添加市场 {}，发现 {} 个插件。\n{}",
@@ -800,13 +894,16 @@ pub async fn run(
                             TabAction::Select(_) => elapsed / 120,
                             _ => elapsed.min(240) / 40,
                         };
+
                         if tick != state.tab_hover_tick {
                             state.tab_hover_tick = tick;
                             dirty = true;
                         }
                     }
+
                     if let Some(replay) = &mut history_replay {
                         let done = replay.advance(&session.snapshot, &mut state, 2048, Duration::from_millis(4));
+
                         if done {
                             history_replay = None;
                             state.resume_loading = None;
@@ -814,30 +911,40 @@ pub async fn run(
                         } else {
                             state.resume_loading = Some(format!("正在显示会话历史…  {}/{}", replay.completed_runs(), session.snapshot.runs.len()));
                         }
+
                         dirty = true;
                     }
+
                     let direction = state.selection.auto_scroll(std::time::Instant::now());
+
                     if direction != 0 {
                         if direction < 0 { state.scroll_up(2); } else { state.scroll_down(2); }
+
                         dirty = true;
                     }
+
                     if dirty || state.running() { frames.request(time::Instant::now()); }
                 }
             }
         }
+
         Ok(())
     }.await;
 
     if let Some(task) = resume_task {
         task.abort();
     }
+
     drop(pending);
+
     if let Some(token) = cancellation {
         token.cancel();
     }
+
     if let Some(token) = local_cancellation {
         token.cancel();
     }
+
     if let Some(mut task) = task
         && time::timeout(Duration::from_millis(500), &mut task)
             .await
@@ -846,6 +953,7 @@ pub async fn run(
         task.abort();
         let _ = task.await;
     }
+
     if let Some(mut task) = local_task
         && time::timeout(Duration::from_millis(500), &mut task)
             .await
@@ -854,6 +962,7 @@ pub async fn run(
         task.abort();
         let _ = task.await;
     }
+
     if let Some(mut task) = marketplace_task
         && time::timeout(Duration::from_millis(500), &mut task)
             .await
@@ -862,10 +971,13 @@ pub async fn run(
         task.abort();
         let _ = task.await;
     }
+
     if let Some(rx) = receiver.as_mut() {
         while rx.try_recv().is_ok() {}
     }
+
     let saved = session.close().await;
+
     result.and(saved)
 }
 
@@ -877,6 +989,7 @@ fn apply_live_event(event: AgentEvent, state: &mut UiState) {
     ) {
         return;
     }
+
     state.apply(event);
 }
 
@@ -903,6 +1016,7 @@ fn tool_context_tokens(history: &[ChatMessage], name: &str) -> usize {
     let messages: Vec<_> = history.iter().filter(|message| {
         matches!(message, ChatMessage::Tool { tool_call_id, .. } if ids.contains(tool_call_id.as_str()))
     }).cloned().collect();
+
     if messages.is_empty() {
         0
     } else {
@@ -914,7 +1028,9 @@ fn format_undo_result(result: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(result) else {
         return result.into();
     };
+
     let path = value["path"].as_str().unwrap_or("文件");
+
     if value["created_file_removed"].as_bool() == Some(true) {
         format!("已回退 {path}：已删除由 Orbit 创建的文件。")
     } else if value["restored"].as_bool() == Some(true) {
@@ -929,9 +1045,11 @@ fn steering_history(
     interrupted_prompt: Option<ChatMessage>,
 ) -> Vec<ChatMessage> {
     let mut history = history.to_vec();
+
     if let Some(prompt) = interrupted_prompt {
         history.push(prompt);
     }
+
     history
 }
 
@@ -957,6 +1075,7 @@ async fn start_agent_run(
     } else {
         history.to_vec()
     };
+
     session.begin(prompt.clone(), state.model.clone()).await?;
     let display_prompt = if attachments.is_empty() {
         prompt.clone()
@@ -966,20 +1085,24 @@ async fn start_agent_run(
             .map(|attachment| format!("[图片：{}]", attachment.name()))
             .collect::<Vec<_>>()
             .join(" ");
+
         if prompt.is_empty() {
             labels
         } else {
             format!("{prompt}\n{labels}")
         }
     };
+
     if compacting {
         state.begin_run();
     } else {
         state.submit(display_prompt);
     }
+
     if !compacting {
         messages.push(ChatMessage::user_with_attachments(prompt, attachments));
     }
+
     state.context_used_tokens =
         state
             .calibration()
@@ -1016,9 +1139,11 @@ async fn start_agent_run(
         .with_compaction(compaction.clone())
         .with_file_activity(files.clone())
         .with_context_archive(archive.clone());
+
     if !compacting {
         agent = agent.with_execution_journal(session.execution_journal()?);
     }
+
     let summary_runtime =
         compaction.for_input_window(local_limit.saturating_sub(max_output_tokens as usize));
     let task = tokio::spawn(async move {
@@ -1072,8 +1197,10 @@ async fn start_agent_run(
                 tool_calls: 0,
             });
         }
+
         agent.run_with_agent_events(request, token, sender).await
     });
+
     Ok(StartedRun {
         receiver,
         cancellation,
@@ -1086,9 +1213,11 @@ async fn start_agent_run(
 // than trying to compress the already small projection a second time.
 fn retry_archive_id(runs: &[Run], history: &[ChatMessage]) -> Option<i64> {
     let last_completed = runs.iter().rev().find(|run| run.status == "completed")?;
+
     if last_completed.prompt != "/compact" {
         return None;
     }
+
     let reference = last_completed.events.iter().find_map(|event| match event {
         AgentEvent::CompactionRecorded { record }
             if record.strategy == CompactionStrategy::ArchiveProjection =>
@@ -1105,6 +1234,7 @@ fn retry_archive_id(runs: &[Run], history: &[ChatMessage]) -> Option<i64> {
         .ok()
         .filter(|id| *id > 0)?;
     let marker = format!("read_history archive_id={id};");
+
     history
         .iter()
         .any(|message| {
@@ -1122,6 +1252,7 @@ async fn compaction_source_history(
     let Some(archive_id) = retry_archive_id(&session.snapshot.runs, history) else {
         return Ok(history.to_vec());
     };
+
     let source = session
         .store
         .load_context_archive(session.id(), archive_id)
@@ -1138,6 +1269,7 @@ async fn compaction_source_history(
             .into_iter()
             .skip_while(|message| matches!(message, ChatMessage::System { .. })),
     );
+
     Ok(restored)
 }
 
@@ -1165,9 +1297,11 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAc
             let KeyCode::Char(digit @ '1'..='9') = key.code else {
                 return None;
             };
+
             tabs.target(digit.to_digit(10)? as usize - 1)
                 .map(|id| TabAction::Select(id.to_owned()))
         }
+
         Event::Key(key)
             if key.kind != KeyEventKind::Release
                 && key.code == KeyCode::Tab
@@ -1179,6 +1313,7 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAc
             )
             .map(|id| TabAction::Select(id.to_owned()))
         }
+
         Event::Mouse(mouse)
             if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                 && state
@@ -1187,6 +1322,7 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAc
         {
             Some(TabAction::New)
         }
+
         Event::Mouse(mouse)
             if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                 && state
@@ -1200,6 +1336,7 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAc
                 .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
                 .map(|(_, id)| TabAction::Close(id.clone()))
         }
+
         Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => state
             .tab_areas
             .iter()
@@ -1210,6 +1347,7 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAc
                     && mouse.row < area.bottom()
             })
             .map(|(_, id)| TabAction::Select(id.clone())),
+
         _ => None,
     }
 }
@@ -1226,11 +1364,14 @@ fn update_tab_hover(event: &Event, state: &mut UiState, tabs: &tabs::Tabs) -> bo
         Event::Resize(_, _) | Event::Key(_) | Event::Mouse(_) => None,
         _ => return false,
     };
+
     if state.tab_hover.as_ref().map(|(action, _)| action) == next.as_ref() {
         return false;
     }
+
     state.tab_hover = next.map(|action| (action, std::time::Instant::now()));
     state.tab_hover_tick = 0;
+
     true
 }
 
@@ -1270,11 +1411,13 @@ async fn new_tab(
     session
         .set_model_profile(state.model.clone(), state.reasoning_effort)
         .await?;
+
     if let Some(workspace) = session.audit_workspace.clone() {
         session
             .initialize_audit(workspace, session.audit_limits.clone())
             .await?;
     }
+
     Ok(())
 }
 
@@ -1298,8 +1441,10 @@ async fn run_command(
         .split_once(char::is_whitespace)
         .unwrap_or((prompt, ""));
     let argument = argument.trim();
+
     match command {
         "/exit" | "/quit" if argument.is_empty() => return Ok(true),
+
         "/rename" => {
             if argument.is_empty() {
                 state.transcript.push(TranscriptItem::CommandError(
@@ -1316,6 +1461,7 @@ async fn run_command(
                 )));
             }
         }
+
         "/mode" | "/permissions" => {
             if !argument.is_empty() {
                 let Some(mode) = permissions::Mode::parse(argument) else {
@@ -1324,10 +1470,13 @@ async fn run_command(
                     ));
                     return Ok(false);
                 };
+
                 state.permission_mode = mode;
             }
+
             state.transcript.push(TranscriptItem::CommandResult(format!("{}\nShift+Tab 切换 · /mode ask|auto|YOLO\n仅本会话有效；重启、恢复或 /new 后回到 auto。",state.permission_mode.description())));
         }
+
         "/context" if argument.is_empty() => {
             let estimated = orbit_agent::context::estimate_tokens(history, &tools.definitions());
             let overview_tokens = tool_context_tokens(history, "project_overview");
@@ -1346,21 +1495,25 @@ async fn run_command(
                 .filter(|message| !matches!(message, ChatMessage::System { .. }))
                 .cloned()
                 .collect::<Vec<_>>();
+
             let system_tokens = orbit_agent::context::estimate_tokens(&system, &[]);
             let project_instruction_tokens =
                 orbit_agent::context::estimate_tokens(&project_rules, &[]);
             let conversation_tokens = orbit_agent::context::estimate_tokens(&conversation, &[]);
             let tool_tokens = orbit_agent::context::estimate_tokens(&[], &tools.definitions());
+
             let sources = if instructions.sources.is_empty() {
                 "未找到".to_owned()
             } else {
                 format!("{} 条", instructions.sources.len())
             };
+
             let truncation = if instructions.truncated {
                 "（达到 32 KiB 上限，后续文件未加载）"
             } else {
                 ""
             };
+
             let project_state_tokens = history
                 .iter()
                 .filter_map(|message| match message {
@@ -1384,9 +1537,11 @@ async fn run_command(
                 calibration.factor()
             )));
         }
+
         "/skills" if argument.is_empty() => state
             .transcript
             .push(TranscriptItem::CommandResult(skills.render())),
+
         "/mcp" if argument.is_empty() => {
             state
                 .transcript
@@ -1394,6 +1549,7 @@ async fn run_command(
                     mcp_statuses,
                 )))
         }
+
         "/plugins" if argument.is_empty() => {
             let project_id = session.snapshot.session.project_id.clone();
             let enabled = session.store.project_plugins(&project_id).await?;
@@ -1403,6 +1559,7 @@ async fn run_command(
                 enabled,
             ));
         }
+
         "/skill" => {
             if argument.is_empty() {
                 state.transcript.push(TranscriptItem::CommandError(
@@ -1431,8 +1588,10 @@ async fn run_command(
                 )));
             }
         }
+
         "/tasks" => run_tasks_command(argument, state, history, session).await?,
         "/memory" => run_memory_command(argument, state, history, session).await?,
+
         "/changes" if argument.is_empty() => {
             let listing = changes::list(&session.store.workspace_changes(session.id()).await?);
             let comparison = crate::verification::changes_text(session).await;
@@ -1440,6 +1599,7 @@ async fn run_command(
                 "{listing}{comparison}"
             )));
         }
+
         "/diff" if argument.trim().is_empty() => {
             state
                 .transcript
@@ -1447,6 +1607,7 @@ async fn run_command(
                     &session.store.workspace_changes(session.id()).await?,
                 )))
         }
+
         "/diff" => state
             .transcript
             .push(TranscriptItem::CommandResult(changes::diff(
@@ -1465,6 +1626,7 @@ async fn run_command(
         "/resume" => {
             state.resume_request = Some(argument.to_owned());
         }
+
         "/status" if argument.is_empty() => {
             let verifications = session.store.verification_records(session.id()).await?;
             let passed = verifications
@@ -1487,6 +1649,7 @@ async fn run_command(
             } else {
                 "命令执行  尚未执行沙箱命令".to_owned()
             };
+
             let verification = format!(
                 "{}\n{}",
                 verification,
@@ -1519,6 +1682,7 @@ async fn run_command(
                 session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), baseline, verification, state.model, history.len(), instructions.sources.len(), skills.len(), mcp_statuses.len(), model.config().timeout.as_secs(), tool_names, state.permission_mode.label()
             )));
         }
+
         "/model" => {
             if argument.is_empty() {
                 state.model_picker = Some(dialogs::ModelPicker::new(
@@ -1541,6 +1705,7 @@ async fn run_command(
                             && choice.model == argument
                     })
                 };
+
                 if let Some(choice) = choice {
                     select_model(
                         &choice.qualified_name(),
@@ -1558,17 +1723,21 @@ async fn run_command(
                 }
             }
         }
+
         _ => {
             let result = if let Some(suggestion) = commands::suggestion(command) {
                 format!("未知命令：{command}。是否想输入 {}？", suggestion.name)
             } else {
                 format!("未知命令：{command}。输入 / 查看可用命令。")
             };
+
             state.transcript.push(TranscriptItem::CommandError(result));
         }
     }
+
     state.follow_bottom = true;
     state.menu_dismissed = false;
+
     Ok(false)
 }
 
@@ -1582,6 +1751,7 @@ async fn run_tasks_command(
         .split_once(char::is_whitespace)
         .unwrap_or((argument, ""));
     let project_id = &session.snapshot.session.project_id;
+
     match action {
         "" | "list" | "all" => {
             let tasks = session.store.tasks(project_id, action == "all").await?;
@@ -1589,6 +1759,7 @@ async fn run_tasks_command(
                 .transcript
                 .push(TranscriptItem::CommandResult(render_tasks(&tasks)));
         }
+
         "add" => {
             if rest.trim().is_empty() {
                 state.transcript.push(TranscriptItem::CommandError(
@@ -1607,6 +1778,7 @@ async fn run_tasks_command(
                 )));
             }
         }
+
         "start" | "done" | "block" | "cancel" => {
             let Ok(id) = rest.trim().parse::<i64>() else {
                 state.transcript.push(TranscriptItem::CommandError(
@@ -1614,6 +1786,7 @@ async fn run_tasks_command(
                 ));
                 return Ok(());
             };
+
             let status = match action {
                 "start" => orbit_store::types::TaskStatus::InProgress,
                 "done" => orbit_store::types::TaskStatus::Completed,
@@ -1621,6 +1794,7 @@ async fn run_tasks_command(
                 "cancel" => orbit_store::types::TaskStatus::Cancelled,
                 _ => unreachable!(),
             };
+
             let task = session
                 .store
                 .update_task(project_id, id, None, None, Some(status), None)
@@ -1632,11 +1806,13 @@ async fn run_tasks_command(
                 task_status_label(task.status)
             )));
         }
+
         _ => state.transcript.push(TranscriptItem::CommandError(
             "用法：/tasks [list|all] · /tasks add <标题> · /tasks start|done|block|cancel <编号>"
                 .into(),
         )),
     }
+
     Ok(())
 }
 
@@ -1644,14 +1820,18 @@ fn render_mcp_status(statuses: &[orbit_tools::mcp::McpServerStatus]) -> String {
     if statuses.is_empty() {
         return "没有配置 MCP server。可在 config.toml 中添加 [mcp.servers.<名称>]，指定 command、args 和 enabled = true。当前仅支持本地 stdio server。".into();
     }
+
     let mut output = String::from("MCP servers\n");
+
     for status in statuses {
         let marker = if status.connected { "✓" } else { "×" };
+
         output.push_str(&format!(
             "{marker} {}  {} · {} 个工具\n",
             status.name, status.detail, status.tool_count
         ));
     }
+
     output
 }
 
@@ -1665,6 +1845,7 @@ async fn run_memory_command(
         .split_once(char::is_whitespace)
         .unwrap_or((argument, ""));
     let session_id = session.id();
+
     match action {
         "" | "list" | "all" => {
             let memories = session
@@ -1675,6 +1856,7 @@ async fn run_memory_command(
                 .transcript
                 .push(TranscriptItem::CommandResult(render_memories(&memories)));
         }
+
         "add" => {
             let (category, content) = rest.split_once(char::is_whitespace).unwrap_or(("", ""));
             let Some(category) = orbit_store::types::MemoryCategory::parse(category) else {
@@ -1689,6 +1871,7 @@ async fn run_memory_command(
                     .push(TranscriptItem::CommandError("记忆内容不能为空。".into()));
                 return Ok(());
             }
+
             let title = concise_title(content.trim());
             let memory = session
                 .store
@@ -1711,6 +1894,7 @@ async fn run_memory_command(
                 memory.id
             )));
         }
+
         "search" => {
             if rest.trim().is_empty() {
                 state.transcript.push(TranscriptItem::CommandError(
@@ -1718,6 +1902,7 @@ async fn run_memory_command(
                 ));
                 return Ok(());
             }
+
             let memories = session
                 .store
                 .search_session_memories(session_id, rest.trim(), 8)
@@ -1728,6 +1913,7 @@ async fn run_memory_command(
                 render_memories(&memories)
             )));
         }
+
         "forget" => {
             let Ok(id) = rest.trim().parse::<i64>() else {
                 state.transcript.push(TranscriptItem::CommandError(
@@ -1735,6 +1921,7 @@ async fn run_memory_command(
                 ));
                 return Ok(());
             };
+
             let memory = session
                 .store
                 .set_session_memory_active(session_id, id, false)
@@ -1751,10 +1938,12 @@ async fn run_memory_command(
                 memory.id
             )));
         }
+
         _ => state.transcript.push(TranscriptItem::CommandError(
             "用法：/memory [list|all] · /memory search <关键词> · /memory add <类型> <内容> · /memory forget <编号>".into(),
         )),
     }
+
     Ok(())
 }
 
@@ -1762,9 +1951,12 @@ fn render_tasks(tasks: &[orbit_store::types::ProjectTask]) -> String {
     if tasks.is_empty() {
         return "当前项目没有待跟踪的任务。\n\n/tasks add <标题> 可创建任务。".into();
     }
+
     let mut output = String::from("项目任务\n");
+
     for task in tasks {
         use std::fmt::Write;
+
         let _ = writeln!(
             output,
             "{}  #{}  {}{}",
@@ -1778,6 +1970,7 @@ fn render_tasks(tasks: &[orbit_store::types::ProjectTask]) -> String {
             },
         );
     }
+
     output
 }
 
@@ -1795,10 +1988,14 @@ fn render_memories(memories: &[orbit_store::types::SessionMemory]) -> String {
     if memories.is_empty() {
         return "当前会话没有已保存的长期记忆。\n\n/memory add <类型> <内容> 可保存约束、决策、事实或偏好。".into();
     }
+
     let mut output = String::from("会话记忆\n");
+
     for memory in memories {
         use std::fmt::Write;
+
         let marker = if memory.active { "●" } else { "○" };
+
         let _ = writeln!(
             output,
             "{marker} #{} [{}] {}\n  {}",
@@ -1808,15 +2005,19 @@ fn render_memories(memories: &[orbit_store::types::SessionMemory]) -> String {
             memory.content,
         );
     }
+
     output
 }
 
 fn concise_title(content: &str) -> String {
     const MAX_CHARS: usize = 72;
+
     let mut title: String = content.chars().take(MAX_CHARS).collect();
+
     if content.chars().nth(MAX_CHARS).is_some() {
         title.push('…');
     }
+
     title
 }
 
@@ -1842,10 +2043,13 @@ async fn select_model(
             .push(TranscriptItem::Error("所选模型已不在当前配置中。".into()));
         return Ok(());
     };
+
     let mut config = choice.config.clone();
+
     if let Some(effort) = selected_effort {
         config.reasoning_effort = choice.reasoning_efforts.contains(&effort).then_some(effort);
     }
+
     match ModelClient::new(config) {
         Ok(client) => {
             let previous_model = state.model.clone();
@@ -1862,12 +2066,14 @@ async fn select_model(
             state.input_context_tokens = choice.input_context_tokens;
             state.reasoning_effort = reasoning_effort;
             state.supports_vision = choice.supports_vision;
+
             if previous_model != state.model {
                 state.transcript.push(TranscriptItem::CommandResult(format!(
                     "{previous_model} → {}",
                     state.model
                 )));
             }
+
             if !choice.supports_vision && !state.attachments.is_empty() {
                 state.attachments.clear();
                 state.transcript.push(TranscriptItem::Notice(
@@ -1879,6 +2085,7 @@ async fn select_model(
             .transcript
             .push(TranscriptItem::Error(error.to_string())),
     }
+
     Ok(())
 }
 
@@ -1892,16 +2099,19 @@ fn attachment_path(argument: &str) -> std::path::PathBuf {
     } else {
         trimmed
     };
+
     if let Ok(url) = url::Url::parse(trimmed)
         && url.scheme() == "file"
         && let Ok(path) = url.to_file_path()
     {
         return path;
     }
+
     #[cfg(unix)]
     let trimmed = {
         let mut value = String::with_capacity(trimmed.len());
         let mut chars = trimmed.chars();
+
         while let Some(character) = chars.next() {
             if character == '\\' {
                 value.push(chars.next().unwrap_or(character));
@@ -1909,10 +2119,12 @@ fn attachment_path(argument: &str) -> std::path::PathBuf {
                 value.push(character);
             }
         }
+
         value
     };
     #[cfg(not(unix))]
     let trimmed = trimmed.to_owned();
+
     trimmed.into()
 }
 
@@ -1923,7 +2135,9 @@ fn resolved_image_path(value: &str) -> Option<PathBuf> {
     } else {
         std::env::current_dir().ok()?.join(path)
     };
+
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+
     matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp")
         .then_some(path)
         .filter(|path| path.is_file())
@@ -1933,6 +2147,7 @@ fn pasted_image_paths(text: &str) -> Option<Vec<PathBuf>> {
     if let Some(path) = resolved_image_path(text) {
         return Some(vec![path]);
     }
+
     #[cfg(unix)]
     {
         let paths = shlex::split(text)?
@@ -1941,6 +2156,7 @@ fn pasted_image_paths(text: &str) -> Option<Vec<PathBuf>> {
             .collect::<Option<Vec<_>>>()?;
         (!paths.is_empty()).then_some(paths)
     }
+
     #[cfg(not(unix))]
     None
 }
@@ -1956,8 +2172,10 @@ fn queue_attachment(state: &mut UiState, attachment: orbit_model::types::Attachm
     {
         return false;
     }
+
     state.attachments.push(attachment);
     state.attachment_cursor = None;
+
     true
 }
 
@@ -1969,12 +2187,15 @@ fn focus_attachment_at(state: &mut UiState, x: u16, y: u16) -> bool {
     else {
         return false;
     };
+
     state.attachment_cursor = Some(index);
+
     true
 }
 
 fn browser_url(value: &str) -> Result<url::Url> {
     let url = url::Url::parse(value)?;
+
     if !matches!(url.scheme(), "http" | "https")
         || url.host().is_none()
         || !url.username().is_empty()
@@ -1982,6 +2203,7 @@ fn browser_url(value: &str) -> Result<url::Url> {
     {
         anyhow::bail!("仅能在浏览器中打开不含凭据的 HTTP(S) 链接");
     }
+
     Ok(url)
 }
 
@@ -2008,6 +2230,7 @@ fn open_link_in_browser(value: &str) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
+
     Ok(())
 }
 
@@ -2018,12 +2241,15 @@ fn remove_focused_attachment(state: &mut UiState, backwards: bool) -> bool {
     if index >= state.attachments.len() {
         return false;
     }
+
     state.attachments.remove(index);
+
     if backwards && index > 0 {
         state.attachment_cursor = Some(index - 1);
     } else if !backwards && index < state.attachments.len() {
         state.attachment_cursor = Some(index);
     }
+
     true
 }
 
@@ -2034,10 +2260,12 @@ fn attach_paths(state: &mut UiState, session: &SessionState, paths: Vec<PathBuf>
         ));
         return Ok(());
     }
+
     for path in paths {
         let attachment = session.import_image(&path)?;
         queue_attachment(state, attachment);
     }
+
     Ok(())
 }
 
@@ -2053,6 +2281,7 @@ enum ClipboardPayload {
 
 fn read_clipboard() -> Result<ClipboardPayload> {
     let mut clipboard = arboard::Clipboard::new()?;
+
     if let Ok(image) = clipboard.get_image() {
         return Ok(ClipboardPayload::Image {
             width: image.width,
@@ -2068,11 +2297,13 @@ fn read_clipboard() -> Result<ClipboardPayload> {
     if let Ok(text) = clipboard.get_text() {
         return Ok(ClipboardPayload::Text(text));
     }
+
     anyhow::bail!("剪贴板中没有可用的图片、文件或文本")
 }
 
 async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<()> {
     let payload = tokio::task::spawn_blocking(read_clipboard).await??;
+
     match payload {
         ClipboardPayload::Image {
             width,
@@ -2086,6 +2317,7 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
                 state.menu_dismissed = false;
                 return Ok(());
             }
+
             let attachment = session.import_clipboard_image(width, height, bytes)?;
             queue_attachment(state, attachment);
         }
@@ -2094,6 +2326,7 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
                 .iter()
                 .filter_map(|path| resolved_image_path(&path.to_string_lossy()))
                 .collect::<Vec<_>>();
+
             if images.len() == files.len() {
                 attach_paths(state, session, images)?;
             } else {
@@ -2114,7 +2347,9 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
             }
         }
     }
+
     state.menu_dismissed = false;
+
     Ok(())
 }
 
@@ -2136,6 +2371,7 @@ async fn load_resume(
         &prepared.snapshot.session.id,
     )
     .await?;
+
     Ok((prepared, history))
 }
 
@@ -2156,6 +2392,7 @@ async fn resume_session(
     if id == session.id() {
         return Ok(());
     }
+
     let (prepared, loaded_history) = load_resume(
         session.store.clone(),
         session.snapshot.session.project_id.clone(),
@@ -2172,6 +2409,7 @@ async fn resume_session(
     *state = restored;
     restore_model_profile(state, model, model_options, session);
     refresh_context_usage(state, history, tools);
+
     Ok(())
 }
 
@@ -2184,6 +2422,7 @@ fn resume_ui_shell(state: &UiState) -> UiState {
     restored.model_completions = state.model_completions.clone();
     restored.permission_mode = crate::tui::permissions::Mode::Auto;
     restored.supports_vision = state.supports_vision;
+
     restored
 }
 
@@ -2200,13 +2439,17 @@ fn restore_model_profile(
     else {
         return;
     };
+
     let mut config = choice.config.clone();
+
     if let Some(effort) = saved_effort.filter(|effort| choice.reasoning_efforts.contains(effort)) {
         config.reasoning_effort = Some(effort);
     }
+
     let Ok(client) = ModelClient::new(config) else {
         return;
     };
+
     *model = client;
     state.model = choice.qualified_name();
     state.context_tokens = choice.context_tokens;
@@ -2237,7 +2480,9 @@ fn toggle_tool_at(state: &mut UiState, point: (u16, u16)) -> bool {
     ) else {
         return false;
     };
+
     toggle_tool(state, index);
+
     true
 }
 
@@ -2251,6 +2496,7 @@ fn toggle_tool(state: &mut UiState, index: usize) {
             .transcript_layout
             .item_offset(old + 1)
             .unwrap_or_else(|| state.transcript_layout.height());
+
         (start..end).contains(&offset)
     });
     state.expanded = if collapsing { None } else { Some(index) };
@@ -2272,6 +2518,7 @@ fn toggle_tool(state: &mut UiState, index: usize) {
             .and_then(|anchor| state.transcript_layout.offset_for_anchor(anchor))
             .unwrap_or(offset)
     };
+
     state.scroll = state.max_scroll.saturating_sub(target);
 }
 
@@ -2282,16 +2529,19 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
             MouseEventKind::ScrollDown => state.scroll_down(wheel::LINES),
             _ => {}
         }
+
         return Action::None;
     }
     if let Event::Paste(text) = event {
         state.attachment_cursor = None;
+
         if text.is_empty() {
             return Action::PasteClipboard;
         }
         if let Some(paths) = pasted_image_paths(&text) {
             return Action::AttachPaths(paths);
         }
+
         state.input.insert(&text);
         state.menu_dismissed = false;
         return Action::None;
@@ -2302,7 +2552,9 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
     if key.kind == KeyEventKind::Release {
         return Action::None;
     }
+
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
+
     if control {
         match key.code {
             KeyCode::Char('c') if busy => return Action::Cancel,
@@ -2320,12 +2572,15 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                     state.input.delete();
                 }
             }
+
             KeyCode::Char('j') => {
                 if state.attachment_cursor.take().is_some() {
                     state.input.cursor = 0;
                 }
+
                 state.input.insert("\n");
             }
+
             KeyCode::Char('a') if !state.attachments.is_empty() => {
                 state.input.home();
                 state.attachment_cursor = Some(0);
@@ -2348,8 +2603,10 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
             }
             KeyCode::Char('l') => return Action::Redraw,
             KeyCode::Char('v') => return Action::PasteClipboard,
+
             KeyCode::Char('o') => {
                 let offset = state.max_scroll.saturating_sub(state.scroll);
+
                 if let Some(index) = state.expanded.or_else(|| {
                     state.transcript_layout.visible_tool(
                         &state.transcript,
@@ -2360,8 +2617,10 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                     toggle_tool(state, index);
                 }
             }
+
             _ => {}
         }
+
         return Action::None;
     }
     if key.code == KeyCode::Esc {
@@ -2386,6 +2645,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 }
             })
             .collect::<Vec<_>>();
+
         if !matches.is_empty() {
             let index = state.model_completion_index % matches.len();
             let completion = if typed.contains("::") {
@@ -2397,17 +2657,22 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                     .unwrap_or(matches[index])
                     .to_owned()
             };
+
             state.input.set(format!("/model {completion}"));
             state.model_completion_index = state.model_completion_index.saturating_add(1);
         }
+
         return Action::None;
     }
     if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::ALT) {
         return Action::PasteClipboard;
     }
+
     let menu = state.menu();
+
     if !menu.is_empty() {
         state.menu_index = state.menu_index.min(menu.len() - 1);
+
         match key.code {
             KeyCode::Up => {
                 state.menu_index = (state.menu_index + menu.len() - 1) % menu.len();
@@ -2427,6 +2692,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
             _ => {}
         }
     }
+
     match key.code {
         KeyCode::Enter
             if key
@@ -2435,6 +2701,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         {
             state.input.insert("\n")
         }
+
         KeyCode::Enter if busy => {
             if let Some(guidance) = state.input.take() {
                 return if guidance.starts_with('/') {
@@ -2444,10 +2711,12 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 };
             }
         }
+
         KeyCode::Enter if state.input.text.ends_with('\\') => {
             state.input.backspace();
             state.input.insert("\n");
         }
+
         KeyCode::Enter => {
             state.menu_index = 0;
             state.menu_dismissed = false;
@@ -2460,19 +2729,23 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 Action::None
             };
         }
+
         KeyCode::Char('?') if state.input.text.is_empty() && state.attachments.is_empty() => {
             state.selection = Default::default();
             state.show_help = true;
             state.help_scroll = 0;
         }
+
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) => {
             if state.attachment_cursor.take().is_some() {
                 state.input.cursor = 0;
             }
+
             state.input.insert(&c.to_string());
             state.menu_index = 0;
             state.menu_dismissed = false;
         }
+
         KeyCode::Backspace => {
             if !remove_focused_attachment(state, true) {
                 if state.input.cursor == 0 && !state.attachments.is_empty() {
@@ -2481,14 +2754,17 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                     state.input.backspace();
                 }
             }
+
             state.menu_index = 0;
             state.menu_dismissed = false;
         }
+
         KeyCode::Delete => {
             if !remove_focused_attachment(state, false) {
                 state.input.delete();
             }
         }
+
         KeyCode::Left => {
             if let Some(index) = &mut state.attachment_cursor {
                 *index = index.saturating_sub(1);
@@ -2498,6 +2774,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.input.move_left();
             }
         }
+
         KeyCode::Right => {
             if let Some(index) = state.attachment_cursor {
                 if index + 1 < state.attachments.len() {
@@ -2510,12 +2787,15 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.input.move_right();
             }
         }
+
         KeyCode::Home => {
             state.input.home();
+
             if !state.attachments.is_empty() {
                 state.attachment_cursor = Some(0);
             }
         }
+
         KeyCode::End => {
             state.attachment_cursor = None;
             state.input.end();
@@ -2525,6 +2805,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.input.move_vertical(false, state.input_width);
             }
         }
+
         KeyCode::Down => {
             if state.attachment_cursor.take().is_some() {
                 state.input.cursor = 0;
@@ -2532,10 +2813,12 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.input.move_vertical(true, state.input_width);
             }
         }
+
         KeyCode::PageUp => state.scroll_up(8),
         KeyCode::PageDown => state.scroll_down(8),
         _ => {}
     }
+
     Action::None
 }
 
@@ -2606,14 +2889,17 @@ mod tests {
                 "BEGIN_UNTRUSTED_COMPACTION_RECORD\nread_history archive_id={id}; search with query"
             )),
         ];
+
         assert_eq!(
             retry_archive_id(&[archive_run.clone(), failed_retry], &projected),
             Some(id)
         );
+
         session.snapshot.runs = vec![archive_run.clone()];
         let restored = compaction_source_history(&session, &projected)
             .await
             .unwrap();
+
         assert_eq!(
             restored,
             vec![
@@ -2626,12 +2912,14 @@ mod tests {
             retry_archive_id(std::slice::from_ref(&archive_run), &[]),
             None
         );
+
         let later_reply = Run {
             prompt: "new work".into(),
             status: "completed".into(),
             elapsed_ms: None,
             events: vec![],
         };
+
         assert_eq!(
             retry_archive_id(&[archive_run, later_reply], &projected),
             None
@@ -2643,6 +2931,7 @@ mod tests {
         let mut state = UiState::new("test::model");
         state.permission_mode = crate::tui::permissions::Mode::Yolo;
         let restored = resume_ui_shell(&state);
+
         assert_eq!(
             restored.permission_mode,
             crate::tui::permissions::Mode::Auto
@@ -2650,6 +2939,7 @@ mod tests {
 
         state.permission_mode = crate::tui::permissions::Mode::Ask;
         let restored = resume_ui_shell(&state);
+
         assert_eq!(
             restored.permission_mode,
             crate::tui::permissions::Mode::Auto
@@ -2659,6 +2949,7 @@ mod tests {
     #[test]
     fn overview_budget_counts_only_matching_tool_results_in_effective_history() {
         use orbit_model::types::ToolCall;
+
         let call = ToolCall::function("map", "project_overview", serde_json::json!({}));
         let output = ChatMessage::tool("map", "repository map");
         let messages = vec![
@@ -2667,6 +2958,7 @@ mod tests {
             output.clone(),
             ChatMessage::tool("other", "unrelated output"),
         ];
+
         assert_eq!(
             tool_context_tokens(&messages, "project_overview"),
             orbit_agent::context::estimate_tokens(&[output], &[])
@@ -2714,7 +3006,7 @@ mod tests {
         tools.register(orbit_agent::tool::ClosureTool::new(
             "test_tool",
             "test tool description",
-            serde_json::json!({"type":"object"}),
+            serde_json::json!({ "type": "object" }),
             |_, _| async { Ok("unused".into()) },
         ));
         let instructions = crate::instructions::Instructions::default();
@@ -2737,6 +3029,7 @@ mod tests {
         )
         .await
         .unwrap();
+
         assert_eq!(state.input_context_tokens, 224_000);
         assert_eq!(state.model, "test::model");
         assert!(state.context_used_tokens > 10_000);
@@ -2745,6 +3038,7 @@ mod tests {
             orbit_agent::context::estimate_tokens(&history, &tools.definitions())
         );
         assert!(state.context_used_tokens > orbit_agent::context::estimate_tokens(&history, &[]));
+
         // Reopening the same saved session must not accumulate injected prompts.
         let before = state.context_used_tokens;
         resume_session(
@@ -2761,6 +3055,7 @@ mod tests {
         )
         .await
         .unwrap();
+
         assert_eq!(state.context_used_tokens, before);
     }
 
@@ -2776,6 +3071,7 @@ mod tests {
                 .as_str(),
             "https://example.com/docs?from=orbit"
         );
+
         for value in [
             "file:///tmp/report.html",
             "mailto:person@example.com",
@@ -2791,17 +3087,22 @@ mod tests {
         state.input.insert("/");
         press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
         press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
+
         assert_eq!(
             press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
             Action::Submit("/rename".into())
         );
+
         state.input.insert("next question");
+
         assert_eq!(
             press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
             Action::Steer("next question".into())
         );
         assert!(state.input.text.is_empty());
+
         state.input.insert("/model");
+
         assert_eq!(
             press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
             Action::Submit("/model".into())
@@ -2835,6 +3136,7 @@ mod tests {
         state.input.insert("previous prompt");
         state.input.take();
         state.input.insert("draft");
+
         for kind in [MouseEventKind::ScrollUp, MouseEventKind::ScrollDown] {
             keyboard_action(
                 &mut state,
@@ -2846,26 +3148,34 @@ mod tests {
                 }),
                 false,
             );
+
             assert_eq!(state.input.text, "draft");
+
             if kind == MouseEventKind::ScrollUp {
                 assert_eq!(state.scroll, wheel::LINES);
                 assert!(!state.follow_bottom);
             }
         }
+
         assert_eq!(state.scroll, 0);
         assert!(state.follow_bottom);
+
         press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
+
         assert_eq!(state.input.text, "previous prompt");
     }
 
     #[test]
     fn plain_q_is_text_and_paste_does_not_submit() {
         let mut state = UiState::new("mock");
+
         assert_eq!(
             press(&mut state, KeyCode::Char('q'), KeyModifiers::NONE, false),
             Action::None
         );
+
         keyboard_action(&mut state, Event::Paste("\nhello\nworld".into()), false);
+
         assert_eq!(state.input.text, "q\nhello\nworld");
     }
 
@@ -2887,12 +3197,14 @@ mod tests {
         assert!(state.input.text.is_empty());
 
         let file_url = url::Url::from_file_path(&image).unwrap().to_string();
+
         assert_eq!(pasted_image_paths(&file_url), Some(vec![image]));
     }
 
     #[test]
     fn clipboard_shortcuts_request_the_system_clipboard() {
         let mut state = UiState::new("mock");
+
         for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
             assert_eq!(
                 press(&mut state, KeyCode::Char('v'), modifiers, false),
@@ -2917,19 +3229,29 @@ mod tests {
         state.input.home();
 
         press(&mut state, KeyCode::Left, KeyModifiers::NONE, false);
+
         assert_eq!(state.attachment_cursor, Some(1));
+
         press(&mut state, KeyCode::Left, KeyModifiers::NONE, false);
+
         assert_eq!(state.attachment_cursor, Some(0));
+
         press(&mut state, KeyCode::Delete, KeyModifiers::NONE, false);
+
         assert_eq!(state.attachments, vec![image("second.png")]);
         assert_eq!(state.attachment_cursor, Some(0));
 
         press(&mut state, KeyCode::Right, KeyModifiers::NONE, false);
+
         assert_eq!(state.attachment_cursor, None);
         assert_eq!(state.input.cursor, 0);
+
         press(&mut state, KeyCode::Backspace, KeyModifiers::NONE, false);
+
         assert!(state.attachments.is_empty());
+
         press(&mut state, KeyCode::Right, KeyModifiers::NONE, false);
+
         assert_eq!(state.input.cursor, 1);
     }
 
@@ -2940,6 +3262,7 @@ mod tests {
         state
             .attachment_areas
             .push(ratatui::layout::Rect::new(4, 5, 20, 1));
+
         assert!(focus_attachment_at(&mut state, 8, 5));
         assert_eq!(state.attachment_cursor, Some(0));
         assert_eq!(
@@ -2964,6 +3287,7 @@ mod tests {
             .unwrap();
 
         attach_paths(&mut state, &session, vec![PathBuf::from("test.png")]).unwrap();
+
         assert!(state.attachments.is_empty());
         assert!(state.transcript.iter().any(|item| matches!(
             item,
@@ -2972,6 +3296,7 @@ mod tests {
 
         // With vision enabled, queue_attachment works
         state.supports_vision = true;
+
         assert!(queue_attachment(&mut state, image("test.png")));
         assert_eq!(state.attachments.len(), 1);
     }

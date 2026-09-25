@@ -178,6 +178,7 @@ impl ModelBackend for MockModel {
                 } => (content.unwrap_or_default(), tool_calls),
                 _ => (String::new(), Vec::new()),
             };
+
             let text = message.0;
             let calls = message.1;
 

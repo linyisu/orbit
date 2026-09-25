@@ -46,6 +46,7 @@ async fn external_path_integration_across_all_tools() {
         )
         .await
         .unwrap_err();
+
     assert!(read_err.to_string().contains("permission denied"));
     assert!(read_err.to_string().contains("request_capability"));
 
@@ -60,6 +61,7 @@ async fn external_path_integration_across_all_tools() {
         )
         .await
         .unwrap_err();
+
     assert!(write_err.to_string().contains("permission denied"));
     assert!(write_err.to_string().contains("request_capability"));
 
@@ -68,16 +70,13 @@ async fn external_path_integration_across_all_tools() {
             ToolCall::function(
                 "e1",
                 "edit_file",
-                json!({
-                    "path": &ext_file_str,
-                    "old_text": "initial line",
-                    "new_text": "hacked line"
-                }),
+                json!({ "path": &ext_file_str, "old_text": "initial line", "new_text": "hacked line" }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
+
     assert!(edit_err.to_string().contains("permission denied"));
     assert!(edit_err.to_string().contains("request_capability"));
 
@@ -88,6 +87,7 @@ async fn external_path_integration_across_all_tools() {
         )
         .await
         .unwrap_err();
+
     assert!(list_err.to_string().contains("permission denied"));
     assert!(list_err.to_string().contains("request_capability"));
 
@@ -102,6 +102,7 @@ async fn external_path_integration_across_all_tools() {
         )
         .await
         .unwrap_err();
+
     assert!(search_err.to_string().contains("permission denied"));
     assert!(search_err.to_string().contains("request_capability"));
 
@@ -120,6 +121,7 @@ async fn external_path_integration_across_all_tools() {
         )
         .await
         .unwrap();
+
     assert!(read_out.content.contains("initial line"));
 
     // 4. write_file to the granted outside path prompts for write approval and succeeds
@@ -127,35 +129,37 @@ async fn external_path_integration_across_all_tools() {
         ToolCall::function(
             "w2",
             "write_file",
-            json!({
-                "path": &ext_file_str,
-                "content": "replaced external content\nsecond line\n"
-            }),
+            json!({ "path": &ext_file_str, "content": "replaced external content\nsecond line\n" }),
         ),
         CancellationToken::new(),
     );
     let approve_task = tokio::spawn(async move {
         let request = write_approval_rx.recv().await.unwrap();
+
         match request.preview {
             approval::ApprovalPreview::Write(preview) => {
                 assert!(preview.after.contains("replaced external content"));
             }
             other => panic!("expected write preview, got {other:?}"),
         }
+
         let _ = request.decision.send(true);
 
         // Expect second approval for edit_file below
         let edit_request = write_approval_rx.recv().await.unwrap();
+
         match edit_request.preview {
             approval::ApprovalPreview::Write(preview) => {
                 assert!(preview.after.contains("edited external line"));
             }
             other => panic!("expected edit write preview, got {other:?}"),
         }
+
         let _ = edit_request.decision.send(true);
     });
 
     let write_result = write_fut.await.unwrap();
+
     assert!(write_result.content.contains("written_bytes"));
     assert_eq!(
         fs::read_to_string(&ext_file).unwrap(),
@@ -168,16 +172,13 @@ async fn external_path_integration_across_all_tools() {
             ToolCall::function(
                 "e2",
                 "edit_file",
-                json!({
-                    "path": &ext_file_str,
-                    "old_text": "second line",
-                    "new_text": "edited external line"
-                }),
+                json!({ "path": &ext_file_str, "old_text": "second line", "new_text": "edited external line" }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap();
+
     assert!(edit_result.content.contains("written_bytes"));
     assert_eq!(
         fs::read_to_string(&ext_file).unwrap(),
@@ -194,6 +195,7 @@ async fn external_path_integration_across_all_tools() {
         )
         .await
         .unwrap();
+
     assert!(list_out.content.contains("config.txt"));
     assert!(list_out.content.contains("\"kind\":\"file\""));
 
@@ -203,15 +205,13 @@ async fn external_path_integration_across_all_tools() {
             ToolCall::function(
                 "s2",
                 "search_text",
-                json!({
-                    "path": &ext_dir_str,
-                    "query": "edited external"
-                }),
+                json!({ "path": &ext_dir_str, "query": "edited external" }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap();
+
     assert!(search_out.content.contains("config.txt"));
     assert!(search_out.content.contains("edited external line"));
 }
@@ -259,6 +259,7 @@ async fn external_special_readers_integration() {
         )
         .await
         .unwrap_err();
+
     assert!(doc_err.to_string().contains("permission denied"));
     assert!(doc_err.to_string().contains("request_capability"));
 
@@ -269,6 +270,7 @@ async fn external_special_readers_integration() {
         )
         .await
         .unwrap_err();
+
     assert!(rtf_err.to_string().contains("permission denied"));
     assert!(rtf_err.to_string().contains("request_capability"));
 
@@ -279,6 +281,7 @@ async fn external_special_readers_integration() {
         )
         .await
         .unwrap_err();
+
     assert!(img_err.to_string().contains("permission denied"));
     assert!(img_err.to_string().contains("request_capability"));
 
@@ -297,6 +300,7 @@ async fn external_special_readers_integration() {
         )
         .await
         .unwrap();
+
     assert!(doc_out.content.contains("local_document_markdown"));
     assert!(doc_out.content.contains("alpha"));
 
@@ -307,6 +311,7 @@ async fn external_special_readers_integration() {
         )
         .await
         .unwrap();
+
     assert!(rtf_out.content.contains("local_document_markdown"));
     assert!(rtf_out.content.contains("Rust for Rustaceans"));
 
@@ -318,6 +323,7 @@ async fn external_special_readers_integration() {
         )
         .await
         .unwrap();
+
     assert!(img_out.content.contains("local_image"));
     assert_eq!(img_out.attachments.len(), 1);
 
@@ -333,6 +339,7 @@ async fn external_special_readers_integration() {
         )
         .await
         .unwrap();
+
     assert!(rel_doc_out.content.contains("local_document_markdown"));
     assert!(rel_doc_out.content.contains("alpha"));
 }

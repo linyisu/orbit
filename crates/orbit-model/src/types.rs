@@ -96,6 +96,7 @@ impl Attachment {
 
     pub fn image(&self) -> Result<(&str, String), crate::error::ModelError> {
         const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
         match self {
             Self::Image {
                 mime_type, path, ..
@@ -103,15 +104,18 @@ impl Attachment {
                 let metadata = std::fs::metadata(path).map_err(|error| {
                     crate::error::ModelError::Attachment(format!("{}: {error}", path.display()))
                 })?;
+
                 if !metadata.is_file() || metadata.len() > MAX_IMAGE_BYTES {
                     return Err(crate::error::ModelError::Attachment(format!(
                         "{} is not a regular image up to 20 MiB",
                         path.display()
                     )));
                 }
+
                 let bytes = std::fs::read(path).map_err(|error| {
                     crate::error::ModelError::Attachment(format!("{}: {error}", path.display()))
                 })?;
+
                 Ok((mime_type, STANDARD.encode(bytes)))
             }
         }
@@ -411,8 +415,11 @@ mod tests {
         assert_eq!(ReasoningEffort::None.label(), "不思考");
 
         let serialized = serde_json::to_string(&ReasoningEffort::None).unwrap();
+
         assert_eq!(serialized, "\"none\"");
+
         let deserialized: ReasoningEffort = serde_json::from_str("\"none\"").unwrap();
+
         assert_eq!(deserialized, ReasoningEffort::None);
     }
 }

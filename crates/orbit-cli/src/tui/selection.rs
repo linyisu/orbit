@@ -65,21 +65,27 @@ impl Selection {
         self.frozen = None;
         self.last_auto = None;
     }
+
     pub fn active(&self) -> bool {
         self.anchor.is_some()
     }
+
     pub fn transcript_drag(&self) -> bool {
         self.dragging && self.region == Some(Region::Transcript)
     }
+
     pub fn dragging(&self) -> bool {
         self.dragging
     }
+
     pub fn reset_caret(&mut self) {
         self.caret = None;
     }
+
     pub fn set_caret(&mut self, position: (u16, u16), cell: Cell) {
         self.caret = Some((position, cell));
     }
+
     fn area(&self) -> Rect {
         match self.region {
             Some(Region::Transcript) => self.viewport,
@@ -89,6 +95,7 @@ impl Selection {
             None => Rect::default(),
         }
     }
+
     fn base(&self) -> usize {
         if self.region == Some(Region::Transcript) {
             self.offset
@@ -96,6 +103,7 @@ impl Selection {
             0
         }
     }
+
     fn position(&self, (x, y): (u16, u16)) -> (u16, usize) {
         let area = self.area();
         (
@@ -103,6 +111,7 @@ impl Selection {
             (y.clamp(area.y, area.bottom().saturating_sub(1)) - area.y) as usize + self.base(),
         )
     }
+
     pub fn click(&self, event: &Event) -> Option<(u16, u16)> {
         if let Event::Mouse(mouse) = event
             && mouse.kind == MouseEventKind::Up(MouseButton::Left)
@@ -115,13 +124,16 @@ impl Selection {
             None
         }
     }
+
     pub fn begin_scroll(&mut self) {
         self.frozen = None;
+
         if self.dragging && self.region == Some(Region::Transcript) {
             self.extend = true;
             self.moved = true;
         }
     }
+
     pub fn auto_scroll(&mut self, now: Instant) -> i8 {
         if !self.dragging || self.region != Some(Region::Transcript) {
             return 0;
@@ -129,6 +141,7 @@ impl Selection {
         let Some((_, y)) = self.pointer else {
             return 0;
         };
+
         let direction = if y <= self.viewport.y {
             -1
         } else if y >= self.viewport.bottom().saturating_sub(1) {
@@ -136,16 +149,20 @@ impl Selection {
         } else {
             return 0;
         };
+
         if self
             .last_auto
             .is_some_and(|last| now.duration_since(last) < Duration::from_millis(80))
         {
             return 0;
         }
+
         self.last_auto = Some(now);
         self.begin_scroll();
+
         direction
     }
+
     pub fn handle(&mut self, event: &Event) -> io::Result<bool> {
         match event {
             Event::Mouse(mouse) => match mouse.kind {
@@ -161,6 +178,7 @@ impl Selection {
                     .into_iter()
                     .find(|(_, area)| area.contains(point.into()))
                     .map(|(region, _)| region);
+
                     if self.region.is_some() {
                         self.anchor = Some(self.position(point));
                         self.end = self.anchor;
@@ -168,12 +186,15 @@ impl Selection {
                         self.down = Some(point);
                         self.dragging = true;
                         self.frozen = self.latest.clone();
+
                         if let Some(buffer) = self.latest.clone() {
                             self.capture(&buffer);
                         }
                     }
+
                     return Ok(true);
                 }
+
                 MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
                     if self.dragging =>
                 {
@@ -181,30 +202,38 @@ impl Selection {
                     self.moved |= self.down != Some(point);
                     self.pointer = Some(point);
                     self.end = Some(self.position(point));
+
                     if matches!(mouse.kind, MouseEventKind::Up(_)) {
                         self.dragging = false;
+
                         if !self.moved {
                             self.clear();
                         }
                     }
+
                     return Ok(true);
                 }
+
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                     self.pointer = Some((mouse.column, mouse.row));
                     self.begin_scroll();
+
                     // A drag belongs to its starting region, even outside its bounds.
                     if self.dragging && self.region != Some(Region::Transcript) {
                         return Ok(true);
                     }
                 }
+
                 _ => {}
             },
+
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 if self.active()
                     && key.code == KeyCode::Char('c')
                     && key.modifiers.contains(KeyModifiers::CONTROL)
                 {
                     let text = self.text();
+
                     if !text.is_empty() {
                         write!(
                             io::stdout(),
@@ -213,32 +242,41 @@ impl Selection {
                         )?;
                         io::stdout().flush()?;
                     }
+
                     return Ok(true);
                 }
                 if self.active() && key.code == KeyCode::Esc {
                     self.clear();
                     return Ok(true);
                 }
+
                 self.clear();
             }
+
             Event::Resize(..) | Event::Paste(_) => self.clear(),
             _ => {}
         }
+
         Ok(false)
     }
+
     fn bounds(&self) -> Option<((u16, usize), (u16, usize))> {
         let (a, b) = (self.anchor?, self.end?);
+
         Some(if (a.1, a.0) <= (b.1, b.0) {
             (a, b)
         } else {
             (b, a)
         })
     }
+
     fn selected_columns(&self, row: usize) -> Option<(u16, u16)> {
         let (start, end) = self.bounds()?;
+
         if row < start.1 || row > end.1 {
             return None;
         }
+
         Some((
             if row == start.1 { start.0 } else { 0 },
             if row == end.1 {
@@ -248,11 +286,14 @@ impl Selection {
             },
         ))
     }
+
     fn capture(&mut self, buffer: &Buffer) {
         if !self.active() {
             return;
         }
+
         let area = self.area().intersection(buffer.area);
+
         for y in area.y..area.bottom() {
             let row = (y - area.y) as usize + self.base();
             self.rows.entry(row).or_insert_with(|| {
@@ -262,6 +303,7 @@ impl Selection {
             });
         }
     }
+
     /// Fill rows skipped by a wheel tick, including when the viewport is shorter
     /// than the scroll step. Copying must include the entire selected interval.
     pub(super) fn transcript_view(
@@ -270,21 +312,26 @@ impl Selection {
         layout: &super::transcript::TranscriptLayout,
     ) {
         self.offset = offset;
+
         if self.region != Some(Region::Transcript) {
             return;
         }
+
         if self.extend {
             if let Some(point) = self.pointer {
                 self.end = Some(self.position(point));
             }
+
             self.extend = false;
         }
+
         let Some((start, end)) = self.bounds() else {
             return;
         };
         if self.filled == Some((start.1, end.1)) {
             return;
         }
+
         for row in start.1..=end.1 {
             self.rows.entry(row).or_insert_with(|| {
                 let area = Rect::new(0, 0, self.viewport.width, 1);
@@ -293,27 +340,37 @@ impl Selection {
                 buffer.content
             });
         }
+
         self.filled = Some((start.1, end.1));
     }
+
     pub fn text(&self) -> String {
         let mut lines = Vec::new();
+
         for (&row, cells) in &self.rows {
             let Some((left, right)) = self.selected_columns(row) else {
                 continue;
             };
+
             let mut text = String::new();
             let mut x = 0;
+
             while x < cells.len() {
                 let width = cells[x].symbol().width().max(1);
+
                 if x <= right as usize && x + width > left as usize {
                     text.push_str(cells[x].symbol());
                 }
+
                 x += width;
             }
+
             lines.push(text.trim_end().to_owned());
         }
+
         lines.join("\n")
     }
+
     pub fn draw_frozen(&mut self, frame: &mut Frame<'_>) -> bool {
         let Some(buffer) = &self.frozen else {
             return false;
@@ -321,23 +378,31 @@ impl Selection {
         if buffer.area != frame.area() {
             return false;
         }
+
         *frame.buffer_mut() = buffer.clone();
         self.paint(frame);
+
         true
     }
+
     pub fn paint(&mut self, frame: &mut Frame<'_>) {
         let mut snapshot = frame.buffer_mut().clone();
+
         if let Some((position, cell)) = &self.caret
             && snapshot.area.contains((*position).into())
         {
             snapshot[*position] = cell.clone();
         }
+
         self.capture(&snapshot);
+
         if self.frozen.is_some() {
             self.frozen = Some(snapshot.clone());
         }
+
         self.latest = Some(snapshot);
         let area = self.area().intersection(frame.area());
+
         for y in area.y..area.bottom() {
             let row = (y - area.y) as usize + self.base();
             let Some((left, right)) = self.selected_columns(row) else {
@@ -346,9 +411,12 @@ impl Selection {
             let Some(cells) = self.rows.get(&row) else {
                 continue;
             };
+
             let mut x = 0;
+
             while x < cells.len().min(area.width as usize) {
                 let width = cells[x].symbol().width().max(1);
+
                 if x <= right as usize && x + width > left as usize {
                     for (column, cell) in cells
                         .iter()
@@ -361,6 +429,7 @@ impl Selection {
                             .set_style(Style::default().bg(Color::Blue).fg(Color::White));
                     }
                 }
+
                 x += width;
             }
         }
@@ -404,6 +473,7 @@ mod tests {
         draw(&mut state, &mut terminal);
         state.scroll = state.max_scroll;
         draw(&mut state, &mut terminal);
+
         (state, terminal)
     }
     #[test]
@@ -419,9 +489,12 @@ mod tests {
             .selection
             .handle(&mouse(MouseEventKind::ScrollDown, x + 5, y))
             .unwrap();
+
         assert!(state.selection.dragging());
+
         state.scroll_down(8);
         draw(&mut state, &mut terminal);
+
         assert_eq!(
             state.selection.text(),
             (0..=8)
@@ -433,6 +506,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+
         state
             .selection
             .handle(&mouse(MouseEventKind::Up(MouseButton::Left), x + 5, y))
@@ -444,14 +518,17 @@ mod tests {
             .unwrap();
         state.scroll_down(8);
         draw(&mut state, &mut terminal);
+
         assert_eq!(state.selection.text(), text);
         assert!(!state.selection.dragging());
+
         state
             .selection
             .handle(&mouse(MouseEventKind::ScrollUp, x, y))
             .unwrap();
         state.scroll_up(8);
         draw(&mut state, &mut terminal);
+
         assert_eq!(terminal.backend().buffer()[(x, y)].bg, Color::Blue);
     }
     #[test]
@@ -475,6 +552,7 @@ mod tests {
             ))
             .unwrap();
         let now = Instant::now();
+
         for i in 0..3 {
             assert_eq!(
                 state
@@ -482,31 +560,38 @@ mod tests {
                     .auto_scroll(now + Duration::from_millis(i * 100)),
                 1
             );
+
             state.scroll_down(2);
             draw(&mut state, &mut terminal);
         }
+
         assert!(state.selection.text().contains("line06"));
+
         state
             .selection
             .handle(&mouse(MouseEventKind::Drag(MouseButton::Left), area.x, 0))
             .unwrap();
+
         assert_eq!(
             state
                 .selection
                 .auto_scroll(now + Duration::from_millis(400)),
             -1
         );
+
         state.scroll_up(2);
         draw(&mut state, &mut terminal);
         state
             .selection
             .handle(&mouse(MouseEventKind::Up(MouseButton::Left), area.x, 0))
             .unwrap();
+
         assert_eq!(state.selection.auto_scroll(now + Duration::from_secs(1)), 0);
     }
     #[test]
     fn selection_stays_in_starting_region_and_excludes_chrome() {
         let (mut state, mut terminal) = setup();
+
         for region in [Region::Transcript, Region::Input, Region::Footer] {
             state.selection.clear();
             draw(&mut state, &mut terminal);
@@ -515,6 +600,7 @@ mod tests {
                 Region::Input => state.selection.input,
                 _ => state.selection.footer,
             };
+
             state
                 .selection
                 .handle(&mouse(
@@ -530,6 +616,7 @@ mod tests {
             terminal
                 .draw(|frame| assert!(state.selection.draw_frozen(frame)))
                 .unwrap();
+
             for y in 0..10 {
                 for x in 0..40 {
                     if !area.contains((x, y).into()) {
@@ -537,7 +624,9 @@ mod tests {
                     }
                 }
             }
+
             let text = state.selection.text();
+
             match region {
                 Region::Transcript => {
                     assert!(text.contains("line00"));
@@ -561,7 +650,9 @@ mod tests {
         let down = mouse(MouseEventKind::Down(MouseButton::Left), area.x + 3, area.y);
         let up = mouse(MouseEventKind::Up(MouseButton::Left), area.x + 3, area.y);
         state.selection.handle(&down).unwrap();
+
         assert_eq!(state.selection.click(&up), Some((area.x + 3, area.y)));
+
         state
             .selection
             .handle(&mouse(
@@ -570,10 +661,13 @@ mod tests {
                 area.y,
             ))
             .unwrap();
+
         assert!(state.selection.click(&up).is_none());
+
         terminal
             .draw(|frame| assert!(state.selection.draw_frozen(frame)))
             .unwrap();
+
         assert_eq!(state.selection.text(), "你好");
     }
 }

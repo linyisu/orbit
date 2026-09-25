@@ -16,6 +16,7 @@ use orbit_tools::{
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+
 fn call(id: &str, name: &str, args: serde_json::Value) -> ChatCompletion {
     ChatCompletion {
         id: None,
@@ -25,6 +26,7 @@ fn call(id: &str, name: &str, args: serde_json::Value) -> ChatCompletion {
         usage: None,
     }
 }
+
 #[tokio::test]
 #[ignore = "requires Linux user namespaces, Python, Node and ORBIT_TEST_RUST_TOOLCHAIN"]
 async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
@@ -53,6 +55,7 @@ async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
             "node --test parser.test.cjs",
         ),
     ];
+
     for (path, source, old, new, command) in cases {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join(path), source).unwrap();
@@ -75,14 +78,14 @@ async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
             },
         ));
         let backend = MockModel::new(vec![
-            call("fail", "run_command", json!({"command":command})),
-            call("read", "read_file", json!({"path":path})),
+            call("fail", "run_command", json!({ "command": command })),
+            call("read", "read_file", json!({ "path": path })),
             call(
                 "edit",
                 "edit_file",
-                json!({"path":path,"old_text":old,"new_text":new}),
+                json!({ "path": path, "old_text": old, "new_text": new }),
             ),
-            call("pass", "run_command", json!({"command":command})),
+            call("pass", "run_command", json!({ "command": command })),
             ChatCompletion {
                 id: None,
                 model: None,
@@ -102,9 +105,12 @@ async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
             )
             .await
             .unwrap();
+
         assert_eq!(result.tool_calls, 4);
+
         let mut codes = Vec::new();
         let mut snapshots = Vec::new();
+
         while let Ok(event) = events_rx.try_recv() {
             match event {
                 AgentEvent::ToolFinished { call, content, .. }
@@ -122,6 +128,7 @@ async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
                 _ => {}
             }
         }
+
         assert_ne!(codes[0], Some(0), "{path} must fail before edit");
         assert_eq!(codes[1], Some(0), "{path} must pass after edit");
         assert_ne!(snapshots[0], snapshots[1]);
@@ -134,6 +141,7 @@ async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
             1,
             "build products must stay out of host project"
         );
+
         approvals.await.unwrap();
     }
 }

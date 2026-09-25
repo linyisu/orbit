@@ -23,19 +23,25 @@ pub(crate) fn same_directory_identity(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }
+
     fn linux_inode_birth(identity: &str) -> Option<(&str, &str)> {
         let mut fields = identity.split(':');
+
         if fields.next()? != "linux" {
             return None;
         }
+
         let _device = fields.next()?;
         let inode = fields.next()?;
         let birth = fields.next()?;
+
         if inode.is_empty() || birth.is_empty() || fields.next().is_some() {
             return None;
         }
+
         Some((inode, birth))
     }
+
     matches!(
         (linux_inode_birth(left), linux_inode_birth(right)),
         (Some(a), Some(b)) if a == b
@@ -47,6 +53,7 @@ impl Directory {
         let path = path.canonicalize()?;
         let metadata = fs::metadata(&path)?;
         ensure!(metadata.is_dir(), "project path is not a directory");
+
         // Reject lossy names rather than letting different paths collapse together.
         let path_text = path
             .to_str()
@@ -66,6 +73,7 @@ impl Directory {
                 birth.map_or_else(|| "unknown".into(), |b| b.to_string())
             )
         });
+
         Ok(Self {
             path: path_text,
             identity,
@@ -77,15 +85,18 @@ impl Directory {
 #[cfg(unix)]
 fn object_id(_: &Path, metadata: &fs::Metadata) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
+
     Some(format!("{}:{}", metadata.dev(), metadata.ino()))
 }
 
 #[cfg(windows)]
 fn object_id(path: &Path, _: &fs::Metadata) -> Option<String> {
     use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
     };
+
     let file = fs::OpenOptions::new()
         .access_mode(0)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
@@ -102,10 +113,13 @@ fn object_id(path: &Path, _: &fs::Metadata) -> Option<String> {
             std::mem::size_of::<FILE_ID_INFO>() as u32,
         )
     };
+
     if ok == 0 {
         return None;
     }
+
     let info = unsafe { info.assume_init() };
+
     Some(format!(
         "{}:{:032x}",
         info.VolumeSerialNumber,

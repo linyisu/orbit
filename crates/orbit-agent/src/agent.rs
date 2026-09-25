@@ -68,6 +68,7 @@ where
         if !backend.supports_vision() {
             tools.remove("read_image");
         }
+
         Self {
             backend,
             tools,
@@ -132,6 +133,7 @@ where
                 )
                 .await?;
         }
+
         Ok(())
     }
 
@@ -172,6 +174,7 @@ where
             if let AgentEvent::Model(event) = event {
                 on_event(event);
             }
+
             std::future::ready(Ok::<(), AgentError>(()))
         })
         .await
@@ -207,21 +210,27 @@ where
         let mut flushed_at = std::time::Instant::now();
         let mut journaled_emit = |event: AgentEvent| {
             let journal = self.journal.clone();
+
             if let Some(journal) = &journal {
                 journal.record(event.clone());
             }
+
             pending_events += 1;
             let flush = pending_events >= 256
                 || flushed_at.elapsed() >= std::time::Duration::from_millis(250);
+
             if flush {
                 pending_events = 0;
                 flushed_at = std::time::Instant::now();
             }
+
             let emitted = emit(event);
+
             async move {
                 if flush && let Some(journal) = journal {
                     journal.flush().await?;
                 }
+
                 emitted.await
             }
         };
@@ -238,11 +247,15 @@ where
                 error: error.to_string(),
             },
         };
+
         let emitted = journaled_emit(terminal).await;
+
         if let Some(journal) = &self.journal {
             journal.flush().await?;
         }
+
         emitted?;
+
         result
     }
 
@@ -261,6 +274,7 @@ where
         }
 
         let mut history = request.messages;
+
         // The host builds a request from its previous projection plus the new
         // user message. Instructions injected by the host are request context,
         // not canonical conversation messages.
@@ -269,6 +283,7 @@ where
         {
             journal.record_message(message.clone());
         }
+
         let mut files = self.files.clone();
         files.merge(&crate::memory::FileActivity::from_history(&history));
         let mut turns = 0;
@@ -311,6 +326,7 @@ where
                     },
                     other => other,
                 });
+
             // A successful compaction may be followed immediately by cancellation
             // or a closed UI channel. Persist its effective history together with
             // the queued compaction events before returning that terminal error.
@@ -318,6 +334,7 @@ where
                 self.checkpoint(&history, turns, tool_calls, None, &[], None)
                     .await?;
             }
+
             prepared?;
             force_compaction = false;
             turns += 1;
@@ -352,6 +369,7 @@ where
                 elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
             })
             .await?;
+
             if self.config.auto_compact
                 && recovery_limit.is_none()
                 && matches!(&response, Err(AgentError::Model(error)) if error.is_context_limit())
@@ -368,6 +386,7 @@ where
                 turns = turns.saturating_sub(1);
                 continue;
             }
+
             let (completion, _) = response?;
             check_finish_reason(completion.finish_reason.as_deref())?;
             let assistant = completion.message.clone();
@@ -375,16 +394,21 @@ where
                 ChatMessage::Assistant { tool_calls, .. } => tool_calls.clone(),
                 _ => Vec::new(),
             };
+
             validate_tool_ids(&calls)?;
+
             if self.config.max_tool_calls > 0
                 && tool_calls.saturating_add(calls.len()) > self.config.max_tool_calls
             {
                 return Err(AgentError::MaxToolCalls);
             }
+
             history.push(assistant.clone());
+
             if let Some(journal) = &self.journal {
                 journal.record_message(assistant);
             }
+
             self.checkpoint(&history, turns, tool_calls, None, &[], None)
                 .await?;
 
@@ -398,6 +422,7 @@ where
             }
 
             let mut loaded_attachments = Vec::new();
+
             for call in calls {
                 if cancellation.is_cancelled() {
                     return Err(AgentError::Cancelled);
@@ -415,6 +440,7 @@ where
                 )
                 .await?;
                 emit(event).await?;
+
                 if call.function.name == "read_image" && !self.backend.supports_vision() {
                     let message = "current model does not support image input".to_string();
                     let event = AgentEvent::ToolFailed {
@@ -423,9 +449,11 @@ where
                     };
                     let result = ChatMessage::tool(call.id, format!("tool error: {message}"));
                     history.push(result.clone());
+
                     if let Some(journal) = &self.journal {
                         journal.record_message(result);
                     }
+
                     self.checkpoint(
                         &history,
                         turns,
@@ -438,9 +466,11 @@ where
                     emit(event).await?;
                     continue;
                 }
+
                 match self.tools.execute(call.clone(), cancellation.clone()).await {
                     Ok(output) => {
                         files.observe(&call, &output.content);
+
                         if let Some(evidence) = output.verification {
                             emit(AgentEvent::VerificationRecorded {
                                 call_id: call.id.clone(),
@@ -448,6 +478,7 @@ where
                             })
                             .await?;
                         }
+
                         let event = AgentEvent::ToolFinished {
                             call: call.clone(),
                             content: output.content.clone(),
@@ -455,9 +486,11 @@ where
                         };
                         let result = ChatMessage::tool(call.id, output.content);
                         history.push(result.clone());
+
                         if let Some(journal) = &self.journal {
                             journal.record_message(result);
                         }
+
                         loaded_attachments.extend(output.attachments);
                         self.checkpoint(
                             &history,
@@ -470,6 +503,7 @@ where
                         .await?;
                         emit(event).await?;
                     }
+
                     Err(error) => {
                         let message = error.to_string();
                         let event = AgentEvent::ToolFailed {
@@ -478,9 +512,11 @@ where
                         };
                         let result = ChatMessage::tool(call.id, format!("tool error: {message}"));
                         history.push(result.clone());
+
                         if let Some(journal) = &self.journal {
                             journal.record_message(result);
                         }
+
                         self.checkpoint(
                             &history,
                             turns,
@@ -494,13 +530,16 @@ where
                     }
                 }
             }
+
             let before_attachments = history.len();
             append_loaded_attachments(&mut history, loaded_attachments);
+
             if let Some(journal) = &self.journal {
                 for message in &history[before_attachments..] {
                     journal.record_message(message.clone());
                 }
             }
+
             self.checkpoint(&history, turns, tool_calls, None, &[], None)
                 .await?;
         }
@@ -521,6 +560,7 @@ where
     {
         let tools = self.tools.definitions();
         let mut estimated = crate::context::estimate_tokens(history, &tools);
+
         if !force
             && self.config.auto_compact
             && estimated >= thresholds.prune_after
@@ -572,12 +612,14 @@ where
                 }
             }
         }
+
         if force && self.archive.is_none() {
             return Err(AgentError::CompactionFailed {
                 kind: crate::compaction::CompactionFailureKind::Archive,
                 message: "context archive is required before compacting history".into(),
             });
         }
+
         let plan = if force {
             Some(crate::autocompact::plan_configured(history, &tools, output, local_limit, crate::memory::CompactionMode::Manual, &self.compaction.settings)
                 .ok_or_else(|| AgentError::CompactionFailed {kind:crate::compaction::CompactionFailureKind::InputBudget,
@@ -597,6 +639,7 @@ where
         } else {
             None
         };
+
         if let Some(plan) = plan {
             emit(AgentEvent::CompactionStarted).await?;
             let runtime = self
@@ -633,9 +676,12 @@ where
                     thresholds.compact_after = result
                         .after_tokens
                         .saturating_add(local_limit.saturating_sub(output) / 10);
+
                     event
                 }
+
                 Err(AgentError::Cancelled) => return Err(AgentError::Cancelled),
+
                 Err(error) => {
                     // A failed early attempt must not cause a summary request on
                     // every tool call. Retry only after substantial input growth.
@@ -645,18 +691,23 @@ where
                         kind: error.compaction_kind(),
                         error: error.to_string(),
                     };
+
                     if force {
                         emit(event).await?;
                         return Err(error);
                     }
+
                     event
                 }
             };
+
             emit(event).await?;
         }
+
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled);
         }
+
         crate::context::check_budget(history, &tools, output, local_limit)
     }
 
@@ -683,6 +734,7 @@ where
         while let Some(event) = stream.next().await {
             let event = event.map_err(AgentError::Model)?;
             emit(AgentEvent::Model(event.clone())).await?;
+
             match event {
                 StreamEvent::TextDelta(delta) => text.push_str(&delta),
                 StreamEvent::ReasoningDelta(_) => {}
@@ -697,6 +749,7 @@ where
                     if reason.is_some() {
                         finish_reason = reason;
                     }
+
                     merge_usage(&mut usage, event_usage);
                 }
             }
@@ -716,6 +769,7 @@ where
                 if let Some(content) = content {
                     emit(AgentEvent::Model(StreamEvent::TextDelta(content.clone()))).await?;
                 }
+
                 for (index, call) in tool_calls.iter().enumerate() {
                     emit(AgentEvent::Model(StreamEvent::ToolCallDelta(
                         ToolCallDelta {
@@ -727,6 +781,7 @@ where
                     )))
                     .await?;
                 }
+
                 emit(AgentEvent::Model(StreamEvent::Completed {
                     finish_reason: completion.finish_reason.clone(),
                     usage: completion.usage.clone(),
@@ -760,6 +815,7 @@ where
 pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<ChatMessage> {
     if !supports_vision {
         let mut messages = history.to_vec();
+
         for message in &mut messages {
             let ChatMessage::User {
                 content,
@@ -771,6 +827,7 @@ pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<Cha
             if attachments.is_empty() {
                 continue;
             }
+
             let omitted = attachments
                 .iter()
                 .map(|attachment| attachment.name())
@@ -781,12 +838,15 @@ pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<Cha
             ));
             attachments.clear();
         }
+
         return messages;
     }
 
     const MAX_IMAGES: usize = 4;
+
     let mut remaining = MAX_IMAGES;
     let mut messages = history.to_vec();
+
     for message in messages.iter_mut().rev() {
         let ChatMessage::User {
             content,
@@ -799,6 +859,7 @@ pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<Cha
             remaining -= attachments.len();
             continue;
         }
+
         let split = attachments.len() - remaining;
         let omitted = attachments[..split]
             .iter()
@@ -811,6 +872,7 @@ pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<Cha
         attachments.drain(..split);
         remaining = 0;
     }
+
     messages
 }
 
@@ -821,6 +883,7 @@ fn append_loaded_attachments(
     if attachments.is_empty() {
         return;
     }
+
     let names = attachments
         .iter()
         .map(|attachment| attachment.name())
@@ -843,6 +906,7 @@ fn check_finish_reason(reason: Option<&str>) -> Result<(), AgentError> {
             ),
         )));
     }
+
     Ok(())
 }
 
@@ -850,6 +914,7 @@ fn merge_usage(current: &mut Option<Usage>, update: Option<Usage>) {
     let Some(update) = update else {
         return;
     };
+
     if let Some(current) = current {
         current.prompt_tokens = update.prompt_tokens.or(current.prompt_tokens);
         current.completion_tokens = update.completion_tokens.or(current.completion_tokens);
@@ -861,6 +926,7 @@ fn merge_usage(current: &mut Option<Usage>, update: Option<Usage>) {
 
 fn validate_tool_ids(calls: &[ToolCall]) -> Result<(), AgentError> {
     let mut ids = HashSet::new();
+
     for call in calls {
         if call.id.trim().is_empty() || !ids.insert(&call.id) {
             return Err(AgentError::Model(orbit_model::error::ModelError::Protocol(
@@ -868,6 +934,7 @@ fn validate_tool_ids(calls: &[ToolCall]) -> Result<(), AgentError> {
             )));
         }
     }
+
     Ok(())
 }
 
@@ -882,12 +949,15 @@ fn merge_tool_call(calls: &mut BTreeMap<usize, ToolCall>, delta: ToolCallDelta) 
             arguments: String::new(),
         },
     });
+
     if let Some(id) = delta.id {
         call.id = id;
     }
+
     if let Some(name) = delta.name {
         call.function.name.push_str(&name);
     }
+
     call.function.arguments.push_str(&delta.arguments);
 }
 
@@ -948,6 +1018,7 @@ mod tests {
         )
         .with_calibration("provider::model".into(), calibration);
         let result = agent.run(request(), CancellationToken::new()).await;
+
         assert!(
             matches!(result,Err(AgentError::ContextBudget {estimated,limit:8192}) if estimated>8192)
         );
@@ -1018,9 +1089,11 @@ mod tests {
     }
     impl crate::checkpoint::ExecutionJournal for FailingJournal {
         fn record(&self, _: AgentEvent) {}
+
         fn flush(&self) -> crate::checkpoint::CheckpointFuture<'_> {
             Box::pin(async { Ok(()) })
         }
+
         fn save<'a>(
             &'a self,
             checkpoint: crate::checkpoint::ExecutionCheckpoint,
@@ -1042,7 +1115,9 @@ mod tests {
     #[tokio::test]
     async fn cancellation_after_compaction_saves_the_published_context() {
         use std::sync::Arc;
+
         struct TestArchive;
+
         impl crate::archive::ContextArchive for TestArchive {
             fn save<'a>(
                 &'a self,
@@ -1051,7 +1126,19 @@ mod tests {
                 Box::pin(async { Ok("archive://test".into()) })
             }
         }
-        let response=assistant_text(&serde_json::json!({"goal":"fix parser","constraints":["preserve API"],"decisions":[],"completed":[],"remaining":["test empty input"],"verification":[],"uncertainty":[]}).to_string());
+
+        let response = assistant_text(
+            &serde_json::json!({
+                "goal": "fix parser",
+                "constraints": ["preserve API"],
+                "decisions": [],
+                "completed": [],
+                "remaining": ["test empty input"],
+                "verification": [],
+                "uncertainty": []
+            })
+            .to_string(),
+        );
         let history = vec![
             ChatMessage::system("coding rules"),
             ChatMessage::user("fix parser, preserve API"),
@@ -1079,12 +1166,16 @@ mod tests {
                 if matches!(event, AgentEvent::ContextCompacted { .. }) {
                     token.cancel();
                 }
+
                 std::future::ready(Ok(()))
             })
             .await;
+
         assert!(matches!(result, Err(AgentError::Cancelled)));
+
         let checkpoints = journal.checkpoints.lock().unwrap();
         let restored = &checkpoints.last().unwrap().history;
+
         assert!(
             crate::context::estimate_tokens(restored, &[])
                 < crate::context::estimate_tokens(&history, &[]) / 2
@@ -1102,6 +1193,7 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
+
         for fail_start in [true, false] {
             for adapter in 0..3 {
                 let count = Arc::new(AtomicUsize::new(0));
@@ -1140,6 +1232,7 @@ mod tests {
                             .await
                     }
                 };
+
                 assert!(matches!(result, Err(AgentError::Checkpoint(_))));
                 assert_eq!(count.load(Ordering::SeqCst), usize::from(!fail_start));
             }
@@ -1168,6 +1261,7 @@ mod tests {
                 _ => 0,
             })
             .sum::<usize>();
+
         assert_eq!(image_count, 4);
         assert!(matches!(
             &payload[0],
@@ -1198,7 +1292,9 @@ mod tests {
             }],
         )];
         let payload = model_messages(&history, false);
+
         assert_eq!(payload.len(), 1);
+
         let ChatMessage::User {
             content,
             attachments,
@@ -1206,6 +1302,7 @@ mod tests {
         else {
             panic!("expected user message");
         };
+
         assert!(attachments.is_empty());
         assert!(content.contains("check this scene"));
         assert!(
@@ -1277,8 +1374,11 @@ mod tests {
             .run(request(), CancellationToken::new())
             .await
             .unwrap();
+
         assert_eq!(result.turns, 2);
+
         let requests = backend.requests();
+
         assert_eq!(requests.len(), 2);
         assert!(matches!(
             requests[1].messages.last(),
@@ -1301,6 +1401,7 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(ImageTool);
         let agent = Agent::new(backend.clone(), tools, AgentConfig::default());
+
         // Verify tool definition does not expose read_image
         assert!(!agent.tools.contains("read_image"));
         assert!(
@@ -1315,9 +1416,12 @@ mod tests {
             .run(request(), CancellationToken::new())
             .await
             .unwrap();
+
         // The assistant called read_image, which agent intercepted as unsupported, returning tool error
         assert_eq!(result.turns, 2);
+
         let requests = backend.requests();
+
         assert_eq!(requests.len(), 2);
         // The tool result in the next request should contain the informative error
         assert!(matches!(
@@ -1334,6 +1438,7 @@ mod tests {
     #[tokio::test]
     async fn scenario_2_model_failure_preserves_attachments_in_checkpoint_losslessly() {
         use std::sync::Arc;
+
         let journal = Arc::new(FailingJournal {
             checkpoints: std::sync::Mutex::new(Vec::new()),
             fail_start: false,
@@ -1351,6 +1456,7 @@ mod tests {
         let agent = Agent::new(backend.clone(), tools, AgentConfig::default())
             .with_execution_journal(journal.clone());
         let result = agent.run(request(), CancellationToken::new()).await;
+
         assert!(result.is_err());
 
         // Check the last saved checkpoint in journal: canonical history preserves image attachments losslessly
@@ -1360,6 +1466,7 @@ mod tests {
             ChatMessage::User { attachments, .. } => !attachments.is_empty(),
             _ => false,
         });
+
         assert!(
             has_raw_attachments,
             "checkpoint must preserve raw image attachments losslessly on model failure"
@@ -1369,6 +1476,7 @@ mod tests {
     #[tokio::test]
     async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
         use std::sync::Arc;
+
         let journal = Arc::new(FailingJournal {
             checkpoints: std::sync::Mutex::new(Vec::new()),
             fail_start: false,
@@ -1392,6 +1500,7 @@ mod tests {
             let checkpoints = journal.checkpoints.lock().unwrap();
             checkpoints.last().unwrap().history.clone()
         };
+
         // Verify restored_history still has image attachment losslessly
         assert!(restored_history.iter().any(|m| match m {
             ChatMessage::User { attachments, .. } => !attachments.is_empty(),
@@ -1406,8 +1515,11 @@ mod tests {
             .run(ChatRequest::new(restored_history), CancellationToken::new())
             .await
             .unwrap();
+
         assert_eq!(result.turns, 1);
+
         let requests = follow_up_backend.requests();
+
         assert_eq!(requests.len(), 1);
         assert!(requests[0].messages.iter().any(|m| match m {
             ChatMessage::User { attachments, .. } => !attachments.is_empty(),
@@ -1447,9 +1559,13 @@ mod tests {
             )
             .await
             .unwrap();
+
         assert_eq!(result.turns, 1);
+
         let requests = text_only_backend.requests();
+
         assert_eq!(requests.len(), 1);
+
         // Verify that the request sent to the text-only model has 0 image attachments
         for msg in &requests[0].messages {
             if let ChatMessage::User { attachments, .. } = msg {
@@ -1459,11 +1575,13 @@ mod tests {
                 );
             }
         }
+
         let recovered_image_msg = requests[0].messages.iter().find(|m| match m {
             ChatMessage::User { content, .. } => content
                 .contains("[Image omitted: current model does not support image input: 1.jpg]"),
             _ => false,
         });
+
         assert!(
             recovered_image_msg.is_some(),
             "must contain degradation text notice"
@@ -1502,15 +1620,20 @@ mod tests {
             .run(ChatRequest::new(switched_history), CancellationToken::new())
             .await
             .unwrap();
+
         assert_eq!(result2.turns, 1);
+
         let requests = text_only_backend.requests();
+
         assert_eq!(requests.len(), 1);
+
         // Ensure no image attachment was sent to the text-only model
         for msg in &requests[0].messages {
             if let ChatMessage::User { attachments, .. } = msg {
                 assert!(attachments.is_empty());
             }
         }
+
         assert!(requests[0].messages.iter().any(|m| match m {
             ChatMessage::User { content, .. } =>
                 content.contains(
@@ -1539,8 +1662,11 @@ mod tests {
             )
             .await
             .unwrap();
+
         assert_eq!(result3.turns, 1);
+
         let requests2 = vision_backend_2.requests();
+
         assert_eq!(requests2.len(), 1);
         assert!(
             requests2[0].messages.iter().any(|m| match m {
@@ -1584,7 +1710,9 @@ mod tests {
                 } else {
                     agent.run(req, CancellationToken::new()).await
                 };
+
                 let error = result.unwrap_err().to_string();
+
                 assert!(
                     error.contains("max_tokens") && error.contains("max_output_tokens"),
                     "{error}"
@@ -1647,6 +1775,7 @@ mod tests {
                     .await
                     .unwrap_err()
             };
+
             assert!(error.to_string().contains("输出达到上限"));
         }
     }
@@ -1661,6 +1790,7 @@ mod tests {
         ) -> crate::model::CompletionFuture<'a> {
             self.0.complete(request, token)
         }
+
         fn stream<'a>(
             &'a self,
             request: ChatRequest,
@@ -1668,6 +1798,7 @@ mod tests {
         ) -> crate::model::StreamFuture<'a> {
             Box::pin(async move {
                 let stream = self.0.stream(request, token).await?;
+
                 Ok(Box::pin(stream.map(|event| {
                     event.map(|event| match event {
                         StreamEvent::ToolCallDelta(mut delta) => {
@@ -1685,8 +1816,8 @@ mod tests {
     async fn sparse_content_indices_execute_only_real_tools_in_both_stream_paths() {
         for channel in [false, true] {
             let calls = vec![
-                ToolCall::function("first", "echo", json!({"text":"one"})),
-                ToolCall::function("second", "echo", json!({"text":"two"})),
+                ToolCall::function("first", "echo", json!({ "text": "one" })),
+                ToolCall::function("second", "echo", json!({ "text": "two" })),
             ];
             let mock = MockModel::new(vec![
                 ChatCompletion {
@@ -1705,7 +1836,7 @@ mod tests {
             tools.register(ClosureTool::new(
                 "echo",
                 "echo",
-                json!({"type":"object"}),
+                json!({ "type": "object" }),
                 |args, _| async move { Ok(args.to_string()) },
             ));
             let agent = Agent::new(SparseToolModel(mock.clone()), tools, AgentConfig::default());
@@ -1720,13 +1851,18 @@ mod tests {
                     .await
             }
             .unwrap();
+
             assert_eq!(result.tool_calls, 2);
+
             let sent = mock.requests();
+
             assert_eq!(sent.len(), 2);
             assert_eq!(sent[1].messages.len(), 4);
+
             let ChatMessage::Assistant { tool_calls, .. } = &sent[1].messages[1] else {
                 panic!("assistant")
             };
+
             assert_eq!(tool_calls, &calls);
             assert!(
                 matches!(&sent[1].messages[2], ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "first")
@@ -1740,6 +1876,7 @@ mod tests {
     #[test]
     fn sparse_and_large_indices_merge_argument_fragments_without_padding() {
         let mut calls = BTreeMap::new();
+
         for (index, id, name, arguments) in [
             (usize::MAX, Some("later"), Some("echo"), "{\"text\":"),
             (2, Some("first"), Some("echo"), "{}"),
@@ -1755,7 +1892,9 @@ mod tests {
                 },
             );
         }
+
         let calls: Vec<_> = calls.into_values().collect();
+
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].id, "first");
         assert_eq!(calls[1].function.arguments, "{\"text\":\"你好\"}");
@@ -1793,6 +1932,7 @@ mod tests {
                     agent.run(request(), CancellationToken::new()).await
                 }
                 .unwrap_err();
+
                 assert!(error.to_string().contains("empty or duplicate"));
                 assert_eq!(mock.requests().len(), 1);
             }
@@ -1836,16 +1976,22 @@ mod tests {
             .run_with_agent_events(request(), CancellationToken::new(), sender)
             .await
             .unwrap();
+
         assert_eq!(result.final_message, ChatMessage::assistant("answer"));
+
         let mut saw_reasoning = false;
+
         while let Some(event) = receiver.recv().await {
             saw_reasoning |= matches!(event, AgentEvent::Model(StreamEvent::ReasoningDelta(_)));
         }
+
         assert!(saw_reasoning);
+
         let result = agent
             .run_with_events(request(), CancellationToken::new(), |_| {})
             .await
             .unwrap();
+
         assert_eq!(result.final_message, ChatMessage::assistant("answer"));
     }
 
@@ -1884,6 +2030,7 @@ mod tests {
             .run(request(), CancellationToken::new())
             .await
             .unwrap();
+
         assert_eq!(
             result.final_message,
             ChatMessage::assistant("streamed answer")
@@ -1919,7 +2066,9 @@ mod tests {
             "Echo a value",
             json!({
                 "type": "object",
-                "properties": { "value": { "type": "string" } }
+                "properties": {
+                    "value": { "type": "string" }
+                }
             }),
             |arguments, _cancellation| async move {
                 Ok(arguments["value"].as_str().unwrap_or_default().to_owned())
@@ -1948,6 +2097,7 @@ mod tests {
         ));
 
         let requests = model.requests();
+
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].messages.len(), 3);
         assert_eq!(requests[1].tools.len(), 1);
@@ -1983,7 +2133,7 @@ mod tests {
         tools.register(ClosureTool::new(
             "echo",
             "Echo a value",
-            json!({"type": "object"}),
+            json!({ "type": "object" }),
             |_arguments, _cancellation| async {
                 Err(ToolError::ExecutionFailed("should not execute".to_owned()))
             },
@@ -2021,6 +2171,7 @@ mod tests {
                 agent.run(request(), CancellationToken::new()).await
             }
             .unwrap();
+
             assert_eq!(result.turns, 41);
             assert_eq!(result.tool_calls, 40);
         }
@@ -2118,6 +2269,7 @@ mod tests {
             .expect("agent completes");
 
         let mut events = Vec::new();
+
         while let Some(event) = receiver.recv().await {
             events.push(event);
         }

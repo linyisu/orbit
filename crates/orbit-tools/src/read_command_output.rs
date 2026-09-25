@@ -68,13 +68,24 @@ impl Tool for ReadCommandOutput {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_command_output",
-            "Read one page of a previous run_command stdout or stderr log. run_command returns an output_id when retained output is available. Use offset and max_bytes to inspect the beginning, middle, or later portions without placing an entire build log in context. Logs are private to the current Orbit session, retained outside the project, capped at 16 MiB per stream and 128 MiB per session, and may be evicted when newer command logs need space.",
-            json!({"type":"object","properties":{
-                "output_id":{"type":"string","description":"Opaque output_id from run_command"},
-                "stream":{"type":"string","enum":["stdout","stderr"],"default":"stdout"},
-                "offset":{"type":"integer","minimum":0,"maximum":16777216,"default":0,"description":"Zero-based byte offset"},
-                "max_bytes":{"type":"integer","minimum":1,"maximum":32768,"default":32768}
-            },"required":["output_id"],"additionalProperties":false}),
+            "Read one page of a previous run_command stdout or stderr log. run_command returns an output_id when retained output is available. offset and max_bytes are byte counts; use the returned next_offset to continue across UTF-8 boundaries. Use them to inspect the beginning, middle, or later portions without placing an entire build log in context. Logs are private to the current Orbit session, retained outside the project, capped at 16 MiB per stream and 128 MiB per session, and may be evicted when newer command logs need space.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "output_id": { "type": "string", "description": "Opaque output_id from run_command" },
+                    "stream": { "type": "string", "enum": ["stdout", "stderr"], "default": "stdout" },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 16777216,
+                        "default": 0,
+                        "description": "Zero-based byte offset"
+                    },
+                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 32768, "default": 32768 }
+                },
+                "required": ["output_id"],
+                "additionalProperties": false
+            }),
         )
     }
 
@@ -83,9 +94,11 @@ impl Tool for ReadCommandOutput {
             let arguments: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|error| invalid(error.to_string()))?;
             validate(&arguments)?;
+
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
+
             let directory = self
                 .directory
                 .read()
@@ -93,6 +106,7 @@ impl Tool for ReadCommandOutput {
                 .clone();
             let token = cancellation.clone();
             let task = tokio::task::spawn_blocking(move || read(directory, arguments, token));
+
             tokio::select! {
                 _ = cancellation.cancelled() => Err(ToolError::Cancelled),
                 result = task => result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?,
@@ -116,6 +130,7 @@ fn validate(arguments: &Arguments) -> Result<(), ToolError> {
             "output_id must be an Orbit command id; offset must be 0..16777216 and max_bytes 1..32768",
         ));
     }
+
     Ok(())
 }
 
@@ -127,11 +142,13 @@ fn read(
     let metadata = std::fs::symlink_metadata(&directory).map_err(|_| {
         ToolError::ExecutionFailed("command output is unavailable for this session".into())
     })?;
+
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(ToolError::ExecutionFailed(
             "command output directory is invalid".into(),
         ));
     }
+
     let name = format!("{}.{}", arguments.output_id, arguments.stream.suffix());
     let path = directory.join(name);
     let metadata = std::fs::symlink_metadata(&path).map_err(|_| {
@@ -139,28 +156,36 @@ fn read(
             "command output was not found; it may have been evicted or was not retained".into(),
         )
     })?;
+
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(ToolError::ExecutionFailed(
             "command output file is invalid".into(),
         ));
     }
+
     let total_bytes = metadata.len();
+
     if arguments.offset > total_bytes {
         return Err(invalid(format!(
             "offset exceeds retained {} length ({total_bytes} bytes)",
             arguments.stream.suffix()
         )));
     }
+
     let mut file = std::fs::File::open(path).map_err(failed)?;
+
     use std::io::Seek;
+
     file.seek(std::io::SeekFrom::Start(arguments.offset))
         .map_err(failed)?;
     let remaining = total_bytes.saturating_sub(arguments.offset);
     let mut bytes = vec![0; remaining.min(arguments.max_bytes.saturating_add(3) as u64) as usize];
     file.read_exact(&mut bytes).map_err(failed)?;
+
     if cancellation.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
+
     let desired = bytes.len().min(arguments.max_bytes);
     let valid_end = match std::str::from_utf8(&bytes) {
         Ok(_) => bytes.len(),
@@ -169,24 +194,31 @@ fn read(
         }
         Err(_) => 0,
     };
+
     let page_len = match std::str::from_utf8(&bytes[..valid_end]) {
         Ok(text) if desired < valid_end => {
             let mut end = desired;
+
             while end > 0 && !text.is_char_boundary(end) {
                 end -= 1;
             }
+
             if end == 0 {
                 end = desired;
+
                 while end < valid_end && !text.is_char_boundary(end) {
                     end += 1;
                 }
             }
+
             end
         }
         _ => desired,
     };
+
     bytes.truncate(page_len);
     let next_offset = arguments.offset + bytes.len() as u64;
+
     Ok(json!({
         "output_id": arguments.output_id,
         "stream": arguments.stream.suffix(),
@@ -194,7 +226,7 @@ fn read(
         "next_offset": next_offset,
         "total_retained_bytes": total_bytes,
         "truncated": next_offset < total_bytes,
-        "content": String::from_utf8_lossy(&bytes),
+        "content": String::from_utf8_lossy(&bytes)
     })
     .to_string())
 }
@@ -247,6 +279,7 @@ mod tests {
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_str(&content).unwrap();
+
         assert_eq!(value["content"], "abc");
         assert_eq!(value["next_offset"], 3);
         assert_eq!(value["total_retained_bytes"], 6);

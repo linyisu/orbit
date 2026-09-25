@@ -260,12 +260,15 @@ impl UiState {
                 if self.status != RunStatus::Cancelling {
                     self.status = RunStatus::Running;
                 }
+
                 self.turn = turn;
                 self.ensure_assistant_item();
             }
+
             AgentEvent::ContextUsage { estimated_input } => {
                 self.context_used_tokens = self.calibration().estimate(estimated_input);
             }
+
             AgentEvent::RequestMetrics {
                 profile,
                 estimated_input,
@@ -282,6 +285,7 @@ impl UiState {
                     .filter(|tokens| *tokens > 0)
                     .unwrap_or_else(|| self.calibration().estimate(estimated_input));
             }
+
             AgentEvent::CompactionRecorded { record } => {
                 self.pending_compaction_archive = record.archive;
             }
@@ -290,6 +294,7 @@ impl UiState {
             // second transcript row for it made every automatic checkpoint
             // look like a noisy command result.
             AgentEvent::CompactionStarted => {}
+
             AgentEvent::ContextCompacted {
                 before_tokens,
                 after_tokens,
@@ -305,6 +310,7 @@ impl UiState {
                 } else {
                     ""
                 };
+
                 let action = match strategy {
                     orbit_agent::memory::CompactionStrategy::ToolPruning => "旧工具输出已精简",
                     orbit_agent::memory::CompactionStrategy::Summary => "上下文已整理",
@@ -312,6 +318,7 @@ impl UiState {
                         "旧历史已归档，摘要未完成"
                     }
                 };
+
                 let archive_note =
                     if strategy == orbit_agent::memory::CompactionStrategy::ArchiveProjection {
                         self.pending_compaction_archive
@@ -327,10 +334,12 @@ impl UiState {
                         self.pending_compaction_archive = None;
                         String::new()
                     };
+
                 self.transcript.push(TranscriptItem::Maintenance(format!(
                     "{action}  {before_tokens} → {after_tokens} tokens{detail}{archive_note}"
                 )));
             }
+
             AgentEvent::CompactionFailed { kind, .. } => {
                 self.transcript
                     .push(TranscriptItem::Maintenance(match kind {
@@ -340,7 +349,9 @@ impl UiState {
                         None => "上下文整理未完成，原上下文已保留".into(),
                     }))
             }
+
             AgentEvent::Model(event) => self.apply_model_event(event),
+
             AgentEvent::ToolStarted { call } => {
                 self.tool_calls += 1;
                 self.transcript.push(TranscriptItem::Tool(ToolRow {
@@ -351,6 +362,7 @@ impl UiState {
                     output: String::new(),
                 }));
             }
+
             AgentEvent::ToolFinished { call, content, .. } => {
                 self.update_tool(&call, ToolStatus::Finished, content);
             }
@@ -380,6 +392,7 @@ impl UiState {
 
     pub fn scroll_down(&mut self, amount: usize) {
         self.scroll = self.scroll.saturating_sub(amount);
+
         if self.scroll == 0 {
             self.follow_bottom = true;
         }
@@ -406,6 +419,7 @@ impl UiState {
         let Some(start) = self.started_at else {
             return self.elapsed;
         };
+
         self.paused_at
             .unwrap_or_else(Instant::now)
             .saturating_duration_since(start)
@@ -434,9 +448,11 @@ impl UiState {
     fn apply_model_event(&mut self, event: StreamEvent) {
         self.transcript_layout
             .invalidate_from(self.transcript.len().saturating_sub(1));
+
         match event {
             StreamEvent::TextDelta(text) => {
                 self.ensure_assistant_item();
+
                 if let Some(TranscriptItem::Assistant(content)) = self.transcript.last_mut() {
                     content.push_str(&text);
                 }
@@ -484,10 +500,13 @@ mod tests {
         state.pause_clock();
         state.paused_at = Some(Instant::now() - std::time::Duration::from_secs(8));
         let active = state.active_elapsed();
+
         assert!(active >= std::time::Duration::from_secs(3));
         assert!(active < std::time::Duration::from_secs(5));
+
         state.resume_clock();
         state.finish_clock();
+
         assert!(state.elapsed >= std::time::Duration::from_secs(3));
         assert!(state.elapsed < std::time::Duration::from_secs(5));
     }
@@ -537,6 +556,7 @@ mod tests {
         state.status = RunStatus::Running;
         state.input.insert("/");
         let commands = state.menu();
+
         assert!(commands.iter().any(|command| command.name == "/model"));
         assert!(commands.iter().any(|command| command.name == "/status"));
         assert!(!commands.iter().any(|command| command.name == "/new"));
@@ -547,7 +567,9 @@ mod tests {
     fn compaction_uses_one_quiet_maintenance_row() {
         let mut state = UiState::new("mock");
         state.apply(AgentEvent::CompactionStarted);
+
         assert!(state.transcript.is_empty());
+
         state.apply(AgentEvent::ContextCompacted {
             strategy: Default::default(),
             before_tokens: 195_754,
@@ -555,6 +577,7 @@ mod tests {
             fallback: true,
             fallback_reason: Some("摘要请求超时".into()),
         });
+
         assert_eq!(state.context_used_tokens, 96_000);
         assert!(matches!(
             state.transcript.as_slice(),
@@ -602,6 +625,7 @@ mod tests {
             fallback: true,
             fallback_reason: None,
         });
+
         assert!(matches!(
             state.transcript.as_slice(),
             [TranscriptItem::Maintenance(text)]
@@ -616,11 +640,15 @@ mod tests {
         state.apply(AgentEvent::ContextUsage {
             estimated_input: 4_000,
         });
+
         assert_eq!(state.context_used_tokens, 4_000);
+
         state.apply(AgentEvent::ContextUsage {
             estimated_input: 12_000,
         });
+
         assert_eq!(state.context_used_tokens, 12_000);
+
         state.apply(AgentEvent::RequestMetrics {
             profile: "mock".into(),
             estimated_input: 12_000,
@@ -632,6 +660,7 @@ mod tests {
             }),
             elapsed_ms: 100,
         });
+
         assert_eq!(state.context_used_tokens, 13_000);
     }
 }

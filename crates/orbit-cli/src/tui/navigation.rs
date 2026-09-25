@@ -36,9 +36,11 @@ impl Navigation {
 /// tooltip would otherwise leave its old text in the terminal buffer.
 pub(super) fn clear_previous_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     let area = state.navigation.tooltip_area;
+
     if area.width != 0 && area.height != 0 {
         super::overlay::clear(frame, area);
     }
+
     state.navigation.tooltip_area = Rect::default();
 }
 
@@ -47,11 +49,13 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
     let Event::Mouse(mouse) = event else {
         return None;
     };
+
     let nav = &mut state.navigation;
     let inside = nav.area.contains((mouse.column, mouse.row).into());
     let hit = inside
         && ((nav.show_latest && mouse.row == nav.area.bottom().saturating_sub(1))
             || nav.targets.iter().any(|(row, _, _)| *row == mouse.row));
+
     if mouse.kind == MouseEventKind::Moved {
         let hovered = hit.then_some(mouse.row);
         let changed = nav.hovered != hovered;
@@ -62,9 +66,11 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
         nav.hovered = None;
         return None;
     }
+
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) if hit => {
             state.selection.clear();
+
             if nav.show_latest && mouse.row == nav.area.bottom() - 1 {
                 state.follow_bottom = true;
                 state.scroll = 0;
@@ -74,6 +80,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
                 state.follow_bottom = false;
                 state.scroll = state.max_scroll.saturating_sub(*offset);
             }
+
             Some(true)
         }
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
@@ -84,6 +91,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
             } else {
                 (nav.first + 3).min(nav.count.saturating_sub(slots))
             };
+
             Some(old != nav.first)
         }
         MouseEventKind::Down(_) | MouseEventKind::Up(_) | MouseEventKind::Drag(_) => Some(false),
@@ -110,16 +118,19 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     nav.count = anchors.len();
     nav.show_latest = offset < state.max_scroll;
     let slots = area.height.saturating_sub(2) as usize;
+
     if slots == 0 || anchors.is_empty() {
         nav.area = Rect::default();
         return;
     }
+
     nav.first = nav.first.min(anchors.len().saturating_sub(slots));
     let shown = (anchors.len() - nav.first).min(slots);
     let first_row = area.y + ((slots - shown) / 2) as u16;
     let active = anchors
         .partition_point(|(start, _)| *start <= offset)
         .saturating_sub(1);
+
     for (j, (start, text)) in anchors.iter().skip(nav.first).take(slots).enumerate() {
         let index = nav.first + j;
         let y = first_row + j as u16;
@@ -131,11 +142,13 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         } else {
             "·"
         };
+
         let color = if hovered || index == active {
             Color::Rgb(218, 139, 109)
         } else {
             Color::Rgb(150, 150, 150)
         };
+
         frame.render_widget(
             Paragraph::new(symbol).style(Style::default().fg(color)),
             Rect::new(nav.area.x, y, 1, 1),
@@ -146,7 +159,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
             render::safe_output(&text.replace(['\n', '\r'], " ")),
         ));
     }
+
     let bottom = nav.area.bottom() - 1;
+
     if nav.show_latest {
         frame.render_widget(
             Paragraph::new("↓").style(Style::default().fg(if nav.hovered == Some(bottom) {
@@ -159,6 +174,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     } else if nav.hovered == Some(bottom) {
         nav.hovered = None;
     }
+
     let tooltip = if nav.show_latest && nav.hovered == Some(bottom) {
         Some((bottom, "回到最新 · 继续跟随输出".to_owned()))
     } else {
@@ -167,6 +183,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
             .find(|(y, _, _)| nav.hovered == Some(*y))
             .map(|(y, _, text)| (*y, text.clone()))
     };
+
     if let Some((y, text)) = tooltip {
         let width = area.width.saturating_sub(5).min(52);
         let tooltip_area = Rect::new(nav.area.x.saturating_sub(width + 1), y, width, 1);
@@ -201,6 +218,7 @@ mod tests {
     #[test]
     fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
         let mut state = UiState::new("model");
+
         for i in 0..3 {
             state
                 .transcript
@@ -209,19 +227,24 @@ mod tests {
                 .transcript
                 .push(TranscriptItem::Assistant("answer\n".repeat(30)));
         }
+
         state.input.insert("保留草稿");
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
         let bottom = state.navigation.area.bottom() - 1;
+
         assert_eq!(
             terminal.backend().buffer()[(state.navigation.area.x, bottom)].symbol(),
             " "
         );
+
         let x = state.navigation.area.x;
         let (y, target, _) = state.navigation.targets[1].clone();
         let hover = mouse(MouseEventKind::Moved, x, y);
+
         assert_eq!(handle(&mut state, &hover), Some(true));
         assert_eq!(handle(&mut state, &hover), Some(false));
+
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
         let screen: String = terminal
             .backend()
@@ -230,6 +253,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
+
         assert!(screen.replace(' ', "").contains("问题1"));
         assert!(!screen.replace(' ', "").contains("第2轮"));
         assert_eq!(
@@ -239,22 +263,32 @@ mod tests {
             ),
             Some(true)
         );
+
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+
         assert_eq!(state.max_scroll - state.scroll, target);
         assert!(!state.follow_bottom);
+
         let last = state.transcript.len() - 1;
+
         if let TranscriptItem::Assistant(text) = &mut state.transcript[last] {
             text.push_str("more\n");
         }
+
         state.transcript_layout.invalidate_from(last);
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+
         assert_eq!(state.max_scroll - state.scroll, target);
+
         let bottom = state.navigation.area.bottom() - 1;
+
         assert_eq!(terminal.backend().buffer()[(x, bottom)].symbol(), "↓");
+
         handle(
             &mut state,
             &mouse(MouseEventKind::Down(MouseButton::Left), x, bottom),
         );
+
         assert!(state.follow_bottom);
         assert_eq!(state.scroll, 0);
         assert_eq!(state.input.text, "保留草稿");
@@ -276,13 +310,16 @@ mod tests {
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
         let (row, _, _) = state.navigation.targets[0].clone();
         let column = state.navigation.area.x;
+
         assert_eq!(
             handle(&mut state, &mouse(MouseEventKind::Moved, column, row)),
             Some(true)
         );
         assert_eq!(state.navigation.hovered, Some(row));
+
         state.show_help = true;
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+
         assert_eq!(state.navigation.hovered, None);
     }
 
@@ -303,11 +340,14 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
+
         assert!(shown.replace(' ', "").contains("first"), "{shown}");
         assert!(!shown.replace(' ', "").contains("第1轮"), "{shown}");
         assert_ne!(state.navigation.tooltip_area, Rect::default());
+
         handle(&mut state, &mouse(MouseEventKind::Moved, 0, 0));
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+
         assert_eq!(state.navigation.tooltip_area, Rect::default());
     }
 
@@ -319,6 +359,7 @@ mod tests {
             .collect();
         let mut terminal = Terminal::new(TestBackend::new(50, 15)).unwrap();
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+
         for _ in 0..40 {
             let area = state.navigation.area;
             handle(
@@ -327,6 +368,7 @@ mod tests {
             );
             terminal.draw(|f| render::draw(f, &mut state)).unwrap();
         }
+
         assert!(
             state
                 .navigation
@@ -336,8 +378,10 @@ mod tests {
                 .2
                 .contains("round 99")
         );
+
         let mut larger = Terminal::new(TestBackend::new(100, 30)).unwrap();
         larger.draw(|f| render::draw(f, &mut state)).unwrap();
+
         for (y, offset, _) in &state.navigation.targets {
             assert!(*y < state.navigation.area.bottom() - 1);
             assert!(*offset < state.transcript_layout.height());
@@ -352,6 +396,7 @@ mod tests {
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
 
         let gap = state.navigation.area.x - 1;
+
         for y in state.navigation.area.y..state.navigation.area.bottom() {
             assert_eq!(terminal.backend().buffer()[(gap, y)].symbol(), " ");
         }

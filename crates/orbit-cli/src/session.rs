@@ -20,7 +20,9 @@ pub fn database_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(std::path::absolute(path)?);
     }
+
     let data = data_directory()?;
+
     Ok(data.join("orbit/orbit.db"))
 }
 
@@ -40,12 +42,14 @@ fn user_data_directory() -> Option<PathBuf> {
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
     }
+
     #[cfg(target_os = "macos")]
     {
         std::env::var_os("HOME")
             .map(|p| PathBuf::from(p).join("Library/Application Support"))
             .filter(|p| p.is_absolute())
     }
+
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         std::env::var_os("HOME")
@@ -56,9 +60,11 @@ fn user_data_directory() -> Option<PathBuf> {
 
 pub async fn list_text(store: &Store) -> Result<String> {
     let rows = store.list().await?;
+
     if rows.is_empty() {
         return Ok("暂无已保存会话。".into());
     }
+
     Ok(rows
         .into_iter()
         .map(|s| {
@@ -101,6 +107,7 @@ pub struct HistoryReplay {
     run_start: Option<usize>,
     done: bool,
 }
+
 impl HistoryReplay {
     pub fn completed_runs(&self) -> usize {
         self.run
@@ -116,15 +123,19 @@ impl HistoryReplay {
         if self.done {
             return true;
         }
+
         let started = Instant::now();
         let mut processed = 0;
         state.workspace = snapshot.session.workspace.clone();
+
         while self.run < snapshot.runs.len() && processed < max_events && started.elapsed() < budget
         {
             let run = &snapshot.runs[self.run];
+
             if self.run_start.is_none() {
                 self.run_start = Some(state.transcript.len());
                 state.input.history.push(run.prompt.clone());
+
                 if run.prompt == "/compact" {
                     state
                         .transcript
@@ -137,6 +148,7 @@ impl HistoryReplay {
                     state.follow_bottom = follow;
                 }
             }
+
             if let Some(event) = run.events.get(self.event) {
                 // Receipt fingerprints and archived summaries can be large;
                 // the transcript has no presentation for these metadata events.
@@ -146,10 +158,12 @@ impl HistoryReplay {
                 ) {
                     state.apply(event.clone());
                 }
+
                 self.event += 1;
                 processed += 1;
                 continue;
             }
+
             match run.status.as_str() {
                 "completed" => state.apply(AgentEvent::Completed {
                     turns: state.turn,
@@ -161,12 +175,15 @@ impl HistoryReplay {
                     state.finish_clock();
                 }
             }
+
             if let Some(elapsed_ms) = run.elapsed_ms {
                 state.elapsed = Duration::from_millis(elapsed_ms);
                 state.started_at = None;
             }
+
             // Only scan the just-finished run, rather than all preceding runs.
             let first = self.run_start.take().unwrap_or_default();
+
             for item in &mut state.transcript[first..] {
                 if let TranscriptItem::Tool(tool) = item
                     && tool.status == ToolStatus::Running
@@ -175,14 +192,17 @@ impl HistoryReplay {
                     tool.output = "运行已结束或中断，未保存工具结果；不会自动重试。".into();
                 }
             }
+
             state.invalidate_transcript(first);
             self.run += 1;
             self.event = 0;
             processed += 1;
         }
+
         if self.run == snapshot.runs.len() {
             self.done = true;
         }
+
         self.done
     }
 }
@@ -201,6 +221,7 @@ impl SessionState {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_millis();
+
         orbit_tools::image_assets::ImageAssets::for_database(self.store.path()).import_rgba(
             format!("clipboard-{timestamp}.png"),
             width,
@@ -226,19 +247,24 @@ impl SessionState {
                 saved.workspace
             );
             ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
+
             store.acquire(&id).await?
         } else {
             store.create(workspace.clone(), model, false).await?
         };
+
         let git_baseline = if creating {
             let baseline = orbit_tools::git_inspect::capture_baseline(Path::new(&workspace));
+
             if let Some(baseline) = &baseline {
                 store.save_git_baseline(writer.id(), baseline).await?;
             }
+
             baseline
         } else {
             store.git_baseline(writer.id()).await?
         };
+
         let snapshot = store.load(writer.id()).await?;
         let scratch = std::sync::Arc::new(std::sync::RwLock::new(
             store.path().with_extension("workspaces").join(writer.id()),
@@ -249,6 +275,7 @@ impl SessionState {
                 .with_extension("command-output")
                 .join(writer.id()),
         ));
+
         Ok(Self {
             scratch,
             command_output,
@@ -270,6 +297,7 @@ impl SessionState {
     ) -> Result<()> {
         self.audit_limits = limits.clone();
         self.audit_workspace = Some(workspace.clone());
+
         // Never label the current state of an old session as its starting state.
         if self.snapshot.runs.is_empty()
             && self.store.workspace_baseline(self.id()).await?.is_none()
@@ -284,11 +312,13 @@ impl SessionState {
                 .save_workspace_baseline(self.id(), &baseline)
                 .await?;
         }
+
         Ok(())
     }
 
     pub fn calibration(&self, profile: &str) -> orbit_agent::calibration::TokenCalibration {
         let mut result = orbit_agent::calibration::TokenCalibration::default();
+
         for event in self.snapshot.runs.iter().flat_map(|r| &r.events) {
             if let AgentEvent::RequestMetrics {
                 profile: key,
@@ -304,6 +334,7 @@ impl SessionState {
                 );
             }
         }
+
         result
     }
 
@@ -314,6 +345,7 @@ impl SessionState {
     #[cfg(test)]
     pub fn restore_ui(&self, state: &mut UiState) {
         let mut replay = HistoryReplay::default();
+
         while !replay.advance(&self.snapshot, state, usize::MAX, Duration::MAX) {}
     }
 
@@ -345,6 +377,7 @@ impl SessionState {
         self.snapshot.session.reasoning_effort = reasoning_effort
             .map(ReasoningEffort::as_str)
             .map(str::to_owned);
+
         Ok(())
     }
 
@@ -373,10 +406,12 @@ impl SessionState {
         if let Some(journal) = &self.journal {
             journal.flush().await?;
         }
+
         self.writer.finish(status, Vec::new(), history).await?;
         self.active = false;
         self.journal = None;
         self.snapshot = self.store.load(self.id()).await?;
+
         Ok(())
     }
 
@@ -384,6 +419,7 @@ impl SessionState {
         if self.active {
             self.finish("cancelled", None).await?;
         }
+
         Ok(())
     }
 
@@ -392,6 +428,7 @@ impl SessionState {
             .store
             .equivalent_project_ids(&self.snapshot.session.project_id)
             .await?;
+
         Ok(self
             .store
             .list()
@@ -412,6 +449,7 @@ impl SessionState {
         if id == self.id() {
             return Ok(());
         }
+
         let prepared = Self::prepare_resume(
             self.store.clone(),
             self.snapshot.session.project_id.clone(),
@@ -419,6 +457,7 @@ impl SessionState {
         )
         .await?;
         self.install_resume(prepared);
+
         Ok(())
     }
 
@@ -436,9 +475,11 @@ impl SessionState {
             "该会话属于其他项目，请在对应目录恢复。"
         );
         ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
+
         let writer = store.acquire(&id).await?;
         let snapshot = store.load(&id).await?;
         let git_baseline = store.git_baseline(&id).await?;
+
         Ok(PreparedResume {
             writer,
             snapshot,
@@ -460,9 +501,11 @@ impl SessionState {
             git_baseline: std::mem::replace(&mut self.git_baseline, prepared.git_baseline),
         };
         self.journal = None;
+
         if let Some(ws) = &self.audit_workspace {
             ws.clear_session_grants();
         }
+
         *self.scratch.write().expect("scratch lock poisoned") = self
             .store
             .path()
@@ -476,11 +519,13 @@ impl SessionState {
             .path()
             .with_extension("command-output")
             .join(self.id());
+
         previous
     }
 
     pub async fn prepare_new(&self, model: String) -> Result<PreparedResume> {
         ensure!(!self.active, "cannot switch sessions during a run");
+
         let writer = self
             .store
             .create(self.snapshot.session.workspace.clone(), model, false)
@@ -488,6 +533,7 @@ impl SessionState {
         let snapshot = self.store.load(writer.id()).await?;
         let git_baseline =
             orbit_tools::git_inspect::capture_baseline(Path::new(&snapshot.session.workspace));
+
         if let Some(baseline) = &git_baseline {
             self.store.save_git_baseline(writer.id(), baseline).await?;
         }
@@ -503,10 +549,12 @@ impl SessionState {
     pub async fn new_session(&mut self, model: String) -> Result<()> {
         let prepared = self.prepare_new(model).await?;
         self.install_resume(prepared);
+
         if let Some(workspace) = self.audit_workspace.clone() {
             self.initialize_audit(workspace, self.audit_limits.clone())
                 .await?;
         }
+
         Ok(())
     }
 }
@@ -539,8 +587,10 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("locked session was opened"),
         };
+
         assert!(error.to_string().contains("已在其他 Orbit"));
         assert_eq!(current.id(), original);
+
         drop(lease);
         let prepared = SessionState::prepare_resume(
             current.store.clone(),
@@ -549,9 +599,12 @@ mod tests {
         )
         .await
         .unwrap();
+
         assert_eq!(current.id(), original);
         assert!(current.store.acquire(&target).await.is_err());
+
         drop(prepared);
+
         // Cancelling a prepared switch releases the destination without
         // releasing the writer for the conversation still visible in the UI.
         assert!(current.store.acquire(&target).await.is_ok());
@@ -561,6 +614,7 @@ mod tests {
     #[tokio::test]
     async fn replay_is_incremental_exact_and_preserves_scroll_and_saved_elapsed_time() {
         use orbit_model::types::{StreamEvent, ToolCall};
+
         let tmp = tempfile::tempdir().unwrap();
         let session = SessionState::open(tmp.path().join("sessions.db"), None, "model".into())
             .await
@@ -571,13 +625,14 @@ mod tests {
                 let call = ToolCall::function(
                     format!("tool-{index}"),
                     "read_file",
-                    serde_json::json!({"path":"test"}),
+                    serde_json::json!({ "path": "test" }),
                 );
                 let mut events = vec![AgentEvent::TurnStarted { turn: 1 }];
                 events.extend(
                     (0..40).map(|_| AgentEvent::Model(StreamEvent::TextDelta("中文".into()))),
                 );
                 events.push(AgentEvent::ToolStarted { call: call.clone() });
+
                 if index != 1 {
                     events.push(AgentEvent::ToolFinished {
                         call,
@@ -585,6 +640,7 @@ mod tests {
                         changes: vec![],
                     });
                 }
+
                 orbit_store::types::Run {
                     prompt: format!("prompt-{index}"),
                     status: "completed".into(),
@@ -598,13 +654,17 @@ mod tests {
         ui.scroll = 5;
         ui.follow_bottom = false;
         let mut replay = HistoryReplay::default();
+
         assert!(!replay.advance(&snapshot, &mut ui, 2, Duration::MAX));
         assert_eq!(ui.input.history.len(), 1);
         assert!(matches!(ui.transcript.last(), Some(TranscriptItem::Assistant(s)) if s == "中文"));
+
         let mut batches = 1;
+
         while !replay.advance(&snapshot, &mut ui, 7, Duration::MAX) {
             batches += 1;
         }
+
         assert!(batches > 10);
         assert_eq!(ui.input.history, vec!["prompt-0", "prompt-1", "prompt-2"]);
         assert_eq!(ui.input.text, "draft");
@@ -612,6 +672,7 @@ mod tests {
         assert!(!ui.follow_bottom);
         assert_eq!(ui.elapsed, Duration::from_millis(12345));
         assert!(ui.started_at.is_none());
+
         let texts: Vec<_> = ui
             .transcript
             .iter()
@@ -623,8 +684,10 @@ mod tests {
                 }
             })
             .collect();
+
         assert_eq!(texts.len(), 3);
         assert!(texts.iter().all(|s| **s == "中文".repeat(40)));
+
         let statuses: Vec<_> = ui
             .transcript
             .iter()
@@ -636,6 +699,7 @@ mod tests {
                 }
             })
             .collect();
+
         assert_eq!(
             statuses,
             vec![
@@ -644,7 +708,9 @@ mod tests {
                 ToolStatus::Finished
             ]
         );
+
         let count = ui.transcript.len();
+
         assert!(replay.advance(&snapshot, &mut ui, 7, Duration::MAX));
         assert_eq!(ui.transcript.len(), count);
         assert!(
@@ -670,10 +736,13 @@ mod tests {
             .unwrap();
         let first = state.import_image(&source).unwrap();
         let second = state.import_image(&source).unwrap();
+
         assert_eq!(first, second);
+
         let Attachment::Image {
             path, mime_type, ..
         } = first;
+
         assert_eq!(mime_type, "image/png");
         assert!(path.starts_with(tmp.path().join("sessions.attachments")));
 
@@ -685,6 +754,7 @@ mod tests {
             path,
             mime_type,
         } = clipboard;
+
         assert!(name.starts_with("clipboard-") && name.ends_with(".png"));
         assert_eq!(mime_type, "image/png");
         assert!(path.starts_with(tmp.path().join("sessions.attachments")));
@@ -718,13 +788,16 @@ mod tests {
         let restored = SessionState::open(database, Some(id), "model".into())
             .await
             .unwrap();
+
         assert!(
             restored.snapshot.runs[0]
                 .elapsed_ms
                 .is_some_and(|ms| ms >= 5)
         );
+
         let mut ui = UiState::new("model");
         restored.restore_ui(&mut ui);
+
         assert!(ui.elapsed >= Duration::from_millis(5));
     }
 
@@ -745,6 +818,7 @@ mod tests {
         let restored = SessionState::open(database, Some(id), "qwen::default".into())
             .await
             .unwrap();
+
         assert_eq!(
             restored.saved_model_profile(),
             ("deepseek::flash", Some(ReasoningEffort::High))
@@ -760,12 +834,15 @@ mod tests {
             .unwrap();
         let id = state.id().to_owned();
         state.rename("解析器重构".into()).await.unwrap();
+
         assert_eq!(state.snapshot.session.title, "解析器重构");
+
         drop(state);
 
         let restored = SessionState::open(database, Some(id.clone()), "model".into())
             .await
             .unwrap();
+
         assert_eq!(restored.id(), id);
         assert_eq!(restored.snapshot.session.title, "解析器重构");
     }
@@ -789,20 +866,26 @@ mod tests {
             .begin("first question".into(), "model".into())
             .await
             .unwrap();
+
         assert!(state.resume("missing").await.is_err());
+
         state
             .finish("completed", Some(history.clone()))
             .await
             .unwrap();
         // Resuming the current session reloads the latest successful history.
         state.resume(&first).await.unwrap();
+
         assert_eq!(state.snapshot.history, history);
+
         state.new_session("model".into()).await.unwrap();
         let second = state.id().to_owned();
+
         assert_ne!(first, second);
         assert_ne!(*scratch.read().unwrap(), first_scratch);
         assert_ne!(*command_output.read().unwrap(), first_command_output);
         assert!(state.snapshot.history.is_empty());
+
         let foreign_path = tmp.path().join("foreign");
         std::fs::create_dir(&foreign_path).unwrap();
         let foreign = state
@@ -823,6 +906,7 @@ mod tests {
             )
             .await
             .unwrap();
+
         assert!(state.resume(foreign.id()).await.is_err());
         assert!(state.resume(legacy_demo.id()).await.is_err());
         assert_eq!(
@@ -835,13 +919,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![first.as_str()]
         );
+
         let locked = state.store.acquire(&first).await.unwrap();
+
         assert!(state.resume(&first).await.is_err());
         assert_eq!(state.id(), second);
         assert!(state.resume("missing").await.is_err());
         assert_eq!(state.id(), second);
+
         drop(locked);
         state.resume(&first).await.unwrap();
+
         assert_eq!(*scratch.read().unwrap(), first_scratch);
         assert_eq!(*command_output.read().unwrap(), first_command_output);
         assert_eq!(state.snapshot.history, history);
@@ -849,11 +937,13 @@ mod tests {
         assert!(state.store.load(&second).await.is_ok());
         // The old lease is released after a successful switch.
         assert!(state.store.acquire(&second).await.is_ok());
+
         drop(state);
         let reopened =
             SessionState::open(tmp.path().join("sessions.db"), Some(first), "model".into())
                 .await
                 .unwrap();
+
         assert_eq!(*reopened.scratch.read().unwrap(), first_scratch);
         assert_eq!(
             *reopened.command_output.read().unwrap(),
@@ -873,6 +963,7 @@ mod tests {
             .await
             .unwrap();
         let journal = session.execution_journal().unwrap();
+
         for (profile, actual) in [("a::model", 200), ("b::model", 500)] {
             journal.record(AgentEvent::RequestMetrics {
                 profile: profile.into(),
@@ -886,6 +977,7 @@ mod tests {
                 }),
             });
         }
+
         session
             .finish(
                 "completed",
@@ -901,14 +993,21 @@ mod tests {
             SessionState::open(tmp.path().join("sessions.db"), Some(id), "a::model".into())
                 .await
                 .unwrap();
+
         assert_eq!(session.calibration("a::model").estimate(100), 200);
         assert_eq!(session.calibration("b::model").estimate(100), 500);
+
         let mut ui = UiState::new("a::model");
         session.restore_ui(&mut ui);
+
         assert_eq!(ui.calibration().estimate(100), 200);
+
         ui.model = "b::model".into();
+
         assert_eq!(ui.calibration().estimate(100), 500);
+
         ui.model = "new::model".into();
+
         assert_eq!(ui.calibration().estimate(100), 100);
     }
 
@@ -934,6 +1033,7 @@ mod tests {
                 orbit_runtime::capability::EnvironmentId::Local,
                 res.clone(),
             ));
+
         assert_eq!(
             workspace
                 .policy()
@@ -947,6 +1047,7 @@ mod tests {
 
         // 2. Switching to a new session clears ephemeral grants
         session.new_session("a::model".into()).await.unwrap();
+
         assert_eq!(
             workspace
                 .policy()
@@ -965,6 +1066,7 @@ mod tests {
                 orbit_runtime::capability::EnvironmentId::Local,
                 res,
             ));
+
         assert_eq!(
             workspace
                 .policy()
@@ -997,6 +1099,7 @@ mod tests {
         .unwrap();
 
         session.install_resume(prepared);
+
         assert_eq!(
             workspace
                 .policy()
@@ -1048,6 +1151,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(resumed.snapshot.history.len(), 2);
+
         let ChatMessage::User {
             content,
             attachments,
@@ -1055,6 +1159,7 @@ mod tests {
         else {
             panic!("expected user message");
         };
+
         assert_eq!(
             attachments.len(),
             1,
@@ -1071,6 +1176,7 @@ mod tests {
         else {
             panic!("expected projected user message");
         };
+
         assert!(
             proj_attachments.is_empty(),
             "projected request attachments must be emptied"
@@ -1117,7 +1223,9 @@ mod tests {
                 .unwrap();
         // Model messages projected for text-only model omits image
         let projected = orbit_agent::model_messages(&session_text.snapshot.history, false);
+
         assert_eq!(projected.len(), 3);
+
         let ChatMessage::User {
             attachments,
             content,
@@ -1125,6 +1233,7 @@ mod tests {
         else {
             panic!()
         };
+
         assert!(attachments.is_empty());
         assert!(
             content
@@ -1153,7 +1262,9 @@ mod tests {
         )
         .await
         .unwrap();
+
         assert_eq!(session_vision.snapshot.history.len(), 5);
+
         let ChatMessage::User {
             attachments: final_attachments,
             ..
@@ -1161,6 +1272,7 @@ mod tests {
         else {
             panic!()
         };
+
         assert_eq!(
             final_attachments.len(),
             1,
@@ -1176,6 +1288,7 @@ mod tests {
         else {
             panic!()
         };
+
         assert_eq!(
             vis_attachments.len(),
             1,
@@ -1190,20 +1303,25 @@ mod tests {
             Ok(v) if !v.is_empty() => std::path::PathBuf::from(v),
             _ => return,
         };
+
         let session_id = match std::env::var("ORBIT_RECOVERY_SESSION") {
             Ok(v) if !v.is_empty() => v,
             _ => return,
         };
+
         if !real_db.exists() {
             return;
         }
+
         let tmp = tempfile::tempdir().unwrap();
         let copy_db = tmp.path().join("orbit_copy.db");
         std::fs::copy(&real_db, &copy_db).unwrap();
+
         for suffix in ["-wal", "-shm", "-journal"] {
             let mut src = real_db.as_os_str().to_os_string();
             src.push(suffix);
             let src = std::path::PathBuf::from(src);
+
             if src.exists() {
                 let mut dst = copy_db.as_os_str().to_os_string();
                 dst.push(suffix);
@@ -1223,6 +1341,7 @@ mod tests {
 
         // 1. Project messages for text-only model: no image attachments
         let projected_text = orbit_agent::model_messages(&prepared.snapshot.history, false);
+
         for msg in &projected_text {
             if let ChatMessage::User { attachments, .. } = msg {
                 assert!(
@@ -1234,6 +1353,7 @@ mod tests {
 
         // 2. Project messages for vision model: history remains valid
         let projected_vision = orbit_agent::model_messages(&prepared.snapshot.history, true);
+
         assert_eq!(projected_vision.len(), prepared.snapshot.history.len());
     }
 }

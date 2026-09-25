@@ -23,6 +23,7 @@ fn start(
         tool.execute(ToolCall::function("edit", "edit_file", args), token)
             .await
     });
+
     (task, rx)
 }
 
@@ -45,7 +46,7 @@ async fn replaces_inserts_deletes_and_explicitly_replaces_all_without_normalizin
         fs::write(root.path().join("file"), before).unwrap();
         let (task, mut rx) = start(
             root.path(),
-            json!({"path":"file","old_text":old,"new_text":new,"replace_all":all}),
+            json!({ "path": "file", "old_text": old, "new_text": new, "replace_all": all }),
             CancellationToken::new(),
         );
         let request = tokio::time::timeout(Duration::from_secs(2), rx.recv())
@@ -55,19 +56,24 @@ async fn replaces_inserts_deletes_and_explicitly_replaces_all_without_normalizin
         let ApprovalPreview::Write(preview) = request.preview else {
             panic!("file preview")
         };
+
         assert_eq!(preview.before.as_deref(), Some(before));
         assert_eq!(preview.after, after);
         assert_eq!(
             fs::read_to_string(root.path().join("file")).unwrap(),
             before
         );
+
         request.decision.send(true).unwrap();
         let output = task.await.unwrap().unwrap();
+
         assert_eq!(output.changes.len(), 1);
         assert_eq!(output.changes[0].path, "file");
         assert_eq!(output.changes[0].before.as_deref(), Some(before));
         assert_eq!(output.changes[0].after, after);
+
         let result: Value = serde_json::from_str(&output).unwrap();
+
         assert_eq!(result["created"], false);
         assert_eq!(fs::read_to_string(root.path().join("file")).unwrap(), after);
     }
@@ -77,20 +83,22 @@ async fn replaces_inserts_deletes_and_explicitly_replaces_all_without_normalizin
 async fn rejects_ambiguous_missing_invalid_noop_and_oversized_edits_before_approval() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("file"), "aaa\r\nx x").unwrap();
+
     for args in [
-        json!({"path":"file","old_text":"aa","new_text":"b"}),
-        json!({"path":"file","old_text":"x","new_text":"y"}),
-        json!({"path":"file","old_text":"absent","new_text":"y"}),
-        json!({"path":"file","old_text":"aaa\n","new_text":"y"}),
-        json!({"path":"file","old_text":"","new_text":"y"}),
-        json!({"path":"file","old_text":"aaa","new_text":"aaa"}),
-        json!({"path":"file","old_text":"aaa","new_text":"\u{0}"}),
-        json!({"path":"file","old_text":"x","new_text":"z".repeat(600000),"replace_all":true}),
-        json!({"path":"missing","old_text":"x","new_text":"y"}),
-        json!({"path":"../file","old_text":"x","new_text":"y"}),
-        json!({"path":"file","old_text":"aaa","new_text":"y","unknown":true}),
+        json!({ "path": "file", "old_text": "aa", "new_text": "b" }),
+        json!({ "path": "file", "old_text": "x", "new_text": "y" }),
+        json!({ "path": "file", "old_text": "absent", "new_text": "y" }),
+        json!({ "path": "file", "old_text": "aaa\n", "new_text": "y" }),
+        json!({ "path": "file", "old_text": "", "new_text": "y" }),
+        json!({ "path": "file", "old_text": "aaa", "new_text": "aaa" }),
+        json!({ "path": "file", "old_text": "aaa", "new_text": "\u{0}" }),
+        json!({ "path": "file", "old_text": "x", "new_text": "z".repeat(600000), "replace_all": true }),
+        json!({ "path": "missing", "old_text": "x", "new_text": "y" }),
+        json!({ "path": "../file", "old_text": "x", "new_text": "y" }),
+        json!({ "path": "file", "old_text": "aaa", "new_text": "y", "unknown": true }),
     ] {
         let (task, mut rx) = start(root.path(), args, CancellationToken::new());
+
         assert!(task.await.unwrap().is_err());
         assert!(rx.try_recv().is_err());
         assert_eq!(
@@ -108,13 +116,14 @@ async fn denial_cancellation_and_concurrent_changes_never_overwrite_the_file() {
         let token = CancellationToken::new();
         let (task, mut rx) = start(
             root.path(),
-            json!({"path":"file","old_text":"original","new_text":"edited"}),
+            json!({ "path": "file", "old_text": "original", "new_text": "edited" }),
             token.clone(),
         );
         let request = tokio::time::timeout(Duration::from_secs(2), rx.recv())
             .await
             .unwrap()
             .unwrap();
+
         match action {
             "deny" => request.decision.send(false).unwrap(),
             "cancel" => token.cancel(),
@@ -123,6 +132,7 @@ async fn denial_cancellation_and_concurrent_changes_never_overwrite_the_file() {
                 request.decision.send(true).unwrap();
             }
         }
+
         assert!(task.await.unwrap().is_err());
         assert_eq!(
             fs::read_to_string(root.path().join("file")).unwrap(),
@@ -142,12 +152,14 @@ async fn rejects_protected_files_and_links() {
     fs::write(root.path().join("file"), "text").unwrap();
     std::os::unix::fs::symlink("file", root.path().join("sym")).unwrap();
     fs::hard_link(root.path().join("file"), root.path().join("hard")).unwrap();
+
     for path in ["config.toml", "sym", "hard"] {
         let (task, mut rx) = start(
             root.path(),
-            json!({"path":path,"old_text":"text","new_text":"changed"}),
+            json!({ "path": path, "old_text": "text", "new_text": "changed" }),
             CancellationToken::new(),
         );
+
         assert!(task.await.unwrap().is_err());
         assert!(rx.try_recv().is_err());
     }
@@ -160,11 +172,12 @@ async fn edits_large_source_without_replacing_unrelated_content() {
     fs::write(root.path().join("large"), &before).unwrap();
     let (task, mut rx) = start(
         root.path(),
-        json!({"path":"large","old_text":"unique anchor","new_text":"updated anchor"}),
+        json!({ "path": "large", "old_text": "unique anchor", "new_text": "updated anchor" }),
         CancellationToken::new(),
     );
     rx.recv().await.unwrap().decision.send(true).unwrap();
     task.await.unwrap().unwrap();
+
     assert_eq!(
         fs::read_to_string(root.path().join("large")).unwrap(),
         before.replace("unique anchor", "updated anchor")
