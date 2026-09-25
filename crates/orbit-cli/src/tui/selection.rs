@@ -547,7 +547,7 @@ mod tests {
                 }
                 Region::Input => assert_eq!(text, "你好 draft"),
                 Region::Footer => {
-                    assert!(text.contains("footer-model"));
+                    assert!(text.contains("/96k"));
                     assert!(!text.contains("draft"));
                 }
                 _ => unreachable!(),

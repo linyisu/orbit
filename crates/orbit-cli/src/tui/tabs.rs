@@ -26,6 +26,18 @@ impl Tabs {
         }
     }
 
+    pub fn empty_tab(&self, session: &SessionState, state: &UiState) -> Option<String> {
+        (session.snapshot.runs.is_empty()
+            && session
+                .snapshot
+                .history
+                .iter()
+                .all(|message| matches!(message, ChatMessage::System { .. }))
+            && state.input.text.is_empty()
+            && state.attachments.is_empty())
+        .then(|| session.id().to_owned())
+    }
+
     pub fn target(&self, index: usize) -> Option<&str> {
         self.order.get(index).map(String::as_str)
     }
@@ -61,6 +73,8 @@ impl Tabs {
             history: std::mem::replace(history, next_history),
         };
         self.parked.insert(current_id, parked);
+        state.tab_hover = None;
+        state.tab_hover_tick = 0;
 
         let next_id = session.id().to_owned();
         if !self.contains(&next_id) {
@@ -86,6 +100,14 @@ impl Tabs {
             history,
             (parked.prepared, parked.state, parked.model, parked.history),
         );
+        true
+    }
+
+    pub fn close_parked(&mut self, id: &str) -> bool {
+        if self.parked.remove(id).is_none() {
+            return false;
+        }
+        self.order.retain(|item| item != id);
         true
     }
 
@@ -140,6 +162,47 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn plus_click_requests_a_new_tab_and_dialogs_block_it() {
+        use super::super::{TabAction, tab_target};
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        let session = SessionState::open(dir.path().join("sessions.db"), None, "mock".into())
+            .await
+            .unwrap();
+        let tabs = Tabs::new(&session);
+        let mut state = UiState::new("mock");
+        state.new_tab_area = ratatui::layout::Rect::new(20, 0, 3, 1);
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 21,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(tab_target(&event, &state, &tabs), Some(TabAction::New));
+        state
+            .tab_areas
+            .push((ratatui::layout::Rect::new(2, 0, 15, 1), "first".into()));
+        state
+            .tab_close_areas
+            .push((ratatui::layout::Rect::new(14, 0, 3, 1), "first".into()));
+        let close = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 15,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            tab_target(&close, &state, &tabs),
+            Some(TabAction::Close("first".into()))
+        );
+        state.show_help = true;
+        assert_eq!(tab_target(&event, &state, &tabs), None);
+        assert_eq!(tab_target(&close, &state, &tabs), None);
+    }
+
+    #[tokio::test]
     async fn switching_preserves_each_tabs_draft_and_history_and_close_releases_lease() {
         let dir = tempfile::tempdir().unwrap();
         let mut session = SessionState::open(dir.path().join("sessions.db"), None, "mock".into())
@@ -148,7 +211,9 @@ mod tests {
         let first_id = session.id().to_owned();
         let mut tabs = Tabs::new(&session);
         let mut state = UiState::new("mock");
+        assert_eq!(tabs.empty_tab(&session, &state), Some(first_id.clone()));
         state.input.set("first draft".into());
+        assert_eq!(tabs.empty_tab(&session, &state), None);
         let mut model = ModelClient::new(Default::default()).unwrap();
         let mut history = vec![ChatMessage::user("first message")];
 

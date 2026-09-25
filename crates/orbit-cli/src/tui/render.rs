@@ -34,7 +34,15 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.input_area = Rect::default();
     state.attachment_areas.clear();
     state.tab_areas.clear();
-    let width = area.width.saturating_sub(7) as usize;
+    state.tab_close_areas.clear();
+    state.new_tab_area = Rect::default();
+    let home = state.transcript.is_empty()
+        && !state.tabs.is_empty()
+        && state.resume_loading.is_none()
+        && state.approval.is_none()
+        && area.height >= 18;
+    let content_width = if home { area.width.min(86) } else { area.width };
+    let width = content_width.saturating_sub(6) as usize;
     state.input_width = width;
     let (input_lines, cursor) = state.input.visual_lines(width);
     let input_height = input_lines
@@ -42,6 +50,15 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         .clamp(1, 6)
         .min(area.height.saturating_sub(8) as usize) as u16;
     let attachment_height = u16::from(!state.attachments.is_empty());
+    let details_height = composer_details(state, width).len() as u16;
+    let input_height = if home {
+        input_height.min(
+            area.height
+                .saturating_sub(attachment_height + details_height + 11),
+        )
+    } else {
+        input_height
+    };
     let menu = state.menu();
     // Navigation previews belong to the transcript only. A command menu or
     // dialog is a separate interaction surface, so it must not retain a stale
@@ -55,6 +72,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         || state.resume_loading.is_some()
     {
         state.navigation.clear_hover();
+        state.tab_hover = None;
         state.context_hovered = false;
         state.link_hovered = None;
     }
@@ -69,8 +87,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         0
     };
-    let areas = Layout::vertical([
-        Constraint::Length(2),
+    let mut areas = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(approval_height),
         Constraint::Length(
@@ -79,21 +97,34 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     .saturating_sub(input_height + attachment_height + 8),
             ),
         ),
-        Constraint::Length(input_height + attachment_height + 2),
+        Constraint::Length(input_height + attachment_height + details_height + 3),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
-    .split(area);
+    .split(area)
+    .to_vec();
+
+    if home {
+        let composer_height = input_height + attachment_height + details_height + 3;
+        let menu_height = panel_height.min(area.height.saturating_sub(composer_height + 10));
+        let group_height = 8 + menu_height + composer_height + 2;
+        let x = area.x + area.width.saturating_sub(content_width) / 2;
+        let y = area.y + area.height.saturating_sub(group_height) / 2;
+        areas[0] = if state.tabs.len() > 1 {
+            Rect::new(area.x, area.y, area.width, 1)
+        } else {
+            Rect::default()
+        };
+        areas[1] = Rect::new(x, y, content_width, 7);
+        areas[2] = Rect::default();
+        areas[3] = Rect::new(x, y + 8, content_width, menu_height);
+        areas[4] = Rect::new(x, y + 8 + menu_height, content_width, composer_height);
+        areas[5] = Rect::new(x, areas[4].bottom(), content_width, 1);
+        areas[6] = Rect::new(x, areas[5].bottom(), content_width, 1);
+    }
 
     draw_header(frame, state, areas[0]);
-    if areas[1].width >= 126 {
-        let content =
-            Layout::horizontal([Constraint::Min(1), Constraint::Length(30)]).split(areas[1]);
-        draw_transcript(frame, state, content[0]);
-        draw_sidebar(frame, state, content[1]);
-    } else {
-        draw_transcript(frame, state, areas[1]);
-    }
+    draw_transcript(frame, state, areas[1]);
     if state.approval.is_some() && !file_modal {
         super::approval::draw_in(frame, state, areas[2]);
         state.selection.approval = areas[2];
@@ -160,137 +191,92 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
 }
 
 fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
-    let mode = state.permission_mode.label();
-    let folder_prefix = "󰉋 ";
-    let mode_label = format!("󰒃 {mode}");
-    let model_label = if state.attachments.is_empty() {
-        format!("󰚩 {}", safe_output(&state.model))
-    } else {
-        format!(
-            "󰚩 {}  󰋩 {}",
-            safe_output(&state.model),
-            state.attachments.len()
-        )
-    };
-    let effort = state
-        .reasoning_effort
-        .map(|effort| format!("󰧑 {}", effort.label()))
-        .unwrap_or_else(|| "󰧑 —".into());
     let available = width.saturating_sub(4);
-    let right_budget = available.saturating_sub(8);
     let context = format!(
         "{}/{}",
         context_percent_label(state),
         compact_tokens(input_context_budget(state)),
     );
-    let detailed_right = format!("{context}  {model_label}  {effort}");
-    let compact_right = format!("{} {model_label}  {effort}", context_percent_label(state));
-    let minimal_right = format!("{} {model_label}", context_percent_label(state));
-    // Match Pi's direct context display only when it does not consume the
-    // project location. A compact footer is still more useful when the
-    // terminal becomes narrow.
-    let footer_left_overhead = folder_prefix.width() + mode_label.width() + 2;
-    // Four columns let a narrow terminal retain a useful project name rather
-    // than spending the same space on a truncated absolute-path prefix.
-    let minimum_path_width = 4;
-    let context_details_visible = detailed_right
-        .width()
-        .saturating_add(footer_left_overhead)
-        .saturating_add(minimum_path_width)
-        <= available;
+    let context_details_visible = context.width() + 8 <= available;
     let right = if context_details_visible {
-        detailed_right
-    } else if compact_right
-        .width()
-        .saturating_add(footer_left_overhead)
-        .saturating_add(minimum_path_width)
-        <= available
-    {
-        compact_right
-    } else {
-        minimal_right
-    };
-    let right = fit_label(&right, right_budget, false);
-    let path = std::env::var_os("HOME")
-        .and_then(|home| {
-            std::path::Path::new(&state.workspace)
-                .strip_prefix(home)
-                .ok()
-                .map(|suffix| {
-                    if suffix.as_os_str().is_empty() {
-                        "~".into()
-                    } else {
-                        format!("~/{}", suffix.display())
-                    }
-                })
-        })
-        .unwrap_or_else(|| state.workspace.clone());
-    let left_width = available.saturating_sub(right.width());
-    let path_width = left_width.saturating_sub(folder_prefix.width() + mode_label.width() + 2);
-    let (left, left_spans) = if path_width == 0 {
-        let mode = fit_label(&mode_label, left_width, false);
-        (mode.clone(), vec![Span::raw(mode)])
-    } else {
-        let full_path = safe_output(&path);
-        let project_name = std::path::Path::new(&state.workspace)
-            .file_name()
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| std::ffi::OsStr::new(&path))
-            .to_string_lossy();
-        let path = if full_path.width() <= path_width {
-            full_path
-        } else {
-            fit_label(&safe_output(&project_name), path_width, false)
-        };
-        (
-            format!("{folder_prefix}{path}  {mode_label}"),
-            vec![
-                Span::styled(
-                    format!("{folder_prefix}{path}"),
-                    Style::default().fg(Color::Rgb(170, 170, 170)),
-                ),
-                Span::raw("  "),
-                Span::raw(mode_label),
-            ],
-        )
-    };
-    let gap = available.saturating_sub(left.width() + right.width());
-    let right_start = 2 + left.width() + gap;
-    let context_prefix = if context_details_visible {
         context
     } else {
         context_percent_label(state)
     };
-    let context_offset = right
-        .starts_with(&context_prefix)
-        .then_some(right_start as u16);
-    let context_width = if context_offset.is_some() {
-        context_prefix.width() as u16
+    let right = fit_label(&right, available, false);
+    let path_width = available.saturating_sub(right.width() + 2);
+    let project = std::path::Path::new(&state.workspace)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&state.workspace);
+    let full_path = safe_output(&state.workspace);
+    let path = if full_path.width() + 2 <= path_width {
+        format!("󰉋 {full_path}")
     } else {
-        0
+        fit_label(&safe_output(project), path_width, false)
     };
-    let right_spans = if let Some(rest) = right.strip_prefix(&context_prefix) {
-        vec![
+    let gap = available.saturating_sub(path.width() + right.width());
+    let context_offset = (!right.is_empty()).then_some((2 + path.width() + gap) as u16);
+    let context_width = right.width() as u16;
+    FooterLayout {
+        line: Line::from(vec![
+            Span::raw("  "),
+            Span::styled(path, Style::default().fg(Color::Rgb(170, 170, 170))),
+            Span::raw(" ".repeat(gap)),
             Span::styled(
-                context_prefix,
+                right,
                 Style::default().fg(context_indicator_color(context_percent(state))),
             ),
-            Span::raw(rest.to_owned()),
-        ]
-    } else {
-        vec![Span::raw(right)]
-    };
-    let mut spans = vec![Span::raw("  ")];
-    spans.extend(left_spans);
-    spans.push(Span::raw(" ".repeat(gap)));
-    spans.extend(right_spans);
-    spans.push(Span::raw("  "));
-    FooterLayout {
-        line: Line::from(spans),
+            Span::raw("  "),
+        ]),
         context_offset,
         context_width,
         context_details_visible,
     }
+}
+
+fn composer_details(state: &UiState, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let (provider, model) = state.model.split_once("::").unwrap_or(("", &state.model));
+    let accent = Style::default().fg(ACCENT);
+    let mut fields = vec![
+        Span::styled(
+            state.permission_mode.label().to_owned(),
+            accent.add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(safe_output(model)),
+    ];
+    if !provider.is_empty() {
+        fields.push(Span::styled(
+            safe_output(provider),
+            Style::default().fg(Color::Rgb(170, 170, 170)),
+        ));
+    }
+    let effort = state
+        .reasoning_effort
+        .map(|effort| effort.label())
+        .unwrap_or("—");
+    fields.push(Span::styled(format!("󰧑 {effort}"), accent));
+
+    let mut rows = Vec::new();
+    let mut row = Line::default();
+    for field in fields {
+        let field = Span::styled(fit_label(&field.content, width, false), field.style);
+        if !row.spans.is_empty() && row.width() + 2 + field.width() > width {
+            rows.push(row);
+            row = Line::default();
+        }
+        if !row.spans.is_empty() {
+            row.spans.push(Span::raw("  "));
+        }
+        row.spans.push(field);
+    }
+    if !row.spans.is_empty() {
+        rows.push(row);
+    }
+    rows
 }
 
 fn compact_tokens(tokens: usize) -> String {
@@ -496,133 +482,133 @@ fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     state.link_tooltip_area = area;
 }
 
+fn tab_title(text: &str, width: usize, elapsed: Option<std::time::Duration>) -> String {
+    let Some(elapsed) = elapsed.filter(|_| text.width() > width) else {
+        return fit_label(text, width, false);
+    };
+    let graphemes: Vec<_> = text.graphemes(true).collect();
+    let mut remaining = text.width();
+    let mut last_start = 0;
+    while remaining > width && last_start < graphemes.len() {
+        remaining = remaining.saturating_sub(graphemes[last_start].width());
+        last_start += 1;
+    }
+    let step = elapsed.as_millis().saturating_sub(100) / 120;
+    let start = (step as usize % (last_start + 8)).min(last_start);
+    let mut shown = String::new();
+    for part in &graphemes[start..] {
+        if shown.width() + part.width() > width {
+            break;
+        }
+        shown.push_str(part);
+    }
+    shown
+}
+
+fn tab_control_style(state: &UiState, target: &super::TabAction) -> Style {
+    let base = Style::default().fg(ACCENT);
+    let Some((_, since)) = state
+        .tab_hover
+        .as_ref()
+        .filter(|(action, _)| action == target)
+    else {
+        return base;
+    };
+    let shade = 48 + (since.elapsed().as_millis().min(240) / 10) as u8;
+    base.bg(Color::Rgb(shade, shade - 8, shade - 10))
+        .add_modifier(Modifier::BOLD)
+}
+
 fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "   Orbit",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ))),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
-    if area.height < 2 {
-        return;
-    }
-
+    let titles: Vec<_> = state
+        .tabs
+        .iter()
+        .map(|tab| {
+            if tab.title.trim().is_empty() {
+                "新会话".to_owned()
+            } else {
+                safe_output(&tab.title)
+            }
+        })
+        .collect();
+    let widths: Vec<_> = titles
+        .iter()
+        .map(|title| title.width().min(32) + 5)
+        .collect();
     let active_index = state.tabs.iter().position(|tab| tab.active).unwrap_or(0);
-    let mut labels = Vec::with_capacity(state.tabs.len());
-    for (index, tab) in state.tabs.iter().enumerate() {
-        let title = if tab.title.trim().is_empty() {
-            "新会话".to_owned()
-        } else {
-            safe_output(&tab.title)
-        };
-        labels.push(format!(" {} {} ", index + 1, fit_label(&title, 18, false)));
-    }
-
-    // Keep the selected tab visible when the terminal cannot fit the full row.
-    let budget = area.width.saturating_sub(4) as usize;
+    let budget = area.width.saturating_sub(8) as usize;
     let mut start = 0;
     while start < active_index
-        && labels[start..=active_index]
+        && widths[start..=active_index]
             .iter()
-            .map(|label| label.width() + 1)
+            .map(|width| width + 1)
             .sum::<usize>()
             > budget
     {
         start += 1;
     }
+
     let mut x = area.x + 2;
     for (index, tab) in state.tabs.iter().enumerate().skip(start) {
-        let available = area.right().saturating_sub(x + 1) as usize;
-        if available < 3 {
+        let available = area.right().saturating_sub(x + 5) as usize;
+        if available < 6 {
             break;
         }
-        let label = fit_label(&labels[index], available, false);
-        let width = label.width() as u16;
-        let rect = Rect::new(x, area.y + 1, width, 1);
+        let width = widths[index].min(available) as u16;
+        let title_width = width.saturating_sub(5) as usize;
+        let elapsed = state.tab_hover.as_ref().and_then(|(action, since)| {
+            (*action == super::TabAction::Select(tab.id.clone())).then(|| since.elapsed())
+        });
+        let title = tab_title(&titles[index], title_width, elapsed);
+        let rect = Rect::new(x, area.y, width, 1);
         let style = if tab.active {
             Style::default()
                 .fg(ACCENT)
                 .bg(Color::Rgb(47, 43, 45))
                 .add_modifier(Modifier::BOLD)
+        } else if elapsed.is_some() {
+            Style::default().fg(ACCENT).bg(Color::Rgb(40, 38, 40))
         } else if tab.status == RunStatus::Failed {
             Style::default().fg(Color::Rgb(220, 111, 122))
         } else {
             Style::default().fg(Color::Rgb(177, 171, 171))
         };
-        frame.render_widget(Paragraph::new(Span::styled(label, style)), rect);
+        frame.render_widget(
+            Paragraph::new(format!(
+                " {title}{}",
+                " ".repeat(width as usize - 1 - title.width())
+            ))
+            .style(style),
+            rect,
+        );
+        let close = Rect::new(rect.right() - 3, rect.y, 3, 1);
+        let hovered = state.tab_hover.as_ref().is_some_and(|(action, _)| {
+            matches!(action, super::TabAction::Select(id) | super::TabAction::Close(id) if id == &tab.id)
+        });
+        if hovered {
+            frame.render_widget(
+                Paragraph::new(" 󰅖 ").style(style.patch(tab_control_style(
+                    state,
+                    &super::TabAction::Close(tab.id.clone()),
+                ))),
+                close,
+            );
+        }
         state.tab_areas.push((rect, tab.id.clone()));
+        state.tab_close_areas.push((close, tab.id.clone()));
         x = x.saturating_add(width + 1);
     }
-}
-
-fn draw_sidebar(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(Style::default().fg(BORDER));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.width < 4 || inner.height < 6 {
-        return;
+    if area.width >= 5 {
+        let plus_x = x.min(area.right().saturating_sub(4));
+        state.new_tab_area = Rect::new(plus_x, area.y, 3, 1);
+        frame.render_widget(
+            Paragraph::new(" + ").style(tab_control_style(state, &super::TabAction::New)),
+            state.new_tab_area,
+        );
     }
-
-    let project = std::path::Path::new(&state.workspace)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(&state.workspace);
-    let value_width = inner.width.saturating_sub(3) as usize;
-    let label = Style::default().fg(Color::Rgb(170, 163, 164));
-    let value = Style::default().fg(Color::Rgb(226, 220, 218));
-    let heading = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let title = state
-        .tabs
-        .iter()
-        .find(|tab| tab.active)
-        .map(|tab| tab.title.as_str())
-        .unwrap_or("新会话");
-    let lines = vec![
-        Line::from(Span::styled("  PROJECT", heading)),
-        Line::from(Span::styled(
-            format!("  {}", fit_label(&safe_output(project), value_width, true)),
-            value,
-        )),
-        Line::from(""),
-        Line::from(Span::styled("  SESSION", heading)),
-        Line::from(Span::styled(
-            format!("  {}", fit_label(&safe_output(title), value_width, false)),
-            value,
-        )),
-        Line::from(Span::styled(
-            format!("  {} 个标签", state.tabs.len()),
-            label,
-        )),
-        Line::from(""),
-        Line::from(Span::styled("  CONTEXT", heading)),
-        Line::from(Span::styled(
-            format!(
-                "  {} / {}",
-                context_percent_label(state),
-                compact_tokens(input_context_budget(state))
-            ),
-            value,
-        )),
-        Line::from(""),
-        Line::from(Span::styled("  MODEL", heading)),
-        Line::from(Span::styled(
-            format!(
-                "  {}",
-                fit_label(&safe_output(&state.model), value_width, false)
-            ),
-            value,
-        )),
-        Line::from(""),
-        Line::from(Span::styled("  Alt+1…9 切换标签", label)),
-        Line::from(Span::styled("  /new 新建 · /close 关闭", label)),
-    ];
-    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn wordmark() -> Vec<Line<'static>> {
@@ -1204,15 +1190,26 @@ fn draw_composer(
         ..area
     };
     let block = Block::default()
-        .borders(Borders::LEFT)
+        .borders(Borders::TOP | Borders::BOTTOM)
         .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(Color::Rgb(43, 40, 43)));
+        .border_style(Style::default().fg(ACCENT));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let details = composer_details(state, inner.width.saturating_sub(2) as usize);
+    let details_height = (details.len() as u16).min(inner.height.saturating_sub(1));
+    if details_height > 0 {
+        frame.render_widget(
+            Paragraph::new(details),
+            Rect::new(
+                inner.x + 2,
+                inner.bottom() - details_height,
+                inner.width.saturating_sub(2),
+                details_height,
+            ),
+        );
+    }
     let inner = Rect {
-        y: inner.y.saturating_add(1),
-        height: inner.height.saturating_sub(2),
+        height: inner.height.saturating_sub(1 + details_height),
         ..inner
     };
     let attachment_height = u16::from(!state.attachments.is_empty());
@@ -1353,6 +1350,107 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn hovered_title_scrolls_without_splitting_wide_or_combining_characters() {
+        let title = "中文e\u{301}标题长到需要滚动显示最后内容";
+        let initial = tab_title(title, 12, None);
+        assert!(initial.ends_with('…'));
+        let frames: Vec<_> = (0..50)
+            .map(|tick| {
+                tab_title(
+                    title,
+                    12,
+                    Some(std::time::Duration::from_millis(tick * 120)),
+                )
+            })
+            .collect();
+        assert!(frames.iter().all(|frame| frame.width() <= 12));
+        assert!(frames.iter().any(|frame| frame.ends_with("最后内容")));
+        assert!(frames.iter().all(|frame| !frame.starts_with('\u{301}')));
+    }
+
+    #[test]
+    fn new_tab_button_changes_on_hover_and_restores_on_leave() {
+        let mut state = UiState::new("model");
+        let plain = tab_control_style(&state, &super::super::TabAction::New);
+        state.tab_hover = Some((super::super::TabAction::New, std::time::Instant::now()));
+        assert_ne!(
+            tab_control_style(&state, &super::super::TabAction::New),
+            plain
+        );
+        state.tab_hover = None;
+        assert_eq!(
+            tab_control_style(&state, &super::super::TabAction::New),
+            plain
+        );
+    }
+
+    #[test]
+    fn home_centers_composer_and_conversation_exposes_new_session_button() {
+        let mut state = UiState::new("provider::model");
+        state.tabs.push(SessionTab {
+            id: "first".into(),
+            title: "New session".into(),
+            status: RunStatus::Idle,
+            active: true,
+        });
+
+        render(&mut state, 140, 40);
+        let home_input = state.input_area;
+        assert!(home_input.x > 20);
+        assert!(home_input.y > 10 && home_input.y < 30);
+        assert!(state.tab_areas.is_empty());
+        assert_eq!(state.new_tab_area, Rect::default());
+
+        state.transcript.push(TranscriptItem::User("Hello".into()));
+        render(&mut state, 140, 40);
+        assert!(state.input_area.y > home_input.y);
+        assert!(state.input_area.width > home_input.width);
+        assert_eq!(state.tab_areas.len(), 1);
+        assert_eq!(state.new_tab_area.height, 1);
+        assert!(state.new_tab_area.x >= state.tab_areas[0].0.right());
+        assert!(!render(&mut state, 140, 40).contains("󰅖"));
+        state.tab_hover = Some((
+            super::super::TabAction::Select("first".into()),
+            std::time::Instant::now(),
+        ));
+        assert!(render(&mut state, 140, 40).contains("󰅖"));
+        state.tab_hover = None;
+        assert!(!render(&mut state, 140, 40).contains("󰅖"));
+    }
+
+    #[test]
+    fn composer_metadata_is_below_input_without_a_background_or_sidebar() {
+        for width in [30, 140] {
+            let mut state = UiState::new("provider::test-model");
+            state.reasoning_effort = Some(orbit_model::types::ReasoningEffort::High);
+            state.input.set("draft".into());
+            let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+
+            let buffer = terminal.backend().buffer();
+            let metadata: String = (state.input_area.bottom()..22)
+                .flat_map(|y| (0..width).map(move |x| buffer[(x, y)].symbol()))
+                .collect();
+            for label in ["auto", "test-model", "provider", "高"] {
+                assert!(metadata.contains(label), "{width}: {metadata:?}");
+            }
+            assert!(state.selection.viewport.right() > width - 10);
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .all(|cell| { cell.bg == Color::Reset || cell.bg == Color::Gray })
+            );
+            assert!(
+                composer_details(&state, width.saturating_sub(7) as usize)
+                    .iter()
+                    .all(|line| line.width() <= width.saturating_sub(7) as usize)
+            );
+        }
+    }
+
+    #[test]
     fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
         let mut state = UiState::new("model");
         state.tabs = (0..5)
@@ -1489,7 +1587,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         let buffer = terminal.backend().buffer();
         let footer: String = (0..100).map(|x| buffer[(x, 29)].symbol()).collect();
-        assert!(footer.contains("model") && footer.contains(state.permission_mode.label()));
+        assert!(footer.contains("/96k"));
+        assert!(!footer.contains("model") && !footer.contains(state.permission_mode.label()));
         assert!(!footer.contains("Shift") && !footer.contains("恢复"));
     }
 
@@ -1696,7 +1795,7 @@ mod tests {
     fn welcome_commands_and_small_terminal_render() {
         let mut state = UiState::new("mock-model");
         let screen = render(&mut state, 100, 30);
-        assert!(screen.contains(" Orbit"));
+        assert!(screen.contains("████"));
         assert!(screen.contains("mock-model"));
         assert!(!screen.contains("开始一段新对话"));
         assert!(!screen.contains("/help"));
@@ -1830,7 +1929,7 @@ mod tests {
                     .all(|cell| cell.bg != Color::Gray)
             );
             if footer {
-                assert!(state.selection.text().contains("model-name"));
+                assert!(state.selection.text().contains("/96k"));
             } else {
                 assert_eq!(state.selection.text(), "你好");
             }
@@ -1900,7 +1999,7 @@ mod tests {
         let mut state = UiState::new("model");
         state.workspace = "/tmp/中文项目".into();
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        for (input, column) in [("", 5), ("你好", 9), ("你e\u{301}", 8), ("第一行\n你好", 9)]
+        for (input, column) in [("", 4), ("你好", 8), ("你e\u{301}", 7), ("第一行\n你好", 8)]
         {
             state.input.set(input.into());
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
@@ -1959,7 +2058,7 @@ mod tests {
                 .position(|(x, y, cell)| {
                     (*x, *y) == (caret.x + 1, caret.y)
                         && cell.symbol() == " "
-                        && cell.bg == Color::Rgb(43, 40, 43)
+                        && cell.bg == Color::Reset
                 })
                 .expect(
                     "the terminal needs an explicit reset of the erased wide glyph's trailing half",
@@ -1977,7 +2076,7 @@ mod tests {
     }
 
     #[test]
-    fn footer_keeps_project_model_and_mode_with_unicode_paths() {
+    fn footer_keeps_project_and_context_with_unicode_paths() {
         let mut state = UiState::new("deepseek");
         state.workspace = format!("/tmp/{}/项目", "长目录/".repeat(40));
         state.context_used_tokens = 51_200;
@@ -1989,10 +2088,10 @@ mod tests {
                 assert!(text.contains("项目"));
             }
             if width >= 80 {
-                assert!(text.contains("󰧑"));
+                assert!(!text.contains("󰧑"));
                 assert!(!text.contains("思考"));
                 assert!(text.contains("53%/96k"));
-                assert!(text.contains(state.permission_mode.label()));
+                assert!(!text.contains(state.permission_mode.label()));
                 assert!(!text.contains('·'));
             }
             assert!(text.ends_with("  "));

@@ -156,14 +156,10 @@ impl HistoryReplay {
                     tool_calls: state.tool_calls,
                 }),
                 "cancelled" => state.apply(AgentEvent::Cancelled),
-                "interrupted" | "running" | "failed"
-                    if self.run + 1 == snapshot.runs.len() && snapshot.recovery.is_some() =>
-                {
-                    state.fail("上次运行未完成；已恢复保存的执行进度，不会自动重放工具。");
+                _ => {
+                    state.status = crate::tui::app::RunStatus::Failed;
+                    state.finish_clock();
                 }
-                "interrupted" | "running" => state
-                    .fail("上次运行被中断；已恢复到最后一次成功完成的模型上下文，未重新执行工具。"),
-                _ => state.fail("上次运行失败；模型上下文保留在上一轮成功状态。"),
             }
             if let Some(elapsed_ms) = run.elapsed_ms {
                 state.elapsed = Duration::from_millis(elapsed_ms);
@@ -185,12 +181,6 @@ impl HistoryReplay {
             processed += 1;
         }
         if self.run == snapshot.runs.len() {
-            if !snapshot.runs.is_empty() {
-                state.transcript.push(TranscriptItem::Notice(format!(
-                    "会话 {} · 自动保存",
-                    snapshot.session.id
-                )));
-            }
             self.done = true;
         }
         self.done

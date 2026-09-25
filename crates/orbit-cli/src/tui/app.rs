@@ -58,6 +58,12 @@ pub enum TranscriptItem {
 #[derive(Debug)]
 pub struct UiState {
     pub tabs: Vec<SessionTab>,
+    pub new_tab_area: ratatui::layout::Rect,
+    pub new_tab_request: bool,
+    pub close_tab_request: Option<String>,
+    pub tab_close_areas: Vec<(ratatui::layout::Rect, String)>,
+    pub(super) tab_hover: Option<(super::TabAction, Instant)>,
+    pub(super) tab_hover_tick: u128,
     pub tab_areas: Vec<(ratatui::layout::Rect, String)>,
     pub(super) navigation: super::navigation::Navigation,
     pub approval: Option<orbit_tools::approval::ApprovalPreview>,
@@ -149,6 +155,12 @@ impl UiState {
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             tabs: Vec::new(),
+            new_tab_area: Default::default(),
+            new_tab_request: false,
+            close_tab_request: None,
+            tab_close_areas: Vec::new(),
+            tab_hover: None,
+            tab_hover_tick: 0,
             tab_areas: Vec::new(),
             navigation: Default::default(),
             approval: None,
@@ -234,12 +246,6 @@ impl UiState {
         self.paused_at = None;
         self.paused_elapsed = std::time::Duration::ZERO;
         self.follow_bottom = true;
-    }
-
-    pub fn fail(&mut self, error: impl Into<String>) {
-        self.status = RunStatus::Failed;
-        self.finish_clock();
-        self.transcript.push(TranscriptItem::Error(error.into()));
     }
 
     pub fn cancel(&mut self) {

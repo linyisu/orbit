@@ -208,15 +208,57 @@ pub async fn run(
                     frames.request(time::Instant::now());
                 }
             }
+            if std::mem::take(&mut state.new_tab_request) {
+                if task.is_some() || local_task.is_some() || resume_task.is_some() || history_replay.is_some() {
+                    state.transcript.push(TranscriptItem::CommandError(
+                        "当前响应结束后才能新建标签。".into(),
+                    ));
+                } else if let Err(error) = new_tab(
+                    &mut tabs, &mut session, &mut state, &mut model,
+                    &mut history, CommandContext {
+                        tools: &tools,
+                        instructions: &instructions,
+                        skills: &skills,
+                        mcp_statuses: &mcp_statuses,
+                        model_options: &model_options,
+                        memory_scope: &memory_scope,
+                    },
+                ).await {
+                    state.transcript.push(TranscriptItem::CommandError(error.to_string()));
+                }
+                dirty = true;
+                frames.request(time::Instant::now());
+            }
+            if let Some(id) = state.close_tab_request.take() {
+                if id != session.id() {
+                    tabs.close_parked(&id);
+                } else if task.is_some() || local_task.is_some() || resume_task.is_some() || history_replay.is_some() {
+                    state.transcript.push(TranscriptItem::CommandError("当前操作结束后才能关闭标签。".into()));
+                } else if tabs.close_active(&mut session, &mut state, &mut model, &mut history) {
+                    memory_scope.set_session(session.id().into());
+                    refresh_context_usage(&mut state, &history, &tools);
+                } else {
+                    match new_tab(&mut tabs, &mut session, &mut state, &mut model, &mut history,
+                        CommandContext { tools: &tools, instructions: &instructions, skills: &skills,
+                            mcp_statuses: &mcp_statuses, model_options: &model_options, memory_scope: &memory_scope }).await {
+                        Ok(()) => { tabs.close_parked(&id); }
+                        Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
+                    }
+                }
+                state.tab_hover = None;
+                dirty = true;
+                frames.request(time::Instant::now());
+            }
             if let Some(id) = state.resume_request.take() {
+                let empty_tab = tabs.empty_tab(&session, &state);
                 if id == session.id() {
-                    state.transcript.push(TranscriptItem::CommandResult("当前已是该会话。".into()));
                     state.picker = None;
                 } else if task.is_some() || local_task.is_some() || history_replay.is_some() {
                     state.transcript.push(TranscriptItem::CommandError(
                         "当前响应或历史加载结束后才能切换标签。".into(),
                     ));
                 } else if tabs.restore(&id, &mut session, &mut state, &mut model, &mut history) {
+                    if let Some(id) = empty_tab { tabs.close_parked(&id); }
                     memory_scope.set_session(session.id().into());
                     state.picker = None;
                     refresh_context_usage(&mut state, &history, &tools);
@@ -237,11 +279,19 @@ pub async fn run(
                     let Some(event) = event else { break };
                     let event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+                    if update_tab_hover(&event, &mut state, &tabs) {
+                        dirty = true;
+                        frames.request(time::Instant::now());
+                    }
                     if resume_task.is_none()
                         && history_replay.is_none()
-                        && let Some(id) = tab_target(&event, &state, &tabs)
+                        && let Some(action) = tab_target(&event, &state, &tabs)
                     {
-                        state.resume_request = Some(id);
+                        match action {
+                            TabAction::Select(id) => state.resume_request = Some(id),
+                            TabAction::New => state.new_tab_request = true,
+                            TabAction::Close(id) => state.close_tab_request = Some(id),
+                        }
                         dirty = true;
                         frames.request(time::Instant::now());
                         continue;
@@ -472,42 +522,15 @@ pub async fn run(
                                 let command = prompt
                                     .split_once(char::is_whitespace)
                                     .map_or(prompt.as_str(), |(command, _)| command);
-                                state.transcript.push(TranscriptItem::Command(prompt.clone()));
+                                if !matches!(command, "/resume" | "/sessions") {
+                                    state.transcript.push(TranscriptItem::Command(prompt.clone()));
+                                }
                                 if command == "/new" && prompt.trim() == "/new" {
-                                    if task.is_some() {
-                                        state.transcript.push(TranscriptItem::CommandError(
-                                            "当前响应结束后才能新建标签。".into(),
-                                        ));
-                                    } else if let Err(error) = new_tab(
-                                        &mut tabs, &mut session, &mut state, &mut model,
-                                        &mut history, CommandContext {
-                                            tools: &tools,
-                                            instructions: &instructions,
-                                            skills: &skills,
-                                            mcp_statuses: &mcp_statuses,
-                                            model_options: &model_options,
-                                            memory_scope: &memory_scope,
-                                        },
-                                    ).await {
-                                        state.transcript.push(TranscriptItem::CommandError(error.to_string()));
-                                    }
+                                    state.new_tab_request = true;
                                     continue;
                                 }
                                 if command == "/close" && prompt.trim() == "/close" {
-                                    if task.is_some() || local_task.is_some() {
-                                        state.transcript.push(TranscriptItem::CommandError(
-                                            "当前操作结束后才能关闭标签。".into(),
-                                        ));
-                                    } else if tabs.close_active(
-                                        &mut session, &mut state, &mut model, &mut history,
-                                    ) {
-                                        memory_scope.set_session(session.id().into());
-                                        refresh_context_usage(&mut state, &history, &tools);
-                                    } else {
-                                        state.transcript.push(TranscriptItem::CommandError(
-                                            "至少保留一个标签。".into(),
-                                        ));
-                                    }
+                                    state.close_tab_request = Some(session.id().to_owned());
                                     continue;
                                 }
                                 if command == "/undo" {
@@ -715,12 +738,14 @@ pub async fn run(
                     state.resume_loading = None;
                     match result {
                         Ok(Ok((prepared, loaded_history))) => {
+                            let empty_tab = tabs.empty_tab(&session, &state);
                             let mut restored = resume_ui_shell(&state);
                             restored.workspace = prepared.snapshot.session.workspace.clone();
                             restored.resume_loading = Some("正在显示会话历史…".into());
                             let next_model = ModelClient::new(model.config().clone())?;
                             tabs.activate(&mut session, &mut state, &mut model, &mut history,
                                 (prepared, restored, next_model, loaded_history));
+                            if let Some(id) = empty_tab { tabs.close_parked(&id); }
                             memory_scope.set_session(session.id().into());
                             restore_model_profile(&mut state, &mut model, &model_options, &session);
                             history_replay = Some(crate::session::HistoryReplay::default());
@@ -769,6 +794,17 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    if let Some((action, since)) = &state.tab_hover {
+                        let elapsed = since.elapsed().as_millis();
+                        let tick = match action {
+                            TabAction::Select(_) => elapsed / 120,
+                            _ => elapsed.min(240) / 40,
+                        };
+                        if tick != state.tab_hover_tick {
+                            state.tab_hover_tick = tick;
+                            dirty = true;
+                        }
+                    }
                     if let Some(replay) = &mut history_replay {
                         let done = replay.advance(&session.snapshot, &mut state, 2048, Duration::from_millis(4));
                         if done {
@@ -1105,7 +1141,14 @@ async fn compaction_source_history(
     Ok(restored)
 }
 
-fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TabAction {
+    Select(String),
+    Close(String),
+    New,
+}
+
+fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAction> {
     if state.approval.is_some()
         || state.show_help
         || state.picker.is_some()
@@ -1123,7 +1166,7 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<Strin
                 return None;
             };
             tabs.target(digit.to_digit(10)? as usize - 1)
-                .map(str::to_owned)
+                .map(|id| TabAction::Select(id.to_owned()))
         }
         Event::Key(key)
             if key.kind != KeyEventKind::Release
@@ -1134,7 +1177,28 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<Strin
                 state.tabs.iter().find(|tab| tab.active)?.id.as_str(),
                 key.modifiers.contains(KeyModifiers::SHIFT),
             )
-            .map(str::to_owned)
+            .map(|id| TabAction::Select(id.to_owned()))
+        }
+        Event::Mouse(mouse)
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && state
+                    .new_tab_area
+                    .contains((mouse.column, mouse.row).into()) =>
+        {
+            Some(TabAction::New)
+        }
+        Event::Mouse(mouse)
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && state
+                    .tab_close_areas
+                    .iter()
+                    .any(|(area, _)| area.contains((mouse.column, mouse.row).into())) =>
+        {
+            state
+                .tab_close_areas
+                .iter()
+                .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
+                .map(|(_, id)| TabAction::Close(id.clone()))
         }
         Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => state
             .tab_areas
@@ -1145,9 +1209,29 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<Strin
                     && mouse.row >= area.y
                     && mouse.row < area.bottom()
             })
-            .map(|(_, id)| id.clone()),
+            .map(|(_, id)| TabAction::Select(id.clone())),
         _ => None,
     }
+}
+
+fn update_tab_hover(event: &Event, state: &mut UiState, tabs: &tabs::Tabs) -> bool {
+    let next = match event {
+        Event::Mouse(mouse)
+            if mouse.kind == MouseEventKind::Moved && !state.selection.dragging() =>
+        {
+            let mut probe = *mouse;
+            probe.kind = MouseEventKind::Down(MouseButton::Left);
+            tab_target(&Event::Mouse(probe), state, tabs)
+        }
+        Event::Resize(_, _) | Event::Key(_) | Event::Mouse(_) => None,
+        _ => return false,
+    };
+    if state.tab_hover.as_ref().map(|(action, _)| action) == next.as_ref() {
+        return false;
+    }
+    state.tab_hover = next.map(|action| (action, std::time::Instant::now()));
+    state.tab_hover_tick = 0;
+    true
 }
 
 async fn new_tab(
@@ -1182,6 +1266,7 @@ async fn new_tab(
         (prepared, next_state, next_model, next_history),
     );
     context.memory_scope.set_session(session.id().into());
+    refresh_context_usage(state, history, context.tools);
     session
         .set_model_profile(state.model.clone(), state.reasoning_effort)
         .await?;
@@ -2069,9 +2154,6 @@ async fn resume_session(
     tools: &ToolRegistry,
 ) -> Result<()> {
     if id == session.id() {
-        state
-            .transcript
-            .push(TranscriptItem::CommandResult("当前已是该会话。".into()));
         return Ok(());
     }
     let (prepared, loaded_history) = load_resume(
