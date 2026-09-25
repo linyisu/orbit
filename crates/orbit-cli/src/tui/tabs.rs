@@ -19,6 +19,14 @@ pub(super) struct Tabs {
 }
 
 impl Tabs {
+    pub async fn poll_titles(&mut self) -> bool {
+        let mut changed = false;
+        for tab in self.parked.values_mut() {
+            changed |= tab.prepared.poll_title().await.unwrap_or(false);
+        }
+        changed
+    }
+
     pub fn has_other_tabs(&self) -> bool {
         self.order.len() > 1
     }

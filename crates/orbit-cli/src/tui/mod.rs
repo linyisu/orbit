@@ -990,6 +990,8 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    dirty |= session.poll_title().await.unwrap_or(false);
+                    dirty |= tabs.poll_titles().await;
                     dirty |= state.navigation.advance_preview();
                     if let Some(picker) = &mut state.picker {
                         dirty |= picker.advance_title_scroll();
@@ -1188,7 +1190,9 @@ async fn start_agent_run(
         history.to_vec()
     };
 
-    session.begin(prompt.clone(), state.model.clone()).await?;
+    session
+        .begin_with_title(prompt.clone(), state.model.clone(), model)
+        .await?;
     let display_prompt = if attachments.is_empty() {
         prompt.clone()
     } else {

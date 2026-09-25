@@ -30,6 +30,7 @@ mod marketplaces;
 mod project_state;
 mod runtime;
 mod session;
+mod session_title;
 mod skills;
 mod tui;
 mod verification;

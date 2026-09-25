@@ -88,14 +88,38 @@ pub struct SessionState {
     pub git_baseline: Option<serde_json::Value>,
     pub audit_workspace: Option<orbit_runtime::filesystem::Workspace>,
     pub audit_limits: orbit_tools::run_command::CommandLimits,
+    title_task: Option<crate::session_title::TitleTask>,
     active: bool,
     journal: Option<std::sync::Arc<dyn orbit_agent::checkpoint::ExecutionJournal>>,
 }
 
+async fn apply_title(
+    task: &mut Option<crate::session_title::TitleTask>,
+    writer: &SessionWriter,
+    snapshot: &mut Snapshot,
+) -> Result<bool> {
+    if !task.as_ref().is_some_and(|task| task.is_finished()) {
+        return Ok(false);
+    }
+    let Some(title) = task.take().unwrap().result().await else {
+        return Ok(false);
+    };
+    writer.set_title(title.clone()).await?;
+    snapshot.session.title = title;
+    Ok(true)
+}
+
 pub struct PreparedResume {
+    title_task: Option<crate::session_title::TitleTask>,
     writer: SessionWriter,
     pub snapshot: Snapshot,
     git_baseline: Option<serde_json::Value>,
+}
+
+impl PreparedResume {
+    pub async fn poll_title(&mut self) -> Result<bool> {
+        apply_title(&mut self.title_task, &self.writer, &mut self.snapshot).await
+    }
 }
 
 /// Replay saved events in bounded batches. This is local display work, not
@@ -287,6 +311,7 @@ impl SessionState {
             snapshot,
             audit_workspace: None,
             audit_limits: Default::default(),
+            title_task: None,
             active: false,
             journal: None,
         })
@@ -404,8 +429,30 @@ impl SessionState {
 
     pub async fn rename(&mut self, title: String) -> Result<()> {
         self.writer.set_title(title.clone()).await?;
+        self.title_task = None;
         self.snapshot.session.title = title;
         Ok(())
+    }
+
+    pub async fn begin_with_title(
+        &mut self,
+        prompt: String,
+        model: String,
+        client: &orbit_model::client::ModelClient,
+    ) -> Result<()> {
+        let generate = prompt != "/compact"
+            && self.snapshot.runs.is_empty()
+            && self.snapshot.session.title.is_empty()
+            && self.title_task.is_none();
+        self.begin(prompt.clone(), model).await?;
+        if generate {
+            self.title_task = Some(crate::session_title::TitleTask::start(client, &prompt));
+        }
+        Ok(())
+    }
+
+    pub async fn poll_title(&mut self) -> Result<bool> {
+        apply_title(&mut self.title_task, &self.writer, &mut self.snapshot).await
     }
 
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
@@ -502,6 +549,7 @@ impl SessionState {
         let git_baseline = store.git_baseline(&id).await?;
 
         Ok(PreparedResume {
+            title_task: None,
             writer,
             snapshot,
             git_baseline,
@@ -517,6 +565,7 @@ impl SessionState {
     /// A TUI tab can later restore that lease without replaying or reacquiring it.
     pub fn swap_resume(&mut self, prepared: PreparedResume) -> PreparedResume {
         let previous = PreparedResume {
+            title_task: std::mem::replace(&mut self.title_task, prepared.title_task),
             writer: std::mem::replace(&mut self.writer, prepared.writer),
             snapshot: std::mem::replace(&mut self.snapshot, prepared.snapshot),
             git_baseline: std::mem::replace(&mut self.git_baseline, prepared.git_baseline),
@@ -560,6 +609,7 @@ impl SessionState {
         }
 
         Ok(PreparedResume {
+            title_task: None,
             writer,
             snapshot,
             git_baseline,
@@ -583,6 +633,40 @@ impl SessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn generated_title_follows_its_session_and_manual_rename_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut current = SessionState::open_in(
+            tmp.path().join("sessions.db"),
+            None,
+            "model".into(),
+            tmp.path(),
+        )
+        .await
+        .unwrap();
+        let original_id = current.id().to_owned();
+        current.title_task = Some(crate::session_title::TitleTask::ready("解析器修复").await);
+        let next = current.prepare_new("model".into()).await.unwrap();
+
+        let mut parked = current.swap_resume(next);
+        assert!(parked.poll_title().await.unwrap());
+        assert_eq!(parked.snapshot.session.title, "解析器修复");
+        assert!(current.snapshot.session.title.is_empty());
+        assert_eq!(
+            current.store.session(&original_id).await.unwrap().title,
+            "解析器修复"
+        );
+        assert!(parked.snapshot.history.is_empty());
+
+        current.title_task = Some(crate::session_title::TitleTask::ready("自动生成标题").await);
+        current.rename("手动标题".into()).await.unwrap();
+        assert!(!current.poll_title().await.unwrap());
+        assert_eq!(
+            current.store.session(current.id()).await.unwrap().title,
+            "手动标题"
+        );
+    }
 
     #[tokio::test]
     async fn prepared_resume_is_atomic_and_releases_lease_when_cancelled() {
