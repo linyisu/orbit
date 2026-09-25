@@ -82,10 +82,8 @@ pub struct SessionState {
     pub git_baseline: Option<serde_json::Value>,
     pub audit_workspace: Option<orbit_runtime::filesystem::Workspace>,
     pub audit_limits: orbit_tools::run_command::CommandLimits,
-    pending: Vec<AgentEvent>,
     active: bool,
-    journaled: bool,
-    flushed_at: Instant,
+    journal: Option<std::sync::Arc<dyn orbit_agent::checkpoint::ExecutionJournal>>,
 }
 
 pub struct PreparedResume {
@@ -270,10 +268,8 @@ impl SessionState {
             snapshot,
             audit_workspace: None,
             audit_limits: Default::default(),
-            pending: Vec::new(),
             active: false,
-            journaled: false,
-            flushed_at: Instant::now(),
+            journal: None,
         })
     }
 
@@ -370,52 +366,31 @@ impl SessionState {
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
         self.writer.begin(prompt, model).await?;
         self.active = true;
-        self.journaled = false;
-        self.flushed_at = Instant::now();
+        self.journal = None;
         Ok(())
-    }
-
-    pub fn record(&mut self, event: &AgentEvent) {
-        if self.journaled {
-            return;
-        }
-        self.pending.push(event.clone());
     }
 
     pub fn execution_journal(
         &mut self,
     ) -> Result<std::sync::Arc<dyn orbit_agent::checkpoint::ExecutionJournal>> {
         let journal = self.writer.execution_journal()?;
-        self.journaled = true;
+        self.journal = Some(journal.clone());
         Ok(journal)
     }
 
-    pub async fn flush_due(&mut self) -> Result<()> {
-        if self.active
-            && !self.pending.is_empty()
-            && (self.pending.len() >= 256
-                || self.flushed_at.elapsed() >= Duration::from_millis(250))
-        {
-            self.writer.append(self.pending.clone()).await?;
-            self.pending.clear();
-            self.flushed_at = Instant::now();
-        }
-        Ok(())
-    }
-
     pub async fn finish(&mut self, status: &str, history: Option<Vec<ChatMessage>>) -> Result<()> {
-        self.writer
-            .finish(status, self.pending.clone(), history)
-            .await?;
-        self.pending.clear();
+        if let Some(journal) = &self.journal {
+            journal.flush().await?;
+        }
+        self.writer.finish(status, Vec::new(), history).await?;
         self.active = false;
+        self.journal = None;
         self.snapshot = self.store.load(self.id()).await?;
         Ok(())
     }
 
     pub async fn close(&mut self) -> Result<()> {
         if self.active {
-            self.record(&AgentEvent::Cancelled);
             self.finish("cancelled", None).await?;
         }
         Ok(())
@@ -482,6 +457,7 @@ impl SessionState {
 
     pub fn install_resume(&mut self, prepared: PreparedResume) {
         self.writer = prepared.writer;
+        self.journal = None;
         self.snapshot = prepared.snapshot;
         self.git_baseline = prepared.git_baseline;
         if let Some(ws) = &self.audit_workspace {
@@ -500,8 +476,6 @@ impl SessionState {
             .path()
             .with_extension("command-output")
             .join(self.id());
-        self.pending.clear();
-        self.flushed_at = Instant::now();
     }
 
     pub async fn new_session(&mut self, model: String) -> Result<()> {
@@ -512,6 +486,7 @@ impl SessionState {
             .await?;
         let snapshot = self.store.load(writer.id()).await?;
         self.writer = writer;
+        self.journal = None;
         self.snapshot = snapshot;
         self.git_baseline = None;
         if let Some(ws) = &self.audit_workspace {
@@ -905,8 +880,9 @@ mod tests {
             .begin("hello".into(), "a::model".into())
             .await
             .unwrap();
+        let journal = session.execution_journal().unwrap();
         for (profile, actual) in [("a::model", 200), ("b::model", 500)] {
-            session.record(&AgentEvent::RequestMetrics {
+            journal.record(AgentEvent::RequestMetrics {
                 profile: profile.into(),
                 estimated_input: 100,
                 retries: Some(0),

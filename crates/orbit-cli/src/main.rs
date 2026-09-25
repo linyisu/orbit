@@ -929,8 +929,6 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
             }
         };
         let Some(event) = event else { break };
-        session.record(&event);
-        session.flush_due().await?;
         report_chat_event(&event, args.stream)?;
     }
 

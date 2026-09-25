@@ -575,7 +575,7 @@ pub async fn run(
                 event = async { receiver.as_mut().unwrap().recv().await }, if receiver.is_some() => {
                     dirty = true;
                     match event {
-                        Some(event) => { apply_live_event(event, &mut state, &mut session); session.flush_due().await?; },
+                        Some(event) => { apply_live_event(event, &mut state); },
                         None => receiver = None,
                     }
                 }
@@ -586,7 +586,7 @@ pub async fn run(
                     if state.approval.take().is_some() { state.selection = Default::default(); }
                     // Drain the completed run before accepting another prompt or clearing history.
                     if let Some(rx) = receiver.as_mut() {
-                        while let Ok(event) = rx.try_recv() { apply_live_event(event, &mut state, &mut session); }
+                        while let Ok(event) = rx.try_recv() { apply_live_event(event, &mut state); }
                     }
                     let (status, final_event, completed_history) = match result {
                         Ok(Ok(result)) if matches!(&result.final_message, ChatMessage::Assistant { content, tool_calls } if content.as_deref().unwrap_or_default().trim().is_empty() && tool_calls.is_empty()) => {
@@ -602,7 +602,6 @@ pub async fn run(
                         Ok(Err(error)) => ("failed", AgentEvent::Failed { error: error.to_string() }, None),
                         Err(error) => ("failed", AgentEvent::Failed { error: format!("后台任务中断：{error}") }, None),
                     };
-                    session.record(&final_event);
                     session.finish(status, completed_history.clone()).await?;
                     if completed_history.is_some() || session.snapshot.recovery.is_some() {
                         history = session.snapshot.history.clone();
@@ -728,7 +727,6 @@ pub async fn run(
                         dirty = true;
                     }
                     if dirty || state.running() { frames.request(time::Instant::now()); }
-                    session.flush_due().await?;
                 }
             }
         }
@@ -770,15 +768,13 @@ pub async fn run(
         let _ = task.await;
     }
     if let Some(rx) = receiver.as_mut() {
-        while let Ok(event) = rx.try_recv() {
-            session.record(&event);
-        }
+        while rx.try_recv().is_ok() {}
     }
     let saved = session.close().await;
     result.and(saved)
 }
 
-fn apply_live_event(event: AgentEvent, state: &mut UiState, session: &mut SessionState) {
+fn apply_live_event(event: AgentEvent, state: &mut UiState) {
     // The joined task is authoritative: persist terminal status with its context atomically.
     if matches!(
         event,
@@ -786,7 +782,6 @@ fn apply_live_event(event: AgentEvent, state: &mut UiState, session: &mut Sessio
     ) {
         return;
     }
-    session.record(&event);
     state.apply(event);
 }
 
