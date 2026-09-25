@@ -116,6 +116,7 @@ fn enabled_skill_roots_from_markets(
                 "市场 {} 的 Git 提交已变更；请重新检查后启用插件",
                 market.source
             );
+            verify_git_checkout(market)?;
             let plugin = market
                 .plugins
                 .iter()
@@ -270,16 +271,14 @@ impl Store {
 
     async fn clone_git_source(&self, source: &str) -> Result<(PathBuf, Option<String>)> {
         let url = git_url(source)?;
-        let target = self
-            .root
-            .join(format!("source-{:016x}", stable_hash(source)));
-        let temporary = self.root.join(format!(
-            ".download-{:016x}",
-            stable_hash(&format!("{source}:new"))
-        ));
-        if temporary.exists() {
-            fs::remove_dir_all(&temporary)?;
-        }
+        self.clone_git_url(source, &url).await
+    }
+
+    async fn clone_git_url(&self, source: &str, url: &str) -> Result<(PathBuf, Option<String>)> {
+        let download = tempfile::Builder::new()
+            .prefix(&format!("source-{:016x}-", stable_hash(source)))
+            .tempdir_in(&self.root)?;
+        let temporary = download.path();
         let mut command = Command::new("git");
         command
             // Marketplace acquisition must not execute a user's Git aliases,
@@ -290,14 +289,13 @@ impl Store {
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
-            .args(["clone", "--depth", "1", "--", &url])
-            .arg(&temporary);
+            .args(["clone", "--depth", "1", "--", url])
+            .arg(temporary);
         let output = command
             .output()
             .await
             .context("failed to start git while downloading marketplace")?;
         if !output.status.success() {
-            let _ = fs::remove_dir_all(&temporary);
             bail!(
                 "marketplace download failed: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
@@ -307,7 +305,7 @@ impl Store {
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .arg("-C")
-            .arg(&temporary)
+            .arg(temporary)
             .args(["rev-parse", "--verify", "HEAD"])
             .output()
             .await
@@ -321,38 +319,61 @@ impl Store {
             revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
             "downloaded marketplace has an invalid Git commit"
         );
-        // Validate before replacing a previously downloaded private copy. A bad
-        // update must leave the last known catalogue untouched.
-        if let Err(error) = parse_catalog(&temporary) {
-            let _ = fs::remove_dir_all(&temporary);
-            return Err(error);
-        }
-        let backup = self
-            .root
-            .join(format!(".previous-{:016x}", stable_hash(source)));
-        if backup.exists() {
-            fs::remove_dir_all(&backup)?;
-        }
-        let replaced = target.exists();
-        if replaced {
-            fs::rename(&target, &backup)?;
-        }
-        if let Err(error) = fs::rename(&temporary, &target) {
-            if replaced {
-                let _ = fs::rename(&backup, &target);
-            }
-            return Err(error).context("failed to install downloaded marketplace catalogue");
-        }
-        if replaced {
-            fs::remove_dir_all(backup)?;
-        }
-        Ok((target, Some(revision)))
+        // Each acquisition keeps its own checkout. An update cannot replace
+        // files already selected by another live session.
+        parse_catalog(temporary)?;
+        Ok((download.keep(), Some(revision)))
     }
 }
 
 fn local_directory(source: &str) -> Option<PathBuf> {
     let path = PathBuf::from(source);
     path.is_dir().then_some(path)
+}
+
+fn verify_git_checkout(market: &Marketplace) -> Result<()> {
+    let Some(expected) = market.revision.as_deref() else {
+        return Ok(());
+    };
+    let command = |args: &[&str]| -> Result<std::process::Output> {
+        std::process::Command::new("git")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .arg("--no-optional-locks")
+            .args(["-c", "core.fsmonitor=false"])
+            .arg("-C")
+            .arg(&market.directory)
+            .args(args)
+            .output()
+            .context("cannot inspect cached marketplace checkout")
+    };
+    let head = command(&["rev-parse", "--verify", "HEAD"])?;
+    ensure!(
+        head.status.success(),
+        "cached marketplace has no Git commit"
+    );
+    ensure!(
+        String::from_utf8(head.stdout)?.trim() == expected,
+        "cached marketplace Git commit no longer matches its enabled revision"
+    );
+    let status = command(&[
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--ignore-submodules=none",
+    ])?;
+    ensure!(
+        status.status.success(),
+        "cannot inspect cached marketplace files"
+    );
+    ensure!(
+        status.stdout.is_empty(),
+        "cached marketplace files changed after download; add the marketplace again"
+    );
+    Ok(())
 }
 
 fn git_url(source: &str) -> Result<String> {
@@ -545,6 +566,27 @@ fn stable_hash(value: &str) -> u64 {
 mod tests {
     use super::*;
 
+    fn git(root: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed:\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
     #[tokio::test]
     async fn registers_a_local_claude_marketplace_without_touching_a_project() {
         let temp = tempfile::tempdir().unwrap();
@@ -570,6 +612,38 @@ mod tests {
             Some("./plugins/review")
         );
         assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_new_git_revision_does_not_replace_an_existing_checkout() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        fs::create_dir_all(source.join(".claude-plugin")).unwrap();
+        let catalog = source.join(".claude-plugin/marketplace.json");
+        fs::write(&catalog, r#"{"name":"team","plugins":[]}"#).unwrap();
+        git(&source, &["init", "-q"]);
+        git(
+            &source,
+            &["config", "user.email", "orbit-test@example.invalid"],
+        );
+        git(&source, &["config", "user.name", "Orbit Test"]);
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-qm", "first"]);
+
+        let store = Store::at(temp.path().join("cache"));
+        fs::create_dir_all(&store.root).unwrap();
+        let url = source.to_str().unwrap();
+        let (first, first_revision) = store.clone_git_url("team/source", url).await.unwrap();
+
+        fs::write(&catalog, r#"{"name":"team","plugins":[{"name":"new"}]}"#).unwrap();
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-qm", "second"]);
+        let (second, second_revision) = store.clone_git_url("team/source", url).await.unwrap();
+
+        assert_ne!(first, second);
+        assert_ne!(first_revision, second_revision);
+        assert_eq!(parse_catalog(&first).unwrap().plugins.len(), 0);
+        assert_eq!(parse_catalog(&second).unwrap().plugins.len(), 1);
     }
 
     #[test]
@@ -626,11 +700,20 @@ mod tests {
         )
         .unwrap();
         fs::write(package.join("skills/check/SKILL.md"), "# check").unwrap();
+        git(&market_root, &["init", "-q"]);
+        git(
+            &market_root,
+            &["config", "user.email", "orbit-test@example.invalid"],
+        );
+        git(&market_root, &["config", "user.name", "Orbit Test"]);
+        git(&market_root, &["add", "."]);
+        git(&market_root, &["commit", "-qm", "fixture"]);
+        let revision = git(&market_root, &["rev-parse", "HEAD"]);
         let market = Marketplace {
             name: "market".into(),
             source: "owner/market".into(),
             directory: market_root,
-            revision: Some("a".repeat(40)),
+            revision: Some(revision.clone()),
             plugins: vec![Plugin {
                 name: "review".into(),
                 description: "Review".into(),
@@ -643,7 +726,7 @@ mod tests {
             plugin_name: "review".into(),
             package_source: "plugins/review".into(),
             version: Some("1.2.3".into()),
-            marketplace_revision: Some("a".repeat(40)),
+            marketplace_revision: Some(revision.clone()),
             enabled_at: 0,
         };
 
@@ -668,13 +751,24 @@ mod tests {
         };
         let unchanged_version = ProjectPlugin {
             version: Some("1.2.3".into()),
-            marketplace_revision: Some("a".repeat(40)),
+            marketplace_revision: Some(revision),
             ..enabled
         };
-        let updated_roots =
-            enabled_skill_roots_from_markets(&[unchanged_version], &[updated_market]);
+        let updated_roots = enabled_skill_roots_from_markets(
+            std::slice::from_ref(&unchanged_version),
+            &[updated_market],
+        );
         assert!(updated_roots.roots.is_empty());
         assert!(updated_roots.diagnostics[0].contains("Git 提交已变更"));
+
+        fs::write(
+            package.join("skills/check/SKILL.md"),
+            "# changed without a commit",
+        )
+        .unwrap();
+        let tampered_roots = enabled_skill_roots_from_markets(&[unchanged_version], &[market]);
+        assert!(tampered_roots.roots.is_empty());
+        assert!(tampered_roots.diagnostics[0].contains("changed after download"));
     }
 
     #[test]
