@@ -21,10 +21,6 @@ mod tool_display;
 mod transcript;
 mod wheel;
 
-/// Nerd Font nf-fa-code. Reserve a following blank cell when drawing it in a
-/// frame so terminals can render the wide pictogram without shrinking it.
-pub(crate) const COMMAND_ICON: &str = "";
-
 use std::{
     path::PathBuf,
     process::{Command, Stdio},
@@ -369,14 +365,21 @@ pub async fn run(
                         && state.model_picker.is_none()
                         && state.marketplace_dialog.is_none()
                         && matches!(render::handle_link_hover(&mut state, &event), Some(true));
+                    let transcript_hover_changed = !state.selection.dragging()
+                        && !approval::file_modal(&state)
+                        && !state.show_help
+                        && state.picker.is_none()
+                        && state.model_picker.is_none()
+                        && state.marketplace_dialog.is_none()
+                        && matches!(render::handle_transcript_hover(&mut state, &event), Some(true));
 
                     if !state.selection.dragging() && !approval::file_modal(&state) && !state.show_help && state.picker.is_none() && state.model_picker.is_none() && state.marketplace_dialog.is_none()
                         && let Some(changed) = navigation::handle(&mut state, &event) {
-                        if changed || context_hover_changed || link_hover_changed { dirty = true; frames.request(time::Instant::now()); }
+                        if changed || context_hover_changed || link_hover_changed || transcript_hover_changed { dirty = true; frames.request(time::Instant::now()); }
 
                         continue;
                     }
-                    if context_hover_changed || link_hover_changed { dirty = true; frames.request(time::Instant::now()); continue; }
+                    if context_hover_changed || link_hover_changed || transcript_hover_changed { dirty = true; frames.request(time::Instant::now()); continue; }
                     // Unused pointer motion must not trigger full-frame redraws.
                     if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) { continue; }
 
@@ -402,7 +405,6 @@ pub async fn run(
                         }
 
                         if let Some(source) = state.pending_marketplace_source.take() {
-                            state.transcript.push(TranscriptItem::Command(format!("/plugins add {source}")));
                             state.transcript.push(TranscriptItem::Notice("正在下载并检查插件市场…".into()));
                             marketplace_task = Some(tokio::spawn(crate::marketplaces::add_current(source)));
                         }
@@ -483,7 +485,7 @@ pub async fn run(
                         continue;
                     }
                     if let Some((x, y)) = state.selection.click(&event)
-                        && toggle_tool_at(&mut state, (x, y)) {
+                        && toggle_transcript_at(&mut state, (x, y)) {
                         continue;
                     }
 
@@ -590,7 +592,6 @@ pub async fn run(
 
                         Action::Submit(prompt) => {
                             if local_task.is_some() {
-                                state.transcript.push(TranscriptItem::Command(prompt));
                                 state.transcript.push(TranscriptItem::CommandError(
                                     "正在等待回退操作完成或取消。".into(),
                                 ));
@@ -653,10 +654,6 @@ pub async fn run(
                                     state.menu_dismissed = true;
                                     continue;
                                 }
-                                if !matches!(command, "/resume" | "/sessions") {
-                                    state.transcript.push(TranscriptItem::Command(prompt.clone()));
-                                }
-
                                 if command == "/new" && prompt.trim() == "/new" {
                                     state.new_tab_request = true;
                                     continue;
@@ -2549,9 +2546,9 @@ enum Action {
     Submit(String),
 }
 
-fn toggle_tool_at(state: &mut UiState, point: (u16, u16)) -> bool {
+fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
     let offset = state.max_scroll.saturating_sub(state.scroll);
-    let Some(index) = state.transcript_layout.tool_toggle_at(
+    let Some(index) = state.transcript_layout.disclosure_at(
         &state.transcript,
         state.selection.viewport,
         offset,
@@ -2560,16 +2557,16 @@ fn toggle_tool_at(state: &mut UiState, point: (u16, u16)) -> bool {
         return false;
     };
 
-    toggle_tool(state, index);
+    toggle_transcript_item(state, index);
 
     true
 }
 
-fn toggle_tool(state: &mut UiState, index: usize) {
+fn toggle_transcript_item(state: &mut UiState, index: usize) {
     let offset = state.max_scroll.saturating_sub(state.scroll);
     let anchor = state.transcript_layout.anchor_at(offset);
     let collapsing = state.expanded == Some(index);
-    let viewport_in_collapsing_tool = state.expanded.is_some_and(|old| {
+    let viewport_in_collapsing_item = state.expanded.is_some_and(|old| {
         let start = state.transcript_layout.item_offset(old).unwrap_or(offset);
         let end = state
             .transcript_layout
@@ -2590,7 +2587,7 @@ fn toggle_tool(state: &mut UiState, index: usize) {
         .transcript_layout
         .height()
         .saturating_sub(usize::from(state.selection.viewport.height));
-    let target = if viewport_in_collapsing_tool {
+    let target = if viewport_in_collapsing_item {
         state.transcript_layout.item_offset(index).unwrap_or(offset)
     } else {
         anchor
@@ -2687,13 +2684,13 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 let offset = state.max_scroll.saturating_sub(state.scroll);
 
                 if let Some(index) = state.expanded.or_else(|| {
-                    state.transcript_layout.visible_tool(
+                    state.transcript_layout.visible_collapsible(
                         &state.transcript,
                         offset,
                         state.selection.viewport.height as usize,
                     )
                 }) {
-                    toggle_tool(state, index);
+                    toggle_transcript_item(state, index);
                 }
             }
 

@@ -12,6 +12,7 @@ use unicode_width::UnicodeWidthStr;
 use super::app::{RunStatus, ToolStatus, TranscriptItem, UiState};
 
 const ACCENT: Color = Color::Rgb(218, 139, 109);
+const HOVER_ACCENT: Color = Color::Rgb(232, 166, 137);
 // Use the terminal foreground for readable text on both light and dark themes.
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
@@ -78,6 +79,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.tab_hover = None;
         state.context_hovered = false;
         state.link_hovered = None;
+        state.transcript_pointer = None;
     }
 
     let panel_height = if !menu.is_empty() {
@@ -406,6 +408,36 @@ pub(super) fn handle_link_hover(
     Some(changed)
 }
 
+pub(super) fn handle_transcript_hover(
+    state: &mut UiState,
+    event: &crossterm::event::Event,
+) -> Option<bool> {
+    let crossterm::event::Event::Mouse(mouse) = event else {
+        return None;
+    };
+    if mouse.kind != crossterm::event::MouseEventKind::Moved {
+        return None;
+    }
+
+    let offset = state.max_scroll.saturating_sub(state.scroll);
+    let hit = |point| {
+        state.transcript_layout.disclosure_at(
+            &state.transcript,
+            state.selection.viewport,
+            offset,
+            point,
+        )
+    };
+    let before = state
+        .transcript_pointer
+        .and_then(|point| hit(point).map(|index| (index, point.1)));
+    let point = (mouse.column, mouse.row);
+    let after = hit(point).map(|index| (index, point.1));
+    state.transcript_pointer = Some(point);
+
+    Some(before != after)
+}
+
 fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
     if !state.context_hovered
         || state.context_details_visible
@@ -526,7 +558,11 @@ fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     state.link_tooltip_area = area;
 }
 
-fn tab_title(text: &str, width: usize, elapsed: Option<std::time::Duration>) -> String {
+pub(super) fn scrolling_title(
+    text: &str,
+    width: usize,
+    elapsed: Option<std::time::Duration>,
+) -> String {
     let Some(elapsed) = elapsed.filter(|_| text.width() > width) else {
         return fit_label(text, width, false);
     };
@@ -619,7 +655,7 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let elapsed = state.tab_hover.as_ref().and_then(|(action, since)| {
             (*action == super::TabAction::Select(tab.id.clone())).then(|| since.elapsed())
         });
-        let title = tab_title(&titles[index], title_width, elapsed);
+        let title = scrolling_title(&titles[index], title_width, elapsed);
         let rect = Rect::new(x, area.y, width, 1);
         let style = if tab.active {
             Style::default()
@@ -854,6 +890,18 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     state
         .transcript_layout
         .draw(frame, state.selection.viewport, offset);
+    if !state.selection.dragging()
+        && let Some(point) = state.transcript_pointer
+        && state
+            .transcript_layout
+            .disclosure_at(&state.transcript, state.selection.viewport, offset, point)
+            .is_some()
+    {
+        for x in state.selection.viewport.x..state.selection.viewport.right() {
+            frame.buffer_mut()[(x, point.1)].set_fg(HOVER_ACCENT);
+        }
+    }
+
     super::navigation::draw(frame, state, area, offset);
     draw_link_tooltip(frame, state);
 }
@@ -889,27 +937,6 @@ pub(super) fn transcript_lines_at_width(
                 lines.push(Line::from(""));
             }
 
-            TranscriptItem::Command(text) => {
-                for (index, line) in text.lines().enumerate() {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            if index == 0 {
-                                format!("{} ", super::COMMAND_ICON)
-                            } else {
-                                "  ".into()
-                            },
-                            Style::default().fg(ACCENT),
-                        ),
-                        Span::styled(
-                            line.to_owned(),
-                            Style::default().add_modifier(Modifier::BOLD),
-                        ),
-                    ]));
-                }
-
-                lines.push(Line::from(""));
-            }
-
             TranscriptItem::Assistant(text) => {
                 if text.is_empty() {
                     continue;
@@ -924,11 +951,32 @@ pub(super) fn transcript_lines_at_width(
                 lines.push(Line::from(""));
             }
 
-            TranscriptItem::Thinking(text) => {
+            TranscriptItem::Thinking(row) => {
+                if row.finished {
+                    let label = row.elapsed.map_or_else(
+                        || "思考".to_owned(),
+                        |elapsed| format!("思考 {:.1}s", elapsed.as_secs_f64()),
+                    );
+                    lines.push(Line::from(Span::styled(
+                        format!("  {label}"),
+                        Style::default().fg(ACCENT),
+                    )));
+
+                    if !expanded {
+                        lines.push(Line::from(""));
+                        continue;
+                    }
+                }
+
+                let text = &row.content;
                 let mut code = None;
 
                 for (index, line) in text.lines().enumerate() {
                     lines.push(thinking_line(line, index, &mut code));
+                }
+
+                if row.finished && expanded {
+                    lines.push(super::tool_display::toggle_line(true, width));
                 }
 
                 if !text.is_empty() {
@@ -964,23 +1012,33 @@ pub(super) fn transcript_lines_at_width(
                 };
 
                 lines.push(Line::from(Span::styled(
-                    format!("  {marker} {} {summary}", row.name),
+                    super::tool_display::clipped(
+                        &safe_output(&format!("  {marker} {} {summary}", row.name)),
+                        usize::from(width),
+                    ),
                     Style::default().fg(color),
                 )));
 
-                if expanded {
-                    lines.push(super::tool_display::toggle_line(true, width));
+                if !expanded {
+                    lines.push(Line::from(""));
+                    continue;
                 }
 
-                if expanded
-                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.arguments)
-                    && let Some(command) = value["command"].as_str()
-                {
-                    lines.extend(
-                        command
-                            .lines()
-                            .map(|line| Line::from(muted(format!("    {line}")))),
-                    );
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.arguments) {
+                    let arguments = value["command"].as_str().map(str::to_owned).or_else(|| {
+                        value
+                            .as_object()
+                            .filter(|object| !object.is_empty())
+                            .and_then(|_| serde_json::to_string_pretty(&value).ok())
+                    });
+
+                    if let Some(arguments) = arguments {
+                        lines.extend(
+                            arguments
+                                .lines()
+                                .map(|line| Line::from(muted(format!("    {line}")))),
+                        );
+                    }
                 }
 
                 if let Some(output) = super::tool_display::lines(row, expanded, width) {
@@ -1034,22 +1092,11 @@ pub(super) fn transcript_lines_at_width(
                         }
                     })
                     .unwrap_or_else(|| row.output.clone());
-                let mut omitted = output.lines().count() > 2;
-
-                for line in output.lines().take(if expanded { usize::MAX } else { 2 }) {
-                    let preview = if expanded {
-                        line.to_owned()
-                    } else {
-                        compact_preview(line, 160)
-                    };
-
-                    omitted |= preview != line;
-                    lines.push(Line::from(muted(format!("    {preview}"))));
+                for line in output.lines() {
+                    lines.push(Line::from(muted(format!("    {line}"))));
                 }
 
-                if expanded || omitted || row.arguments.contains("\"command\"") {
-                    lines.push(super::tool_display::toggle_line(expanded, width));
-                }
+                lines.push(super::tool_display::toggle_line(true, width));
 
                 lines.push(Line::from(""));
             }
@@ -1283,16 +1330,13 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
     let elapsed = state.active_elapsed();
     let text = match state.status {
         RunStatus::Idle => String::new(),
-        RunStatus::Running if state.approval.is_some() => {
-            format!("  等待审批  ·  {:.1}s", elapsed.as_secs_f32())
-        }
+        RunStatus::Running if state.approval.is_some() => "  等待审批".into(),
         RunStatus::Running => {
             let frames = ["✶", "✳", "✢", "✻"];
 
             format!(
-                "  {} 正在响应…  {:.1}s  ·  Ctrl+C 取消",
-                frames[(elapsed.as_millis() / 160) as usize % frames.len()],
-                elapsed.as_secs_f32()
+                "  {} 正在响应…  ·  Ctrl+C 取消",
+                frames[(elapsed.as_millis() / 160) as usize % frames.len()]
             )
         }
         RunStatus::Cancelling => "  ◌ 正在取消…".into(),
@@ -1495,15 +1539,113 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        use orbit_agent::events::AgentEvent;
+        use orbit_model::types::StreamEvent;
+
+        let mut state = UiState::new("model");
+        state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
+            "private working text".into(),
+        )));
+        assert!(render(&mut state, 90, 30).contains("private working text"));
+
+        state.apply(AgentEvent::Model(StreamEvent::TextDelta(
+            "final response".into(),
+        )));
+        let TranscriptItem::Thinking(row) = &mut state.transcript[0] else {
+            unreachable!()
+        };
+        row.elapsed = Some(std::time::Duration::from_millis(7500));
+        let collapsed = render(&mut state, 90, 30);
+        assert!(collapsed.contains("7.5s"), "{collapsed}");
+        assert!(
+            transcript_lines(&state.transcript[..1], false)[0]
+                .to_string()
+                .contains("思考 7.5s")
+        );
+        assert!(!collapsed.contains("private working text"));
+        assert!(collapsed.contains("final response"));
+
+        let area = state.selection.viewport;
+        let offset = state.max_scroll.saturating_sub(state.scroll);
+        let point = (area.y..area.bottom())
+            .find_map(|y| {
+                (area.x..area.right()).find_map(|x| {
+                    (state
+                        .transcript_layout
+                        .disclosure_at(&state.transcript, area, offset, (x, y))
+                        == Some(0))
+                    .then_some((x, y))
+                })
+            })
+            .expect("thought header is clickable");
+        let moved = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: point.0,
+            row: point.1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(handle_transcript_hover(&mut state, &moved), Some(true));
+        let mut terminal = Terminal::new(TestBackend::new(90, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert_eq!(terminal.backend().buffer()[point].fg, HOVER_ACCENT);
+
+        assert!(super::super::toggle_transcript_at(&mut state, point));
+        assert!(render(&mut state, 90, 30).contains("private working text"));
+        assert!(super::super::toggle_transcript_at(&mut state, point));
+        assert!(!render(&mut state, 90, 30).contains("private working text"));
+
+        let leave = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(handle_transcript_hover(&mut state, &leave), Some(true));
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert_eq!(terminal.backend().buffer()[point].fg, ACCENT);
+    }
+
+    #[test]
+    fn collapsed_tools_fit_one_row_even_with_wide_text_and_controls() {
+        use super::super::app::ToolRow;
+
+        for status in [
+            ToolStatus::Running,
+            ToolStatus::Finished,
+            ToolStatus::Failed,
+        ] {
+            let item = TranscriptItem::Tool(ToolRow {
+                id: "call".into(),
+                name: "run_command".into(),
+                status,
+                arguments:
+                    serde_json::json!({ "command": format!("中文\t{}", "command ".repeat(50)) })
+                        .to_string(),
+                output: "hidden result".into(),
+            });
+
+            for width in [1, 8, 24, 80] {
+                let lines = transcript_lines_at_width(std::slice::from_ref(&item), false, width);
+                assert_eq!(lines.len(), 2);
+                assert!(lines[0].width() <= usize::from(width), "{lines:?}");
+                assert!(lines[1].to_string().is_empty());
+                assert!(!lines[0].to_string().contains("hidden result"));
+            }
+        }
+    }
+
+    #[test]
     fn hovered_title_scrolls_without_splitting_wide_or_combining_characters() {
         let title = "中文e\u{301}标题长到需要滚动显示最后内容";
-        let initial = tab_title(title, 12, None);
+        let initial = scrolling_title(title, 12, None);
 
         assert!(initial.ends_with('…'));
 
         let frames: Vec<_> = (0..50)
             .map(|tick| {
-                tab_title(
+                scrolling_title(
                     title,
                     12,
                     Some(std::time::Duration::from_millis(tick * 120)),
@@ -1647,12 +1789,13 @@ mod tests {
                 .to_string()
                 .contains("report.md · 1 行 · 120000 字节")
         );
-        assert!(short[1].to_string().chars().count() < 180);
-        assert!(short[1].to_string().ends_with('…'));
+        assert_eq!(short.len(), 2);
+        assert!(short[1].to_string().is_empty());
+        assert!(!short.iter().any(|line| line.to_string().contains("[展开]")));
         assert!(
-            transcript_lines(&[item], true)[2]
-                .to_string()
-                .contains(&output)
+            transcript_lines(&[item], true)
+                .iter()
+                .any(|line| line.to_string().contains(&output))
         );
         assert!(
             tool_summary(&serde_json::json!({ "command": "x".repeat(10000) }).to_string())
@@ -1673,6 +1816,7 @@ mod tests {
         assert!(!summary.starts_with("set -e"), "{summary}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn editor_returns_to_home_until_the_draft_is_sent() {
         let directory = tempfile::tempdir().unwrap();
@@ -1749,7 +1893,7 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_is_visible_and_expansion_only_affects_one_visible_tool() {
+    fn reasoning_is_visible_and_expansion_only_affects_one_visible_collapsible() {
         use super::super::app::ToolRow;
 
         use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -1838,7 +1982,7 @@ mod tests {
                     (0..100).find_map(|x| {
                         state
                             .transcript_layout
-                            .tool_toggle_at(
+                            .disclosure_at(
                                 &state.transcript,
                                 state.selection.viewport,
                                 state.max_scroll.saturating_sub(state.scroll),
@@ -1864,11 +2008,11 @@ mod tests {
             state.selection.handle(&down).unwrap();
 
             assert_eq!(state.selection.click(&up), Some(point));
-            assert!(super::super::toggle_tool_at(&mut state, point));
+            assert!(super::super::toggle_transcript_at(&mut state, point));
             assert_eq!(state.expanded, expected);
         }
 
-        assert!(!super::super::toggle_tool_at(&mut state, (0, 0)));
+        assert!(!super::super::toggle_transcript_at(&mut state, (0, 0)));
     }
 
     #[test]
@@ -1919,13 +2063,13 @@ mod tests {
                         (area.x..area.right()).find_map(|x| {
                             state
                                 .transcript_layout
-                                .tool_toggle_at(&state.transcript, area, offset, (x, y))
+                                .disclosure_at(&state.transcript, area, offset, (x, y))
                                 .map(|_| (x, y))
                         })
                     })
                     .unwrap_or_else(|| panic!("missing control for {name}"));
 
-                assert!(super::super::toggle_tool_at(&mut state, point));
+                assert!(super::super::toggle_transcript_at(&mut state, point));
                 assert_eq!(state.expanded, expected);
                 assert_eq!(state.input.text, "unfinished draft");
 
@@ -1957,7 +2101,7 @@ mod tests {
         }
 
         render(&mut state, 90, 24);
-        super::super::toggle_tool(&mut state, 1);
+        super::super::toggle_transcript_item(&mut state, 1);
         let after_tool = state.transcript_layout.item_offset(2).unwrap();
         state.scroll = state.max_scroll.saturating_sub(after_tool - 5);
         render(&mut state, 90, 24);
@@ -1968,18 +2112,18 @@ mod tests {
                 (area.x..area.right()).find_map(|x| {
                     state
                         .transcript_layout
-                        .tool_toggle_at(&state.transcript, area, offset, (x, y))
+                        .disclosure_at(&state.transcript, area, offset, (x, y))
                         .filter(|index| *index == 1)
                         .map(|_| (x, y))
                 })
             })
             .expect("bottom collapse control is visible");
 
-        assert!(super::super::toggle_tool_at(&mut state, point));
+        assert!(super::super::toggle_transcript_at(&mut state, point));
         assert_eq!(state.expanded, None);
         assert!(render(&mut state, 90, 24).contains("tool_1"));
 
-        super::super::toggle_tool(&mut state, 1);
+        super::super::toggle_transcript_item(&mut state, 1);
         state.scroll = 0;
         render(&mut state, 90, 24);
         super::super::keyboard_action(
@@ -2006,20 +2150,20 @@ mod tests {
     fn command_results_use_a_distinct_result_rail() {
         let lines = transcript_lines(
             &[
-                TranscriptItem::Command("/model asd".into()),
                 TranscriptItem::CommandResult("状态\n细节".into()),
                 TranscriptItem::CommandError("未知命令：/stauts。是否想输入 /status？".into()),
             ],
             false,
         );
 
-        assert_eq!(
-            lines[0].to_string(),
-            format!("{} /model asd", crate::tui::COMMAND_ICON)
+        assert_eq!(lines[0].to_string(), "  状态");
+        assert_eq!(lines[1].to_string(), "  细节");
+        assert!(lines[3].to_string().starts_with("● 未知命令"));
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.to_string().contains("/model asd"))
         );
-        assert_eq!(lines[2].to_string(), "  状态");
-        assert_eq!(lines[3].to_string(), "  细节");
-        assert!(lines[5].to_string().starts_with("● 未知命令"));
     }
 
     #[test]
@@ -2051,6 +2195,13 @@ mod tests {
         assert!(compact.contains("Ctrl+C取消"));
         assert!(!compact.contains("esc取消"));
         assert!(!compact.contains("第1轮"));
+        assert!(!compact.contains("0.0s"));
+
+        state.status = RunStatus::Completed;
+        state.started_at = None;
+        state.elapsed = std::time::Duration::from_millis(7500);
+        let completed = render(&mut state, 100, 24);
+        assert!(completed.contains("7.5s"));
     }
 
     #[test]

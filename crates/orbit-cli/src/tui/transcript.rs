@@ -206,7 +206,7 @@ fn byte_at_column(text: &str, range: &Range<usize>, column: u16) -> Option<usize
 #[derive(Debug, Default)]
 struct Entry {
     rows: Vec<Row>,
-    tool_toggles: Vec<usize>,
+    disclosures: Vec<usize>,
     height: usize,
     end: usize,
     // Completed source lines never change during streaming. Only reformat the
@@ -351,10 +351,6 @@ impl Entry {
         self.framed_input(text, width, "❯");
     }
 
-    fn command(&mut self, text: &str, width: u16) {
-        self.framed_input(text, width, super::COMMAND_ICON);
-    }
-
     fn framed_input(&mut self, text: &str, width: u16, icon: &str) {
         // A complete frame lets user turns remain visually distinct after their
         // contents wrap. Keep a plain fallback for terminals too narrow to
@@ -387,17 +383,13 @@ impl Entry {
         }
 
         let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
-        // Nerd Font pictograms need an empty following cell to expand into in
-        // terminals such as kitty. Include that cell in the border width.
-        let icon_padding = if icon == super::COMMAND_ICON { " " } else { "" };
-
-        let top_label = format!("╭─{icon}{icon_padding}─");
+        let top_label = format!("╭─{icon}─");
         let trailing = "─".repeat(usize::from(width) - top_label.width() - 1);
         self.push(
             Line::from(vec![
                 Span::styled("╭─", border),
                 Span::styled(
-                    format!("{icon}{icon_padding}"),
+                    icon.to_owned(),
                     border.add_modifier(ratatui::style::Modifier::BOLD),
                 ),
                 Span::styled(format!("─{trailing}╮"), border),
@@ -521,18 +513,18 @@ impl TranscriptLayout {
         {
             match item {
                 TranscriptItem::Assistant(text) => entry.stream(text, false, width),
-                TranscriptItem::Thinking(text) => entry.stream(text, true, width),
+                TranscriptItem::Thinking(row) if !row.finished => {
+                    entry.stream(&row.content, true, width)
+                }
                 TranscriptItem::User(text) => {
                     *entry = Entry::default();
                     entry.user(text, width);
                 }
-                TranscriptItem::Command(text) => {
-                    *entry = Entry::default();
-                    entry.command(text, width);
-                }
                 _ => {
                     *entry = Entry::default();
-                    let toggle = matches!(item, TranscriptItem::Tool(_)).then(|| {
+                    let collapsible =
+                        matches!(item, TranscriptItem::Tool(_) | TranscriptItem::Thinking(_));
+                    let toggle = collapsible.then(|| {
                         super::tool_display::toggle_line(expanded == Some(first + relative), width)
                     });
 
@@ -542,8 +534,9 @@ impl TranscriptLayout {
                         width,
                     ) {
                         // Match the generated styled control, not an ellipsis in tool data.
-                        if toggle.as_ref() == Some(&line) {
-                            entry.tool_toggles.push(entry.rows.len());
+                        if (collapsible && entry.rows.is_empty()) || toggle.as_ref() == Some(&line)
+                        {
+                            entry.disclosures.push(entry.rows.len());
                         }
 
                         entry.push(line, width);
@@ -558,7 +551,7 @@ impl TranscriptLayout {
         self.dirty_from = items.len();
     }
 
-    pub fn visible_tool(
+    pub fn visible_collapsible(
         &self,
         items: &[TranscriptItem],
         offset: usize,
@@ -571,7 +564,8 @@ impl TranscriptLayout {
             .find_map(|(index, entry)| {
                 (entry.end > offset
                     && entry.end - entry.height < offset + height
-                    && matches!(items.get(index), Some(TranscriptItem::Tool(_))))
+                    && (matches!(items.get(index), Some(TranscriptItem::Tool(_)))
+                        || matches!(items.get(index), Some(TranscriptItem::Thinking(row)) if row.finished)))
                 .then_some(index)
             })
     }
@@ -582,7 +576,7 @@ impl TranscriptLayout {
             .map(|entry| entry.end - entry.height)
     }
 
-    pub(super) fn tool_toggle_at(
+    pub(super) fn disclosure_at(
         &self,
         items: &[TranscriptItem],
         area: Rect,
@@ -597,19 +591,26 @@ impl TranscriptLayout {
         let index = self.entries.partition_point(|entry| entry.end <= absolute);
         let entry = self.entries.get(index)?;
 
-        if !matches!(items.get(index), Some(TranscriptItem::Tool(_))) {
+        if !matches!(
+            items.get(index),
+            Some(TranscriptItem::Tool(_))
+                | Some(TranscriptItem::Thinking(super::app::ThinkingRow {
+                    finished: true,
+                    ..
+                }))
+        ) {
             return None;
         }
 
         let relative = absolute - (entry.end - entry.height);
         let row = entry
-            .tool_toggles
+            .disclosures
             .iter()
             .filter_map(|i| entry.rows.get(*i))
             .find(|row| row.start <= relative && relative < row.start + row.height)?;
         let column = usize::from(point.0 - area.x);
 
-        (column >= 4 && column < row.line.width()).then_some(index)
+        (column >= 2 && column < row.line.width()).then_some(index)
     }
 
     pub fn height(&self) -> usize {
@@ -718,7 +719,7 @@ mod tests {
         let text = "中文 words 👋 words ".repeat(80);
 
         for (item, marker) in [
-            (TranscriptItem::Thinking(text.clone()), "┊"),
+            (TranscriptItem::Thinking(text.clone().into()), "┊"),
             (
                 TranscriptItem::Assistant(format!("```rust\n// {text}\n```")),
                 "│",
@@ -841,23 +842,6 @@ mod tests {
     }
 
     #[test]
-    fn commands_keep_the_user_frame_with_a_code_icon() {
-        let mut layout = TranscriptLayout::default();
-        layout.update(&[TranscriptItem::Command("/compact".into())], None, 32);
-        let rows = &layout.entries[0].rows;
-
-        assert!(
-            rows[0]
-                .line
-                .to_string()
-                .starts_with(&format!("╭─{} ─", crate::tui::COMMAND_ICON))
-        );
-        assert_eq!(rows[0].line.width(), 32);
-        assert!(rows[1].line.to_string().contains("/compact"));
-        assert!(rows.last().unwrap().line.to_string().is_empty());
-    }
-
-    #[test]
     fn user_turn_marker_is_joined_to_the_top_border() {
         let mut layout = TranscriptLayout::default();
         layout.update(&[TranscriptItem::User("问题".into())], None, 32);
@@ -875,7 +859,7 @@ mod tests {
         let mut layout = TranscriptLayout::default();
         layout.update(
             &[
-                TranscriptItem::Thinking("inspect the request".into()),
+                TranscriptItem::Thinking("inspect the request".to_owned().into()),
                 TranscriptItem::Assistant("final answer".into()),
             ],
             None,
@@ -891,10 +875,9 @@ mod tests {
     fn thinking_code_keeps_both_rails_when_wrapped() {
         let mut layout = TranscriptLayout::default();
         layout.update(
-            &[TranscriptItem::Thinking(format!(
-                "```markdown\n{}\n```",
-                "long Markdown source ".repeat(4)
-            ))],
+            &[TranscriptItem::Thinking(
+                format!("```markdown\n{}\n```", "long Markdown source ".repeat(4)).into(),
+            )],
             None,
             22,
         );
@@ -1086,7 +1069,7 @@ mod tests {
     #[test]
     fn width_and_expansion_invalidate_cached_heights() {
         let items = vec![
-            TranscriptItem::Thinking("thinking words ".repeat(80)),
+            TranscriptItem::Thinking("thinking words ".repeat(80).into()),
             TranscriptItem::Assistant("answer words ".repeat(80)),
         ];
         let mut layout = TranscriptLayout::default();

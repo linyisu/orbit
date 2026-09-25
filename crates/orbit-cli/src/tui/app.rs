@@ -39,12 +39,31 @@ pub struct ToolRow {
     pub output: String,
 }
 
+/// A reasoning segment has its own lifetime, independent of the whole run.
+#[derive(Clone, Debug)]
+pub struct ThinkingRow {
+    pub content: String,
+    pub finished: bool,
+    pub elapsed: Option<std::time::Duration>,
+    started_at: Option<Instant>,
+}
+
+impl From<String> for ThinkingRow {
+    fn from(content: String) -> Self {
+        Self {
+            content,
+            finished: false,
+            elapsed: None,
+            started_at: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum TranscriptItem {
     User(String),
-    Command(String),
     Assistant(String),
-    Thinking(String),
+    Thinking(ThinkingRow),
     Tool(ToolRow),
     Error(String),
     Notice(String),
@@ -90,6 +109,8 @@ pub struct UiState {
     pub context_details_visible: bool,
     /// Pointer position while it rests on a clickable transcript link.
     pub link_hovered: Option<(u16, u16)>,
+    pub transcript_pointer: Option<(u16, u16)>,
+    active_thinking: Option<usize>,
     /// Last drawn link hint; it must be cleared before the transcript redraws.
     pub link_tooltip_area: ratatui::layout::Rect,
     pub auto_compact: bool,
@@ -181,6 +202,8 @@ impl UiState {
             context_hovered: false,
             context_details_visible: false,
             link_hovered: None,
+            transcript_pointer: None,
+            active_thinking: None,
             link_tooltip_area: ratatui::layout::Rect::default(),
             auto_compact: true,
             pending_compaction_archive: None,
@@ -360,6 +383,7 @@ impl UiState {
             AgentEvent::Model(event) => self.apply_model_event(event),
 
             AgentEvent::ToolStarted { call } => {
+                self.finish_thinking();
                 self.tool_calls += 1;
                 self.transcript.push(TranscriptItem::Tool(ToolRow {
                     id: call.id,
@@ -446,6 +470,7 @@ impl UiState {
     }
 
     pub fn finish_clock(&mut self) {
+        self.finish_thinking();
         self.elapsed = self.active_elapsed();
         self.started_at = None;
         self.paused_at = None;
@@ -458,18 +483,64 @@ impl UiState {
 
         match event {
             StreamEvent::TextDelta(text) => {
+                if text.is_empty() {
+                    return;
+                }
+
+                self.finish_thinking();
                 self.ensure_assistant_item();
 
                 if let Some(TranscriptItem::Assistant(content)) = self.transcript.last_mut() {
                     content.push_str(&text);
                 }
             }
-            StreamEvent::ReasoningDelta(text) => match self.transcript.last_mut() {
-                Some(TranscriptItem::Thinking(content)) => content.push_str(&text),
-                _ => self.transcript.push(TranscriptItem::Thinking(text)),
-            },
-            StreamEvent::ToolCallDelta(_) | StreamEvent::Completed { .. } => {}
+            StreamEvent::ReasoningDelta(text) => {
+                if text.is_empty() {
+                    return;
+                }
+
+                if let Some(TranscriptItem::Thinking(row)) = self
+                    .active_thinking
+                    .and_then(|index| self.transcript.get_mut(index))
+                {
+                    row.content.push_str(&text);
+                } else {
+                    self.active_thinking = Some(self.transcript.len());
+                    self.transcript.push(TranscriptItem::Thinking(ThinkingRow {
+                        started_at: Some(Instant::now()),
+                        ..text.into()
+                    }));
+                }
+
+                if let Some(index) = self.active_thinking {
+                    self.transcript_layout.invalidate_from(index);
+                }
+            }
+            StreamEvent::ToolCallDelta(_) | StreamEvent::Completed { .. } => self.finish_thinking(),
         }
+    }
+
+    /// Historical events have no reasoning timestamps. Never time their replay.
+    pub fn apply_replayed(&mut self, event: AgentEvent) {
+        self.apply(event);
+
+        if let Some(TranscriptItem::Thinking(row)) = self.transcript.last_mut() {
+            row.started_at = None;
+            row.elapsed = None;
+        }
+    }
+
+    fn finish_thinking(&mut self) {
+        let Some(index) = self.active_thinking.take() else {
+            return;
+        };
+        let Some(TranscriptItem::Thinking(row)) = self.transcript.get_mut(index) else {
+            return;
+        };
+
+        row.finished = true;
+        row.elapsed = row.started_at.take().map(|start| start.elapsed());
+        self.transcript_layout.invalidate_from(index);
     }
 
     fn ensure_assistant_item(&mut self) {
@@ -498,6 +569,72 @@ impl UiState {
 mod tests {
     use super::*;
     use orbit_model::types::FunctionCall;
+
+    #[test]
+    fn reasoning_finishes_before_text_tools_and_terminal_events() {
+        let endings = [
+            AgentEvent::Model(StreamEvent::TextDelta("answer".into())),
+            AgentEvent::ToolStarted { call: call("tool") },
+            AgentEvent::Completed {
+                turns: 1,
+                tool_calls: 0,
+            },
+            AgentEvent::Failed {
+                error: "network".into(),
+            },
+            AgentEvent::Cancelled,
+        ];
+
+        for ending in endings {
+            let mut state = UiState::new("mock");
+            state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
+                "first".into(),
+            )));
+            state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
+                " second".into(),
+            )));
+            let TranscriptItem::Thinking(row) = &mut state.transcript[0] else {
+                panic!("missing reasoning");
+            };
+            assert!(!row.finished);
+            row.started_at = Some(Instant::now() - std::time::Duration::from_millis(7500));
+
+            state.apply(ending);
+
+            let TranscriptItem::Thinking(row) = &state.transcript[0] else {
+                panic!("missing reasoning");
+            };
+            assert!(row.finished);
+            assert_eq!(row.content, "first second");
+            assert!(row.elapsed.unwrap() >= std::time::Duration::from_millis(7500));
+            let elapsed = row.elapsed;
+            state.finish_clock();
+            let TranscriptItem::Thinking(row) = &state.transcript[0] else {
+                unreachable!()
+            };
+            assert_eq!(
+                row.elapsed, elapsed,
+                "later completion must not extend reasoning time"
+            );
+        }
+    }
+
+    #[test]
+    fn replay_does_not_invent_reasoning_duration() {
+        let mut state = UiState::new("mock");
+        state.apply_replayed(AgentEvent::Model(StreamEvent::ReasoningDelta(
+            "old thought".into(),
+        )));
+        state.apply_replayed(AgentEvent::Model(StreamEvent::TextDelta(
+            "old answer".into(),
+        )));
+
+        let TranscriptItem::Thinking(row) = &state.transcript[0] else {
+            panic!("missing reasoning");
+        };
+        assert!(row.finished);
+        assert_eq!(row.elapsed, None);
+    }
 
     #[test]
     fn approval_wait_is_excluded_from_response_clock() {

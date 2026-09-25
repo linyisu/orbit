@@ -349,7 +349,7 @@ fn memory(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
     Some(out)
 }
 
-fn clipped(text: &str, width: usize) -> String {
+pub(super) fn clipped(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_owned();
     }

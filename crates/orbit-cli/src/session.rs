@@ -136,11 +136,7 @@ impl HistoryReplay {
                 self.run_start = Some(state.transcript.len());
                 state.input.history.push(run.prompt.clone());
 
-                if run.prompt == "/compact" {
-                    state
-                        .transcript
-                        .push(TranscriptItem::Command(run.prompt.clone()));
-                } else {
+                if run.prompt != "/compact" {
                     // Do not reset the reader's scroll position between runs.
                     let (scroll, follow) = (state.scroll, state.follow_bottom);
                     state.submit(run.prompt.clone());
@@ -156,7 +152,7 @@ impl HistoryReplay {
                     event,
                     AgentEvent::CompactionRecorded { .. } | AgentEvent::VerificationRecorded { .. }
                 ) {
-                    state.apply(event.clone());
+                    state.apply_replayed(event.clone());
                 }
 
                 self.event += 1;
