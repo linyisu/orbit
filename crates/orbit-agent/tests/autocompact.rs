@@ -45,6 +45,14 @@ fn long_task() -> Vec<ChatMessage> {
         ChatMessage::tool("recent", "recent result"),
     ]
 }
+fn prose_task() -> Vec<ChatMessage> {
+    vec![
+        ChatMessage::system("Never modify tests."),
+        ChatMessage::user("Fix the scheduler and run all tests; keep the API stable."),
+        ChatMessage::assistant("old analysis ".repeat(1_450)),
+        ChatMessage::user("Continue with the current task."),
+    ]
+}
 fn assert_paired(history: &[ChatMessage]) {
     let mut pending = std::collections::HashSet::new();
     for message in history {
@@ -313,6 +321,7 @@ async fn automatic_compaction_preserves_history_after_a_retryable_summary_failur
         request_id: String::new(),
         body: "rate limited".into(),
         retryable: true,
+        context_limit: false,
     })]);
     let result =
         autocompact::execute_automatic(&backend, plan, &[], 1000, 8000, CancellationToken::new())
@@ -366,7 +375,8 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
                 context_tokens: 8000,
                 ..Default::default()
             },
-        );
+        )
+        .with_context_archive(std::sync::Arc::new(Archive::default()));
         let mut request = ChatRequest::new(history.clone());
         request.max_tokens = Some(1000);
         let result = if streaming {
@@ -390,18 +400,18 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
                 .iter()
                 .position(|e| matches!(e, AgentEvent::ToolFinished { .. }))
                 .unwrap();
-            let compact_started = events
+            let compacted = events
                 .iter()
-                .position(|e| matches!(e, AgentEvent::CompactionStarted))
+                .position(|e| matches!(e, AgentEvent::ContextCompacted { .. }))
                 .unwrap();
-            assert!(completed_tool < compact_started);
+            assert!(completed_tool < compacted);
             result
         } else {
             agent.run(request, CancellationToken::new()).await.unwrap()
         };
         assert_eq!(result.turns, 2);
         assert_eq!(result.tool_calls, 1);
-        assert!(backend.requests().len() >= 3);
+        assert!(backend.requests().len() >= 2);
         assert!(result.history.contains(&history[1]));
         assert!(!result.history.contains(&history[3]));
         assert_paired(&result.history);
@@ -410,7 +420,7 @@ async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths(
 
 #[tokio::test]
 async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compaction() {
-    let history = long_task();
+    let history = prose_task();
     assert!(estimate_tokens(&history, &[]) + 1000 < 8000);
     for enabled in [false, true] {
         let backend = MockModel::new(if enabled {
@@ -426,7 +436,8 @@ async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compact
                 auto_compact: enabled,
                 ..Default::default()
             },
-        );
+        )
+        .with_context_archive(std::sync::Arc::new(Archive::default()));
         let mut request = ChatRequest::new(history.clone());
         request.max_tokens = Some(1000);
         let result = agent.run(request, CancellationToken::new()).await.unwrap();
@@ -498,8 +509,9 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
             context_tokens: 8000,
             ..Default::default()
         },
-    );
-    let mut request = ChatRequest::new(long_task());
+    )
+    .with_context_archive(std::sync::Arc::new(Archive::default()));
+    let mut request = ChatRequest::new(prose_task());
     request.max_tokens = Some(1000);
     let result = agent.run(request, CancellationToken::new()).await.unwrap();
     assert_eq!(result.tool_calls, 1);
@@ -508,10 +520,11 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
 }
 
 #[tokio::test]
-async fn failed_over_limit_summary_stops_without_discarding_history() {
-    let mut history = long_task();
-    history[3] = ChatMessage::tool("old", "x".repeat(30_000));
-    let backend = MockModel::new([answer(""), answer("")]);
+async fn failed_over_limit_summary_uses_retrievable_archive_projection() {
+    let mut history = prose_task();
+    history[2] = ChatMessage::assistant("x".repeat(30_000));
+    let backend = MockModel::new((0..64).map(|_| answer("")));
+    let archive = std::sync::Arc::new(Archive::default());
     let agent = Agent::new(
         backend.clone(),
         ToolRegistry::new(),
@@ -519,15 +532,26 @@ async fn failed_over_limit_summary_stops_without_discarding_history() {
             context_tokens: 8000,
             ..Default::default()
         },
-    );
-    let mut request = ChatRequest::new(history);
+    )
+    .with_context_archive(archive.clone());
+    let mut request = ChatRequest::new(history.clone());
     request.max_tokens = Some(1000);
-    let result = agent.run(request, CancellationToken::new()).await;
-    assert!(matches!(
-        result,
-        Err(orbit_agent::error::AgentError::ContextBudget { .. })
-    ));
-    assert_eq!(backend.requests().len(), 2);
+    let result = agent.run(request, CancellationToken::new()).await.unwrap();
+
+    assert!(
+        archive
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|saved| saved == &history)
+    );
+    assert!(
+        serde_json::to_string(&result.history)
+            .unwrap()
+            .contains("read_history archive_id=1")
+    );
+    assert!(backend.requests().len() >= 2);
     for request in backend.requests() {
         check_budget(
             &request.messages,
@@ -762,6 +786,7 @@ async fn successful_summary_batches_resume_after_later_provider_failure() {
         request_id: String::new(),
         body: "rate limited".into(),
         retryable: true,
+        context_limit: false,
     };
     let first = MockModel::from_results([Ok(answer("First batch accepted")), Err(failure)]);
     let first_result = autocompact::execute_with_archive(

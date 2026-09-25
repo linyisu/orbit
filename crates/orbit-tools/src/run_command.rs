@@ -47,6 +47,7 @@ struct Arguments {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CommandLimits {
+    pub network: orbit_runtime::capability::NetworkPolicy,
     pub rust_toolchain: Option<std::path::PathBuf>,
     #[serde(alias = "snapshot_mib")]
     pub max_scan_mib: usize,
@@ -100,6 +101,7 @@ impl From<CommandLimits> for WorkspaceScanLimits {
 impl Default for CommandLimits {
     fn default() -> Self {
         Self {
+            network: orbit_runtime::capability::NetworkPolicy::Allow,
             rust_toolchain: None,
             max_scan_mib: 64,
             max_scan_entries: 10_000,
@@ -202,7 +204,7 @@ impl Tool for RunCommand {
         ToolDefinition::function(
             "run_command",
             format!(
-                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (automatically allowed in Auto mode when no external write grants are mounted). Protected paths (.env*, .git, orbit config/db) existing at startup are isolated and masked; fixed sensitive roots (.git, .env, .env.local) are preserved and masked against replacement. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is allowed by default under policy. Enforces execution timeout, private script execution, and resource limits (memory, file size, processes, open files). /tmp is a disposable tmpfs. Persistent scratch is mounted at /scratch when configured to retain files across commands and session resume; HOME is /scratch/home in that case, or disposable /tmp/home without scratch. Write generated files to /scratch or a writable workspace path if they must survive another command. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Never automatically retry a denied command. Read-only cache mounts: {}. Host-configured verification commands: {}.",
+                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (requires approval in Auto mode). Protected paths (.env*, .git, orbit config/db) existing at startup are isolated and masked; fixed sensitive roots (.git, .env, .env.local) are preserved and masked against replacement. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network follows the configured command policy and network-enabled commands require approval in Auto mode. Enforces execution timeout, private script execution, and resource limits (memory, file size, processes, open files). /tmp is a disposable tmpfs. Persistent scratch is mounted at /scratch when configured to retain files across commands and session resume; HOME is /scratch/home in that case, or disposable /tmp/home without scratch. Write generated files to /scratch or a writable workspace path if they must survive another command. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Never automatically retry a denied command. Read-only cache mounts: {}. Host-configured verification commands: {}.",
                 serde_json::to_string(
                     &self
                         .limits
@@ -290,6 +292,10 @@ impl Tool for RunCommand {
                         grant.path.canonical().display()
                     ));
                 }
+            }
+            for cache in &self.limits.dependency_caches {
+                external_capabilities
+                    .push(format!("{} (ro, dependency cache)", cache.path.display()));
             }
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
@@ -431,6 +437,12 @@ mod configuration_tests {
         assert!(limits.validate().is_ok());
         assert_eq!(limits.max_scan_mib, 128);
         assert_eq!(limits.max_scan_entries, 20000);
+
+        let offline: CommandLimits = toml::from_str("network='deny'").unwrap();
+        assert_eq!(
+            offline.network,
+            orbit_runtime::capability::NetworkPolicy::Deny
+        );
 
         // Backward compatibility: alias snapshot_mib and snapshot_entries
         let legacy: CommandLimits =

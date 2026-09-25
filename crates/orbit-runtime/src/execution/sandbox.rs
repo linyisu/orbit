@@ -430,7 +430,7 @@ impl BwrapSandboxBackend {
         };
 
         mount_scratch_and_tmp(&mut command, spec.scratch.as_deref())?;
-        mount_toolchain_and_mounts(&mut command, rust_toolchain, mounts)?;
+        mount_toolchain_and_mounts(&mut command, rust_toolchain, mounts, policy)?;
         mount_capabilities(
             &mut command,
             policy,
@@ -1083,6 +1083,7 @@ pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result
     let mut normalized_targets = Vec::with_capacity(mounts.len());
     for mount in mounts {
         mount.validate()?;
+        validate_mount_source(&mount.source, policy)?;
         normalized_targets.push(mount.normalized_target()?);
     }
 
@@ -1133,10 +1134,36 @@ pub fn validate_mounts(mounts: &[MountSpec], policy: &EffectivePolicy) -> Result
     Ok(())
 }
 
+fn validate_mount_source(source: &Path, policy: &EffectivePolicy) -> Result<PathBuf, RuntimeError> {
+    let canonical = source.canonicalize().map_err(failed)?;
+    if crate::execution::process::is_reserved_system_path(&canonical) {
+        return Err(failed(format!(
+            "mount source '{}' is a reserved system path",
+            canonical.display()
+        )));
+    }
+
+    let protected = policy
+        .protected_paths
+        .read()
+        .map_err(|_| failed("protected path policy lock is poisoned"))?;
+    for path in protected.iter() {
+        if canonical.starts_with(path) || path.starts_with(&canonical) {
+            return Err(failed(format!(
+                "mount source '{}' overlaps protected path '{}'",
+                canonical.display(),
+                path.display()
+            )));
+        }
+    }
+    Ok(canonical)
+}
+
 fn mount_toolchain_and_mounts(
     command: &mut Command,
     rust_toolchain: Option<&Path>,
     mounts: &[MountSpec],
+    policy: &EffectivePolicy,
 ) -> Result<(), RuntimeError> {
     if let Some(path) = rust_toolchain {
         let path = path.canonicalize().map_err(failed)?;
@@ -1153,7 +1180,7 @@ fn mount_toolchain_and_mounts(
     }
 
     for mount in mounts {
-        let path = mount.source.canonicalize().map_err(failed)?;
+        let path = validate_mount_source(&mount.source, policy)?;
         if !path.exists() {
             return Err(failed(format!(
                 "configured mount source '{}' must exist",
@@ -1294,27 +1321,18 @@ fn configure_limits_and_entrypoint(
 }
 
 fn find_executable(name: &str) -> Option<PathBuf> {
-    if let Ok(path_var) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
+    use std::os::unix::fs::PermissionsExt;
 
-    for fallback in [
-        format!("/usr/bin/{name}"),
-        format!("/bin/{name}"),
-        format!("/usr/local/bin/{name}"),
-    ] {
-        let path = PathBuf::from(fallback);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-
-    None
+    ["/usr/bin", "/bin"]
+        .into_iter()
+        .map(|directory| Path::new(directory).join(name))
+        .filter_map(|path| path.canonicalize().ok())
+        .find(|path| {
+            path.starts_with("/usr/bin")
+                && path.metadata().is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o022 == 0
+                })
+        })
 }
 
 struct Captured {
@@ -1810,6 +1828,24 @@ mod tests {
             MountSpec::read_write(dir2.path(), "/mnt/data2"),
         ];
         assert!(validate_mounts(&non_overlapping, &policy).is_ok());
+    }
+
+    #[test]
+    fn rejects_mount_sources_overlapping_protected_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let secret = source.path().join("credential");
+        std::fs::write(&secret, "secret").unwrap();
+        let policy = EffectivePolicy::new(crate::policy::BasePolicy::new(
+            crate::filesystem::ResolvedPath::from_canonical(workspace.path()),
+        ));
+        policy.protected_paths.write().unwrap().push(secret.clone());
+
+        let ancestor = MountSpec::read_only(source.path(), "/opt/orbit-cache/source");
+        let exact = MountSpec::read_only(&secret, "/opt/orbit-cache/secret");
+
+        assert!(validate_mounts(&[ancestor], &policy).is_err());
+        assert!(validate_mounts(&[exact], &policy).is_err());
     }
 
     #[test]

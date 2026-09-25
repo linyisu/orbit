@@ -54,11 +54,17 @@ pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
         .is_ok_and(|resolved| resolved.starts_with(root))
 }
 
-/// Auto mode permits operations confined to the workspace. External write
-/// grants, MCP tools, and new filesystem capabilities retain their own gate.
+/// Auto mode permits read-only, offline commands and workspace-local file
+/// edits. Shell commands with network, workspace writes, or external mounts
+/// require approval because their effects cannot be inferred from the text.
 pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
     match preview {
-        ApprovalPreview::Command(command) => !command.external_write,
+        ApprovalPreview::Command(command) => {
+            !command.network_allowed
+                && command.workspace_access == CommandWorkspaceAccess::Read
+                && !command.external_write
+                && command.external_capabilities.is_empty()
+        }
         ApprovalPreview::Write(write) => workspace_local_file(&write.path, workspace),
         ApprovalPreview::Delete(delete) => workspace_local_file(&delete.path, workspace),
         ApprovalPreview::Mcp(_) | ApprovalPreview::Capability(_) => false,

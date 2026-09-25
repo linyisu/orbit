@@ -168,7 +168,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             if preview.external_capabilities.is_empty() {
                 lines.push(Line::from("外部路径：无额外已授权 Capability"));
             } else {
-                lines.push(Line::from("外部路径（已授权 Capability）："));
+                lines.push(Line::from("外部路径（Capability 或依赖缓存挂载）："));
                 for cap in &preview.external_capabilities {
                     lines.push(Line::from(format!("  • {cap}")));
                 }

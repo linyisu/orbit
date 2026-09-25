@@ -627,7 +627,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             header,
         );
         let rows = picker.matches();
-        let visible = body.height.saturating_sub(2) as usize;
+        let visible = (body.height.saturating_sub(2) as usize).max(1);
         let first = picker.selected.saturating_sub(visible - 1);
         let mut lines = Vec::new();
         let mut previous_provider = None;
@@ -1069,6 +1069,15 @@ mod tests {
             demo: true,
             updated_at: 0,
         }
+    }
+
+    #[test]
+    fn model_picker_draws_on_a_terminal_too_short_for_body_rows() {
+        let mut state = UiState::new("model");
+        state.model_picker = Some(ModelPicker::new(Vec::new(), "model".into(), None));
+        let mut terminal = Terminal::new(TestBackend::new(12, 6)).unwrap();
+
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
     }
 
     #[test]

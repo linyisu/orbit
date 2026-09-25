@@ -42,7 +42,9 @@ impl Mode {
     pub fn description(self) -> &'static str {
         match self {
             Self::Ask => "ask：文件修改、沙箱命令、MCP 调用和外部权限逐次确认",
-            Self::Auto => "auto：工作区内操作自动执行；外部写入、MCP 调用和外部权限仍需确认",
+            Self::Auto => {
+                "auto：工作区文件工具和离线只读命令自动执行；联网、Shell 写入和外部权限需确认"
+            }
             Self::Yolo => "YOLO：全部操作自动确认通过（沙箱和权限边界限制不变）",
         }
     }
@@ -102,8 +104,16 @@ mod tests {
         assert!(!Mode::Ask.allows(&cmd_rw, root));
         assert!(!Mode::Ask.allows(&write, root));
         assert!(!Mode::Ask.allows(&capability, root));
-        assert!(Mode::Auto.allows(&cmd_read, root));
-        assert!(Mode::Auto.allows(&cmd_rw, root));
+        assert!(!Mode::Auto.allows(&cmd_read, root));
+        assert!(!Mode::Auto.allows(&cmd_rw, root));
+        let offline_read = ApprovalPreview::Command(CommandPreview {
+            network_allowed: false,
+            ..match cmd_read.clone() {
+                ApprovalPreview::Command(command) => command,
+                _ => unreachable!(),
+            }
+        });
+        assert!(Mode::Auto.allows(&offline_read, root));
         assert!(Mode::Auto.allows(&write, root));
         assert!(Mode::Auto.allows(&delete, root));
         assert!(!Mode::Ask.allows(&mcp, root));

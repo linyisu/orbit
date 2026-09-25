@@ -25,27 +25,50 @@ pub(crate) struct InstructionSource {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Instructions {
     pub sources: Vec<InstructionSource>,
+    pub omitted: Vec<PathBuf>,
     pub content: String,
     pub truncated: bool,
 }
 
 impl Instructions {
     pub(crate) fn source_summary(&self) -> String {
-        if self.sources.is_empty() {
-            return "未找到".into();
-        }
-        self.sources
+        let loaded = self
+            .sources
             .iter()
             .map(|source| source.path.display().to_string())
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        if self.omitted.is_empty() {
+            if loaded.is_empty() {
+                "未找到".into()
+            } else {
+                loaded
+            }
+        } else {
+            format!(
+                "{loaded}\n因预算未载入：{}",
+                self.omitted
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
     }
 
     fn prompt(&self) -> Option<String> {
-        (!self.content.is_empty()).then(|| {
+        (!self.content.is_empty() || self.truncated).then(|| {
+            let omitted = if self.omitted.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\n以下规则文件因大小预算未载入：{}。请在相关工作开始前用 read_file 读取，不要假定已遵守其中未见的内容。",
+                    self.omitted.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(", ")
+                )
+            };
             format!(
-                "{MESSAGE_PREFIX}以下是用户提供的项目指令。请和当前用户请求一起遵守；后面的文件比前面的文件更具体。\n\n{}",
-                self.content
+                "{MESSAGE_PREFIX}以下是用户提供的项目指令。请和当前用户请求一起遵守；后面的文件比前面的文件更具体。\n\n{}{}",
+                self.content, omitted
             )
         })
     }
@@ -63,9 +86,11 @@ pub(crate) fn load_current() -> Instructions {
 }
 
 pub(crate) fn load_for(cwd: &Path, user_dir: Option<&Path>, max_bytes: usize) -> Instructions {
-    let mut result = Instructions::default();
-    if let Some(dir) = user_dir {
-        add_directory(&mut result, dir, max_bytes);
+    let mut candidates = Vec::new();
+    if let Some(dir) = user_dir
+        && let Some(candidate) = instruction_file(dir)
+    {
+        candidates.push(candidate);
     }
 
     let root = project_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
@@ -76,11 +101,41 @@ pub(crate) fn load_for(cwd: &Path, user_dir: Option<&Path>, max_bytes: usize) ->
         .collect::<Vec<_>>();
     directories.reverse();
     for directory in directories {
-        add_directory(&mut result, &directory, max_bytes);
-        if result.truncated {
-            break;
+        if let Some(candidate) = instruction_file(&directory) {
+            candidates.push(candidate);
         }
     }
+
+    let mut result = Instructions::default();
+    let mut selected = vec![false; candidates.len()];
+    let mut used = 0usize;
+    for (index, (path, content)) in candidates.iter().enumerate().rev() {
+        let size = formatted_instruction(path, content).len();
+        let separator = if used == 0 { 0 } else { 2 };
+        if used.saturating_add(separator).saturating_add(size) <= max_bytes {
+            selected[index] = true;
+            used += separator + size;
+        } else {
+            result.truncated = true;
+            result.omitted.push(path.clone());
+        }
+    }
+    for (index, (path, content)) in candidates.into_iter().enumerate() {
+        if !selected[index] {
+            continue;
+        }
+        if !result.content.is_empty() {
+            result.content.push_str("\n\n");
+        }
+        result
+            .content
+            .push_str(&formatted_instruction(&path, &content));
+        result.sources.push(InstructionSource {
+            path,
+            bytes: content.len(),
+        });
+    }
+    result.omitted.reverse();
     result
 }
 
@@ -135,31 +190,19 @@ fn project_root(cwd: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-fn add_directory(result: &mut Instructions, directory: &Path, max_bytes: usize) {
-    let Some(path) = CANDIDATES
+fn instruction_file(directory: &Path) -> Option<(PathBuf, String)> {
+    let path = CANDIDATES
         .iter()
         .map(|name| directory.join(name))
-        .find(|path| is_nonempty_regular_file(path))
-    else {
-        return;
-    };
+        .find(|path| is_nonempty_regular_file(path))?;
     let Ok(content) = fs::read_to_string(&path) else {
-        return;
+        return None;
     };
-    if result.content.len().saturating_add(content.len()) > max_bytes {
-        result.truncated = true;
-        return;
-    }
-    if !result.content.is_empty() {
-        result.content.push_str("\n\n");
-    }
-    result
-        .content
-        .push_str(&format!("--- {} ---\n{content}", path.display()));
-    result.sources.push(InstructionSource {
-        path,
-        bytes: content.len(),
-    });
+    Some((path, content))
+}
+
+fn formatted_instruction(path: &Path, content: &str) -> String {
+    format!("--- {} ---\n{content}", path.display())
 }
 
 fn is_nonempty_regular_file(path: &Path) -> bool {
@@ -228,6 +271,28 @@ mod tests {
         assert!(loaded.content.is_empty());
         assert!(loaded.sources.is_empty());
         assert!(loaded.truncated);
+        assert!(loaded.prompt().unwrap().contains("未载入"));
+    }
+
+    #[test]
+    fn keeps_nearest_project_rules_when_the_budget_is_tight() {
+        let temp = tempfile::tempdir().unwrap();
+        let user = temp.path().join("user");
+        let root = temp.path().join("repo");
+        let nested = root.join("src");
+        fs::create_dir_all(&user).unwrap();
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        write(&user.join("AGENTS.md"), &"u".repeat(200));
+        write(&root.join("AGENTS.md"), &"r".repeat(200));
+        write(&nested.join("AGENTS.md"), "nested rule");
+
+        let loaded = load_for(&nested, Some(&user), 120);
+
+        assert!(loaded.content.contains("nested rule"));
+        assert!(!loaded.content.contains(&"u".repeat(200)));
+        assert_eq!(loaded.omitted.len(), 2);
+        assert!(loaded.prompt().unwrap().contains("因大小预算未载入"));
     }
 
     #[test]
@@ -237,6 +302,7 @@ mod tests {
                 path: PathBuf::from("/repo/AGENTS.md"),
                 bytes: 4,
             }],
+            omitted: Vec::new(),
             content: "rule".into(),
             truncated: false,
         };

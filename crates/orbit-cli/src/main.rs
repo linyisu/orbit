@@ -98,6 +98,10 @@ struct TuiArgs {
     /// Restore a saved session in the current workspace.
     #[arg(long)]
     resume: Option<String>,
+
+    /// Allow enabled local MCP server programs to start for this invocation.
+    #[arg(long)]
+    allow_mcp_start: bool,
 }
 
 #[derive(Debug, Args)]
@@ -114,13 +118,17 @@ struct ChatArgs {
     #[arg(long, value_name = "PROVIDER::MODEL")]
     model: Option<String>,
 
-    /// Execution permission policy. auto allows workspace operations; yolo allows every request.
+    /// Execution policy. auto allows file edits and offline read-only commands; yolo approves all requests.
     #[arg(long, value_enum, default_value_t = ChatMode::Auto)]
     mode: ChatMode,
 
     /// Restore a saved session in the current workspace.
     #[arg(long)]
     resume: Option<String>,
+
+    /// Allow enabled local MCP server programs to start for this invocation.
+    #[arg(long)]
+    allow_mcp_start: bool,
 
     /// Attach an image to this user message. May be supplied more than once.
     #[arg(long = "image", value_name = "PATH")]
@@ -188,6 +196,8 @@ enum ChatCapability {
     Git,
     /// write_file and edit_file.
     Write,
+    /// request_capability for paths outside the workspace.
+    Capability,
     /// run_command, read_command_output, verification_status and export_artifact.
     Command,
     /// Archived context retrieval and tool-output pruning.
@@ -234,7 +244,7 @@ struct FileConfig {
     providers: BTreeMap<String, ProviderConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ProviderConfig {
     #[serde(default = "default_api_format")]
     api_format: ApiFormat,
@@ -247,6 +257,20 @@ struct ProviderConfig {
     /// Number of retries after a failed request that has not produced headers.
     #[serde(default = "orbit_model::types::default_max_retries")]
     max_retries: u8,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderConfig")
+            .field("api_format", &self.api_format)
+            .field("base_url", &self.base_url)
+            .field("api_key", &"[redacted]")
+            .field("models", &self.models)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_retries", &self.max_retries)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -639,6 +663,7 @@ async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs)
         command_limits,
         web,
         mcp,
+        args.allow_mcp_start,
         Some(session.scratch.clone()),
         Some(session.command_output.clone()),
         Some(file_config.permissions.clone()),
@@ -769,6 +794,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         } else {
             file_config.mcp.clone()
         },
+        args.allow_mcp_start,
         Some(session.scratch.clone()),
         Some(session.command_output.clone()),
         Some(file_config.permissions.clone()),
@@ -869,8 +895,11 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     loop {
         let event = tokio::select! {
             event = receiver.recv() => event,
-            signal = tokio::signal::ctrl_c(), if !interrupted => {
+            signal = tokio::signal::ctrl_c() => {
                 signal.context("failed to listen for Ctrl+C")?;
+                if interrupted {
+                    std::process::exit(130);
+                }
                 interrupted = true;
                 cancellation.cancel();
                 eprintln!("正在取消…");
@@ -1024,6 +1053,9 @@ fn disable_chat_capabilities(
         tools.remove("write_file");
         tools.remove("edit_file");
     }
+    if capability_is_disabled(disabled, ChatCapability::Capability) {
+        tools.remove("request_capability");
+    }
     if capability_is_disabled(disabled, ChatCapability::Command) {
         tools.remove("run_command");
         tools.remove("read_command_output");
@@ -1097,12 +1129,30 @@ mod config_tests {
     use orbit_agent::tool::{ClosureTool, ToolRegistry};
 
     #[test]
+    fn provider_debug_redacts_credentials() {
+        let provider = ProviderConfig {
+            api_format: ApiFormat::OpenaiChatCompletions,
+            base_url: "https://example.com/v1".into(),
+            api_key: "test-secret".into(),
+            models: Vec::new(),
+            timeout_seconds: 30,
+            max_retries: 0,
+        };
+
+        let rendered = format!("{provider:?}");
+
+        assert!(rendered.contains("[redacted]"));
+        assert!(!rendered.contains("test-secret"));
+    }
+
+    #[test]
     fn chat_capability_filter_removes_groups_before_request_assembly() {
         let mut tools = ToolRegistry::new();
         for name in [
             "read_file",
             "project_overview",
             "write_file",
+            "request_capability",
             "web_search",
             "web_fetch",
             "mcp__test__lookup",
@@ -1122,12 +1172,14 @@ mod config_tests {
             ChatCapability::Mcp,
             ChatCapability::ProjectState,
             ChatCapability::History,
+            ChatCapability::Capability,
         ]
         .into_iter()
         .collect();
         disable_chat_capabilities(&mut tools, &disabled);
         assert!(!tools.contains("read_file"));
         assert!(!tools.contains("project_overview"));
+        assert!(!tools.contains("request_capability"));
         assert!(!tools.contains("web_search"));
         assert!(!tools.contains("web_fetch"));
         assert!(!tools.contains("mcp__test__lookup"));

@@ -383,22 +383,7 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
     let available = usize::from(width).saturating_sub(3 * cols + 3);
     // On narrow terminals use labelled cells rather than losing columns/content.
     if available < cols * 3 {
-        let mut lines = Vec::new();
-        for row in rows.iter().skip(1) {
-            for (i, cell) in row.iter().enumerate() {
-                let mut spans = vec![Span::styled(
-                    format!("  {}: ", rows[0][i]),
-                    Style::default().fg(ACCENT),
-                )];
-                spans.extend(cell.spans.clone());
-                lines.push(Line::from(spans));
-            }
-            lines.push(Line::from(""));
-        }
-        if lines.is_empty() {
-            lines.extend(rows.remove(0));
-        }
-        return Some((end, lines));
+        return Some((end, labelled_table_rows(&rows)));
     }
     let mut widths: Vec<usize> = (0..cols)
         .map(|i| {
@@ -472,6 +457,29 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
     }
     lines.push(border("└", "┴", "┘"));
     Some((end, lines))
+}
+
+fn labelled_table_rows(rows: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for row in rows.iter().skip(1) {
+        for (i, cell) in row.iter().enumerate() {
+            let heading = rows[0]
+                .get(i)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("第 {} 列", i + 1));
+            let mut spans = vec![Span::styled(
+                format!("  {heading}: "),
+                Style::default().fg(ACCENT),
+            )];
+            spans.extend(cell.spans.clone());
+            lines.push(Line::from(spans));
+        }
+        lines.push(Line::from(""));
+    }
+    if lines.is_empty() {
+        lines.extend(rows[0].iter().cloned());
+    }
+    lines
 }
 
 fn wrap_cell(cell: &Line<'static>, width: usize) -> Vec<Line<'static>> {
@@ -805,6 +813,22 @@ mod tests {
         let (_, narrow) = table(source, 10).unwrap();
         assert!(narrow.iter().any(|l| l.to_string().contains("名称:")));
         assert!(table("normal | text\nnot a separator", 80).is_none());
+    }
+
+    #[test]
+    fn narrow_table_tolerates_a_body_wider_than_its_header() {
+        let rows = vec![
+            vec![Line::from("名称")],
+            vec![Line::from("一"), Line::from("二")],
+        ];
+
+        let lines = labelled_table_rows(&rows);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_string().contains("第 2 列: 二"))
+        );
     }
 
     #[test]

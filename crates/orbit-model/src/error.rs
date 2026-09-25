@@ -27,6 +27,7 @@ pub enum ModelError {
         request_id: String,
         body: String,
         retryable: bool,
+        context_limit: bool,
     },
     #[error("could not decode model response: {0}")]
     Decode(#[from] serde_json::Error),
@@ -43,14 +44,17 @@ impl ModelError {
     /// also covers invalid parameters; 413 can mean byte size, not token count.
     /// Do not infer a context limit from arbitrary upstream prose.
     pub fn is_context_limit(&self) -> bool {
-        let Self::Http {
-            status: 400 | 413 | 422,
-            body,
-            ..
-        } = self
-        else {
-            return false;
-        };
+        matches!(
+            self,
+            Self::Http {
+                status: 400 | 413 | 422,
+                context_limit: true,
+                ..
+            }
+        )
+    }
+
+    pub(crate) fn has_context_limit_code(body: &str) -> bool {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
             return false;
         };

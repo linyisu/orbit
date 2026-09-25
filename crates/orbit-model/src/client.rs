@@ -98,6 +98,24 @@ impl ModelClient {
             ));
         }
 
+        let loopback = endpoint.host_str() == Some("localhost")
+            || endpoint
+                .host_str()
+                .and_then(|host| {
+                    host.trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .ok()
+                })
+                .is_some_and(|address| address.is_loopback());
+        if config.api_key.as_deref().is_some_and(|key| !key.is_empty())
+            && endpoint.scheme() != "https"
+            && !loopback
+        {
+            return Err(ModelError::InvalidBaseUrl(
+                "an API key requires HTTPS except for a loopback endpoint".into(),
+            ));
+        }
+
         let host = endpoint.host_str().unwrap_or_default();
         if (host.starts_with("sk-") && !host.contains('.') && host.len() > 20)
             || config
@@ -116,7 +134,10 @@ impl ModelClient {
             ));
         }
 
-        let http = Client::builder().connect_timeout(config.timeout).build()?;
+        let http = Client::builder()
+            .connect_timeout(config.timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
 
         Ok(Self {
             http,
@@ -216,10 +237,13 @@ impl ModelClient {
 
     async fn send(
         &self,
-        request: ChatRequest,
+        mut request: ChatRequest,
         stream: bool,
         cancellation: CancellationToken,
     ) -> Result<(Response, u32), ModelError> {
+        if request.reasoning_effort.is_none() {
+            request.reasoning_effort = self.config.reasoning_effort;
+        }
         let format = self.config.api_format;
         let (body, headers) = match format {
             ApiFormat::OpenaiChatCompletions => crate::openai::chat_completions::encode(
@@ -326,6 +350,7 @@ impl ModelClient {
             request_id,
             body: truncate_body(&body, 2_000),
             retryable: matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504 | 529),
+            context_limit: ModelError::has_context_limit_code(&body),
         })
     }
 }
@@ -543,6 +568,82 @@ pub(crate) fn invalid_response(message: &str) -> ModelError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejects_remote_http_with_credentials() {
+        let config = crate::types::ModelConfig {
+            base_url: "http://example.com/v1".into(),
+            api_key: Some("secret".into()),
+            ..Default::default()
+        };
+
+        let error = super::ModelClient::new(config).unwrap_err();
+
+        assert!(error.to_string().contains("requires HTTPS"));
+    }
+
+    #[tokio::test]
+    async fn does_not_follow_a_model_endpoint_redirect() {
+        let (base_url, request) = test_server(
+            "HTTP/1.1 302 Found\r\nlocation: https://example.com/receive\r\ncontent-length: 0\r\n\r\n",
+        )
+        .await;
+        let client = client(&base_url, "openai_chat_completions", "mock", Some("secret"));
+
+        let error = client
+            .complete(crate::types::ChatRequest::new(vec![
+                crate::types::ChatMessage::user("hello"),
+            ]))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::error::ModelError::Http { status: 302, .. }
+        ));
+        assert!(request.await.contains("secret"));
+    }
+
+    #[test]
+    fn recognizes_context_limit_before_truncating_a_long_error_body() {
+        let body = serde_json::json!({
+            "error": {
+                "code": "context_length_exceeded",
+                "message": "x".repeat(4_000)
+            }
+        })
+        .to_string();
+        let error = crate::error::ModelError::Http {
+            status: 400,
+            request_id: String::new(),
+            body: super::truncate_body(&body, 2_000),
+            retryable: false,
+            context_limit: crate::error::ModelError::has_context_limit_code(&body),
+        };
+
+        assert!(error.is_context_limit());
+    }
+
+    #[tokio::test]
+    async fn model_config_reasoning_effort_applies_when_request_has_no_override() {
+        let (base_url, request) = test_server(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}",
+        )
+        .await;
+        let mut config = client(&base_url, "openai_chat_completions", "mock", None).config;
+        config.reasoning_adapter = Some(crate::types::ReasoningAdapter::OpenaiChat);
+        config.reasoning_effort = Some(crate::types::ReasoningEffort::High);
+        let client = super::ModelClient::new(config).unwrap();
+
+        client
+            .complete(crate::types::ChatRequest::new(vec![
+                crate::types::ChatMessage::user("think"),
+            ]))
+            .await
+            .unwrap();
+
+        assert!(request.await.contains("\"reasoning_effort\":\"high\""));
+    }
+
     #[test]
     fn rejects_credentials_used_as_service_addresses_without_echoing_them() {
         for address in [

@@ -383,11 +383,6 @@ pub async fn run(
                     }
                     if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release) {
                         state.permission_mode = state.permission_mode.next();
-                        if state.approval_shown && pending.as_ref().is_some_and(|request| state.permission_mode.allows(&request.preview, std::path::Path::new(&session.snapshot.session.workspace))) {
-                            if let Some(request) = pending.take() { let _ = request.decision.send(true); }
-                            state.approval = None;
-                            state.resume_clock();
-                        }
                         continue;
                     }
                     if pending.is_some() {
@@ -458,6 +453,12 @@ pub async fn run(
                                     .map_or(prompt.as_str(), |(command, _)| command);
                                 state.transcript.push(TranscriptItem::Command(prompt.clone()));
                                 if command == "/undo" {
+                                    if task.is_some() {
+                                        state.transcript.push(TranscriptItem::CommandError(
+                                            "Agent 运行中不能回退文件；请等待当前响应结束。".into(),
+                                        ));
+                                        continue;
+                                    }
                                     let argument = prompt
                                         .split_once(char::is_whitespace)
                                         .map_or("", |(_, argument)| argument.trim());

@@ -376,6 +376,11 @@ where
                 _ => Vec::new(),
             };
             validate_tool_ids(&calls)?;
+            if self.config.max_tool_calls > 0
+                && tool_calls.saturating_add(calls.len()) > self.config.max_tool_calls
+            {
+                return Err(AgentError::MaxToolCalls);
+            }
             history.push(assistant.clone());
             if let Some(journal) = &self.journal {
                 journal.record_message(assistant);
@@ -396,9 +401,6 @@ where
             for call in calls {
                 if cancellation.is_cancelled() {
                     return Err(AgentError::Cancelled);
-                }
-                if self.config.max_tool_calls > 0 && tool_calls >= self.config.max_tool_calls {
-                    return Err(AgentError::MaxToolCalls);
                 }
 
                 tool_calls += 1;
@@ -570,11 +572,20 @@ where
                 }
             }
         }
+        if force && self.archive.is_none() {
+            return Err(AgentError::CompactionFailed {
+                kind: crate::compaction::CompactionFailureKind::Archive,
+                message: "context archive is required before compacting history".into(),
+            });
+        }
         let plan = if force {
             Some(crate::autocompact::plan_configured(history, &tools, output, local_limit, crate::memory::CompactionMode::Manual, &self.compaction.settings)
                 .ok_or_else(|| AgentError::CompactionFailed {kind:crate::compaction::CompactionFailureKind::InputBudget,
                     message:"no safe compaction boundary fits the rejected request; original context preserved".into()})?)
-        } else if self.config.auto_compact && estimated >= thresholds.compact_after {
+        } else if self.config.auto_compact
+            && self.archive.is_some()
+            && estimated >= thresholds.compact_after
+        {
             crate::autocompact::plan_configured(
                 history,
                 &tools,
@@ -948,6 +959,63 @@ mod tests {
         fail_start: bool,
         fail_receipt: bool,
     }
+
+    #[tokio::test]
+    async fn compaction_without_an_archive_keeps_the_original_history() {
+        let agent = Agent::new(
+            MockModel::new(vec![]),
+            ToolRegistry::new(),
+            AgentConfig {
+                context_tokens: 8192,
+                ..Default::default()
+            },
+        );
+        let original = vec![
+            ChatMessage::system("rules"),
+            ChatMessage::user("preserve this request"),
+            ChatMessage::assistant("previous work"),
+        ];
+        let mut automatic = original.clone();
+        let mut thresholds = ContextThresholds {
+            prune_after: 0,
+            compact_after: 0,
+        };
+
+        agent
+            .prepare_context(
+                &mut automatic,
+                (128, 8192, false),
+                &mut thresholds,
+                &Default::default(),
+                CancellationToken::new(),
+                &mut |_| std::future::ready(Ok(())),
+            )
+            .await
+            .unwrap();
+
+        let mut manual = original.clone();
+        let error = agent
+            .prepare_context(
+                &mut manual,
+                (128, 8192, true),
+                &mut thresholds,
+                &Default::default(),
+                CancellationToken::new(),
+                &mut |_| std::future::ready(Ok(())),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(automatic, original);
+        assert_eq!(manual, original);
+        assert!(matches!(
+            error,
+            AgentError::CompactionFailed {
+                kind: crate::compaction::CompactionFailureKind::Archive,
+                ..
+            }
+        ));
+    }
     impl crate::checkpoint::ExecutionJournal for FailingJournal {
         fn record(&self, _: AgentEvent) {}
         fn flush(&self) -> crate::checkpoint::CheckpointFuture<'_> {
@@ -974,6 +1042,15 @@ mod tests {
     #[tokio::test]
     async fn cancellation_after_compaction_saves_the_published_context() {
         use std::sync::Arc;
+        struct TestArchive;
+        impl crate::archive::ContextArchive for TestArchive {
+            fn save<'a>(
+                &'a self,
+                _messages: &'a [ChatMessage],
+            ) -> crate::archive::ArchiveFuture<'a> {
+                Box::pin(async { Ok("archive://test".into()) })
+            }
+        }
         let response=assistant_text(&serde_json::json!({"goal":"fix parser","constraints":["preserve API"],"decisions":[],"completed":[],"remaining":["test empty input"],"verification":[],"uncertainty":[]}).to_string());
         let history = vec![
             ChatMessage::system("coding rules"),
@@ -994,7 +1071,8 @@ mod tests {
                 ..Default::default()
             },
         )
-        .with_execution_journal(journal.clone());
+        .with_execution_journal(journal.clone())
+        .with_context_archive(Arc::new(TestArchive));
         let token = CancellationToken::new();
         let result = agent
             .run_core(ChatRequest::new(history.clone()), token.clone(), |event| {
@@ -1996,6 +2074,11 @@ mod tests {
             finish_reason: Some("tool_calls".to_owned()),
             usage: None,
         }]);
+        let journal = std::sync::Arc::new(FailingJournal {
+            checkpoints: Default::default(),
+            fail_start: false,
+            fail_receipt: false,
+        });
         let agent = Agent::new(
             model,
             ToolRegistry::new(),
@@ -2004,7 +2087,8 @@ mod tests {
                 max_tool_calls: 1,
                 ..AgentConfig::default()
             },
-        );
+        )
+        .with_execution_journal(journal.clone());
 
         let error = agent
             .run(request(), CancellationToken::new())
@@ -2012,6 +2096,14 @@ mod tests {
             .expect_err("tool budget must stop the loop");
 
         assert!(matches!(error, AgentError::MaxToolCalls));
+        assert!(journal
+            .checkpoints
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|checkpoint| !checkpoint.history.iter().any(|message| {
+                matches!(message, ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty())
+            })));
     }
 
     #[tokio::test]

@@ -18,7 +18,7 @@ use orbit_model::types::{ToolCall, ToolDefinition};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
     sync::{Mutex, oneshot},
     time,
@@ -84,6 +84,17 @@ impl McpConfig {
                 bail!("MCP server {name:?} must set a command and a positive timeout_seconds");
             }
             let mut names = std::collections::BTreeSet::new();
+            for key in server.env.keys() {
+                if matches!(
+                    key.as_str(),
+                    "PATH" | "ORBIT_PROJECT_DIR" | "LD_PRELOAD" | "LD_LIBRARY_PATH"
+                ) || key.starts_with("DYLD_")
+                {
+                    bail!(
+                        "MCP server {name:?} cannot override protected environment variable {key:?}"
+                    );
+                }
+            }
             for tool in &server.tools {
                 if tool.trim().is_empty() || !names.insert(tool) {
                     bail!("MCP server {name:?} has an empty or duplicate tool allowlist entry");
@@ -110,6 +121,7 @@ pub async fn register(
     config: &McpConfig,
     workspace: &Path,
     approvals: Option<ApprovalSender>,
+    allow_start: bool,
 ) -> Vec<McpServerStatus> {
     let mut statuses = Vec::new();
     for (name, config) in &config.servers {
@@ -131,6 +143,15 @@ pub async fn register(
             });
             continue;
         };
+        if !allow_start {
+            statuses.push(McpServerStatus {
+                name: name.clone(),
+                detail: "启动需显式授权：添加 --allow-mcp-start".into(),
+                tool_count: 0,
+                connected: false,
+            });
+            continue;
+        }
         match StdioClient::start(name, config, workspace).await {
             Ok((client, definitions)) => {
                 let filtered = definitions
@@ -255,6 +276,8 @@ struct StdioClient {
     _child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    pending_line: Vec<u8>,
+    poisoned: bool,
     next_id: u64,
     timeout: Duration,
     workspace: PathBuf,
@@ -297,6 +320,8 @@ impl StdioClient {
             _child: child,
             stdin,
             stdout: BufReader::new(stdout),
+            pending_line: Vec::new(),
+            poisoned: false,
             next_id: 1,
             timeout: Duration::from_secs(config.timeout_seconds),
             workspace: workspace.to_path_buf(),
@@ -365,6 +390,9 @@ impl StdioClient {
         params: Value,
         cancellation: CancellationToken,
     ) -> Result<Value> {
+        if self.poisoned {
+            bail!("MCP connection is unusable after a previous protocol or timeout error");
+        }
         let id = self.next_id;
         self.next_id += 1;
         self.write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
@@ -393,10 +421,18 @@ impl StdioClient {
                 }
             }
         };
-        tokio::select! {
-            _ = cancellation.cancelled() => bail!("cancelled"),
-            result = time::timeout(timeout, response) => result.context("MCP request timed out")?,
+        let outcome = tokio::select! {
+            _ = cancellation.cancelled() => Err(anyhow::anyhow!("cancelled")),
+            result = time::timeout(timeout, response) => {
+                result.map_err(|_| anyhow::anyhow!("MCP request timed out"))
+                    .and_then(|response| response)
+            },
+        };
+        if outcome.is_err() {
+            self.poisoned = true;
+            let _ = self._child.start_kill();
         }
+        outcome
     }
 
     async fn write(&mut self, value: Value) -> Result<()> {
@@ -411,15 +447,35 @@ impl StdioClient {
     }
 
     async fn read(&mut self) -> Result<Value> {
-        let mut line = Vec::new();
-        let read = self.stdout.read_until(b'\n', &mut line).await?;
-        if read == 0 {
+        read_protocol_line(&mut self.stdout, &mut self.pending_line).await
+    }
+}
+
+async fn read_protocol_line<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    pending: &mut Vec<u8>,
+) -> Result<Value> {
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
             bail!("server closed its stdout");
         }
-        if line.len() > MAX_MESSAGE_BYTES {
+        let end = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |position| position + 1);
+        if pending.len().saturating_add(end) > MAX_MESSAGE_BYTES {
             bail!("MCP response exceeds the 4 MiB protocol limit");
         }
-        serde_json::from_slice(&line).context("server emitted invalid JSON-RPC on stdout")
+
+        let complete = available[end - 1] == b'\n';
+        pending.extend_from_slice(&available[..end]);
+        reader.consume(end);
+        if complete {
+            let line = std::mem::take(pending);
+            return serde_json::from_slice(&line)
+                .context("server emitted invalid JSON-RPC on stdout");
+        }
     }
 }
 
@@ -464,6 +520,80 @@ fn file_uri(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rejects_an_unterminated_response_at_the_protocol_limit() {
+        let bytes = vec![b'x'; MAX_MESSAGE_BYTES + 1];
+        let mut reader = BufReader::new(std::io::Cursor::new(bytes));
+        let mut pending = Vec::new();
+
+        let error = read_protocol_line(&mut reader, &mut pending)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("4 MiB"));
+        assert!(pending.len() <= MAX_MESSAGE_BYTES);
+    }
+
+    #[tokio::test]
+    async fn interrupted_read_keeps_the_partial_json_rpc_line() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let mut reader = BufReader::new(reader);
+        let mut pending = Vec::new();
+        writer.write_all(b"{\"id\":").await.unwrap();
+
+        let timed_out = time::timeout(
+            Duration::from_millis(10),
+            read_protocol_line(&mut reader, &mut pending),
+        )
+        .await;
+        assert!(timed_out.is_err());
+        assert_eq!(pending, b"{\"id\":");
+
+        writer.write_all(b"1}\n").await.unwrap();
+        let value = read_protocol_line(&mut reader, &mut pending).await.unwrap();
+
+        assert_eq!(value["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn timed_out_request_invalidates_its_stdio_connection() {
+        let workspace = tempfile::tempdir().unwrap();
+        let config = McpServerConfig {
+            transport: "stdio".into(),
+            command: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                r#"while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}' ;;
+    *'"method":"tools/list"'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}' ;;
+    *'"method":"tools/call"'*) sleep 3 ;;
+  esac
+done"#
+                    .into(),
+            ],
+            env: BTreeMap::new(),
+            timeout_seconds: 1,
+            tools: Vec::new(),
+            enabled: true,
+        };
+        let (mut client, _) = StdioClient::start("fixture", &config, workspace.path())
+            .await
+            .unwrap();
+
+        let first = client
+            .call_tool("slow", json!({}), CancellationToken::new())
+            .await
+            .unwrap_err();
+        let second = client
+            .call_tool("slow", json!({}), CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert!(first.to_string().contains("timed out"), "{first}");
+        assert!(second.to_string().contains("unusable"), "{second}");
+    }
     use crate::approval::ApprovalPreview;
     use orbit_model::types::ToolCall;
 
@@ -550,7 +680,14 @@ done
             assert_eq!(preview.tool, "echo");
             request.decision.send(true).unwrap();
         });
-        let statuses = register(&mut registry, &config, directory.path(), Some(approvals)).await;
+        let statuses = register(
+            &mut registry,
+            &config,
+            directory.path(),
+            Some(approvals),
+            true,
+        )
+        .await;
         assert_eq!(statuses[0].tool_count, 1, "{statuses:?}");
         let output = registry
             .execute(
@@ -574,8 +711,49 @@ done
         )
         .unwrap();
         let mut registry = ToolRegistry::new();
-        let statuses = register(&mut registry, &config, Path::new("/tmp"), None).await;
+        let statuses = register(&mut registry, &config, Path::new("/tmp"), None, false).await;
         assert_eq!(statuses[0].detail, "需要审批通道；未启动");
         assert!(registry.definitions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn configured_server_requires_startup_authorization() {
+        let config: McpConfig = toml::from_str(
+            r#"
+            [servers.files]
+            command = "definitely-not-a-real-mcp-server"
+            enabled = true
+            "#,
+        )
+        .unwrap();
+        let mut registry = ToolRegistry::new();
+        let (approvals, _receiver) = crate::approval::channel();
+
+        let statuses = register(
+            &mut registry,
+            &config,
+            Path::new("/tmp"),
+            Some(approvals),
+            false,
+        )
+        .await;
+
+        assert!(statuses[0].detail.contains("--allow-mcp-start"));
+        assert!(registry.definitions().is_empty());
+    }
+
+    #[test]
+    fn rejects_mcp_environment_overrides_of_runtime_isolation() {
+        let config: McpConfig = toml::from_str(
+            r#"
+            [servers.files]
+            command = "npx"
+            [servers.files.env]
+            PATH = "/tmp/untrusted"
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.validate().unwrap_err().to_string().contains("PATH"));
     }
 }

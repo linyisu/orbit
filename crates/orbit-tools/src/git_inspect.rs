@@ -530,6 +530,7 @@ fn git_with_limit(
             std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()),
         )
         .env("LC_ALL", "C")
+        .arg("--no-optional-locks")
         .arg("--no-pager")
         .arg("-c")
         .arg("core.fsmonitor=false")

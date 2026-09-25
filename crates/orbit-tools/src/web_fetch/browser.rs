@@ -55,7 +55,13 @@ pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolErr
     file.flush().await.map_err(failed)?;
     drop(file);
 
-    let mut child = Command::new("firefox")
+    let mut child = Command::new("/usr/bin/firefox")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", profile.path())
+        .env("XDG_CONFIG_HOME", profile.path())
+        .env("XDG_CACHE_HOME", profile.path())
+        .env("LANG", "C.UTF-8")
         .args(["--headless", "--no-remote", "--profile"])
         .arg(profile.path())
         .args(["--remote-debugging-port", "0"])

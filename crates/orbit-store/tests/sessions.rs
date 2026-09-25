@@ -162,7 +162,7 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
 }
 
 #[tokio::test]
-async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
+async fn invalid_finish_keeps_run_recoverable_and_migration_can_be_replayed() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
@@ -182,7 +182,24 @@ async fn invalid_finish_keeps_run_recoverable_and_newer_schema_is_rejected() {
     let connection = rusqlite::Connection::open(db.path()).unwrap();
     connection.execute_batch("PRAGMA user_version=14").unwrap();
     drop(connection);
-    assert!(Store::open(db.path()).await.is_err());
+    assert!(Store::open(db.path()).await.is_ok());
+}
+
+#[tokio::test]
+async fn rejects_a_database_from_a_newer_schema() {
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    drop(store);
+    let connection = rusqlite::Connection::open(db.path()).unwrap();
+    connection.execute_batch("PRAGMA user_version=16").unwrap();
+    drop(connection);
+
+    let error = Store::open(db.path())
+        .await
+        .err()
+        .expect("newer schema rejected");
+
+    assert!(error.to_string().contains("newer than"), "{error}");
 }
 
 #[tokio::test]

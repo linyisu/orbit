@@ -51,7 +51,7 @@ test = "cargo test --offline --workspace --target-dir /scratch/target"
 
 ## 审批与执行证据
 
-`ask` 逐次审批，`auto` 自动执行沙箱命令并审批源文件修改，`YOLO` 允许两者；这些模式都不取消隔离与文件冲突检查。TUI 的文件审批使用差异弹窗。
+`ask` 逐次审批；`auto` 自动执行离线只读命令和工作区内的文件工具操作，联网命令、Shell 写入及外部挂载需确认；`YOLO` 自动批准请求。这些模式都不取消隔离与文件冲突检查。TUI 的文件审批使用差异弹窗。
 
 每个命令记录退出码、超时、取消、耗时与实际输入快照校验值。完整校验值保存在会话事件里，不塞入模型的工具结果。`verification_status` 和 `/status` 比对当前输入，区分输入未变、已过期及旧记录未知。`/changes` 对比任务开始基线、Orbit 写入收据和当前文件。
 
@@ -59,7 +59,7 @@ test = "cargo test --offline --workspace --target-dir /scratch/target"
 
 ## 隔离和资源限制
 
-- 系统 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 与动态链接缓存只读挂载。独立 PID、IPC、用户和 UTS 命名空间；清空 capabilities，禁止嵌套用户命名空间。只有网络策略为 `deny` 时才创建独立网络命名空间；当前 CLI 配置使用 `allow`。
+- 系统 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 与动态链接缓存只读挂载。独立 PID、IPC、用户和 UTS 命名空间；清空 capabilities，禁止嵌套用户命名空间。只有网络策略为 `deny` 时才创建独立网络命名空间；可在 `[command]` 中设置 `network = "deny"`，默认仍为 `allow`。
 - 环境清空，只设置 PATH、HOME、TMPDIR、LANG。`/tmp` 为 64 MiB 临时文件系统，`/dev` 为最小设备集；没有宿主 HOME 或 SSH agent。网络访问由当前策略决定。
 - 地址空间 4 GiB、单文件 64 MiB、文件描述符 1024、NPROC 1024。CPU 不另设时间上限，命令受墙钟超时与取消控制。没有 cgroup 总内存预算、系统调用过滤或虚拟机隔离。
 - 命令正文放入私有脚本文件，不受工具 8 KiB 或 execve 单参数限制。超时从进程启动开始计算，源快照准备不计入。

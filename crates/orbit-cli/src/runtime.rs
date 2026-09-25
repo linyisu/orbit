@@ -26,11 +26,12 @@ pub async fn workspace_tools(
     command_limits: orbit_tools::run_command::CommandLimits,
     web: orbit_tools::web_fetch::WebConfig,
     mcp: orbit_tools::mcp::McpConfig,
+    allow_mcp_start: bool,
     scratch: Option<orbit_tools::run_command::ScratchDirectory>,
     command_output: Option<orbit_tools::run_command::CommandOutputDirectory>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
 ) -> Result<WorkspaceRuntime> {
-    let workspace = protected_workspace(config, database, permissions)?;
+    let workspace = protected_workspace(config, database, permissions, command_limits.network)?;
     let mut tools = ToolRegistry::new();
     tools.register(ReadFile::new(workspace.clone()));
     tools.register(ReadDocument::new(workspace.clone()));
@@ -78,8 +79,14 @@ pub async fn workspace_tools(
             tools.register(command);
         }
     }
-    let mcp_statuses =
-        orbit_tools::mcp::register(&mut tools, &mcp, workspace.root(), mcp_approvals).await;
+    let mcp_statuses = orbit_tools::mcp::register(
+        &mut tools,
+        &mcp,
+        workspace.root(),
+        mcp_approvals,
+        allow_mcp_start,
+    )
+    .await;
     Ok(WorkspaceRuntime {
         workspace,
         command_limits,
@@ -95,7 +102,12 @@ pub fn workspace_writer(
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
 ) -> Result<WriteFile> {
     Ok(WriteFile::new(
-        protected_workspace(config, Some(database), permissions)?,
+        protected_workspace(
+            config,
+            Some(database),
+            permissions,
+            orbit_runtime::capability::NetworkPolicy::Allow,
+        )?,
         approvals,
     ))
 }
@@ -104,6 +116,7 @@ fn protected_workspace(
     config: &Path,
     database: Option<&Path>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
+    network: orbit_runtime::capability::NetworkPolicy,
 ) -> Result<Workspace> {
     let mut workspace = Workspace::new(std::env::current_dir()?)?;
     workspace.protect(config)?;
@@ -119,8 +132,6 @@ fn protected_workspace(
             workspace.protect(std::path::PathBuf::from(sidecar))?;
         }
     }
-    if let Some(perms) = permissions {
-        workspace.configure_policy(perms, orbit_runtime::capability::NetworkPolicy::Allow)?;
-    }
+    workspace.configure_policy(permissions.unwrap_or_default(), network)?;
     Ok(workspace)
 }

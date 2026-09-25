@@ -247,12 +247,21 @@ impl Store {
                 )?;
             }
             if version < 15 {
+                let has_content_sha256: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('context_archives') WHERE name='content_sha256')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if !has_content_sha256 {
+                    connection.execute_batch(
+                        "ALTER TABLE context_archives ADD COLUMN content_sha256 TEXT;",
+                    )?;
+                }
                 connection.execute_batch(
-                    "ALTER TABLE context_archives ADD COLUMN content_sha256 TEXT;
-                     CREATE UNIQUE INDEX context_archives_content
+                    "CREATE UNIQUE INDEX IF NOT EXISTS context_archives_content
                        ON context_archives(session_id,content_sha256)
                        WHERE content_sha256 IS NOT NULL;
-                     CREATE TABLE compaction_progress (
+                     CREATE TABLE IF NOT EXISTS compaction_progress (
                          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                          source_fingerprint TEXT NOT NULL,
                          payload TEXT NOT NULL,

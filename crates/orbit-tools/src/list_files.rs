@@ -222,7 +222,11 @@ fn list(
             if eligible <= args.offset {
                 continue;
             }
-            let entry = json!({"path":path.to_str().expect("UTF-8 path components"),"kind":kind});
+            let Some(path) = path.to_str() else {
+                skipped += 1;
+                continue;
+            };
+            let entry = json!({ "path": path, "kind": kind });
             let size = entry.to_string().len() + 1;
             if entries.len() == args.limit || bytes + size > MAX_OUTPUT - 1024 {
                 more = true;

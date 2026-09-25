@@ -318,22 +318,22 @@ async fn fetch(
             continue;
         }
         if !response.status().is_success() {
-            if browser::is_browser_challenge(response.headers()) {
-                if let Some(browser_proxy) = browser_proxy {
-                    let browser_page = browser::fetch(&url, browser_proxy).await?;
-                    let mut output: serde_json::Value = serde_json::from_str(&page(
-                        &requested,
-                        browser_page.url.as_str(),
-                        "text/plain",
-                        browser_page.text,
-                        args.start_char,
-                        args.max_chars,
-                    )?)
-                    .map_err(failed)?;
-                    output["retrieval_method"] = json!("isolated_browser");
-                    output["title"] = json!(browser_page.title);
-                    return Ok(output.to_string());
-                }
+            if browser::is_browser_challenge(response.headers())
+                && let Some(browser_proxy) = browser_proxy
+            {
+                let browser_page = browser::fetch(&url, browser_proxy).await?;
+                let mut output: serde_json::Value = serde_json::from_str(&page(
+                    &requested,
+                    browser_page.url.as_str(),
+                    "text/plain",
+                    browser_page.text,
+                    args.start_char,
+                    args.max_chars,
+                )?)
+                .map_err(failed)?;
+                output["retrieval_method"] = json!("isolated_browser");
+                output["title"] = json!(browser_page.title);
+                return Ok(output.to_string());
             }
             return Err(fetch_status_error(response.status(), response.headers()));
         }
