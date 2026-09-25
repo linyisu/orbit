@@ -238,12 +238,24 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(&state.workspace);
-    let full_path = safe_output(&state.workspace);
-    let path = if full_path.width() + 2 <= path_width {
-        format!("󰉋 {full_path}")
+    let full_path = safe_output(&super::project_label::path_label(
+        &state.workspace,
+        state.completion_home.as_deref(),
+    ));
+    let branch = state
+        .branch
+        .as_deref()
+        .filter(|_| state.branch_workspace == state.workspace)
+        .map(|branch| format!(" : {}", safe_output(branch)))
+        .unwrap_or_default();
+    let branch = fit_label(&branch, path_width / 2, false);
+    let available_path = path_width.saturating_sub(branch.width());
+    let path = if full_path.width() <= available_path {
+        full_path
     } else {
-        fit_label(&safe_output(project), path_width, false)
+        fit_label(&safe_output(project), available_path, false)
     };
+    let path = format!("{path}{branch}");
 
     let gap = available.saturating_sub(path.width() + right.width());
     let context_offset = (!right.is_empty()).then_some((2 + path.width() + gap) as u16);

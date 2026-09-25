@@ -14,6 +14,7 @@ mod markdown;
 mod navigation;
 mod overlay;
 mod permissions;
+mod project_label;
 pub mod render;
 mod search;
 mod selection;
@@ -212,6 +213,9 @@ pub async fn run(
     let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
     let mut frames = frames::Frames::default();
     let mut wheel = wheel::Wheel::default();
+    let mut branch_task: Option<JoinHandle<(String, Option<String>)>> = None;
+    let mut branch_checked = std::time::Instant::now();
+    let mut branch_workspace = String::new();
 
     let result: Result<()> = async {
         let mut dirty = true;
@@ -990,6 +994,23 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    if branch_task.as_ref().is_some_and(|task| task.is_finished())
+                        && let Ok((workspace, branch)) = branch_task.take().unwrap().await
+                        && workspace == state.workspace
+                    {
+                        dirty |= state.branch_workspace != workspace || state.branch != branch;
+                        state.branch_workspace = workspace;
+                        state.branch = branch;
+                    }
+                    if branch_task.is_none() && (branch_workspace != state.workspace || branch_checked.elapsed() >= Duration::from_secs(2)) {
+                        branch_workspace = state.workspace.clone();
+                        branch_checked = std::time::Instant::now();
+                        let workspace = branch_workspace.clone();
+                        branch_task = Some(tokio::spawn(async move {
+                            let branch = project_label::branch(&workspace).await;
+                            (workspace, branch)
+                        }));
+                    }
                     dirty |= session.poll_title().await.unwrap_or(false);
                     dirty |= tabs.poll_titles().await;
                     dirty |= state.navigation.advance_preview();
