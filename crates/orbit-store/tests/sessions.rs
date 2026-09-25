@@ -206,11 +206,20 @@ async fn rejects_a_database_from_a_newer_schema() {
 async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
-    let writer = store
+    let mut writer = store
         .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
         .await
         .unwrap();
     let id = writer.id().to_owned();
+    let usage = store.session_storage_usage().await.unwrap();
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].id, id);
+    assert!(usage[0].payload_bytes > 0);
+    writer.begin("prompt".into(), "mock".into()).await.unwrap();
+    writer.append(vec![text("stored event")]).await.unwrap();
+    writer.finish("failed", Vec::new(), None).await.unwrap();
+    let with_event = store.session_storage_usage().await.unwrap();
+    assert!(with_event[0].payload_bytes > usage[0].payload_bytes);
     for extension in ["workspaces", "command-output", "artifacts"] {
         let sidecar = db.path().with_extension(extension).join(&id);
         std::fs::create_dir_all(&sidecar).unwrap();
@@ -223,6 +232,7 @@ async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
 
     assert!(store.delete_session(&id).await.unwrap());
     assert!(store.load(&id).await.is_err());
+    assert!(store.session_storage_usage().await.unwrap().is_empty());
     for extension in ["workspaces", "command-output", "artifacts"] {
         assert!(!db.path().with_extension(extension).join(&id).exists());
     }

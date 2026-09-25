@@ -80,6 +80,8 @@ enum ProjectCommand {
 #[derive(Debug, Subcommand)]
 enum SessionCommand {
     List,
+    /// Show the stored payload size of each session before choosing what to delete.
+    Storage,
     /// Delete a closed session, its canonical history, and private sidecar files.
     Delete {
         id: String,
@@ -616,6 +618,16 @@ async fn main() -> Result<()> {
                 orbit_store::store::Store::open(session::database_path(cli.database)?).await?;
             match command {
                 SessionCommand::List => println!("{}", session::list_text(&store).await?),
+                SessionCommand::Storage => {
+                    for usage in store.session_storage_usage().await? {
+                        println!(
+                            "{}  {:>12} B  {}",
+                            usage.id,
+                            usage.payload_bytes,
+                            usage.title.replace(['\n', '\r', '\t'], " ")
+                        );
+                    }
+                }
                 SessionCommand::Delete { id, yes } => {
                     anyhow::ensure!(yes, "永久删除会话需要 --yes；请先确认会话 ID。");
                     let deleted = store.delete_session(&id).await?;

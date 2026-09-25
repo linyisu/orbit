@@ -24,6 +24,14 @@ pub struct Store {
     path: PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionStorageUsage {
+    pub id: String,
+    pub title: String,
+    /// Stored payload bytes, excluding SQLite indexes and unused pages.
+    pub payload_bytes: u64,
+}
+
 // Holding the file keeps a process-scoped writer lease, including between runs.
 // Readers can inspect a live session without acquiring this lease.
 pub struct SessionWriter {
@@ -357,6 +365,36 @@ impl Store {
         }).await
     }
 
+    pub async fn session_storage_usage(&self) -> Result<Vec<SessionStorageUsage>> {
+        self.read_access(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT s.id,s.title,
+                    length(CAST(s.history AS BLOB))
+                    + COALESCE((SELECT sum(length(CAST(r.prompt AS BLOB))) FROM runs r WHERE r.session_id=s.id),0)
+                    + COALESCE((SELECT sum(length(CAST(e.payload AS BLOB))) FROM events e JOIN runs r ON r.id=e.run_id WHERE r.session_id=s.id),0)
+                    + COALESCE((SELECT sum(length(CAST(m.payload AS BLOB))) FROM session_messages m WHERE m.session_id=s.id),0)
+                    + COALESCE((SELECT sum(length(CAST(am.payload AS BLOB))) FROM context_archive_messages am JOIN context_archives a ON a.id=am.archive_id WHERE a.session_id=s.id),0)
+                    + COALESCE((SELECT sum(length(CAST(c.payload AS BLOB))) FROM execution_checkpoints c JOIN runs r ON r.id=c.run_id WHERE r.session_id=s.id),0)
+                    + COALESCE((SELECT sum(length(CAST(p.payload AS BLOB))) FROM compaction_progress p WHERE p.session_id=s.id),0)
+                    + COALESCE((SELECT sum(length(CAST(m.content AS BLOB))) FROM session_memories m WHERE m.session_id=s.id),0)
+                    + COALESCE((SELECT length(CAST(b.payload AS BLOB)) FROM session_git_baselines b WHERE b.session_id=s.id),0)
+                    + COALESCE((SELECT length(CAST(b.payload AS BLOB)) FROM session_workspace_baselines b WHERE b.session_id=s.id),0)
+                 FROM sessions s ORDER BY 3 DESC,s.id",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok(SessionStorageUsage {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        payload_bytes: row.get::<_, i64>(2)?.max(0) as u64,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+        .await
+    }
+
     /// Read identity and display metadata without deserializing the event log.
     pub async fn session(&self, id: &str) -> Result<Session> {
         let id = id.to_owned();
@@ -402,17 +440,15 @@ impl Store {
             for (run_id, prompt, status, elapsed_ms) in rows {
                 let mut events = transaction
                     .prepare("SELECT payload FROM events WHERE run_id=?1 ORDER BY id")?;
-                let payloads = events
-                    .query_map([run_id], |r| r.get::<_, String>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut decoded = Vec::new();
+                for payload in events.query_map([run_id], |r| r.get::<_, String>(0))? {
+                    decoded.push(serde_json::from_str(&payload?)?);
+                }
                 runs.push(Run {
                     prompt,
                     status,
                     elapsed_ms,
-                    events: payloads
-                        .iter()
-                        .map(|p| serde_json::from_str(p))
-                        .collect::<serde_json::Result<_>>()?,
+                    events: decoded,
                 });
             }
             let checkpoint: Option<String> = transaction.query_row(
