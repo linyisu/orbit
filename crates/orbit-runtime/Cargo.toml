@@ -5,7 +5,9 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+libc.workspace = true
 rustix.workspace = true
+seccompiler.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -341,6 +341,41 @@ async fn process_limits_keep_memory_and_descriptor_bounds() {
 }
 
 #[tokio::test]
+#[ignore = "requires Linux user namespaces and /usr/bin/cc"]
+async fn seccomp_rejects_ptrace_without_blocking_normal_processes() {
+    let (root, workspace) = fixture();
+    fs::write(
+        root.path().join("seccomp_probe.c"),
+        "#include <errno.h>\n#include <stdio.h>\n#include <sys/ptrace.h>\nint main(void) { errno = 0; long result = ptrace(PTRACE_TRACEME, 0, 0, 0); if (result == -1 && errno == EPERM) { puts(\"ptrace blocked\"); return 0; } return 1; }\n",
+    )
+    .unwrap();
+    let compiled = std::process::Command::new("/usr/bin/cc")
+        .arg(root.path().join("seccomp_probe.c"))
+        .arg("-o")
+        .arg(root.path().join("seccomp_probe"))
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compiled.stdout),
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+
+    let result = sandbox::run(
+        workspace,
+        "./seccomp_probe".into(),
+        Duration::from_secs(10),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert!(result.stdout.contains("ptrace blocked"), "{result:?}");
+}
+
+#[tokio::test]
 #[ignore = "requires Linux user namespaces"]
 async fn command_stderr_with_a_bwrap_prefix_is_a_normal_program_failure() {
     let (_root, workspace) = fixture();

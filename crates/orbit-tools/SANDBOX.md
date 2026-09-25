@@ -61,7 +61,7 @@ test = "cargo test --offline --workspace --target-dir /scratch/target"
 
 - 系统 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 与动态链接缓存只读挂载。独立 PID、IPC、用户和 UTS 命名空间；清空 capabilities，禁止嵌套用户命名空间。只有网络策略为 `deny` 时才创建独立网络命名空间；可在 `[command]` 中设置 `network = "deny"`，默认仍为 `allow`。
 - 环境清空，只设置 PATH、HOME、TMPDIR、LANG。`/tmp` 为 64 MiB 临时文件系统，`/dev` 为最小设备集；没有宿主 HOME 或 SSH agent。网络访问由当前策略决定。
-- 地址空间 4 GiB、单文件 64 MiB、文件描述符 1024、NPROC 1024。CPU 不另设时间上限，命令受墙钟超时与取消控制。没有 cgroup 总内存预算、系统调用过滤或虚拟机隔离。
+- 地址空间 4 GiB、单文件 64 MiB、文件描述符 1024、NPROC 1024。CPU 不另设时间上限，命令受墙钟超时与取消控制。Bubblewrap 必须加载 seccomp 过滤器，拒绝 `ptrace`、BPF、性能计数器、密钥环以及挂载和命名空间管理等高风险系统调用；生成或加载失败时命令不执行。过滤器是额外约束，不是完整 syscall 白名单；没有 cgroup 总内存预算或虚拟机隔离。
 - 命令正文放入私有脚本文件，不受工具 8 KiB 或 execve 单参数限制。超时从进程启动开始计算，源快照准备不计入。
 - stdout/stderr 各返回最后 32 KiB。完整日志按会话保存，单流最多 16 MiB、会话滚动预算 128 MiB；通过 `read_command_output` 分页回读。截断不会终止进程，工具会报告总字节数与截断状态。
 - 取消、超时及父进程退出终止命名空间中的后代。执行检查点先于工具开始持久化；中断恢复不会直接重放副作用，结果未知的操作需先核实。

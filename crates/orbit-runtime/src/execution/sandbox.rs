@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -8,6 +8,7 @@ use std::{
 
 use crate::error::{RuntimeError, failed};
 use crate::verification::{FileFingerprint, VerificationEvidence, WorkspaceFingerprint};
+use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -129,6 +130,7 @@ impl Snapshot {
             &serde_json::to_vec(&(
                 &snapshot.fingerprint.files,
                 &snapshot.fingerprint.directories,
+                snapshot.fingerprint.skipped_entries,
             ))
             .map_err(failed)?,
         );
@@ -376,10 +378,11 @@ impl BwrapSandboxBackend {
         validate_mounts(mounts, policy)?;
 
         let mut command = Command::new(&self.bwrap_path);
+        let seccomp = seccomp_filter()?;
 
         command
             .env_clear()
-            .stdin(Stdio::null())
+            .stdin(Stdio::from(seccomp))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -535,6 +538,8 @@ impl SandboxBackend for BwrapSandboxBackend {
 
 fn configure_isolation(command: &mut Command, network: NetworkPolicy) {
     command.args([
+        "--seccomp",
+        "0",
         "--unshare-user",
         "--disable-userns",
         "--die-with-parent",
@@ -550,6 +555,51 @@ fn configure_isolation(command: &mut Command, network: NetworkPolicy) {
     if network == NetworkPolicy::Deny {
         command.arg("--unshare-net");
     }
+}
+
+fn seccomp_filter() -> Result<std::fs::File, RuntimeError> {
+    let blocked = [
+        libc::SYS_ptrace,
+        libc::SYS_bpf,
+        libc::SYS_perf_event_open,
+        libc::SYS_keyctl,
+        libc::SYS_add_key,
+        libc::SYS_request_key,
+        libc::SYS_mount,
+        libc::SYS_umount2,
+        libc::SYS_pivot_root,
+        libc::SYS_setns,
+        libc::SYS_unshare,
+        libc::SYS_init_module,
+        libc::SYS_finit_module,
+        libc::SYS_delete_module,
+        libc::SYS_kexec_load,
+        libc::SYS_open_by_handle_at,
+    ];
+    let rules = blocked
+        .into_iter()
+        .map(|syscall| (syscall, vec![]))
+        .collect();
+    let architecture = std::env::consts::ARCH.try_into().map_err(failed)?;
+    let filter = SeccompFilter::new(
+        rules,
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::EPERM as u32),
+        architecture,
+    )
+    .map_err(failed)?;
+    let program: BpfProgram = filter.try_into().map_err(failed)?;
+    let mut file = tempfile::tempfile().map_err(failed)?;
+    for instruction in program {
+        file.write_all(&instruction.code.to_ne_bytes())
+            .map_err(failed)?;
+        file.write_all(&[instruction.jt, instruction.jf])
+            .map_err(failed)?;
+        file.write_all(&instruction.k.to_ne_bytes())
+            .map_err(failed)?;
+    }
+    file.rewind().map_err(failed)?;
+    Ok(file)
 }
 
 fn mount_system_paths(command: &mut Command, network: NetworkPolicy) {
