@@ -98,24 +98,6 @@ impl ModelClient {
             ));
         }
 
-        let loopback = endpoint.host_str() == Some("localhost")
-            || endpoint
-                .host_str()
-                .and_then(|host| {
-                    host.trim_matches(['[', ']'])
-                        .parse::<std::net::IpAddr>()
-                        .ok()
-                })
-                .is_some_and(|address| address.is_loopback());
-        if config.api_key.as_deref().is_some_and(|key| !key.is_empty())
-            && endpoint.scheme() != "https"
-            && !loopback
-        {
-            return Err(ModelError::InvalidBaseUrl(
-                "an API key requires HTTPS except for a loopback endpoint".into(),
-            ));
-        }
-
         let host = endpoint.host_str().unwrap_or_default();
         if (host.starts_with("sk-") && !host.contains('.') && host.len() > 20)
             || config
@@ -569,16 +551,18 @@ pub(crate) fn invalid_response(message: &str) -> ModelError {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn rejects_remote_http_with_credentials() {
-        let config = crate::types::ModelConfig {
-            base_url: "http://example.com/v1".into(),
-            api_key: Some("secret".into()),
-            ..Default::default()
-        };
+    fn accepts_custom_http_endpoints_with_api_keys() {
+        for base_url in ["http://example.com/v1", "http://192.168.1.42:8080/v1"] {
+            let config = crate::types::ModelConfig {
+                base_url: base_url.into(),
+                api_key: Some("secret".into()),
+                ..Default::default()
+            };
 
-        let error = super::ModelClient::new(config).unwrap_err();
+            let client = super::ModelClient::new(config).unwrap();
 
-        assert!(error.to_string().contains("requires HTTPS"));
+            assert_eq!(client.config().base_url, base_url);
+        }
     }
 
     #[tokio::test]
