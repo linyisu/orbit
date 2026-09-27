@@ -1,3 +1,4 @@
+use orbit_agent::tool::FileChange;
 use orbit_model::types::ChatMessage;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,6 +18,18 @@ pub struct Run {
     pub status: String,
     pub started_at_ms: i64,
     pub finished_at_ms: Option<i64>,
+}
+
+/// A committed Orbit write, stored separately from the model-visible tool result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceChange {
+    pub id: i64,
+    pub run_id: i64,
+    pub run_status: String,
+    pub call_id: String,
+    pub tool: String,
+    pub change: FileChange,
+    pub undone: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

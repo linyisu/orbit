@@ -1,3 +1,4 @@
+use orbit_agent::tool::FileChange;
 use orbit_model::types::{ChatMessage, ToolCall};
 use orbit_store::Store;
 use serde_json::json;
@@ -44,6 +45,89 @@ async fn records_and_reopens_complete_session_history() {
         .unwrap();
     assert_eq!(first[0].message, ChatMessage::user("find the bug"));
     assert_eq!(second[0].message, ChatMessage::assistant("fixed"));
+}
+
+#[tokio::test]
+async fn file_change_receipts_survive_reopen_and_undo_is_session_scoped() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store.create(root.path(), "model").await.unwrap();
+    let session_id = writer.id().to_owned();
+    let other = store.create(root.path(), "model").await.unwrap();
+    writer.begin("edit".into(), "model".into()).await.unwrap();
+    let call = ToolCall::function(
+        "call-1",
+        "edit_file",
+        json!({ "path": "src/main.rs", "old_text": "old", "new_text": "new" }),
+    );
+    let change = FileChange {
+        path: "src/main.rs".into(),
+        before: Some("old\n".into()),
+        after: "new\n".into(),
+    };
+
+    writer
+        .record_changes(&call, std::slice::from_ref(&change))
+        .await
+        .unwrap();
+    writer.finish("completed").await.unwrap();
+    drop(writer);
+    drop(store);
+
+    let reopened = Store::open(&database).await.unwrap();
+    let records = reopened.workspace_changes(&session_id).await.unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].change, change);
+    assert_eq!(records[0].tool, "edit_file");
+    assert_eq!(records[0].run_status, "completed");
+    assert!(
+        reopened
+            .record_workspace_undo(other.id(), records[0].id)
+            .await
+            .is_err()
+    );
+    reopened
+        .record_workspace_undo(&session_id, records[0].id)
+        .await
+        .unwrap();
+    assert!(
+        reopened
+            .record_workspace_undo(&session_id, records[0].id)
+            .await
+            .is_err()
+    );
+    assert!(reopened.workspace_changes(&session_id).await.unwrap()[0].undone);
+}
+
+#[tokio::test]
+async fn version_seven_database_migrates_without_losing_session_history() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("sessions.db");
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store.create(root.path(), "model").await.unwrap();
+    let session_id = writer.id().to_owned();
+    writer.begin("hello".into(), "model".into()).await.unwrap();
+    writer.finish("completed").await.unwrap();
+    drop(writer);
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch("DROP TABLE workspace_changes; PRAGMA user_version = 7;")
+        .unwrap();
+    drop(connection);
+
+    let upgraded = Store::open(&database).await.unwrap();
+
+    assert_eq!(upgraded.load(&session_id).await.unwrap().messages.len(), 1);
+    assert!(
+        upgraded
+            .workspace_changes(&session_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -116,7 +200,11 @@ async fn upgrades_version_six_with_existing_messages_and_adds_usage_samples() {
 
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
-        .execute_batch("DROP TABLE model_token_samples; PRAGMA user_version = 6;")
+        .execute_batch(
+            "DROP TABLE workspace_changes;
+             DROP TABLE model_token_samples;
+             PRAGMA user_version = 6;",
+        )
         .unwrap();
     drop(connection);
 
@@ -199,7 +287,8 @@ async fn version_five_sessions_upgrade_with_reasoning_profile() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE model_token_samples;
+            "DROP TABLE workspace_changes;
+             DROP TABLE model_token_samples;
              ALTER TABLE sessions DROP COLUMN reasoning_effort;
              PRAGMA user_version = 5;",
         )
@@ -450,7 +539,8 @@ async fn upgrades_existing_session_database_without_losing_messages() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE model_token_samples;
+            "DROP TABLE workspace_changes;
+             DROP TABLE model_token_samples;
              DROP TABLE session_memories;
              DROP TABLE project_tasks;
              DROP TABLE context_checkpoints;
@@ -500,7 +590,8 @@ async fn upgrades_version_two_command_outputs_to_verification_evidence_schema() 
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE model_token_samples;
+            "DROP TABLE workspace_changes;
+                        DROP TABLE model_token_samples;
                         DROP TABLE session_memories;
                         DROP TABLE project_tasks;
                         DROP TABLE context_checkpoints;
@@ -625,7 +716,8 @@ async fn upgrades_version_three_session_with_checkpoint_schema() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE model_token_samples;
+            "DROP TABLE workspace_changes;
+                              DROP TABLE model_token_samples;
                               DROP TABLE session_memories;
                               DROP TABLE project_tasks;
                               DROP TABLE context_checkpoints;

@@ -1,4 +1,4 @@
-use orbit_agent::tool::{Tool, ToolError, ToolFuture};
+use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutputFuture};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use serde::Deserialize;
 use serde_json::json;
@@ -50,6 +50,18 @@ impl Tool for EditFile {
     }
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
+        Box::pin(async move {
+            self.execute_output(call, cancellation)
+                .await
+                .map(|output| output.content)
+        })
+    }
+
+    fn execute_output<'a>(
+        &'a self,
+        call: ToolCall,
+        cancellation: CancellationToken,
+    ) -> ToolOutputFuture<'a> {
         Box::pin(async move {
             let args: Arguments = serde_json::from_str(&call.function.arguments).map_err(|e| {
                 ToolError::InvalidArguments {

@@ -273,6 +273,7 @@ where
                         AgentEvent::ToolFinished {
                             call: call.clone(),
                             content: output.content,
+                            changes: output.changes,
                         },
                     ),
                     Err(error) => {

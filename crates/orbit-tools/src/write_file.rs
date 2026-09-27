@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture};
+use orbit_agent::tool::{FileChange, Tool, ToolError, ToolFuture, ToolOutput, ToolOutputFuture};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use rustix::fs::{
     AtFlags, Mode, OFlags, RenameFlags, fchmod, openat, renameat, renameat_with, unlinkat,
@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, WritePreview},
+    approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, DeletePreview, WritePreview},
     workspace::{Workspace, WorkspaceError},
 };
 
@@ -50,7 +50,7 @@ impl WriteFile {
         path: String,
         transform: impl FnOnce(&str) -> Result<String, ToolError> + Send + 'static,
         cancellation: CancellationToken,
-    ) -> Result<String, ToolError> {
+    ) -> Result<ToolOutput, ToolError> {
         check_cancelled(&cancellation)?;
 
         let workspace = self.workspace.clone();
@@ -86,6 +86,146 @@ impl WriteFile {
             .approve_and_commit(&self.approvals, cancellation)
             .await
     }
+
+    /// Restore only if the file still matches the committed write receipt.
+    pub async fn restore(
+        &self,
+        change: FileChange,
+        cancellation: CancellationToken,
+    ) -> Result<String, ToolError> {
+        check_cancelled(&cancellation)?;
+
+        if let Some(before) = change.before {
+            let workspace = self.workspace.clone();
+            let path = change.path.clone();
+            let expected = change.after;
+            let prepared = tokio::task::spawn_blocking(move || {
+                let prepared = Prepared::new(
+                    workspace,
+                    Arguments {
+                        path,
+                        content: before,
+                    },
+                )?;
+                if prepared.preview.before.as_deref() != Some(expected.as_str()) {
+                    return Err(failed(
+                        "cannot undo: current file differs from the recorded write",
+                    ));
+                }
+                Ok::<_, ToolError>(prepared)
+            })
+            .await
+            .map_err(failed)??;
+
+            let output = prepared
+                .approve_and_commit(&self.approvals, cancellation)
+                .await?;
+            Ok(json!({ "path": change.path, "restored": true, "deleted": false, "result": output.content }).to_string())
+        } else {
+            let workspace = self.workspace.clone();
+            let path = change.path.clone();
+            let expected = change.after;
+            let prepared =
+                tokio::task::spawn_blocking(move || DeletePrepared::new(workspace, path, expected))
+                    .await
+                    .map_err(failed)??;
+            let result = prepared
+                .approve_and_commit(&self.approvals, cancellation)
+                .await?;
+            Ok(
+                json!({ "path": change.path, "restored": true, "deleted": true, "result": result })
+                    .to_string(),
+            )
+        }
+    }
+}
+
+struct DeletePrepared {
+    workspace: Workspace,
+    path: String,
+    before: Fingerprint,
+    text: String,
+    parent: (u64, u64),
+}
+
+impl DeletePrepared {
+    fn new(workspace: Workspace, path: String, expected: String) -> Result<Self, ToolError> {
+        let (parent, _) = workspace.write_parent(Path::new(&path)).map_err(failed)?;
+        let parent_metadata = parent.metadata().map_err(failed)?;
+        let (before, text) = snapshot(&workspace, &path)?;
+        let before = before.ok_or_else(|| failed("cannot undo: created file is already absent"))?;
+        let text = text.ok_or_else(|| failed("cannot undo: created file is already absent"))?;
+        if text != expected {
+            return Err(failed(
+                "cannot undo: current file differs from the recorded write",
+            ));
+        }
+
+        Ok(Self {
+            workspace,
+            path,
+            before,
+            text,
+            parent: (parent_metadata.dev(), parent_metadata.ino()),
+        })
+    }
+
+    async fn approve_and_commit(
+        self,
+        approvals: &ApprovalSender,
+        cancellation: CancellationToken,
+    ) -> Result<String, ToolError> {
+        check_cancelled(&cancellation)?;
+        let (sender, receiver) = oneshot::channel();
+        let preview = ApprovalPreview::Delete(DeletePreview {
+            path: self.path.clone(),
+            before: self.text.clone(),
+        });
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+            sent = approvals.send(ApprovalRequest { preview, decision: sender }) => {
+                sent.map_err(|_| failed("undo approval unavailable; no file was changed"))?;
+            }
+        }
+
+        let approved = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+            answer = receiver => answer.unwrap_or(false),
+        };
+        if !approved {
+            return Err(failed("user denied undo; no file was changed"));
+        }
+
+        tokio::task::spawn_blocking(move || self.commit(cancellation))
+            .await
+            .map_err(failed)?
+    }
+
+    fn commit(self, cancellation: CancellationToken) -> Result<String, ToolError> {
+        check_cancelled(&cancellation)?;
+        let (parent, name) = self
+            .workspace
+            .write_parent(Path::new(&self.path))
+            .map_err(failed)?;
+        let metadata = parent.metadata().map_err(failed)?;
+        if (metadata.dev(), metadata.ino()) != self.parent {
+            return Err(failed("cannot undo: parent directory changed"));
+        }
+
+        let (current, text) = snapshot(&self.workspace, &self.path)?;
+        if current.as_ref() != Some(&self.before) || text.as_deref() != Some(self.text.as_str()) {
+            return Err(failed(
+                "cannot undo: current file differs from the recorded write",
+            ));
+        }
+
+        check_cancelled(&cancellation)?;
+        unlinkat(&parent, &name, AtFlags::empty()).map_err(failed)?;
+        let synced = parent.sync_all().is_ok();
+        Ok(json!({ "path": self.path, "deleted": true, "directory_synced": synced }).to_string())
+    }
 }
 
 impl Tool for WriteFile {
@@ -106,6 +246,18 @@ impl Tool for WriteFile {
     }
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
+        Box::pin(async move {
+            self.execute_output(call, cancellation)
+                .await
+                .map(|output| output.content)
+        })
+    }
+
+    fn execute_output<'a>(
+        &'a self,
+        call: ToolCall,
+        cancellation: CancellationToken,
+    ) -> ToolOutputFuture<'a> {
         Box::pin(async move {
             let args: Arguments = serde_json::from_str(&call.function.arguments).map_err(|e| {
                 ToolError::InvalidArguments {
@@ -188,7 +340,7 @@ impl Prepared {
         self,
         approvals: &ApprovalSender,
         cancellation: CancellationToken,
-    ) -> Result<String, ToolError> {
+    ) -> Result<ToolOutput, ToolError> {
         let prepared = self;
         check_cancelled(&cancellation)?;
 
@@ -217,9 +369,15 @@ impl Prepared {
         }
 
         check_cancelled(&cancellation)?;
+        let change = FileChange {
+            path: prepared.preview.path.clone(),
+            before: prepared.preview.before.clone(),
+            after: prepared.preview.after.clone(),
+        };
         tokio::task::spawn_blocking(move || prepared.commit(cancellation))
             .await
             .map_err(failed)?
+            .map(|receipt| ToolOutput::with_changes(receipt, vec![change]))
     }
 
     fn commit(self, cancellation: CancellationToken) -> Result<String, ToolError> {

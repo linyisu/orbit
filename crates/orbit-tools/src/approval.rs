@@ -8,6 +8,12 @@ pub struct WritePreview {
 }
 
 #[derive(Clone, Debug)]
+pub struct DeletePreview {
+    pub path: String,
+    pub before: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct CommandPreview {
     pub command: String,
     pub timeout_seconds: u64,
@@ -16,6 +22,7 @@ pub struct CommandPreview {
 #[derive(Clone, Debug)]
 pub enum ApprovalPreview {
     Write(WritePreview),
+    Delete(DeletePreview),
     Command(CommandPreview),
 }
 

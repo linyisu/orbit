@@ -175,6 +175,7 @@ fn collect(
         .collect::<Vec<_>>();
 
     let mut walker = WalkBuilder::new(workspace.root());
+    walker.require_git(false);
     let filter = workspace.clone();
     let filter_scope = scope.clone();
     walker

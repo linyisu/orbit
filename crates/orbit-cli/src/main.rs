@@ -29,7 +29,7 @@ use orbit_model::{
         ChatMessage, ChatRequest, ModelConfig, ReasoningAdapter, ReasoningEffort, StreamEvent,
     },
 };
-use orbit_store::Store;
+use orbit_store::{SessionWriter, Store};
 use orbit_tools::{InstructionSet, Workspace, load_for_target};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -516,6 +516,48 @@ async fn token_calibration(
     Ok(calibration)
 }
 
+async fn persist_agent_event(
+    writer: &SessionWriter,
+    store: &Store,
+    model_name: &str,
+    event: &AgentEvent,
+) -> Result<(), AgentError> {
+    match event {
+        AgentEvent::MessageCommitted { message } => writer
+            .append(message.clone())
+            .await
+            .map_err(|error| AgentError::EventHandler(error.to_string()))?,
+        AgentEvent::ToolFinished { call, changes, .. } => writer
+            .record_changes(call, changes)
+            .await
+            .map_err(|error| AgentError::EventHandler(error.to_string()))?,
+        AgentEvent::ContextCheckpoint { checkpoint } => {
+            let payload = serde_json::to_string(checkpoint)
+                .map_err(|error| AgentError::EventHandler(error.to_string()))?;
+            store
+                .save_context_checkpoint(
+                    writer.id(),
+                    checkpoint.through,
+                    &checkpoint.prefix_sha256,
+                    &payload,
+                )
+                .await
+                .map_err(|error| AgentError::EventHandler(error.to_string()))?;
+        }
+        AgentEvent::ModelUsageObserved {
+            local_estimate,
+            actual_input_tokens: Some(actual),
+            ..
+        } => {
+            let _ = store
+                .record_model_token_sample(writer.id(), model_name, *local_estimate, *actual)
+                .await;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -620,6 +662,18 @@ fn startup_instructions(
     Ok(instructions)
 }
 
+async fn open_store_and_instructions(
+    workspace: &Path,
+    config_path: &Path,
+    database: &Path,
+    user_home: Option<&Path>,
+) -> Result<(Store, InstructionSet)> {
+    let store = Store::open(database).await?;
+    let instructions = startup_instructions(workspace, config_path, database, user_home)?;
+
+    Ok((store, instructions))
+}
+
 async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result<()> {
     ensure!(args.images.len() <= 4, "at most four images per message");
     let disabled = args.disabled.iter().copied().collect::<BTreeSet<_>>();
@@ -648,8 +702,8 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
         .instruction_home
         .as_deref()
         .or(file_config.instruction_home.as_deref());
-    let instructions = startup_instructions(&workspace, &config_path, &database, instruction_home)?;
-    let store = Store::open(&database).await?;
+    let (store, instructions) =
+        open_store_and_instructions(&workspace, &config_path, &database, instruction_home).await?;
     let (approval_sender, approval_receiver) = orbit_tools::approval::channel();
     let mut saved_effort = None;
     let (mut writer, mut history, checkpoint) = if let Some(id) = args.resume.as_deref() {
@@ -761,41 +815,8 @@ async fn chat(config_path: PathBuf, database: PathBuf, args: ChatArgs) -> Result
             let store = &store;
             let model_name = &model_name;
             async move {
+                persist_agent_event(writer, store, model_name, &event).await?;
                 match event {
-                    AgentEvent::MessageCommitted { message } => writer
-                        .append(message)
-                        .await
-                        .map_err(|error| AgentError::EventHandler(error.to_string()))?,
-                    AgentEvent::ContextCheckpoint { checkpoint } => {
-                        let payload = serde_json::to_string(&checkpoint)
-                            .map_err(|error| AgentError::EventHandler(error.to_string()))?;
-                        store
-                            .save_context_checkpoint(
-                                writer.id(),
-                                checkpoint.through,
-                                &checkpoint.prefix_sha256,
-                                &payload,
-                            )
-                            .await
-                            .map_err(|error| AgentError::EventHandler(error.to_string()))?;
-                    }
-                    AgentEvent::ModelUsageObserved {
-                        local_estimate,
-                        actual_input_tokens: Some(actual),
-                        ..
-                    } => {
-                        if let Err(error) = store
-                            .record_model_token_sample(
-                                writer.id(),
-                                model_name,
-                                local_estimate,
-                                actual,
-                            )
-                            .await
-                        {
-                            eprintln!("token calibration was not saved: {error}");
-                        }
-                    }
                     AgentEvent::Model(StreamEvent::TextDelta(text)) if streaming => {
                         print!("{text}");
                         std::io::stdout()
@@ -904,6 +925,58 @@ mod tests {
         );
         assert_eq!(request.messages.last(), history.last());
         assert_eq!(history, vec![ChatMessage::user("fix parser")]);
+    }
+
+    #[tokio::test]
+    async fn startup_creates_a_new_database_parent_before_protecting_its_path() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.toml");
+        let database = root.path().join("new/data/sessions.db");
+        std::fs::write(&config, "model = 'test'\n").unwrap();
+        std::fs::write(root.path().join("AGENTS.md"), "project rules\n").unwrap();
+        assert!(!database.parent().unwrap().exists());
+
+        let (store, instructions) =
+            open_store_and_instructions(root.path(), &config, &database, None)
+                .await
+                .unwrap();
+
+        assert_eq!(store.path(), database.as_path());
+        assert!(database.exists());
+        assert_eq!(instructions.files.len(), 1);
+        assert_eq!(instructions.files[0].content, "project rules\n");
+    }
+
+    #[tokio::test]
+    async fn shared_event_persistence_records_a_committed_file_change() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path().join("sessions.db")).await.unwrap();
+        let mut writer = store.create(root.path(), "model").await.unwrap();
+        writer.begin("edit".into(), "model".into()).await.unwrap();
+        let call = orbit_model::types::ToolCall::function(
+            "call-1",
+            "write_file",
+            serde_json::json!({ "path": "file.txt", "content": "after" }),
+        );
+        let change = orbit_agent::tool::FileChange {
+            path: "file.txt".into(),
+            before: Some("before".into()),
+            after: "after".into(),
+        };
+        let event = AgentEvent::ToolFinished {
+            call,
+            content: "written".into(),
+            changes: vec![change.clone()],
+        };
+
+        persist_agent_event(&writer, &store, "model", &event)
+            .await
+            .unwrap();
+        writer.finish("completed").await.unwrap();
+
+        let records = store.workspace_changes(writer.id()).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].change, change);
     }
 
     #[test]

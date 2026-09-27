@@ -75,6 +75,41 @@ async fn replaces_inserts_deletes_and_explicitly_replaces_all_without_normalizin
 }
 
 #[tokio::test]
+async fn edit_output_carries_the_exact_committed_change_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("file"), "one\n").unwrap();
+    let (sender, mut approvals) = approval::channel();
+    let tool = EditFile::new(Workspace::new(root.path()).unwrap(), sender);
+    let task = tokio::spawn(async move {
+        tool.execute_output(
+            ToolCall::function(
+                "edit-1",
+                "edit_file",
+                json!({ "path": "file", "old_text": "one", "new_text": "two" }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let approval = tokio::time::timeout(Duration::from_secs(2), approvals.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    approval.decision.send(true).unwrap();
+    let output = task.await.unwrap().unwrap();
+
+    assert_eq!(output.changes.len(), 1);
+    assert_eq!(output.changes[0].path, "file");
+    assert_eq!(output.changes[0].before.as_deref(), Some("one\n"));
+    assert_eq!(output.changes[0].after, "two\n");
+    assert_eq!(
+        fs::read_to_string(root.path().join("file")).unwrap(),
+        "two\n"
+    );
+}
+
+#[tokio::test]
 async fn rejects_ambiguous_missing_invalid_noop_and_oversized_edits_before_approval() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("file"), "aaa\r\nx x").unwrap();

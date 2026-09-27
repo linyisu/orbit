@@ -7,13 +7,15 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use orbit_agent::tool::FileChange;
+use orbit_model::types::ToolCall;
 use orbit_model::types::{Attachment, ChatMessage, MAX_IMAGE_BYTES, image_mime};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 
-use crate::session::{CanonicalMessage, Run, Session, Snapshot};
+use crate::session::{CanonicalMessage, Run, Session, Snapshot, WorkspaceChange};
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const MAX_SESSION_OUTPUT_BYTES: i64 = 128 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -249,6 +251,28 @@ impl Store {
                      CREATE INDEX model_token_samples_lookup
                          ON model_token_samples(session_id, model, id DESC);
                      PRAGMA user_version = 7;
+                     COMMIT;",
+                )?;
+            }
+
+            if version < 8 {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     CREATE TABLE workspace_changes (
+                         id INTEGER PRIMARY KEY,
+                         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                         run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                         call_id TEXT NOT NULL,
+                         tool TEXT NOT NULL CHECK(tool IN ('write_file', 'edit_file')),
+                         path TEXT NOT NULL,
+                         before TEXT,
+                         after TEXT NOT NULL,
+                         undone_at_ms INTEGER,
+                         UNIQUE(run_id, call_id, path)
+                     );
+                     CREATE INDEX workspace_changes_session
+                         ON workspace_changes(session_id, id);
+                     PRAGMA user_version = 8;
                      COMMIT;",
                 )?;
             }
@@ -561,6 +585,54 @@ impl Store {
                 runs,
                 messages,
             })
+        })
+        .await
+    }
+
+    pub async fn workspace_changes(&self, session_id: &str) -> Result<Vec<WorkspaceChange>> {
+        validate_session_id(session_id)?;
+        let session_id = session_id.to_owned();
+        self.access(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT c.id, c.run_id, r.status, c.call_id, c.tool,
+                        c.path, c.before, c.after, c.undone_at_ms
+                 FROM workspace_changes AS c
+                 JOIN runs AS r ON r.id=c.run_id
+                 WHERE c.session_id=?1 ORDER BY c.id",
+            )?;
+            statement
+                .query_map([session_id], |row| {
+                    Ok(WorkspaceChange {
+                        id: row.get(0)?,
+                        run_id: row.get(1)?,
+                        run_status: row.get(2)?,
+                        call_id: row.get(3)?,
+                        tool: row.get(4)?,
+                        change: FileChange {
+                            path: row.get(5)?,
+                            before: row.get(6)?,
+                            after: row.get(7)?,
+                        },
+                        undone: row.get::<_, Option<i64>>(8)?.is_some(),
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn record_workspace_undo(&self, session_id: &str, change_id: i64) -> Result<()> {
+        validate_session_id(session_id)?;
+        let session_id = session_id.to_owned();
+        self.access(move |connection| {
+            let updated = connection.execute(
+                "UPDATE workspace_changes SET undone_at_ms=?3
+                 WHERE id=?1 AND session_id=?2 AND undone_at_ms IS NULL",
+                params![change_id, session_id, now_millis()],
+            )?;
+            ensure!(updated == 1, "write receipt not found or already undone");
+            Ok(())
         })
         .await
     }
@@ -1050,6 +1122,50 @@ impl SessionWriter {
                     "UPDATE sessions SET updated_at_ms=?2 WHERE id=?1",
                     params![id, now_millis()],
                 )?;
+                transaction.commit()?;
+                Ok(())
+            })
+            .await
+    }
+
+    pub async fn record_changes(&self, call: &ToolCall, changes: &[FileChange]) -> Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        ensure!(
+            matches!(call.function.name.as_str(), "write_file" | "edit_file"),
+            "only file tools may record workspace changes"
+        );
+        let run = self.active_run.context("no active run")?;
+        let id = self.id.clone();
+        let call_id = call.id.clone();
+        let tool = call.function.name.clone();
+        let changes = changes.to_vec();
+        self.store
+            .access(move |connection| {
+                let transaction = connection.transaction()?;
+                let status: String = transaction.query_row(
+                    "SELECT status FROM runs WHERE id=?1 AND session_id=?2",
+                    params![run, id],
+                    |row| row.get(0),
+                )?;
+                ensure!(status == "running", "run is no longer active");
+                for change in changes {
+                    transaction.execute(
+                        "INSERT INTO workspace_changes (
+                            session_id, run_id, call_id, tool, path, before, after
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        params![
+                            id,
+                            run,
+                            call_id,
+                            tool,
+                            change.path,
+                            change.before,
+                            change.after
+                        ],
+                    )?;
+                }
                 transaction.commit()?;
                 Ok(())
             })

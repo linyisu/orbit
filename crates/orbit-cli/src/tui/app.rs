@@ -18,6 +18,7 @@ pub enum EntryKind {
     Thinking,
     Tool,
     Notice,
+    Result,
     Error,
 }
 
@@ -171,6 +172,10 @@ impl App {
         self.entries.push(Entry::new(EntryKind::Notice, text));
     }
 
+    pub fn result(&mut self, text: impl Into<String>) {
+        self.entries.push(Entry::new(EntryKind::Result, text));
+    }
+
     pub fn error(&mut self, text: impl Into<String>) {
         self.entries.push(Entry::new(EntryKind::Error, text));
     }
@@ -307,7 +312,7 @@ impl App {
                 self.active_assistant = None;
                 self.status = "Using tools".to_owned();
             }
-            AgentEvent::ToolFinished { call, content } => {
+            AgentEvent::ToolFinished { call, content, .. } => {
                 self.finish_tool(&call.id, &content, false);
             }
             AgentEvent::ToolFailed { call, error } => {
@@ -481,6 +486,7 @@ mod tests {
         app.apply(AgentEvent::ToolFinished {
             call,
             content: "ok".into(),
+            changes: Vec::new(),
         });
         assert_eq!(app.entries[2].output, "ok");
     }
@@ -533,6 +539,7 @@ mod tests {
                 "scan_truncated": false
             })
             .to_string(),
+            changes: Vec::new(),
         });
 
         assert_eq!(app.entries[0].text, "search_text  \"fallback\"  src");

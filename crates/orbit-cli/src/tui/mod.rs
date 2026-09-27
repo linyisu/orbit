@@ -1,5 +1,6 @@
 mod app;
 mod approval_diff;
+mod changes;
 mod commands;
 mod input;
 mod markdown;
@@ -192,6 +193,10 @@ pub async fn run(config_path: PathBuf, database: PathBuf, args: TuiArgs) -> Resu
                         )),
                         Err(error) => app.error(format!("Context compaction failed: {error}")),
                     },
+                    Ok(RunOutcome::Undo(result)) => match result {
+                        Ok(path) => app.result(format!("Restored {path}")),
+                        Err(error) => app.error(format!("Undo failed: {error}")),
+                    },
                     Err(error) => {
                         app.error(format!("Agent task stopped: {error}"));
                         if runtime.writer.is_none()
@@ -339,6 +344,7 @@ async fn handle_key(
                 if matches!(
                     &request.preview,
                     orbit_tools::approval::ApprovalPreview::Write(_)
+                        | orbit_tools::approval::ApprovalPreview::Delete(_)
                 ) =>
             {
                 app.approval_full = !app.approval_full;
@@ -638,6 +644,30 @@ async fn command(
             let title = text.strip_prefix("/rename").unwrap_or("").trim();
             match runtime.store.rename_session(&app.session_id, title).await {
                 Ok(()) => app.notice(format!("Session renamed: {title}")),
+                Err(error) => app.error(error.to_string()),
+            }
+            Ok(false)
+        }
+        "/changes" => {
+            let changes = runtime.store.workspace_changes(&app.session_id).await?;
+            app.result(changes::list(&changes));
+            Ok(false)
+        }
+        "/diff" => {
+            let path = text.strip_prefix("/diff").unwrap_or("").trim();
+            if path.is_empty() {
+                app.error("Use /diff <workspace-relative path>");
+            } else {
+                let changes = runtime.store.workspace_changes(&app.session_id).await?;
+                app.result(changes::diff(&changes, path));
+            }
+            Ok(false)
+        }
+        "/undo" => {
+            let path = text.strip_prefix("/undo").unwrap_or("").trim();
+            let path = (!path.is_empty()).then_some(path);
+            match runtime.start_undo(path, app).await {
+                Ok(run) => *active = Some(run),
                 Err(error) => app.error(error.to_string()),
             }
             Ok(false)

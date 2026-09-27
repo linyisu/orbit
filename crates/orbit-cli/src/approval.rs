@@ -49,6 +49,7 @@ fn workspace_local_file(path: &str, workspace: &Path) -> bool {
 pub(crate) fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
     match preview {
         ApprovalPreview::Write(write) => workspace_local_file(&write.path, workspace),
+        ApprovalPreview::Delete(delete) => workspace_local_file(&delete.path, workspace),
         ApprovalPreview::Command(_) => true,
     }
 }
@@ -61,6 +62,12 @@ fn show_preview(preview: &ApprovalPreview) {
             eprintln!("{}", write.before.as_deref().unwrap_or("(new file)"));
             eprintln!("+++ after");
             eprintln!("{}", write.after);
+        }
+        ApprovalPreview::Delete(delete) => {
+            eprintln!("Delete file: {}", delete.path);
+            eprintln!("--- before");
+            eprintln!("{}", delete.before);
+            eprintln!("+++ after (file removed)");
         }
         ApprovalPreview::Command(command) => {
             eprintln!(

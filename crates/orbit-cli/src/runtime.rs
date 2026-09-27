@@ -38,16 +38,7 @@ pub fn workspace_tools(
     approvals: ApprovalSender,
     options: WorkspaceToolOptions,
 ) -> Result<ToolRegistry> {
-    let mut workspace = Workspace::new(root)?;
-    workspace.protect(config)?;
-    workspace.protect(database)?;
-    for suffix in ["-wal", "-shm", "-journal"] {
-        let mut sidecar = database.as_os_str().to_os_string();
-        sidecar.push(suffix);
-        workspace.protect(std::path::PathBuf::from(sidecar))?;
-    }
-    workspace.protect_opaque_runtime_root(database.with_extension("session-locks"))?;
-    workspace.protect_opaque_runtime_root(database.with_extension("attachments"))?;
+    let workspace = protected_workspace(root, config, database)?;
 
     let mut tools = ToolRegistry::new();
     orbit_tools::project_state::register(
@@ -87,6 +78,32 @@ pub fn workspace_tools(
             .with_toolchain(options.rust_toolchain),
     );
     Ok(tools)
+}
+
+pub fn workspace_writer(
+    root: &Path,
+    config: &Path,
+    database: &Path,
+    approvals: ApprovalSender,
+) -> Result<WriteFile> {
+    Ok(WriteFile::new(
+        protected_workspace(root, config, database)?,
+        approvals,
+    ))
+}
+
+fn protected_workspace(root: &Path, config: &Path, database: &Path) -> Result<Workspace> {
+    let mut workspace = Workspace::new(root)?;
+    workspace.protect(config)?;
+    workspace.protect(database)?;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut sidecar = database.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        workspace.protect(std::path::PathBuf::from(sidecar))?;
+    }
+    workspace.protect_opaque_runtime_root(database.with_extension("session-locks"))?;
+    workspace.protect_opaque_runtime_root(database.with_extension("attachments"))?;
+    Ok(workspace)
 }
 
 #[cfg(test)]

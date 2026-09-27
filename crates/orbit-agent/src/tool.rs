@@ -12,6 +12,14 @@ pub type ToolOutputFuture<'a> =
 pub struct ToolOutput {
     pub content: String,
     pub attachments: Vec<Attachment>,
+    pub changes: Vec<FileChange>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileChange {
+    pub path: String,
+    pub before: Option<String>,
+    pub after: String,
 }
 
 impl ToolOutput {
@@ -19,6 +27,7 @@ impl ToolOutput {
         Self {
             content: content.into(),
             attachments: Vec::new(),
+            changes: Vec::new(),
         }
     }
 
@@ -26,6 +35,15 @@ impl ToolOutput {
         Self {
             content: content.into(),
             attachments,
+            changes: Vec::new(),
+        }
+    }
+
+    pub fn with_changes(content: impl Into<String>, changes: Vec<FileChange>) -> Self {
+        Self {
+            content: content.into(),
+            attachments: Vec::new(),
+            changes,
         }
     }
 }

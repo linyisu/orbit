@@ -16,13 +16,13 @@ use orbit_model::{
     types::{ChatMessage, ReasoningEffort},
 };
 use orbit_store::{SessionWriter, Store};
-use orbit_tools::{InstructionSet, approval::ApprovalSender};
+use orbit_tools::{InstructionSet, WriteFile, approval::ApprovalSender};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    FileConfig, ModelOption, TuiArgs, coding_request, project_state, result_status, runtime,
-    startup_instructions, token_calibration,
+    FileConfig, ModelOption, TuiArgs, coding_request, open_store_and_instructions,
+    persist_agent_event, project_state, result_status, runtime, token_calibration,
 };
 
 use super::app::App;
@@ -36,6 +36,7 @@ pub(super) enum RunOutcome {
         finish: Result<()>,
     },
     Compaction(Result<CompactionProgress>),
+    Undo(Result<String>),
 }
 
 pub(super) struct CompactionProgress {
@@ -62,6 +63,7 @@ pub(super) struct Runtime {
     approval_sender: ApprovalSender,
     pub(super) writer: Option<SessionWriter>,
     tools: ToolRegistry,
+    undo_writer: WriteFile,
     max_turns: usize,
     max_tool_calls: usize,
 }
@@ -83,14 +85,14 @@ impl Runtime {
         );
         let workspace = std::env::current_dir()?.canonicalize()?;
         let config = FileConfig::load(&config_path)?;
-        let instructions = startup_instructions(
+        let (store, instructions) = open_store_and_instructions(
             &workspace,
             &config_path,
             &database,
             config.instruction_home.as_deref(),
-        )?;
+        )
+        .await?;
         let mut selected = config.select_model(args.model.as_deref())?;
-        let store = Store::open(database).await?;
         let mut saved_effort = None;
         let writer = if let Some(id) = args.resume.as_deref() {
             let session = store.session(id).await?;
@@ -118,6 +120,12 @@ impl Runtime {
             approval_sender.clone(),
             &config,
         )?;
+        let undo_writer = runtime::workspace_writer(
+            &workspace,
+            &config_path,
+            store.path(),
+            approval_sender.clone(),
+        )?;
         store
             .set_session_profile(
                 writer.id(),
@@ -138,6 +146,7 @@ impl Runtime {
             approval_sender,
             writer: Some(writer),
             tools,
+            undo_writer,
             max_turns: args.max_turns,
             max_tool_calls: args.max_tool_calls,
         })
@@ -346,42 +355,7 @@ impl Runtime {
                     let sender = &sender;
                     let model_name = &model_name;
                     async move {
-                        match &event {
-                            AgentEvent::MessageCommitted { message } => {
-                                writer
-                                    .append(message.clone())
-                                    .await
-                                    .map_err(|error| AgentError::EventHandler(error.to_string()))?;
-                            }
-                            AgentEvent::ContextCheckpoint { checkpoint } => {
-                                let payload = serde_json::to_string(checkpoint)
-                                    .map_err(|error| AgentError::EventHandler(error.to_string()))?;
-                                store
-                                    .save_context_checkpoint(
-                                        writer.id(),
-                                        checkpoint.through,
-                                        &checkpoint.prefix_sha256,
-                                        &payload,
-                                    )
-                                    .await
-                                    .map_err(|error| AgentError::EventHandler(error.to_string()))?;
-                            }
-                            AgentEvent::ModelUsageObserved {
-                                local_estimate,
-                                actual_input_tokens: Some(actual),
-                                ..
-                            } => {
-                                let _ = store
-                                    .record_model_token_sample(
-                                        writer.id(),
-                                        model_name,
-                                        *local_estimate,
-                                        *actual,
-                                    )
-                                    .await;
-                            }
-                            _ => {}
-                        }
+                        persist_agent_event(writer, store, model_name, &event).await?;
                         let _ = sender.send(event).await;
                         Ok(())
                     }
@@ -514,6 +488,46 @@ impl Runtime {
         app.running = true;
         app.status = "Compacting context".to_owned();
         app.notice("/compact");
+        Ok(ActiveRun {
+            events,
+            task,
+            cancellation,
+        })
+    }
+
+    pub(super) async fn start_undo(&self, path: Option<&str>, app: &mut App) -> Result<ActiveRun> {
+        let changes = self.store.workspace_changes(self.session_id()).await?;
+        let record = changes
+            .into_iter()
+            .rev()
+            .find(|record| !record.undone && path.is_none_or(|path| record.change.path == path))
+            .context("No matching file change to undo in this session")?;
+        let session_id = self.session_id().to_owned();
+        let store = self.store.clone();
+        let writer = self.undo_writer.clone();
+        let cancellation = CancellationToken::new();
+        let token = cancellation.clone();
+        let (_, events) = mpsc::channel(1);
+        let task = tokio::spawn(async move {
+            let result = async {
+                let path = record.change.path.clone();
+                let receipt = writer.restore(record.change, token).await?;
+                store
+                    .record_workspace_undo(&session_id, record.id)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "file was restored, but its write receipt could not be marked undone: {receipt}"
+                        )
+                    })?;
+                Ok(path)
+            }
+            .await;
+            RunOutcome::Undo(result)
+        });
+        app.running = true;
+        app.status = "Restoring file".to_owned();
+
         Ok(ActiveRun {
             events,
             task,

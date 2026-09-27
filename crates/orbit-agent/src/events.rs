@@ -1,6 +1,7 @@
 use orbit_model::types::{ChatMessage, StreamEvent, ToolCall};
 
 use crate::context::ContextCheckpoint;
+use crate::tool::FileChange;
 
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
@@ -28,6 +29,7 @@ pub enum AgentEvent {
     ToolFinished {
         call: ToolCall,
         content: String,
+        changes: Vec<FileChange>,
     },
     ToolFailed {
         call: ToolCall,

@@ -155,6 +155,7 @@ fn entry_lines(entry: &Entry, width: usize, selected: bool) -> Vec<Line<'static>
         EntryKind::Thinking => ("  ", DIM),
         EntryKind::Tool => ("  ", if entry.failed { ERROR } else { ACCENT }),
         EntryKind::Notice => ("  ", DIM),
+        EntryKind::Result => ("  ", Color::Reset),
         EntryKind::Error => ("! ", ERROR),
     };
     let body = if entry.kind == EntryKind::Tool {
@@ -472,91 +473,37 @@ fn draw_approval(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let Some(request) = &app.approval else { return };
     match &request.preview {
         ApprovalPreview::Write(write) => {
-            let regions = Layout::vertical([
-                Constraint::Length(2),
-                Constraint::Min(1),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-            frame.render_widget(
-                Paragraph::new(truncate_width(
-                    &format!("File change: {}", write.path),
-                    regions[0].width as usize,
-                )),
-                regions[0],
+            draw_file_approval(
+                frame,
+                inner,
+                FileApprovalContent {
+                    path: &write.path,
+                    before: write.before.as_deref(),
+                    after: &write.after,
+                    deleting: false,
+                },
+                FileApprovalState {
+                    scroll: &mut app.approval_scroll,
+                    diff: &mut app.approval_diff,
+                    full: app.approval_full,
+                },
             );
-            let panes =
-                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .split(regions[1]);
-            let before = Block::default()
-                .title(if write.before.is_some() {
-                    " Before "
-                } else {
-                    " New file "
-                })
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(DIM));
-            let after = Block::default()
-                .title(" After ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(DIM));
-            let left = before.inner(panes[0]);
-            let right = after.inner(panes[1]);
-            frame.render_widget(before, panes[0]);
-            frame.render_widget(after, panes[1]);
-
-            let widths = (left.width, right.width);
-            if app
-                .approval_diff
-                .as_ref()
-                .is_none_or(|cache| cache.widths != widths)
-            {
-                app.approval_diff = Some(super::approval_diff::ApprovalDiff::new(
-                    write.before.as_deref().unwrap_or(""),
-                    &write.after,
-                    widths,
-                    app.approval_full,
-                ));
-            }
-            let cache = app.approval_diff.as_ref().expect("approval diff is cached");
-            let height = left.height.min(right.height) as usize;
-            let max_scroll = cache.left.len().saturating_sub(height);
-            app.approval_scroll = app.approval_scroll.min(max_scroll);
-            frame.render_widget(
-                Paragraph::new(
-                    cache
-                        .left
-                        .iter()
-                        .skip(app.approval_scroll)
-                        .take(height)
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                ),
-                left,
-            );
-            frame.render_widget(
-                Paragraph::new(
-                    cache
-                        .right
-                        .iter()
-                        .skip(app.approval_scroll)
-                        .take(height)
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                ),
-                right,
-            );
-            frame.render_widget(
-                Paragraph::new(format!(
-                    "Y approve  N deny  Esc deny  ↑↓ scroll  Tab {}",
-                    if app.approval_full {
-                        "fold unchanged"
-                    } else {
-                        "show all"
-                    }
-                ))
-                .style(Style::default().fg(ACCENT)),
-                regions[2],
+        }
+        ApprovalPreview::Delete(delete) => {
+            draw_file_approval(
+                frame,
+                inner,
+                FileApprovalContent {
+                    path: &delete.path,
+                    before: Some(&delete.before),
+                    after: "",
+                    deleting: true,
+                },
+                FileApprovalState {
+                    scroll: &mut app.approval_scroll,
+                    diff: &mut app.approval_diff,
+                    full: app.approval_full,
+                },
             );
         }
         ApprovalPreview::Command(command) => {
@@ -580,6 +527,121 @@ fn draw_approval(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             frame.render_widget(Paragraph::new(lines), inner);
         }
     }
+}
+
+struct FileApprovalContent<'a> {
+    path: &'a str,
+    before: Option<&'a str>,
+    after: &'a str,
+    deleting: bool,
+}
+
+struct FileApprovalState<'a> {
+    scroll: &'a mut usize,
+    diff: &'a mut Option<super::approval_diff::ApprovalDiff>,
+    full: bool,
+}
+
+fn draw_file_approval(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    content: FileApprovalContent<'_>,
+    state: FileApprovalState<'_>,
+) {
+    let regions = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    let action = if content.deleting {
+        "Delete file"
+    } else {
+        "File change"
+    };
+    frame.render_widget(
+        Paragraph::new(truncate_width(
+            &format!("{action}: {}", content.path),
+            regions[0].width as usize,
+        )),
+        regions[0],
+    );
+    let panes = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(regions[1]);
+    let before = Block::default()
+        .title(if content.before.is_some() {
+            " Before "
+        } else {
+            " New file "
+        })
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(DIM));
+    let after = Block::default()
+        .title(if content.deleting {
+            " Removed "
+        } else {
+            " After "
+        })
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(DIM));
+    let left = before.inner(panes[0]);
+    let right = after.inner(panes[1]);
+    frame.render_widget(before, panes[0]);
+    frame.render_widget(after, panes[1]);
+
+    let widths = (left.width, right.width);
+    if state
+        .diff
+        .as_ref()
+        .is_none_or(|cache| cache.widths != widths)
+    {
+        *state.diff = Some(super::approval_diff::ApprovalDiff::new(
+            content.before.unwrap_or(""),
+            content.after,
+            widths,
+            state.full,
+        ));
+    }
+    let cache = state.diff.as_ref().expect("approval diff is cached");
+    let height = left.height.min(right.height) as usize;
+    let max_scroll = cache.left.len().saturating_sub(height);
+    *state.scroll = (*state.scroll).min(max_scroll);
+    frame.render_widget(
+        Paragraph::new(
+            cache
+                .left
+                .iter()
+                .skip(*state.scroll)
+                .take(height)
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
+        left,
+    );
+    frame.render_widget(
+        Paragraph::new(
+            cache
+                .right
+                .iter()
+                .skip(*state.scroll)
+                .take(height)
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
+        right,
+    );
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Y approve  N deny  Esc deny  ↑↓ scroll  Tab {}",
+            if state.full {
+                "fold unchanged"
+            } else {
+                "show all"
+            }
+        ))
+        .style(Style::default().fg(ACCENT)),
+        regions[2],
+    );
 }
 
 fn input_height(app: &App, width: u16) -> u16 {
@@ -736,7 +798,10 @@ mod tests {
             128_000,
         );
         app.input.insert("/");
-        app.command_selection = 12;
+        app.command_selection = super::commands::COMMANDS
+            .iter()
+            .position(|command| command.name == "/help")
+            .unwrap();
 
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
 
@@ -833,5 +898,37 @@ mod tests {
         assert!(screen.contains("old"), "{screen}");
         assert!(screen.contains("new"), "{screen}");
         assert!(app.approval_diff.is_some());
+    }
+
+    #[test]
+    fn undo_of_created_file_renders_a_delete_preview() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut app = App::new(
+            "session".into(),
+            "workspace".into(),
+            "model".into(),
+            128_000,
+        );
+        let (decision, _receiver) = tokio::sync::oneshot::channel();
+        app.approval = Some(orbit_tools::approval::ApprovalRequest {
+            preview: ApprovalPreview::Delete(orbit_tools::approval::DeletePreview {
+                path: "new.txt".into(),
+                before: "created content\n".into(),
+            }),
+            decision,
+        });
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("Delete file: new.txt"), "{screen}");
+        assert!(screen.contains("Removed"), "{screen}");
+        assert!(screen.contains("created content"), "{screen}");
     }
 }

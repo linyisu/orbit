@@ -128,6 +128,116 @@ async fn requires_approval_then_creates_and_replaces_exact_utf8_with_mode_preser
 }
 
 #[tokio::test]
+async fn committed_receipt_restores_existing_file_and_rejects_external_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("file.txt");
+    fs::write(&path, "before\n").unwrap();
+    let (sender, mut approvals) = approval::channel();
+    let tool = WriteFile::new(Workspace::new(root.path()).unwrap(), sender);
+    let writer = tool.clone();
+    let write = tokio::spawn(async move {
+        writer
+            .execute_output(call("file.txt", "after\n"), CancellationToken::new())
+            .await
+    });
+
+    let approval = request(&mut approvals).await;
+    approval.decision.send(true).unwrap();
+    let output = write.await.unwrap().unwrap();
+    let change = output.changes.into_iter().next().unwrap();
+    assert_eq!(change.before.as_deref(), Some("before\n"));
+    assert_eq!(change.after, "after\n");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "after\n");
+
+    let restore_tool = tool.clone();
+    let checkpoint = change.clone();
+    let restore = tokio::spawn(async move {
+        restore_tool
+            .restore(checkpoint, CancellationToken::new())
+            .await
+    });
+    let approval = request(&mut approvals).await;
+    let approval::ApprovalPreview::Write(preview) = &approval.preview else {
+        panic!("expected restore preview");
+    };
+    assert_eq!(preview.before.as_deref(), Some("after\n"));
+    assert_eq!(preview.after, "before\n");
+    approval.decision.send(true).unwrap();
+    restore.await.unwrap().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "before\n");
+
+    fs::write(&path, "external\n").unwrap();
+    let error = tool
+        .restore(change.clone(), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("differs from the recorded write")
+    );
+    assert!(approvals.try_recv().is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "external\n");
+}
+
+#[tokio::test]
+async fn undo_of_created_file_requires_delete_approval_and_checks_for_conflicts() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("new.txt");
+    let (sender, mut approvals) = approval::channel();
+    let tool = WriteFile::new(Workspace::new(root.path()).unwrap(), sender);
+    let writer = tool.clone();
+    let write = tokio::spawn(async move {
+        writer
+            .execute_output(call("new.txt", "created\n"), CancellationToken::new())
+            .await
+    });
+    request(&mut approvals).await.decision.send(true).unwrap();
+    let change = write.await.unwrap().unwrap().changes.remove(0);
+    assert!(change.before.is_none());
+
+    let restore_tool = tool.clone();
+    let checkpoint = change.clone();
+    let restore = tokio::spawn(async move {
+        restore_tool
+            .restore(checkpoint, CancellationToken::new())
+            .await
+    });
+    let approval = request(&mut approvals).await;
+    let approval::ApprovalPreview::Delete(preview) = &approval.preview else {
+        panic!("expected delete preview");
+    };
+    assert_eq!(preview.before, "created\n");
+    approval.decision.send(false).unwrap();
+    assert!(restore.await.unwrap().is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "created\n");
+
+    fs::write(&path, "external\n").unwrap();
+    let error = tool
+        .restore(change.clone(), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("differs from the recorded write")
+    );
+    assert!(approvals.try_recv().is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "external\n");
+
+    fs::write(&path, "created\n").unwrap();
+    let restore = tokio::spawn(async move { tool.restore(change, CancellationToken::new()).await });
+    let approval = request(&mut approvals).await;
+    assert!(matches!(
+        approval.preview,
+        approval::ApprovalPreview::Delete(_)
+    ));
+    approval.decision.send(true).unwrap();
+    restore.await.unwrap().unwrap();
+    assert!(!path.exists());
+}
+
+#[tokio::test]
 async fn deny_cancel_and_closed_ui_never_write() {
     let root = Fixture::new();
 

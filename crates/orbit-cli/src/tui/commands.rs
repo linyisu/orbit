@@ -27,6 +27,21 @@ pub const COMMANDS: &[Command] = &[
         needs_argument: true,
     },
     Command {
+        name: "/changes",
+        description: "List files changed by Orbit in this session",
+        needs_argument: false,
+    },
+    Command {
+        name: "/diff",
+        description: "Show the last recorded change for a file",
+        needs_argument: true,
+    },
+    Command {
+        name: "/undo",
+        description: "Restore the latest Orbit file change, optionally by path",
+        needs_argument: false,
+    },
+    Command {
         name: "/model",
         description: "Choose the model for the next response",
         needs_argument: false,

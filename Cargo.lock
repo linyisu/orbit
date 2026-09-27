@@ -2141,6 +2141,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "image",
+ "orbit-agent",
  "orbit-model",
  "rusqlite",
  "serde",
