@@ -72,9 +72,9 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                 tool_call_id,
                 content,
             } => {
-                let (name, native_id) = calls.get(&tool_call_id).ok_or_else(|| {
-                    ModelError::Protocol("Google tool result has no matching function call".into())
-                })?;
+                let Some((name, native_id)) = calls.get(&tool_call_id) else {
+                    continue;
+                };
                 let mut response = json!({ "name": name, "response": { "output": content } });
                 if let Some(id) = native_id {
                     response["id"] = json!(id);
@@ -499,5 +499,19 @@ mod tests {
         };
         assert_ne!(id(&first), id(&second));
         assert_ne!(id(&first), id(&third));
+    }
+
+    #[test]
+    fn orphaned_tool_response_without_matching_call_is_gracefully_ignored() {
+        let messages = vec![
+            ChatMessage::user("initial question"),
+            ChatMessage::tool("unknown-tool-id", "orphaned result"),
+        ];
+        let (body, _) = encode("gemini-test", ChatRequest::new(messages)).unwrap();
+        assert_eq!(body["request"]["contents"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            body["request"]["contents"][0]["parts"][0]["text"],
+            "initial question"
+        );
     }
 }
