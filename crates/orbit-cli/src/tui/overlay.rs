@@ -1,5 +1,10 @@
 //! Clear an overlay without leaving half a background grapheme across its edges.
-use ratatui::{Frame, buffer::CellWidth, layout::Rect, widgets::Clear};
+use ratatui::{
+    Frame,
+    buffer::{CellDiffOption, CellWidth},
+    layout::Rect,
+    widgets::Clear,
+};
 
 pub(super) fn clear(frame: &mut Frame<'_>, area: Rect) {
     let buffer = frame.buffer_mut();
@@ -32,4 +37,13 @@ pub(super) fn clear(frame: &mut Frame<'_>, area: Rect) {
     }
 
     frame.render_widget(Clear, area);
+
+    // A modal owns the covered terminal cells, including blank ones. Explicitly
+    // repaint them instead of trusting the previous buffer: a terminal-side
+    // artifact is otherwise invisible to the diff and can survive indefinitely.
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            frame.buffer_mut()[(x, y)].set_diff_option(CellDiffOption::AlwaysUpdate);
+        }
+    }
 }

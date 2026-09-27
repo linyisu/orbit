@@ -266,7 +266,7 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         .branch
         .as_deref()
         .filter(|_| state.branch_workspace == state.workspace)
-        .map(|branch| format!(" : {}", safe_output(branch)))
+        .map(|branch| format!(": {}", safe_output(branch)))
         .unwrap_or_default();
     let branch = fit_label(&branch, path_width / 2, false);
     let available_path = path_width.saturating_sub(branch.width());
@@ -1510,6 +1510,10 @@ fn draw_composer(
     if text_area.width > 0
         && text_area.height > 0
         && !state.selection.active()
+        && state.picker.is_none()
+        && state.model_picker.is_none()
+        && state.marketplace_dialog.is_none()
+        && !state.show_help
         && state.attachment_cursor.is_none()
     {
         // Draw a steady caret; restore the hidden hardware cursor after flushing.
@@ -1583,8 +1587,17 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             width = super::commands::COMMAND_NAME_WIDTH,
         );
 
+        // Match the three-column inset on the left, even for short arguments.
+        let text = format!(
+            "{}   ",
+            fit_label(
+                text.trim_end(),
+                area.width.saturating_sub(3) as usize,
+                false
+            )
+        );
         let width =
-            unicode_width::UnicodeWidthStr::width(text.trim_end()).min(area.width as usize) as u16;
+            unicode_width::UnicodeWidthStr::width(text.as_str()).min(area.width as usize) as u16;
         state
             .menu_rows
             .push((Rect::new(area.x, area.y + row as u16, width, 1), index));

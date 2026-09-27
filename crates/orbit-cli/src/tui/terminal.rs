@@ -165,10 +165,11 @@ pub fn anchor_cursor<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     position: Option<ratatui::layout::Position>,
 ) -> Result<(), B::Error> {
+    terminal.hide_cursor()?;
     if let Some(position) = position {
         terminal.set_cursor_position(position)?;
-        terminal.backend_mut().flush()?;
     }
+    terminal.backend_mut().flush()?;
 
     Ok(())
 }
@@ -197,5 +198,46 @@ mod tests {
         draw_buffer(&mut terminal, |_| {}).unwrap();
 
         assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn overlay_repaint_clears_terminal_only_highlight_artifacts() {
+        use ratatui::{
+            layout::Rect,
+            style::{Color, Style},
+            text::Line,
+            widgets::Paragraph,
+        };
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let draw = |frame: &mut ratatui::Frame<'_>| {
+            super::super::overlay::clear(frame, Rect::new(2, 2, 36, 8));
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    "模型 (视觉)",
+                    Style::default().bg(Color::Rgb(218, 139, 109)),
+                )),
+                Rect::new(3, 3, 30, 1),
+            );
+        };
+        draw_buffer(&mut terminal, draw).unwrap();
+        let mut artifact = Cell::default();
+        artifact.set_bg(Color::Rgb(218, 139, 109));
+        terminal
+            .backend_mut()
+            .draw([(24, 5, &artifact), (28, 7, &artifact)].into_iter())
+            .unwrap();
+
+        draw_buffer(&mut terminal, draw).unwrap();
+
+        for position in [(24, 5), (28, 7)] {
+            let cell = &terminal.backend().buffer()[position];
+            assert_eq!(cell.symbol(), " ");
+            assert_eq!(cell.bg, Color::Reset, "stale highlight at {position:?}");
+        }
+        assert_eq!(
+            terminal.backend().buffer()[(3, 3)].bg,
+            Color::Rgb(218, 139, 109)
+        );
     }
 }
