@@ -160,22 +160,37 @@ impl Workspace {
     }
 
     fn resolve_and_validate_protected_path(&self, path: &Path) -> Result<PathBuf, WorkspaceError> {
-        let resolved = match path.canonicalize() {
-            Ok(path) => path,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let parent = path.parent().ok_or(WorkspaceError::InvalidPath)?;
-                let parent_canon = if parent.as_os_str().is_empty() {
-                    self.path.clone()
-                } else if parent.exists() {
-                    parent.canonicalize()?
-                } else {
-                    return Err(WorkspaceError::InvalidPath);
-                };
-
-                parent_canon.join(path.file_name().ok_or(WorkspaceError::InvalidPath)?)
-            }
-            Err(error) => return Err(error.into()),
+        let requested = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.path.join(path)
         };
+        let mut ancestor = requested.as_path();
+        let mut missing = Vec::new();
+
+        // Runtime directories may have several absent parents on first launch.
+        // Resolve the existing prefix without creating directories or hiding I/O
+        // failures; a dangling symlink must not be mistaken for a missing path.
+        let mut resolved = loop {
+            match ancestor.canonicalize() {
+                Ok(path) => break path,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    match std::fs::symlink_metadata(ancestor) {
+                        Ok(_) => return Err(error.into()),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                    }
+
+                    missing.push(ancestor.file_name().ok_or(WorkspaceError::InvalidPath)?);
+                    ancestor = ancestor.parent().ok_or(WorkspaceError::InvalidPath)?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+
+        for component in missing.into_iter().rev() {
+            resolved.push(component);
+        }
 
         let effective = self.policy.effective_policy();
 
@@ -658,6 +673,33 @@ impl Workspace {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn missing_protected_paths_resolve_existing_symlinks_and_reject_dangling_ones() {
+        let root = tempdir().unwrap();
+        let storage = tempdir().unwrap();
+        std::os::unix::fs::symlink(storage.path(), root.path().join("alias")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("absent"), root.path().join("dangling"))
+            .unwrap();
+        std::fs::write(root.path().join("file"), "content").unwrap();
+        let mut workspace = Workspace::new(root.path()).unwrap();
+
+        workspace
+            .protect(Path::new("alias/config/orbit/auth"))
+            .unwrap();
+        workspace
+            .protect_opaque_runtime_root(root.path().join("missing/runtime/archive"))
+            .unwrap();
+
+        assert!(
+            workspace
+                .protected()
+                .contains(&storage.path().join("config/orbit/auth"))
+        );
+        assert!(workspace.protect(Path::new("dangling/auth")).is_err());
+        assert!(workspace.protect(Path::new("file/auth")).is_err());
+        assert!(!root.path().join("missing").exists());
+    }
 
     #[test]
     fn protected_directory_descendant_hardlinks_cannot_be_read() {
