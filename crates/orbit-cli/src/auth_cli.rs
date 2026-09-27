@@ -78,7 +78,7 @@ pub(crate) async fn run(command: AuthCommand, directory: PathBuf) -> Result<()> 
     let store = AuthStore::new(directory.clone())?;
     match command {
         AuthCommand::Models { config } => {
-            let mut config = crate::FileConfig::load(&config, &directory)?;
+            let mut config = crate::config::FileConfig::load(&config, &directory)?;
             for diagnostic in crate::account_models::refresh(&mut config, true).await {
                 eprintln!("{diagnostic}");
             }

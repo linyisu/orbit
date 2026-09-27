@@ -8,7 +8,7 @@ use anyhow::{Context, Result, ensure};
 use orbit_model::{client::ApiFormat, types::ReasoningEffort};
 use serde_json::{Value, json};
 
-use crate::{FileConfig, ModelProfile};
+use crate::config::{FileConfig, ModelProfile};
 
 pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
     let Some(directory) = config.auth_directory.clone() else {
@@ -16,6 +16,9 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
     };
     let mut diagnostics = Vec::new();
     for (name, provider) in &mut config.providers {
+        if provider.managed_models {
+            continue;
+        }
         let Some(credential) = provider.credential.as_ref() else {
             continue;
         };
@@ -61,8 +64,11 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
             let (models, _) = normalize(provider.api_format, &payload)?;
             for model in models {
                 if let Some(existing) = provider.models.iter_mut().find(|entry| entry.id == model.id) {
-                    *existing = model;
-                } else { provider.models.push(model); }
+                    if existing.context_tokens.is_none() { existing.context_tokens = model.context_tokens; }
+                    if existing.input_context_tokens.is_none() { existing.input_context_tokens = model.input_context_tokens; }
+                    if existing.supports_vision.is_none() { existing.supports_vision = model.supports_vision; }
+                    if existing.reasoning.is_none() { existing.reasoning = model.reasoning; }
+                } else if !provider.managed_models { provider.models.push(model); }
             }
             Ok(())
         }.await;
@@ -100,7 +106,10 @@ fn read_cache(path: &Path, binding: &Value) -> Option<Value> {
     (data.get("binding") == Some(binding)).then(|| data["payload"].clone())
 }
 
-fn normalize(format: ApiFormat, payload: &Value) -> Result<(Vec<ModelProfile>, Vec<String>)> {
+pub(crate) fn normalize(
+    format: ApiFormat,
+    payload: &Value,
+) -> Result<(Vec<ModelProfile>, Vec<String>)> {
     let mut models = Vec::new();
     let mut unavailable = Vec::new();
     if format == ApiFormat::OpenaiChatCompletions {

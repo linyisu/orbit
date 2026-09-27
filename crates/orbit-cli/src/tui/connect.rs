@@ -1,10 +1,8 @@
 //! Browser account connection, isolated from conversation history.
-use std::{
-    io::Write,
-    time::{Duration, Instant},
-};
+use std::io::Write;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use futures_util::StreamExt;
 use orbit_auth::{
@@ -23,6 +21,8 @@ use super::{ModelOption, terminal};
 
 #[derive(Clone, Copy)]
 enum ConnectionProvider {
+    Custom,
+    Manage,
     OAuth(OAuthProvider),
     ApiKey(orbit_auth::ApiKeyProvider),
 }
@@ -30,13 +30,15 @@ enum ConnectionProvider {
 impl ConnectionProvider {
     fn name(self) -> &'static str {
         match self {
+            Self::Custom => "custom",
+            Self::Manage => "manage",
             Self::OAuth(provider) => provider.name(),
             Self::ApiKey(provider) => provider.name(),
         }
     }
 }
 
-const PROVIDERS: [(ConnectionProvider, &str, ApiFormat); 5] = [
+const PROVIDERS: [(ConnectionProvider, &str, ApiFormat); 7] = [
     (
         ConnectionProvider::OAuth(OAuthProvider::Antigravity),
         "Google Antigravity",
@@ -60,6 +62,16 @@ const PROVIDERS: [(ConnectionProvider, &str, ApiFormat); 5] = [
     (
         ConnectionProvider::ApiKey(orbit_auth::ApiKeyProvider::ZhipuCodingPlan),
         "智谱 Coding Plan",
+        ApiFormat::OpenaiChatCompletions,
+    ),
+    (
+        ConnectionProvider::Custom,
+        "自定义服务",
+        ApiFormat::OpenaiChatCompletions,
+    ),
+    (
+        ConnectionProvider::Manage,
+        "管理已有连接",
         ApiFormat::OpenaiChatCompletions,
     ),
 ];
@@ -93,7 +105,7 @@ pub(super) async fn run(
                 bounds
                     .height
                     .saturating_sub(2)
-                    .min(if message.is_empty() { 9 } else { 16 });
+                    .min(if message.is_empty() { 12 } else { 19 });
             let area = Rect::new(
                 bounds.x + bounds.width.saturating_sub(width) / 2,
                 bounds.y + bounds.height.saturating_sub(height) / 2,
@@ -110,7 +122,15 @@ pub(super) async fn run(
 
             let mut lines = Vec::new();
             for (index, (provider, name, _)) in PROVIDERS.iter().enumerate() {
-                rows.push(Rect::new(inner.x, inner.y + index as u16, inner.width, 1));
+                if matches!(provider, ConnectionProvider::Manage) {
+                    lines.push(Line::raw(""));
+                }
+                rows.push(Rect::new(
+                    inner.x,
+                    inner.y + lines.len() as u16,
+                    inner.width,
+                    1,
+                ));
                 let style = if index == selected {
                     Style::default()
                         .fg(Color::Black)
@@ -174,7 +194,16 @@ pub(super) async fn run(
             let result: Result<(LoginOutcome, Option<String>)> =
                 task.take().expect("login task").await?;
             match result {
-                Ok((LoginOutcome::Connected, _)) => match save_profile(options, selected).await {
+                Ok((LoginOutcome::Connected, _)) => match crate::connections::save_account(
+                    &options.config,
+                    &options.auth_directory,
+                    match PROVIDERS[selected].0 {
+                        ConnectionProvider::OAuth(provider) => provider,
+                        _ => unreachable!(),
+                    },
+                )
+                .await
+                {
                     Ok(models) => return Ok(Some(models)),
                     Err(error) => message = format!("账号已连接，但配置未保存：{error:#}"),
                 },
@@ -306,6 +335,22 @@ pub(super) async fn run(
         verification_url = None;
         copied_at = None;
         let provider = match PROVIDERS[selected].0 {
+            ConnectionProvider::Manage => {
+                if let Some(models) =
+                    super::connect_custom::manage(terminal, events, options).await?
+                {
+                    return Ok(Some(models));
+                }
+                continue;
+            }
+            ConnectionProvider::Custom => {
+                if let Some(models) =
+                    super::connect_custom::run(terminal, events, options, None).await?
+                {
+                    return Ok(Some(models));
+                }
+                continue;
+            }
             ConnectionProvider::OAuth(provider) => provider,
             ConnectionProvider::ApiKey(provider) => {
                 if let Some(models) =
@@ -438,119 +483,6 @@ fn abort(task: &mut Option<LoginTask>) {
     }
 }
 
-async fn save_profile(options: &crate::TuiOptions, selected: usize) -> Result<Vec<ModelOption>> {
-    let (provider, _, format) = PROVIDERS[selected];
-    let ConnectionProvider::OAuth(provider) = provider else {
-        anyhow::bail!("API key connection must be verified before saving");
-    };
-    let endpoint = match provider {
-        OAuthProvider::Antigravity => "https://daily-cloudcode-pa.googleapis.com/",
-        OAuthProvider::Google => "https://cloudcode-pa.googleapis.com/",
-        OAuthProvider::Chatgpt => "https://chatgpt.com/backend-api/codex/",
-        OAuthProvider::Anthropic => unreachable!(),
-    };
-    append_profile(
-        &options.config,
-        &options.auth_directory,
-        provider.name(),
-        format,
-        endpoint,
-    )?;
-    let mut config = crate::FileConfig::load(&options.config, &options.auth_directory)?;
-    let diagnostics = crate::account_models::refresh(&mut config, true).await;
-    if !diagnostics.is_empty() {
-        anyhow::bail!("{}", diagnostics.join("\n"));
-    }
-    config.model_options()
-}
-
-fn append_profile(
-    path: &std::path::Path,
-    auth_directory: &std::path::Path,
-    credential: &str,
-    format: ApiFormat,
-    endpoint: &str,
-) -> Result<Vec<ModelOption>> {
-    let catalog: serde_json::Value = serde_json::from_str(include_str!("account_models.json"))?;
-    let antigravity;
-    let models = if credential == "antigravity" {
-        antigravity = serde_json::to_value(crate::antigravity_profiles()?)?;
-        &antigravity
-    } else {
-        catalog.get(credential).context("账号缺少内置模型目录")?
-    };
-
-    append_profile_models(path, auth_directory, credential, format, endpoint, models)
-}
-
-pub(super) fn append_profile_models(
-    path: &std::path::Path,
-    auth_directory: &std::path::Path,
-    credential: &str,
-    format: ApiFormat,
-    endpoint: &str,
-    models: &serde_json::Value,
-) -> Result<Vec<ModelOption>> {
-    let original = std::fs::read_to_string(path)?;
-    let mut config: crate::FileConfig = toml::from_str(&original)?;
-    config.auth_directory = Some(auth_directory.to_path_buf());
-    config.merge_account_models()?;
-
-    if config.providers.values().any(|provider| {
-        provider.credential.as_deref() == Some(credential)
-            && provider.base_url == endpoint
-            && provider.api_format == format
-    }) {
-        return config.model_options();
-    }
-
-    let mut name = format!("{credential}-account");
-    let mut suffix = 2;
-    while config.providers.contains_key(&name) {
-        name = format!("{credential}-account-{suffix}");
-        suffix += 1;
-    }
-
-    // Serialize only the added table, preserving the user's comments and settings.
-    let addition = serde_json::json!({
-        "providers": {
-            name: {
-                "api_format": format,
-                "base_url": endpoint,
-                "credential": credential,
-                "models": models
-            }
-        }
-    });
-    let updated = format!(
-        "{}\n\n{}",
-        original.trim_end(),
-        toml::to_string_pretty(&addition)?
-    );
-    let mut parsed: crate::FileConfig = toml::from_str(&updated)?;
-    parsed.auth_directory = Some(auth_directory.to_path_buf());
-    parsed.merge_account_models()?;
-    let models = parsed.model_options()?;
-
-    let parent = path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(std::path::Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary
-        .as_file()
-        .set_permissions(std::fs::metadata(path)?.permissions())?;
-    temporary.write_all(updated.as_bytes())?;
-    temporary.as_file().sync_all()?;
-    ensure!(
-        std::fs::read_to_string(path)? == original,
-        "配置已被其他程序修改，请重试"
-    );
-    temporary.persist(path).context("无法保存账号配置")?;
-
-    Ok(models)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,244 +589,6 @@ mod tests {
             &mut selected,
             &rows
         ));
-    }
-
-    #[test]
-    fn api_key_connection_persists_discovered_models_without_a_secret() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        let auth = directory.path().join("auth");
-        std::fs::write(
-            &path,
-            "# preserve me\ndefault_provider = 'deepseek-account'\n[providers]\n",
-        )
-        .unwrap();
-        let catalog = serde_json::json!([{ "id": "server-model-a" }, { "id": "server-model-b" }]);
-
-        let models = append_profile_models(
-            &path,
-            &auth,
-            "deepseek",
-            ApiFormat::OpenaiChatCompletions,
-            orbit_auth::DEEPSEEK_BASE,
-            &catalog,
-        )
-        .unwrap();
-
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0].model, "server-model-a");
-        assert_eq!(models[1].model, "server-model-b");
-        assert_eq!(
-            models[0].config.credential.as_ref().unwrap().name,
-            "deepseek"
-        );
-        let saved = std::fs::read_to_string(path).unwrap();
-        assert!(saved.starts_with("# preserve me"));
-        assert!(!saved.contains("api_key"));
-    }
-
-    #[test]
-    fn zhipu_profile_uses_domestic_coding_endpoint_and_credential() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        let auth = directory.path().join("auth");
-        std::fs::write(
-            &path,
-            "default_provider = 'zhipu-coding-plan-account'\n[providers]\n",
-        )
-        .unwrap();
-        let provider = orbit_auth::ApiKeyProvider::ZhipuCodingPlan;
-        let catalog = serde_json::json!([{ "id": "glm-server-model" }]);
-
-        let models = append_profile_models(
-            &path,
-            &auth,
-            provider.name(),
-            ApiFormat::OpenaiChatCompletions,
-            provider.base_url(),
-            &catalog,
-        )
-        .unwrap();
-
-        assert_eq!(models[0].model, "glm-server-model");
-        assert_eq!(
-            models[0].config.credential.as_ref().unwrap().name,
-            "zhipu-coding-plan"
-        );
-        let saved = std::fs::read_to_string(path).unwrap();
-        assert!(saved.contains(orbit_auth::ZHIPU_CODING_BASE));
-        assert!(!saved.contains("api_key"));
-    }
-
-    #[test]
-    fn connection_preserves_config_and_reloads_both_account_protocols() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        let auth = directory.path().join("auth");
-        let original = "# user settings\ndefault_provider = 'local'\n[providers.local]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [{ id = 'local-model' }]\n";
-        std::fs::write(&path, original).unwrap();
-
-        for (credential, format, endpoint) in [
-            (
-                "antigravity",
-                ApiFormat::GoogleCodeAssist,
-                "https://daily-cloudcode-pa.googleapis.com/",
-            ),
-            (
-                "google",
-                ApiFormat::GoogleCodeAssist,
-                "https://cloudcode-pa.googleapis.com/",
-            ),
-            (
-                "chatgpt",
-                ApiFormat::ChatgptCodex,
-                "https://chatgpt.com/backend-api/codex/",
-            ),
-        ] {
-            let models = append_profile(&path, &auth, credential, format, endpoint).unwrap();
-            let connected = models
-                .iter()
-                .find(|entry| entry.provider == format!("{credential}-account"))
-                .unwrap();
-
-            assert_eq!(
-                connected.config.credential.as_ref().unwrap().directory,
-                auth
-            );
-            assert_eq!(
-                connected.config.credential.as_ref().unwrap().name,
-                credential
-            );
-            assert!(
-                std::fs::read_to_string(&path)
-                    .unwrap()
-                    .starts_with(original)
-            );
-
-            let before = std::fs::read_to_string(&path).unwrap();
-            let reconnected = append_profile(&path, &auth, credential, format, endpoint).unwrap();
-
-            assert_eq!(
-                crate::FileConfig::load(&path, &auth)
-                    .unwrap()
-                    .model_options()
-                    .unwrap()
-                    .len(),
-                models.len()
-            );
-            assert_eq!(reconnected.len(), models.len());
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
-        }
-
-        assert!(!auth.exists());
-    }
-
-    #[test]
-    fn existing_antigravity_catalog_expands_without_rewriting_user_settings() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        let auth = directory.path().join("auth");
-        let original = "default_provider = 'account'\n[providers.account]\napi_format = 'google_code_assist'\nbase_url = 'https://daily-cloudcode-pa.googleapis.com/'\ncredential = 'antigravity'\nmodels = [{ id = 'gemini-3-pro', context_tokens = 90000 }, { id = 'custom-model' }]\n";
-        std::fs::write(&path, original).unwrap();
-
-        let config = crate::FileConfig::load(&path, &auth).unwrap();
-        let options = config.model_options().unwrap();
-        let reconnected = append_profile(
-            &path,
-            &auth,
-            "antigravity",
-            ApiFormat::GoogleCodeAssist,
-            "https://daily-cloudcode-pa.googleapis.com/",
-        )
-        .unwrap();
-
-        assert_eq!(options.len(), 18);
-        assert_eq!(reconnected.len(), options.len());
-        assert_eq!(options[0].context_tokens, 90000);
-        for id in [
-            "gemini-3.8-flash",
-            "claude-opus-4-6",
-            "gpt-oss-120b",
-            "custom-model",
-        ] {
-            assert!(
-                options.iter().any(|model| model.model == id),
-                "missing {id}"
-            );
-        }
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-
-        let connected = append_profile(
-            &path,
-            &auth,
-            "chatgpt",
-            ApiFormat::ChatgptCodex,
-            "https://chatgpt.com/backend-api/codex/",
-        )
-        .unwrap();
-
-        assert_eq!(connected.len(), 19);
-        assert!(
-            connected
-                .iter()
-                .any(|model| model.model == "gemini-3.8-flash")
-        );
-        assert!(connected.iter().any(|model| model.model == "gpt-5.5"));
-        assert_eq!(
-            crate::FileConfig::load(&path, &auth)
-                .unwrap()
-                .model_options()
-                .unwrap()
-                .len(),
-            connected.len()
-        );
-        assert!(!auth.exists());
-    }
-
-    #[test]
-    fn connection_keeps_existing_provider_and_rejects_invalid_config_without_writing() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        let auth = directory.path().join("auth");
-        let original = "default_provider = 'google-account'\n[providers.google-account]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [{ id = 'existing' }]\n";
-        std::fs::write(&path, original).unwrap();
-
-        let models = append_profile(
-            &path,
-            &auth,
-            "google",
-            ApiFormat::GoogleCodeAssist,
-            "https://cloudcode-pa.googleapis.com/",
-        )
-        .unwrap();
-
-        assert!(
-            models
-                .iter()
-                .any(|model| model.qualified_name() == "google-account::existing")
-        );
-        assert!(
-            models
-                .iter()
-                .any(|model| model.provider == "google-account-2")
-        );
-        assert!(
-            std::fs::read_to_string(&path)
-                .unwrap()
-                .starts_with(original)
-        );
-
-        std::fs::write(&path, "invalid = [").unwrap();
-        let result = append_profile(
-            &path,
-            &auth,
-            "google",
-            ApiFormat::GoogleCodeAssist,
-            "https://cloudcode-pa.googleapis.com/",
-        );
-
-        assert!(result.is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "invalid = [");
     }
 
     #[tokio::test]

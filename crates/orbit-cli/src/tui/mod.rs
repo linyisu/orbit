@@ -5,6 +5,7 @@ mod changes;
 pub mod commands;
 mod completion;
 mod connect;
+mod connect_custom;
 mod connect_key;
 mod dialogs;
 mod directory;
@@ -84,6 +85,7 @@ type ModelRefreshTask =
 
 #[derive(Clone, Debug)]
 pub struct ModelOption {
+    pub max_output_tokens: u32,
     pub provider: String,
     pub model: String,
     /// Request budget passed to the agent, including the output upper bound.
@@ -264,7 +266,7 @@ pub async fn run(
                     let started = start_agent_run("/compact".into(), Vec::new(), true,
                         &mut state, &mut session, &history, &model, &tools,
                         target_context,
-                        auto_compact, max_output_tokens, max_turns, max_tool_calls, &compaction).await;
+                        auto_compact, max_turns, max_tool_calls, &compaction).await;
 
                     match started {
                         Ok(started) => { receiver=Some(started.receiver); cancellation=Some(started.cancellation); task=Some(started.task); }
@@ -332,6 +334,7 @@ pub async fn run(
                     ));
                 } else if tabs.restore(&id, &mut session, &mut state, &mut model, &mut history) {
                     if let Some(id) = empty_tab { tabs.close_parked(&id); }
+                    restore_model_profile(&mut state, &mut model, &model_options, &session);
 
                     memory_scope.set_session(session.id().into());
                     state.picker = None;
@@ -710,7 +713,7 @@ pub async fn run(
                                         let config_path = options.config.clone();
                                         let auth_directory = options.auth_directory.clone();
                                         model_refresh = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-                                            let mut config = crate::FileConfig::load(&config_path, &auth_directory)?;
+                                            let mut config = crate::config::FileConfig::load(&config_path, &auth_directory)?;
                                             let diagnostics = crate::account_models::refresh(&mut config, true).await;
                                             Ok((config.model_options()?, diagnostics))
                                         })));
@@ -727,6 +730,11 @@ pub async fn run(
                                         Ok(Some(models)) => {
                                             model_options = models;
                                             state.model_completions = model_options.iter().map(ModelOption::qualified_name).collect();
+                                            let current = model_options.iter().find(|choice| choice.qualified_name() == state.model)
+                                                .or_else(|| model_options.first()).map(ModelOption::qualified_name);
+                                            if let Some(current) = current {
+                                                select_model(&current, None, &mut state, &mut model, &model_options, &mut session).await?;
+                                            }
                                             state.model_picker = Some(dialogs::ModelPicker::new(model_options.clone(), state.model.clone(), state.reasoning_effort));
                                         }
                                         Ok(None) => {}
@@ -863,7 +871,6 @@ pub async fn run(
                                 &tools,
                                 active_context_tokens,
                                 auto_compact,
-                                max_output_tokens,
                                 max_turns,
                                 max_tool_calls,
                                 &compaction,
@@ -970,7 +977,6 @@ pub async fn run(
                             &tools,
                             context_tokens,
                             auto_compact,
-                            max_output_tokens,
                             max_turns,
                             max_tool_calls,
                             &compaction,
@@ -1264,11 +1270,11 @@ async fn start_agent_run(
     tools: &ToolRegistry,
     context_tokens: usize,
     auto_compact: bool,
-    max_output_tokens: u32,
     max_turns: usize,
     max_tool_calls: usize,
     compaction: &orbit_agent::compaction::CompactionRuntime,
 ) -> Result<StartedRun> {
+    let max_output_tokens = state.max_output_tokens;
     let mut messages = if compacting {
         compaction_source_history(session, history).await?
     } else {
@@ -2320,6 +2326,7 @@ async fn select_model(
             state.model = model_name;
             state.compact_after_model_switch |=
                 state.auto_compact && choice.input_context_tokens < state.input_context_tokens;
+            state.max_output_tokens = choice.max_output_tokens;
             state.context_tokens = choice.context_tokens;
             state.input_context_tokens = choice.input_context_tokens;
             state.reasoning_effort = reasoning_effort;
@@ -2718,6 +2725,7 @@ fn restore_model_profile(
 
     *model = client;
     state.model = choice.qualified_name();
+    state.max_output_tokens = choice.max_output_tokens;
     state.context_tokens = choice.context_tokens;
     state.input_context_tokens = choice.input_context_tokens;
     state.reasoning_effort = model.config().reasoning_effort;
@@ -3096,6 +3104,15 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
     Action::None
 }
 
+/// First-run connection setup, before a model or session is constructed.
+pub(crate) async fn setup_connection(options: &crate::TuiOptions) -> Result<bool> {
+    let (_guard, mut terminal) = terminal::TerminalGuard::enter()?;
+    let mut events = EventStream::new();
+    Ok(connect::run(&mut terminal, &mut events, options)
+        .await?
+        .is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3267,6 +3284,7 @@ mod tests {
         let scope = crate::project_state::MemoryScope::new(session.id().into());
         let mut model = ModelClient::new(Default::default()).unwrap();
         let options = vec![ModelOption {
+            max_output_tokens: 32_000,
             provider: "test".into(),
             model: "model".into(),
             context_tokens: 232_000,

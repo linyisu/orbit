@@ -1434,6 +1434,7 @@ mod tests {
     fn grouped_models_keep_last_row_visible_and_support_mouse_selection() {
         let models = (0..30)
             .map(|index| ModelOption {
+                max_output_tokens: 32_000,
                 provider: format!("provider-{}", index / 3),
                 model: format!("model-{index}"),
                 context_tokens: 128_000,
@@ -1511,6 +1512,7 @@ mod tests {
     fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
         let models = (0..30)
             .map(|index| ModelOption {
+                max_output_tokens: 32_000,
                 provider: "provider".into(),
                 model: format!("model-{index}"),
                 context_tokens: 128_000,
@@ -1593,6 +1595,7 @@ mod tests {
         state.model_picker = Some(ModelPicker::new(
             vec![
                 ModelOption {
+                    max_output_tokens: 32_000,
                     provider: "deepseek".into(),
                     model: "deepseek-chat".into(),
                     context_tokens: 64_000,
@@ -1603,6 +1606,7 @@ mod tests {
                     config: orbit_model::types::ModelConfig::default(),
                 },
                 ModelOption {
+                    max_output_tokens: 32_000,
                     provider: "openai".into(),
                     model: "gpt-6-astra".into(),
                     context_tokens: 128_000,
@@ -1637,6 +1641,7 @@ mod tests {
         state.model_picker = Some(ModelPicker::new(
             vec![
                 ModelOption {
+                    max_output_tokens: 32_000,
                     provider: "deepseek".into(),
                     model: "deepseek-chat".into(),
                     context_tokens: 64_000,
@@ -1650,6 +1655,7 @@ mod tests {
                     config: orbit_model::types::ModelConfig::default(),
                 },
                 ModelOption {
+                    max_output_tokens: 32_000,
                     provider: "deepseek".into(),
                     model: "strict-model".into(),
                     context_tokens: 64_000,
@@ -1677,6 +1683,7 @@ mod tests {
         state.model = "deepseek::strict-model".into();
         state.model_picker = Some(ModelPicker::new(
             vec![ModelOption {
+                max_output_tokens: 32_000,
                 provider: "deepseek".into(),
                 model: "strict-model".into(),
                 context_tokens: 64_000,

@@ -113,3 +113,197 @@ pub async fn discover(
         last.unwrap_or_default()
     )))
 }
+
+/// Discover API models without persisting a draft connection or making an inference request.
+pub async fn discover_api_models(
+    base: &str,
+    format: ApiFormat,
+    key: &str,
+) -> Result<Vec<String>, ModelError> {
+    discover_api_models_inner(base, format, key, None).await
+}
+
+pub async fn discover_saved_api_models(
+    reference: &CredentialRef,
+    base: &str,
+    format: ApiFormat,
+) -> Result<Vec<String>, ModelError> {
+    discover_api_models_inner(base, format, "", Some(reference)).await
+}
+
+async fn discover_api_models_inner(
+    base: &str,
+    format: ApiFormat,
+    key: &str,
+    reference: Option<&CredentialRef>,
+) -> Result<Vec<String>, ModelError> {
+    if !matches!(
+        format,
+        ApiFormat::OpenaiChatCompletions
+            | ApiFormat::OpenaiResponses
+            | ApiFormat::AnthropicMessages
+    ) {
+        return Err(ModelError::Protocol(
+            "unsupported API discovery protocol".into(),
+        ));
+    }
+    let mut endpoint = reqwest::Url::parse(base)
+        .map_err(|_| ModelError::Protocol("invalid service URL".into()))?;
+    if !matches!(endpoint.scheme(), "http" | "https")
+        || endpoint.host_str().is_none()
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err(ModelError::Protocol(
+            "use an HTTP(S) base URL without credentials, query or fragment".into(),
+        ));
+    }
+    endpoint.set_path(&format!("{}/models", endpoint.path().trim_end_matches('/')));
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(15))
+        .build()?;
+    let auth = if let Some(reference) = reference {
+        let target = if format == ApiFormat::AnthropicMessages {
+            AuthTarget::Anthropic
+        } else {
+            AuthTarget::Openai
+        };
+        Some(
+            AuthStore::new(reference.directory.clone())?
+                .resolve(&reference.name, &endpoint, target)
+                .await?,
+        )
+    } else {
+        None
+    };
+    let mut request = client.get(endpoint).header("accept", "application/json");
+    if let Some(auth) = auth {
+        request = request.headers(auth.headers);
+    }
+    if format == ApiFormat::AnthropicMessages {
+        request = request.header("anthropic-version", "2023-06-01");
+        if !key.is_empty() {
+            request = request.header("x-api-key", key);
+        }
+    } else if !key.is_empty() {
+        request = request.bearer_auth(key);
+    }
+
+    let mut response = request
+        .send()
+        .await
+        .map_err(|_| ModelError::Protocol("model discovery request failed".into()))?;
+    if !response.status().is_success() {
+        return Err(ModelError::Protocol(format!(
+            "model discovery returned HTTP {}",
+            response.status()
+        )));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len().saturating_add(chunk.len()) > 4 * 1024 * 1024 {
+            return Err(ModelError::Protocol("model catalog is too large".into()));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let payload: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| ModelError::Protocol("model catalog is not JSON".into()))?;
+    let rows = payload["data"]
+        .as_array()
+        .ok_or_else(|| ModelError::Protocol("model catalog has no data array".into()))?;
+    let mut ids = Vec::new();
+    for row in rows {
+        if let Some(id) = row["id"].as_str()
+            && !id.trim().is_empty()
+            && id.len() <= 256
+            && !id.chars().any(char::is_control)
+            && !ids.iter().any(|existing| existing == id)
+        {
+            ids.push(id.to_owned());
+        }
+    }
+    if ids.is_empty() {
+        return Err(ModelError::Protocol(
+            "model catalog is empty; enter model IDs manually".into(),
+        ));
+    }
+
+    Ok(ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn catalog_server(listener: tokio::net::TcpListener, status: &str, body: &str) -> String {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(socket.read_u8().await.unwrap());
+        }
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+        String::from_utf8(request).unwrap().to_ascii_lowercase()
+    }
+
+    #[tokio::test]
+    async fn custom_catalog_preserves_prefix_and_selects_protocol_auth() {
+        for (format, key, header) in [
+            (
+                ApiFormat::OpenaiResponses,
+                "test-key",
+                Some("authorization: bearer test-key"),
+            ),
+            (
+                ApiFormat::AnthropicMessages,
+                "test-key",
+                Some("x-api-key: test-key"),
+            ),
+            (ApiFormat::OpenaiChatCompletions, "", None),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}/custom/v1/", listener.local_addr().unwrap());
+            let server = catalog_server(
+                listener,
+                "200 OK",
+                r#"{"data":[{"id":"a"},{"id":"a"},{"id":"b"}]}"#,
+            );
+
+            let (result, request) = tokio::join!(discover_api_models(&base, format, key), server);
+
+            assert_eq!(result.unwrap(), ["a", "b"]);
+            assert!(request.starts_with("get /custom/v1/models "), "{request}");
+            if let Some(header) = header {
+                assert!(request.contains(header), "{request}");
+            } else {
+                assert!(
+                    !request.contains("authorization:") && !request.contains("x-api-key:"),
+                    "{request}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn discovery_failure_does_not_expose_response_body_or_infer_models() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = catalog_server(listener, "403 Forbidden", "private-response");
+
+        let (result, _) = tokio::join!(
+            discover_api_models(&base, ApiFormat::OpenaiResponses, "secret"),
+            server
+        );
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("403"));
+        assert!(!error.contains("private-response") && !error.contains("secret"));
+    }
+}

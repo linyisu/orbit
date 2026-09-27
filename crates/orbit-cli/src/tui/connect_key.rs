@@ -2,8 +2,6 @@
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
-use orbit_auth::AuthStore;
-use orbit_model::client::ApiFormat;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -68,14 +66,9 @@ pub(super) async fn run(
                     task = None;
                     match result? {
                         Ok((secret, ids)) => {
-                            let store = AuthStore::new(options.auth_directory.clone())?;
-                            store.set_api_key(provider.name(), secret, provider.base_url()).await?;
-                            let models = ids.into_iter().map(|id| serde_json::json!({ "id": id })).collect::<Vec<_>>();
-                            return super::connect::append_profile_models(
-                                &options.config, &options.auth_directory, provider.name(),
-                                ApiFormat::OpenaiChatCompletions, provider.base_url(),
-                                &serde_json::Value::Array(models),
-                            ).map(Some);
+                            return crate::connections::save_api_key(
+                                &options.config, &options.auth_directory, provider, secret, ids,
+                            ).await.map(Some);
                         }
                         Err(error) => message = format!("连接失败：{error}"),
                     }
