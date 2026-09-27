@@ -285,8 +285,12 @@ fn search(
             }
         };
 
-        if file_size > MAX_FILE_BYTES || scanned_bytes.saturating_add(file_size) > MAX_SCANNED_BYTES
-        {
+        if file_size > MAX_FILE_BYTES {
+            skipped_files += 1;
+            continue;
+        }
+
+        if scanned_bytes.saturating_add(file_size) > MAX_SCANNED_BYTES {
             scan_truncated = true;
             break;
         }

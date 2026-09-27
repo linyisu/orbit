@@ -213,3 +213,28 @@ async fn search_text_external_single_file() {
             .contains("found_unique_needle")
     );
 }
+
+#[tokio::test]
+async fn oversized_file_is_skipped_without_truncating_subsequent_files() {
+    let directory = tempfile::tempdir().unwrap();
+
+    fs::write(
+        directory.path().join("01_oversized.txt"),
+        "x".repeat(3 * 1024 * 1024),
+    )
+    .unwrap();
+
+    fs::write(
+        directory.path().join("02_valid.txt"),
+        "line 1\nneedle_after_oversized\nline 3\n",
+    )
+    .unwrap();
+
+    let tool = SearchText::new(Workspace::new(directory.path()).unwrap());
+    let result = run(&tool, json!({ "query": "needle_after_oversized" })).await;
+
+    let matches = result["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["line"], 2);
+    assert_eq!(result["scan_truncated"], false);
+}
