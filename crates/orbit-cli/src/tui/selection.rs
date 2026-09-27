@@ -135,7 +135,7 @@ impl Selection {
     }
 
     pub fn auto_scroll(&mut self, now: Instant) -> i8 {
-        if !self.dragging || self.region != Some(Region::Transcript) {
+        if !self.dragging || !self.moved || self.region != Some(Region::Transcript) {
             return 0;
         }
         let Some((_, y)) = self.pointer else {
@@ -271,6 +271,10 @@ impl Selection {
     }
 
     fn selected_columns(&self, row: usize) -> Option<(u16, u16)> {
+        if !self.moved {
+            return None;
+        }
+
         let (start, end) = self.bounds()?;
 
         if row < start.1 || row > end.1 {
@@ -433,6 +437,15 @@ impl Selection {
                 x += width;
             }
         }
+
+        // Frozen snapshots omit the caret so copying only captures text.
+        // Repaint it after selection, including when the selected range overlaps it.
+        if let Some((position, _)) = &self.caret
+            && frame.area().contains((*position).into())
+        {
+            frame.buffer_mut()[*position]
+                .set_style(Style::default().bg(Color::Gray).fg(Color::Black));
+        }
     }
 }
 
@@ -476,6 +489,58 @@ mod tests {
 
         (state, terminal)
     }
+    #[test]
+    fn press_does_not_select_until_pointer_moves() {
+        let (mut state, mut terminal) = setup();
+        let area = state.selection.viewport;
+        let point = (area.x + 2, area.y);
+        let before = terminal.backend().buffer().clone();
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                point.0,
+                point.1,
+            ))
+            .unwrap();
+        terminal
+            .draw(|frame| assert!(state.selection.draw_frozen(frame)))
+            .unwrap();
+
+        assert_eq!(terminal.backend().buffer(), &before);
+        assert!(state.selection.text().is_empty());
+        assert_eq!(state.selection.auto_scroll(Instant::now()), 0);
+
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0, point.1);
+        assert_eq!(state.selection.click(&release), Some(point));
+        state.selection.handle(&release).unwrap();
+        assert!(!state.selection.active());
+
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                point.0,
+                point.1,
+            ))
+            .unwrap();
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                point.0 + 3,
+                point.1,
+            ))
+            .unwrap();
+        terminal
+            .draw(|frame| assert!(state.selection.draw_frozen(frame)))
+            .unwrap();
+
+        assert_eq!(terminal.backend().buffer()[point].bg, Color::Blue);
+        assert!(!state.selection.text().is_empty());
+        assert!(state.selection.click(&release).is_none());
+    }
+
     #[test]
     fn held_wheel_extends_across_skipped_rows_and_release_stops_extension() {
         let (mut state, mut terminal) = setup();
