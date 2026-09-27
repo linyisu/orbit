@@ -722,6 +722,8 @@ where
         Fut: Future<Output = Result<(), AgentError>>,
     {
         let fallback_request = request.clone();
+        let mut reasoning_start = std::time::Instant::now();
+        let mut reasoning_active = false;
         let (mut stream, retries) = self
             .backend
             .stream_with_retries(request, cancellation.clone())
@@ -733,6 +735,25 @@ where
 
         while let Some(event) = stream.next().await {
             let event = event.map_err(AgentError::Model)?;
+            match &event {
+                StreamEvent::ReasoningDelta(text) if !text.is_empty() => reasoning_active = true,
+                StreamEvent::ReasoningDelta(_) => {}
+                StreamEvent::TextDelta(text) if text.is_empty() => {}
+                _ => {
+                    if reasoning_active {
+                        emit(AgentEvent::ReasoningFinished {
+                            elapsed_ms: reasoning_start
+                                .elapsed()
+                                .as_millis()
+                                .min(u128::from(u64::MAX))
+                                as u64,
+                        })
+                        .await?;
+                        reasoning_active = false;
+                    }
+                    reasoning_start = std::time::Instant::now();
+                }
+            }
             emit(AgentEvent::Model(event.clone())).await?;
 
             match event {

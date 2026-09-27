@@ -12,7 +12,8 @@ use unicode_width::UnicodeWidthStr;
 use super::app::{RunStatus, ToolStatus, TranscriptItem, UiState};
 
 const ACCENT: Color = Color::Rgb(218, 139, 109);
-const HOVER_ACCENT: Color = Color::Rgb(232, 166, 137);
+const THINKING_MUTED: Color = Color::Rgb(215, 155, 78);
+const THINKING_BRIGHT: Color = Color::Rgb(239, 167, 71);
 // Use the terminal foreground for readable text on both light and dark themes.
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
@@ -476,6 +477,16 @@ pub(super) fn handle_transcript_hover(
         .and_then(|point| hit(point).map(|index| (index, point.1)));
     let point = (mouse.column, mouse.row);
     let after = hit(point).map(|index| (index, point.1));
+    if before != after {
+        state.thinking_hover_started = after
+            .filter(|(index, _)| {
+                matches!(
+                    state.transcript.get(*index),
+                    Some(TranscriptItem::Thinking(_))
+                )
+            })
+            .map(|_| std::time::Instant::now());
+    }
     state.transcript_pointer = Some(point);
 
     Some(before != after)
@@ -900,7 +911,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .flatten();
     state
         .transcript_layout
-        .update(&state.transcript, state.expanded, width);
+        .update_expanded(&state.transcript, &state.expanded, width);
     state.max_scroll = state
         .transcript_layout
         .height()
@@ -935,13 +946,31 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .draw(frame, state.selection.viewport, offset);
     if !state.selection.dragging()
         && let Some(point) = state.transcript_pointer
-        && state
-            .transcript_layout
-            .disclosure_at(&state.transcript, state.selection.viewport, offset, point)
-            .is_some()
+        && let Some(index) = state.transcript_layout.disclosure_at(
+            &state.transcript,
+            state.selection.viewport,
+            offset,
+            point,
+        )
+        && matches!(
+            state.transcript.get(index),
+            Some(TranscriptItem::Thinking(_))
+        )
     {
         for x in state.selection.viewport.x..state.selection.viewport.right() {
-            frame.buffer_mut()[(x, point.1)].set_fg(HOVER_ACCENT);
+            let progress = state
+                .thinking_hover_started
+                .map_or(1.0, |start| (start.elapsed().as_secs_f32() / 0.12).min(1.0));
+            let color = Color::Rgb(
+                (215.0 + 24.0 * progress) as u8,
+                (155.0 + 12.0 * progress) as u8,
+                (78.0 - 7.0 * progress) as u8,
+            );
+            frame.buffer_mut()[(x, point.1)].set_fg(if progress >= 1.0 {
+                THINKING_BRIGHT
+            } else {
+                color
+            });
         }
     }
 
@@ -998,11 +1027,23 @@ pub(super) fn transcript_lines_at_width(
                 if row.finished {
                     let label = row.elapsed.map_or_else(
                         || "思考".to_owned(),
-                        |elapsed| format!("思考 {:.1}s", elapsed.as_secs_f64()),
+                        |elapsed| {
+                            if elapsed.as_secs_f64() < 0.1 {
+                                "思考 <0.1s".into()
+                            } else {
+                                format!("思考 {:.1}s", elapsed.as_secs_f64())
+                            }
+                        },
                     );
+                    let title_width = if width == u16::MAX { 120 } else { width } as usize;
+                    let gap = title_width.saturating_sub(label.width() + 1);
                     lines.push(Line::from(Span::styled(
-                        format!("  {label}"),
-                        Style::default().fg(ACCENT),
+                        format!(
+                            "{label}{}{}",
+                            " ".repeat(gap),
+                            if expanded { "⌄" } else { "›" }
+                        ),
+                        Style::default().fg(THINKING_MUTED),
                     )));
 
                     if !expanded {
@@ -1011,15 +1052,11 @@ pub(super) fn transcript_lines_at_width(
                     }
                 }
 
-                let text = &row.content;
+                let text = row.content.trim_end();
                 let mut code = None;
 
                 for (index, line) in text.lines().enumerate() {
                     lines.push(thinking_line(line, index, &mut code));
-                }
-
-                if row.finished && expanded {
-                    lines.push(super::tool_display::toggle_line(true, width));
                 }
 
                 if !text.is_empty() {
@@ -1038,110 +1075,7 @@ pub(super) fn transcript_lines_at_width(
                     lines.push(Line::from(""));
                 }
 
-                let (marker, color) = match row.status {
-                    ToolStatus::Running => ("◌", ACCENT),
-                    ToolStatus::Finished => ("✓", Color::Green),
-                    ToolStatus::Failed => ("×", Color::Red),
-                };
-
-                let summary = if row.name == "search_text" {
-                    super::tool_display::search_summary(&row.arguments)
-                } else if row.name == "memory_save" {
-                    super::tool_display::memory_summary(&row.arguments)
-                } else if row.name == "git_inspect" {
-                    super::tool_display::git_summary(&row.arguments)
-                } else {
-                    tool_summary(&row.arguments)
-                };
-
-                lines.push(Line::from(Span::styled(
-                    super::tool_display::clipped(
-                        &safe_output(&format!("  {marker} {} {summary}", row.name)),
-                        usize::from(width),
-                    ),
-                    Style::default().fg(color),
-                )));
-
-                if !expanded {
-                    lines.push(Line::from(""));
-                    continue;
-                }
-
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.arguments) {
-                    let arguments = value["command"].as_str().map(str::to_owned).or_else(|| {
-                        value
-                            .as_object()
-                            .filter(|object| !object.is_empty())
-                            .and_then(|_| serde_json::to_string_pretty(&value).ok())
-                    });
-
-                    if let Some(arguments) = arguments {
-                        lines.extend(
-                            arguments
-                                .lines()
-                                .map(|line| Line::from(muted(format!("    {line}")))),
-                        );
-                    }
-                }
-
-                if let Some(output) = super::tool_display::lines(row, expanded, width) {
-                    lines.extend(output);
-                    lines.push(Line::from(""));
-                    continue;
-                }
-
-                let output = serde_json::from_str::<serde_json::Value>(&row.output)
-                    .ok()
-                    .and_then(|value| {
-                        if value.get("stdout").is_some() {
-                            let retained = value["output_id"]
-                                .as_str()
-                                .map(|id| format!(" · output {id}"))
-                                .unwrap_or_default();
-                            let verification_error = value["verification_error"].as_str();
-                            let verification_badge = if verification_error.is_some() {
-                                " · 验证不可用"
-                            } else {
-                                ""
-                            };
-
-                            let verification_detail = verification_error
-                                .map(|error| format!("\n验证：{error}"))
-                                .unwrap_or_default();
-
-                            Some(format!(
-                                "exit {} · {} ms · timeout {} · truncated {}{}{}\n{}{}{}",
-                                value["exit_code"],
-                                value["elapsed_ms"],
-                                value["timed_out"],
-                                value["output_truncated"],
-                                retained,
-                                verification_badge,
-                                value["stdout"].as_str().unwrap_or_default(),
-                                value["stderr"].as_str().unwrap_or_default(),
-                                verification_detail,
-                            ))
-                        } else if let Some(bytes) = value["written_bytes"].as_u64() {
-                            Some(format!(
-                                "已{} · {bytes} 字节",
-                                if value["created"].as_bool() == Some(true) {
-                                    "创建"
-                                } else {
-                                    "写入"
-                                }
-                            ))
-                        } else {
-                            value["content"].as_str().map(str::to_owned)
-                        }
-                    })
-                    .unwrap_or_else(|| row.output.clone());
-                for line in output.lines() {
-                    lines.push(Line::from(muted(format!("    {line}"))));
-                }
-
-                lines.push(super::tool_display::toggle_line(true, width));
-
-                lines.push(Line::from(""));
+                lines.extend(tool_card(row, expanded, width));
             }
 
             TranscriptItem::CommandResult(text) => {
@@ -1217,6 +1151,228 @@ pub(super) fn compact_preview(text: &str, limit: usize) -> String {
     result
 }
 
+fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let (marker, color) = match row.status {
+        ToolStatus::Running => ("◌", ACCENT),
+        ToolStatus::Finished => ("✓", Color::Green),
+        ToolStatus::Failed => ("×", Color::Red),
+    };
+
+    let summary = if row.name == "search_text" {
+        super::tool_display::search_summary(&row.arguments)
+    } else if row.name == "memory_save" {
+        super::tool_display::memory_summary(&row.arguments)
+    } else if row.name == "git_inspect" {
+        super::tool_display::git_summary(&row.arguments)
+    } else {
+        tool_summary(&row.arguments)
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {marker} "), Style::default().fg(color)),
+        Span::styled(
+            super::tool_display::clipped(
+                &safe_output(&format!("{} {summary}", row.name)),
+                usize::from(width).saturating_sub(4),
+            ),
+            Style::default().fg(Color::Rgb(222, 222, 222)),
+        ),
+    ]));
+
+    if expanded
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.arguments)
+        && value["command"].is_null()
+    {
+        let arguments = value["command"].as_str().map(str::to_owned).or_else(|| {
+            value
+                .as_object()
+                .filter(|object| !object.is_empty())
+                .and_then(|_| serde_json::to_string_pretty(&value).ok())
+        });
+
+        if let Some(arguments) = arguments {
+            lines.extend(
+                arguments
+                    .lines()
+                    .map(|line| Line::from(muted(format!("    {line}")))),
+            );
+        }
+    }
+
+    if let Some(output) = super::tool_display::lines(row, expanded, width) {
+        lines.extend(output);
+        lines.push(Line::from(""));
+        return lines;
+    }
+
+    let output = serde_json::from_str::<serde_json::Value>(&row.output)
+        .ok()
+        .and_then(|value| {
+            if value.get("stdout").is_some() {
+                let retained = value["output_id"]
+                    .as_str()
+                    .map(|id| format!(" · output {id}"))
+                    .unwrap_or_default();
+                let verification_error = value["verification_error"].as_str();
+                let verification_badge = if verification_error.is_some() {
+                    " · 验证不可用"
+                } else {
+                    ""
+                };
+
+                let verification_detail = verification_error
+                    .map(|error| format!("\n验证：{error}"))
+                    .unwrap_or_default();
+
+                Some(format!(
+                    "exit {} · {} ms · timeout {} · truncated {}{}{}\n{}{}{}",
+                    value["exit_code"],
+                    value["elapsed_ms"],
+                    value["timed_out"],
+                    value["output_truncated"],
+                    retained,
+                    verification_badge,
+                    value["stdout"].as_str().unwrap_or_default(),
+                    value["stderr"].as_str().unwrap_or_default(),
+                    verification_detail,
+                ))
+            } else if let Some(bytes) = value["written_bytes"].as_u64() {
+                Some(format!(
+                    "已{} · {bytes} 字节",
+                    if value["created"].as_bool() == Some(true) {
+                        "创建"
+                    } else {
+                        "写入"
+                    }
+                ))
+            } else {
+                value["content"].as_str().map(str::to_owned)
+            }
+        })
+        .unwrap_or_else(|| row.output.clone());
+    for line in output.lines() {
+        lines.push(Line::from(muted(format!("    {line}"))));
+    }
+
+    lines.push(super::tool_display::toggle_line(true, width));
+
+    lines.push(Line::from(""));
+    lines
+}
+
+fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
+    let width = if width == u16::MAX { 120 } else { width };
+    let color = match row.status {
+        ToolStatus::Running => ACCENT,
+        ToolStatus::Finished => Color::Green,
+        ToolStatus::Failed => Color::Red,
+    };
+    if width < 10 {
+        return vec![
+            Line::styled(
+                super::tool_display::clipped(&row.name, width as usize),
+                Style::default().fg(color),
+            ),
+            Line::from(""),
+        ];
+    }
+    let inner = width;
+    let mut details = tool_details(row, expanded, inner);
+    details.remove(0);
+    let toggle = super::tool_display::toggle_line(expanded, inner);
+    let collapse = super::tool_display::toggle_line(true, inner);
+    details.retain(|line| *line != toggle && *line != collapse);
+    while details
+        .last()
+        .is_some_and(|line| line.to_string().trim().is_empty())
+    {
+        details.pop();
+    }
+    let mut body = Vec::new();
+    for mut line in details {
+        // Remove only the old presentation inset, retaining indentation in the result itself.
+        if line.to_string().starts_with("    ") {
+            let mut remaining = 4;
+            for span in &mut line.spans {
+                let count = span
+                    .content
+                    .chars()
+                    .take_while(|c| *c == ' ')
+                    .count()
+                    .min(remaining);
+                span.content = span.content[count..].to_owned().into();
+                remaining -= count;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        for span in &mut line.spans {
+            span.content = safe_output(&span.content).into();
+        }
+        body.extend(super::transcript::wrap_line(&line, inner).0);
+    }
+    let hidden = !expanded && body.len() > 3;
+    if !expanded {
+        body.truncate(3);
+    }
+    let arguments = serde_json::from_str::<serde_json::Value>(&row.arguments).ok();
+    let command = arguments
+        .as_ref()
+        .and_then(|value| {
+            ["command", "query", "url", "path"]
+                .iter()
+                .find_map(|key| value[*key].as_str())
+        })
+        .unwrap_or("");
+    let command = if row.name == "search_text" {
+        arguments
+            .as_ref()
+            .map(|value| {
+                format!(
+                    "{} {}",
+                    value["query"],
+                    value["path"].as_str().unwrap_or(".")
+                )
+            })
+            .unwrap_or_default()
+    } else if !expanded {
+        tool_summary(&row.arguments)
+    } else {
+        command.to_owned()
+    };
+    let title = safe_output(&format!("{} {command}", row.name));
+    let title_style = Style::default().fg(color);
+    let title_width = width;
+    let mut lines = if expanded {
+        super::transcript::wrap_line(&Line::styled(title, title_style), title_width).0
+    } else {
+        vec![Line::styled(
+            super::tool_display::clipped(&title, title_width as usize),
+            title_style,
+        )]
+    };
+    lines.push(Line::styled(
+        "─".repeat(width as usize),
+        Style::default().fg(Color::Rgb(70, 70, 70)),
+    ));
+    for mut line in body.into_iter().chain(hidden.then(|| Line::from("…"))) {
+        for span in &mut line.spans {
+            if span.style.fg == Some(Color::Reset) || span.style.fg.is_none() {
+                span.style = span.style.fg(Color::Rgb(155, 155, 155));
+            }
+        }
+        lines.push(line);
+    }
+    lines.push(Line::styled(
+        "─".repeat(width as usize),
+        Style::default().fg(Color::Rgb(70, 70, 70)),
+    ));
+    lines.push(Line::from(""));
+    lines
+}
+
 fn tool_summary(arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
         return String::new();
@@ -1244,6 +1400,7 @@ fn tool_summary(arguments: &str) -> String {
 
     let target = value["path"]
         .as_str()
+        .or_else(|| value["query"].as_str())
         .or_else(|| value["url"].as_str())
         .unwrap_or_default();
     let mut summary = compact_preview(target.lines().next().unwrap_or_default(), 120);
@@ -1291,7 +1448,7 @@ pub(super) fn thinking_line(
         // and `│` identifies the Markdown code block. They are one compound
         // gutter so wrapped code lines reserve their combined width.
         if first.content == "  │ " {
-            first.content = "  ┊ │ ".into();
+            first.content = "┊ │ ".into();
             has_thinking_rail = true;
         } else if let Some(rest) = first.content.strip_prefix("  ") {
             if rest.is_empty() {
@@ -1311,7 +1468,7 @@ pub(super) fn thinking_line(
     if !has_thinking_rail {
         rendered.spans.insert(
             0,
-            Span::styled("  ┊ ", Style::default().fg(Color::Rgb(145, 145, 145))),
+            Span::styled("┊ ", Style::default().fg(Color::Rgb(145, 145, 145))),
         );
     }
 
@@ -1615,6 +1772,55 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn tools_expand_independently_and_commands_expand_in_full() {
+        let mut state = UiState::new("mock");
+        for i in 0..2 {
+            state
+                .transcript
+                .push(TranscriptItem::Tool(super::super::app::ToolRow {
+                id: i.to_string(),
+                name: "run_command".into(),
+                status: ToolStatus::Finished,
+                arguments:
+                    serde_json::json!({ "command": format!("echo {} end-{i}", "long ".repeat(30)) })
+                        .to_string(),
+                output: "one\ntwo\nthree\nfour".into(),
+            }));
+        }
+        render(&mut state, 100, 40);
+
+        super::super::toggle_transcript_item(&mut state, 0);
+        super::super::toggle_transcript_item(&mut state, 1);
+        assert_eq!(state.expanded, [0, 1].into_iter().collect());
+        let TranscriptItem::Tool(row) = &state.transcript[0] else {
+            unreachable!()
+        };
+        let full = tool_card(row, true, 80)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(full.starts_with("run_command"));
+        assert!(full.contains("end-0"));
+        assert_eq!(full.matches("end-0").count(), 1);
+
+        super::super::toggle_transcript_item(&mut state, 0);
+        assert_eq!(state.expanded, [1].into_iter().collect());
+    }
+
+    #[test]
+    fn completed_thinking_drops_trailing_blank_rows_without_changing_content() {
+        let mut row: super::super::app::ThinkingRow = "thought\n\n  \n".to_owned().into();
+        row.finished = true;
+        row.elapsed = Some(std::time::Duration::ZERO);
+        let lines = transcript_lines(&[TranscriptItem::Thinking(row.clone())], true);
+
+        assert!(lines[0].to_string().contains("<0.1s"));
+        assert_eq!(lines.len(), 3);
+        assert_eq!(row.content, "thought\n\n  \n");
+    }
+
+    #[test]
     fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
         use orbit_agent::events::AgentEvent;
@@ -1663,9 +1869,11 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(handle_transcript_hover(&mut state, &moved), Some(true));
+        state.thinking_hover_started =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(150));
         let mut terminal = Terminal::new(TestBackend::new(90, 30)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-        assert_eq!(terminal.backend().buffer()[point].fg, HOVER_ACCENT);
+        assert_eq!(terminal.backend().buffer()[point].fg, THINKING_BRIGHT);
 
         assert!(super::super::toggle_transcript_at(&mut state, point));
         assert!(render(&mut state, 90, 30).contains("private working text"));
@@ -1680,11 +1888,11 @@ mod tests {
         });
         assert_eq!(handle_transcript_hover(&mut state, &leave), Some(true));
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-        assert_eq!(terminal.backend().buffer()[point].fg, ACCENT);
+        assert_eq!(terminal.backend().buffer()[point].fg, THINKING_MUTED);
     }
 
     #[test]
-    fn collapsed_tools_fit_one_row_even_with_wide_text_and_controls() {
+    fn collapsed_tool_cards_fit_width_and_bound_the_preview() {
         use super::super::app::ToolRow;
 
         for status in [
@@ -1704,10 +1912,12 @@ mod tests {
 
             for width in [1, 8, 24, 80] {
                 let lines = transcript_lines_at_width(std::slice::from_ref(&item), false, width);
-                assert_eq!(lines.len(), 2);
-                assert!(lines[0].width() <= usize::from(width), "{lines:?}");
-                assert!(lines[1].to_string().is_empty());
-                assert!(!lines[0].to_string().contains("hidden result"));
+                assert!(lines.len() <= 9);
+                assert!(
+                    lines.iter().all(|line| line.width() <= usize::from(width)),
+                    "{lines:?}"
+                );
+                assert!(lines.last().unwrap().to_string().is_empty());
             }
         }
     }
@@ -1901,14 +2111,15 @@ mod tests {
                 .to_string()
                 .contains("report.md · 1 行 · 120000 字节")
         );
-        assert_eq!(short.len(), 2);
-        assert!(short[1].to_string().is_empty());
+        assert!(short.len() <= 9);
+        assert!(short.last().unwrap().to_string().is_empty());
         assert!(!short.iter().any(|line| line.to_string().contains("[展开]")));
-        assert!(
-            transcript_lines(&[item], true)
-                .iter()
-                .any(|line| line.to_string().contains(&output))
-        );
+        let expanded = transcript_lines(std::slice::from_ref(&item), true);
+        assert!(expanded.len() > short.len());
+        let TranscriptItem::Tool(row) = &item else {
+            unreachable!()
+        };
+        assert_eq!(row.output, output);
         assert!(
             tool_summary(&serde_json::json!({ "command": "x".repeat(10000) }).to_string())
                 .chars()
@@ -2030,7 +2241,7 @@ mod tests {
                 name: "read_file".into(),
                 arguments: "{}".into(),
                 status: ToolStatus::Finished,
-                output: format!("first\nsecond\n{id}-detail"),
+                output: format!("first\nsecond\nthird\n{id}-detail"),
             }));
         }
 
@@ -2128,7 +2339,7 @@ mod tests {
 
             assert_eq!(state.selection.click(&up), Some(point));
             assert!(super::super::toggle_transcript_at(&mut state, point));
-            assert_eq!(state.expanded, expected);
+            assert_eq!(state.expanded, expected.into_iter().collect());
         }
 
         assert!(!super::super::toggle_transcript_at(&mut state, (0, 0)));
@@ -2189,7 +2400,7 @@ mod tests {
                     .unwrap_or_else(|| panic!("missing control for {name}"));
 
                 assert!(super::super::toggle_transcript_at(&mut state, point));
-                assert_eq!(state.expanded, expected);
+                assert_eq!(state.expanded, expected.into_iter().collect());
                 assert_eq!(state.input.text, "unfinished draft");
 
                 let TranscriptItem::Tool(row) = &state.transcript[0] else {
@@ -2202,7 +2413,7 @@ mod tests {
     }
 
     #[test]
-    fn bottom_collapse_returns_to_the_tool_and_shortcut_keeps_its_target() {
+    fn shortcut_collapses_scrolled_tool_with_clickable_output() {
         use super::super::app::ToolRow;
 
         use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -2226,20 +2437,18 @@ mod tests {
         render(&mut state, 90, 24);
         let area = state.selection.viewport;
         let offset = state.max_scroll.saturating_sub(state.scroll);
-        let point = (area.y..area.bottom())
-            .find_map(|y| {
-                (area.x..area.right()).find_map(|x| {
-                    state
-                        .transcript_layout
-                        .disclosure_at(&state.transcript, area, offset, (x, y))
-                        .filter(|index| *index == 1)
-                        .map(|_| (x, y))
-                })
-            })
-            .expect("bottom collapse control is visible");
-
-        assert!(super::super::toggle_transcript_at(&mut state, point));
-        assert_eq!(state.expanded, None);
+        assert!((area.y..area.bottom()).any(|y| {
+            state
+                .transcript_layout
+                .disclosure_at(&state.transcript, area, offset, (area.x + 4, y))
+                == Some(1)
+        }));
+        super::super::keyboard_action(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+            false,
+        );
+        assert!(state.expanded.is_empty());
         assert!(render(&mut state, 90, 24).contains("tool_1"));
 
         super::super::toggle_transcript_item(&mut state, 1);
@@ -2252,7 +2461,8 @@ mod tests {
         );
 
         assert_eq!(
-            state.expanded, None,
+            state.expanded,
+            Default::default(),
             "must collapse tool_1 instead of expanding tool_2"
         );
     }
@@ -2787,7 +2997,7 @@ mod tests {
         let mut code = None;
         let line = thinking_line("- **重点** 与 `code`", 0, &mut code);
 
-        assert_eq!(line.spans[0].content, "  ┊ ");
+        assert_eq!(line.spans[0].content, "┊ ");
         assert!(
             line.spans
                 .iter()
@@ -2817,7 +3027,7 @@ mod tests {
             &mut code,
         );
 
-        assert_eq!(line.spans[0].content, "  ┊ │ ");
+        assert_eq!(line.spans[0].content, "┊ │ ");
     }
 
     #[test]

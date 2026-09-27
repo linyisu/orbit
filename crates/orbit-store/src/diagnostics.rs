@@ -209,7 +209,8 @@ fn summarize(
                 }
             }
 
-            AgentEvent::VerificationRecorded { .. }
+            AgentEvent::ReasoningFinished { .. }
+            | AgentEvent::VerificationRecorded { .. }
             | AgentEvent::ContextUsage { .. }
             | AgentEvent::Completed { .. }
             | AgentEvent::CompactionStarted

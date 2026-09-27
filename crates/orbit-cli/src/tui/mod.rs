@@ -1064,6 +1064,7 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    if state.thinking_hover_started.is_some_and(|started| started.elapsed() < Duration::from_millis(160)) { dirty = true; }
                     if branch_task.as_ref().is_some_and(|task| task.is_finished())
                         && let Ok((workspace, branch)) = branch_task.take().unwrap().await
                         && workspace == state.workspace
@@ -2764,22 +2765,23 @@ fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
 fn toggle_transcript_item(state: &mut UiState, index: usize) {
     let offset = state.max_scroll.saturating_sub(state.scroll);
     let anchor = state.transcript_layout.anchor_at(offset);
-    let collapsing = state.expanded == Some(index);
-    let viewport_in_collapsing_item = state.expanded.is_some_and(|old| {
-        let start = state.transcript_layout.item_offset(old).unwrap_or(offset);
-        let end = state
-            .transcript_layout
-            .item_offset(old + 1)
-            .unwrap_or_else(|| state.transcript_layout.height());
-
-        (start..end).contains(&offset)
-    });
-    state.expanded = if collapsing { None } else { Some(index) };
+    let collapsing = state.expanded.contains(&index);
+    let start = state.transcript_layout.item_offset(index).unwrap_or(offset);
+    let end = state
+        .transcript_layout
+        .item_offset(index + 1)
+        .unwrap_or_else(|| state.transcript_layout.height());
+    let viewport_in_collapsing_item = collapsing && (start..end).contains(&offset);
+    if collapsing {
+        state.expanded.remove(&index);
+    } else {
+        state.expanded.insert(index);
+    }
     state.follow_bottom = false;
     state.selection.clear();
-    state.transcript_layout.update(
+    state.transcript_layout.update_expanded(
         &state.transcript,
-        state.expanded,
+        &state.expanded,
         state.selection.viewport.width,
     );
     state.max_scroll = state
@@ -2882,7 +2884,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
             KeyCode::Char('o') => {
                 let offset = state.max_scroll.saturating_sub(state.scroll);
 
-                if let Some(index) = state.expanded.or_else(|| {
+                if let Some(index) = state.expanded.iter().next_back().copied().or_else(|| {
                     state.transcript_layout.visible_collapsible(
                         &state.transcript,
                         offset,

@@ -1,8 +1,6 @@
 //! Cache Unicode-aware physical-line layout, and hand only visible lines to
 //! Ratatui. Scrolling never asks a Paragraph to wrap and skip the entire
 //! conversation from its beginning.
-#[cfg(test)]
-use ratatui::widgets::Wrap;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -45,7 +43,7 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
     if line
         .spans
         .first()
-        .is_some_and(|span| matches!(span.content.as_ref(), "  │ " | "  ┊ " | "  ┊ │ "))
+        .is_some_and(|span| matches!(span.content.as_ref(), "  │ " | "┊ " | "┊ │ "))
     {
         let span = line.spans.remove(0);
         let width = span.width() as u16;
@@ -88,8 +86,17 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
                     .iter()
                     .all(|prefix| prefix.content.chars().all(char::is_whitespace))
         })
-        .map(|(index, _)| index)?;
-    let prefix = line.spans.drain(..=marker).collect::<Vec<_>>();
+        .map(|(index, _)| index);
+    let end = marker.or_else(|| {
+        line.spans
+            .iter()
+            .take_while(|span| {
+                !span.content.is_empty() && span.content.chars().all(char::is_whitespace)
+            })
+            .count()
+            .checked_sub(1)
+    })?;
+    let prefix = line.spans.drain(..=end).collect::<Vec<_>>();
     let width = prefix.iter().map(Span::width).sum::<usize>() as u16;
 
     Some(Gutter {
@@ -430,7 +437,7 @@ impl Entry {
 pub(super) struct TranscriptLayout {
     entries: Vec<Entry>,
     width: u16,
-    expanded: Option<usize>,
+    expanded: std::collections::BTreeSet<usize>,
     dirty_from: usize,
 }
 
@@ -483,19 +490,28 @@ impl TranscriptLayout {
         self.dirty_from = self.dirty_from.min(index);
     }
 
+    #[cfg(test)]
     pub fn update(&mut self, items: &[TranscriptItem], expanded: Option<usize>, width: u16) {
+        self.update_expanded(items, &expanded.into_iter().collect(), width);
+    }
+
+    pub fn update_expanded(
+        &mut self,
+        items: &[TranscriptItem],
+        expanded: &std::collections::BTreeSet<usize>,
+        width: u16,
+    ) {
         if self.width != width || items.len() < self.entries.len() {
             self.entries.clear();
             self.dirty_from = 0;
             self.width = width;
         }
 
-        if self.expanded != expanded {
-            for index in self.expanded.into_iter().chain(expanded) {
+        if &self.expanded != expanded {
+            if let Some(index) = self.expanded.symmetric_difference(expanded).next().copied() {
                 self.invalidate_from(index);
             }
-
-            self.expanded = expanded;
+            self.expanded = expanded.clone();
         }
 
         if width == 0 {
@@ -514,7 +530,7 @@ impl TranscriptLayout {
             match item {
                 TranscriptItem::Assistant(text) => entry.stream(text, false, width),
                 TranscriptItem::Thinking(row) if !row.finished => {
-                    entry.stream(&row.content, true, width)
+                    entry.stream(row.content.trim_end(), true, width)
                 }
                 TranscriptItem::User(text) => {
                     *entry = Entry::default();
@@ -525,16 +541,22 @@ impl TranscriptLayout {
                     let collapsible =
                         matches!(item, TranscriptItem::Tool(_) | TranscriptItem::Thinking(_));
                     let toggle = collapsible.then(|| {
-                        super::tool_display::toggle_line(expanded == Some(first + relative), width)
+                        super::tool_display::toggle_line(
+                            expanded.contains(&(first + relative)),
+                            width,
+                        )
                     });
 
+                    let tool = matches!(item, TranscriptItem::Tool(_));
                     for line in render::transcript_lines_at_width(
                         std::slice::from_ref(item),
-                        expanded == Some(first + relative),
+                        expanded.contains(&(first + relative)),
                         width,
                     ) {
-                        // Match the generated styled control, not an ellipsis in tool data.
-                        if (collapsible && entry.rows.is_empty()) || toggle.as_ref() == Some(&line)
+                        // A click toggles the card; drag selection remains handled separately.
+                        if (tool && !line.to_string().is_empty())
+                            || (collapsible && entry.rows.is_empty())
+                            || toggle.as_ref() == Some(&line)
                         {
                             entry.disclosures.push(entry.rows.len());
                         }
@@ -610,7 +632,7 @@ impl TranscriptLayout {
             .find(|row| row.start <= relative && relative < row.start + row.height)?;
         let column = usize::from(point.0 - area.x);
 
-        (column >= 2 && column < row.line.width()).then_some(index)
+        (column < row.line.width()).then_some(index)
     }
 
     pub fn height(&self) -> usize {
@@ -715,6 +737,33 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn tool_title_and_output_are_clickable() {
+        let items = vec![TranscriptItem::Tool(super::super::app::ToolRow {
+            id: "web".into(),
+            name: "web_search".into(),
+            arguments: serde_json::json!({ "query": "papers" }).to_string(),
+            status: super::super::app::ToolStatus::Failed,
+            output: "first\nsecond\nthird\nfourth".into(),
+        })];
+        let mut layout = TranscriptLayout::default();
+        let area = Rect::new(0, 0, 80, 40);
+
+        layout.update(&items, None, 80);
+        assert_eq!(layout.disclosure_at(&items, area, 0, (0, 0)), Some(0));
+        for y in 1..layout.height() - 1 {
+            assert_eq!(
+                layout.disclosure_at(&items, area, 0, (0, y as u16)),
+                Some(0)
+            );
+        }
+        let collapsed = layout.height();
+        layout.update(&items, Some(0), 80);
+
+        assert!(layout.height() > collapsed);
+        assert_eq!(layout.disclosure_at(&items, area, 0, (80, 2)), None);
+    }
+
+    #[test]
     fn wrapped_thinking_and_code_keep_gutters_even_when_scrolled_mid_line() {
         let text = "中文 words 👋 words ".repeat(80);
 
@@ -734,12 +783,25 @@ mod tests {
             let buffer = terminal.backend().buffer();
 
             for y in 0..6 {
-                assert_eq!(buffer[(0, y)].symbol(), " ");
-                assert_eq!(buffer[(1, y)].symbol(), " ");
-                assert_eq!(buffer[(2, y)].symbol(), marker);
-                assert_eq!(buffer[(3, y)].symbol(), " ");
+                let column = if marker == "┊" { 0 } else { 2 };
+                assert_eq!(buffer[(column, y)].symbol(), marker);
+                assert_eq!(buffer[(column + 1, y)].symbol(), " ");
             }
         }
+    }
+
+    #[test]
+    fn paragraph_continuations_keep_their_left_margin() {
+        let text = "### 标题\n\n这是一段中文说明，换行以后仍然需要与段落开头对齐。\n  缩进段落也要保持原有的额外缩进，而不是向左跳。";
+        let mut layout = TranscriptLayout::default();
+        layout.update(&[TranscriptItem::Assistant(text.into())], None, 24);
+
+        for row in layout.entries[0].rows.iter().filter(|row| row.height > 1) {
+            let gutter = row.gutter.as_ref().expect("wrapped prose retains a margin");
+            assert!(gutter.width >= 2);
+            assert_eq!(gutter.first.width(), gutter.continuation.width());
+        }
+        assert!(layout.entries[0].rows.iter().any(|row| row.height > 1));
     }
 
     #[test]
@@ -868,7 +930,8 @@ mod tests {
         let thinking = &layout.entries[0];
 
         assert!(thinking.rows.last().unwrap().line.to_string().is_empty());
-        assert_eq!(layout.entries[1].rows[0].line.to_string(), "  final answer");
+        assert_eq!(layout.entries[1].rows[0].line.to_string(), "final answer");
+        assert_eq!(layout.entries[1].rows[0].gutter.as_ref().unwrap().width, 2);
     }
 
     #[test]
@@ -884,8 +947,8 @@ mod tests {
         let row = &layout.entries[0].rows[1];
         let gutter = row.gutter.as_ref().unwrap();
 
-        assert_eq!(gutter.first.to_string(), "  ┊ │ ");
-        assert_eq!(gutter.continuation.to_string(), "  ┊ │ ");
+        assert_eq!(gutter.first.to_string(), "┊ │ ");
+        assert_eq!(gutter.continuation.to_string(), "┊ │ ");
         assert!(row.height > 1);
 
         let mut terminal = Terminal::new(TestBackend::new(22, 5)).unwrap();
@@ -894,8 +957,8 @@ mod tests {
             .unwrap();
 
         for y in 1..5 {
-            assert_eq!(terminal.backend().buffer()[(2, y)].symbol(), "┊");
-            assert_eq!(terminal.backend().buffer()[(4, y)].symbol(), "│");
+            assert_eq!(terminal.backend().buffer()[(0, y)].symbol(), "┊");
+            assert_eq!(terminal.backend().buffer()[(2, y)].symbol(), "│");
         }
     }
 
@@ -1082,10 +1145,10 @@ mod tests {
             (80, None),
         ] {
             layout.update(&items, expanded, width);
-            let expected =
-                Paragraph::new(render::transcript_lines(&items, false)).wrap(Wrap { trim: false });
+            let mut expected = TranscriptLayout::default();
+            expected.update(&items, expanded, width);
 
-            assert_eq!(layout.height(), expected.line_count(width));
+            assert_eq!(layout.height(), expected.height());
 
             let offset = layout.height().saturating_sub(6);
             let mut actual_terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
@@ -1094,7 +1157,7 @@ mod tests {
                 .unwrap();
             let mut expected_terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
             expected_terminal
-                .draw(|f| f.render_widget(expected.clone().scroll((offset as u16, 0)), f.area()))
+                .draw(|f| expected.draw(f, f.area(), offset))
                 .unwrap();
 
             assert_eq!(

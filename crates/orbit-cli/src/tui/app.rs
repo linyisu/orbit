@@ -109,8 +109,10 @@ pub struct UiState {
     pub context_details_visible: bool,
     /// Pointer position while it rests on a clickable transcript link.
     pub link_hovered: Option<(u16, u16)>,
+    pub thinking_hover_started: Option<Instant>,
     pub transcript_pointer: Option<(u16, u16)>,
     active_thinking: Option<usize>,
+    model_started_at: Option<Instant>,
     /// Last drawn link hint; it must be cleared before the transcript redraws.
     pub link_tooltip_area: ratatui::layout::Rect,
     pub auto_compact: bool,
@@ -159,7 +161,7 @@ pub struct UiState {
     pub completion_home: Option<std::path::PathBuf>,
     pub skill_completions: Vec<(String, String)>,
     pub directory_completions: super::completion::DirectoryCache,
-    pub expanded: Option<usize>,
+    pub expanded: std::collections::BTreeSet<usize>,
     pub max_scroll: usize,
     pub(super) transcript_layout: super::transcript::TranscriptLayout,
     pub elapsed: std::time::Duration,
@@ -216,8 +218,10 @@ impl UiState {
             context_hovered: false,
             context_details_visible: false,
             link_hovered: None,
+            thinking_hover_started: None,
             transcript_pointer: None,
             active_thinking: None,
+            model_started_at: None,
             link_tooltip_area: ratatui::layout::Rect::default(),
             auto_compact: true,
             pending_compaction_archive: None,
@@ -264,7 +268,7 @@ impl UiState {
             completion_home: None,
             skill_completions: Vec::new(),
             directory_completions: Default::default(),
-            expanded: None,
+            expanded: Default::default(),
             max_scroll: 0,
             transcript_layout: Default::default(),
             elapsed: std::time::Duration::ZERO,
@@ -324,6 +328,7 @@ impl UiState {
             }
 
             AgentEvent::ContextUsage { estimated_input } => {
+                self.model_started_at = Some(Instant::now());
                 self.context_used_tokens = self.calibration().estimate(estimated_input);
             }
 
@@ -408,6 +413,15 @@ impl UiState {
                     }))
             }
 
+            AgentEvent::ReasoningFinished { elapsed_ms } => {
+                let index = self.active_thinking;
+                self.finish_thinking();
+                if let Some(TranscriptItem::Thinking(row)) =
+                    index.and_then(|i| self.transcript.get_mut(i))
+                {
+                    row.elapsed = Some(std::time::Duration::from_millis(elapsed_ms));
+                }
+            }
             AgentEvent::Model(event) => self.apply_model_event(event),
 
             AgentEvent::ToolStarted { call } => {
@@ -557,6 +571,7 @@ impl UiState {
                 }
 
                 self.finish_thinking();
+                self.model_started_at = None;
                 self.ensure_assistant_item();
 
                 if let Some(TranscriptItem::Assistant(content)) = self.transcript.last_mut() {
@@ -576,7 +591,7 @@ impl UiState {
                 } else {
                     self.active_thinking = Some(self.transcript.len());
                     self.transcript.push(TranscriptItem::Thinking(ThinkingRow {
-                        started_at: Some(Instant::now()),
+                        started_at: Some(self.model_started_at.take().unwrap_or_else(Instant::now)),
                         ..text.into()
                     }));
                 }
@@ -591,11 +606,15 @@ impl UiState {
 
     /// Historical events have no reasoning timestamps. Never time their replay.
     pub fn apply_replayed(&mut self, event: AgentEvent) {
+        let has_timing = matches!(event, AgentEvent::ReasoningFinished { .. });
         self.apply(event);
+        self.model_started_at = None;
 
         if let Some(TranscriptItem::Thinking(row)) = self.transcript.last_mut() {
             row.started_at = None;
-            row.elapsed = None;
+            if !has_timing && !row.finished {
+                row.elapsed = None;
+            }
         }
     }
 
@@ -704,6 +723,48 @@ mod tests {
                 "later completion must not extend reasoning time"
             );
         }
+    }
+
+    #[test]
+    fn buffered_reasoning_includes_request_wait_before_first_delta() {
+        let mut state = UiState::new("mock");
+        state.apply(AgentEvent::ContextUsage { estimated_input: 1 });
+        state.model_started_at = Some(Instant::now() - std::time::Duration::from_secs(3));
+
+        state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
+            "buffered reasoning".into(),
+        )));
+        state.apply(AgentEvent::Model(StreamEvent::TextDelta("answer".into())));
+
+        let TranscriptItem::Thinking(row) = &state.transcript[0] else {
+            panic!("missing reasoning");
+        };
+        assert!(row.elapsed.unwrap() >= std::time::Duration::from_secs(3));
+        assert!(state.model_started_at.is_none());
+    }
+
+    #[test]
+    fn replay_preserves_recorded_reasoning_time() {
+        let events = vec![
+            AgentEvent::Model(StreamEvent::ReasoningDelta("reasoning".into())),
+            AgentEvent::ReasoningFinished { elapsed_ms: 7500 },
+            AgentEvent::Model(StreamEvent::Completed {
+                finish_reason: None,
+                usage: None,
+            }),
+        ];
+        let stored = serde_json::to_string(&events).unwrap();
+        let restored: Vec<AgentEvent> = serde_json::from_str(&stored).unwrap();
+        let mut state = UiState::new("mock");
+
+        for event in restored {
+            state.apply_replayed(event);
+        }
+
+        let TranscriptItem::Thinking(row) = &state.transcript[0] else {
+            panic!("missing reasoning");
+        };
+        assert_eq!(row.elapsed, Some(std::time::Duration::from_millis(7500)));
     }
 
     #[test]
