@@ -24,6 +24,26 @@ fn muted(text: impl Into<String>) -> Span<'static> {
 }
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
+    let hover = state.pending_list_hover.take();
+    draw_contents(frame, state);
+
+    if let Some(mut mouse) = hover {
+        // Hit testing must use the rows laid out after scrolling, not the
+        // previous frame. Repaint the highlight without moving the viewport.
+        mouse.kind = crossterm::event::MouseEventKind::Moved;
+        if state.picker.is_some()
+            || state.model_picker.is_some()
+            || state.marketplace_dialog.is_some()
+        {
+            super::handle_list_hover(state, &crossterm::event::Event::Mouse(mouse));
+        } else if state.menu_area.contains((mouse.column, mouse.row).into()) {
+            super::completion::select_with_mouse(state, &mouse);
+        }
+        draw_contents(frame, state);
+    }
+}
+
+fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     let area = frame.area();
     state.selection.viewport = Rect::default();
     state.selection.input = Rect::default();
@@ -1527,7 +1547,15 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     let visible = area.height as usize;
     // Keep keyboard focus near the middle while moving through a long menu.
     let max_first = menu.len().saturating_sub(visible);
-    let first = state.menu_index.saturating_sub(visible / 2).min(max_first);
+    if !state.menu_manual_scroll {
+        state.menu_offset = state
+            .menu_offset
+            .min(state.menu_index)
+            .max(state.menu_index.saturating_sub(visible.saturating_sub(1)))
+            .min(max_first);
+    }
+    state.menu_offset = state.menu_offset.min(max_first);
+    let first = state.menu_offset;
 
     super::overlay::clear(frame, area);
     frame.render_widget(Block::default().style(background), area);
@@ -1539,9 +1567,6 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .take(visible)
         .enumerate()
     {
-        state
-            .menu_rows
-            .push((Rect::new(area.x, area.y + row as u16, area.width, 1), index));
         let selected = index == state.menu_index.min(menu.len() - 1);
         let style = if selected {
             Style::default()
@@ -1558,9 +1583,14 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             width = super::commands::COMMAND_NAME_WIDTH,
         );
 
+        let width =
+            unicode_width::UnicodeWidthStr::width(text.trim_end()).min(area.width as usize) as u16;
+        state
+            .menu_rows
+            .push((Rect::new(area.x, area.y + row as u16, width, 1), index));
         frame.render_widget(
             Paragraph::new(fit_label(&text, area.width as usize, false)).style(style),
-            Rect::new(area.x, area.y + row as u16, area.width, 1),
+            Rect::new(area.x, area.y + row as u16, width, 1),
         );
     }
 }
@@ -1918,8 +1948,14 @@ mod tests {
                 .filter(|cell| cell.bg == ACCENT)
                 .map(|cell| cell.symbol().width())
                 .sum::<usize>();
-            let expected_width = if home { 82 } else { 96 };
-            assert_eq!(selected, expected_width);
+            let selected_area = state
+                .menu_rows
+                .iter()
+                .find(|(_, index)| *index == state.menu_index)
+                .unwrap()
+                .0;
+            assert_eq!(selected, selected_area.width as usize);
+            assert!(selected < if home { 82 } else { 96 });
         }
     }
 
@@ -1938,7 +1974,8 @@ mod tests {
         let middle_page = render(&mut state, 100, 20);
 
         assert!(middle_page.contains("  /resume"));
-        assert!(!middle_page.contains("/new"));
+        assert!(middle_page.contains("/new"));
+        assert_eq!(state.menu_offset, 0);
 
         state.menu_index = state.menu().len() - 1;
         let last_page = render(&mut state, 100, 20);

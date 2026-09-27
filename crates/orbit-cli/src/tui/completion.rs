@@ -130,6 +130,11 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
         "/model" => models
             .iter()
             .map(|name| (name.clone(), "切换模型".into(), false))
+            .chain(std::iter::once((
+                "refresh".into(),
+                "刷新账号模型目录".into(),
+                false,
+            )))
             .collect(),
         "/skill" => skills
             .iter()
@@ -281,9 +286,20 @@ pub fn select_with_mouse(state: &mut super::app::UiState, mouse: &crossterm::eve
 
     state.menu_index = state.menu_index.min(count - 1);
     match mouse.kind {
-        MouseEventKind::ScrollUp => state.menu_index = (state.menu_index + count - 1) % count,
-        MouseEventKind::ScrollDown => state.menu_index = (state.menu_index + 1) % count,
-        MouseEventKind::Down(MouseButton::Left) => {
+        MouseEventKind::ScrollUp => {
+            state.menu_offset = state.menu_offset.saturating_sub(3);
+            state.menu_manual_scroll = true;
+            state.pending_list_hover = Some(*mouse);
+        }
+        MouseEventKind::ScrollDown => {
+            state.menu_offset = state
+                .menu_offset
+                .saturating_add(3)
+                .min(count.saturating_sub(state.menu_rows.len().max(1)));
+            state.menu_manual_scroll = true;
+            state.pending_list_hover = Some(*mouse);
+        }
+        MouseEventKind::Moved | MouseEventKind::Down(MouseButton::Left) => {
             if let Some((_, index)) = state
                 .menu_rows
                 .iter()
@@ -301,7 +317,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mouse_selects_visible_command_rows_and_wheel_wraps() {
+    fn mouse_selects_rows_and_wheel_scrolls_without_changing_selection() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let mut state = super::super::app::UiState::new("model");
         state.input.set("/".into());
@@ -316,10 +332,18 @@ mod tests {
         select_with_mouse(&mut state, &mouse);
         assert_eq!(state.menu_index, 6);
         assert_eq!(state.input.text, "/");
+        state.menu_index = 0;
+        mouse.kind = MouseEventKind::Moved;
+        select_with_mouse(&mut state, &mouse);
+        assert_eq!(state.menu_index, 6);
+        assert_eq!(state.input.text, "/");
+
         state.menu_index = state.menu().len() - 1;
         mouse.kind = MouseEventKind::ScrollDown;
         select_with_mouse(&mut state, &mouse);
-        assert_eq!(state.menu_index, 0);
+        assert_eq!(state.menu_index, state.menu().len() - 1);
+        assert_eq!(state.menu_offset, 3);
+        assert!(state.menu_manual_scroll);
     }
 
     #[test]
@@ -327,7 +351,7 @@ mod tests {
         let models = vec!["one::fast".into(), "two::fast".into()];
         let skills = vec![("review".into(), "代码审查".into())];
 
-        assert_eq!(matching("/model f", &models, &skills).len(), 2);
+        assert_eq!(matching("/model f", &models, &skills).len(), 3);
         assert_eq!(
             matching("/model two::", &models, &skills)[0].name,
             "/model two::fast"

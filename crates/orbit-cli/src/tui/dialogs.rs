@@ -12,6 +12,7 @@ use ratatui::{
 
 #[derive(Debug)]
 pub struct SessionPicker {
+    offset: usize,
     sessions: Vec<Session>,
     query: String,
     selected: usize,
@@ -22,6 +23,7 @@ pub struct SessionPicker {
 
 #[derive(Debug)]
 pub struct ModelPicker {
+    offset: usize,
     models: Vec<ModelOption>,
     query: String,
     selected: usize,
@@ -31,6 +33,8 @@ pub struct ModelPicker {
 
 #[derive(Debug)]
 pub struct MarketplaceDialog {
+    market_offset: usize,
+    plugin_offset: usize,
     marketplaces: Vec<Marketplace>,
     source: String,
     adding: bool,
@@ -59,6 +63,8 @@ impl MarketplaceDialog {
         enabled: Vec<ProjectPlugin>,
     ) -> Self {
         Self {
+            market_offset: 0,
+            plugin_offset: 0,
             marketplaces,
             source: String::new(),
             adding: false,
@@ -184,12 +190,33 @@ impl ModelPicker {
             .unwrap_or_default();
 
         Self {
+            offset: 0,
             models,
             query: String::new(),
             selected,
             current,
             effort,
         }
+    }
+
+    fn first_visible(&mut self, height: usize) -> usize {
+        let rows = self.matches();
+        let selected = self.selected.min(rows.len().saturating_sub(1));
+        let mut first = self.offset.min(selected);
+        while first < selected {
+            let required = selected - first
+                + 2
+                + rows[first..=selected]
+                    .windows(2)
+                    .filter(|pair| pair[0].provider != pair[1].provider)
+                    .count();
+            if required <= height {
+                break;
+            }
+            first += 1;
+        }
+        self.offset = first;
+        first
     }
 
     fn matches(&self) -> Vec<&ModelOption> {
@@ -224,27 +251,6 @@ impl ModelPicker {
         model.reasoning_efforts.clone()
     }
 
-    fn cycle_effort(&mut self, forward: bool) {
-        let efforts = self.selected_efforts();
-
-        if efforts.is_empty() {
-            self.effort = None;
-            return;
-        }
-
-        let index = efforts
-            .iter()
-            .position(|effort| Some(*effort) == self.effort)
-            .unwrap_or(0);
-        let next = if forward {
-            (index + 1) % efforts.len()
-        } else {
-            (index + efforts.len() - 1) % efforts.len()
-        };
-
-        self.effort = Some(efforts[next]);
-    }
-
     fn normalize_effort(&mut self) {
         let efforts = self.selected_efforts();
 
@@ -264,6 +270,7 @@ impl ModelPicker {
 impl SessionPicker {
     pub fn new(sessions: Vec<Session>) -> Self {
         Self {
+            offset: 0,
             sessions,
             query: String::new(),
             selected: 0,
@@ -331,7 +338,61 @@ impl SessionPicker {
     }
 }
 
+fn fit_hit_rows(rows: &mut [(Rect, usize)], lines: &[Line<'_>], body: Rect) {
+    for (area, _) in rows {
+        let row = area.y.saturating_sub(body.y) as usize;
+        if let Some(line) = lines.get(row) {
+            area.width = area.width.min(line.width().min(u16::MAX as usize) as u16);
+            area.height = area.height.min(1);
+        }
+    }
+}
+
 pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
+    if matches!(&event, Event::Key(_) | Event::Paste(_)) {
+        state.dialog_manual_scroll = false;
+    }
+    if let Event::Mouse(mouse) = &event
+        && matches!(
+            mouse.kind,
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+        )
+    {
+        let visible = state
+            .dialog_rows
+            .iter()
+            .map(|(_, index)| *index)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            .max(1);
+        let down = mouse.kind == MouseEventKind::ScrollDown;
+        let scroll = |offset: &mut usize, count: usize| {
+            *offset = if down {
+                offset.saturating_add(3).min(count.saturating_sub(visible))
+            } else {
+                offset.saturating_sub(3)
+            };
+        };
+        if let Some(picker) = &mut state.picker {
+            let count = picker.matches().len();
+            scroll(&mut picker.offset, count);
+        } else if let Some(picker) = &mut state.model_picker {
+            let count = picker.matches().len();
+            scroll(&mut picker.offset, count);
+        } else if let Some(dialog) = &mut state.marketplace_dialog {
+            if dialog.viewing_plugins {
+                let count = dialog
+                    .selected_market()
+                    .map_or(0, |market| market.plugins.len());
+                scroll(&mut dialog.plugin_offset, count);
+            } else {
+                scroll(&mut dialog.market_offset, dialog.marketplaces.len());
+            }
+        }
+        state.dialog_manual_scroll = true;
+        state.pending_list_hover = Some(*mouse);
+        return None;
+    }
     if let Event::Key(key) = &event {
         if key.kind == KeyEventKind::Release {
             return None;
@@ -362,7 +423,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
     }
 
     if let Event::Mouse(mouse) = &event
-        && mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left)
+        && matches!(
+            mouse.kind,
+            MouseEventKind::Moved | MouseEventKind::Down(crossterm::event::MouseButton::Left)
+        )
         && let Some((_, index)) = state
             .dialog_rows
             .iter()
@@ -383,6 +447,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 dialog.selected_plugin = 0;
             }
         }
+        if mouse.kind == MouseEventKind::Moved {
+            return None;
+        }
+        state.dialog_manual_scroll = false;
         return handle(
             state,
             Event::Key(crossterm::event::KeyEvent::new(
@@ -431,8 +499,6 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             Event::Key(key) => match key.code {
                 KeyCode::Up => picker.move_by(false),
                 KeyCode::Down => picker.move_by(true),
-                KeyCode::Left => picker.cycle_effort(false),
-                KeyCode::Right => picker.cycle_effort(true),
                 KeyCode::Enter => {
                     state.chosen_model = picker
                         .matches()
@@ -593,6 +659,7 @@ fn clean(text: &str) -> String {
 }
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
+    state.dialog_rows.clear();
     if !state.show_help
         && state.picker.is_none()
         && state.model_picker.is_none()
@@ -694,9 +761,15 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         frame.render_widget(Paragraph::new(heading).wrap(Wrap { trim: false }), header);
         let title_width = body.width.saturating_sub(2) as usize;
         let title_elapsed = picker.prepare_title_scroll(title_width);
-        let rows = picker.matches();
         let visible = (body.height as usize / 2).max(1);
-        let first = picker.selected.saturating_sub(visible - 1);
+        if !state.dialog_manual_scroll {
+            picker.offset = picker
+                .offset
+                .min(picker.selected)
+                .max(picker.selected.saturating_sub(visible - 1));
+        }
+        let first = picker.offset;
+        let rows = picker.matches();
         let mut lines = Vec::new();
 
         for (index, session) in rows.iter().enumerate().skip(first).take(visible) {
@@ -740,6 +813,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             }));
         }
 
+        fit_hit_rows(&mut state.dialog_rows, &lines, body);
         frame.render_widget(Paragraph::new(lines), body);
         let detail = format!("{} 个会话 · 按最近更新排序", rows.len());
         frame.render_widget(
@@ -747,6 +821,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             footer,
         );
     } else if let Some(picker) = &mut state.model_picker {
+        let body = Rect {
+            height: body.height.saturating_sub(1),
+            ..body
+        };
         let search = super::render::fit_label(
             &format!("筛选模型：{}", clean(&picker.query)),
             header.width.saturating_sub(1) as usize,
@@ -771,13 +849,21 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             ]),
             header,
         );
+        let visible = body.height as usize;
+        let first = if state.dialog_manual_scroll {
+            picker.offset
+        } else {
+            picker.first_visible(visible)
+        };
         let rows = picker.matches();
-        let visible = (body.height.saturating_sub(2) as usize).max(1);
-        let first = picker.selected.saturating_sub(visible - 1);
         let mut lines = Vec::new();
         let mut previous_provider = None;
 
-        for (index, model) in rows.iter().enumerate().skip(first).take(visible) {
+        for (index, model) in rows.iter().enumerate().skip(first) {
+            let needed = 1 + usize::from(previous_provider != Some(model.provider.as_str()));
+            if lines.len() + needed > visible {
+                break;
+            }
             if previous_provider != Some(model.provider.as_str()) {
                 lines.push(Line::styled(
                     clean(&model.provider),
@@ -834,16 +920,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             lines.push(Line::from("没有匹配的模型。"));
         }
 
+        fit_hit_rows(&mut state.dialog_rows, &lines, body);
         frame.render_widget(Paragraph::new(lines), body);
-        let effort = picker
-            .effort
-            .map(orbit_model::types::ReasoningEffort::label)
-            .unwrap_or("此模型未配置思考强度");
         frame.render_widget(
-            Paragraph::new(format!(
-                "{} 个模型 · ←/→ 思考强度：{effort} · ↑↓ 选择 · Enter 确认 · Esc 返回",
-                rows.len()
-            )),
+            Paragraph::new(format!("共 {} 个模型 · Esc 返回", rows.len())),
             footer,
         );
     } else if let Some(dialog) = &mut state.marketplace_dialog {
@@ -1005,6 +1085,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             );
         } else if dialog.viewing_plugins {
             state.ime_cursor = None;
+            let visible = (body.height as usize / 2).max(1);
+            if !state.dialog_manual_scroll {
+                dialog.plugin_offset = dialog
+                    .plugin_offset
+                    .min(dialog.selected_plugin)
+                    .max(dialog.selected_plugin.saturating_sub(visible - 1));
+            }
             let Some(market) = dialog.selected_market() else {
                 return;
             };
@@ -1025,7 +1112,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 header,
             );
             let visible = (body.height as usize / 2).max(1);
-            let first = dialog.selected_plugin.saturating_sub(visible - 1);
+            let first = dialog.plugin_offset;
             let mut entries = Vec::new();
 
             for (index, plugin) in market.plugins.iter().enumerate().skip(first).take(visible) {
@@ -1073,6 +1160,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 entries.push(Line::from("这个市场没有声明插件。"));
             }
 
+            fit_hit_rows(&mut state.dialog_rows, &entries, body);
             frame.render_widget(Paragraph::new(entries), body);
             frame.render_widget(
                 Paragraph::new(format!(
@@ -1093,7 +1181,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 header,
             );
             let visible = (body.height as usize / 2).max(1);
-            let first = dialog.selected_market.saturating_sub(visible - 1);
+            if !state.dialog_manual_scroll {
+                dialog.market_offset = dialog
+                    .market_offset
+                    .min(dialog.selected_market)
+                    .max(dialog.selected_market.saturating_sub(visible - 1));
+            }
+            let first = dialog.market_offset;
             let mut entries = Vec::new();
 
             for (index, market) in dialog
@@ -1137,6 +1231,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 entries.push(Line::from("尚未添加市场。"));
             }
 
+            fit_hit_rows(&mut state.dialog_rows, &entries, body);
             frame.render_widget(Paragraph::new(entries), body);
             frame.render_widget(
                 Paragraph::new(format!(
@@ -1245,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_confirms_session_rows_and_wheel_only_changes_selection() {
+    fn mouse_confirms_session_rows_and_wheel_preserves_selection() {
         use crossterm::event::{MouseButton, MouseEvent};
         let mut state = UiState::new("model");
         state.picker = Some(SessionPicker::new(vec![
@@ -1265,7 +1360,7 @@ mod tests {
         let mut mouse = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: area.x,
-            row: area.y + 1,
+            row: area.y,
             modifiers: KeyModifiers::NONE,
         };
 
@@ -1273,7 +1368,7 @@ mod tests {
         assert_eq!(state.picker.as_ref().unwrap().selected, 1);
         mouse.kind = MouseEventKind::ScrollUp;
         handle(&mut state, Event::Mouse(mouse));
-        assert_eq!(state.picker.as_ref().unwrap().selected, 0);
+        assert_eq!(state.picker.as_ref().unwrap().selected, 1);
     }
 
     #[test]
@@ -1336,6 +1431,145 @@ mod tests {
     }
 
     #[test]
+    fn grouped_models_keep_last_row_visible_and_support_mouse_selection() {
+        let models = (0..30)
+            .map(|index| ModelOption {
+                provider: format!("provider-{}", index / 3),
+                model: format!("model-{index}"),
+                context_tokens: 128_000,
+                input_context_tokens: 96_000,
+                default_for_provider: false,
+                reasoning_efforts: Vec::new(),
+                supports_vision: false,
+                config: orbit_model::types::ModelConfig::default(),
+            })
+            .collect();
+        let mut state = UiState::new("provider-9::model-29");
+        state.model_picker = Some(ModelPicker::new(models, state.model.clone(), None));
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+
+        let (last, _) = state
+            .dialog_rows
+            .iter()
+            .find(|(_, index)| *index == 29)
+            .unwrap();
+        assert!(last.height > 0 && last.width > 0);
+        let (area, index) = state.dialog_rows[0];
+        let mouse = |kind| {
+            Event::Mouse(crossterm::event::MouseEvent {
+                kind,
+                column: area.x,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+
+        assert!(super::super::handle_list_hover(
+            &mut state,
+            &mouse(MouseEventKind::Moved)
+        ));
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+
+        assert_eq!(state.model_picker.as_ref().unwrap().selected, index);
+        assert_eq!(state.dialog_rows[0], (area, index));
+        assert_eq!(
+            terminal.backend().buffer()[(area.x, area.y)].bg,
+            Color::Rgb(218, 139, 109)
+        );
+        assert!(state.chosen_model.is_none());
+
+        handle(&mut state, mouse(MouseEventKind::ScrollUp));
+        assert_eq!(state.model_picker.as_ref().unwrap().selected, index);
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(state.dialog_rows[0].1 < index);
+        // Restore the original viewport for the click check below.
+        state.model_picker.as_mut().unwrap().offset = index;
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let blank = Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: area.right() + 1,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(!super::super::handle_list_hover(&mut state, &blank));
+        assert_eq!(state.model_picker.as_ref().unwrap().selected, index);
+
+        handle(
+            &mut state,
+            mouse(MouseEventKind::Down(crossterm::event::MouseButton::Left)),
+        );
+        assert!(state.model_picker.is_none());
+        assert_eq!(
+            state.chosen_model,
+            Some(format!("provider-{}::model-{index}", index / 3))
+        );
+    }
+
+    #[test]
+    fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
+        let models = (0..30)
+            .map(|index| ModelOption {
+                provider: "provider".into(),
+                model: format!("model-{index}"),
+                context_tokens: 128_000,
+                input_context_tokens: 96_000,
+                default_for_provider: false,
+                reasoning_efforts: Vec::new(),
+                supports_vision: false,
+                config: orbit_model::types::ModelConfig::default(),
+            })
+            .collect();
+        let mut state = UiState::new("provider::model-0");
+        state.model_picker = Some(ModelPicker::new(models, state.model.clone(), None));
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal
+            .draw(|frame| super::super::render::draw(frame, &mut state))
+            .unwrap();
+        let (area, before) = state.dialog_rows[2];
+
+        handle(
+            &mut state,
+            Event::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: area.x + 2,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        );
+        terminal
+            .draw(|frame| super::super::render::draw(frame, &mut state))
+            .unwrap();
+
+        let after = state
+            .dialog_rows
+            .iter()
+            .find(|(rect, _)| rect.contains((area.x + 2, area.y).into()))
+            .unwrap()
+            .1;
+        assert!(after > before);
+        assert_eq!(state.model_picker.as_ref().unwrap().selected, after);
+        assert!(state.pending_list_hover.is_none());
+        assert!(state.chosen_model.is_none());
+        assert_eq!(
+            terminal.backend().buffer()[(area.x + 2, area.y)].bg,
+            Color::Rgb(218, 139, 109)
+        );
+        let buffer = terminal.backend().buffer();
+        let footer_y = (0..20)
+            .find(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, *y)].symbol())
+                    .collect::<String>()
+                    .replace(' ', "")
+                    .contains("共30个模型·Esc返回")
+            })
+            .unwrap();
+        assert!((3..97).all(|x| buffer[(x, footer_y - 1)].symbol() == " "));
+    }
+
+    #[test]
     fn picker_filters_selects_and_cancels_without_touching_draft() {
         let mut state = UiState::new("model");
         state.input.insert("draft");
@@ -1393,12 +1627,12 @@ mod tests {
         assert_eq!(state.chosen_model.as_deref(), Some("openai::gpt-6-astra"));
         assert_eq!(
             state.chosen_effort,
-            Some(orbit_model::types::ReasoningEffort::High)
+            Some(orbit_model::types::ReasoningEffort::Medium)
         );
     }
 
     #[test]
-    fn model_picker_can_select_no_thinking_effort() {
+    fn model_picker_arrows_do_not_change_thinking_effort() {
         let mut state = UiState::new("deepseek::deepseek-chat");
         state.model_picker = Some(ModelPicker::new(
             vec![
@@ -1429,14 +1663,14 @@ mod tests {
             state.model.clone(),
             Some(orbit_model::types::ReasoningEffort::Low),
         ));
-        // Cycling left from Low (which is at index 1 of [None, Low]) goes to None ("none")
+        // Horizontal arrows no longer change reasoning in the model picker.
         handle(&mut state, key(KeyCode::Left));
         handle(&mut state, key(KeyCode::Enter));
 
         assert!(state.model_picker.is_none());
         assert_eq!(
             state.chosen_effort,
-            Some(orbit_model::types::ReasoningEffort::None)
+            Some(orbit_model::types::ReasoningEffort::Low)
         );
 
         // Model without None in efforts cannot select None

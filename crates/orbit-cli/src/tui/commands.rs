@@ -33,6 +33,10 @@ pub const COMMANDS: &[Command] = &[
         description: "选择模型；/model refresh 刷新账号目录",
     },
     Command {
+        name: "/reasoning",
+        description: "选择当前模型的思考强度；用法 /reasoning high",
+    },
+    Command {
         name: "/connect",
         description: "连接账号或配置供应商 API Key",
     },
@@ -130,6 +134,7 @@ pub fn available_while_running(name: &str) -> bool {
         "/status"
             | "/diagnostics"
             | "/model"
+            | "/reasoning"
             | "/context"
             | "/skills"
             | "/mcp"

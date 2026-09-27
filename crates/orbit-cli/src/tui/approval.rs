@@ -36,6 +36,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                 .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
             {
                 match mouse.kind {
+                    MouseEventKind::Moved => state.approval_choice = *choice,
                     MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
                         state.approval_choice = *choice;
                         if state.approval_shown {
@@ -45,9 +46,6 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                                 Action::Deny
                             };
                         }
-                    }
-                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                        state.approval_choice ^= 1
                     }
                     _ => {}
                 }

@@ -159,6 +159,11 @@ pub async fn run(
     state.auto_compact = auto_compact;
     state.max_output_tokens = max_output_tokens;
     state.reasoning_effort = model.config().reasoning_effort;
+    state.reasoning_efforts = model_options
+        .iter()
+        .find(|choice| choice.qualified_name() == state.model)
+        .map(|choice| choice.reasoning_efforts.clone())
+        .unwrap_or_default();
     state.supports_vision = model.supports_vision();
     state.model_completions = model_options
         .iter()
@@ -401,10 +406,11 @@ pub async fn run(
                         && state.menu_area.contains((mouse.column, mouse.row).into())
                         && !state.menu().is_empty()
                     {
+                        let previous = state.menu_index;
                         completion::select_with_mouse(&mut state, mouse);
                         let clicked = mouse.kind == MouseEventKind::Down(MouseButton::Left)
                             && state.menu_rows.iter().any(|(area, _)| area.contains((mouse.column, mouse.row).into()));
-                        if mouse.kind != MouseEventKind::Moved {
+                        if state.menu_index != previous || mouse.kind != MouseEventKind::Moved {
                             dirty = true;
                             frames.request(time::Instant::now());
                         }
@@ -417,6 +423,11 @@ pub async fn run(
                         }
                     }
 
+                    if handle_list_hover(&mut state, &event) {
+                        dirty = true;
+                        frames.request(time::Instant::now());
+                        continue;
+                    }
                     let context_hover_changed = !state.selection.dragging()
                         && matches!(render::handle_context_hover(&mut state, &event), Some(true));
                     let link_hover_changed = !state.selection.dragging()
@@ -815,7 +826,7 @@ pub async fn run(
                                         && !commands::available_while_running(command)
                                     {
                                         state.transcript.push(TranscriptItem::CommandError(
-                                            "运行中只能使用 /status、/diagnostics、/model、/context、/skills、/mcp、/plugins、/mode 或 /permissions；请先按 Ctrl+C 取消当前响应。".into(),
+                                            "运行中只能使用 /status、/diagnostics、/model、/reasoning、/context、/skills、/mcp、/plugins、/mode 或 /permissions；请先按 Ctrl+C 取消当前响应。".into(),
                                         ));
                                         continue;
                                     }
@@ -1542,6 +1553,39 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAc
     }
 }
 
+// Route list motion before the main loop discards unused pointer movement.
+fn handle_list_hover(state: &mut UiState, event: &Event) -> bool {
+    let Event::Mouse(mouse) = event else {
+        return false;
+    };
+    if mouse.kind != MouseEventKind::Moved {
+        return false;
+    }
+    let point = (mouse.column, mouse.row).into();
+
+    if state.picker.is_some() || state.model_picker.is_some() || state.marketplace_dialog.is_some()
+    {
+        if state
+            .dialog_rows
+            .iter()
+            .any(|(area, _)| area.contains(point))
+        {
+            dialogs::handle(state, event.clone());
+            return true;
+        }
+    } else if state.approval.is_some()
+        && state
+            .approval_options
+            .iter()
+            .any(|(area, _)| area.contains(point))
+    {
+        approval::handle(state, event.clone());
+        return true;
+    }
+
+    false
+}
+
 fn update_tab_hover(event: &Event, state: &mut UiState, tabs: &tabs::Tabs) -> bool {
     let next = match event {
         Event::Mouse(mouse)
@@ -1588,6 +1632,7 @@ async fn new_tab(
     let mut next_state = resume_ui_shell(state);
     next_state.workspace = prepared.snapshot.session.workspace.clone();
     next_state.reasoning_effort = state.reasoning_effort;
+    next_state.reasoning_efforts = state.reasoning_efforts.clone();
     let next_model = ModelClient::new(model.config().clone())?;
     tabs.activate(
         session,
@@ -1871,6 +1916,29 @@ async fn run_command(
                 "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n{}\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\nSkills  {} 个\nMCP  {} 个 server，输入 /mcp 查看状态\n超时  {}s（流空闲）\n工具  {} · 审批：{}",
                 session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), baseline, verification, state.model, history.len(), instructions.sources.len(), skills.len(), mcp_statuses.len(), model.config().timeout.as_secs(), tool_names, state.permission_mode.label()
             )));
+        }
+
+        "/reasoning" => {
+            let efforts = state.reasoning_efforts.clone();
+            if efforts.is_empty() {
+                state.transcript.push(TranscriptItem::CommandResult(
+                    "当前模型未配置可调整的思考强度。".into(),
+                ));
+            } else if argument.is_empty() {
+                state.input.set("/reasoning ".into());
+            } else if let Some(effort) = efforts.iter().find(|effort| effort.as_str() == argument) {
+                let name = state.model.clone();
+                select_model(&name, Some(*effort), state, model, model_options, session).await?;
+            } else {
+                state.transcript.push(TranscriptItem::CommandError(format!(
+                    "当前模型支持的思考强度：{}",
+                    efforts
+                        .iter()
+                        .map(|effort| effort.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                )));
+            }
         }
 
         "/model" => {
@@ -2255,6 +2323,7 @@ async fn select_model(
             state.context_tokens = choice.context_tokens;
             state.input_context_tokens = choice.input_context_tokens;
             state.reasoning_effort = reasoning_effort;
+            state.reasoning_efforts = choice.reasoning_efforts.clone();
             state.supports_vision = choice.supports_vision;
 
             if previous_model != state.model {
@@ -2652,6 +2721,7 @@ fn restore_model_profile(
     state.context_tokens = choice.context_tokens;
     state.input_context_tokens = choice.input_context_tokens;
     state.reasoning_effort = model.config().reasoning_effort;
+    state.reasoning_efforts = choice.reasoning_efforts.clone();
     state.supports_vision = choice.supports_vision;
 }
 
@@ -2830,6 +2900,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         return Action::PasteClipboard;
     }
 
+    state.menu_manual_scroll = false;
     let menu = state.menu();
 
     if !menu.is_empty() {
@@ -2852,6 +2923,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                         "/cd"
                             | "/mode"
                             | "/model"
+                            | "/reasoning"
                             | "/skill"
                             | "/tasks"
                             | "/memory"

@@ -118,6 +118,7 @@ pub struct UiState {
     pending_compaction_archive: Option<String>,
     pub max_output_tokens: u32,
     pub model: String,
+    pub reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
     pub reasoning_effort: Option<orbit_model::types::ReasoningEffort>,
     pub supports_vision: bool,
     pub attachments: Vec<Attachment>,
@@ -136,6 +137,10 @@ pub struct UiState {
     pub dialog_rows: Vec<(ratatui::layout::Rect, usize)>,
     pub approval_options: Vec<(ratatui::layout::Rect, usize)>,
     pub menu_index: usize,
+    pub menu_offset: usize,
+    pub menu_manual_scroll: bool,
+    pub dialog_manual_scroll: bool,
+    pub pending_list_hover: Option<crossterm::event::MouseEvent>,
     pub menu_dismissed: bool,
     pub show_help: bool,
     pub help_keys: bool,
@@ -218,6 +223,7 @@ impl UiState {
             pending_compaction_archive: None,
             max_output_tokens: 32_000,
             model: model.into(),
+            reasoning_efforts: Vec::new(),
             reasoning_effort: None,
             supports_vision: false,
             attachments: Vec::new(),
@@ -236,6 +242,10 @@ impl UiState {
             dialog_rows: Vec::new(),
             approval_options: Vec::new(),
             menu_index: 0,
+            menu_offset: 0,
+            menu_manual_scroll: false,
+            dialog_manual_scroll: false,
+            pending_list_hover: None,
             menu_dismissed: false,
             show_help: false,
             help_keys: false,
@@ -472,6 +482,20 @@ impl UiState {
             );
         }
 
+        if let Some(query) = self.input.text.strip_prefix("/reasoning ") {
+            return super::search::ranked(self.reasoning_efforts.iter(), |effort| {
+                super::search::rank(effort.as_str(), query.trim())
+            })
+            .into_iter()
+            .map(|effort| super::completion::Candidate {
+                name: format!("/reasoning {}", effort.as_str()),
+                display: Some(effort.as_str().into()),
+                description: String::new(),
+                continue_input: false,
+            })
+            .collect();
+        }
+
         if !self.stored_completions.is_empty() {
             return self.stored_completions.clone();
         }
@@ -612,6 +636,24 @@ impl UiState {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reasoning_completion_only_offers_current_model_capabilities() {
+        use orbit_model::types::ReasoningEffort;
+
+        let mut state = super::UiState::new("provider::model");
+        state.reasoning_efforts = vec![ReasoningEffort::Low, ReasoningEffort::High];
+        state.input.set("/reasoning ".into());
+
+        let names = state
+            .menu()
+            .into_iter()
+            .map(|item| item.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, ["/reasoning low", "/reasoning high"]);
+        state.input.set("/reasoning hi".into());
+        assert_eq!(state.menu()[0].name, "/reasoning high");
+    }
     use super::*;
     use orbit_model::types::FunctionCall;
 
