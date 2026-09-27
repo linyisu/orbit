@@ -124,10 +124,25 @@ impl Attachment {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCall {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ToolCallMetadata>,
     pub id: String,
     #[serde(rename = "type", default = "default_tool_call_kind")]
     pub kind: String,
     pub function: FunctionCall,
+}
+
+/// Provider evidence retained losslessly, projected only by its own adapter.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolCallMetadata {
+    pub google: GoogleToolMetadata,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GoogleToolMetadata {
+    pub model: String,
+    pub thought_signature: Option<String>,
+    pub native_id: Option<String>,
 }
 
 fn default_tool_call_kind() -> String {
@@ -137,6 +152,7 @@ fn default_tool_call_kind() -> String {
 impl ToolCall {
     pub fn function(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
         Self {
+            metadata: None,
             id: id.into(),
             kind: "function".to_owned(),
             function: FunctionCall {
@@ -217,6 +233,7 @@ pub enum ReasoningAdapter {
     OpenaiChat,
     OpenaiResponses,
     AnthropicMessages,
+    Google,
 }
 
 impl ReasoningEffort {
@@ -297,6 +314,8 @@ pub enum StreamEvent {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCallDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ToolCallMetadata>,
     pub index: usize,
     pub id: Option<String>,
     pub name: Option<String>,
@@ -308,6 +327,8 @@ pub struct ModelConfig {
     pub api_format: ApiFormat,
     pub base_url: String,
     pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<orbit_auth::CredentialRef>,
     pub model: String,
     #[serde(with = "duration_seconds")]
     pub timeout: Duration,
@@ -329,6 +350,7 @@ impl Default for ModelConfig {
             api_format: ApiFormat::OpenaiChatCompletions,
             base_url: "https://api.openai.com/v1".to_owned(),
             api_key: None,
+            credential: None,
             model: "gpt-5.6-sol".to_owned(),
             timeout: Duration::from_secs(120),
             max_retries: default_max_retries(),
@@ -347,6 +369,7 @@ impl std::fmt::Debug for ModelConfig {
             .field("api_format", &self.api_format)
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field("credential", &self.credential)
             .field("model", &self.model)
             .field("timeout", &self.timeout)
             .field("max_retries", &self.max_retries)

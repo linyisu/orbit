@@ -18,6 +18,8 @@ pub enum ApiFormat {
     OpenaiChatCompletions,
     OpenaiResponses,
     AnthropicMessages,
+    GoogleCodeAssist,
+    ChatgptCodex,
 }
 
 impl ApiFormat {
@@ -26,6 +28,8 @@ impl ApiFormat {
             "openai_chat_completions" => Ok(Self::OpenaiChatCompletions),
             "openai_responses" => Ok(Self::OpenaiResponses),
             "anthropic_messages" => Ok(Self::AnthropicMessages),
+            "google_code_assist" => Ok(Self::GoogleCodeAssist),
+            "chatgpt_codex" => Ok(Self::ChatgptCodex),
             other => Err(ModelError::UnsupportedApiFormat(other.to_owned())),
         }
     }
@@ -36,6 +40,9 @@ pub struct ModelClient {
     http: Client,
     config: ModelConfig,
     endpoint: Url,
+    auth_store: Option<orbit_auth::AuthStore>,
+    #[cfg(test)]
+    request_endpoint: Option<Url>,
 }
 
 impl std::fmt::Debug for ModelClient {
@@ -66,12 +73,12 @@ impl ModelClient {
                     ApiFormat::OpenaiChatCompletions,
                     ReasoningAdapter::OpenaiChat
                 ) | (
-                    ApiFormat::OpenaiResponses,
+                    ApiFormat::OpenaiResponses | ApiFormat::ChatgptCodex,
                     ReasoningAdapter::OpenaiResponses
                 ) | (
                     ApiFormat::AnthropicMessages,
                     ReasoningAdapter::AnthropicMessages
-                )
+                ) | (ApiFormat::GoogleCodeAssist, ReasoningAdapter::Google)
             );
 
             if !compatible {
@@ -84,7 +91,8 @@ impl ModelClient {
         let format = config.api_format;
         let suffix = match format {
             ApiFormat::OpenaiChatCompletions => "chat/completions",
-            ApiFormat::OpenaiResponses => "responses",
+            ApiFormat::OpenaiResponses | ApiFormat::ChatgptCodex => "responses",
+            ApiFormat::GoogleCodeAssist => "v1internal:streamGenerateContent?alt=sse",
             ApiFormat::AnthropicMessages => "messages",
         };
 
@@ -119,6 +127,26 @@ impl ModelClient {
             ));
         }
 
+        if config.credential.is_some() && config.api_key.is_some() {
+            return Err(ModelError::Protocol(
+                "choose either api_key or credential authentication".into(),
+            ));
+        }
+        if matches!(
+            format,
+            ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
+        ) && config.credential.is_none()
+        {
+            return Err(ModelError::Protocol(
+                "account-backed providers require a saved credential".into(),
+            ));
+        }
+        let auth_store = config
+            .credential
+            .as_ref()
+            .map(|reference| orbit_auth::AuthStore::new(reference.directory.clone()))
+            .transpose()?;
+
         let http = Client::builder()
             .connect_timeout(config.timeout)
             .redirect(reqwest::redirect::Policy::none())
@@ -128,6 +156,9 @@ impl ModelClient {
             http,
             config,
             endpoint,
+            auth_store,
+            #[cfg(test)]
+            request_endpoint: None,
         })
     }
 
@@ -149,6 +180,13 @@ impl ModelClient {
         request: ChatRequest,
         cancellation: CancellationToken,
     ) -> Result<ChatCompletion, ModelError> {
+        if matches!(
+            self.config.api_format,
+            ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
+        ) {
+            let stream = self.stream_with_cancel(request, cancellation).await?;
+            return crate::collect::completion(stream, &self.config.model).await;
+        }
         let (response, _) = self.send(request, false, cancellation.clone()).await?;
         let decode = async {
             match self.config.api_format {
@@ -160,6 +198,9 @@ impl ModelClient {
                 }
                 ApiFormat::AnthropicMessages => {
                     crate::anthropic::messages::decode_completion(response).await
+                }
+                ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex => {
+                    unreachable!("account providers collect SSE")
                 }
             }
         };
@@ -200,17 +241,29 @@ impl ModelClient {
             .unwrap_or_default()
             .to_ascii_lowercase();
 
-        if !content_type.contains("text/event-stream") {
-            return Err(ModelError::Protocol(
-                "streaming endpoint did not return text/event-stream".to_owned(),
-            ));
+        // ChatGPT can omit Content-Type on a successful SSE response. Let the
+        // event decoder validate that body, including its terminal event.
+        let codex_without_type =
+            self.config.api_format == ApiFormat::ChatgptCodex && content_type.is_empty();
+        if !content_type.contains("text/event-stream") && !codex_without_type {
+            return Err(ModelError::Protocol(format!(
+                "streaming endpoint returned HTTP {} with Content-Type {:?}; expected text/event-stream",
+                response.status(),
+                content_type
+            )));
         }
 
         let stream = match self.config.api_format {
+            ApiFormat::GoogleCodeAssist => crate::google::stream(
+                response,
+                self.config.timeout,
+                cancellation,
+                self.config.model.clone(),
+            ),
             ApiFormat::OpenaiChatCompletions => {
                 crate::openai::chat_completions::stream(response, self.config.timeout, cancellation)
             }
-            ApiFormat::OpenaiResponses => {
+            ApiFormat::OpenaiResponses | ApiFormat::ChatgptCodex => {
                 crate::openai::responses::stream(response, self.config.timeout, cancellation)
             }
             ApiFormat::AnthropicMessages => {
@@ -233,6 +286,13 @@ impl ModelClient {
 
         let format = self.config.api_format;
         let (body, headers) = match format {
+            ApiFormat::GoogleCodeAssist => crate::google::encode(&self.config.model, request),
+            ApiFormat::ChatgptCodex => crate::openai::codex::encode(
+                &self.config.model,
+                request,
+                self.config.reasoning_adapter,
+                &self.config.reasoning_extra,
+            ),
             ApiFormat::OpenaiChatCompletions => crate::openai::chat_completions::encode(
                 &self.config.model,
                 request,
@@ -287,20 +347,44 @@ impl ModelClient {
         format: ApiFormat,
         cancellation: CancellationToken,
     ) -> Result<Response, ModelError> {
+        let endpoint = &self.endpoint;
+        #[cfg(test)]
+        let endpoint = self.request_endpoint.as_ref().unwrap_or(endpoint);
         let mut builder = self
             .http
-            .post(self.endpoint.clone())
+            .post(endpoint.clone())
             .headers(headers.clone())
-            .header(header::CONTENT_TYPE, "application/json")
-            .json(body);
+            .header(header::CONTENT_TYPE, "application/json");
+        let mut body = body.clone();
 
-        if let Some(api_key) = &self.config.api_key {
+        if let (Some(store), Some(reference)) = (&self.auth_store, &self.config.credential) {
+            let auth = select! {
+                _ = cancellation.cancelled() => return Err(ModelError::Cancelled),
+                result = time::timeout(self.config.timeout, store.resolve(
+                    &reference.name, &self.endpoint, match format {
+                        ApiFormat::AnthropicMessages => orbit_auth::AuthTarget::Anthropic,
+                        ApiFormat::GoogleCodeAssist => orbit_auth::AuthTarget::GoogleCodeAssist,
+                        ApiFormat::ChatgptCodex => orbit_auth::AuthTarget::ChatgptCodex,
+                        _ => orbit_auth::AuthTarget::Openai,
+                    },
+                )) => result.map_err(|_| orbit_auth::AuthError::Timeout)??,
+            };
+            if format == ApiFormat::GoogleCodeAssist {
+                body["project"] =
+                    serde_json::json!(auth.project_id.ok_or(orbit_auth::AuthError::InvalidToken)?);
+            }
+            if auth.kind == orbit_auth::CredentialKind::AntigravityOAuth {
+                crate::google::antigravity_envelope(&mut body)?;
+            }
+            builder = builder.headers(auth.headers);
+        } else if let Some(api_key) = &self.config.api_key {
             builder = match format {
                 ApiFormat::AnthropicMessages => builder.header("x-api-key", api_key),
                 _ => builder.bearer_auth(api_key),
             };
         }
 
+        let builder = builder.json(&body);
         let response = select! {
             _ = cancellation.cancelled() => return Err(ModelError::Cancelled),
             result = time::timeout(self.config.timeout, builder.send()) => {
@@ -348,10 +432,10 @@ pub(crate) fn sse_stream<F>(
     response: Response,
     timeout: Duration,
     cancellation: CancellationToken,
-    decode: F,
+    mut decode: F,
 ) -> ModelStream
 where
-    F: Fn(&str) -> Result<Vec<StreamEvent>, ModelError> + Send + Sync + 'static,
+    F: FnMut(&str) -> Result<Vec<StreamEvent>, ModelError> + Send + Sync + 'static,
 {
     let mut body = response.bytes_stream();
 
@@ -411,7 +495,7 @@ where
                         return;
                     }
 
-                    match decode_sse_data(&data, &decode) {
+                    match decode_sse_data(&data, &mut decode) {
                         Ok((events, terminal)) => {
                             decoded_events += events.len();
                             for event in events {
@@ -438,7 +522,7 @@ where
         if !buffer.trim().is_empty() {
             match sse_data(&buffer) {
                 Some(data) if data == "[DONE]" => {}
-                Some(data) => match decode_sse_data(&data, &decode) {
+                Some(data) => match decode_sse_data(&data, &mut decode) {
                     Ok((events, _)) => {
                         for event in events {
                             yield Ok(event);
@@ -452,9 +536,9 @@ where
     })
 }
 
-fn decode_sse_data<F>(data: &str, decode: &F) -> Result<(Vec<StreamEvent>, bool), ModelError>
+fn decode_sse_data<F>(data: &str, decode: &mut F) -> Result<(Vec<StreamEvent>, bool), ModelError>
 where
-    F: Fn(&str) -> Result<Vec<StreamEvent>, ModelError>,
+    F: FnMut(&str) -> Result<Vec<StreamEvent>, ModelError>,
 {
     let value: serde_json::Value = serde_json::from_str(data)?;
 
@@ -465,7 +549,8 @@ where
     let terminal = matches!(
         value["type"].as_str(),
         Some("response.completed" | "response.incomplete" | "message_stop")
-    );
+    ) || value["response"]["candidates"][0]["finishReason"].is_string()
+        || value["candidates"][0]["finishReason"].is_string();
 
     Ok((decode(data)?, terminal))
 }
@@ -565,6 +650,165 @@ pub(crate) fn invalid_response(message: &str) -> ModelError {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() {
+        use serde_json::json;
+
+        for (format, kind, base, payload) in [
+            (
+                ApiFormat::ChatgptCodex,
+                orbit_auth::CredentialKind::ChatgptOAuth,
+                "https://chatgpt.com/backend-api/codex",
+                concat!(
+                    "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"item-one\",\"call_id\":\"call-one\",\"name\":\"test\",\"arguments\":\"\"}}\n\n",
+                    "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"item_id\":\"item-one\",\"delta\":\"{}\"}\n\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":3,\"total_tokens\":13}}}\n\n"
+                ),
+            ),
+            (
+                ApiFormat::GoogleCodeAssist,
+                orbit_auth::CredentialKind::GoogleOAuth,
+                "https://cloudcode-pa.googleapis.com",
+                "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"test\",\"args\":{}},\"thoughtSignature\":\"opaque-signature\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":1,\"thoughtsTokenCount\":2,\"totalTokenCount\":13}}}\n\n",
+            ),
+            (
+                ApiFormat::GoogleCodeAssist,
+                orbit_auth::CredentialKind::AntigravityOAuth,
+                "https://daily-cloudcode-pa.googleapis.com",
+                "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"test\",\"args\":{}},\"thoughtSignature\":\"opaque-signature\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":1,\"thoughtsTokenCount\":2,\"totalTokenCount\":13}}}\n\n",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("test.json");
+            let credential = json!({
+                "version": 1,
+                "kind": kind,
+                "endpoint": format!("{base}/"),
+                "access": "fake-account-token",
+                "refresh": "fake-refresh-token",
+                "expires_at": u64::MAX,
+                "account_id": "test-account",
+                "project_id": "test-project"
+            });
+            std::fs::write(&path, credential.to_string()).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            let content_type = if format == ApiFormat::ChatgptCodex {
+                ""
+            } else {
+                "content-type: text/event-stream\r\n"
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n{content_type}content-length: {}\r\n\r\n{payload}",
+                payload.len()
+            );
+            let (transport, captured) = test_server(response).await;
+            let config = ModelConfig {
+                api_format: format,
+                base_url: base.into(),
+                model: "test-model".into(),
+                credential: Some(orbit_auth::CredentialRef {
+                    directory: directory.path().into(),
+                    name: "test".into(),
+                }),
+                timeout: Duration::from_secs(5),
+                max_retries: 0,
+                ..Default::default()
+            };
+            let mut model = ModelClient::new(config).unwrap();
+            // The credential scope remains the real service; only the test HTTP transport is redirected.
+            model.request_endpoint = Some(transport.parse().unwrap());
+            let mut request = ChatRequest::new(vec![ChatMessage::user("hello")]);
+            request.max_tokens = Some(10);
+            request.temperature = Some(0.5);
+
+            let completion = model.complete(request).await.unwrap();
+            let wire = captured.await;
+
+            assert!(wire.contains("authorization: bearer fake-account-token"));
+            assert_eq!(completion.usage.unwrap().total_tokens, Some(13));
+            let ChatMessage::Assistant { tool_calls, .. } = completion.message else {
+                panic!("assistant response expected")
+            };
+            assert_eq!(tool_calls.len(), 1);
+            assert_eq!(tool_calls[0].function.arguments, "{}");
+            if kind == orbit_auth::CredentialKind::AntigravityOAuth {
+                assert!(wire.contains("user-agent: antigravity/hub/2.8.0 (aidev_client; os_type=darwin; arch=arm64; cl=963137146)"));
+                assert!(wire.contains("\"useragent\":\"antigravity\""));
+                assert!(wire.contains("\"requesttype\":\"agent\""));
+                assert!(wire.contains("\"requestid\":\"agent/"));
+            }
+            if format == ApiFormat::ChatgptCodex {
+                assert_eq!(tool_calls[0].id, "call-one");
+                assert!(wire.contains("chatgpt-account-id: test-account"));
+                assert!(wire.contains("\"store\":false"));
+                assert!(wire.contains("\"stream\":true"));
+                assert!(!wire.contains("max_output_tokens"));
+                assert!(!wire.contains("temperature"));
+            } else {
+                assert!(wire.contains("\"project\":\"test-project\""));
+                assert_eq!(
+                    tool_calls[0]
+                        .metadata
+                        .as_ref()
+                        .unwrap()
+                        .google
+                        .thought_signature
+                        .as_deref(),
+                    Some("opaque-signature")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_credentials_are_resolved_for_requests_and_logout_takes_effect() {
+        let root = tempfile::tempdir().unwrap();
+        let store = orbit_auth::AuthStore::new(root.path().join("auth")).unwrap();
+        let (base_url, request) = test_server(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}",
+        ).await;
+        store
+            .set_api_key("test", "stored-secret".into(), &base_url)
+            .await
+            .unwrap();
+        let mut config = client(&base_url, "openai_chat_completions", "mock", None).config;
+        config.credential = Some(orbit_auth::CredentialRef {
+            directory: store.directory().to_owned(),
+            name: "test".into(),
+        });
+        let model = super::ModelClient::new(config).unwrap();
+        let message =
+            crate::types::ChatRequest::new(vec![crate::types::ChatMessage::user("hello")]);
+
+        model.complete(message.clone()).await.unwrap();
+
+        assert!(
+            request
+                .await
+                .contains("authorization: bearer stored-secret")
+        );
+        assert!(
+            !serde_json::to_string(model.config())
+                .unwrap()
+                .contains("stored-secret")
+        );
+
+        store.remove("test").await.unwrap();
+        let error = model.complete(message).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::error::ModelError::Authentication(orbit_auth::AuthError::Missing)
+        ));
+        assert!(!error.is_retryable());
+    }
+
     #[test]
     fn accepts_custom_http_endpoints_with_api_keys() {
         for base_url in ["http://example.com/v1", "http://192.168.1.42:8080/v1"] {
@@ -907,7 +1151,7 @@ mod tests {
                 }
             }),
         ] {
-            let error = decode_sse_data(&value.to_string(), &|_| {
+            let error = decode_sse_data(&value.to_string(), &mut |_| {
                 panic!("failed responses must not reach the normal decoder")
             })
             .unwrap_err();
@@ -1105,11 +1349,35 @@ mod tests {
         assert_eq!(requests.await.expect("request count"), 2);
     }
 
+    #[tokio::test]
+    async fn codex_missing_content_type_does_not_accept_non_sse_bodies() {
+        for payload in [
+            "<html>proxy error</html>",
+            "{\"error\":\"unavailable\"}",
+            "data: not-json\n\n",
+        ] {
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{payload}",
+                payload.len()
+            );
+            let (url, _) = test_server(response).await;
+            let mut model = client(&url, "openai_responses", "mock", None);
+            model.config.api_format = ApiFormat::ChatgptCodex;
+
+            let result = model
+                .complete(ChatRequest::new(vec![ChatMessage::user("hello")]))
+                .await;
+
+            assert!(result.is_err(), "unexpected success for {payload:?}");
+        }
+    }
+
     fn client(base_url: &str, api_format: &str, model: &str, api_key: Option<&str>) -> ModelClient {
         ModelClient::new(ModelConfig {
             api_format: ApiFormat::parse(api_format).unwrap(),
             base_url: base_url.to_owned(),
             api_key: api_key.map(str::to_owned),
+            credential: None,
             model: model.to_owned(),
             timeout: Duration::from_secs(5),
             max_retries: 0,

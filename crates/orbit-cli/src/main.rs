@@ -24,6 +24,8 @@ use orbit_model::{
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+mod account_models;
+mod auth_cli;
 mod history;
 mod instructions;
 mod marketplaces;
@@ -50,12 +52,21 @@ struct Cli {
     #[arg(long, env = "orbit_database", global = true)]
     database: Option<PathBuf>,
 
+    /// Private credentials directory (defaults to $XDG_CONFIG_HOME/orbit/auth).
+    #[arg(long, global = true)]
+    auth_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Manage saved API keys and experimental subscription credentials.
+    Auth {
+        #[command(subcommand)]
+        command: auth_cli::AuthCommand,
+    },
     Chat(ChatArgs),
     Tui(TuiArgs),
     /// List projects or reconnect a moved directory without connecting to an API.
@@ -230,6 +241,8 @@ struct SwePrediction<'a> {
 
 #[derive(Debug, Deserialize)]
 struct FileConfig {
+    #[serde(skip)]
+    auth_directory: Option<PathBuf>,
     default_provider: String,
     #[serde(default = "default_context_tokens")]
     context_tokens: usize,
@@ -259,7 +272,10 @@ struct ProviderConfig {
     #[serde(default = "default_api_format")]
     api_format: ApiFormat,
     base_url: String,
+    #[serde(default)]
     api_key: String,
+    #[serde(default)]
+    credential: Option<String>,
     /// The first model is selected when Orbit starts with this provider.
     models: Vec<ModelProfile>,
     #[serde(default = "default_timeout_seconds")]
@@ -276,6 +292,7 @@ impl std::fmt::Debug for ProviderConfig {
             .field("api_format", &self.api_format)
             .field("base_url", &self.base_url)
             .field("api_key", &"[redacted]")
+            .field("credential", &self.credential)
             .field("models", &self.models)
             .field("timeout_seconds", &self.timeout_seconds)
             .field("max_retries", &self.max_retries)
@@ -283,21 +300,25 @@ impl std::fmt::Debug for ProviderConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 struct ModelProfile {
     id: String,
     /// Overrides the top-level context window for this model only.
+    #[serde(skip_serializing_if = "Option::is_none")]
     context_tokens: Option<usize>,
     /// Full usable input window for providers that allow output outside this
     /// input limit. When omitted, `context_tokens` keeps its total-budget
     /// meaning and Orbit reserves the configured output upper bound from it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     input_context_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ReasoningProfile>,
     #[serde(default, alias = "vision")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     supports_vision: Option<bool>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 struct ReasoningProfile {
     adapter: ReasoningAdapter,
     efforts: Vec<ReasoningEffort>,
@@ -350,10 +371,11 @@ fn validate_reasoning_extra(model: &str, api_format: ApiFormat, extra: &toml::Ta
 
     let conflicts_effort = match api_format {
         ApiFormat::OpenaiChatCompletions => extra.contains_key("reasoning_effort"),
-        ApiFormat::OpenaiResponses => extra
+        ApiFormat::OpenaiResponses | ApiFormat::ChatgptCodex => extra
             .get("reasoning")
             .and_then(toml::Value::as_table)
             .is_some_and(|reasoning| reasoning.contains_key("effort")),
+        ApiFormat::GoogleCodeAssist => !extra.is_empty(),
         ApiFormat::AnthropicMessages => extra
             .get("output_config")
             .and_then(toml::Value::as_table)
@@ -375,12 +397,61 @@ fn default_api_format() -> ApiFormat {
     ApiFormat::OpenaiChatCompletions
 }
 
+fn antigravity_profiles() -> Result<Vec<ModelProfile>> {
+    orbit_model::account_catalog::antigravity_models()
+        .iter()
+        .map(|(id, model)| {
+            let reasoning = model.thinking.as_ref().map(|thinking| {
+                serde_json::json!({
+                    "adapter": "google",
+                    "efforts": thinking["efforts"],
+                    "default": "high"
+                })
+            });
+
+            Ok(serde_json::from_value(serde_json::json!({
+                "id": id,
+                "context_tokens": model.context_window,
+                "supports_vision": model.input.iter().any(|kind| kind == "image"),
+                "reasoning": reasoning
+            }))?)
+        })
+        .collect()
+}
+
 impl FileConfig {
-    fn load(path: &PathBuf) -> Result<Self> {
+    fn merge_account_models(&mut self) -> Result<()> {
+        for provider in self.providers.values_mut() {
+            if provider.api_format != ApiFormat::GoogleCodeAssist
+                || provider.credential.is_none()
+                || provider.base_url.trim_end_matches('/')
+                    != "https://daily-cloudcode-pa.googleapis.com"
+            {
+                continue;
+            }
+
+            for model in antigravity_profiles()? {
+                if !provider
+                    .models
+                    .iter()
+                    .any(|existing| existing.id == model.id)
+                {
+                    provider.models.push(model);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn load(path: &Path, auth_directory: &Path) -> Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let config: Self = toml::from_str(&content)
+        let mut config: Self = toml::from_str(&content)
             .with_context(|| format!("failed to parse {}", path.display()))?;
+
+        config.auth_directory = Some(auth_directory.to_path_buf());
+        config.merge_account_models()?;
 
         if config.context_tokens < 8192 {
             bail!("context_tokens must be at least 8192");
@@ -394,7 +465,11 @@ impl FileConfig {
         for (name, provider) in &config.providers {
             if name.trim().is_empty()
                 || provider.base_url.trim().is_empty()
-                || provider.api_key.trim().is_empty()
+                || (provider.api_key.trim().is_empty() == provider.credential.is_none())
+                || provider
+                    .credential
+                    .as_ref()
+                    .is_some_and(|name| name.trim().is_empty())
                 || provider.models.is_empty()
                 || provider.timeout_seconds == 0
                 || provider.max_retries > 5
@@ -404,7 +479,7 @@ impl FileConfig {
                     .any(|model| model.id.trim().is_empty())
             {
                 bail!(
-                    "provider {name:?} must set nonempty base_url, api_key, models, a positive timeout_seconds, and max_retries from 0 to 5"
+                    "provider {name:?} must set nonempty base_url, models, exactly one of api_key or credential, a positive timeout_seconds, and max_retries from 0 to 5"
                 );
             }
         }
@@ -432,7 +507,10 @@ impl FileConfig {
                 if let Some(reasoning) = &model.reasoning {
                     let expected = match provider.api_format {
                         ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
-                        ApiFormat::OpenaiResponses => ReasoningAdapter::OpenaiResponses,
+                        ApiFormat::OpenaiResponses | ApiFormat::ChatgptCodex => {
+                            ReasoningAdapter::OpenaiResponses
+                        }
+                        ApiFormat::GoogleCodeAssist => ReasoningAdapter::Google,
                         ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
                     };
 
@@ -569,7 +647,22 @@ impl FileConfig {
                     config: ModelConfig {
                         api_format: provider.api_format,
                         base_url: provider.base_url.clone(),
-                        api_key: Some(provider.api_key.clone()),
+                        api_key: provider
+                            .credential
+                            .is_none()
+                            .then(|| provider.api_key.clone()),
+                        credential: provider
+                            .credential
+                            .as_ref()
+                            .map(|name| {
+                                Ok::<_, anyhow::Error>(orbit_auth::CredentialRef {
+                                    name: name.clone(),
+                                    directory: self.auth_directory.clone().context(
+                                        "credential directory was not supplied by the host",
+                                    )?,
+                                })
+                            })
+                            .transpose()?,
                         model: model.id.clone(),
                         timeout: Duration::from_secs(provider.timeout_seconds),
                         max_retries: provider.max_retries,
@@ -609,9 +702,18 @@ impl FileConfig {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    let auth_directory = || {
+        auth_cli::directory(
+            cli.auth_dir,
+            std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+            std::env::var_os("HOME").map(PathBuf::from),
+        )
+    };
+
     match cli.command {
-        Command::Chat(args) => chat(cli.config, cli.database, args).await,
-        Command::Tui(args) => run_tui(cli.config, cli.database, args).await,
+        Command::Auth { command } => auth_cli::run(command, auth_directory()?).await,
+        Command::Chat(args) => chat(cli.config, cli.database, args, auth_directory()?).await,
+        Command::Tui(args) => run_tui(cli.config, cli.database, args, auth_directory()?).await,
 
         Command::Projects { command } => {
             let store =
@@ -692,6 +794,7 @@ async fn main() -> Result<()> {
 }
 
 pub(crate) struct TuiOptions {
+    auth_directory: PathBuf,
     config: PathBuf,
     database: PathBuf,
     allow_mcp_start: bool,
@@ -718,9 +821,15 @@ pub(crate) struct TuiResources {
     moved: bool,
 }
 
-async fn run_tui(config_path: PathBuf, database: Option<PathBuf>, args: TuiArgs) -> Result<()> {
+async fn run_tui(
+    config_path: PathBuf,
+    database: Option<PathBuf>,
+    args: TuiArgs,
+    auth_directory: PathBuf,
+) -> Result<()> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let options = TuiOptions {
+        auth_directory,
         config: std::path::absolute(config_path)?,
         database: session::database_path(database)?,
         allow_mcp_start: args.allow_mcp_start,
@@ -754,7 +863,7 @@ pub(crate) async fn prepare_tui(
     directory: &std::path::Path,
     resume: Option<String>,
 ) -> Result<PreparedTui> {
-    let config = FileConfig::load(&options.config)?;
+    let config = FileConfig::load(&options.config, &options.auth_directory)?;
     let model = config.default_model_option()?.qualified_name();
     let mut session =
         session::SessionState::open_in(options.database.clone(), resume, model, directory).await?;
@@ -781,7 +890,10 @@ pub(crate) async fn prepare_tui_resources(
         instructions::MAX_INSTRUCTION_BYTES,
     );
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
-    let file_config = FileConfig::load(config_path)?;
+    let mut file_config = FileConfig::load(config_path, &options.auth_directory)?;
+    for diagnostic in account_models::refresh(&mut file_config, false).await {
+        eprintln!("{diagnostic}");
+    }
     let model_options = file_config.model_options()?;
     let default_model = file_config.default_model_option()?;
     let agent_config = file_config.agent_config();
@@ -805,6 +917,7 @@ pub(crate) async fn prepare_tui_resources(
     let undo_writer = runtime::workspace_writer(
         directory,
         config_path,
+        &options.auth_directory,
         session.store.path(),
         approvals.clone(),
         Some(file_config.permissions.clone()),
@@ -812,6 +925,7 @@ pub(crate) async fn prepare_tui_resources(
     let runtime = runtime::workspace_tools(
         directory,
         config_path,
+        &options.auth_directory,
         Some(session.store.path()),
         Some(approvals),
         command_limits,
@@ -864,7 +978,12 @@ pub(crate) async fn prepare_tui_resources(
     })
 }
 
-async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -> Result<()> {
+async fn chat(
+    config_path: PathBuf,
+    database: Option<PathBuf>,
+    args: ChatArgs,
+    auth_directory: PathBuf,
+) -> Result<()> {
     let prompt = read_chat_prompt(&args)?;
     let disabled = args.disabled.iter().copied().collect::<BTreeSet<_>>();
 
@@ -872,7 +991,10 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
         bail!("--image cannot be used when the image capability is disabled");
     }
 
-    let file_config = FileConfig::load(&config_path)?;
+    let mut file_config = FileConfig::load(&config_path, &auth_directory)?;
+    for diagnostic in account_models::refresh(&mut file_config, false).await {
+        eprintln!("{diagnostic}");
+    }
     let database = session::database_path(database)?;
 
     // Open the persistent conversation before choosing a resumed model. A new
@@ -947,6 +1069,7 @@ async fn chat(config_path: PathBuf, database: Option<PathBuf>, args: ChatArgs) -
     let runtime = runtime::workspace_tools(
         &std::env::current_dir()?,
         &config_path,
+        &auth_directory,
         Some(session.store.path()),
         approvals,
         file_config.command.clone(),
@@ -1355,6 +1478,7 @@ id = "test"
         )
         .unwrap();
         let options = TuiOptions {
+            auth_directory: directory.path().join("home/.config/orbit/auth"),
             config,
             database: directory.path().join("test.db"),
             allow_mcp_start: false,
@@ -1364,6 +1488,15 @@ id = "test"
             editor_command: "vi".into(),
         };
         let prepared = prepare_tui(&options, &old, None).await.unwrap();
+
+        assert!(!options.auth_directory.exists());
+        assert!(
+            prepared
+                .resources
+                .workspace
+                .protected()
+                .contains(&options.auth_directory)
+        );
         let id = prepared.session.id().to_owned();
 
         let resources = prepare_tui_resources(&options, &new, &prepared.session)
@@ -1404,6 +1537,7 @@ id = "test"
             api_format: ApiFormat::OpenaiChatCompletions,
             base_url: "https://example.com/v1".into(),
             api_key: "test-secret".into(),
+            credential: None,
             models: Vec::new(),
             timeout_seconds: 30,
             max_retries: 0,
@@ -1678,7 +1812,9 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default =
 "#,
         )
         .unwrap();
-        let error = FileConfig::load(&path).unwrap_err().to_string();
+        let error = FileConfig::load(&path, &path.with_extension("auth"))
+            .unwrap_err()
+            .to_string();
 
         assert!(error.contains("reasoning.extra") && error.contains("stream"));
     }
@@ -1720,11 +1856,82 @@ input_context_tokens = 224000
     }
 
     #[test]
+    fn saved_provider_credentials_are_injected_as_references_and_cannot_mix_with_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let content = r#"default_provider = "test"
+[providers.test]
+api_format = "anthropic_messages"
+base_url = "https://api.anthropic.com/v1"
+credential = "anthropic"
+[[providers.test.models]]
+id = "test-model"
+"#;
+        fs::write(&path, content).unwrap();
+        let auth_directory = directory.path().join("auth");
+
+        let config = FileConfig::load(&path, &auth_directory).unwrap();
+        let models = config.model_options().unwrap();
+
+        assert!(models[0].config.api_key.is_none());
+        assert_eq!(
+            models[0].config.credential.as_ref().unwrap().directory,
+            auth_directory
+        );
+        assert_eq!(
+            models[0].config.credential.as_ref().unwrap().name,
+            "anthropic"
+        );
+
+        fs::write(
+            &path,
+            content.replace("credential =", "api_key = \"secret\"\ncredential ="),
+        )
+        .unwrap();
+
+        assert!(FileConfig::load(&path, &auth_directory).is_err());
+    }
+
+    #[test]
+    fn account_configuration_example_connects_both_provider_protocols() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let readme = include_str!("../../orbit-auth/README.md");
+        let example = readme
+            .split("```toml\n")
+            .nth(1)
+            .unwrap()
+            .split("```")
+            .next()
+            .unwrap();
+        fs::write(&path, example).unwrap();
+
+        let config = FileConfig::load(&path, &directory.path().join("auth")).unwrap();
+        let models = config.model_options().unwrap();
+
+        assert_eq!(models.len(), 2);
+        assert!(
+            models
+                .iter()
+                .any(|model| model.config.api_format == ApiFormat::GoogleCodeAssist)
+        );
+        assert!(
+            models
+                .iter()
+                .any(|model| model.config.api_format == ApiFormat::ChatgptCodex)
+        );
+        for model in models {
+            assert!(model.config.credential.is_some());
+            ModelClient::new(model.config).unwrap();
+        }
+    }
+
+    #[test]
     fn example_configuration_uses_valid_model_capability_profiles() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
         fs::write(&path, include_str!("../../../config.example.toml")).unwrap();
-        let config = FileConfig::load(&path).unwrap();
+        let config = FileConfig::load(&path, &path.with_extension("auth")).unwrap();
         let models = config.model_options().unwrap();
 
         assert_eq!(models.len(), 4);
@@ -1750,7 +1957,7 @@ id = "other-model"
         let path = directory.path().join("config.toml");
         fs::write(&path, duplicate).unwrap();
 
-        assert!(FileConfig::load(&path).is_err());
+        assert!(FileConfig::load(&path, &path.with_extension("auth")).is_err());
 
         fs::write(
             &path,
@@ -1764,7 +1971,7 @@ id = "other-model"
         )
         .unwrap();
 
-        assert!(FileConfig::load(&path).is_err());
+        assert!(FileConfig::load(&path, &path.with_extension("auth")).is_err());
 
         fs::write(
             &path,
@@ -1779,7 +1986,7 @@ reasoning = { adapter = "openai_chat", efforts = ["high", "high"], default = "hi
         )
         .unwrap();
 
-        assert!(FileConfig::load(&path).is_err());
+        assert!(FileConfig::load(&path, &path.with_extension("auth")).is_err());
     }
 
     #[test]

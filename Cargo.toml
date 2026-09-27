@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/orbit-auth",
     "crates/orbit-model",
     "crates/orbit-agent",
     "crates/orbit-runtime",
@@ -15,6 +16,7 @@ edition = "2024"
 
 [workspace.dependencies]
 # Internal workspace crates
+orbit-auth = { path = "crates/orbit-auth" }
 orbit-agent = { path = "crates/orbit-agent" }
 orbit-model = { path = "crates/orbit-model" }
 orbit-runtime = { path = "crates/orbit-runtime" }
@@ -22,6 +24,7 @@ orbit-store = { path = "crates/orbit-store" }
 orbit-tools = { path = "crates/orbit-tools" }
 
 # Third-party dependencies
+getrandom = "0.4.3"
 anydoc = "0.1.9"
 anyhow = "1.0.100"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }

@@ -55,8 +55,17 @@ pub(crate) fn encode(
             ChatMessage::Assistant {
                 content,
                 tool_calls,
-            } => messages
-                .push(json!({ "role": "assistant", "content": content, "tool_calls": tool_calls })),
+            } => {
+                let calls = tool_calls
+                    .into_iter()
+                    .map(|mut call| {
+                        call.metadata = None;
+                        call
+                    })
+                    .collect::<Vec<_>>();
+                messages
+                    .push(json!({ "role": "assistant", "content": content, "tool_calls": calls }));
+            }
             ChatMessage::Tool {
                 tool_call_id,
                 content,
@@ -158,6 +167,7 @@ pub(crate) fn stream(
                 let function = call.function;
 
                 events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
+                    metadata: None,
                     index: call.index.unwrap_or_default(),
                     id: call.id,
                     name: function.as_ref().and_then(|value| value.name.clone()),

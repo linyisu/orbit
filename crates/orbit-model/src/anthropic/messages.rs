@@ -215,6 +215,7 @@ pub(crate) fn stream(
                 if let Some(block) = event.content_block {
                     match block.kind.as_str() {
                         "tool_use" => events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
+                            metadata: None,
                             index: event.index.unwrap_or_default(),
                             id: block.id,
                             name: block.name,
@@ -255,6 +256,7 @@ pub(crate) fn stream(
                         Some("input_json_delta") => {
                             if let Some(json) = delta.partial_json {
                                 events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
+                                    metadata: None,
                                     index: event.index.unwrap_or_default(),
                                     id: None,
                                     name: None,

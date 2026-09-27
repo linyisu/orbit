@@ -30,7 +30,11 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/model",
-        description: "选择模型；支持 /model 供应商::模型",
+        description: "选择模型；/model refresh 刷新账号目录",
+    },
+    Command {
+        name: "/connect",
+        description: "连接账号或配置供应商 API Key",
     },
     Command {
         name: "/resume",

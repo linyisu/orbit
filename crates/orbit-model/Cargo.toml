@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+getrandom.workspace = true
+orbit-auth.workspace = true
 async-stream.workspace = true
 base64.workspace = true
 futures-core.workspace = true

@@ -773,6 +773,7 @@ where
                 for (index, call) in tool_calls.iter().enumerate() {
                     emit(AgentEvent::Model(StreamEvent::ToolCallDelta(
                         ToolCallDelta {
+                            metadata: call.metadata.clone(),
                             index,
                             id: Some(call.id.clone()),
                             name: Some(call.function.name.clone()),
@@ -942,6 +943,7 @@ fn merge_tool_call(calls: &mut BTreeMap<usize, ToolCall>, delta: ToolCallDelta) 
     // Providers index all output blocks, including text and reasoning. Only
     // materialize actual tool blocks; never pad sparse indices with fake calls.
     let call = calls.entry(delta.index).or_insert_with(|| ToolCall {
+        metadata: None,
         id: String::new(),
         kind: "function".to_owned(),
         function: FunctionCall {
@@ -956,6 +958,10 @@ fn merge_tool_call(calls: &mut BTreeMap<usize, ToolCall>, delta: ToolCallDelta) 
 
     if let Some(name) = delta.name {
         call.function.name.push_str(&name);
+    }
+
+    if let Some(metadata) = delta.metadata {
+        call.metadata = Some(metadata);
     }
 
     call.function.arguments.push_str(&delta.arguments);
@@ -1318,6 +1324,7 @@ mod tests {
             message: ChatMessage::Assistant {
                 content: None,
                 tool_calls: vec![ToolCall {
+                    metadata: None,
                     id: id.to_owned(),
                     kind: "function".to_owned(),
                     function: FunctionCall {
@@ -1874,6 +1881,49 @@ mod tests {
     }
 
     #[test]
+    fn tool_signature_metadata_survives_delta_merging_and_history_serialization() {
+        let metadata = orbit_model::types::ToolCallMetadata {
+            google: orbit_model::types::GoogleToolMetadata {
+                model: "test-model".into(),
+                thought_signature: Some("opaque-signature".into()),
+                native_id: None,
+            },
+        };
+        let mut calls = BTreeMap::new();
+
+        merge_tool_call(
+            &mut calls,
+            ToolCallDelta {
+                metadata: Some(metadata.clone()),
+                index: 0,
+                id: Some("call".into()),
+                name: Some("read_file".into()),
+                arguments: "{".into(),
+            },
+        );
+        merge_tool_call(
+            &mut calls,
+            ToolCallDelta {
+                metadata: None,
+                index: 0,
+                id: None,
+                name: None,
+                arguments: "}".into(),
+            },
+        );
+        let history = ChatMessage::assistant_tool_calls(calls.into_values().collect());
+        let restored: ChatMessage =
+            serde_json::from_str(&serde_json::to_string(&history).unwrap()).unwrap();
+
+        assert_eq!(restored, history);
+        let ChatMessage::Assistant { tool_calls, .. } = restored else {
+            panic!("assistant history expected")
+        };
+        assert_eq!(tool_calls[0].metadata, Some(metadata));
+        assert_eq!(tool_calls[0].function.arguments, "{}");
+    }
+
+    #[test]
     fn sparse_and_large_indices_merge_argument_fragments_without_padding() {
         let mut calls = BTreeMap::new();
 
@@ -1885,6 +1935,7 @@ mod tests {
             merge_tool_call(
                 &mut calls,
                 ToolCallDelta {
+                    metadata: None,
                     index,
                     id: id.map(str::to_owned),
                     name: name.map(str::to_owned),
@@ -2204,6 +2255,7 @@ mod tests {
     #[tokio::test]
     async fn max_tool_calls_stops_tool_execution() {
         let first = ToolCall {
+            metadata: None,
             id: "call-1".to_owned(),
             kind: "function".to_owned(),
             function: FunctionCall {
@@ -2212,6 +2264,7 @@ mod tests {
             },
         };
         let second = ToolCall {
+            metadata: None,
             id: "call-2".to_owned(),
             ..first.clone()
         };

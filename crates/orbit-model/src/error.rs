@@ -4,6 +4,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ModelError {
+    #[error("authentication failed: {0}")]
+    Authentication(#[from] orbit_auth::AuthError),
     #[error("model name cannot be empty")]
     InvalidModel,
     #[error("unsupported API format: {0}")]
@@ -77,7 +79,8 @@ impl ModelError {
         match self {
             Self::Http { retryable, .. } => *retryable,
             Self::Request(_) | Self::Timeout { .. } => true,
-            Self::InvalidModel
+            Self::Authentication(_)
+            | Self::InvalidModel
             | Self::UnsupportedApiFormat(_)
             | Self::InvalidBaseUrl(_)
             | Self::Cancelled

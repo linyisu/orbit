@@ -169,6 +169,7 @@ pub(crate) fn stream(
             "response.output_item.added" => {
                 if let Some(item) = event.item.filter(|item| item.kind == "function_call") {
                     events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
+                        metadata: None,
                         index: event.output_index.unwrap_or_default(),
                         id: item.call_id.or(item.id),
                         name: item.name,
@@ -178,8 +179,10 @@ pub(crate) fn stream(
             }
             "response.function_call_arguments.delta" => {
                 events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
+                    metadata: None,
                     index: event.output_index.unwrap_or_default(),
-                    id: event.item_id,
+                    // The item ID differs from the function call ID used by tool results.
+                    id: None,
                     name: None,
                     arguments: event.delta.unwrap_or_default(),
                 }));
@@ -347,7 +350,6 @@ struct ResponsesEvent {
     kind: String,
     delta: Option<String>,
     output_index: Option<usize>,
-    item_id: Option<String>,
     item: Option<ResponseOutput>,
     response: Option<ResponsesResponse>,
 }

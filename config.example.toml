@@ -14,6 +14,7 @@ max_tool_calls = 500
 [providers.openai]
 api_format = "openai_responses"
 base_url = "https://api.openai.com/v1"
+# 也可用 orbit auth set-key 保存密钥，再将 api_key 替换为 credential = "凭据名"。
 api_key = "replace-with-openai-key"
 timeout_seconds = 600
 # 响应开始前的临时网络错误重试次数。

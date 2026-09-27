@@ -22,6 +22,7 @@ pub struct WorkspaceRuntime {
 pub async fn workspace_tools(
     directory: &Path,
     config: &Path,
+    auth_directory: &Path,
     database: Option<&Path>,
     approvals: Option<ApprovalSender>,
     command_limits: orbit_tools::run_command::CommandLimits,
@@ -35,6 +36,7 @@ pub async fn workspace_tools(
     let workspace = protected_workspace(
         directory,
         config,
+        auth_directory,
         database,
         permissions,
         command_limits.network,
@@ -114,6 +116,7 @@ pub async fn workspace_tools(
 pub fn workspace_writer(
     directory: &Path,
     config: &Path,
+    auth_directory: &Path,
     database: &Path,
     approvals: ApprovalSender,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
@@ -122,6 +125,7 @@ pub fn workspace_writer(
         protected_workspace(
             directory,
             config,
+            auth_directory,
             Some(database),
             permissions,
             orbit_runtime::capability::NetworkPolicy::Allow,
@@ -133,12 +137,14 @@ pub fn workspace_writer(
 fn protected_workspace(
     directory: &Path,
     config: &Path,
+    auth_directory: &Path,
     database: Option<&Path>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
     network: orbit_runtime::capability::NetworkPolicy,
 ) -> Result<Workspace> {
     let mut workspace = Workspace::new(directory)?;
     workspace.protect(config)?;
+    workspace.protect(auth_directory)?;
 
     if let Some(database) = database {
         workspace.protect(database)?;
@@ -157,4 +163,70 @@ fn protected_workspace(
     workspace.configure_policy(permissions.unwrap_or_default(), network)?;
 
     Ok(workspace)
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[test]
+    fn first_launch_protects_credentials_with_missing_parent_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+
+        for auth in [
+            root.path().join("home/.config/orbit/auth"),
+            project.join("private/config/orbit/auth"),
+        ] {
+            let workspace = protected_workspace(
+                &project,
+                &project.join("config.toml"),
+                &auth,
+                None,
+                None,
+                orbit_runtime::capability::NetworkPolicy::Allow,
+            )
+            .unwrap();
+
+            assert!(
+                !auth.exists(),
+                "startup must not create credential directories"
+            );
+            assert!(workspace.protected().contains(&auth));
+
+            std::fs::create_dir_all(&auth).unwrap();
+            std::fs::write(auth.join("test.json"), "secret").unwrap();
+
+            assert!(workspace.authorize_read(&auth.join("test.json")).is_err());
+            if let Ok(relative) = auth.strip_prefix(&project) {
+                assert!(workspace.open_read(&relative.join("test.json")).is_err());
+                assert!(workspace.write_parent(&relative.join("test.json")).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn credential_directory_is_protected_inside_a_project() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = root.path().join("auth");
+        std::fs::create_dir(&auth).unwrap();
+        std::fs::write(auth.join("test.json"), "secret").unwrap();
+        let workspace = protected_workspace(
+            root.path(),
+            &root.path().join("config.toml"),
+            &auth,
+            None,
+            None,
+            orbit_runtime::capability::NetworkPolicy::Allow,
+        )
+        .unwrap();
+
+        let read = workspace.open_read(Path::new("auth/test.json"));
+        let write = workspace.write_parent(Path::new("auth/test.json"));
+
+        assert!(read.is_err());
+        assert!(write.is_err());
+        assert!(workspace.protected().contains(&auth));
+    }
 }

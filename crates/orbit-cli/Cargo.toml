@@ -8,6 +8,7 @@ name = "orbit"
 path = "src/main.rs"
 
 [dependencies]
+orbit-auth.workspace = true
 anyhow.workspace = true
 arboard.workspace = true
 base64.workspace = true

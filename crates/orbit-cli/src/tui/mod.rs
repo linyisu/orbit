@@ -4,6 +4,8 @@ mod approval_diff;
 mod changes;
 pub mod commands;
 mod completion;
+mod connect;
+mod connect_key;
 mod dialogs;
 mod directory;
 mod editor;
@@ -77,6 +79,9 @@ struct CommandContext<'a> {
     memory_scope: &'a crate::project_state::MemoryScope,
 }
 
+type ModelRefreshTask =
+    tokio_util::task::AbortOnDropHandle<Result<(Vec<ModelOption>, Vec<String>)>>;
+
 #[derive(Clone, Debug)]
 pub struct ModelOption {
     pub provider: String,
@@ -145,7 +150,7 @@ pub async fn run(
         skills,
         plugin_skill_diagnostics,
         mcp_statuses,
-        model_options,
+        mut model_options,
         memory_scope,
         compaction,
     } = budget;
@@ -208,6 +213,7 @@ pub async fn run(
     let mut local_cancellation: Option<CancellationToken> = None;
     let mut resume_task: Option<ResumeTask> = None;
     let mut marketplace_task: Option<JoinHandle<Result<crate::marketplaces::Marketplace>>> = None;
+    let mut model_refresh: Option<ModelRefreshTask> = None;
     let mut pending_guidance = Vec::new();
     let mut active_context: Option<ChatMessage> = None;
     let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
@@ -222,6 +228,22 @@ pub async fn run(
         let mut completion_key = None;
 
         loop {
+            if model_refresh.as_ref().is_some_and(|task| task.is_finished()) {
+                let result = model_refresh.take().expect("model refresh task").await;
+                match result {
+                    Ok(Ok((models, diagnostics))) => {
+                        model_options = models;
+                        state.model_completions = model_options.iter().map(ModelOption::qualified_name).collect();
+                        for diagnostic in diagnostics {
+                            state.transcript.push(TranscriptItem::CommandError(diagnostic));
+                        }
+                        state.model_picker = Some(dialogs::ModelPicker::new(model_options.clone(), state.model.clone(), state.reasoning_effort));
+                    }
+                    Ok(Err(error)) => state.transcript.push(TranscriptItem::CommandError(format!("模型刷新失败：{error}"))),
+                    Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("模型刷新任务失败：{error}"))),
+                }
+                dirty = true;
+            }
             let key = (session.id().to_owned(), state.input.text.clone());
             if completion_key.as_ref() != Some(&key) {
                 state.stored_completions = completion::stored(&state.input.text, &session).await.unwrap_or_default();
@@ -670,6 +692,37 @@ pub async fn run(
                                         },
                                         Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("{error:#}"))),
                                     }
+                                    continue;
+                                }
+                                if prompt.trim() == "/model refresh" {
+                                    if model_refresh.is_none() {
+                                        let config_path = options.config.clone();
+                                        let auth_directory = options.auth_directory.clone();
+                                        model_refresh = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+                                            let mut config = crate::FileConfig::load(&config_path, &auth_directory)?;
+                                            let diagnostics = crate::account_models::refresh(&mut config, true).await;
+                                            Ok((config.model_options()?, diagnostics))
+                                        })));
+                                    }
+                                    continue;
+                                }
+                                if command == "/connect" {
+                                    if task.is_some() || marketplace_task.is_some() {
+                                        state.transcript.push(TranscriptItem::CommandError("请等待当前操作结束后再连接账号。".into()));
+                                        continue;
+                                    }
+
+                                    match connect::run(&mut terminal, &mut events, options).await {
+                                        Ok(Some(models)) => {
+                                            model_options = models;
+                                            state.model_completions = model_options.iter().map(ModelOption::qualified_name).collect();
+                                            state.model_picker = Some(dialogs::ModelPicker::new(model_options.clone(), state.model.clone(), state.reasoning_effort));
+                                        }
+                                        Ok(None) => {}
+                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("连接账号失败：{error:#}"))),
+                                    }
+                                    state.menu_dismissed = true;
+                                    state.selection.clear();
                                     continue;
                                 }
                                 if command == "/editor" {

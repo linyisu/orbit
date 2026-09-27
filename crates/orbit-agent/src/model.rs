@@ -188,6 +188,7 @@ impl ModelBackend for MockModel {
                 }
                 for (index, call) in calls.into_iter().enumerate() {
                     yield Ok(StreamEvent::ToolCallDelta(orbit_model::types::ToolCallDelta {
+                        metadata: call.metadata,
                         index,
                         id: Some(call.id),
                         name: Some(call.function.name),

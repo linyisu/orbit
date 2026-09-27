@@ -702,6 +702,7 @@ mod tests {
 
     fn call(id: &str) -> ToolCall {
         ToolCall {
+            metadata: None,
             id: id.to_owned(),
             kind: "function".to_owned(),
             function: FunctionCall {
