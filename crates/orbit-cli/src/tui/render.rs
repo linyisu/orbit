@@ -1035,16 +1035,20 @@ pub(super) fn transcript_lines_at_width(
                             }
                         },
                     );
-                    let title_width = if width == u16::MAX { 120 } else { width } as usize;
+                    let title_width =
+                        (if width == u16::MAX { 120 } else { width } as usize).saturating_sub(2);
                     let gap = title_width.saturating_sub(label.width() + 1);
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            "{label}{}{}",
-                            " ".repeat(gap),
-                            if expanded { "⌄" } else { "›" }
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            format!(
+                                "{label}{}{}",
+                                " ".repeat(gap),
+                                if expanded { "⌄" } else { "›" }
+                            ),
+                            Style::default().fg(THINKING_MUTED),
                         ),
-                        Style::default().fg(THINKING_MUTED),
-                    )));
+                    ]));
 
                     if !expanded {
                         lines.push(Line::from(""));
@@ -1277,7 +1281,7 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
             Line::from(""),
         ];
     }
-    let inner = width;
+    let inner = width.saturating_sub(2);
     let mut details = tool_details(row, expanded, inner);
     details.remove(0);
     let toggle = super::tool_display::toggle_line(expanded, inner);
@@ -1342,9 +1346,14 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
     } else {
         command.to_owned()
     };
-    let title = safe_output(&format!("{} {command}", row.name));
+    let title_text = if command.is_empty() {
+        row.name.clone()
+    } else {
+        format!("{} {command}", row.name)
+    };
+    let title = safe_output(&title_text);
     let title_style = Style::default().fg(color);
-    let title_width = width;
+    let title_width = inner;
     let mut lines = if expanded {
         super::transcript::wrap_line(&Line::styled(title, title_style), title_width).0
     } else {
@@ -1353,22 +1362,27 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
             title_style,
         )]
     };
-    lines.push(Line::styled(
-        "─".repeat(width as usize),
-        Style::default().fg(Color::Rgb(70, 70, 70)),
-    ));
+    for line in &mut lines {
+        line.spans.insert(0, Span::raw("  "));
+    }
+    let divider = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "─".repeat(inner as usize),
+            Style::default().fg(Color::Rgb(65, 68, 74)),
+        ),
+    ]);
+    lines.push(divider.clone());
     for mut line in body.into_iter().chain(hidden.then(|| Line::from("…"))) {
         for span in &mut line.spans {
             if span.style.fg == Some(Color::Reset) || span.style.fg.is_none() {
                 span.style = span.style.fg(Color::Rgb(155, 155, 155));
             }
         }
+        line.spans.insert(0, Span::raw("  "));
         lines.push(line);
     }
-    lines.push(Line::styled(
-        "─".repeat(width as usize),
-        Style::default().fg(Color::Rgb(70, 70, 70)),
-    ));
+    lines.push(divider);
     lines.push(Line::from(""));
     lines
 }
@@ -1666,7 +1680,6 @@ fn draw_composer(
 
     if text_area.width > 0
         && text_area.height > 0
-        && !state.selection.active()
         && state.picker.is_none()
         && state.model_picker.is_none()
         && state.marketplace_dialog.is_none()
@@ -1800,7 +1813,7 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(full.starts_with("run_command"));
+        assert!(full.starts_with("  run_command"));
         assert!(full.contains("end-0"));
         assert_eq!(full.matches("end-0").count(), 1);
 
@@ -2602,7 +2615,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_and_footer_can_be_selected_without_a_visible_caret() {
+    fn composer_and_footer_selection_preserves_caret() {
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
         let mut state = UiState::new("model-name");
@@ -2653,7 +2666,7 @@ mod tests {
                     .buffer()
                     .content
                     .iter()
-                    .all(|cell| cell.bg != Color::Gray)
+                    .any(|cell| cell.bg == Color::Gray)
             );
 
             if footer {
@@ -2665,7 +2678,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_hides_caret_without_moving_input_position() {
+    fn selecting_preserves_caret_without_moving_input_position() {
         let mut state = UiState::new("mock");
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         state.input.insert("draft");
@@ -2716,7 +2729,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.input.cursor, input_cursor);
-        assert_ne!(terminal.backend().buffer().content[caret].bg, Color::Gray);
+        assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
 
         state.apply(orbit_agent::events::AgentEvent::Completed {
             turns: 1,
@@ -2725,7 +2738,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
 
         assert!(!terminal.backend().cursor_visible());
-        assert_ne!(terminal.backend().buffer().content[caret].bg, Color::Gray);
+        assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
     }
 
     #[test]

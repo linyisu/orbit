@@ -70,6 +70,7 @@ static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CodeFence {
+    indent: usize,
     delimiter: char,
     length: usize,
     markdown_source: bool,
@@ -601,15 +602,27 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             && trimmed[count..].trim().is_empty()
             && code.nested_fences.is_empty()
         {
+            let indent = " ".repeat(code.indent);
             *fence = None;
-            return Line::styled("  └─", Style::default().fg(SECONDARY));
+            return Line::styled(format!("  {indent}└─"), Style::default().fg(SECONDARY));
         }
 
         let mut highlighter =
             HighlightLines::from_state(&CODE_THEME, code.state.0.clone(), code.state.1.clone());
-        let mut spans = vec![Span::styled("  │ ", Style::default().fg(SECONDARY))];
+        let indent = " ".repeat(code.indent);
+        let mut spans = vec![Span::styled(
+            format!("  {indent}│ "),
+            Style::default().fg(SECONDARY),
+        )];
 
-        match highlighter.highlight_line(source, &SYNTAXES) {
+        let code_line =
+            if source.len() >= code.indent && source[..code.indent].chars().all(|c| c == ' ') {
+                &source[code.indent..]
+            } else {
+                source.trim_start()
+            };
+
+        match highlighter.highlight_line(code_line, &SYNTAXES) {
             Ok(tokens) => spans.extend(tokens.into_iter().map(|(style, text)| {
                 let c = style.foreground;
                 Span::styled(
@@ -617,7 +630,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                     Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
                 )
             })),
-            Err(_) => spans.push(Span::raw(source.to_owned())),
+            Err(_) => spans.push(Span::raw(code_line.to_owned())),
         }
 
         code.state = highlighter.state();
@@ -627,19 +640,22 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
         && count >= 3
         && !(marker == '`' && trimmed[count..].contains('`'))
     {
+        let indent = source.len() - trimmed.len();
         let label = trimmed[count..].trim();
         let resolved = syntax_for_label(label);
         let syntax = resolved.unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
         *fence = Some(CodeFence {
+            indent,
             delimiter: marker,
             length: count,
             markdown_source: is_markdown_label(label),
             nested_fences: Vec::new(),
             state: HighlightLines::new(syntax, &CODE_THEME).state(),
         });
+        let indent_str = " ".repeat(indent);
         return Line::styled(
             format!(
-                "  ┌─ {label}{}",
+                "  {indent_str}┌─ {label}{}",
                 if !label.is_empty() && resolved.is_none() {
                     " · 纯文本"
                 } else {
@@ -830,6 +846,22 @@ mod tests {
             assert!(colors.len() >= 3, "{label}: {rendered:?}");
             assert_eq!(rendered.to_string(), format!("  │ {sample}"));
         }
+    }
+
+    #[test]
+    fn indented_code_fence_inside_list_aligns_border_and_strips_leading_indent() {
+        let mut fence = None;
+        let open = line("    ```rust", 0, &mut fence);
+        assert_eq!(open.to_string(), "      ┌─ rust");
+
+        let code = line("    let x = 42;", 1, &mut fence);
+        assert_eq!(code.to_string(), "      │ let x = 42;");
+
+        let nested_code = line("        let y = x + 1;", 2, &mut fence);
+        assert_eq!(nested_code.to_string(), "      │     let y = x + 1;");
+
+        let close = line("    ```", 3, &mut fence);
+        assert_eq!(close.to_string(), "      └─");
     }
 
     #[test]
