@@ -49,11 +49,18 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                         .as_ref()
                         .map(|value| &value.google)
                         .filter(|value| value.model == model);
-                    let native_id = metadata.and_then(|value| value.native_id.clone());
-                    let mut function = json!({ "name": call.function.name, "args": arguments });
-                    if let Some(id) = &native_id {
-                        function["id"] = json!(id);
+                    // Claude behind Code Assist requires IDs even for imported or
+                    // unsigned calls. Keep the response paired with the same wire ID.
+                    let native_id = metadata
+                        .and_then(|value| value.native_id.as_deref())
+                        .filter(|id| !id.is_empty())
+                        .unwrap_or(&call.id);
+                    if native_id.is_empty() {
+                        return Err(ModelError::Protocol("tool call has no ID".into()));
                     }
+                    let native_id = native_id.to_owned();
+                    let function =
+                        json!({ "id": native_id, "name": call.function.name, "args": arguments });
                     let mut part = json!({ "functionCall": function });
                     if let Some(signature) =
                         metadata.and_then(|value| value.thought_signature.as_deref())
@@ -75,10 +82,8 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                 let Some((name, native_id)) = calls.get(&tool_call_id) else {
                     continue;
                 };
-                let mut response = json!({ "name": name, "response": { "output": content } });
-                if let Some(id) = native_id {
-                    response["id"] = json!(id);
-                }
+                let response =
+                    json!({ "id": native_id, "name": name, "response": { "output": content } });
                 ("user", vec![json!({ "functionResponse": response })])
             }
         };
@@ -193,7 +198,10 @@ fn decode(
                 .ok_or_else(|| {
                     ModelError::Protocol("Google returned a function call without a name".into())
                 })?;
-            let native_id = call["id"].as_str().map(str::to_owned);
+            let native_id = call["id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned);
             let id = native_id
                 .clone()
                 .unwrap_or_else(|| format!("google_{nonce}_{next_call}"));
@@ -482,6 +490,78 @@ mod tests {
                 .unwrap()
                 .contains("signature")
         );
+    }
+
+    #[test]
+    fn claude_replay_pairs_imported_and_unsigned_calls_with_their_results() {
+        let signed = ToolCall {
+            metadata: Some(ToolCallMetadata {
+                google: GoogleToolMetadata {
+                    model: "gemini-test".into(),
+                    native_id: Some("gemini-native".into()),
+                    thought_signature: Some("gemini-private-signature".into()),
+                },
+            }),
+            ..ToolCall::function("orbit-one", "read_file", json!({ "path": "one" }))
+        };
+        let unsigned = ToolCall::function("orbit-two", "read_file", json!({ "path": "two" }));
+        let messages = vec![
+            ChatMessage::user("read both"),
+            ChatMessage::assistant_tool_calls(vec![signed, unsigned]),
+            ChatMessage::tool("orbit-two", "second"),
+            ChatMessage::tool("orbit-one", "first"),
+        ];
+        let restored = serde_json::from_str(&serde_json::to_string(&messages).unwrap()).unwrap();
+        let (body, _) = encode("claude-sonnet-4-6", ChatRequest::new(restored)).unwrap();
+        let contents = &body["request"]["contents"];
+        assert_eq!(contents[1]["parts"][0]["functionCall"]["id"], "orbit-one");
+        assert_eq!(contents[1]["parts"][1]["functionCall"]["id"], "orbit-two");
+        assert_eq!(
+            contents[2]["parts"][0]["functionResponse"]["id"],
+            "orbit-two"
+        );
+        assert_eq!(
+            contents[2]["parts"][1]["functionResponse"]["id"],
+            "orbit-one"
+        );
+        assert!(!body.to_string().contains("gemini-private-signature"));
+        assert!(!body.to_string().contains("gemini-native"));
+    }
+
+    #[test]
+    fn a_missing_or_empty_provider_id_is_generated_and_sent_on_replay() {
+        for call in [
+            json!({ "name": "read_file", "args": {} }),
+            json!({ "id": "", "name": "read_file", "args": {} }),
+        ] {
+            let payload = json!({ "response": { "candidates": [{ "content": { "parts": [{ "functionCall": call }] } }] } }).to_string();
+            let events = decode(&payload, "claude-sonnet-4-6", "turn", &mut 0).unwrap();
+            let StreamEvent::ToolCallDelta(delta) = &events[0] else {
+                panic!("expected tool call");
+            };
+            let id = delta.id.clone().unwrap();
+            assert!(!id.is_empty());
+            let tool = ToolCall {
+                metadata: delta.metadata.clone(),
+                ..ToolCall::function(&id, "read_file", json!({}))
+            };
+            let (body, _) = encode(
+                "claude-sonnet-4-6",
+                ChatRequest::new(vec![
+                    ChatMessage::assistant_tool_calls(vec![tool]),
+                    ChatMessage::tool(&id, "ok"),
+                ]),
+            )
+            .unwrap();
+            assert_eq!(
+                body["request"]["contents"][0]["parts"][0]["functionCall"]["id"],
+                id
+            );
+            assert_eq!(
+                body["request"]["contents"][1]["parts"][0]["functionResponse"]["id"],
+                id
+            );
+        }
     }
 
     #[test]
