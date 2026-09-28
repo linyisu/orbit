@@ -56,7 +56,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 17,
+                version <= 20,
                 "database schema {version} is newer than this Orbit supports"
             );
 
@@ -325,6 +325,32 @@ impl Store {
                 }
 
                 connection.execute_batch("PRAGMA user_version=17;")?;
+            }
+
+            if version < 18 {
+                connection.execute_batch("CREATE TABLE IF NOT EXISTS tui_tabs (
+                    position INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE
+                ); PRAGMA user_version=18;")?;
+            }
+
+            if version < 19 {
+                connection.execute_batch("CREATE TABLE IF NOT EXISTS tui_session_state (
+                    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                    permission_mode TEXT NOT NULL DEFAULT 'auto',
+                    run_id INTEGER REFERENCES runs(id) ON DELETE CASCADE,
+                    runtime TEXT
+                ); PRAGMA user_version=19;")?;
+            }
+
+            // Early schema 19 databases contain presentation state but no file grants.
+            // Keep this a separate versioned migration, including for existing grants.
+            if version < 20 {
+                connection.execute_batch("CREATE TABLE IF NOT EXISTS tui_file_grants (
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    path TEXT NOT NULL,
+                    PRIMARY KEY(session_id,path)
+                ); PRAGMA user_version=20;")?;
             }
 
             connection.execute_batch("COMMIT;")?;
@@ -859,7 +885,7 @@ impl Store {
             let file = private_file(&lock_dir.join(lock_id))?;
             file.try_lock().map_err(|error| match error {
                 std::fs::TryLockError::WouldBlock => {
-                    anyhow::anyhow!("该会话已在其他 Orbit 窗口或进程中打开，请先关闭后再恢复。")
+                    anyhow::anyhow!("该会话正在其他 Orbit 窗口中执行，请等待当前请求结束。")
                 }
                 std::fs::TryLockError::Error(error) => {
                     anyhow::Error::new(error).context("无法获取会话锁")
@@ -1403,6 +1429,7 @@ impl SessionWriter {
                      updated_at=unixepoch() WHERE id=?1",
                     params![id, project.id, path],
                 )?;
+                tx.execute("DELETE FROM tui_file_grants WHERE session_id=?1", [&id])?;
                 tx.execute(
                     "DELETE FROM session_workspace_baselines WHERE session_id=?1",
                     [&id],
@@ -1425,6 +1452,10 @@ impl SessionWriter {
             .await?;
 
         self.store.session(&self.id).await
+    }
+
+    pub fn active_run_id(&self) -> Option<i64> {
+        self.active_run
     }
 
     pub fn id(&self) -> &str {
@@ -1517,6 +1548,7 @@ impl SessionWriter {
             store: self.store.clone(),
             run: self.active_run.context("no active run")?,
             session: self.id.clone(),
+            commit_lock: tokio::sync::Mutex::new(()),
             pending: Mutex::new(Vec::new()),
             pending_messages: Mutex::new(Vec::new()),
         }))

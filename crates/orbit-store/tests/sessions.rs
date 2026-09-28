@@ -210,7 +210,7 @@ async fn rejects_a_database_from_a_newer_schema() {
     let store = Store::open(db.path()).await.unwrap();
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=18").unwrap();
+    connection.execute_batch("PRAGMA user_version=21").unwrap();
     drop(connection);
 
     let error = Store::open(db.path())
@@ -1153,4 +1153,79 @@ async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace()
     let changes = store.workspace_changes(&id).await.unwrap();
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].change.after, "new content");
+}
+
+#[tokio::test]
+async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions() {
+    for had_grants in [false, true] {
+        let db = Database::new();
+        let store = Store::open(db.path()).await.unwrap();
+        let mut writer = store
+            .create(db.0.to_string_lossy().into_owned(), "mock".into(), false)
+            .await
+            .unwrap();
+        let id = writer.id().to_owned();
+        writer
+            .begin("preserve my conversation".into(), "mock".into())
+            .await
+            .unwrap();
+        writer
+            .finish(
+                "completed",
+                vec![text("saved answer")],
+                Some(vec![ChatMessage::user("saved prompt")]),
+            )
+            .await
+            .unwrap();
+        store.set_tui_mode(&id, "ask").await.unwrap();
+        store.remember_tui_tab(&id).await.unwrap();
+        store.grant_tui_file(&id, "existing.txt").await.unwrap();
+        drop(writer);
+        drop(store);
+        let connection = rusqlite::Connection::open(db.path()).unwrap();
+        if !had_grants {
+            connection
+                .execute_batch("DROP TABLE tui_file_grants;")
+                .unwrap();
+        }
+        connection.execute_batch("PRAGMA user_version=19;").unwrap();
+        drop(connection);
+
+        let store = Store::open(db.path()).await.unwrap();
+        let saved = store.load(&id).await.unwrap();
+        assert_eq!(saved.runs.len(), 1);
+        assert_eq!(saved.runs[0].prompt, "preserve my conversation");
+        assert_eq!(saved.runs[0].events.len(), 1);
+        assert_eq!(saved.history, vec![ChatMessage::user("saved prompt")]);
+        assert_eq!(store.tui_mode(&id).await.unwrap(), "ask");
+        assert_eq!(
+            store.tui_tabs(&saved.session.project_id).await.unwrap(),
+            vec![id.clone()]
+        );
+        assert_eq!(
+            store
+                .tui_file_grants(&id)
+                .await
+                .unwrap()
+                .contains("existing.txt"),
+            had_grants
+        );
+        store.grant_tui_file(&id, "new.txt").await.unwrap();
+        drop(store);
+        let reopened = Store::open(db.path()).await.unwrap();
+        assert!(
+            reopened
+                .tui_file_grants(&id)
+                .await
+                .unwrap()
+                .contains("new.txt")
+        );
+        let connection = rusqlite::Connection::open(db.path()).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            20
+        );
+    }
 }

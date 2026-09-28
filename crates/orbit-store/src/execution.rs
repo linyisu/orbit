@@ -18,6 +18,7 @@ pub(crate) struct Journal {
     pub store: Store,
     pub run: i64,
     pub session: String,
+    pub commit_lock: tokio::sync::Mutex<()>,
     pub pending: std::sync::Mutex<Vec<AgentEvent>>,
     pub pending_messages: std::sync::Mutex<Vec<ChatMessage>>,
 }
@@ -28,6 +29,7 @@ impl Journal {
         checkpoint: Option<ExecutionCheckpoint>,
         event: Option<AgentEvent>,
     ) -> Result<(), AgentError> {
+        let _guard = self.commit_lock.lock().await;
         let run = self.run;
         let session = self.session.clone();
         // Keep queued facts until the SQLite transaction commits. A failed
@@ -36,6 +38,9 @@ impl Journal {
         let messages = journal_lock(&self.pending_messages).clone();
         let event_count = events.len();
         let message_count = messages.len();
+        if checkpoint.is_none() && event.is_none() && event_count == 0 && message_count == 0 {
+            return Ok(());
+        }
         let mut events = events;
         events.extend(event);
         self.store.access(move |conn| {
