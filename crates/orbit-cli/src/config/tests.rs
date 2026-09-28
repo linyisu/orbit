@@ -41,8 +41,8 @@ id = "test"
     assert_eq!(config.max_output_tokens, 32000);
     assert_eq!(config.providers["test"].timeout_seconds, 600);
     assert_eq!(config.providers["test"].max_retries, 2);
-    assert_eq!(config.agent_config().max_turns, 75);
-    assert_eq!(config.agent_config().max_tool_calls, 500);
+    assert_eq!(config.agent_config().max_turns, 300);
+    assert_eq!(config.agent_config().max_tool_calls, 2000);
     assert_eq!(config.command.default_timeout_seconds, 120);
     assert_eq!(config.command.max_timeout_seconds, 600);
 

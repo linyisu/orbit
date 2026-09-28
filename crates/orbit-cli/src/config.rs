@@ -119,11 +119,11 @@ fn default_context_tokens() -> usize {
 }
 
 fn default_max_turns() -> usize {
-    75
+    300
 }
 
 fn default_max_tool_calls() -> usize {
-    500
+    2000
 }
 
 fn validate_reasoning_extra(model: &str, api_format: ApiFormat, extra: &toml::Table) -> Result<()> {

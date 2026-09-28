@@ -26,8 +26,8 @@ impl Default for AgentConfig {
         Self {
             // Large enough for sustained repository work, while still placing
             // a firm bound on a malformed model/tool loop.
-            max_turns: 75,
-            max_tool_calls: 500,
+            max_turns: 300,
+            max_tool_calls: 2000,
             context_tokens: 128_000,
             auto_compact: true,
         }

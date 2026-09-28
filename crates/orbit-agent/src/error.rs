@@ -11,9 +11,13 @@ pub enum AgentError {
     Model(#[from] ModelError),
     #[error("tool failed: {0}")]
     Tool(#[from] ToolError),
-    #[error("agent reached the maximum number of turns")]
+    #[error(
+        "agent reached the maximum number of turns (已达单次任务轮数上限；可在 config.toml 配置 max_turns = 0 取消限制，或发送“继续”)"
+    )]
     MaxTurns,
-    #[error("agent reached the maximum number of tool calls")]
+    #[error(
+        "agent reached the maximum number of tool calls (已达工具调用上限；可在 config.toml 配置 max_tool_calls = 0 取消限制)"
+    )]
     MaxToolCalls,
     #[error(
         "estimated context {estimated} tokens exceeds budget {limit}; use /compact or raise context_tokens"
