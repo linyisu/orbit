@@ -736,7 +736,12 @@ where
         while let Some(event) = stream.next().await {
             let event = event.map_err(AgentError::Model)?;
             match &event {
-                StreamEvent::ReasoningDelta(text) if !text.is_empty() => reasoning_active = true,
+                StreamEvent::ReasoningDelta(text) if !text.is_empty() => {
+                    if !reasoning_active {
+                        reasoning_start = std::time::Instant::now();
+                        reasoning_active = true;
+                    }
+                }
                 StreamEvent::ReasoningDelta(_) => {}
                 StreamEvent::TextDelta(text) if text.is_empty() => {}
                 _ => {

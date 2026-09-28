@@ -589,9 +589,10 @@ impl UiState {
                 {
                     row.content.push_str(&text);
                 } else {
+                    self.model_started_at = None;
                     self.active_thinking = Some(self.transcript.len());
                     self.transcript.push(TranscriptItem::Thinking(ThinkingRow {
-                        started_at: Some(self.model_started_at.take().unwrap_or_else(Instant::now)),
+                        started_at: Some(Instant::now()),
                         ..text.into()
                     }));
                 }
@@ -726,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn buffered_reasoning_includes_request_wait_before_first_delta() {
+    fn thinking_duration_measures_reasoning_stream_time() {
         let mut state = UiState::new("mock");
         state.apply(AgentEvent::ContextUsage { estimated_input: 1 });
         state.model_started_at = Some(Instant::now() - std::time::Duration::from_secs(3));
@@ -739,7 +740,7 @@ mod tests {
         let TranscriptItem::Thinking(row) = &state.transcript[0] else {
             panic!("missing reasoning");
         };
-        assert!(row.elapsed.unwrap() >= std::time::Duration::from_secs(3));
+        assert!(row.elapsed.unwrap() < std::time::Duration::from_secs(2));
         assert!(state.model_started_at.is_none());
     }
 
