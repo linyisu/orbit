@@ -135,6 +135,8 @@ pub struct UiState {
     pub input_scroll: usize,
     pub input_width: usize,
     pub ime_cursor: Option<ratatui::layout::Position>,
+    pub restore_picker: Option<super::restore::RestorePicker>,
+    pub restore_selection: Option<Vec<String>>,
     pub stored_completions: Vec<super::completion::Candidate>,
     pub menu_area: ratatui::layout::Rect,
     pub menu_rows: Vec<(ratatui::layout::Rect, usize)>,
@@ -244,6 +246,8 @@ impl UiState {
             input_scroll: 0,
             input_width: 74,
             ime_cursor: None,
+            restore_picker: None,
+            restore_selection: None,
             stored_completions: Vec::new(),
             menu_area: Default::default(),
             menu_rows: Vec::new(),
@@ -481,7 +485,7 @@ impl UiState {
     }
 
     pub fn menu(&self) -> Vec<super::completion::Candidate> {
-        if self.menu_dismissed || self.resume_loading.is_some() {
+        if self.restore_picker.is_some() || self.menu_dismissed || self.resume_loading.is_some() {
             return Vec::new();
         }
 

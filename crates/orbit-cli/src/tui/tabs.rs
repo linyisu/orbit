@@ -49,7 +49,6 @@ impl Tabs {
         Ok(())
     }
 
-    #[cfg(test)]
     pub fn restore_snapshot(&self) -> &[String] {
         self.window.as_ref().map_or(&[], |window| window.previous())
     }

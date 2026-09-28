@@ -98,7 +98,8 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     // Navigation previews belong to the transcript only. A command menu or
     // dialog is a separate interaction surface, so it must not retain a stale
     // tooltip from a dot the pointer hovered earlier.
-    if !menu.is_empty()
+    if state.restore_picker.is_some()
+        || !menu.is_empty()
         || state.show_help
         || state.picker.is_some()
         || state.model_picker.is_some()
@@ -113,7 +114,9 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         state.transcript_pointer = None;
     }
 
-    let panel_height = if !menu.is_empty() {
+    let panel_height = if let Some(picker) = &state.restore_picker {
+        picker.height()
+    } else if !menu.is_empty() {
         menu.len().min(MAX_COMMAND_MENU_ITEMS) as u16
     } else {
         0
@@ -1962,6 +1965,10 @@ fn draw_composer(
 }
 
 fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    if let Some(picker) = &mut state.restore_picker {
+        picker.draw(frame, area);
+        return;
+    }
     let menu = state.menu();
 
     if menu.is_empty() || area.height == 0 || area.width <= 4 {

@@ -49,6 +49,10 @@ pub const COMMANDS: &[Command] = &[
         description: "打开会话选择器（同 /resume）",
     },
     Command {
+        name: "/restore",
+        description: "选择恢复上次未关闭的标签",
+    },
+    Command {
         name: "/context",
         description: "查看上下文估算和预算",
     },

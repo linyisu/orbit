@@ -19,6 +19,7 @@ mod overlay;
 mod permissions;
 mod project_label;
 pub mod render;
+mod restore;
 mod search;
 mod selection;
 mod session_sync;
@@ -233,6 +234,7 @@ pub async fn run(
     let mut model_refresh: Option<ModelRefreshTask> = None;
     let mut pending_guidance = Vec::new();
     let mut retry_submit = false;
+    let mut restore_queue = std::collections::VecDeque::new();
     let mut refresh_before_retry = false;
     let mut active_context: Option<ChatMessage> = None;
     let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
@@ -247,6 +249,13 @@ pub async fn run(
         let mut completion_key = None;
 
         loop {
+            if let Some(ids) = state.restore_selection.take() {
+                restore_queue.extend(ids);
+            }
+            if state.resume_request.is_none() && resume_task.is_none() && history_replay.is_none()
+                && task.is_none() && local_task.is_none() {
+                state.resume_request = restore_queue.pop_front();
+            }
             // A peer can move this session while this window remains open.
             // Rebind the actual runtime before accepting the next input.
             if task.is_none() && local_task.is_none() && resume_task.is_none() && history_replay.is_none() {
@@ -474,6 +483,12 @@ pub async fn run(
                     let Some(event) = event else { break };
                     let mut event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+
+                    if state.restore_picker.is_some() && restore::handle(&mut state, &event) {
+                        dirty = true;
+                        frames.request(time::Instant::now());
+                        continue;
+                    }
 
                     if update_tab_hover(&event, &mut state, &tabs) {
                         dirty = true;
@@ -830,6 +845,18 @@ pub async fn run(
                         }
 
                         Action::Submit(prompt) => {
+                            if prompt.trim() == "/restore" {
+                                if task.is_some() || local_task.is_some() || resume_task.is_some() || history_replay.is_some() {
+                                    state.input.set(prompt);
+                                    state.transcript.push(TranscriptItem::Notice("当前操作结束后可以恢复标签。".into()));
+                                } else {
+                                    match restore::RestorePicker::load(&session.store, tabs.restore_snapshot()).await {
+                                        Ok(picker) => { state.restore_picker = Some(picker); state.input.set("/restore ".into()); }
+                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
+                                    }
+                                }
+                                continue;
+                            }
                             if local_task.is_some() {
                                 state.transcript.push(TranscriptItem::CommandError(
                                     "正在等待回退操作完成或取消。".into(),
