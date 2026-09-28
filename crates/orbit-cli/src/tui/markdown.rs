@@ -7,66 +7,9 @@ use ratatui::{
 };
 
 use super::languages::{SYNTAXES, is_markdown_label, syntax_for_label};
-use std::sync::LazyLock;
-use syntect::{
-    easy::HighlightLines,
-    highlighting::{
-        Color as SyntaxColor, HighlightState, StyleModifier, Theme, ThemeItem, ThemeSettings,
-    },
-    parsing::ParseState,
-};
+use syntect::{easy::HighlightLines, highlighting::HighlightState, parsing::ParseState};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-
-// Follow bat's scope-based themes with a restrained, readable palette.
-// Reference: https://github.com/sharkdp/bat/blob/master/assets/themes/ansi.tmTheme
-// Keep semantic distinctions with light, low-saturation colors. Comments stay
-// readable on translucent terminals; punctuation uses the warm base foreground.
-pub(super) static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
-    let color = |r, g, b| SyntaxColor { r, g, b, a: 255 };
-
-    Theme {
-        name: Some("Orbit restrained".into()),
-        settings: ThemeSettings {
-            foreground: Some(color(234, 232, 227)),
-            ..Default::default()
-        },
-        scopes: [
-            ("keyword - keyword.operator, storage", color(197, 218, 244)),
-            ("string", color(215, 229, 192)),
-            (
-                "entity.name.function, support.function",
-                color(198, 230, 230),
-            ),
-            (
-                "entity.name.type, entity.name.class, support.type, support.class",
-                color(224, 211, 240),
-            ),
-            (
-                "constant.numeric, constant.language, constant.character",
-                color(240, 217, 183),
-            ),
-            (
-                "entity.name.tag, entity.other.attribute-name",
-                color(197, 218, 244),
-            ),
-            (
-                "comment, punctuation.definition.comment",
-                color(190, 196, 205),
-            ),
-        ]
-        .into_iter()
-        .map(|(scope, foreground)| ThemeItem {
-            scope: scope.parse().expect("valid built-in syntax scope"),
-            style: StyleModifier {
-                foreground: Some(foreground),
-                ..Default::default()
-            },
-        })
-        .collect(),
-        ..Default::default()
-    }
-});
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CodeFence {
@@ -87,15 +30,12 @@ pub(super) struct LinkTarget {
     pub url: String,
 }
 
-const ACCENT: Color = Color::Rgb(218, 139, 109);
-const SECONDARY: Color = Color::Rgb(170, 170, 170);
-// Inline syntax follows the terminal's text-first hierarchy. Avoid opaque
-// background chips: they fight the translucent wallpaper and code-block rails.
-const MARK_FOREGROUND: Color = Color::Rgb(225, 166, 126);
-const INLINE_CODE: Color = Color::Rgb(174, 211, 217);
+use super::theme::{CODE_THEME, THEME};
+
+const SECONDARY: Color = THEME.secondary;
 
 pub(super) fn mark_style(style: Style) -> Style {
-    style.fg(MARK_FOREGROUND).add_modifier(Modifier::UNDERLINED)
+    style.fg(THEME.md_mark).add_modifier(Modifier::UNDERLINED)
 }
 
 /// Byte ranges and normalized targets for visible, bare web addresses.
@@ -230,7 +170,7 @@ fn push_text_with_bare_links(
         spans.push(Span::styled(
             text[range.clone()].to_owned(),
             style
-                .fg(Color::LightBlue)
+                .fg(crate::tui::theme::THEME.md_link)
                 .add_modifier(Modifier::UNDERLINED),
         ));
         cursor = range.end;
@@ -275,10 +215,15 @@ fn push_text_with_cjk_strong(
             push_text_with_bare_links(spans, &rest[..open], style, recover_mark);
         }
 
+        let strong_fg = if style.add_modifier.contains(Modifier::ITALIC) {
+            THEME.md_bold_italic
+        } else {
+            THEME.md_bold
+        };
         push_text_with_bare_links(
             spans,
             content,
-            style.add_modifier(Modifier::BOLD),
+            style.fg(strong_fg).add_modifier(Modifier::BOLD),
             recover_mark,
         );
         rest = &after_open[close + 2..];
@@ -324,7 +269,12 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
         spans.drain(open..open + 2);
 
         for span in &mut spans[open..close - 2] {
-            span.style = span.style.add_modifier(Modifier::BOLD);
+            let strong_fg = if span.style.add_modifier.contains(Modifier::ITALIC) {
+                THEME.md_bold_italic
+            } else {
+                THEME.md_bold
+            };
+            span.style = span.style.fg(strong_fg).add_modifier(Modifier::BOLD);
         }
 
         open = close - 2;
@@ -455,7 +405,7 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
                     .collect::<Vec<_>>()
                     .join(join)
             ),
-            Style::default().fg(SECONDARY),
+            Style::default().fg(THEME.md_table_border),
         )
     };
     let mut lines = vec![border("┌", "┬", "┐")];
@@ -468,7 +418,10 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
             .collect();
 
         for n in 0..cells.iter().map(Vec::len).max().unwrap_or(1) {
-            let mut spans = vec![Span::styled("  │", Style::default().fg(SECONDARY))];
+            let mut spans = vec![Span::styled(
+                "  │",
+                Style::default().fg(THEME.md_table_border),
+            )];
 
             for i in 0..cols {
                 let cell = cells
@@ -486,13 +439,19 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
                 spans.push(Span::raw(" ".repeat(left + 1)));
                 spans.extend(cell.spans.into_iter().map(|mut span| {
                     if r == 0 {
-                        span.style = span.style.add_modifier(Modifier::BOLD).fg(ACCENT);
+                        span.style = span
+                            .style
+                            .add_modifier(Modifier::BOLD)
+                            .fg(THEME.md_table_header);
                     }
 
                     span
                 }));
                 spans.push(Span::raw(" ".repeat(padding - left + 1)));
-                spans.push(Span::styled("│", Style::default().fg(SECONDARY)));
+                spans.push(Span::styled(
+                    "│",
+                    Style::default().fg(THEME.md_table_border),
+                ));
             }
 
             lines.push(Line::from(spans));
@@ -502,7 +461,7 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
             let mut separator = border("├", "┼", "┤");
 
             if r > 0 {
-                separator.style = Style::default().fg(Color::Rgb(115, 115, 115));
+                separator.style = Style::default().fg(THEME.md_table_separator);
             }
 
             lines.push(separator);
@@ -525,7 +484,7 @@ fn labelled_table_rows(rows: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
                 .unwrap_or_else(|| format!("第 {} 列", i + 1));
             let mut spans = vec![Span::styled(
                 format!("  {heading}: "),
-                Style::default().fg(ACCENT),
+                Style::default().fg(THEME.md_table_header),
             )];
             spans.extend(cell.spans.clone());
             lines.push(Line::from(spans));
@@ -690,23 +649,52 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                 stack.push(style);
 
                 match tag {
-                    Tag::Heading { .. } => style = style.fg(ACCENT).add_modifier(Modifier::BOLD),
-                    Tag::Strong => style = style.add_modifier(Modifier::BOLD),
-                    Tag::Emphasis => style = style.add_modifier(Modifier::ITALIC),
-                    Tag::Strikethrough => style = style.add_modifier(Modifier::CROSSED_OUT),
+                    Tag::Heading { level, .. } => {
+                        let color = match level {
+                            pulldown_cmark::HeadingLevel::H1 => THEME.md_h1,
+                            pulldown_cmark::HeadingLevel::H2 => THEME.md_h2,
+                            pulldown_cmark::HeadingLevel::H3 => THEME.md_h3,
+                            _ => THEME.md_h4_plus,
+                        };
+                        style = style.fg(color).add_modifier(Modifier::BOLD);
+                    }
+                    Tag::Strong => {
+                        let fg = if style.add_modifier.contains(Modifier::ITALIC) {
+                            THEME.md_bold_italic
+                        } else {
+                            THEME.md_bold
+                        };
+                        style = style.fg(fg).add_modifier(Modifier::BOLD);
+                    }
+                    Tag::Emphasis => {
+                        let fg = if style.add_modifier.contains(Modifier::BOLD) {
+                            THEME.md_bold_italic
+                        } else {
+                            THEME.md_italic
+                        };
+                        style = style.fg(fg).add_modifier(Modifier::ITALIC);
+                    }
+                    Tag::Strikethrough => {
+                        style = style
+                            .fg(THEME.md_strikethrough)
+                            .add_modifier(Modifier::CROSSED_OUT);
+                    }
                     Tag::BlockQuote(_) => {
-                        spans.push(Span::styled("▎ ", Style::default().fg(ACCENT)));
+                        spans.push(Span::styled("▎ ", Style::default().fg(THEME.md_quote_rail)));
+                        style = style.fg(THEME.md_quote_text);
                     }
                     Tag::List(start) => ordered = start,
                     Tag::Item => spans.push(Span::styled(
                         ordered.map_or("• ".into(), |n| format!("{n}. ")),
-                        Style::default().fg(ACCENT),
+                        Style::default().fg(if ordered.is_some() {
+                            THEME.md_ordered_bullet
+                        } else {
+                            THEME.md_unordered_bullet
+                        }),
                     )),
                     Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
                         links.push((spans.len(), dest_url.into_string()));
-                        style = style
-                            .fg(Color::LightBlue)
-                            .add_modifier(Modifier::UNDERLINED);
+                        style = style.fg(THEME.md_link).add_modifier(Modifier::UNDERLINED);
                     }
                     _ => {}
                 }
@@ -746,11 +734,11 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             }
             Event::Code(text) => spans.push(Span::styled(
                 text.into_string(),
-                style.fg(INLINE_CODE).add_modifier(Modifier::BOLD),
+                style.fg(THEME.md_inline_code).add_modifier(Modifier::BOLD),
             )),
             Event::Rule => spans.push(Span::styled(
                 "────────────────────────",
-                Style::default().fg(Color::Rgb(55, 58, 64)),
+                Style::default().fg(THEME.md_rule),
             )),
 
             Event::TaskListMarker(done) => {
@@ -763,9 +751,20 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
                         })
                 }) {
                     marker.content = checkbox.into();
-                    marker.style = style.fg(ACCENT);
+                    marker.style = Style::default().fg(if done {
+                        THEME.md_task_done
+                    } else {
+                        THEME.secondary
+                    });
                 } else {
-                    spans.push(Span::styled(checkbox, style.fg(ACCENT)));
+                    spans.push(Span::styled(
+                        checkbox,
+                        Style::default().fg(if done {
+                            THEME.md_task_done
+                        } else {
+                            THEME.secondary
+                        }),
+                    ));
                 }
             }
 
@@ -972,12 +971,12 @@ mod tests {
         assert_eq!(value.to_string(), "  正常 重点 与 ==代码==");
         assert!(value.spans.iter().any(|span| {
             span.content == "重点"
-                && span.style.fg == Some(MARK_FOREGROUND)
+                && span.style.fg == Some(THEME.md_mark)
                 && span.style.add_modifier.contains(Modifier::UNDERLINED)
         }));
         assert!(value.spans.iter().any(|span| {
             span.content == "==代码=="
-                && span.style.fg == Some(INLINE_CODE)
+                && span.style.fg == Some(THEME.md_inline_code)
                 && span.style.add_modifier.contains(Modifier::BOLD)
         }));
         assert_eq!(render(r"保留 \==字面量==").to_string(), "  保留 ==字面量==");
@@ -992,7 +991,7 @@ mod tests {
             rendered
                 .spans
                 .iter()
-                .filter(|span| span.style.fg == Some(Color::LightBlue))
+                .filter(|span| span.style.fg == Some(crate::tui::theme::THEME.md_link))
                 .count(),
             2
         );

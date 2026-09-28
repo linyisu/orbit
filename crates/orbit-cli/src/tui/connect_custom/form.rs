@@ -15,10 +15,10 @@ use unicode_width::UnicodeWidthStr;
 
 use super::super::{input::InputState, overlay, terminal};
 
-pub(super) const ACCENT: Color = Color::Rgb(220, 140, 100);
+pub(super) const ACCENT: Color = crate::tui::theme::THEME.dialog_accent;
 // Explicit RGB keeps secondary text readable when a terminal theme maps
 // ANSI dark gray close to the transparent background.
-const HINT_TEXT: Color = Color::Rgb(178, 184, 194);
+const HINT_TEXT: Color = crate::tui::theme::THEME.placeholder;
 
 pub(super) struct Field {
     pub label: String,
@@ -202,7 +202,9 @@ pub(super) async fn choose(
                 );
                 frame.render_widget(
                     Paragraph::new(choice.as_str()).style(if index == selected {
-                        Style::default().bg(ACCENT).fg(Color::Black)
+                        Style::default()
+                            .bg(ACCENT)
+                            .fg(crate::tui::theme::THEME.on_accent)
                     } else {
                         Style::default()
                     }),

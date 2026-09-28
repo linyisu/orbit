@@ -11,7 +11,7 @@ use orbit_auth::{
 use orbit_model::client::ApiFormat;
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -116,7 +116,7 @@ pub(super) async fn run(
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(" 连接账号 ")
-                .border_style(Style::default().fg(Color::Rgb(220, 140, 100)));
+                .border_style(Style::default().fg(crate::tui::theme::THEME.dialog_accent));
             let inner = block.inner(area);
             frame.render_widget(block, area);
 
@@ -133,8 +133,8 @@ pub(super) async fn run(
                 ));
                 let style = if index == selected {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(220, 140, 100))
+                        .fg(crate::tui::theme::THEME.on_accent)
+                        .bg(crate::tui::theme::THEME.dialog_accent)
                 } else {
                     Style::default()
                 };
@@ -177,10 +177,10 @@ pub(super) async fn run(
                     let hovered = pointer.is_some_and(|point| area.contains(point));
                     let style = if hovered {
                         Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Rgb(220, 140, 100))
+                            .fg(crate::tui::theme::THEME.on_accent)
+                            .bg(crate::tui::theme::THEME.dialog_accent)
                     } else {
-                        Style::default().fg(Color::Rgb(220, 140, 100))
+                        Style::default().fg(crate::tui::theme::THEME.dialog_accent)
                     };
                     frame.render_widget(Paragraph::new(label).style(style), area);
                 }

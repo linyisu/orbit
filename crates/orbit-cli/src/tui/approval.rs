@@ -2,7 +2,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKin
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
@@ -195,7 +195,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 
     let panel_block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(Color::Rgb(218, 139, 109)));
+        .border_style(Style::default().fg(crate::tui::theme::THEME.accent));
     let inner_area = panel_block.inner(area);
     frame.render_widget(panel_block, area);
 
@@ -217,18 +217,21 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             };
             let title = vec![
                 Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(Color::Rgb(218, 139, 109))),
-                    Span::styled("权限确认", Style::default().fg(Color::White)),
+                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                    Span::styled(
+                        "权限确认",
+                        Style::default().fg(crate::tui::theme::THEME.white),
+                    ),
                 ]),
                 Line::from(vec![
                     Span::styled(
                         format!("  → {op} "),
-                        Style::default().fg(Color::Rgb(150, 150, 150)),
+                        Style::default().fg(crate::tui::theme::THEME.label_muted),
                     ),
                     Span::styled(
                         preview.path.clone(),
                         Style::default()
-                            .fg(Color::Rgb(230, 230, 230))
+                            .fg(crate::tui::theme::THEME.strong)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]),
@@ -239,7 +242,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 
             let syntax = super::languages::syntax_for_label(&preview.path)
                 .unwrap_or_else(|| super::languages::SYNTAXES.find_syntax_plain_text());
-            let mut highlighter = HighlightLines::new(syntax, &super::markdown::CODE_THEME);
+            let mut highlighter = HighlightLines::new(syntax, &super::theme::CODE_THEME);
 
             let mut diff_lines = Vec::new();
 
@@ -263,9 +266,15 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 };
 
                 let sign_style = match tag {
-                    similar::ChangeTag::Delete => Style::default().fg(Color::Rgb(220, 110, 104)),
-                    similar::ChangeTag::Insert => Style::default().fg(Color::Rgb(114, 205, 142)),
-                    similar::ChangeTag::Equal => Style::default().fg(Color::Rgb(100, 100, 100)),
+                    similar::ChangeTag::Delete => {
+                        Style::default().fg(crate::tui::theme::THEME.error)
+                    }
+                    similar::ChangeTag::Insert => {
+                        Style::default().fg(crate::tui::theme::THEME.success)
+                    }
+                    similar::ChangeTag::Equal => {
+                        Style::default().fg(crate::tui::theme::THEME.diff_context)
+                    }
                 };
 
                 let text =
@@ -273,7 +282,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 let mut spans = vec![
                     Span::styled(
                         format!("{line_no} "),
-                        Style::default().fg(Color::Rgb(90, 95, 105)),
+                        Style::default().fg(crate::tui::theme::THEME.line_number),
                     ),
                     Span::styled(format!("{sign} "), sign_style),
                 ];
@@ -281,19 +290,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 if let Ok(tokens) = highlighter.highlight_line(&text, &super::languages::SYNTAXES) {
                     for (style, token) in tokens {
                         let c = style.foreground;
-                        let fg = match tag {
-                            similar::ChangeTag::Delete => Color::Rgb(
-                                ((c.r as u16 + 220) / 2) as u8,
-                                ((c.g as u16 + 110) / 2) as u8,
-                                ((c.b as u16 + 104) / 2) as u8,
-                            ),
-                            similar::ChangeTag::Insert => Color::Rgb(
-                                ((c.r as u16 + 114) / 2) as u8,
-                                ((c.g as u16 + 205) / 2) as u8,
-                                ((c.b as u16 + 142) / 2) as u8,
-                            ),
-                            similar::ChangeTag::Equal => Color::Rgb(c.r, c.g, c.b),
-                        };
+                        let fg = super::theme::diff_syntax_color(c, tag);
                         spans.push(Span::styled(token.to_owned(), Style::default().fg(fg)));
                     }
                 } else {
@@ -313,18 +310,21 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         orbit_tools::approval::ApprovalPreview::Delete(preview) => {
             let title = vec![
                 Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(Color::Rgb(220, 110, 104))),
-                    Span::styled("权限确认", Style::default().fg(Color::White)),
+                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.error)),
+                    Span::styled(
+                        "权限确认",
+                        Style::default().fg(crate::tui::theme::THEME.white),
+                    ),
                 ]),
                 Line::from(vec![
                     Span::styled(
                         "  × 删除文件 ",
-                        Style::default().fg(Color::Rgb(220, 110, 104)),
+                        Style::default().fg(crate::tui::theme::THEME.error),
                     ),
                     Span::styled(
                         preview.path.clone(),
                         Style::default()
-                            .fg(Color::Rgb(230, 230, 230))
+                            .fg(crate::tui::theme::THEME.strong)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]),
@@ -335,7 +335,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 .map(|line| {
                     Line::styled(
                         format!("- {line}"),
-                        Style::default().fg(Color::Rgb(220, 110, 104)),
+                        Style::default().fg(crate::tui::theme::THEME.error),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -355,13 +355,16 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             };
             let title = vec![
                 Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(Color::Rgb(218, 139, 109))),
-                    Span::styled("权限确认", Style::default().fg(Color::White)),
-                    Span::styled(tag, Style::default().fg(Color::Rgb(140, 140, 140))),
+                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                    Span::styled(
+                        "权限确认",
+                        Style::default().fg(crate::tui::theme::THEME.white),
+                    ),
+                    Span::styled(tag, Style::default().fg(crate::tui::theme::THEME.muted)),
                 ]),
                 Line::from(vec![Span::styled(
                     "  # 执行命令",
-                    Style::default().fg(Color::Rgb(180, 185, 195)),
+                    Style::default().fg(crate::tui::theme::THEME.description),
                 )]),
             ];
 
@@ -369,10 +372,10 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             for (i, line) in preview.command.lines().enumerate() {
                 let prefix = if i == 0 { "$ " } else { "  " };
                 lines.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Rgb(140, 140, 140))),
+                    Span::styled(prefix, Style::default().fg(crate::tui::theme::THEME.muted)),
                     Span::styled(
                         visible(line),
-                        Style::default().fg(Color::Rgb(120, 200, 240)),
+                        Style::default().fg(crate::tui::theme::THEME.approval_link),
                     ),
                 ]));
             }
@@ -383,18 +386,21 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         orbit_tools::approval::ApprovalPreview::Mcp(preview) => {
             let title = vec![
                 Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(Color::Rgb(218, 139, 109))),
-                    Span::styled("权限确认", Style::default().fg(Color::White)),
+                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                    Span::styled(
+                        "权限确认",
+                        Style::default().fg(crate::tui::theme::THEME.white),
+                    ),
                 ]),
                 Line::from(vec![
                     Span::styled(
                         "  ⚙ 调用工具 ",
-                        Style::default().fg(Color::Rgb(150, 150, 150)),
+                        Style::default().fg(crate::tui::theme::THEME.label_muted),
                     ),
                     Span::styled(
                         format!("{}::{}", preview.server, preview.tool),
                         Style::default()
-                            .fg(Color::Rgb(230, 230, 230))
+                            .fg(crate::tui::theme::THEME.strong)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]),
@@ -406,7 +412,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 .map(|line| {
                     Line::styled(
                         visible(line),
-                        Style::default().fg(Color::Rgb(120, 200, 240)),
+                        Style::default().fg(crate::tui::theme::THEME.approval_link),
                     )
                 })
                 .collect();
@@ -422,22 +428,25 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             };
             let title = vec![
                 Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(Color::Rgb(218, 139, 109))),
-                    Span::styled("权限确认", Style::default().fg(Color::White)),
+                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                    Span::styled(
+                        "权限确认",
+                        Style::default().fg(crate::tui::theme::THEME.white),
+                    ),
                     Span::styled(
                         format!(" · {access_desc}"),
-                        Style::default().fg(Color::Rgb(150, 150, 150)),
+                        Style::default().fg(crate::tui::theme::THEME.label_muted),
                     ),
                 ]),
                 Line::from(vec![
                     Span::styled(
                         "  ← 访问外部路径 ",
-                        Style::default().fg(Color::Rgb(150, 150, 150)),
+                        Style::default().fg(crate::tui::theme::THEME.label_muted),
                     ),
                     Span::styled(
                         preview.path.display().to_string(),
                         Style::default()
-                            .fg(Color::Rgb(230, 230, 230))
+                            .fg(crate::tui::theme::THEME.strong)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]),
@@ -447,13 +456,13 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             if !preview.reason.is_empty() {
                 lines.push(Line::styled(
                     format!("理由：{}", preview.reason),
-                    Style::default().fg(Color::Rgb(180, 185, 195)),
+                    Style::default().fg(crate::tui::theme::THEME.description),
                 ));
                 lines.push(Line::from(""));
             }
             lines.push(Line::styled(
                 format!("- {}/*", preview.path.display()),
-                Style::default().fg(Color::Rgb(210, 215, 225)),
+                Style::default().fg(crate::tui::theme::THEME.approval_foreground),
             ));
 
             (title, lines)
@@ -483,10 +492,10 @@ fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         (Rect::new(area.x + 27, area.y, 8, 1).intersection(area), 2),
     ];
     let selected_style = Style::default()
-        .bg(Color::Rgb(218, 139, 109))
-        .fg(Color::Black)
+        .bg(crate::tui::theme::THEME.accent)
+        .fg(crate::tui::theme::THEME.on_accent)
         .add_modifier(Modifier::BOLD);
-    let normal_style = Style::default().fg(Color::Rgb(200, 205, 215));
+    let normal_style = Style::default().fg(crate::tui::theme::THEME.approval_detail);
 
     let options = Line::from(vec![
         Span::raw(" "),
@@ -519,7 +528,7 @@ fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         Span::raw("   "),
         Span::styled(
             "Tab 切换 · Enter 确认 · Esc 拒绝",
-            Style::default().fg(Color::Rgb(110, 115, 125)),
+            Style::default().fg(crate::tui::theme::THEME.approval_muted),
         ),
     ]);
     frame.render_widget(Paragraph::new(options), area);
@@ -555,7 +564,7 @@ pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Rgb(218, 139, 109)))
+        .border_style(Style::default().fg(crate::tui::theme::THEME.accent))
         .title(" 文件变更确认 ");
     let inner = block.inner(area);
     frame.render_widget(block, area);

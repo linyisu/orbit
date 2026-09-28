@@ -39,13 +39,24 @@ fn list_marker(text: &str) -> bool {
             .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
+fn is_rail_gutter(content: &str) -> bool {
+    if let Some(prefix) = content
+        .strip_suffix("┊ │ ")
+        .or_else(|| content.strip_suffix("│ "))
+        .or_else(|| content.strip_suffix("┊ "))
+    {
+        prefix.chars().all(|c| c == ' ')
+    } else {
+        false
+    }
+}
+
 fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
-    if line.spans.first().is_some_and(|span| {
-        matches!(
-            span.content.as_ref(),
-            "  │ " | "┊ " | "┊ │ " | "  ┊ " | "  ┊ │ "
-        )
-    }) {
+    if line
+        .spans
+        .first()
+        .is_some_and(|span| is_rail_gutter(span.content.as_ref()))
+    {
         let span = line.spans.remove(0);
         let width = span.width() as u16;
         let gutter = Line::from(span);
@@ -373,8 +384,7 @@ impl Entry {
                             } else {
                                 "  ".into()
                             },
-                            ratatui::style::Style::default()
-                                .fg(ratatui::style::Color::Rgb(218, 139, 109)),
+                            ratatui::style::Style::default().fg(crate::tui::theme::THEME.accent),
                         ),
                         Span::styled(
                             line.to_owned(),
@@ -390,7 +400,7 @@ impl Entry {
             return;
         }
 
-        let border = ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(218, 139, 109));
+        let border = ratatui::style::Style::default().fg(crate::tui::theme::THEME.accent);
         let top_label = format!("╭─{icon}─");
         let trailing = "─".repeat(usize::from(width) - top_label.width() - 1);
         self.push(
@@ -627,15 +637,6 @@ impl TranscriptLayout {
 
         let relative = absolute - (entry.end - entry.height);
 
-        // For a tool card, anywhere inside the card (except the trailing margin line)
-        // can be clicked to toggle expansion across the full viewport width.
-        if matches!(items.get(index), Some(TranscriptItem::Tool(_))) {
-            let card_height = entry.height.saturating_sub(1);
-            if relative < card_height {
-                return Some(index);
-            }
-        }
-
         let row = entry
             .disclosures
             .iter()
@@ -746,6 +747,43 @@ impl TranscriptLayout {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn nested_thinking_code_gutter_is_recognized() {
+        assert!(is_rail_gutter("  ┊ │ "));
+        assert!(is_rail_gutter("    │ "));
+        assert!(is_rail_gutter("  ┊ "));
+        assert!(!is_rail_gutter("text │ "));
+    }
+
+    #[test]
+    fn hover_disclosure_only_active_within_text_width() {
+        let mut row = super::super::app::ThinkingRow::from("some thinking content".to_owned());
+        row.finished = true;
+        row.elapsed = Some(std::time::Duration::from_secs(1));
+        let thinking = TranscriptItem::Thinking(row);
+        let tool = TranscriptItem::Tool(super::super::app::ToolRow {
+            id: "tool_1".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({ "path": "src/main.rs" }).to_string(),
+            status: super::super::app::ToolStatus::Finished,
+            output: "done".into(),
+        });
+        let items = vec![thinking, tool];
+        let mut layout = TranscriptLayout::default();
+        let area = Rect::new(0, 0, 80, 40);
+
+        layout.update(&items, None, 80);
+
+        // Thinking line: (2, 0) is over text -> Some(0); (50, 0) is in trailing blank space -> None.
+        assert_eq!(layout.disclosure_at(&items, area, 0, (2, 0)), Some(0));
+        assert_eq!(layout.disclosure_at(&items, area, 0, (50, 0)), None);
+
+        // Tool line: (2, 2) is over text -> Some(1); (50, 2) is in trailing blank space -> None.
+        let tool_y = layout.entries[0].height as u16;
+        assert_eq!(layout.disclosure_at(&items, area, 0, (2, tool_y)), Some(1));
+        assert_eq!(layout.disclosure_at(&items, area, 0, (50, tool_y)), None);
+    }
 
     #[test]
     fn tool_title_and_output_are_clickable() {
@@ -1195,10 +1233,11 @@ mod tests {
             Some('╭')
         );
         assert_eq!(rows.last().unwrap().line.to_string(), "");
-        assert!(
-            rows.iter()
-                .any(|row| row.line.to_string().starts_with("│ "))
-        );
+        assert!(rows.iter().any(|row| {
+            row.gutter
+                .as_ref()
+                .is_some_and(|gutter| gutter.first.to_string() == "│ ")
+        }));
         assert!(rows.iter().any(|row| row.line.to_string().starts_with('╰')));
         assert!(rows.iter().all(|row| row.line.width() <= 24));
     }
@@ -1242,5 +1281,36 @@ mod tests {
             stable,
             layout.entries[0].rows[500].line.spans[0].content.as_ptr()
         );
+    }
+
+    #[test]
+    fn wrapped_indented_code_blocks_keep_rails_on_continuation_lines() {
+        let text = "代码片段:\n  ```rust\n  const FRAME_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);\n  ```";
+        let mut layout = TranscriptLayout::default();
+        layout.update(&[TranscriptItem::Assistant(text.into())], None, 45);
+
+        let code_row = layout.entries[0]
+            .rows
+            .iter()
+            .find(|row| row.height > 1 && row.line.to_string().contains("FRAME_DEADLINE"))
+            .expect("code line should wrap into multiple rows");
+
+        let gutter = code_row
+            .gutter
+            .as_ref()
+            .expect("indented code block retains gutter");
+        assert!(gutter.width >= 4);
+        assert_eq!(gutter.first.to_string(), gutter.continuation.to_string());
+        assert!(gutter.continuation.to_string().contains('│'));
+
+        let mut terminal = Terminal::new(TestBackend::new(45, 6)).unwrap();
+        terminal
+            .draw(|frame| layout.draw(frame, frame.area(), 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let rail_col = gutter.continuation.to_string().find('│').unwrap();
+        assert_eq!(buffer[(rail_col as u16, 2)].symbol(), "│");
+        assert_eq!(buffer[(rail_col as u16, 3)].symbol(), "│");
     }
 }

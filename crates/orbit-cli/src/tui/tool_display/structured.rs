@@ -1,8 +1,8 @@
 //! Structured terminal views of directory listings and Git evidence.
 use super::*;
 
-const ADDED: Color = Color::Rgb(139, 195, 143);
-const REMOVED: Color = Color::Rgb(218, 139, 139);
+const ADDED: Color = crate::tui::theme::THEME.patch_added;
+const REMOVED: Color = crate::tui::theme::THEME.diff_removed;
 
 // Format each logical line before transcript layout so wrapped continuations
 // retain the tool gutter. Never run tool data through Markdown.
@@ -270,7 +270,7 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
             } else if text.starts_with('-') {
                 REMOVED
             } else if text.starts_with("@@") {
-                Color::Rgb(139, 185, 195)
+                crate::tui::theme::THEME.patch_location
             } else {
                 Color::Reset
             };

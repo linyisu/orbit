@@ -1,6 +1,7 @@
 use super::{
     app::{TranscriptItem, UiState},
     render,
+    theme::THEME,
 };
 use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
@@ -9,7 +10,7 @@ use crossterm::event::{Event, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::{Modifier, Style},
     widgets::Paragraph,
 };
 
@@ -24,6 +25,7 @@ pub(super) struct Navigation {
     show_latest: bool,
     first: usize,
     count: usize,
+    manual_scroll: bool,
 }
 
 impl Navigation {
@@ -68,9 +70,13 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
 
     let nav = &mut state.navigation;
     let inside = nav.area.contains((mouse.column, mouse.row).into());
+    let top = nav.area.y;
+    let bottom = nav.area.bottom().saturating_sub(1);
+    let hit_top = nav.first > 0 && mouse.row == top;
+    let slots = nav.area.height.saturating_sub(2) as usize;
+    let hit_bottom = (nav.show_latest || (nav.first + slots) < nav.count) && mouse.row == bottom;
     let hit = inside
-        && ((nav.show_latest && mouse.row == nav.area.bottom().saturating_sub(1))
-            || nav.targets.iter().any(|(row, _, _)| *row == mouse.row));
+        && (hit_top || hit_bottom || nav.targets.iter().any(|(row, _, _)| *row == mouse.row));
 
     if mouse.kind == MouseEventKind::Moved {
         let hovered = hit.then_some(mouse.row);
@@ -90,9 +96,26 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
         MouseEventKind::Down(MouseButton::Left) if hit => {
             state.selection.clear();
 
-            if nav.show_latest && mouse.row == nav.area.bottom() - 1 {
-                state.follow_bottom = true;
-                state.scroll = 0;
+            if hit_top {
+                nav.manual_scroll = true;
+                nav.first = nav.first.saturating_sub(5);
+                if let Some((_, offset, _)) = nav.targets.first() {
+                    state.follow_bottom = false;
+                    state.scroll = state.max_scroll.saturating_sub(*offset);
+                }
+            } else if hit_bottom {
+                if nav.show_latest {
+                    state.follow_bottom = true;
+                    state.scroll = 0;
+                    nav.manual_scroll = false;
+                } else {
+                    nav.manual_scroll = true;
+                    nav.first = (nav.first + 5).min(nav.count.saturating_sub(slots));
+                    if let Some((_, offset, _)) = nav.targets.last() {
+                        state.follow_bottom = false;
+                        state.scroll = state.max_scroll.saturating_sub(*offset);
+                    }
+                }
             } else if let Some((_, offset, _)) =
                 nav.targets.iter().find(|(row, _, _)| *row == mouse.row)
             {
@@ -103,6 +126,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
             Some(true)
         }
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            nav.manual_scroll = true;
             let slots = nav.area.height.saturating_sub(2) as usize;
             let old = nav.first;
             nav.first = if mouse.kind == MouseEventKind::ScrollUp {
@@ -143,33 +167,55 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         return;
     }
 
+    let active = if state.follow_bottom || anchors.is_empty() {
+        anchors.len().saturating_sub(1)
+    } else {
+        let focus = offset + (area.height as usize / 2);
+        anchors
+            .partition_point(|(start, _)| *start <= focus)
+            .saturating_sub(1)
+    };
+
+    if state.follow_bottom {
+        nav.manual_scroll = false;
+        nav.first = anchors.len().saturating_sub(slots);
+    } else if !nav.manual_scroll {
+        nav.first = active
+            .saturating_sub(slots / 2)
+            .min(anchors.len().saturating_sub(slots));
+    }
+
     nav.first = nav.first.min(anchors.len().saturating_sub(slots));
     let shown = (anchors.len() - nav.first).min(slots);
     let first_row = area.y + ((slots - shown) / 2) as u16;
-    let active = anchors
-        .partition_point(|(start, _)| *start <= offset)
-        .saturating_sub(1);
 
     for (j, (start, text)) in anchors.iter().skip(nav.first).take(slots).enumerate() {
         let index = nav.first + j;
         let y = first_row + j as u16;
         let hovered = nav.hovered == Some(y);
+        let is_active = index == active;
         let symbol = if hovered {
             "◆"
-        } else if index == active {
+        } else if is_active {
             "●"
         } else {
             "·"
         };
 
-        let color = if hovered || index == active {
-            Color::Rgb(218, 139, 109)
+        let style = if hovered {
+            Style::default()
+                .fg(crate::tui::theme::THEME.md_bold)
+                .add_modifier(Modifier::BOLD)
+        } else if is_active {
+            Style::default()
+                .fg(THEME.accent)
+                .add_modifier(Modifier::BOLD)
         } else {
-            Color::Rgb(150, 150, 150)
+            Style::default().fg(crate::tui::theme::THEME.navigation_muted)
         };
 
         frame.render_widget(
-            Paragraph::new(symbol).style(Style::default().fg(color)),
+            Paragraph::new(symbol).style(style),
             Rect::new(nav.area.x, y, 1, 1),
         );
         nav.targets.push((
@@ -179,14 +225,30 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         ));
     }
 
+    let top = area.y;
     let bottom = nav.area.bottom() - 1;
+    let has_more_above = nav.first > 0;
+    let has_more_below = (nav.first + slots) < anchors.len();
 
-    if nav.show_latest {
+    if has_more_above {
+        frame.render_widget(
+            Paragraph::new("↑").style(Style::default().fg(if nav.hovered == Some(top) {
+                crate::tui::theme::THEME.accent
+            } else {
+                crate::tui::theme::THEME.muted
+            })),
+            Rect::new(nav.area.x, top, 1, 1),
+        );
+    } else if nav.hovered == Some(top) {
+        nav.hovered = None;
+    }
+
+    if nav.show_latest || has_more_below {
         frame.render_widget(
             Paragraph::new("↓").style(Style::default().fg(if nav.hovered == Some(bottom) {
-                Color::Rgb(218, 139, 109)
+                crate::tui::theme::THEME.accent
             } else {
-                Color::Rgb(170, 170, 170)
+                crate::tui::theme::THEME.secondary
             })),
             Rect::new(nav.area.x, bottom, 1, 1),
         );
@@ -196,6 +258,16 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
 
     let tooltip = if nav.show_latest && nav.hovered == Some(bottom) {
         Some((bottom, "回到最新 · 继续跟随输出".to_owned()))
+    } else if has_more_below && nav.hovered == Some(bottom) {
+        Some((
+            bottom,
+            format!(
+                "下方还有 {} 轮对话 · 点击向下滚动",
+                anchors.len().saturating_sub(nav.first + slots)
+            ),
+        ))
+    } else if has_more_above && nav.hovered == Some(top) {
+        Some((top, format!("上方还有 {} 轮对话 · 点击向上滚动", nav.first)))
     } else {
         nav.targets
             .iter()
@@ -205,7 +277,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
 
     if let Some((y, text)) = tooltip {
         let width = (frame.area().width / 4)
-            .min(area.width.saturating_sub(5))
+            .min(area.width.saturating_sub(6))
             .min(text.width().min(u16::MAX as usize) as u16);
         if width == 0 {
             return;
@@ -231,8 +303,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         frame.render_widget(
             Paragraph::new(render::scrolling_title(&text, width as usize, elapsed)).style(
                 Style::default()
-                    .fg(Color::Rgb(222, 218, 212))
-                    .bg(Color::Rgb(48, 48, 52)),
+                    .fg(crate::tui::theme::THEME.overlay_foreground)
+                    .bg(crate::tui::theme::THEME.overlay_background),
             ),
             tooltip_area,
         );
@@ -479,5 +551,78 @@ mod tests {
         for y in state.navigation.area.y..state.navigation.area.bottom() {
             assert_eq!(terminal.backend().buffer()[(gap, y)].symbol(), " ");
         }
+    }
+
+    #[test]
+    fn navigation_auto_follows_latest_rounds_when_crowded() {
+        let mut state = UiState::new("model");
+        state.transcript = (0..50)
+            .map(|i| TranscriptItem::User(format!("round {i}")))
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(50, 15)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+
+        assert!(
+            state
+                .navigation
+                .targets
+                .last()
+                .unwrap()
+                .2
+                .contains("round 49")
+        );
+        assert_eq!(state.navigation.first, 50 - state.navigation.targets.len());
+        assert_eq!(
+            state.navigation.targets.len(),
+            usize::from(state.navigation.area.height - 2)
+        );
+    }
+
+    #[test]
+    fn active_dot_is_always_visible_in_navigation_targets() {
+        let mut state = UiState::new("model");
+        state.transcript = (0..60)
+            .map(|i| TranscriptItem::User(format!("round {i}")))
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+
+        // 1. At bottom
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let has_active = state
+            .navigation
+            .targets
+            .iter()
+            .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == "●");
+        assert!(has_active, "Active dot must be visible at bottom");
+
+        // 2. Scrolled to middle
+        state.follow_bottom = false;
+        state.scroll = 100;
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let has_active = state
+            .navigation
+            .targets
+            .iter()
+            .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == "●");
+        assert!(
+            has_active,
+            "Active dot must be visible when scrolled to middle"
+        );
+
+        // 3. Scrolled to top
+        state.scroll = state.max_scroll;
+        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let has_active = state
+            .navigation
+            .targets
+            .iter()
+            .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == "●");
+        assert!(
+            has_active,
+            "Active dot must be visible when scrolled to top"
+        );
     }
 }

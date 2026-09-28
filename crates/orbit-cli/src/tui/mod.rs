@@ -23,6 +23,7 @@ mod search;
 mod selection;
 mod tabs;
 pub mod terminal;
+pub mod theme;
 mod tool_display;
 mod transcript;
 mod wheel;

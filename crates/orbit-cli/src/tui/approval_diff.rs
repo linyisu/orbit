@@ -11,7 +11,7 @@ use super::{
     transcript::wrap_line,
 };
 
-const FOLDED_COLOR: Color = Color::Rgb(170, 170, 170);
+const FOLDED_COLOR: Color = crate::tui::theme::THEME.secondary;
 
 #[derive(Debug)]
 pub(super) struct Cache {
@@ -101,8 +101,8 @@ fn side(
 
     let text = safe_output(text.strip_suffix('\n').unwrap_or(text));
     let style = Style::default().fg(match marker {
-        '-' => Color::Rgb(218, 139, 139),
-        '+' => Color::Rgb(145, 195, 155),
+        '-' => crate::tui::theme::THEME.diff_removed,
+        '+' => crate::tui::theme::THEME.diff_added,
         _ => Color::Reset,
     });
     let prefix = format!("{marker}{number:>digits$} │ ");

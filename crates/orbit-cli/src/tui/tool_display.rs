@@ -17,8 +17,8 @@ use super::{
     render::safe_output,
 };
 
-const ACCENT: Color = Color::Rgb(218, 139, 109);
-const SECONDARY: Color = Color::Rgb(160, 160, 160);
+const ACCENT: Color = crate::tui::theme::THEME.accent;
+const SECONDARY: Color = crate::tui::theme::THEME.tool_detail;
 // Keep adjacent file previews aligned even when their lengths differ.
 const MIN_LINE_NUMBER_WIDTH: usize = 4;
 

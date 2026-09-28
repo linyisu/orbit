@@ -1,6 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     widgets::{Block, Borders, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
@@ -68,7 +68,8 @@ pub(super) fn draw(
             }
         } else if let Some(Target::Action(Action::Effort(i, 1))) = row.target {
             frame.render_widget(
-                Paragraph::new("思考强度").style(Style::default().fg(Color::Rgb(220, 222, 226))),
+                Paragraph::new("思考强度")
+                    .style(Style::default().fg(crate::tui::theme::THEME.foreground)),
                 Rect::new(rect.x, rect.y, 18.min(rect.width), 1),
             );
             let mut x = rect.x + 20.min(rect.width);
@@ -97,7 +98,7 @@ pub(super) fn draw(
                 Paragraph::new(field.label.clone()).style(Style::default().fg(if focused {
                     ACCENT
                 } else {
-                    Color::Rgb(220, 222, 226)
+                    crate::tui::theme::THEME.foreground
                 })),
                 Rect::new(rect.x, rect.y, label_width, 1),
             );
@@ -165,9 +166,11 @@ pub(super) fn draw(
                 && (hover || panel.pointer.is_none() && row.target == Some(panel.focus));
             frame.render_widget(
                 Paragraph::new(row.label.clone()).style(if active {
-                    Style::default().fg(Color::Black).bg(ACCENT)
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.on_accent)
+                        .bg(ACCENT)
                 } else {
-                    Style::default().fg(Color::Rgb(220, 222, 226))
+                    Style::default().fg(crate::tui::theme::THEME.foreground)
                 }),
                 hit,
             );
@@ -189,7 +192,9 @@ pub(super) fn draw(
                         || panel.pointer.is_none() && panel.focus == Target::Action(action);
                     frame.render_widget(
                         Paragraph::new(label).style(if active {
-                            Style::default().fg(Color::Black).bg(ACCENT)
+                            Style::default()
+                                .fg(crate::tui::theme::THEME.on_accent)
+                                .bg(ACCENT)
                         } else {
                             Style::default().fg(ACCENT)
                         }),
@@ -229,7 +234,9 @@ pub(super) fn draw(
             || panel.pointer.is_none() && panel.focus == Target::Action(action);
         frame.render_widget(
             Paragraph::new(label).style(if active {
-                Style::default().fg(Color::Black).bg(ACCENT)
+                Style::default()
+                    .fg(crate::tui::theme::THEME.on_accent)
+                    .bg(ACCENT)
             } else {
                 Style::default().fg(ACCENT)
             }),
@@ -248,7 +255,7 @@ fn button_style(panel: &Panel, rect: Rect, target: Target, selected: bool) -> St
             .fg(ACCENT)
             .add_modifier(ratatui::style::Modifier::BOLD)
     } else {
-        Style::default().fg(Color::Rgb(220, 222, 226))
+        Style::default().fg(crate::tui::theme::THEME.foreground)
     };
     if hovered {
         style = style.add_modifier(ratatui::style::Modifier::UNDERLINED);

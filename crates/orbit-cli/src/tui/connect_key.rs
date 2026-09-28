@@ -4,7 +4,7 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -39,7 +39,7 @@ pub(super) async fn run(
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" {} API Key ", provider.label()))
-                .border_style(Style::default().fg(Color::Rgb(220, 140, 100)));
+                .border_style(Style::default().fg(crate::tui::theme::THEME.dialog_accent));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             let mask = "*".repeat(

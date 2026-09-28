@@ -31,7 +31,7 @@ fn prime_full_redraw<B: Backend>(terminal: &mut Terminal<B>) {
     // Make every cell differ from the fresh drawing buffer. This clears stale
     // cells with ordinary cell updates instead of a visible Clear(All).
     for cell in &mut terminal.current_buffer_mut().content {
-        cell.set_bg(ratatui::style::Color::Rgb(1, 2, 3));
+        cell.set_bg(crate::tui::theme::THEME.repaint_sentinel);
     }
 
     terminal.swap_buffers();
@@ -215,14 +215,14 @@ mod tests {
             frame.render_widget(
                 Paragraph::new(Line::styled(
                     "模型 (视觉)",
-                    Style::default().bg(Color::Rgb(218, 139, 109)),
+                    Style::default().bg(crate::tui::theme::THEME.accent),
                 )),
                 Rect::new(3, 3, 30, 1),
             );
         };
         draw_buffer(&mut terminal, draw).unwrap();
         let mut artifact = Cell::default();
-        artifact.set_bg(Color::Rgb(218, 139, 109));
+        artifact.set_bg(crate::tui::theme::THEME.accent);
         terminal
             .backend_mut()
             .draw([(24, 5, &artifact), (28, 7, &artifact)].into_iter())
@@ -237,7 +237,7 @@ mod tests {
         }
         assert_eq!(
             terminal.backend().buffer()[(3, 3)].bg,
-            Color::Rgb(218, 139, 109)
+            crate::tui::theme::THEME.accent
         );
     }
 }

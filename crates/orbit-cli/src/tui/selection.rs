@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
     buffer::{Buffer, Cell},
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
 };
 use std::{
     collections::BTreeMap,
@@ -429,8 +429,11 @@ impl Selection {
                         .skip(x)
                     {
                         frame.buffer_mut()[(area.x + column as u16, y)] = cell.clone();
-                        frame.buffer_mut()[(area.x + column as u16, y)]
-                            .set_style(Style::default().bg(Color::Blue).fg(Color::White));
+                        frame.buffer_mut()[(area.x + column as u16, y)].set_style(
+                            Style::default()
+                                .bg(crate::tui::theme::THEME.selection)
+                                .fg(crate::tui::theme::THEME.white),
+                        );
                     }
                 }
 
@@ -443,8 +446,11 @@ impl Selection {
         if let Some((position, _)) = &self.caret
             && frame.area().contains((*position).into())
         {
-            frame.buffer_mut()[*position]
-                .set_style(Style::default().bg(Color::Gray).fg(Color::Black));
+            frame.buffer_mut()[*position].set_style(
+                Style::default()
+                    .bg(crate::tui::theme::THEME.caret)
+                    .fg(crate::tui::theme::THEME.on_accent),
+            );
         }
     }
 }
@@ -536,7 +542,10 @@ mod tests {
             .draw(|frame| assert!(state.selection.draw_frozen(frame)))
             .unwrap();
 
-        assert_eq!(terminal.backend().buffer()[point].bg, Color::Blue);
+        assert_eq!(
+            terminal.backend().buffer()[point].bg,
+            crate::tui::theme::THEME.selection
+        );
         assert!(!state.selection.text().is_empty());
         assert!(state.selection.click(&release).is_none());
     }
@@ -594,7 +603,10 @@ mod tests {
         state.scroll_up(8);
         draw(&mut state, &mut terminal);
 
-        assert_eq!(terminal.backend().buffer()[(x, y)].bg, Color::Blue);
+        assert_eq!(
+            terminal.backend().buffer()[(x, y)].bg,
+            crate::tui::theme::THEME.selection
+        );
     }
     #[test]
     fn boundary_timer_repeats_without_motion_and_stops_on_release() {
@@ -685,7 +697,10 @@ mod tests {
             for y in 0..10 {
                 for x in 0..40 {
                     if !area.contains((x, y).into()) {
-                        assert_ne!(terminal.backend().buffer()[(x, y)].bg, Color::Blue);
+                        assert_ne!(
+                            terminal.backend().buffer()[(x, y)].bg,
+                            crate::tui::theme::THEME.selection
+                        );
                     }
                 }
             }

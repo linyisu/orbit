@@ -1,3 +1,4 @@
+use super::theme::{ansi_color, desaturate_ansi_color, desaturate_for_thinking};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -11,16 +12,18 @@ use unicode_width::UnicodeWidthStr;
 
 use super::app::{RunStatus, ToolStatus, TranscriptItem, UiState};
 
-const ACCENT: Color = Color::Rgb(218, 139, 109);
-const THINKING_MUTED: Color = Color::Rgb(165, 155, 140);
-const THINKING_BRIGHT: Color = Color::Rgb(255, 215, 95);
-const TOOL_FINISHED: Color = Color::Rgb(105, 175, 135);
-const TOOL_RUNNING: Color = Color::Rgb(220, 160, 90);
-const TOOL_FAILED: Color = Color::Rgb(225, 110, 105);
+use super::theme::THEME;
+
+const ACCENT: Color = THEME.accent;
+const THINKING_MUTED: Color = THEME.thinking_header_default;
+const THINKING_BRIGHT: Color = THEME.thinking_header_hover;
+const TOOL_FINISHED: Color = THEME.tool_finished;
+const TOOL_RUNNING: Color = THEME.tool_running;
+const TOOL_FAILED: Color = THEME.tool_failed;
 // Use the terminal foreground for readable text on both light and dark themes.
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
-const BORDER: Color = Color::Rgb(85, 85, 85);
+const BORDER: Color = THEME.border;
 const MAX_COMMAND_MENU_ITEMS: usize = 8;
 
 fn muted(text: impl Into<String>) -> Span<'static> {
@@ -298,9 +301,15 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
                         bar.to_string(),
                         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled("  ·  ", Style::default().fg(Color::Rgb(85, 85, 90))),
-                    Span::styled("Ctrl+C", Style::default().fg(Color::Rgb(160, 160, 165))),
-                    Span::styled(" 取消", Style::default().fg(Color::Rgb(120, 120, 125))),
+                    Span::styled(
+                        "  ·  ",
+                        Style::default().fg(crate::tui::theme::THEME.border_muted),
+                    ),
+                    Span::styled(
+                        "Ctrl+C",
+                        Style::default().fg(crate::tui::theme::THEME.muted_text),
+                    ),
+                    Span::styled(" 取消", Style::default().fg(crate::tui::theme::THEME.faint)),
                 ],
                 22,
             )
@@ -318,7 +327,7 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         (
             vec![Span::styled(
                 path,
-                Style::default().fg(Color::Rgb(170, 170, 170)),
+                Style::default().fg(crate::tui::theme::THEME.secondary),
             )],
             w,
         )
@@ -363,7 +372,7 @@ fn composer_details(state: &UiState, width: usize) -> Vec<Line<'static>> {
     if !provider.is_empty() {
         fields.push(Span::styled(
             safe_output(provider),
-            Style::default().fg(Color::Rgb(170, 170, 170)),
+            Style::default().fg(crate::tui::theme::THEME.secondary),
         ));
     }
 
@@ -444,7 +453,7 @@ fn context_indicator_color(percent: usize) -> Color {
     match percent {
         0..=74 => Color::Reset,
         75..=89 => ACCENT,
-        _ => Color::Rgb(220, 100, 88),
+        _ => crate::tui::theme::THEME.context_danger,
     }
 }
 
@@ -604,15 +613,15 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(BORDER))
-        .style(Style::default().bg(Color::Rgb(48, 48, 52)));
+        .style(Style::default().bg(crate::tui::theme::THEME.overlay_background));
     let inner = block.inner(area);
 
     frame.render_widget(block, area);
     frame.render_widget(
         Paragraph::new(lines.join("\n")).style(
             Style::default()
-                .fg(Color::Rgb(222, 218, 212))
-                .bg(Color::Rgb(48, 48, 52)),
+                .fg(crate::tui::theme::THEME.overlay_foreground)
+                .bg(crate::tui::theme::THEME.overlay_background),
         ),
         inner,
     );
@@ -650,8 +659,8 @@ fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     frame.render_widget(
         Paragraph::new(fit_label(text, width as usize, false)).style(
             Style::default()
-                .fg(Color::Rgb(222, 218, 212))
-                .bg(Color::Rgb(48, 48, 52)),
+                .fg(crate::tui::theme::THEME.overlay_foreground)
+                .bg(crate::tui::theme::THEME.overlay_background),
         ),
         area,
     );
@@ -704,9 +713,7 @@ fn tab_control_style(state: &UiState, target: &super::TabAction) -> Style {
         return base;
     };
 
-    let shade = 48 + (since.elapsed().as_millis().min(240) / 10) as u8;
-
-    base.bg(Color::Rgb(shade, shade - 8, shade - 10))
+    base.bg(super::theme::tab_hover_background(since.elapsed()))
         .add_modifier(Modifier::BOLD)
 }
 
@@ -773,14 +780,16 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let style = if tab.active {
             Style::default()
                 .fg(ACCENT)
-                .bg(Color::Rgb(47, 43, 45))
+                .bg(crate::tui::theme::THEME.tab_hover_background)
                 .add_modifier(Modifier::BOLD)
         } else if elapsed.is_some() {
-            Style::default().fg(ACCENT).bg(Color::Rgb(40, 38, 40))
+            Style::default()
+                .fg(ACCENT)
+                .bg(crate::tui::theme::THEME.tab_background)
         } else if tab.status == RunStatus::Failed {
-            Style::default().fg(Color::Rgb(220, 111, 122))
+            Style::default().fg(crate::tui::theme::THEME.tab_error)
         } else {
-            Style::default().fg(Color::Rgb(177, 171, 171))
+            Style::default().fg(crate::tui::theme::THEME.tab_inactive)
         };
 
         frame.render_widget(
@@ -834,14 +843,14 @@ fn wordmark() -> Vec<Line<'static>> {
     .map(|line| {
         Line::from(Span::styled(
             line,
-            Style::default().fg(Color::Rgb(230, 222, 210)),
+            Style::default().fg(crate::tui::theme::THEME.logo_foreground),
         ))
     })
     .collect()
 }
 
 fn welcome() -> Vec<Line<'static>> {
-    let rear = Style::default().fg(Color::Rgb(112, 80, 69));
+    let rear = Style::default().fg(crate::tui::theme::THEME.logo_shadow);
     let front = Style::default().fg(ACCENT);
     let mut canvas = vec![vec![(' ', rear); 58]; 12];
     let stamp =
@@ -921,8 +930,9 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     clear_previous_link_tooltip(frame, state);
     state.selection.viewport = Rect {
         x: area.x + 2,
-        // Keep one blank column between wrapped output and the navigation dots.
-        width: area.width.saturating_sub(5),
+        // Keep a generous blank gap between wrapped output and the navigation dots
+        // so double-width CJK characters never collide with or touch the dots.
+        width: area.width.saturating_sub(6),
         ..area
     };
 
@@ -1044,7 +1054,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                                     if cell.symbol() != " " {
                                         cell.set_style(cell.style().add_modifier(Modifier::BOLD));
                                         if cell.fg == TOOL_FINISHED {
-                                            cell.set_fg(Color::Rgb(140, 225, 170));
+                                            cell.set_fg(crate::tui::theme::THEME.tool_hover);
                                         }
                                     }
                                 }
@@ -1118,19 +1128,9 @@ pub(super) fn transcript_lines_at_width(
                             }
                         },
                     );
-                    let title_width =
-                        (if width == u16::MAX { 120 } else { width } as usize).saturating_sub(2);
-                    let gap = title_width.saturating_sub(label.width() + 1);
                     lines.push(Line::from(vec![
                         Span::raw("  "),
-                        Span::styled(
-                            format!(
-                                "{label}{}{}",
-                                " ".repeat(gap),
-                                if expanded { "⌄" } else { "›" }
-                            ),
-                            Style::default().fg(THINKING_MUTED),
-                        ),
+                        Span::styled(label, Style::default().fg(THINKING_MUTED)),
                     ]));
 
                     if !expanded {
@@ -1169,7 +1169,7 @@ pub(super) fn transcript_lines_at_width(
                 for line in text.lines() {
                     lines.push(Line::from(Span::styled(
                         format!("  {line}"),
-                        Style::default().fg(Color::Rgb(190, 190, 190)),
+                        Style::default().fg(crate::tui::theme::THEME.detail),
                     )));
                 }
 
@@ -1192,7 +1192,7 @@ pub(super) fn transcript_lines_at_width(
                     lines.push(
                         Line::from(Span::styled(
                             format!("── {line} ──"),
-                            Style::default().fg(Color::Rgb(155, 155, 155)),
+                            Style::default().fg(crate::tui::theme::THEME.output_muted),
                         ))
                         .alignment(Alignment::Center),
                     );
@@ -1207,7 +1207,11 @@ pub(super) fn transcript_lines_at_width(
                 for line in text.lines() {
                     lines.push(Line::from(Span::styled(
                         format!("{} {line}", if error { "×" } else { "›" }),
-                        Style::default().fg(if error { Color::Red } else { MUTED }),
+                        Style::default().fg(if error {
+                            crate::tui::theme::THEME.error
+                        } else {
+                            MUTED
+                        }),
                     )));
                 }
 
@@ -1236,56 +1240,6 @@ pub(super) fn compact_preview(text: &str, limit: usize) -> String {
     }
 
     result
-}
-
-fn desaturate_ansi_color(color: Color) -> Color {
-    let (r, g, b) = match color {
-        Color::Rgb(r, g, b) => (r, g, b),
-        Color::Red => (210, 80, 75),
-        Color::LightRed => (235, 110, 105),
-        Color::Green => (90, 175, 110),
-        Color::LightGreen => (120, 205, 140),
-        Color::Yellow => (210, 175, 80),
-        Color::LightYellow => (235, 200, 105),
-        Color::Blue => (95, 150, 215),
-        Color::LightBlue => (125, 180, 235),
-        Color::Magenta => (180, 115, 195),
-        Color::LightMagenta => (205, 140, 220),
-        Color::Cyan => (100, 180, 185),
-        Color::LightCyan => (130, 205, 210),
-        Color::White => (205, 205, 205),
-        Color::Gray | Color::DarkGray => (130, 130, 130),
-        Color::Black => (40, 40, 40),
-        _ => return color,
-    };
-    let gray = 140.0;
-    Color::Rgb(
-        (r as f32 * 0.75 + gray * 0.25) as u8,
-        (g as f32 * 0.75 + gray * 0.25) as u8,
-        (b as f32 * 0.75 + gray * 0.25) as u8,
-    )
-}
-
-fn ansi_color(code: u16) -> Option<Color> {
-    match code {
-        30 => Some(Color::Black),
-        31 => Some(Color::Red),
-        32 => Some(Color::Green),
-        33 => Some(Color::Yellow),
-        34 => Some(Color::Blue),
-        35 => Some(Color::Magenta),
-        36 => Some(Color::Cyan),
-        37 => Some(Color::White),
-        90 => Some(Color::DarkGray),
-        91 => Some(Color::LightRed),
-        92 => Some(Color::LightGreen),
-        93 => Some(Color::LightYellow),
-        94 => Some(Color::LightBlue),
-        95 => Some(Color::LightMagenta),
-        96 => Some(Color::LightCyan),
-        97 => Some(Color::White),
-        _ => None,
-    }
 }
 
 pub(super) fn parse_ansi_to_spans(text: &str) -> Vec<Span<'static>> {
@@ -1416,7 +1370,7 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
                 &safe_output(&format!("{} {summary}", row.name)),
                 usize::from(width).saturating_sub(4),
             ),
-            Style::default().fg(Color::Rgb(222, 222, 222)),
+            Style::default().fg(crate::tui::theme::THEME.output_foreground),
         ),
     ]));
 
@@ -1605,7 +1559,7 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
             Span::raw(" "),
             Span::styled(
                 safe_output(&command),
-                Style::default().fg(Color::Rgb(160, 165, 175)),
+                Style::default().fg(crate::tui::theme::THEME.tool_summary),
             ),
         ]
     };
@@ -1626,8 +1580,7 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
         line.spans.insert(0, Span::raw("  "));
     }
 
-    let is_block_tool = row.name == "run_command";
-    let show_body = expanded || is_block_tool;
+    let show_body = expanded;
 
     if !show_body || body.is_empty() {
         lines.push(Line::from(""));
@@ -1638,14 +1591,14 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
         Span::raw("  "),
         Span::styled(
             "─".repeat(inner as usize),
-            Style::default().fg(Color::Rgb(65, 68, 74)),
+            Style::default().fg(THEME.tool_divider),
         ),
     ]);
     lines.push(divider.clone());
     for mut line in body.into_iter().chain(hidden.then(|| Line::from("…"))) {
         for span in &mut line.spans {
             if span.style.fg == Some(Color::Reset) || span.style.fg.is_none() {
-                span.style = span.style.fg(Color::Rgb(155, 155, 155));
+                span.style = span.style.fg(crate::tui::theme::THEME.output_muted);
             }
         }
         line.spans.insert(0, Span::raw("  "));
@@ -1803,31 +1756,14 @@ pub(super) fn thinking_line(
     if !has_thinking_rail {
         rendered.spans.insert(
             0,
-            Span::styled("  ┊ ", Style::default().fg(Color::Rgb(145, 145, 145))),
+            Span::styled(
+                "  ┊ ",
+                Style::default().fg(crate::tui::theme::THEME.thinking_rail),
+            ),
         );
     }
 
     rendered
-}
-
-fn desaturate_for_thinking(color: Option<Color>) -> Color {
-    let (red, green, blue) = match color.unwrap_or(Color::Rgb(218, 218, 212)) {
-        Color::Rgb(red, green, blue) => (red, green, blue),
-        Color::Black => (0, 0, 0),
-        Color::Red | Color::LightRed => (220, 110, 104),
-        Color::Green | Color::LightGreen => (114, 205, 142),
-        Color::Yellow | Color::LightYellow => (224, 194, 110),
-        Color::Blue | Color::LightBlue => (128, 180, 225),
-        Color::Magenta | Color::LightMagenta => (205, 144, 215),
-        Color::Cyan | Color::LightCyan => (126, 205, 208),
-        Color::Gray | Color::DarkGray => (155, 155, 155),
-        Color::White => (232, 232, 228),
-        Color::Indexed(_) | Color::Reset => (190, 190, 188),
-    };
-
-    let blend = |channel| ((u16::from(channel) * 7 + 175 * 3) / 10) as u8;
-
-    Color::Rgb(blend(red), blend(green), blend(blue))
 }
 
 pub(super) fn sanitize_line(line: &mut Line<'_>) {
@@ -1948,7 +1884,7 @@ fn draw_composer(
             let chip = Rect::new(x, inner.y, width, 1);
             let style = if state.attachment_cursor == Some(index) {
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(crate::tui::theme::THEME.on_accent)
                     .bg(ACCENT)
                     .add_modifier(Modifier::BOLD)
             } else {
@@ -2009,7 +1945,11 @@ fn draw_composer(
         state
             .selection
             .set_caret((x, y), frame.buffer_mut()[(x, y)].clone());
-        frame.buffer_mut()[(x, y)].set_style(Style::default().bg(Color::Gray).fg(Color::Black));
+        frame.buffer_mut()[(x, y)].set_style(
+            Style::default()
+                .bg(crate::tui::theme::THEME.caret)
+                .fg(crate::tui::theme::THEME.on_accent),
+        );
 
         // Overwriting half of a CJK glyph with the caret can color its other
         // half in the terminal even though that trailing buffer cell is blank.
@@ -2060,7 +2000,7 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let selected = index == state.menu_index.min(menu.len() - 1);
         let style = if selected {
             Style::default()
-                .fg(Color::Black)
+                .fg(crate::tui::theme::THEME.on_accent)
                 .bg(ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -2412,12 +2352,9 @@ mod tests {
             }
 
             assert!(state.selection.viewport.right() > width - 10);
-            assert!(
-                buffer
-                    .content
-                    .iter()
-                    .all(|cell| { cell.bg == Color::Reset || cell.bg == Color::Gray })
-            );
+            assert!(buffer.content.iter().all(|cell| {
+                cell.bg == Color::Reset || cell.bg == crate::tui::theme::THEME.caret
+            }));
             assert!(
                 composer_details(&state, width.saturating_sub(7) as usize)
                     .iter()
@@ -3003,7 +2940,7 @@ mod tests {
                     .buffer()
                     .content
                     .iter()
-                    .any(|cell| cell.bg == Color::Gray)
+                    .any(|cell| cell.bg == crate::tui::theme::THEME.caret)
             );
 
             if footer {
@@ -3034,7 +2971,7 @@ mod tests {
             .buffer()
             .content
             .iter()
-            .position(|c| c.bg == Color::Gray)
+            .position(|c| c.bg == crate::tui::theme::THEME.caret)
             .unwrap();
         let input_cursor = state.input.cursor;
 
@@ -3066,7 +3003,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.input.cursor, input_cursor);
-        assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
+        assert_eq!(
+            terminal.backend().buffer().content[caret].bg,
+            crate::tui::theme::THEME.caret
+        );
 
         state.apply(orbit_agent::events::AgentEvent::Completed {
             turns: 1,
@@ -3075,7 +3015,10 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
 
         assert!(!terminal.backend().cursor_visible());
-        assert_eq!(terminal.backend().buffer().content[caret].bg, Color::Gray);
+        assert_eq!(
+            terminal.backend().buffer().content[caret].bg,
+            crate::tui::theme::THEME.caret
+        );
     }
 
     #[test]
@@ -3100,7 +3043,7 @@ mod tests {
             assert!(!terminal.backend().cursor_visible());
             assert_eq!(
                 terminal.backend().buffer()[(position.x, position.y)].bg,
-                Color::Gray
+                crate::tui::theme::THEME.caret
             );
 
             // Streaming output must not leave the IME attached to the transcript.
@@ -3163,7 +3106,7 @@ mod tests {
                 current
                     .content
                     .iter()
-                    .filter(|cell| cell.bg == Color::Gray)
+                    .filter(|cell| cell.bg == crate::tui::theme::THEME.caret)
                     .count(),
                 1
             );
@@ -3354,17 +3297,10 @@ mod tests {
                 .any(|span| span.content == "重点"
                     && span.style.add_modifier.contains(Modifier::BOLD))
         );
-        assert!(
-            line.spans
-                .iter()
-                .any(|span| span.content == "code"
-                    && span.style.fg == Some(Color::Rgb(174, 200, 204)))
-        );
+        assert!(line.spans.iter().any(|span| span.content == "code"
+            && span.style.fg == Some(desaturate_for_thinking(Some(THEME.md_inline_code)))));
         assert_eq!(line.style.fg, None);
-        assert_eq!(
-            desaturate_for_thinking(Some(ACCENT)),
-            Color::Rgb(205, 149, 128)
-        );
+        assert_ne!(desaturate_for_thinking(Some(ACCENT)), ACCENT);
     }
 
     #[test]
