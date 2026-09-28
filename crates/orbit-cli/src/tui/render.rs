@@ -115,7 +115,12 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
 
     let file_modal = super::approval::file_modal(state);
     let approval_height = if state.approval.is_some() && !file_modal {
-        (area.height / 2).min(if state.approval_expanded { 18 } else { 12 })
+        let needed = state
+            .approval
+            .as_ref()
+            .map(super::approval::needed_height)
+            .unwrap_or(8);
+        (area.height / 2).min(needed)
     } else {
         0
     };
@@ -2577,7 +2582,7 @@ mod tests {
     }
 
     #[test]
-    fn file_approval_overlays_conversation_and_preserves_the_draft() {
+    fn file_approval_keeps_conversation_and_draft_visible() {
         let mut state = UiState::new("mock");
         state.transcript.push(TranscriptItem::Assistant(
             "Conversation remains visible".into(),
@@ -2600,17 +2605,14 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
 
-        assert!(!text.contains("Conversation remains visible"));
+        assert!(text.contains("Conversation remains visible"));
         assert_eq!(state.input.text, "my draft");
-        assert_eq!(state.selection.viewport, Rect::default());
-        assert_eq!(state.input_area, Rect::default());
-        assert_eq!(state.ime_cursor, None);
+        assert!(state.selection.viewport.height > 0);
+        assert!(state.input_area.height > 0);
         assert!(text.contains("price.c"));
-        assert!(text.replace(' ', "").contains("修改前"));
-        assert!(text.replace(' ', "").contains("修改后"));
-        assert!(text.contains("-   1 │ return subtotal > 10000;"));
-        assert!(text.contains("+   1 │ return subtotal >= 10000;"));
-        assert!(text.replace(' ', "").contains("Enter确认"), "{text}");
+        assert!(text.contains("return subtotal > 10000;"));
+        assert!(text.contains("return subtotal >= 10000;"));
+        assert!(text.replace(' ', "").contains("允许"), "{text}");
         assert!(state.approval_shown);
     }
 

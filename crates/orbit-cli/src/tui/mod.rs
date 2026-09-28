@@ -573,8 +573,70 @@ pub async fn run(
                             state.input_width);
                     }
 
+                    if pending.is_some() {
+                        match approval::handle(&mut state, event.clone()) {
+                            approval::Action::Approve => {
+                                if let Some(request) = pending.take() {
+                                    let _ = request.decision.send(true);
+                                }
+
+                                state.approval = None;
+                                state.resume_clock();
+                                continue;
+                            }
+                            approval::Action::AlwaysAllow => {
+                                if let Some(request) = pending.take() {
+                                    match &request.preview {
+                                        orbit_tools::approval::ApprovalPreview::Write(p) => {
+                                            state.session_allowed_files.insert(p.path.clone());
+                                        }
+                                        orbit_tools::approval::ApprovalPreview::Delete(p) => {
+                                            state.session_allowed_files.insert(p.path.clone());
+                                        }
+                                        _ => {}
+                                    }
+                                    let _ = request.decision.send(true);
+                                }
+
+                                state.approval = None;
+                                state.resume_clock();
+                                continue;
+                            }
+                            approval::Action::Deny => {
+                                if let Some(request) = pending.take() {
+                                    let _ = request.decision.send(false);
+                                }
+
+                                state.approval = None;
+                                state.resume_clock();
+                                continue;
+                            }
+                            approval::Action::Cancel => {
+                                if let Some(request) = pending.take() {
+                                    let _ = request.decision.send(false);
+                                }
+
+                                state.approval = None;
+                                state.resume_clock();
+                                state.cancel();
+
+                                if let Some(token) = &cancellation {
+                                    token.cancel();
+                                }
+
+                                if let Some(token) = &local_cancellation {
+                                    token.cancel();
+                                }
+                                continue;
+                            }
+                            approval::Action::None => {}
+                        }
+                    }
+
                     if state.selection.handle(&event)? {
-                        if state.selection.transcript_drag() { state.follow_bottom = false; }
+                        if state.selection.transcript_drag() {
+                            state.follow_bottom = false;
+                        }
 
                         terminal::draw_synchronized(&mut terminal, |frame| {
                             if !state.selection.draw_frozen(frame) {
@@ -588,44 +650,26 @@ pub async fn run(
                         continue;
                     }
                     if matches!(&event, Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)) {
-                        if state.selection.dragging() { keyboard_action(&mut state, event, task.is_some() || local_task.is_some()); }
-                        else if pending.is_some() { approval::handle(&mut state, event); }
-                        else { keyboard_action(&mut state, event, task.is_some() || local_task.is_some()); }
+                        if state.selection.dragging() {
+                            keyboard_action(
+                                &mut state,
+                                event,
+                                task.is_some() || local_task.is_some(),
+                            );
+                        } else if pending.is_some() {
+                            approval::handle(&mut state, event);
+                        } else {
+                            keyboard_action(
+                                &mut state,
+                                event,
+                                task.is_some() || local_task.is_some(),
+                            );
+                        }
 
                         continue;
                     }
                     if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release) {
                         state.permission_mode = state.permission_mode.next();
-                        continue;
-                    }
-                    if pending.is_some() {
-                        match approval::handle(&mut state, event) {
-                            approval::Action::Approve => {
-                                if let Some(request) = pending.take() { let _ = request.decision.send(true); }
-
-                                state.approval = None;
-                                state.resume_clock();
-                            }
-                            approval::Action::Deny => {
-                                if let Some(request) = pending.take() { let _ = request.decision.send(false); }
-
-                                state.approval = None;
-                                state.resume_clock();
-                            }
-                            approval::Action::Cancel => {
-                                if let Some(request) = pending.take() { let _ = request.decision.send(false); }
-
-                                state.approval = None;
-                                state.resume_clock();
-                                state.cancel();
-
-                                if let Some(token) = &cancellation { token.cancel(); }
-
-                                if let Some(token) = &local_cancellation { token.cancel(); }
-                            }
-                            approval::Action::None => {}
-                        }
-
                         continue;
                     }
 
@@ -886,6 +930,19 @@ pub async fn run(
                 }
                 Some(request) = approvals.recv() => {
                     if request.decision.is_closed() { continue; }
+                    let auto_allowed = match &request.preview {
+                        orbit_tools::approval::ApprovalPreview::Write(p) => {
+                            state.session_allowed_files.contains(&p.path)
+                        }
+                        orbit_tools::approval::ApprovalPreview::Delete(p) => {
+                            state.session_allowed_files.contains(&p.path)
+                        }
+                        _ => false,
+                    };
+                    if auto_allowed {
+                        let _ = request.decision.send(true);
+                        continue;
+                    }
                     if state.permission_mode.allows(&request.preview, std::path::Path::new(&session.snapshot.session.workspace)) {
                         let _ = request.decision.send(true);
                         continue;
@@ -2694,7 +2751,7 @@ fn resume_ui_shell(state: &UiState) -> UiState {
     restored.model_completions = state.model_completions.clone();
     restored.completion_home = state.completion_home.clone();
     restored.skill_completions = state.skill_completions.clone();
-    restored.permission_mode = crate::tui::permissions::Mode::Auto;
+    restored.permission_mode = state.permission_mode;
     restored.supports_vision = state.supports_vision;
 
     restored
@@ -3220,23 +3277,20 @@ mod tests {
     }
 
     #[test]
-    fn resume_ui_shell_resets_permission_mode_to_auto() {
+    fn resume_ui_shell_preserves_permission_mode() {
         let mut state = UiState::new("test::model");
         state.permission_mode = crate::tui::permissions::Mode::Yolo;
         let restored = resume_ui_shell(&state);
 
         assert_eq!(
             restored.permission_mode,
-            crate::tui::permissions::Mode::Auto
+            crate::tui::permissions::Mode::Yolo
         );
 
         state.permission_mode = crate::tui::permissions::Mode::Ask;
         let restored = resume_ui_shell(&state);
 
-        assert_eq!(
-            restored.permission_mode,
-            crate::tui::permissions::Mode::Auto
-        );
+        assert_eq!(restored.permission_mode, crate::tui::permissions::Mode::Ask);
     }
 
     #[test]

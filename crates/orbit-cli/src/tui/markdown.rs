@@ -22,7 +22,7 @@ use unicode_width::UnicodeWidthStr;
 // Reference: https://github.com/sharkdp/bat/blob/master/assets/themes/ansi.tmTheme
 // Keep semantic distinctions with light, low-saturation colors. Comments stay
 // readable on translucent terminals; punctuation uses the warm base foreground.
-static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
+pub(super) static CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
     let color = |r, g, b| SyntaxColor { r, g, b, a: 255 };
 
     Theme {

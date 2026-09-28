@@ -2,29 +2,25 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKin
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
-    style::{Color, Style},
-    text::Line,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
+use syntect::easy::HighlightLines;
 
 use super::app::UiState;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Approve,
+    AlwaysAllow,
     Deny,
     Cancel,
     None,
 }
 
-pub(super) fn file_modal(state: &UiState) -> bool {
-    matches!(
-        state.approval,
-        Some(
-            orbit_tools::approval::ApprovalPreview::Write(_)
-                | orbit_tools::approval::ApprovalPreview::Delete(_)
-        )
-    )
+pub(super) fn file_modal(_state: &UiState) -> bool {
+    false
 }
 
 pub fn handle(state: &mut UiState, event: Event) -> Action {
@@ -40,10 +36,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                     MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
                         state.approval_choice = *choice;
                         if state.approval_shown {
-                            return if *choice == 0 {
-                                Action::Approve
-                            } else {
-                                Action::Deny
+                            return match *choice {
+                                0 => Action::Approve,
+                                1 => Action::AlwaysAllow,
+                                _ => Action::Deny,
                             };
                         }
                     }
@@ -86,6 +82,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
             if key.modifiers == KeyModifiers::CONTROL {
                 return match key.code {
                     KeyCode::Char('y') if state.approval_shown => Action::Approve,
+                    KeyCode::Char('a') if state.approval_shown => Action::AlwaysAllow,
                     KeyCode::Char('n') => Action::Deny,
                     KeyCode::Char('c') => Action::Cancel,
                     _ => Action::None,
@@ -94,19 +91,22 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
 
             match key.code {
                 KeyCode::Tab => {
-                    state.approval_expanded = !state.approval_expanded;
-                    state.approval_scroll = 0;
+                    state.approval_choice = (state.approval_choice + 1) % 3;
                     return Action::None;
                 }
-                KeyCode::Left | KeyCode::Right => {
-                    state.approval_choice ^= 1;
+                KeyCode::Left => {
+                    state.approval_choice = state.approval_choice.saturating_sub(1);
+                    return Action::None;
+                }
+                KeyCode::Right => {
+                    state.approval_choice = (state.approval_choice + 1).min(2);
                     return Action::None;
                 }
                 KeyCode::Enter if state.approval_shown => {
-                    return if state.approval_choice == 0 {
-                        Action::Approve
-                    } else {
-                        Action::Deny
+                    return match state.approval_choice {
+                        0 => Action::Approve,
+                        1 => Action::AlwaysAllow,
+                        _ => Action::Deny,
                     };
                 }
                 KeyCode::Esc => return Action::Deny,
@@ -156,205 +156,373 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_in(frame, state, frame.area());
 }
 
+pub(super) fn needed_height(preview: &orbit_tools::approval::ApprovalPreview) -> u16 {
+    match preview {
+        orbit_tools::approval::ApprovalPreview::Command(p) => {
+            let cmd_lines = p.command.lines().count().clamp(1, 6) as u16;
+            2 + cmd_lines + 1
+        }
+        orbit_tools::approval::ApprovalPreview::Write(_) => 10,
+        orbit_tools::approval::ApprovalPreview::Delete(p) => {
+            let lines = p.before.lines().count().clamp(1, 6) as u16;
+            2 + lines + 1
+        }
+        orbit_tools::approval::ApprovalPreview::Capability(_) => 6,
+        orbit_tools::approval::ApprovalPreview::Mcp(p) => {
+            let arg_lines = p.arguments.lines().count().clamp(1, 4) as u16;
+            2 + arg_lines + 1
+        }
+    }
+}
+
 pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     if file_modal(state) {
         draw_file_modal(frame, state);
         return;
     }
 
+    let area = Rect {
+        x: area.x + 2,
+        width: area.width.saturating_sub(4),
+        ..area
+    };
+
     state.approval_area = area;
     let proposal = state
         .approval
         .as_ref()
         .expect("approval screen requires a proposal");
+
+    let panel_block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(Color::Rgb(218, 139, 109)));
+    let inner_area = panel_block.inner(area);
+    frame.render_widget(panel_block, area);
+
     let areas = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(1),
-        Constraint::Length(2),
+        Constraint::Length(1),
     ])
-    .split(area);
+    .split(inner_area);
+
     let (title, lines) = match proposal {
-        orbit_tools::approval::ApprovalPreview::Write(_)
-        | orbit_tools::approval::ApprovalPreview::Delete(_) => {
-            return draw_file_modal(frame, state);
+        orbit_tools::approval::ApprovalPreview::Write(preview) => {
+            let before = preview.before.as_deref().unwrap_or_default();
+            let after = preview.after.as_str();
+            let op = if preview.before.is_some() {
+                "修改"
+            } else {
+                "新建"
+            };
+            let title = vec![
+                Line::from(vec![
+                    Span::styled("△ ", Style::default().fg(Color::Rgb(218, 139, 109))),
+                    Span::styled("权限确认", Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  → {op} "),
+                        Style::default().fg(Color::Rgb(150, 150, 150)),
+                    ),
+                    Span::styled(
+                        preview.path.clone(),
+                        Style::default()
+                            .fg(Color::Rgb(230, 230, 230))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+            ];
+            let diff = similar::TextDiff::configure()
+                .timeout(std::time::Duration::from_millis(250))
+                .diff_lines(before, after);
+
+            let syntax = super::languages::syntax_for_label(&preview.path)
+                .unwrap_or_else(|| super::languages::SYNTAXES.find_syntax_plain_text());
+            let mut highlighter = HighlightLines::new(syntax, &super::markdown::CODE_THEME);
+
+            let mut diff_lines = Vec::new();
+
+            for change in diff.iter_all_changes() {
+                let (line_no, sign, tag) = match change.tag() {
+                    similar::ChangeTag::Delete => (
+                        format!("{:>4}", change.old_index().unwrap_or(0) + 1),
+                        "-",
+                        similar::ChangeTag::Delete,
+                    ),
+                    similar::ChangeTag::Insert => (
+                        format!("{:>4}", change.new_index().unwrap_or(0) + 1),
+                        "+",
+                        similar::ChangeTag::Insert,
+                    ),
+                    similar::ChangeTag::Equal => (
+                        format!("{:>4}", change.new_index().unwrap_or(0) + 1),
+                        " ",
+                        similar::ChangeTag::Equal,
+                    ),
+                };
+
+                let sign_style = match tag {
+                    similar::ChangeTag::Delete => Style::default().fg(Color::Rgb(220, 110, 104)),
+                    similar::ChangeTag::Insert => Style::default().fg(Color::Rgb(114, 205, 142)),
+                    similar::ChangeTag::Equal => Style::default().fg(Color::Rgb(100, 100, 100)),
+                };
+
+                let text =
+                    super::render::safe_output(change.value().trim_end_matches(['\r', '\n']));
+                let mut spans = vec![
+                    Span::styled(
+                        format!("{line_no} "),
+                        Style::default().fg(Color::Rgb(90, 95, 105)),
+                    ),
+                    Span::styled(format!("{sign} "), sign_style),
+                ];
+
+                if let Ok(tokens) = highlighter.highlight_line(&text, &super::languages::SYNTAXES) {
+                    for (style, token) in tokens {
+                        let c = style.foreground;
+                        let fg = match tag {
+                            similar::ChangeTag::Delete => Color::Rgb(
+                                ((c.r as u16 + 220) / 2) as u8,
+                                ((c.g as u16 + 110) / 2) as u8,
+                                ((c.b as u16 + 104) / 2) as u8,
+                            ),
+                            similar::ChangeTag::Insert => Color::Rgb(
+                                ((c.r as u16 + 114) / 2) as u8,
+                                ((c.g as u16 + 205) / 2) as u8,
+                                ((c.b as u16 + 142) / 2) as u8,
+                            ),
+                            similar::ChangeTag::Equal => Color::Rgb(c.r, c.g, c.b),
+                        };
+                        spans.push(Span::styled(token.to_owned(), Style::default().fg(fg)));
+                    }
+                } else {
+                    spans.push(Span::styled(text.to_owned(), sign_style));
+                }
+
+                diff_lines.push(Line::from(spans));
+            }
+
+            if diff_lines.is_empty() {
+                diff_lines.push(Line::from("（无内容差异）"));
+            }
+
+            (title, diff_lines)
+        }
+
+        orbit_tools::approval::ApprovalPreview::Delete(preview) => {
+            let title = vec![
+                Line::from(vec![
+                    Span::styled("△ ", Style::default().fg(Color::Rgb(220, 110, 104))),
+                    Span::styled("权限确认", Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        "  × 删除文件 ",
+                        Style::default().fg(Color::Rgb(220, 110, 104)),
+                    ),
+                    Span::styled(
+                        preview.path.clone(),
+                        Style::default()
+                            .fg(Color::Rgb(230, 230, 230))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+            ];
+            let diff_lines = preview
+                .before
+                .lines()
+                .map(|line| {
+                    Line::styled(
+                        format!("- {line}"),
+                        Style::default().fg(Color::Rgb(220, 110, 104)),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            (title, diff_lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
-            let ws_desc = match preview.workspace_access {
-                orbit_tools::approval::CommandWorkspaceAccess::Read => "只读 (受保护路径隔离)",
-                orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => {
-                    "读写真实项目 (受保护路径隔离)"
-                }
+            let access = match preview.workspace_access {
+                orbit_tools::approval::CommandWorkspaceAccess::Read => "只读",
+                orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => "读写",
             };
-
-            let net_desc = if preview.network_allowed {
-                "允许"
+            let tag = if preview.network_allowed {
+                format!(" · {access} · 联网")
             } else {
-                "禁止"
+                format!(" · {access}")
             };
-
-            let mut lines = vec![
-                Line::from(format!("工作区：{ws_desc}")),
-                Line::from(format!("网络：{net_desc}")),
+            let title = vec![
+                Line::from(vec![
+                    Span::styled("△ ", Style::default().fg(Color::Rgb(218, 139, 109))),
+                    Span::styled("权限确认", Style::default().fg(Color::White)),
+                    Span::styled(tag, Style::default().fg(Color::Rgb(140, 140, 140))),
+                ]),
+                Line::from(vec![Span::styled(
+                    "  # 执行命令",
+                    Style::default().fg(Color::Rgb(180, 185, 195)),
+                )]),
             ];
 
-            if preview.workspace_access == orbit_tools::approval::CommandWorkspaceAccess::ReadWrite
-            {
-                lines.push(Line::from("命令对项目文件的修改会在执行结束后保留。"));
+            let mut lines = Vec::new();
+            for (i, line) in preview.command.lines().enumerate() {
+                let prefix = if i == 0 { "$ " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(Color::Rgb(140, 140, 140))),
+                    Span::styled(
+                        visible(line),
+                        Style::default().fg(Color::Rgb(120, 200, 240)),
+                    ),
+                ]));
             }
 
-            if preview.external_capabilities.is_empty() {
-                lines.push(Line::from("外部路径：无额外已授权 Capability"));
-            } else {
-                lines.push(Line::from("外部路径（Capability 或依赖缓存挂载）："));
-
-                for cap in &preview.external_capabilities {
-                    lines.push(Line::from(format!("  • {cap}")));
-                }
-            }
-
-            lines.push(Line::from(
-                "受保护路径（如 .env、.git、配置及数据库）已强制隔离屏蔽。",
-            ));
-            lines.push(Line::from(""));
-            lines.extend(
-                preview
-                    .command
-                    .split('\n')
-                    .map(|line| Line::styled(visible(line), Style::default().fg(Color::Cyan))),
-            );
-
-            (
-                format!(
-                    "命令执行确认\n超时：{} 秒 · 工作区：{} · 网络：{}",
-                    preview.timeout_seconds,
-                    match preview.workspace_access {
-                        orbit_tools::approval::CommandWorkspaceAccess::Read => "只读",
-                        orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => "读写",
-                    },
-                    net_desc,
-                ),
-                lines,
-            )
+            (title, lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Mcp(preview) => {
-            let mut lines = vec![
-                Line::from("MCP 是外部进程；Orbit 无法从工具声明判断其是否会读取、写入或联网。"),
-                Line::from("请仅在信任该服务器及本次参数时允许。"),
-                Line::from(""),
+            let title = vec![
+                Line::from(vec![
+                    Span::styled("△ ", Style::default().fg(Color::Rgb(218, 139, 109))),
+                    Span::styled("权限确认", Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        "  ⚙ 调用工具 ",
+                        Style::default().fg(Color::Rgb(150, 150, 150)),
+                    ),
+                    Span::styled(
+                        format!("{}::{}", preview.server, preview.tool),
+                        Style::default()
+                            .fg(Color::Rgb(230, 230, 230))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
             ];
-            lines.extend(
-                preview
-                    .arguments
-                    .split('\n')
-                    .map(|line| Line::styled(visible(line), Style::default().fg(Color::Cyan))),
-            );
 
-            (
-                format!("MCP 调用确认 · {}::{}", preview.server, preview.tool),
-                lines,
-            )
+            let lines = preview
+                .arguments
+                .split('\n')
+                .map(|line| {
+                    Line::styled(
+                        visible(line),
+                        Style::default().fg(Color::Rgb(120, 200, 240)),
+                    )
+                })
+                .collect();
+
+            (title, lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Capability(preview) => {
             let access_desc = if preview.access.allows_write() {
-                "读写权限 (Read/Write)"
+                "读写"
             } else {
-                "读取权限 (Read)"
+                "读取"
             };
-
-            let lines = vec![
-                Line::from(format!("环境：{}", preview.environment)),
-                Line::from(format!("路径：{}", preview.path.display())),
-                Line::from(format!("权限：{}", preview.access.description())),
-                Line::from(format!("理由：{}", preview.reason)),
-                Line::from(""),
-                Line::from("该权限仅在当前 Runtime Session 内有效，会话结束自动销毁。"),
+            let title = vec![
+                Line::from(vec![
+                    Span::styled("△ ", Style::default().fg(Color::Rgb(218, 139, 109))),
+                    Span::styled("权限确认", Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!(" · {access_desc}"),
+                        Style::default().fg(Color::Rgb(150, 150, 150)),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        "  ← 访问外部路径 ",
+                        Style::default().fg(Color::Rgb(150, 150, 150)),
+                    ),
+                    Span::styled(
+                        preview.path.display().to_string(),
+                        Style::default()
+                            .fg(Color::Rgb(230, 230, 230))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
             ];
 
-            (format!("工作区外权限申请 · {access_desc}"), lines)
+            let mut lines = Vec::new();
+            if !preview.reason.is_empty() {
+                lines.push(Line::styled(
+                    format!("理由：{}", preview.reason),
+                    Style::default().fg(Color::Rgb(180, 185, 195)),
+                ));
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::styled(
+                format!("- {}/*", preview.path.display()),
+                Style::default().fg(Color::Rgb(210, 215, 225)),
+            ));
+
+            (title, lines)
         }
     };
 
     frame.render_widget(Paragraph::new(title), areas[0]);
-    let lines = if state.approval_expanded {
-        lines
-    } else {
-        let total = lines.len();
-        let mut preview: Vec<_> = lines
-            .into_iter()
-            .take(4)
-            .map(|mut line| {
-                if line.width() > 160 {
-                    line = Line::styled(
-                        super::render::compact_preview(&line.to_string(), 160),
-                        line.style,
-                    );
-                }
-
-                line
-            })
-            .collect();
-
-        if total > 4 {
-            preview.push(Line::from(format!("… 另有 {} 行，Tab 展开查看", total - 4)));
-        }
-
-        preview
-    };
-
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL));
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     state.approval_max_scroll = paragraph
-        .line_count(areas[1].width.saturating_sub(2))
-        .saturating_sub(areas[1].height.saturating_sub(2) as usize)
+        .line_count(areas[1].width)
+        .saturating_sub(areas[1].height as usize)
         .min(u16::MAX as usize);
     state.approval_scroll = state.approval_scroll.min(state.approval_max_scroll);
     frame.render_widget(
         paragraph.scroll((state.approval_scroll as u16, 0)),
         areas[1],
     );
-    draw_options(
-        frame,
-        state,
-        areas[2],
-        if state.approval_expanded {
-            "← → 切换 · Enter 确认 · Esc 拒绝 · Tab 收起"
-        } else {
-            "← → 切换 · Enter 确认 · Esc 拒绝 · Tab 展开"
-        },
-    );
-    state.selection.approval = areas[1].inner(ratatui::layout::Margin::new(1, 1));
+    draw_options(frame, state, areas[2]);
+    state.selection.approval = areas[1];
     state.approval_shown = true;
 }
 
-fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, hint: &str) {
+fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     state.approval_options = vec![
-        (Rect::new(area.x, area.y, 8, 1).intersection(area), 0),
-        (Rect::new(area.x + 11, area.y, 8, 1).intersection(area), 1),
+        (Rect::new(area.x + 1, area.y, 12, 1).intersection(area), 0),
+        (Rect::new(area.x + 15, area.y, 10, 1).intersection(area), 1),
+        (Rect::new(area.x + 27, area.y, 8, 1).intersection(area), 2),
     ];
+    let selected_style = Style::default()
+        .bg(Color::Rgb(218, 139, 109))
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
+    let normal_style = Style::default().fg(Color::Rgb(200, 205, 215));
+
     let options = Line::from(vec![
-        ratatui::text::Span::styled(
-            "  允许  ",
+        Span::raw(" "),
+        Span::styled(
+            " 允许一次 ",
             if state.approval_choice == 0 {
-                Style::default().bg(Color::White).fg(Color::Black)
+                selected_style
             } else {
-                Style::default().fg(Color::Reset)
+                normal_style
             },
         ),
-        ratatui::text::Span::raw("   "),
-        ratatui::text::Span::styled(
-            "  拒绝  ",
+        Span::raw("  "),
+        Span::styled(
+            " 始终允许 ",
             if state.approval_choice == 1 {
-                Style::default().bg(Color::White).fg(Color::Black)
+                selected_style
             } else {
-                Style::default().fg(Color::Reset)
+                normal_style
             },
+        ),
+        Span::raw("  "),
+        Span::styled(
+            "  拒绝  ",
+            if state.approval_choice == 2 {
+                selected_style
+            } else {
+                normal_style
+            },
+        ),
+        Span::raw("   "),
+        Span::styled(
+            "Tab 切换 · Enter 确认 · Esc 拒绝",
+            Style::default().fg(Color::Rgb(110, 115, 125)),
         ),
     ]);
-    frame.render_widget(Paragraph::new(vec![options, Line::from(hint)]), area);
+    frame.render_widget(Paragraph::new(options), area);
 }
 
 pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
@@ -448,15 +616,7 @@ pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
         frame.render_widget(Paragraph::new(visible), pane);
     }
 
-    let hint = format!(
-        "←→ 选择 · Enter 确认 · Esc 拒绝 · 滚轮同步 · Tab {}",
-        if state.approval_expanded {
-            "仅看改动"
-        } else {
-            "显示全文"
-        }
-    );
-    draw_options(frame, state, sections[2], &hint);
+    draw_options(frame, state, sections[2]);
     state.approval_area = area;
     state.selection.approval = sections[1];
     // The modal owns pointer interaction; no links or composer clicks below it.
@@ -477,7 +637,11 @@ mod tests {
     fn clicking_a_visible_approval_option_confirms_it() {
         use crossterm::event::{MouseButton, MouseEvent};
         let mut state = UiState::new("model");
-        state.approval_options = vec![(Rect::new(2, 3, 8, 1), 0), (Rect::new(13, 3, 8, 1), 1)];
+        state.approval_options = vec![
+            (Rect::new(2, 3, 10, 1), 0),
+            (Rect::new(13, 3, 10, 1), 1),
+            (Rect::new(24, 3, 8, 1), 2),
+        ];
         let click = |column| {
             Event::Mouse(MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
@@ -490,7 +654,8 @@ mod tests {
         assert_eq!(handle(&mut state, click(3)), Action::None);
         state.approval_shown = true;
         assert_eq!(handle(&mut state, click(3)), Action::Approve);
-        assert_eq!(handle(&mut state, click(14)), Action::Deny);
+        assert_eq!(handle(&mut state, click(15)), Action::AlwaysAllow);
+        assert_eq!(handle(&mut state, click(26)), Action::Deny);
     }
 
     use super::*;
@@ -558,9 +723,26 @@ mod tests {
                 &mut state,
                 Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             ),
+            Action::AlwaysAllow
+        );
+
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        );
+
+        assert_eq!(
+            handle(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            ),
             Action::Deny
         );
 
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+        );
         handle(
             &mut state,
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
@@ -592,7 +774,7 @@ mod render_tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
-    fn modal_wheels_in_either_pane_share_the_scroll_and_do_not_move_the_chat() {
+    fn preview_wheels_scroll_preview_and_outside_wheels_scroll_chat() {
         let mut state = UiState::new("mock");
         state.max_scroll = 100;
         state.input.insert("draft");
@@ -631,7 +813,7 @@ mod render_tests {
             }),
         );
 
-        assert_eq!(state.scroll, 0);
+        assert_eq!(state.scroll, super::super::wheel::LINES);
         assert_eq!(state.approval_scroll, super::super::wheel::LINES * 2);
 
         terminal.draw(|f| draw_file_modal(f, &mut state)).unwrap();
@@ -684,7 +866,7 @@ mod render_tests {
         );
         terminal.draw(|f| draw(f, &mut state)).unwrap();
 
-        assert!(state.approval_expanded);
+        assert_eq!(state.approval_choice, 1);
         assert!(state.approval_max_scroll > 0);
 
         state.approval_scroll = state.approval_max_scroll;

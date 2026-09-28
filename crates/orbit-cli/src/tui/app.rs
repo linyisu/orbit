@@ -93,6 +93,7 @@ pub struct UiState {
     pub(super) approval_diff: Option<super::approval_diff::Cache>,
     pub approval_shown: bool,
     pub approval_choice: usize,
+    pub session_allowed_files: std::collections::HashSet<String>,
     pub permission_mode: super::permissions::Mode,
     pub selection: super::selection::Selection,
     /// Request budget, including output capacity where the provider counts it.
@@ -208,6 +209,7 @@ impl UiState {
             approval_diff: None,
             approval_shown: false,
             approval_choice: 0,
+            session_allowed_files: std::collections::HashSet::new(),
             permission_mode: super::permissions::Mode::default(),
             selection: super::selection::Selection::default(),
             context_tokens: 128_000,
