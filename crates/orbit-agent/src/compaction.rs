@@ -23,8 +23,8 @@ impl Default for CompactionSettings {
             model: None,
             max_input_tokens: 16384,
             max_output_tokens: 4096,
-            request_timeout_seconds: 45,
-            total_timeout_seconds: 180,
+            request_timeout_seconds: 120,
+            total_timeout_seconds: 360,
             manual_request_timeout_seconds: 180,
             manual_total_timeout_seconds: 3600,
         }
