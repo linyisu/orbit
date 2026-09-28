@@ -324,6 +324,32 @@ pub async fn run(
                 frames.request(time::Instant::now());
             }
 
+            if let Some(id) = state.delete_request.take() {
+                // Refuse to delete the currently active session.
+                if id == session.id() {
+                    if let Some(picker) = &mut state.picker {
+                        picker.error = Some("无法删除当前正在使用的会话。".into());
+                    }
+                } else {
+                    match session.store.delete_session(&id).await {
+                        Ok(_) => {
+                            // Remove the deleted session from the picker list so the
+                            // UI reflects the change immediately without a reload.
+                            if let Some(picker) = &mut state.picker {
+                                picker.remove_session(&id);
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(picker) = &mut state.picker {
+                                picker.error = Some(format!("删除失败：{error}"));
+                            }
+                        }
+                    }
+                }
+                dirty = true;
+                frames.request(time::Instant::now());
+            }
+
             if let Some(id) = state.resume_request.take() {
                 let empty_tab = tabs.empty_tab(&session, &state);
 

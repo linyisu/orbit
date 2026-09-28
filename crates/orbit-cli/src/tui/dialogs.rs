@@ -5,7 +5,7 @@ use orbit_store::types::{ProjectPlugin, Session};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -19,6 +19,9 @@ pub struct SessionPicker {
     pub error: Option<String>,
     title_scroll: Option<(String, usize, std::time::Instant)>,
     title_scroll_tick: u128,
+    /// ID of the session currently awaiting delete confirmation. Set on the
+    /// first `Delete` keypress; cleared on any other key or Esc.
+    pending_delete: Option<String>,
 }
 
 #[derive(Debug)]
@@ -277,6 +280,7 @@ impl SessionPicker {
             error: None,
             title_scroll: None,
             title_scroll_tick: 0,
+            pending_delete: None,
         }
     }
 
@@ -321,10 +325,7 @@ impl SessionPicker {
 
     fn matches(&self) -> Vec<&Session> {
         super::search::ranked(self.sessions.iter(), |session| {
-            [&session.title, &session.id]
-                .into_iter()
-                .filter_map(|text| super::search::rank(text, &self.query))
-                .min()
+            super::search::rank(&session.title, &self.query)
         })
     }
 
@@ -336,6 +337,74 @@ impl SessionPicker {
             self.selected.saturating_sub(1)
         };
     }
+
+    /// Remove the session with `id` from the list and clamp the selection index.
+    pub fn remove_session(&mut self, id: &str) {
+        self.sessions.retain(|s| s.id != id);
+        self.selected = self.selected.min(self.sessions.len().saturating_sub(1));
+        self.pending_delete = None;
+        self.error = None;
+    }
+}
+
+/// Format a Unix-second timestamp as `YYYY-MM-DD HH:MM` in local wall-clock
+/// time using only `std` and a safe POSIX `localtime_r` call. Returns `"—"`
+/// when the timestamp is zero or negative.
+fn format_session_time(updated_at: i64) -> String {
+    if updated_at <= 0 {
+        return "—".into();
+    }
+    let local_secs = (updated_at + local_utc_offset_secs()).max(0) as u64;
+    let secs_per_day = 86400u64;
+    let days = local_secs / secs_per_day;
+    let tod = local_secs % secs_per_day;
+    let hh = tod / 3600;
+    let mm = (tod % 3600) / 60;
+    let (year, month, day) = days_to_ymd(days);
+    format!("{year:04}-{month:02}-{day:02} {hh:02}:{mm:02}")
+}
+
+/// Return the local UTC offset in signed seconds using only `std` and a
+/// single safe `unsafe` block to read the POSIX `timezone` global on Linux.
+/// On all other targets the display falls back to UTC (offset = 0).
+fn local_utc_offset_secs() -> i64 {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: `tzset` and the `timezone` global are thread-safe POSIX
+        // globals; reading after `tzset` is defined behaviour.
+        unsafe extern "C" {
+            fn tzset();
+            static timezone: std::ffi::c_long;
+        }
+        unsafe {
+            tzset();
+            // POSIX `timezone` is seconds *west* of UTC; negate to get east.
+            // c_long is 32-bit on 32-bit Linux, but i64 on 64-bit Linux.
+            #[allow(clippy::unnecessary_cast)]
+            let offset = timezone as i64;
+            -offset
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
+}
+
+/// Convert a count of days since the Unix epoch (1970-01-01) to (year, month, day).
+/// Uses Howard Hinnant's "civil_from_days" algorithm — exact for all Gregorian dates.
+const fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z % 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 fn fit_hit_rows(rows: &mut [(Rect, usize)], lines: &[Line<'_>], body: Rect) {
@@ -434,6 +503,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
     {
         let index = *index;
         if let Some(picker) = &mut state.picker {
+            // Moving to a different row cancels any pending delete confirmation.
+            if picker.selected != index {
+                picker.pending_delete = None;
+            }
             picker.selected = index;
             picker.error = None;
         } else if let Some(picker) = &mut state.model_picker {
@@ -463,35 +536,70 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
     if let Some(picker) = &mut state.picker {
         match event {
             Event::Key(key) => match key.code {
-                KeyCode::Up => picker.move_by(false),
-                KeyCode::Down => picker.move_by(true),
+                KeyCode::Up => {
+                    picker.pending_delete = None;
+                    picker.move_by(false);
+                }
+                KeyCode::Down => {
+                    picker.pending_delete = None;
+                    picker.move_by(true);
+                }
                 KeyCode::Enter => {
-                    return picker.matches().get(picker.selected).map(|s| s.id.clone());
+                    // If a delete is pending, confirm it; otherwise resume.
+                    if let Some(id) = picker.pending_delete.take() {
+                        state.delete_request = Some(id);
+                    } else {
+                        return picker.matches().get(picker.selected).map(|s| s.id.clone());
+                    }
+                }
+                KeyCode::Delete => {
+                    let selected_id = picker.matches().get(picker.selected).map(|s| s.id.clone());
+                    if let Some(id) = selected_id {
+                        if picker.pending_delete.as_deref() == Some(&id) {
+                            // Second Delete on the same session — confirm.
+                            picker.pending_delete = None;
+                            state.delete_request = Some(id);
+                        } else {
+                            // First Delete — enter confirmation state.
+                            picker.pending_delete = Some(id);
+                        }
+                    }
                 }
                 KeyCode::Char(c)
                     if !key
                         .modifiers
                         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
                 {
+                    picker.pending_delete = None;
                     picker.query.push(c);
                     picker.selected = 0;
                     picker.error = None;
                 }
                 KeyCode::Backspace => {
+                    picker.pending_delete = None;
                     picker.query.pop();
                     picker.selected = 0;
                     picker.error = None;
                 }
-                _ => {}
+                _ => {
+                    picker.pending_delete = None;
+                }
             },
             Event::Paste(text) => {
+                picker.pending_delete = None;
                 picker
                     .query
                     .extend(text.chars().filter(|c| !c.is_control()));
                 picker.selected = 0;
             }
-            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => picker.move_by(false),
-            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => picker.move_by(true),
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
+                picker.pending_delete = None;
+                picker.move_by(false);
+            }
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
+                picker.pending_delete = None;
+                picker.move_by(true);
+            }
             _ => {}
         }
     } else if let Some(picker) = &mut state.model_picker {
@@ -691,7 +799,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(218, 139, 109)));
+        .border_style(Style::default().fg(crate::tui::theme::THEME.accent));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let header = Rect::new(
@@ -726,7 +834,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             footer.y.saturating_sub(header.bottom()),
         );
         let search = super::render::fit_label(
-            &format!("搜索标题或 ID：{}", clean(&picker.query)),
+            &format!("搜索标题：{}", clean(&picker.query)),
             header.width.saturating_sub(1) as usize,
             true,
         );
@@ -741,7 +849,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             Line::styled(
                 title,
                 Style::default()
-                    .fg(Color::Rgb(218, 139, 109))
+                    .fg(crate::tui::theme::THEME.accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Line::from(format!("{search}▏")),
@@ -751,9 +859,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             heading.push(Line::styled(
                 clean(feedback),
                 Style::default().fg(if picker.error.is_some() {
-                    Color::Rgb(235, 135, 135)
+                    crate::tui::theme::THEME.danger
                 } else {
-                    Color::Rgb(218, 139, 109)
+                    crate::tui::theme::THEME.accent
                 }),
             ));
         }
@@ -771,6 +879,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         let first = picker.offset;
         let rows = picker.matches();
         let mut lines = Vec::new();
+        let pending_delete_id = picker.pending_delete.clone();
 
         for (index, session) in rows.iter().enumerate().skip(first).take(visible) {
             state.dialog_rows.push((
@@ -779,16 +888,40 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 index,
             ));
             let selected = index == picker.selected;
-            let style = if selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Rgb(218, 139, 109))
-                    .add_modifier(Modifier::BOLD)
+            let confirming = selected && pending_delete_id.as_deref() == Some(session.id.as_str());
+
+            let (title_style, subtitle_style) = if confirming {
+                (
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.white)
+                        .bg(crate::tui::theme::THEME.danger_background)
+                        .add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.danger_foreground)
+                        .bg(crate::tui::theme::THEME.danger_background),
+                )
+            } else if selected {
+                (
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.on_accent)
+                        .bg(crate::tui::theme::THEME.accent)
+                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(crate::tui::theme::THEME.secondary),
+                )
             } else {
-                Style::default()
+                (
+                    Style::default(),
+                    Style::default().fg(crate::tui::theme::THEME.secondary),
+                )
             };
 
-            lines.push(Line::styled(
+            let title_text = if confirming {
+                let label = "⚠ 确认删除？再按 Del 或 Enter 确认，其他键取消";
+                format!(
+                    "  {}",
+                    super::render::scrolling_title(label, title_width, None)
+                )
+            } else {
                 format!(
                     "  {}",
                     super::render::scrolling_title(
@@ -796,12 +929,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                         title_width,
                         if selected { title_elapsed } else { None },
                     )
-                ),
-                style,
-            ));
+                )
+            };
+
+            lines.push(Line::styled(title_text, title_style));
             lines.push(Line::styled(
-                format!("  {} · {}", session.id, clean(&session.model)),
-                Style::default().fg(Color::Rgb(170, 170, 170)),
+                format!("  {}", format_session_time(session.updated_at)),
+                subtitle_style,
             ));
         }
 
@@ -817,7 +951,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         frame.render_widget(Paragraph::new(lines), body);
         let detail = format!("{} 个会话 · 按最近更新排序", rows.len());
         frame.render_widget(
-            Paragraph::new(format!("{detail}\n↑↓ 选择 · Enter 恢复 · Esc 返回")),
+            Paragraph::new(format!(
+                "{detail}\n↑↓ 选择 · Enter 恢复 · Del 删除 · Esc 返回"
+            )),
             footer,
         );
     } else if let Some(picker) = &mut state.model_picker {
@@ -842,7 +978,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 Line::styled(
                     title,
                     Style::default()
-                        .fg(Color::Rgb(218, 139, 109))
+                        .fg(crate::tui::theme::THEME.accent)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Line::from(format!("{search}▏")),
@@ -868,7 +1004,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 lines.push(Line::styled(
                     clean(&model.provider),
                     Style::default()
-                        .fg(Color::Rgb(218, 139, 109))
+                        .fg(crate::tui::theme::THEME.accent)
                         .add_modifier(Modifier::BOLD),
                 ));
                 previous_provider = Some(model.provider.as_str());
@@ -888,8 +1024,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 .map_or(1, |position| position + 1);
             let style = if selected {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Rgb(218, 139, 109))
+                    .fg(crate::tui::theme::THEME.on_accent)
+                    .bg(crate::tui::theme::THEME.accent)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -945,7 +1081,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     Line::styled(
                         "添加市场源",
                         Style::default()
-                            .fg(Color::Rgb(218, 139, 109))
+                            .fg(crate::tui::theme::THEME.accent)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Line::from(format!("{source}▏")),
@@ -986,7 +1122,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                                     }
                                 ),
                                 Style::default()
-                                    .fg(Color::Rgb(218, 139, 109))
+                                    .fg(crate::tui::theme::THEME.accent)
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Line::styled(
@@ -995,7 +1131,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                                     header.width as usize,
                                     true,
                                 ),
-                                Style::default().fg(Color::Rgb(170, 170, 170)),
+                                Style::default().fg(crate::tui::theme::THEME.secondary),
                             ),
                         ]),
                         header,
@@ -1033,7 +1169,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                                 body.width as usize,
                                 true,
                             ),
-                            Style::default().fg(Color::Rgb(170, 170, 170)),
+                            Style::default().fg(crate::tui::theme::THEME.secondary),
                         ),
                         Line::from(""),
                         Line::styled(
@@ -1045,7 +1181,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                             } else {
                                 "启用只记录当前项目的选择；Hook、MCP 和命令不会自动运行。"
                             },
-                            Style::default().fg(Color::Rgb(170, 170, 170)),
+                            Style::default().fg(crate::tui::theme::THEME.secondary),
                         ),
                     ];
                     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
@@ -1056,7 +1192,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                         Paragraph::new(Line::styled(
                             "无法检查插件包",
                             Style::default()
-                                .fg(Color::Rgb(218, 139, 109))
+                                .fg(crate::tui::theme::THEME.accent)
                                 .add_modifier(Modifier::BOLD),
                         )),
                         header,
@@ -1101,12 +1237,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     Line::styled(
                         format!("{} · 插件", clean(&market.name)),
                         Style::default()
-                            .fg(Color::Rgb(218, 139, 109))
+                            .fg(crate::tui::theme::THEME.accent)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Line::styled(
                         clean(&market.source),
-                        Style::default().fg(Color::Rgb(170, 170, 170)),
+                        Style::default().fg(crate::tui::theme::THEME.secondary),
                     ),
                 ]),
                 header,
@@ -1124,8 +1260,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 let selected = index == dialog.selected_plugin;
                 let style = if selected {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(218, 139, 109))
+                        .fg(crate::tui::theme::THEME.on_accent)
+                        .bg(crate::tui::theme::THEME.accent)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().add_modifier(Modifier::BOLD)
@@ -1152,7 +1288,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                             true,
                         )
                     ),
-                    Style::default().fg(Color::Rgb(170, 170, 170)),
+                    Style::default().fg(crate::tui::theme::THEME.secondary),
                 ));
             }
 
@@ -1175,7 +1311,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 Paragraph::new(Line::styled(
                     "已添加的市场",
                     Style::default()
-                        .fg(Color::Rgb(218, 139, 109))
+                        .fg(crate::tui::theme::THEME.accent)
                         .add_modifier(Modifier::BOLD),
                 )),
                 header,
@@ -1205,8 +1341,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 let selected = index == dialog.selected_market;
                 let style = if selected {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(218, 139, 109))
+                        .fg(crate::tui::theme::THEME.on_accent)
+                        .bg(crate::tui::theme::THEME.accent)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().add_modifier(Modifier::BOLD)
@@ -1223,7 +1359,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                         ),
                         market.plugins.len()
                     ),
-                    Style::default().fg(Color::Rgb(170, 170, 170)),
+                    Style::default().fg(crate::tui::theme::THEME.secondary),
                 ));
             }
 
@@ -1248,7 +1384,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 Line::styled(
                     title,
                     Style::default()
-                        .fg(Color::Rgb(218, 139, 109))
+                        .fg(crate::tui::theme::THEME.accent)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Line::styled(
@@ -1258,7 +1394,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                         "[命令]     快捷键"
                     },
                     Style::default()
-                        .fg(Color::Rgb(218, 139, 109))
+                        .fg(crate::tui::theme::THEME.accent)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),
@@ -1318,8 +1454,100 @@ mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
     use ratatui::{Terminal, backend::TestBackend};
+
     #[test]
-    fn resume_search_ranks_titles_and_ids_with_the_shared_matching_rules() {
+    fn delete_requires_two_presses_to_confirm_and_any_other_key_cancels() {
+        let mut picker = SessionPicker::new(vec![
+            session("keep", "保留的会话"),
+            session("del", "要删除的会话"),
+        ]);
+        picker.selected = 1;
+
+        // First Delete: enters pending state, no delete_request yet.
+        assert!(picker.pending_delete.is_none());
+        let del_key = Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+
+        let mut state = UiState::new("model");
+        state.picker = Some(picker);
+
+        handle(&mut state, del_key.clone());
+        assert_eq!(
+            state.picker.as_ref().unwrap().pending_delete.as_deref(),
+            Some("del")
+        );
+        assert!(state.delete_request.is_none());
+
+        // Pressing Up cancels pending delete.
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+        );
+        assert!(state.picker.as_ref().unwrap().pending_delete.is_none());
+
+        // Navigate back and press Delete twice → delete_request is set.
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+        );
+        handle(&mut state, del_key.clone()); // first press
+        handle(&mut state, del_key.clone()); // second press confirms
+        assert_eq!(state.delete_request.as_deref(), Some("del"));
+        assert!(state.picker.as_ref().unwrap().pending_delete.is_none());
+    }
+
+    #[test]
+    fn delete_confirmed_with_enter_after_first_del_press() {
+        let mut state = UiState::new("model");
+        state.picker = Some(SessionPicker::new(vec![session("abc", "会话")]));
+
+        // First Delete → pending.
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+        );
+        assert!(state.picker.as_ref().unwrap().pending_delete.is_some());
+
+        // Enter confirms.
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        );
+        assert_eq!(state.delete_request.as_deref(), Some("abc"));
+        assert!(state.picker.as_ref().unwrap().pending_delete.is_none());
+    }
+
+    #[test]
+    fn calendar_year_changes_only_once_for_january_and_february() {
+        assert_eq!(days_to_ymd(19722), (2023, 12, 31));
+        assert_eq!(days_to_ymd(19723), (2024, 1, 1));
+        assert_eq!(days_to_ymd(19782), (2024, 2, 29));
+        assert_eq!(days_to_ymd(19783), (2024, 3, 1));
+    }
+
+    #[test]
+    fn format_session_time_produces_iso_date_and_dash_for_zero() {
+        // Zero / negative → em dash placeholder.
+        assert_eq!(format_session_time(0), "—");
+        assert_eq!(format_session_time(-1), "—");
+
+        // 2024-06-15 12:00:00 UTC. On any system we get HH:MM in local time, so
+        // only the date portion is safe to assert without knowing the TZ offset.
+        let s = format_session_time(1_718_445_600);
+        assert!(
+            s.starts_with("2024-06-"),
+            "expected 2024-06-xx date, got {s}"
+        );
+        // Must match YYYY-MM-DD HH:MM
+        let re_like = s.len() == 16
+            && s.as_bytes()[4] == b'-'
+            && s.as_bytes()[7] == b'-'
+            && s.as_bytes()[10] == b' '
+            && s.as_bytes()[13] == b':';
+        assert!(re_like, "unexpected format: {s}");
+    }
+
+    #[test]
+    fn resume_search_ranks_titles_with_the_shared_matching_rules() {
         let mut picker = SessionPicker::new(vec![
             session("one", "a-long-b-long-c"),
             session("two", "项目 abc"),
@@ -1334,7 +1562,8 @@ mod tests {
             .map(|session| session.id.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(ids, ["three", "two", "one", "aabbcc"]);
+        // Only title-matching sessions are returned; "aabbcc" (ID only) is excluded.
+        assert_eq!(ids, ["three", "two", "one"]);
         picker.query = "项c".into();
         assert_eq!(picker.matches()[0].id, "two");
     }
@@ -1417,7 +1646,9 @@ mod tests {
             model: "model".into(),
             reasoning_effort: None,
             demo: true,
-            updated_at: 0,
+            // 2024-06-15 12:00:00 UTC — a stable, non-zero timestamp so that
+            // the rendered subtitle shows a date rather than "—".
+            updated_at: 1_718_445_600,
         }
     }
 
@@ -1477,7 +1708,7 @@ mod tests {
         assert_eq!(state.dialog_rows[0], (area, index));
         assert_eq!(
             terminal.backend().buffer()[(area.x, area.y)].bg,
-            Color::Rgb(218, 139, 109)
+            crate::tui::theme::THEME.accent
         );
         assert!(state.chosen_model.is_none());
 
@@ -1556,7 +1787,7 @@ mod tests {
         assert!(state.chosen_model.is_none());
         assert_eq!(
             terminal.backend().buffer()[(area.x + 2, area.y)].bg,
-            Color::Rgb(218, 139, 109)
+            crate::tui::theme::THEME.accent
         );
         let buffer = terminal.backend().buffer();
         let footer_y = (0..20)
@@ -1931,7 +2162,7 @@ mod tests {
                 .iter()
                 .enumerate()
                 .filter(|(_, cell)| {
-                    cell.fg == Color::Rgb(235, 135, 135) && !cell.symbol().trim().is_empty()
+                    cell.fg == crate::tui::theme::THEME.danger && !cell.symbol().trim().is_empty()
                 })
                 .collect();
 
