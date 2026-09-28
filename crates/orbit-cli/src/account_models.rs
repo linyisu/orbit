@@ -19,7 +19,7 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
         if provider.managed_models {
             continue;
         }
-        let Some(credential) = provider.credential.as_ref() else {
+        let Some(credential) = provider.credential.clone() else {
             continue;
         };
         if !supported(provider.api_format, &provider.base_url) {
@@ -31,7 +31,7 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
         };
         let result = async {
             let info = orbit_auth::AuthStore::new(directory.clone())?.list()?.into_iter()
-                .find(|info| info.name == *credential).context("账号尚未登录")?;
+                .find(|info| info.name == credential).context("账号尚未登录")?;
             let binding = json!({ "name": credential, "account": info.account,
                 "account_id": info.account_id, "project": info.project_id, "endpoint": provider.base_url });
             let cache_dir = directory.join("model-catalog");
@@ -62,14 +62,7 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
                 }
             };
             let (models, _) = normalize(provider.api_format, &payload)?;
-            for model in models {
-                if let Some(existing) = provider.models.iter_mut().find(|entry| entry.id == model.id) {
-                    if existing.context_tokens.is_none() { existing.context_tokens = model.context_tokens; }
-                    if existing.input_context_tokens.is_none() { existing.input_context_tokens = model.input_context_tokens; }
-                    if existing.supports_vision.is_none() { existing.supports_vision = model.supports_vision; }
-                    if existing.reasoning.is_none() { existing.reasoning = model.reasoning; }
-                } else if !provider.managed_models { provider.models.push(model); }
-            }
+            merge_discovered_models(provider, models);
             Ok(())
         }.await;
         if let Err(error) = result {
@@ -77,6 +70,42 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
         }
     }
     diagnostics
+}
+
+fn merge_discovered_models(
+    provider: &mut crate::config::ProviderConfig,
+    models: Vec<ModelProfile>,
+) {
+    if provider.api_format == ApiFormat::GoogleCodeAssist {
+        // The bundled catalog describes wire formats, not account availability.
+        // Only a successful discovery (or its account-bound cache) reaches here.
+        provider
+            .models
+            .retain(|existing| models.iter().any(|model| model.id == existing.id));
+    }
+
+    for model in models {
+        if let Some(existing) = provider
+            .models
+            .iter_mut()
+            .find(|entry| entry.id == model.id)
+        {
+            if existing.context_tokens.is_none() {
+                existing.context_tokens = model.context_tokens;
+            }
+            if existing.input_context_tokens.is_none() {
+                existing.input_context_tokens = model.input_context_tokens;
+            }
+            if existing.supports_vision.is_none() {
+                existing.supports_vision = model.supports_vision;
+            }
+            if existing.reasoning.is_none() {
+                existing.reasoning = model.reasoning;
+            }
+        } else {
+            provider.models.push(model);
+        }
+    }
 }
 
 fn supported(format: ApiFormat, base: &str) -> bool {
@@ -230,6 +259,38 @@ fn profile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antigravity_discovery_removes_retired_models_and_preserves_available_settings() {
+        let mut provider: crate::config::ProviderConfig = serde_json::from_value(json!({
+            "api_format": "google_code_assist",
+            "base_url": "https://daily-cloudcode-pa.googleapis.com",
+            "credential": "antigravity",
+            "models": [
+                { "id": "claude-sonnet-4-5" },
+                { "id": "claude-sonnet-4-6", "context_tokens": 123456 }
+            ]
+        }))
+        .unwrap();
+        let (models, _) = normalize(
+            ApiFormat::GoogleCodeAssist,
+            &json!({
+                "models": {
+                    "claude-sonnet-4-6": { "maxTokens": 250000 },
+                    "claude-opus-4-6-thinking": { "maxTokens": 250000 }
+                }
+            }),
+        )
+        .unwrap();
+
+        merge_discovered_models(&mut provider, models);
+
+        assert_eq!(provider.models.len(), 2);
+        assert_eq!(provider.models[0].id, "claude-sonnet-4-6");
+        assert_eq!(provider.models[0].context_tokens, Some(123456));
+        assert_eq!(provider.models[1].id, "claude-opus-4-6");
+        assert!(provider.models[0].reasoning.is_some());
+    }
 
     #[test]
     fn codex_discovery_preserves_new_models_and_advertised_efforts() {

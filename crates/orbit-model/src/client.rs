@@ -375,6 +375,12 @@ impl ModelClient {
             }
             if auth.kind == orbit_auth::CredentialKind::AntigravityOAuth {
                 crate::google::antigravity_envelope(&mut body)?;
+                if body["model"]
+                    .as_str()
+                    .is_some_and(|model| model.starts_with("claude-"))
+                {
+                    builder = builder.header("anthropic-beta", "interleaved-thinking-2025-05-14");
+                }
             }
             builder = builder.headers(auth.headers);
         } else if let Some(api_key) = &self.config.api_key {
@@ -711,7 +717,12 @@ mod tests {
             let config = ModelConfig {
                 api_format: format,
                 base_url: base.into(),
-                model: "test-model".into(),
+                model: if kind == orbit_auth::CredentialKind::AntigravityOAuth {
+                    "claude-sonnet-4-6"
+                } else {
+                    "test-model"
+                }
+                .into(),
                 credential: Some(orbit_auth::CredentialRef {
                     directory: directory.path().into(),
                     name: "test".into(),
@@ -740,6 +751,7 @@ mod tests {
             if kind == orbit_auth::CredentialKind::AntigravityOAuth {
                 assert!(wire.contains("user-agent: antigravity/hub/2.8.0 (aidev_client; os_type=darwin; arch=arm64; cl=963137146)"));
                 assert!(wire.contains("\"useragent\":\"antigravity\""));
+                assert!(wire.contains("anthropic-beta: interleaved-thinking-2025-05-14"));
                 assert!(wire.contains("\"requesttype\":\"agent\""));
                 assert!(wire.contains("\"requestid\":\"agent/"));
             }
