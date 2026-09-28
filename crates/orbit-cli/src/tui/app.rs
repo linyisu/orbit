@@ -17,6 +17,7 @@ pub enum RunStatus {
 
 #[derive(Clone, Debug)]
 pub struct SessionTab {
+    pub elapsed: std::time::Duration,
     pub id: String,
     pub title: String,
     pub status: RunStatus,
@@ -531,6 +532,72 @@ impl UiState {
                 )
         })
         .collect()
+    }
+
+    pub(super) fn runtime_snapshot(&self) -> orbit_store::tui_sessions::TuiRuntime {
+        orbit_store::tui_sessions::TuiRuntime {
+            model: self.model.clone(),
+            effort: self
+                .reasoning_effort
+                .map(|effort| effort.as_str().to_owned()),
+            context_used: self.context_used_tokens,
+            context_limit: self.context_tokens,
+            input_limit: self.input_context_tokens,
+            max_output: self.max_output_tokens,
+            elapsed_ms: self.active_elapsed().as_millis().min(u64::MAX as u128) as u64,
+            sampled_at_ms: super::session_sync::now_ms(),
+            paused: self.paused_at.is_some(),
+            status: match self.status {
+                RunStatus::Idle => "idle",
+                RunStatus::Running => "running",
+                RunStatus::Cancelling => "cancelling",
+                RunStatus::Completed => "completed",
+                RunStatus::Failed => "failed",
+                RunStatus::Cancelled => "cancelled",
+            }
+            .into(),
+            turn: self.turn,
+            tool_calls: self.tool_calls,
+        }
+    }
+
+    pub(super) fn apply_runtime(&mut self, runtime: &orbit_store::tui_sessions::TuiRuntime) {
+        if self.model == runtime.model
+            && self.reasoning_effort.map(|e| e.as_str()) == runtime.effort.as_deref()
+        {
+            self.context_used_tokens = runtime.context_used;
+            self.context_tokens = runtime.context_limit;
+            self.input_context_tokens = runtime.input_limit;
+            self.max_output_tokens = runtime.max_output;
+        }
+        let live = matches!(self.status, RunStatus::Running | RunStatus::Cancelling)
+            && matches!(runtime.status.as_str(), "running" | "cancelling");
+        let terminal = matches!(
+            (&self.status, runtime.status.as_str()),
+            (RunStatus::Completed, "completed")
+                | (RunStatus::Failed, "failed")
+                | (RunStatus::Cancelled, "cancelled")
+        );
+        if !live && !terminal {
+            return;
+        }
+        let elapsed = runtime
+            .elapsed_ms
+            .saturating_add(if live && !runtime.paused {
+                super::session_sync::now_ms().saturating_sub(runtime.sampled_at_ms)
+            } else {
+                0
+            });
+        self.elapsed = std::time::Duration::from_millis(elapsed);
+        let now = Instant::now();
+        self.started_at = live.then(|| now.checked_sub(self.elapsed).unwrap_or(now));
+        self.paused_at = (live && runtime.paused).then_some(now);
+        self.paused_elapsed = std::time::Duration::ZERO;
+        self.turn = runtime.turn;
+        self.tool_calls = runtime.tool_calls;
+        if live && runtime.status == "cancelling" {
+            self.status = RunStatus::Cancelling;
+        }
     }
 
     pub fn active_elapsed(&self) -> std::time::Duration {

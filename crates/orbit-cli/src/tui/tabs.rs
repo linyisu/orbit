@@ -16,19 +16,88 @@ struct ParkedTab {
 pub(super) struct Tabs {
     order: Vec<String>,
     parked: HashMap<String, ParkedTab>,
+    remembered: Vec<String>,
+    window: Option<orbit_store::tui_windows::TuiWindow>,
 }
 
 impl Tabs {
+    pub async fn persist(&mut self, session: &SessionState) -> anyhow::Result<()> {
+        if self.window.is_none() {
+            self.window = Some(session.store.open_tui_window().await?);
+        }
+        let ids: Vec<_> = self
+            .order
+            .iter()
+            .filter(|id| {
+                let snapshot = if id.as_str() == session.id() {
+                    &session.snapshot
+                } else if let Some(tab) = self.parked.get(*id) {
+                    &tab.prepared.snapshot
+                } else {
+                    return false;
+                };
+                !snapshot.runs.is_empty()
+                    || !snapshot.session.title.is_empty()
+                    || (id.as_str() == session.id() && session.active_run_id().is_some())
+            })
+            .cloned()
+            .collect();
+        if ids != self.remembered {
+            self.window.as_ref().unwrap().update(ids.clone()).await?;
+            self.remembered = ids;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn restore_snapshot(&self) -> &[String] {
+        self.window.as_ref().map_or(&[], |window| window.previous())
+    }
+
+    pub async fn close(&mut self, session: &SessionState) -> anyhow::Result<()> {
+        self.persist(session).await?;
+        if let Some(window) = self.window.take() {
+            window.close().await?;
+        }
+        Ok(())
+    }
+
+    pub async fn synchronize_parked(
+        &mut self,
+        sync: &mut super::session_sync::SessionSync,
+    ) -> anyhow::Result<bool> {
+        let mut changed = false;
+        for tab in self.parked.values_mut() {
+            changed |= super::session_sync::sync_mode(
+                &tab.prepared.store(),
+                &tab.prepared.snapshot.session.id,
+                &mut tab.state,
+            )
+            .await?;
+            changed |= sync
+                .poll(
+                    &tab.prepared.store(),
+                    &mut tab.prepared.snapshot,
+                    &mut tab.state,
+                    &mut tab.history,
+                )
+                .await?;
+            changed |= super::session_sync::sync_runtime(
+                &tab.prepared.store(),
+                &tab.prepared.snapshot.session.id,
+                &mut tab.state,
+            )
+            .await?;
+        }
+        Ok(changed)
+    }
+
     pub async fn poll_titles(&mut self) -> bool {
         let mut changed = false;
         for tab in self.parked.values_mut() {
             changed |= tab.prepared.poll_title().await.unwrap_or(false);
         }
         changed
-    }
-
-    pub fn has_other_tabs(&self) -> bool {
-        self.order.len() > 1
     }
 
     pub fn has_drafts(&self) -> bool {
@@ -41,6 +110,8 @@ impl Tabs {
         Self {
             order: vec![session.id().to_owned()],
             parked: HashMap::new(),
+            remembered: Vec::new(),
+            window: None,
         }
     }
 
@@ -162,17 +233,23 @@ impl Tabs {
             .order
             .iter()
             .filter_map(|id| {
-                let (title, status) = if id == session.id() {
-                    (&session.snapshot.session.title, state.status.clone())
+                let (title, status, elapsed) = if id == session.id() {
+                    (
+                        &session.snapshot.session.title,
+                        state.status.clone(),
+                        state.active_elapsed(),
+                    )
                 } else {
                     let parked = self.parked.get(id)?;
                     (
                         &parked.prepared.snapshot.session.title,
                         parked.state.status.clone(),
+                        parked.state.active_elapsed(),
                     )
                 };
 
                 Some(SessionTab {
+                    elapsed,
                     id: id.clone(),
                     title: title.clone(),
                     status,
@@ -186,6 +263,41 @@ impl Tabs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn startup_keeps_a_new_home_and_only_restore_snapshot_remembers_old_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("sessions.db");
+        let mut owner = SessionState::open_shared_in(db.clone(), None, "mock".into(), dir.path())
+            .await
+            .unwrap();
+        owner
+            .begin("saved conversation".into(), "mock".into())
+            .await
+            .unwrap();
+        owner
+            .finish(
+                "completed",
+                Some(vec![ChatMessage::user("saved conversation")]),
+            )
+            .await
+            .unwrap();
+        let mut first = Tabs::new(&owner);
+        first.persist(&owner).await.unwrap();
+        first.close(&owner).await.unwrap();
+        let next = SessionState::open_shared_in(db, None, "mock".into(), dir.path())
+            .await
+            .unwrap();
+        let mut tabs = Tabs::new(&next);
+        tabs.persist(&next).await.unwrap();
+        assert_eq!(tabs.restore_snapshot(), [owner.id()]);
+        assert_eq!(tabs.order, [next.id()]);
+        assert!(tabs.parked.is_empty());
+        tabs.close(&next).await.unwrap();
+        let window = next.store.open_tui_window().await.unwrap();
+        assert!(window.previous().is_empty());
+        assert!(next.store.session(owner.id()).await.is_ok());
+    }
 
     #[tokio::test]
     async fn plus_click_requests_a_new_tab_and_dialogs_block_it() {

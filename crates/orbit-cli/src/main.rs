@@ -408,7 +408,8 @@ pub(crate) async fn prepare_tui(
     let config = FileConfig::load(&options.config, &options.auth_directory)?;
     let model = config.default_model_option()?.qualified_name();
     let mut session =
-        session::SessionState::open_in(options.database.clone(), resume, model, directory).await?;
+        session::SessionState::open_shared_in(options.database.clone(), resume, model, directory)
+            .await?;
     let resources = prepare_tui_resources(options, directory, &session).await?;
     session
         .initialize_audit(

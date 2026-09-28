@@ -79,9 +79,20 @@ pub async fn list_text(store: &Store) -> Result<String> {
         .join("\n"))
 }
 
+/// A peer changed the session after the UI's last snapshot. Refresh and retry
+/// before creating a run; this is not a user-facing failure.
+#[derive(Debug)]
+pub(crate) struct SessionRefreshRequired;
+impl std::fmt::Display for SessionRefreshRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("session snapshot requires refresh")
+    }
+}
+impl std::error::Error for SessionRefreshRequired {}
+
 pub struct SessionState {
     pub store: Store,
-    writer: SessionWriter,
+    writer: Option<SessionWriter>,
     pub snapshot: Snapshot,
     pub scratch: orbit_tools::run_command::ScratchDirectory,
     pub command_output: orbit_tools::run_command::CommandOutputDirectory,
@@ -90,17 +101,27 @@ pub struct SessionState {
     pub audit_limits: orbit_tools::run_command::CommandLimits,
     title_task: Option<crate::session_title::TitleTask>,
     active: bool,
+    shared: bool,
     journal: Option<std::sync::Arc<dyn orbit_agent::checkpoint::ExecutionJournal>>,
 }
 
 async fn apply_title(
+    store: &Store,
     task: &mut Option<crate::session_title::TitleTask>,
-    writer: &SessionWriter,
+    writer: &Option<SessionWriter>,
     snapshot: &mut Snapshot,
 ) -> Result<bool> {
     if !task.as_ref().is_some_and(|task| task.is_finished()) {
         return Ok(false);
     }
+    let temporary;
+    let writer = match writer {
+        Some(writer) => writer,
+        None => {
+            temporary = store.acquire(&snapshot.session.id).await?;
+            &temporary
+        }
+    };
     let Some(title) = task.take().unwrap().result().await else {
         return Ok(false);
     };
@@ -110,15 +131,25 @@ async fn apply_title(
 }
 
 pub struct PreparedResume {
+    store: Store,
     title_task: Option<crate::session_title::TitleTask>,
-    writer: SessionWriter,
+    writer: Option<SessionWriter>,
     pub snapshot: Snapshot,
     git_baseline: Option<serde_json::Value>,
 }
 
 impl PreparedResume {
+    pub fn store(&self) -> Store {
+        self.store.clone()
+    }
     pub async fn poll_title(&mut self) -> Result<bool> {
-        apply_title(&mut self.title_task, &self.writer, &mut self.snapshot).await
+        apply_title(
+            &self.store,
+            &mut self.title_task,
+            &self.writer,
+            &mut self.snapshot,
+        )
+        .await
     }
 }
 
@@ -129,10 +160,31 @@ pub struct HistoryReplay {
     run: usize,
     event: usize,
     run_start: Option<usize>,
-    done: bool,
 }
 
 impl HistoryReplay {
+    /// Continue after events that this view has already displayed.
+    pub fn following(snapshot: &Snapshot, state: &UiState) -> Self {
+        if let Some(last) = snapshot.runs.last().filter(|run| run.status == "running") {
+            Self {
+                run: snapshot.runs.len() - 1,
+                event: last.events.len(),
+                run_start: Some(
+                    state
+                        .transcript
+                        .iter()
+                        .rposition(|item| matches!(item, TranscriptItem::User(_)))
+                        .unwrap_or(0),
+                ),
+            }
+        } else {
+            Self {
+                run: snapshot.runs.len(),
+                ..Self::default()
+            }
+        }
+    }
+
     pub fn completed_runs(&self) -> usize {
         self.run
     }
@@ -144,10 +196,6 @@ impl HistoryReplay {
         max_events: usize,
         budget: Duration,
     ) -> bool {
-        if self.done {
-            return true;
-        }
-
         let started = Instant::now();
         let mut processed = 0;
         state.workspace = snapshot.session.workspace.clone();
@@ -182,6 +230,11 @@ impl HistoryReplay {
                 self.event += 1;
                 processed += 1;
                 continue;
+            }
+
+            // A live reader waits at the tail; it must not mark pending tools as failed.
+            if run.status == "running" {
+                return true;
             }
 
             match run.status.as_str() {
@@ -219,11 +272,7 @@ impl HistoryReplay {
             processed += 1;
         }
 
-        if self.run == snapshot.runs.len() {
-            self.done = true;
-        }
-
-        self.done
+        self.run == snapshot.runs.len()
     }
 }
 
@@ -260,11 +309,30 @@ impl SessionState {
         model: String,
         directory: &Path,
     ) -> Result<Self> {
+        Self::open_mode(path, resume, model, directory, false).await
+    }
+
+    pub async fn open_shared_in(
+        path: PathBuf,
+        resume: Option<String>,
+        model: String,
+        directory: &Path,
+    ) -> Result<Self> {
+        Self::open_mode(path, resume, model, directory, true).await
+    }
+
+    async fn open_mode(
+        path: PathBuf,
+        resume: Option<String>,
+        model: String,
+        directory: &Path,
+        shared: bool,
+    ) -> Result<Self> {
         let store = Store::open(path).await?;
         let workspace = directory.canonicalize()?.to_string_lossy().into_owned();
         let project = store.resolve_project(&workspace).await?;
         let creating = resume.is_none();
-        let writer = if let Some(id) = resume {
+        let (id, writer) = if let Some(id) = resume {
             let saved = store.session(&id).await?;
             let equivalent = store.equivalent_project_ids(&project.id).await?;
             ensure!(
@@ -274,32 +342,35 @@ impl SessionState {
             );
             ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
 
-            store.acquire(&id).await?
+            let writer = if shared {
+                None
+            } else {
+                Some(store.acquire(&id).await?)
+            };
+            (id, writer)
         } else {
-            store.create(workspace.clone(), model, false).await?
+            let writer = store.create(workspace.clone(), model, false).await?;
+            (writer.id().to_owned(), Some(writer))
         };
 
         let git_baseline = if creating {
             let baseline = orbit_tools::git_inspect::capture_baseline(Path::new(&workspace));
 
             if let Some(baseline) = &baseline {
-                store.save_git_baseline(writer.id(), baseline).await?;
+                store.save_git_baseline(&id, baseline).await?;
             }
 
             baseline
         } else {
-            store.git_baseline(writer.id()).await?
+            store.git_baseline(&id).await?
         };
 
-        let snapshot = store.load(writer.id()).await?;
+        let snapshot = store.load(&id).await?;
         let scratch = std::sync::Arc::new(std::sync::RwLock::new(
-            store.path().with_extension("workspaces").join(writer.id()),
+            store.path().with_extension("workspaces").join(&id),
         ));
         let command_output = std::sync::Arc::new(std::sync::RwLock::new(
-            store
-                .path()
-                .with_extension("command-output")
-                .join(writer.id()),
+            store.path().with_extension("command-output").join(&id),
         ));
 
         Ok(Self {
@@ -307,12 +378,13 @@ impl SessionState {
             command_output,
             git_baseline,
             store,
-            writer,
+            writer: if shared { None } else { writer },
             snapshot,
             audit_workspace: None,
             audit_limits: Default::default(),
             title_task: None,
             active: false,
+            shared,
             journal: None,
         })
     }
@@ -324,12 +396,15 @@ impl SessionState {
     ) -> Result<()> {
         ensure!(!self.active, "请先结束当前响应再移动会话");
         let baseline = orbit_tools::git_inspect::capture_baseline(workspace.root());
+        self.ensure_writer().await?;
         let session = self
             .writer
+            .as_ref()
+            .unwrap()
             .move_to(workspace.root(), baseline.clone())
-            .await?;
-
-        self.snapshot.session = session;
+            .await;
+        self.release_idle_writer();
+        self.snapshot.session = session?;
         self.git_baseline = baseline;
         self.audit_workspace = Some(workspace);
         self.audit_limits = limits;
@@ -385,7 +460,7 @@ impl SessionState {
     }
 
     pub fn id(&self) -> &str {
-        self.writer.id()
+        &self.snapshot.session.id
     }
 
     #[cfg(test)]
@@ -411,14 +486,20 @@ impl SessionState {
         model: String,
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<()> {
-        self.writer
+        self.ensure_writer().await?;
+        let result = self
+            .writer
+            .as_ref()
+            .unwrap()
             .set_model_profile(
                 model.clone(),
                 reasoning_effort
                     .map(ReasoningEffort::as_str)
                     .map(str::to_owned),
             )
-            .await?;
+            .await;
+        self.release_idle_writer();
+        result?;
         self.snapshot.session.model = model;
         self.snapshot.session.reasoning_effort = reasoning_effort
             .map(ReasoningEffort::as_str)
@@ -428,7 +509,10 @@ impl SessionState {
     }
 
     pub async fn rename(&mut self, title: String) -> Result<()> {
-        self.writer.set_title(title.clone()).await?;
+        self.ensure_writer().await?;
+        let result = self.writer.as_ref().unwrap().set_title(title.clone()).await;
+        self.release_idle_writer();
+        result?;
         self.title_task = None;
         self.snapshot.session.title = title;
         Ok(())
@@ -452,11 +536,43 @@ impl SessionState {
     }
 
     pub async fn poll_title(&mut self) -> Result<bool> {
-        apply_title(&mut self.title_task, &self.writer, &mut self.snapshot).await
+        apply_title(
+            &self.store,
+            &mut self.title_task,
+            &self.writer,
+            &mut self.snapshot,
+        )
+        .await
     }
 
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
-        self.writer.begin(prompt, model).await?;
+        self.ensure_writer().await?;
+        // Check under the lease: a peer may have completed a turn since the UI's last refresh.
+        let latest = match self.store.load(self.id()).await {
+            Ok(latest) => latest,
+            Err(error) => {
+                self.release_idle_writer();
+                return Err(error);
+            }
+        };
+        if let Some(workspace) = &self.audit_workspace
+            && workspace.root() != Path::new(&latest.session.workspace)
+        {
+            self.release_idle_writer();
+            return Err(SessionRefreshRequired.into());
+        }
+        if latest.history != self.snapshot.history
+            || latest.runs.len() != self.snapshot.runs.len()
+            || latest.session.model != self.snapshot.session.model
+            || latest.session.reasoning_effort != self.snapshot.session.reasoning_effort
+        {
+            self.release_idle_writer();
+            return Err(SessionRefreshRequired.into());
+        }
+        if let Err(error) = self.writer.as_mut().unwrap().begin(prompt, model).await {
+            self.release_idle_writer();
+            return Err(error);
+        }
         self.active = true;
         self.journal = None;
         Ok(())
@@ -465,7 +581,11 @@ impl SessionState {
     pub fn execution_journal(
         &mut self,
     ) -> Result<std::sync::Arc<dyn orbit_agent::checkpoint::ExecutionJournal>> {
-        let journal = self.writer.execution_journal()?;
+        let journal = self
+            .writer
+            .as_ref()
+            .context("no active writer")?
+            .execution_journal()?;
         self.journal = Some(journal.clone());
         Ok(journal)
     }
@@ -475,10 +595,15 @@ impl SessionState {
             journal.flush().await?;
         }
 
-        self.writer.finish(status, Vec::new(), history).await?;
+        self.writer
+            .as_mut()
+            .context("no active writer")?
+            .finish(status, Vec::new(), history)
+            .await?;
         self.active = false;
         self.journal = None;
         self.snapshot = self.store.load(self.id()).await?;
+        self.release_idle_writer();
 
         Ok(())
     }
@@ -531,6 +656,7 @@ impl SessionState {
 
     /// Load under the destination lease without releasing or changing the
     /// current session. Safe to cancel before install_resume.
+    #[cfg(test)]
     pub async fn prepare_resume(
         store: Store,
         project: String,
@@ -549,8 +675,9 @@ impl SessionState {
         let git_baseline = store.git_baseline(&id).await?;
 
         Ok(PreparedResume {
+            store: store.clone(),
             title_task: None,
-            writer,
+            writer: Some(writer),
             snapshot,
             git_baseline,
         })
@@ -561,10 +688,57 @@ impl SessionState {
         drop(self.swap_resume(prepared));
     }
 
-    /// Replace the selected session while retaining the previous writer lease.
-    /// A TUI tab can later restore that lease without replaying or reacquiring it.
+    pub async fn prepare_shared(
+        store: Store,
+        _project: String,
+        id: String,
+    ) -> Result<PreparedResume> {
+        let snapshot = store.load(&id).await?;
+        ensure!(!snapshot.session.demo, "演示会话已不再受支持。");
+        let git_baseline = store.git_baseline(&id).await?;
+        Ok(PreparedResume {
+            store,
+            title_task: None,
+            writer: None,
+            snapshot,
+            git_baseline,
+        })
+    }
+
+    pub fn enable_shared(&mut self) {
+        self.shared = true;
+        self.release_idle_writer();
+    }
+
+    fn release_idle_writer(&mut self) {
+        if self.shared && !self.active {
+            self.writer = None;
+        }
+    }
+
+    async fn ensure_writer(&mut self) -> Result<()> {
+        if self.writer.is_none() {
+            self.writer = Some(self.store.acquire(self.id()).await?);
+        }
+        Ok(())
+    }
+
+    pub fn active_run_id(&self) -> Option<i64> {
+        self.writer.as_ref().and_then(SessionWriter::active_run_id)
+    }
+
+    pub async fn flush_events(&self) -> Result<()> {
+        if let Some(journal) = &self.journal {
+            journal.flush().await?;
+        }
+        Ok(())
+    }
+
+    /// Park the previous session's snapshot and title task. Shared TUI tabs hold
+    /// no idle writer lease; exclusive callers retain their original lease.
     pub fn swap_resume(&mut self, prepared: PreparedResume) -> PreparedResume {
         let previous = PreparedResume {
+            store: self.store.clone(),
             title_task: std::mem::replace(&mut self.title_task, prepared.title_task),
             writer: std::mem::replace(&mut self.writer, prepared.writer),
             snapshot: std::mem::replace(&mut self.snapshot, prepared.snapshot),
@@ -609,8 +783,9 @@ impl SessionState {
         }
 
         Ok(PreparedResume {
+            store: self.store.clone(),
             title_task: None,
-            writer,
+            writer: if self.shared { None } else { Some(writer) },
             snapshot,
             git_baseline,
         })
@@ -693,7 +868,7 @@ mod tests {
             Ok(_) => panic!("locked session was opened"),
         };
 
-        assert!(error.to_string().contains("已在其他 Orbit"));
+        assert!(error.to_string().contains("正在其他 Orbit"));
         assert_eq!(current.id(), original);
 
         drop(lease);
