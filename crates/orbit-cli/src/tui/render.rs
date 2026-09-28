@@ -12,8 +12,11 @@ use unicode_width::UnicodeWidthStr;
 use super::app::{RunStatus, ToolStatus, TranscriptItem, UiState};
 
 const ACCENT: Color = Color::Rgb(218, 139, 109);
-const THINKING_MUTED: Color = Color::Rgb(215, 155, 78);
-const THINKING_BRIGHT: Color = Color::Rgb(239, 167, 71);
+const THINKING_MUTED: Color = Color::Rgb(165, 155, 140);
+const THINKING_BRIGHT: Color = Color::Rgb(255, 215, 95);
+const TOOL_FINISHED: Color = Color::Rgb(105, 175, 135);
+const TOOL_RUNNING: Color = Color::Rgb(220, 160, 90);
+const TOOL_FAILED: Color = Color::Rgb(225, 110, 105);
 // Use the terminal foreground for readable text on both light and dark themes.
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
@@ -131,7 +134,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         Constraint::Length(approval_height),
         Constraint::Length(0),
         Constraint::Length(input_height + attachment_height + details_height + 3),
-        Constraint::Length(1),
+        Constraint::Length(0),
         Constraint::Length(1),
     ])
     .split(area)
@@ -150,8 +153,8 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         areas[1] = Rect::new(x, y, content_width, 7);
         areas[2] = Rect::default();
         areas[4] = Rect::new(x, y + 8, content_width, composer_height);
-        areas[5] = Rect::new(x, areas[4].bottom(), content_width, 1);
-        areas[6] = Rect::new(x, areas[5].bottom(), content_width, 1);
+        areas[5] = Rect::default();
+        areas[6] = Rect::new(x, areas[4].bottom(), content_width, 1);
     }
 
     let menu_height = panel_height.min(areas[4].y.saturating_sub(area.y + 1));
@@ -244,6 +247,16 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
     footer_layout(state, width).line
 }
 
+const PROGRESS_FRAMES: &[&str] = &[
+    "      ",
+    "█     ",
+    "██    ",
+    "███   ",
+    "████  ",
+    "█████ ",
+    "██████",
+];
+
 fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let available = width.saturating_sub(4);
     let context = format!(
@@ -268,36 +281,64 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         &state.workspace,
         state.completion_home.as_deref(),
     ));
-    let branch = state
-        .branch
-        .as_deref()
-        .filter(|_| state.branch_workspace == state.workspace)
-        .map(|branch| format!(": {}", safe_output(branch)))
-        .unwrap_or_default();
-    let branch = fit_label(&branch, path_width / 2, false);
-    let available_path = path_width.saturating_sub(branch.width());
-    let path = if full_path.width() <= available_path {
+    let path = if full_path.width() <= path_width {
         full_path
     } else {
-        fit_label(&safe_output(project), available_path, false)
+        fit_label(&safe_output(project), path_width, false)
     };
-    let path = format!("{path}{branch}");
 
-    let gap = available.saturating_sub(path.width() + right.width());
-    let context_offset = (!right.is_empty()).then_some((2 + path.width() + gap) as u16);
+    let (left_spans, left_width) = if state.status == RunStatus::Running {
+        let ms = state.active_elapsed().as_millis();
+        let bar = PROGRESS_FRAMES[(ms / 260) as usize % PROGRESS_FRAMES.len()];
+
+        if available >= 24 {
+            (
+                vec![
+                    Span::styled(
+                        bar.to_string(),
+                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("  ·  ", Style::default().fg(Color::Rgb(85, 85, 90))),
+                    Span::styled("Ctrl+C", Style::default().fg(Color::Rgb(160, 160, 165))),
+                    Span::styled(" 取消", Style::default().fg(Color::Rgb(120, 120, 125))),
+                ],
+                22,
+            )
+        } else {
+            (
+                vec![Span::styled(
+                    bar.to_string(),
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                )],
+                6,
+            )
+        }
+    } else {
+        let w = path.width();
+        (
+            vec![Span::styled(
+                path,
+                Style::default().fg(Color::Rgb(170, 170, 170)),
+            )],
+            w,
+        )
+    };
+
+    let gap = available.saturating_sub(left_width + right.width());
+    let context_offset = (!right.is_empty()).then_some((2 + left_width + gap) as u16);
     let context_width = right.width() as u16;
 
+    let mut line_spans = vec![Span::raw("  ")];
+    line_spans.extend(left_spans);
+    line_spans.push(Span::raw(" ".repeat(gap)));
+    line_spans.push(Span::styled(
+        right,
+        Style::default().fg(context_indicator_color(context_percent(state))),
+    ));
+    line_spans.push(Span::raw("  "));
+
     FooterLayout {
-        line: Line::from(vec![
-            Span::raw("  "),
-            Span::styled(path, Style::default().fg(Color::Rgb(170, 170, 170))),
-            Span::raw(" ".repeat(gap)),
-            Span::styled(
-                right,
-                Style::default().fg(context_indicator_color(context_percent(state))),
-            ),
-            Span::raw("  "),
-        ]),
+        line: Line::from(line_spans),
         context_offset,
         context_width,
         context_details_visible,
@@ -487,7 +528,7 @@ pub(super) fn handle_transcript_hover(
             .filter(|(index, _)| {
                 matches!(
                     state.transcript.get(*index),
-                    Some(TranscriptItem::Thinking(_))
+                    Some(TranscriptItem::Thinking(_) | TranscriptItem::Tool(_))
                 )
             })
             .map(|_| std::time::Instant::now());
@@ -626,25 +667,28 @@ pub(super) fn scrolling_title(
         return fit_label(text, width, false);
     };
 
-    let graphemes: Vec<_> = text.graphemes(true).collect();
-    let mut remaining = text.width();
-    let mut last_start = 0;
+    let graphemes: Vec<&str> = text.graphemes(true).collect();
+    let separator = [" ", " ", " ", " "];
+    let cycle_items: Vec<&str> = graphemes.iter().copied().chain(separator).collect();
 
-    while remaining > width && last_start < graphemes.len() {
-        remaining = remaining.saturating_sub(graphemes[last_start].width());
-        last_start += 1;
-    }
-
-    let step = elapsed.as_millis().saturating_sub(100) / 120;
-    let start = (step as usize % (last_start + 8)).min(last_start);
+    let step = (elapsed.as_millis().saturating_sub(100) / 120) as usize;
+    let start = step % cycle_items.len();
     let mut shown = String::new();
+    let mut current_width = 0;
 
-    for part in &graphemes[start..] {
-        if shown.width() + part.width() > width {
+    for &part in cycle_items.iter().cycle().skip(start) {
+        let part_w = part.width();
+        if current_width + part_w > width {
             break;
         }
 
         shown.push_str(part);
+        current_width += part_w;
+    }
+
+    while current_width < width {
+        shown.push(' ');
+        current_width += 1;
     }
 
     shown
@@ -710,11 +754,21 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         }
 
         let width = widths[index].min(available) as u16;
-        let title_width = width.saturating_sub(5) as usize;
+        let is_running =
+            (tab.active && state.status == RunStatus::Running) || tab.status == RunStatus::Running;
+        let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let spinner_prefix = if is_running {
+            let idx = (state.active_elapsed().as_millis() / 80) as usize % spinner_frames.len();
+            format!("{} ", spinner_frames[idx])
+        } else {
+            String::new()
+        };
+        let title_width = width.saturating_sub(5 + spinner_prefix.width() as u16) as usize;
         let elapsed = state.tab_hover.as_ref().and_then(|(action, since)| {
             (*action == super::TabAction::Select(tab.id.clone())).then(|| since.elapsed())
         });
         let title = scrolling_title(&titles[index], title_width, elapsed);
+        let display_title = format!("{spinner_prefix}{title}");
         let rect = Rect::new(x, area.y, width, 1);
         let style = if tab.active {
             Style::default()
@@ -731,8 +785,8 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 
         frame.render_widget(
             Paragraph::new(format!(
-                " {title}{}",
-                " ".repeat(width as usize - 1 - title.width())
+                " {display_title}{}",
+                " ".repeat((width as usize).saturating_sub(1 + display_title.width()))
             ))
             .style(style),
             rect,
@@ -761,7 +815,7 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let plus_x = x.min(area.right().saturating_sub(4));
         state.new_tab_area = Rect::new(plus_x, area.y, 3, 1);
         frame.render_widget(
-            Paragraph::new(" + ").style(tab_control_style(state, &super::TabAction::New)),
+            Paragraph::new(" 󰐕 ").style(tab_control_style(state, &super::TabAction::New)),
             state.new_tab_area,
         );
     }
@@ -957,25 +1011,49 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             offset,
             point,
         )
-        && matches!(
-            state.transcript.get(index),
-            Some(TranscriptItem::Thinking(_))
-        )
     {
-        for x in state.selection.viewport.x..state.selection.viewport.right() {
-            let progress = state
-                .thinking_hover_started
-                .map_or(1.0, |start| (start.elapsed().as_secs_f32() / 0.12).min(1.0));
-            let color = Color::Rgb(
-                (215.0 + 24.0 * progress) as u8,
-                (155.0 + 12.0 * progress) as u8,
-                (78.0 - 7.0 * progress) as u8,
-            );
-            frame.buffer_mut()[(x, point.1)].set_fg(if progress >= 1.0 {
-                THINKING_BRIGHT
-            } else {
-                color
-            });
+        match state.transcript.get(index) {
+            Some(TranscriptItem::Thinking(_)) => {
+                for x in state.selection.viewport.x..state.selection.viewport.right() {
+                    let cell = &mut frame.buffer_mut()[(x, point.1)];
+                    if cell.symbol() != " " {
+                        cell.set_fg(THINKING_BRIGHT);
+                        cell.set_style(cell.style().add_modifier(Modifier::BOLD));
+                    }
+                }
+            }
+            Some(TranscriptItem::Tool(row)) => {
+                let start = state.transcript_layout.item_offset(index).unwrap_or(0);
+                let absolute =
+                    offset + usize::from(point.1.saturating_sub(state.selection.viewport.y));
+                let relative = absolute.saturating_sub(start);
+                let expanded = state.expanded.contains(&index);
+                let header_lines =
+                    tool_header_line_count(row, expanded, state.selection.viewport.width);
+
+                if relative < header_lines {
+                    for rel in 0..header_lines {
+                        let row_abs = start + rel;
+                        if row_abs >= offset {
+                            let y = state.selection.viewport.y + (row_abs - offset) as u16;
+                            if y < state.selection.viewport.bottom() {
+                                for x in
+                                    state.selection.viewport.x..state.selection.viewport.right()
+                                {
+                                    let cell = &mut frame.buffer_mut()[(x, y)];
+                                    if cell.symbol() != " " {
+                                        cell.set_style(cell.style().add_modifier(Modifier::BOLD));
+                                        if cell.fg == TOOL_FINISHED {
+                                            cell.set_fg(Color::Rgb(140, 225, 170));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1160,12 +1238,165 @@ pub(super) fn compact_preview(text: &str, limit: usize) -> String {
     result
 }
 
+fn desaturate_ansi_color(color: Color) -> Color {
+    let (r, g, b) = match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Red => (210, 80, 75),
+        Color::LightRed => (235, 110, 105),
+        Color::Green => (90, 175, 110),
+        Color::LightGreen => (120, 205, 140),
+        Color::Yellow => (210, 175, 80),
+        Color::LightYellow => (235, 200, 105),
+        Color::Blue => (95, 150, 215),
+        Color::LightBlue => (125, 180, 235),
+        Color::Magenta => (180, 115, 195),
+        Color::LightMagenta => (205, 140, 220),
+        Color::Cyan => (100, 180, 185),
+        Color::LightCyan => (130, 205, 210),
+        Color::White => (205, 205, 205),
+        Color::Gray | Color::DarkGray => (130, 130, 130),
+        Color::Black => (40, 40, 40),
+        _ => return color,
+    };
+    let gray = 140.0;
+    Color::Rgb(
+        (r as f32 * 0.75 + gray * 0.25) as u8,
+        (g as f32 * 0.75 + gray * 0.25) as u8,
+        (b as f32 * 0.75 + gray * 0.25) as u8,
+    )
+}
+
+fn ansi_color(code: u16) -> Option<Color> {
+    match code {
+        30 => Some(Color::Black),
+        31 => Some(Color::Red),
+        32 => Some(Color::Green),
+        33 => Some(Color::Yellow),
+        34 => Some(Color::Blue),
+        35 => Some(Color::Magenta),
+        36 => Some(Color::Cyan),
+        37 => Some(Color::White),
+        90 => Some(Color::DarkGray),
+        91 => Some(Color::LightRed),
+        92 => Some(Color::LightGreen),
+        93 => Some(Color::LightYellow),
+        94 => Some(Color::LightBlue),
+        95 => Some(Color::LightMagenta),
+        96 => Some(Color::LightCyan),
+        97 => Some(Color::White),
+        _ => None,
+    }
+}
+
+pub(super) fn parse_ansi_to_spans(text: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut current_style = Style::default();
+    let mut chars = text.chars().peekable();
+    let mut current_chunk = String::new();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            match chars.peek().copied() {
+                Some('[') => {
+                    chars.next();
+                    let mut seq = String::new();
+                    while let Some(&c) = chars.peek() {
+                        chars.next();
+                        if c.is_ascii_alphabetic() {
+                            seq.push(c);
+                            break;
+                        }
+                        seq.push(c);
+                    }
+                    if seq.ends_with('m') {
+                        if !current_chunk.is_empty() {
+                            spans.push(Span::styled(current_chunk.clone(), current_style));
+                            current_chunk.clear();
+                        }
+                        let code_part = &seq[..seq.len() - 1];
+                        if code_part.is_empty() || code_part == "0" {
+                            current_style = Style::default();
+                        } else {
+                            for code in code_part.split(';') {
+                                match code.trim().parse::<u16>() {
+                                    Ok(0) => current_style = Style::default(),
+                                    Ok(1) => {
+                                        current_style = current_style.add_modifier(Modifier::BOLD)
+                                    }
+                                    Ok(2) => {
+                                        current_style = current_style.add_modifier(Modifier::DIM)
+                                    }
+                                    Ok(3) => {
+                                        current_style = current_style.add_modifier(Modifier::ITALIC)
+                                    }
+                                    Ok(4) => {
+                                        current_style =
+                                            current_style.add_modifier(Modifier::UNDERLINED)
+                                    }
+                                    Ok(39) => current_style = current_style.fg(Color::Reset),
+                                    Ok(c) => {
+                                        if let Some(color) = ansi_color(c) {
+                                            current_style =
+                                                current_style.fg(desaturate_ansi_color(color));
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+                Some('(' | ')' | '*' | '+') => {
+                    chars.next();
+                    chars.next();
+                    continue;
+                }
+                Some(']') => {
+                    chars.next();
+                    while let Some(&c) = chars.peek() {
+                        chars.next();
+                        if c == '\x07' || c == '\x1b' {
+                            if c == '\x1b' && chars.peek() == Some(&'\\') {
+                                chars.next();
+                            }
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                Some(_) => {
+                    chars.next();
+                    continue;
+                }
+                None => continue,
+            }
+        }
+
+        if ch == '\t' {
+            current_chunk.push_str("    ");
+        } else if ch != '\r' {
+            current_chunk.push(ch);
+        }
+    }
+
+    if !current_chunk.is_empty() {
+        spans.push(Span::styled(current_chunk, current_style));
+    }
+
+    if spans.is_empty() {
+        vec![Span::raw("")]
+    } else {
+        spans
+    }
+}
+
 fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let (marker, color) = match row.status {
-        ToolStatus::Running => ("◌", ACCENT),
-        ToolStatus::Finished => ("✓", Color::Green),
-        ToolStatus::Failed => ("×", Color::Red),
+        ToolStatus::Running => ("◌", TOOL_RUNNING),
+        ToolStatus::Finished => ("✓", TOOL_FINISHED),
+        ToolStatus::Failed => ("×", TOOL_FAILED),
     };
 
     let summary = if row.name == "search_text" {
@@ -1219,6 +1450,10 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         .ok()
         .and_then(|value| {
             if value.get("stdout").is_some() {
+                let is_running = value
+                    .get("running")
+                    .and_then(|r| r.as_bool())
+                    .unwrap_or(false);
                 let retained = value["output_id"]
                     .as_str()
                     .map(|id| format!(" · output {id}"))
@@ -1234,14 +1469,22 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
                     .map(|error| format!("\n验证：{error}"))
                     .unwrap_or_default();
 
+                let header = if is_running {
+                    "运行中…".to_string()
+                } else {
+                    format!(
+                        "exit {} · {} ms · timeout {} · truncated {}{}{}",
+                        value["exit_code"],
+                        value["elapsed_ms"],
+                        value["timed_out"],
+                        value["output_truncated"],
+                        retained,
+                        verification_badge,
+                    )
+                };
+
                 Some(format!(
-                    "exit {} · {} ms · timeout {} · truncated {}{}{}\n{}{}{}",
-                    value["exit_code"],
-                    value["elapsed_ms"],
-                    value["timed_out"],
-                    value["output_truncated"],
-                    retained,
-                    verification_badge,
+                    "{header}\n{}{}{}",
                     value["stdout"].as_str().unwrap_or_default(),
                     value["stderr"].as_str().unwrap_or_default(),
                     verification_detail,
@@ -1261,7 +1504,7 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         })
         .unwrap_or_else(|| row.output.clone());
     for line in output.lines() {
-        lines.push(Line::from(muted(format!("    {line}"))));
+        lines.push(Line::from(parse_ansi_to_spans(line)));
     }
 
     lines.push(super::tool_display::toggle_line(true, width));
@@ -1273,9 +1516,9 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
 fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
     let width = if width == u16::MAX { 120 } else { width };
     let color = match row.status {
-        ToolStatus::Running => ACCENT,
-        ToolStatus::Finished => Color::Green,
-        ToolStatus::Failed => Color::Red,
+        ToolStatus::Running => TOOL_RUNNING,
+        ToolStatus::Finished => TOOL_FINISHED,
+        ToolStatus::Failed => TOOL_FAILED,
     };
     if width < 10 {
         return vec![
@@ -1351,25 +1594,46 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
     } else {
         command.to_owned()
     };
-    let title_text = if command.is_empty() {
-        row.name.clone()
+    let title_spans = if command.is_empty() {
+        vec![Span::styled(
+            safe_output(&row.name),
+            Style::default().fg(color),
+        )]
     } else {
-        format!("{} {command}", row.name)
+        vec![
+            Span::styled(safe_output(&row.name), Style::default().fg(color)),
+            Span::raw(" "),
+            Span::styled(
+                safe_output(&command),
+                Style::default().fg(Color::Rgb(160, 165, 175)),
+            ),
+        ]
     };
-    let title = safe_output(&title_text);
-    let title_style = Style::default().fg(color);
+    let title_line = Line::from(title_spans);
     let title_width = inner;
     let mut lines = if expanded {
-        super::transcript::wrap_line(&Line::styled(title, title_style), title_width).0
+        super::transcript::wrap_line(&title_line, title_width).0
     } else {
-        vec![Line::styled(
-            super::tool_display::clipped(&title, title_width as usize),
-            title_style,
-        )]
+        vec![
+            super::transcript::wrap_line(&title_line, title_width)
+                .0
+                .into_iter()
+                .next()
+                .unwrap_or(title_line),
+        ]
     };
     for line in &mut lines {
         line.spans.insert(0, Span::raw("  "));
     }
+
+    let is_block_tool = row.name == "run_command";
+    let show_body = expanded || is_block_tool;
+
+    if !show_body || body.is_empty() {
+        lines.push(Line::from(""));
+        return lines;
+    }
+
     let divider = Line::from(vec![
         Span::raw("  "),
         Span::styled(
@@ -1435,6 +1699,58 @@ fn tool_summary(arguments: &str) -> String {
     summary
 }
 
+fn tool_header_line_count(row: &super::app::ToolRow, expanded: bool, width: u16) -> usize {
+    let width = if width == u16::MAX { 120 } else { width };
+    if width < 10 {
+        return 1;
+    }
+    let inner = width.saturating_sub(2);
+    let arguments = serde_json::from_str::<serde_json::Value>(&row.arguments).ok();
+    let command = arguments
+        .as_ref()
+        .and_then(|value| {
+            ["command", "query", "url", "path"]
+                .iter()
+                .find_map(|key| value[*key].as_str())
+        })
+        .unwrap_or("");
+    let command = if row.name == "search_text" {
+        arguments
+            .as_ref()
+            .map(|value| {
+                format!(
+                    "{} {}",
+                    value["query"],
+                    value["path"].as_str().unwrap_or(".")
+                )
+            })
+            .unwrap_or_default()
+    } else if !expanded {
+        tool_summary(&row.arguments)
+    } else {
+        command.to_owned()
+    };
+    let title_spans = if command.is_empty() {
+        vec![Span::raw(safe_output(&row.name))]
+    } else {
+        vec![
+            Span::raw(safe_output(&row.name)),
+            Span::raw(" "),
+            Span::raw(safe_output(&command)),
+        ]
+    };
+    let title_line = Line::from(title_spans);
+    let title_width = inner;
+    if expanded {
+        super::transcript::wrap_line(&title_line, title_width)
+            .0
+            .len()
+            .max(1)
+    } else {
+        1
+    }
+}
+
 fn is_shell_preamble(line: &str) -> bool {
     let compact = line.split_whitespace().collect::<String>();
     compact.starts_with("set-")
@@ -1467,7 +1783,7 @@ pub(super) fn thinking_line(
         // and `│` identifies the Markdown code block. They are one compound
         // gutter so wrapped code lines reserve their combined width.
         if first.content == "  │ " {
-            first.content = "┊ │ ".into();
+            first.content = "  ┊ │ ".into();
             has_thinking_rail = true;
         } else if let Some(rest) = first.content.strip_prefix("  ") {
             if rest.is_empty() {
@@ -1487,7 +1803,7 @@ pub(super) fn thinking_line(
     if !has_thinking_rail {
         rendered.spans.insert(
             0,
-            Span::styled("┊ ", Style::default().fg(Color::Rgb(145, 145, 145))),
+            Span::styled("  ┊ ", Style::default().fg(Color::Rgb(145, 145, 145))),
         );
     }
 
@@ -1548,20 +1864,15 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
 
     let elapsed = state.active_elapsed();
     let text = match state.status {
-        RunStatus::Idle => String::new(),
+        RunStatus::Idle | RunStatus::Completed | RunStatus::Cancelled => String::new(),
         RunStatus::Running if state.approval.is_some() => "  等待审批".into(),
         RunStatus::Running => {
-            let frames = ["✶", "✳", "✢", "✻"];
-
-            format!(
-                "  {} 正在响应…  ·  Ctrl+C 取消",
-                frames[(elapsed.as_millis() / 160) as usize % frames.len()]
-            )
+            let ms = elapsed.as_millis();
+            let bar = PROGRESS_FRAMES[(ms / 260) as usize % PROGRESS_FRAMES.len()];
+            format!("  {}  ·  Ctrl+C 取消", bar)
         }
         RunStatus::Cancelling => "  ◌ 正在取消…".into(),
-        RunStatus::Completed => format!("  ✓ 完成  ·  {:.1}s", elapsed.as_secs_f32()),
         RunStatus::Failed => "  × 操作未完成 · 请查看上方错误".into(),
-        RunStatus::Cancelled => "  ◇ 已取消 · 可以继续输入".into(),
     };
 
     frame.render_widget(
@@ -1827,6 +2138,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_ansi_to_spans_strips_charset_and_preserves_clean_text() {
+        let raw = "\x1b[31m-\x1b(B\x1b[m\x1b[32m+    let cell = &mut frame;\x1b(B\x1b[m";
+        let spans = parse_ansi_to_spans(raw);
+        let joined: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!joined.contains("\u{1b}"));
+        assert!(!joined.contains("(B"));
+        assert_eq!(joined, "-+    let cell = &mut frame;");
+    }
+
+    #[test]
     fn completed_thinking_drops_trailing_blank_rows_without_changing_content() {
         let mut row: super::super::app::ThinkingRow = "thought\n\n  \n".to_owned().into();
         row.finished = true;
@@ -1891,7 +2212,14 @@ mod tests {
             Some(std::time::Instant::now() - std::time::Duration::from_millis(150));
         let mut terminal = Terminal::new(TestBackend::new(90, 30)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-        assert_eq!(terminal.backend().buffer()[point].fg, THINKING_BRIGHT);
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|cell| cell.symbol() == "思" && cell.fg == THINKING_BRIGHT)
+        );
 
         assert!(super::super::toggle_transcript_at(&mut state, point));
         assert!(render(&mut state, 90, 30).contains("private working text"));
@@ -1906,7 +2234,14 @@ mod tests {
         });
         assert_eq!(handle_transcript_hover(&mut state, &leave), Some(true));
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-        assert_eq!(terminal.backend().buffer()[point].fg, THINKING_MUTED);
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|cell| cell.symbol() == "思" && cell.fg == THINKING_MUTED)
+        );
     }
 
     #[test]
@@ -2548,7 +2883,7 @@ mod tests {
         state.started_at = None;
         state.elapsed = std::time::Duration::from_millis(7500);
         let completed = render(&mut state, 100, 24);
-        assert!(completed.contains("7.5s"));
+        assert!(!completed.contains("7.5s"));
     }
 
     #[test]
@@ -3012,7 +3347,7 @@ mod tests {
         let mut code = None;
         let line = thinking_line("- **重点** 与 `code`", 0, &mut code);
 
-        assert_eq!(line.spans[0].content, "┊ ");
+        assert_eq!(line.spans[0].content, "  ┊ ");
         assert!(
             line.spans
                 .iter()
@@ -3042,7 +3377,7 @@ mod tests {
             &mut code,
         );
 
-        assert_eq!(line.spans[0].content, "┊ │ ");
+        assert_eq!(line.spans[0].content, "  ┊ │ ");
     }
 
     #[test]

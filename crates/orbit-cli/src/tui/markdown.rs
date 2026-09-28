@@ -750,7 +750,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             )),
             Event::Rule => spans.push(Span::styled(
                 "────────────────────────",
-                Style::default().fg(SECONDARY),
+                Style::default().fg(Color::Rgb(55, 58, 64)),
             )),
 
             Event::TaskListMarker(done) => {

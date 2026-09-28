@@ -1428,6 +1428,15 @@ fn configure_limits_and_entrypoint(
         "--setenv",
         "LANG",
         "C.UTF-8",
+        "--setenv",
+        "TERM",
+        "xterm-256color",
+        "--setenv",
+        "COLORTERM",
+        "truecolor",
+        "--setenv",
+        "CLICOLOR_FORCE",
+        "1",
         "--",
         prlimit.to_str().unwrap_or("/usr/bin/prlimit"),
         &format!(
@@ -1517,6 +1526,7 @@ async fn capture(
             if prior < MAX_RETAINED_OUTPUT_PER_STREAM {
                 let allowed = (MAX_RETAINED_OUTPUT_PER_STREAM - prior).min(count as u64) as usize;
                 file.write_all(&buffer[..allowed]).await?;
+                file.flush().await?;
             }
         }
 

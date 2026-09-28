@@ -967,6 +967,22 @@ pub async fn run(
                         None => receiver = None,
                     }
                 }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)), if task.is_some() => {
+                    if let Some(TranscriptItem::Tool(row)) = state.transcript.last_mut()
+                        && row.name == "run_command"
+                        && row.status == app::ToolStatus::Running
+                        && let Ok(dir) = session.command_output.read()
+                        && let Some(stdout) = read_active_command_stdout(&dir)
+                        && !stdout.is_empty()
+                    {
+                        row.output = serde_json::json!({
+                            "stdout": stdout,
+                            "running": true,
+                        }).to_string();
+                        dirty = true;
+                        frames.request(time::Instant::now());
+                    }
+                }
                 result = async { task.as_mut().unwrap().await }, if task.is_some() => {
                     dirty = true;
                     task = None;
@@ -2755,6 +2771,33 @@ fn resume_ui_shell(state: &UiState) -> UiState {
     restored.supports_vision = state.supports_vision;
 
     restored
+}
+
+fn read_active_command_stdout(dir: &std::path::Path) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut latest = None;
+    let mut latest_time = std::time::SystemTime::UNIX_EPOCH;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "stdout")
+            && let Ok(metadata) = entry.metadata()
+            && let Ok(modified) = metadata.modified()
+            && modified >= latest_time
+        {
+            latest_time = modified;
+            latest = Some(path);
+        }
+    }
+
+    let path = latest?;
+    let content = std::fs::read(&path).ok()?;
+    let slice = if content.len() > 16 * 1024 {
+        &content[content.len() - 16 * 1024..]
+    } else {
+        &content[..]
+    };
+    Some(String::from_utf8_lossy(slice).to_string())
 }
 
 fn restore_model_profile(

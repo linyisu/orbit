@@ -40,11 +40,12 @@ fn list_marker(text: &str) -> bool {
 }
 
 fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
-    if line
-        .spans
-        .first()
-        .is_some_and(|span| matches!(span.content.as_ref(), "  │ " | "┊ " | "┊ │ "))
-    {
+    if line.spans.first().is_some_and(|span| {
+        matches!(
+            span.content.as_ref(),
+            "  │ " | "┊ " | "┊ │ " | "  ┊ " | "  ┊ │ "
+        )
+    }) {
         let span = line.spans.remove(0);
         let width = span.width() as u16;
         let gutter = Line::from(span);
@@ -625,6 +626,16 @@ impl TranscriptLayout {
         }
 
         let relative = absolute - (entry.end - entry.height);
+
+        // For a tool card, anywhere inside the card (except the trailing margin line)
+        // can be clicked to toggle expansion across the full viewport width.
+        if matches!(items.get(index), Some(TranscriptItem::Tool(_))) {
+            let card_height = entry.height.saturating_sub(1);
+            if relative < card_height {
+                return Some(index);
+            }
+        }
+
         let row = entry
             .disclosures
             .iter()
@@ -783,7 +794,7 @@ mod tests {
             let buffer = terminal.backend().buffer();
 
             for y in 0..6 {
-                let column = if marker == "┊" { 0 } else { 2 };
+                let column = 2;
                 assert_eq!(buffer[(column, y)].symbol(), marker);
                 assert_eq!(buffer[(column + 1, y)].symbol(), " ");
             }
@@ -947,8 +958,8 @@ mod tests {
         let row = &layout.entries[0].rows[1];
         let gutter = row.gutter.as_ref().unwrap();
 
-        assert_eq!(gutter.first.to_string(), "┊ │ ");
-        assert_eq!(gutter.continuation.to_string(), "┊ │ ");
+        assert_eq!(gutter.first.to_string(), "  ┊ │ ");
+        assert_eq!(gutter.continuation.to_string(), "  ┊ │ ");
         assert!(row.height > 1);
 
         let mut terminal = Terminal::new(TestBackend::new(22, 5)).unwrap();
@@ -957,8 +968,8 @@ mod tests {
             .unwrap();
 
         for y in 1..5 {
-            assert_eq!(terminal.backend().buffer()[(0, y)].symbol(), "┊");
-            assert_eq!(terminal.backend().buffer()[(2, y)].symbol(), "│");
+            assert_eq!(terminal.backend().buffer()[(2, y)].symbol(), "┊");
+            assert_eq!(terminal.backend().buffer()[(4, y)].symbol(), "│");
         }
     }
 
