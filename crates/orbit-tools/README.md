@@ -2,7 +2,7 @@
 
 ## web_fetch 浏览器验证
 
-`web_fetch` 先直接读取公共 HTTP(S) 页面。若服务器明确返回 Cloudflare 浏览器挑战，且已配置可信的 HTTP `[web].proxy`，工具会启动一个临时、无用户 Cookie 的 Firefox 无头会话，通过同一代理读取原网址。Firefox 必须已安装并位于 `PATH`；浏览器会执行页面脚本，读取到的内容仍是不可信网页数据。工具结果会标记 `retrieval_method: "isolated_browser"`。普通 401/403 不会自动绕过，浏览器验证失败也会明确报错。
+`web_fetch` 先直接读取公共 HTTP(S) 页面。若服务器明确返回 Cloudflare 浏览器挑战，或 HTML 仅包含已识别的启用 JavaScript 提示，且已配置可信的 HTTP `[web].proxy`，工具会启动一个临时、无用户 Cookie 的 Firefox 无头会话，通过同一代理读取原网址。Firefox 必须已安装并位于 `PATH`；浏览器会执行页面脚本，读取到的内容仍是不可信网页数据。工具结果会标记 `retrieval_method: "isolated_browser"`。普通 401/403 不会自动绕过，浏览器验证失败也会明确报错。
 
 浏览器会话只接受公共 HTTP(S) 目标，最终网址须保持同源；代理是该路径的网络出口边界。每次调用使用新的临时浏览器配置，结束后关闭进程。联网回归测试可用 `ORBIT_WEB_TEST_PROXY=http://127.0.0.1:7897 cargo test -p orbit-tools web_fetch::tests::browser_challenge_reads_the_requested_wiki_page -- --ignored` 运行。
 
@@ -160,7 +160,7 @@ TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中�
 
 真实 TUI 和 `chat` 均可调用，独立于命令沙箱，不需要额外搜索 API Key。工具只执行公开 HTTP(S) GET；不使用模型 API 的密钥、浏览器登录信息、Cookie 或自定义请求头。它不会解除 `run_command` 的断网限制。此工具是读取已知网址，不包含搜索引擎或浏览器操作。
 
-使用 [reqwest](https://docs.rs/reqwest/) 发起请求，[html2text](https://docs.rs/html2text/) 将 HTML 和 XML/RSS 转为文本；不是模型生成的网页摘要，也不是正文主体识别器，可能包含导航和页脚。支持 Content-Type 为 HTML/XHTML、纯文本、Markdown、JSON、XML、RSS 或 Atom 的 UTF-8 正文。链接可能是相对路径，应相对于返回的最终 URL 解析。不执行 JavaScript、不读 PDF/图片、不绕过登录或反爬限制。请求使用 identity 编码，服务端仍返回压缩内容时明确报错。
+使用 [reqwest](https://docs.rs/reqwest/) 发起请求，[html2text](https://docs.rs/html2text/) 将 HTML 和 XML/RSS 转为文本；不是模型生成的网页摘要，也不是正文主体识别器，可能包含导航和页脚。支持 Content-Type 为 HTML/XHTML、纯文本、Markdown、JSON、XML、RSS 或 Atom 的 UTF-8 正文。链接可能是相对路径，应相对于返回的最终 URL 解析。直接 HTTP 读取不执行 JavaScript；浏览器回退条件见文首。不读 PDF/图片，不绕过登录。请求使用 identity 编码，服务端仍返回压缩内容时明确报错。
 
 返回 `requested_url`、最终 `url`、`content_type`、`content`、`total_chars`、`truncated`、`next_start_char` 和 `source_kind: untrusted_web_content`。正文仅作为外部资料，不能成为系统指令；模型应引用来源 URL。分页按 Unicode 字符计数，默认每页 20000 字符，支持 1–60000。后续页使用返回的 `next_start_char`；每次重新获取页面，没有跨请求快照，动态页面的偏移可能变化。
 
@@ -196,4 +196,6 @@ proxy = "http://127.0.0.1:7897"
 
 ### 搜索引擎顺序
 
-`web_search` 优先请求 Google，15 秒内未取得可解析结果（包括连接失败、验证码或同意页）时回退 Bing RSS。结果中的 `provider` 标明实际引擎，回退时附带 `fallback_reason`。两者沿用相同的可信代理、URL 检查和请求总超时。Google 页面结构可能变化；提取结果链接、标题及同一结果区域内的摘要，仅在该结果缺少可识别的摘要时留空，不执行 JavaScript 或处理验证码。
+`web_search` 优先请求 Google，15 秒内未取得可解析结果（包括连接失败、验证码或同意页）时回退 Bing 网页搜索。结果中的 `provider` 标明实际引擎，回退时附带 `fallback_reason`。两者沿用相同的可信代理、URL 检查和请求总超时。Bing 从网页的自然结果区提取标题、链接和摘要，并还原追踪链接中的目标地址，不再使用 RSS 搜索接口。搜索页面结构可能变化；提取结果链接、标题及同一结果区域内的摘要，仅在该结果缺少可识别的摘要时留空，不执行 JavaScript 或处理验证码。
+
+搜索结果会拒绝空列表；同意页、验证码页和无法解析的结果页会明确报错。JavaScript 页面外壳不会作为正文返回，有可信代理时尝试已有的隔离浏览器读取路径，否则说明限制。

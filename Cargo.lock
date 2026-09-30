@@ -2441,6 +2441,7 @@ version = "0.1.0"
 dependencies = [
  "anydoc",
  "anyhow",
+ "base64 0.22.1",
  "futures-util",
  "globset",
  "html2text",
