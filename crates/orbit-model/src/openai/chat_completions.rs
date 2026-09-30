@@ -63,8 +63,11 @@ pub(crate) fn encode(
                         call
                     })
                     .collect::<Vec<_>>();
-                messages
-                    .push(json!({ "role": "assistant", "content": content, "tool_calls": calls }));
+                let mut message = json!({ "role": "assistant", "content": content });
+                if !calls.is_empty() {
+                    message["tool_calls"] = json!(calls);
+                }
+                messages.push(message);
             }
             ChatMessage::Tool {
                 tool_call_id,
@@ -255,6 +258,34 @@ struct WireFunctionDelta {
 mod input_tests {
     use super::*;
     use crate::types::Attachment;
+
+    #[test]
+    fn replay_omits_empty_tool_calls_but_preserves_actual_calls() {
+        for stream in [false, true] {
+            let (body, _) = encode(
+                "deepseek-chat",
+                ChatRequest::new(vec![
+                    ChatMessage::user("hello"),
+                    ChatMessage::assistant("hello back"),
+                    ChatMessage::assistant_tool_calls(vec![ToolCall::function(
+                        "call-1",
+                        "web_search",
+                        json!({"query": "rust"}),
+                    )]),
+                ]),
+                None,
+                &json!({}),
+                stream,
+            )
+            .unwrap();
+            assert_eq!(body["messages"][1]["content"], "hello back");
+            assert!(body["messages"][1].get("tool_calls").is_none());
+            let calls = body["messages"][2]["tool_calls"].as_array().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0]["id"], "call-1");
+            assert_eq!(calls[0]["function"]["name"], "web_search");
+        }
+    }
 
     #[test]
     fn includes_reasoning_effort_when_configured() {
