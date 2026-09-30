@@ -424,7 +424,13 @@ impl FileConfig {
                     |input| input.saturating_add(max_output_tokens as usize),
                 );
                 let reasoning = model.reasoning.as_ref();
-                let supports_vision = model.supports_vision.unwrap_or(false);
+                let supports_vision = model.supports_vision.unwrap_or_else(|| {
+                    crate::account_models::default_vision(
+                        provider.api_format,
+                        &provider.base_url,
+                        &model.id,
+                    )
+                });
                 options.push(tui::ModelOption {
                     max_output_tokens,
                     provider: name.clone(),

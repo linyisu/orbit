@@ -362,3 +362,28 @@ id = "model-1"
         vec![PathBuf::from("/tmp/out")]
     );
 }
+
+#[test]
+fn deepseek_flash_vision_defaults_apply_to_existing_config_without_overriding_user_choice() {
+    for (setting, expected) in [
+        ("", true),
+        ("supports_vision = false", false),
+        ("supports_vision = true", true),
+    ] {
+        let config: FileConfig = toml::from_str(&format!(
+            r#"
+default_provider = "deepseek"
+[providers.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key = "test"
+[[providers.deepseek.models]]
+id = "deepseek-flash"
+{setting}
+"#
+        ))
+        .unwrap();
+        let options = config.model_options().unwrap();
+        assert_eq!(options[0].supports_vision, expected);
+        assert_eq!(options[0].config.supports_vision, expected);
+    }
+}

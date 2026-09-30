@@ -256,6 +256,21 @@ fn profile(
     )?)
 }
 
+/// Official capability metadata absent from the provider's ID-only model list.
+/// https://api-docs.deepseek.com/guides/vision/ (checked 2026-09-30).
+pub(crate) fn default_vision(format: ApiFormat, base: &str, id: &str) -> bool {
+    matches!(
+        format,
+        ApiFormat::OpenaiChatCompletions | ApiFormat::OpenaiResponses
+    ) && matches!(
+        base.trim_end_matches('/'),
+        "https://api.deepseek.com" | "https://api.deepseek.com/v1"
+    ) && matches!(
+        id,
+        "deepseek-flash" | "deepseek-v4-flash" | "deepseek-v4-flash-vision-exp"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +382,30 @@ mod tests {
 
         assert!(read_cache(&path, &binding).is_some());
         assert!(read_cache(&path, &json!({ "account_id": "second" })).is_none());
+    }
+    #[test]
+    fn flash_vision_is_scoped_to_verified_official_models_and_endpoints() {
+        for format in [ApiFormat::OpenaiChatCompletions, ApiFormat::OpenaiResponses] {
+            assert!(default_vision(
+                format,
+                "https://api.deepseek.com/v1/",
+                "deepseek-flash"
+            ));
+            assert!(default_vision(
+                format,
+                "https://api.deepseek.com",
+                "deepseek-v4-flash"
+            ));
+            assert!(!default_vision(
+                format,
+                "https://proxy.example/v1",
+                "deepseek-flash"
+            ));
+            assert!(!default_vision(
+                format,
+                "https://api.deepseek.com/v1",
+                "deepseek-v4-pro"
+            ));
+        }
     }
 }

@@ -2848,7 +2848,7 @@ fn remove_focused_attachment(state: &mut UiState, backwards: bool) -> bool {
 fn attach_paths(state: &mut UiState, session: &SessionState, paths: Vec<PathBuf>) -> Result<()> {
     if !state.supports_vision {
         state.transcript.push(TranscriptItem::Notice(
-            "当前模型不支持图片输入，未添加图片附件。可在配置中为该模型设置 supports_vision = true。".into(),
+            "当前模型未启用图片输入，未添加图片附件。可切换支持图片的模型，或在 /connect 中调整自定义模型的图片输入设置。".into(),
         ));
         return Ok(());
     }
@@ -2904,7 +2904,7 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
         } => {
             if !state.supports_vision {
                 state.transcript.push(TranscriptItem::Notice(
-                    "当前模型不支持图片输入，未添加图片附件。可在配置中为该模型设置 supports_vision = true。".into(),
+                    "当前模型未启用图片输入，未添加图片附件。可切换支持图片的模型，或在 /connect 中调整自定义模型的图片输入设置。".into(),
                 ));
                 state.menu_dismissed = false;
                 return Ok(());
@@ -3986,7 +3986,7 @@ mod tests {
         assert!(state.attachments.is_empty());
         assert!(state.transcript.iter().any(|item| matches!(
             item,
-            TranscriptItem::Notice(msg) if msg.contains("当前模型不支持图片输入，未添加图片附件")
+            TranscriptItem::Notice(msg) if msg.contains("当前模型未启用图片输入，未添加图片附件")
         )));
 
         // With vision enabled, queue_attachment works
