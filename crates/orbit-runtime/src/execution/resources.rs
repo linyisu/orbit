@@ -2,12 +2,15 @@ use serde::{Deserialize, Serialize};
 
 pub const MIB: usize = 1024 * 1024;
 pub const TMP_SIZE_BYTES: u64 = 64 * 1024 * 1024;
-pub const DEFAULT_MAX_MEMORY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-pub const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
+pub const UNLIMITED: u64 = 0;
+pub const DEFAULT_MAX_MEMORY_BYTES: u64 = UNLIMITED;
+pub const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = UNLIMITED;
 pub const DEFAULT_MAX_PROCESSES: u64 = 1024;
 pub const DEFAULT_MAX_OPEN_FILES: u64 = 1024;
 
-/// ProcessLimits provides strict resource limits enforced via OS prlimit/rlimit.
+/// ProcessLimits provides resource limits enforced via OS prlimit/rlimit.
+/// When max_memory_bytes or max_file_size_bytes is 0 (UNLIMITED), no hard ceiling
+/// is imposed, ensuring large debug builds and compilation artifacts succeed.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProcessLimits {
@@ -19,19 +22,31 @@ pub struct ProcessLimits {
 
 impl ProcessLimits {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.max_memory_bytes < 16 * 1024 * 1024 {
-            return Err("process max_memory_bytes must be at least 16 MiB");
+        if self.max_memory_bytes != UNLIMITED
+            && self.max_memory_bytes != u64::MAX
+            && self.max_memory_bytes < 16 * 1024 * 1024
+        {
+            return Err("process max_memory_bytes must be at least 16 MiB or 0 (unlimited)");
         }
 
-        if self.max_file_size_bytes < 1024 {
-            return Err("process max_file_size_bytes must be at least 1 KiB");
+        if self.max_file_size_bytes != UNLIMITED
+            && self.max_file_size_bytes != u64::MAX
+            && self.max_file_size_bytes < 1024
+        {
+            return Err("process max_file_size_bytes must be at least 1 KiB or 0 (unlimited)");
         }
 
-        if self.max_processes < 1 {
+        if self.max_processes != UNLIMITED
+            && self.max_processes != u64::MAX
+            && self.max_processes < 1
+        {
             return Err("process max_processes must be at least 1");
         }
 
-        if self.max_open_files < 16 {
+        if self.max_open_files != UNLIMITED
+            && self.max_open_files != u64::MAX
+            && self.max_open_files < 16
+        {
             return Err("process max_open_files must be at least 16");
         }
 
@@ -92,10 +107,12 @@ impl ResourceLimits {
 impl From<ProcessLimits> for ResourceLimits {
     fn from(limits: ProcessLimits) -> Self {
         Self {
-            max_memory_bytes: Some(limits.max_memory_bytes),
-            max_file_size_bytes: Some(limits.max_file_size_bytes),
-            max_processes: Some(limits.max_processes),
-            max_open_files: Some(limits.max_open_files),
+            max_memory_bytes: (limits.max_memory_bytes != UNLIMITED)
+                .then_some(limits.max_memory_bytes),
+            max_file_size_bytes: (limits.max_file_size_bytes != UNLIMITED)
+                .then_some(limits.max_file_size_bytes),
+            max_processes: (limits.max_processes != UNLIMITED).then_some(limits.max_processes),
+            max_open_files: (limits.max_open_files != UNLIMITED).then_some(limits.max_open_files),
         }
     }
 }
@@ -121,11 +138,8 @@ mod tests {
         assert_eq!(unconstrained.max_file_size_bytes, None);
 
         let process_limits = unconstrained.to_process_limits();
-        assert_eq!(process_limits.max_memory_bytes, DEFAULT_MAX_MEMORY_BYTES);
-        assert_eq!(
-            process_limits.max_file_size_bytes,
-            DEFAULT_MAX_FILE_SIZE_BYTES
-        );
+        assert_eq!(process_limits.max_memory_bytes, UNLIMITED);
+        assert_eq!(process_limits.max_file_size_bytes, UNLIMITED);
 
         let custom = ResourceLimits::default()
             .with_memory_limit(1024 * 1024 * 1024)

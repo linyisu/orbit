@@ -396,6 +396,7 @@ impl BwrapSandboxBackend {
         rust_toolchain: Option<&Path>,
         mounts: &[MountSpec],
         placeholder_guard: &mut PlaceholderGuard,
+        task_tmp: Option<&Path>,
     ) -> Result<Command, RuntimeError> {
         validate_mounts(mounts, policy)?;
 
@@ -457,7 +458,7 @@ impl BwrapSandboxBackend {
             inodes
         };
 
-        mount_scratch_and_tmp(&mut command, spec.scratch.as_deref())?;
+        mount_scratch_and_tmp(&mut command, spec.scratch.as_deref(), task_tmp)?;
         mount_toolchain_and_mounts(&mut command, rust_toolchain, mounts, policy)?;
         mount_capabilities(
             &mut command,
@@ -498,6 +499,11 @@ impl SandboxBackend for BwrapSandboxBackend {
                 .map_err(failed)?;
             script_file.flush().map_err(failed)?;
 
+            let task_tmp = tempfile::Builder::new()
+                .prefix("orbit-task-tmp-")
+                .tempdir()
+                .map_err(failed)?;
+
             let mut placeholder_guard = PlaceholderGuard::new();
             let mut cmd = self.build_command(
                 policy,
@@ -508,6 +514,7 @@ impl SandboxBackend for BwrapSandboxBackend {
                 spec.rust_toolchain.as_deref(),
                 &spec.mounts,
                 &mut placeholder_guard,
+                Some(task_tmp.path()),
             )?;
             let child = cmd.spawn().map_err(failed)?;
 
@@ -1341,6 +1348,7 @@ fn mount_toolchain_and_mounts(
 fn mount_scratch_and_tmp(
     command: &mut Command,
     scratch: Option<&Path>,
+    task_tmp: Option<&Path>,
 ) -> Result<(), RuntimeError> {
     if let Some(path) = scratch {
         use std::os::unix::fs::DirBuilderExt;
@@ -1378,22 +1386,26 @@ fn mount_scratch_and_tmp(
         command.arg("--bind").arg(path).arg("/scratch");
     }
 
-    command.args([
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--size",
-        &TMP_SIZE_BYTES.to_string(),
-        "--tmpfs",
-        "/tmp",
-        "--chdir",
-        "/workspace",
-    ]);
+    command.args(["--proc", "/proc", "--dev", "/dev"]);
 
-    if scratch.is_none() {
-        command.args(["--dir", "/tmp/home"]);
+    if let Some(tmp_dir) = task_tmp {
+        if scratch.is_none() {
+            use std::os::unix::fs::DirBuilderExt;
+
+            let tmp_home = tmp_dir.join("home");
+            let _ = std::fs::DirBuilder::new().mode(0o700).create(&tmp_home);
+        }
+
+        command.arg("--bind").arg(tmp_dir).arg("/tmp");
+    } else {
+        command.args(["--size", &TMP_SIZE_BYTES.to_string(), "--tmpfs", "/tmp"]);
+
+        if scratch.is_none() {
+            command.args(["--dir", "/tmp/home"]);
+        }
     }
+
+    command.args(["--chdir", "/workspace"]);
 
     Ok(())
 }
@@ -1439,22 +1451,37 @@ fn configure_limits_and_entrypoint(
         "1",
         "--",
         prlimit.to_str().unwrap_or("/usr/bin/prlimit"),
-        &format!(
+    ]);
+
+    if limits.max_memory_bytes != 0 && limits.max_memory_bytes != u64::MAX {
+        command.arg(format!(
             "--as={}:{}",
             limits.max_memory_bytes, limits.max_memory_bytes
-        ),
-        &format!(
+        ));
+    }
+
+    if limits.max_file_size_bytes != 0 && limits.max_file_size_bytes != u64::MAX {
+        command.arg(format!(
             "--fsize={}:{}",
             limits.max_file_size_bytes, limits.max_file_size_bytes
-        ),
-        &format!(
+        ));
+    }
+
+    if limits.max_open_files != 0 && limits.max_open_files != u64::MAX {
+        command.arg(format!(
             "--nofile={}:{}",
             limits.max_open_files, limits.max_open_files
-        ),
-        &format!("--nproc={}:{}", limits.max_processes, limits.max_processes),
-        "--",
-        "/bin/sh",
-    ]);
+        ));
+    }
+
+    if limits.max_processes != 0 && limits.max_processes != u64::MAX {
+        command.arg(format!(
+            "--nproc={}:{}",
+            limits.max_processes, limits.max_processes
+        ));
+    }
+
+    command.args(["--", "/bin/sh"]);
 
     if is_writable_tmpfs {
         command.args([
@@ -1670,6 +1697,11 @@ pub async fn run_configured(
         None
     };
 
+    let task_tmp = tempfile::Builder::new()
+        .prefix("orbit-task-tmp-")
+        .tempdir()
+        .map_err(failed)?;
+
     let mut placeholder_guard = PlaceholderGuard::new();
     let mut child_cmd = backend.build_command(
         policy,
@@ -1680,6 +1712,7 @@ pub async fn run_configured(
         rust_toolchain,
         mounts,
         &mut placeholder_guard,
+        Some(task_tmp.path()),
     )?;
     let child = child_cmd.spawn().map_err(failed)?;
 
@@ -2604,6 +2637,79 @@ mod tests {
                 .iter()
                 .any(|(p, is_dir)| p == Path::new("/workspace/leak_data.csv") && !*is_dir),
             "hardlink to secret inside user directory named *.workspaces must be masked"
+        );
+    }
+
+    #[test]
+    fn test_task_tmp_disk_dir_and_optional_resource_limits() {
+        let tmp_task = tempfile::tempdir().unwrap();
+        let mut cmd = Command::new("/usr/bin/bwrap");
+
+        // Verify task_tmp mounts disk directory instead of 64MiB tmpfs
+        mount_scratch_and_tmp(&mut cmd, None, Some(tmp_task.path())).unwrap();
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"--bind".to_string()));
+        assert!(args.contains(&tmp_task.path().to_string_lossy().to_string()));
+        assert!(args.contains(&"/tmp".to_string()));
+        assert!(!args.contains(&"--tmpfs".to_string()));
+
+        // Verify unlimited limits omit --as and --fsize
+        let mut cmd_limits = Command::new("/usr/bin/bwrap");
+        let unlimited_limits = ProcessLimits::default(); // 0 for memory and file size
+        configure_limits_and_entrypoint(
+            &mut cmd_limits,
+            Path::new("/usr/bin/prlimit"),
+            &unlimited_limits,
+            false,
+            false,
+            false,
+        );
+
+        let limit_args = cmd_limits
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(!limit_args.iter().any(|a| a.starts_with("--as=")));
+        assert!(!limit_args.iter().any(|a| a.starts_with("--fsize=")));
+        assert!(limit_args.iter().any(|a| a.starts_with("--nofile=")));
+        assert!(limit_args.iter().any(|a| a.starts_with("--nproc=")));
+
+        // Verify explicitly configured limits DO pass --as and --fsize
+        let mut cmd_explicit = Command::new("/usr/bin/bwrap");
+        let explicit_limits = ProcessLimits {
+            max_memory_bytes: 64 * 1024 * 1024,
+            max_file_size_bytes: 10 * 1024 * 1024,
+            max_processes: 100,
+            max_open_files: 200,
+        };
+
+        configure_limits_and_entrypoint(
+            &mut cmd_explicit,
+            Path::new("/usr/bin/prlimit"),
+            &explicit_limits,
+            false,
+            false,
+            false,
+        );
+
+        let explicit_args = cmd_explicit
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(explicit_args.iter().any(|a| a == "--as=67108864:67108864"));
+        assert!(
+            explicit_args
+                .iter()
+                .any(|a| a == "--fsize=10485760:10485760")
         );
     }
 }
