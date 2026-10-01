@@ -550,3 +550,67 @@ async fn run_command_rejects_mount_overlapping_protected_path() {
         other => panic!("expected ExecutionFailed error, got {:?}", other),
     }
 }
+
+#[tokio::test]
+async fn run_command_rejects_mount_containing_hardlink_to_protected_path() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let external_temp = tempfile::tempdir().unwrap();
+    let cache_temp = tempfile::tempdir().unwrap();
+
+    let secret_file = external_temp.path().join("secret.key");
+    fs::write(&secret_file, "SUPER_SECRET_PAYLOAD").unwrap();
+
+    let mut workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    workspace.protect(&secret_file).unwrap();
+
+    // Create a hardlink in an entirely distinct directory (no path overlap)
+    let alias_file = cache_temp.path().join("alias.key");
+    fs::hard_link(&secret_file, &alias_file).unwrap();
+
+    let (sender, mut receiver) = approval::channel();
+    let mut limits = CommandLimits::default();
+    limits
+        .dependency_caches
+        .push(orbit_tools::run_command::DependencyCache {
+            name: "leak_hardlink_cache".to_string(),
+            path: cache_temp.path().to_path_buf(),
+        });
+
+    let tool = RunCommand::with_limits(workspace, sender, limits);
+
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "test",
+                "run_command",
+                json!({
+                    "command": "cat /opt/orbit-cache/leak_hardlink_cache/alias.key"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    request.decision.send(true).unwrap();
+
+    let result = task.await.unwrap();
+    assert!(
+        result.is_err(),
+        "expected execution to fail due to hardlink to protected path"
+    );
+    match result {
+        Err(orbit_agent::tool::ToolError::ExecutionFailed(msg)) => {
+            assert!(
+                msg.contains("contains hardlink to protected path"),
+                "expected 'contains hardlink to protected path' error, got: {msg}"
+            );
+        }
+        other => panic!("expected ExecutionFailed error, got {:?}", other),
+    }
+}

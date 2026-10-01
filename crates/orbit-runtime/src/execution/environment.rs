@@ -138,9 +138,13 @@ pub fn remap_path_environment(
     // 1. Remap CARGO_HOME
     if let Some(cargo_val) = env.get("CARGO_HOME").cloned() {
         let cargo_path = PathBuf::from(&cargo_val);
-        if let Some(remapped) =
-            remap_single_path(&cargo_path, workspace_root, mounts, external_grants)
-        {
+        if let Some(remapped) = remap_single_path(
+            &cargo_path,
+            workspace_root,
+            mounts,
+            external_grants,
+            container_home,
+        ) {
             env.insert(
                 "CARGO_HOME".to_string(),
                 remapped.to_string_lossy().to_string(),
@@ -161,9 +165,13 @@ pub fn remap_path_environment(
     // 2. Remap RUSTUP_HOME
     if let Some(rustup_val) = env.get("RUSTUP_HOME").cloned() {
         let rustup_path = PathBuf::from(&rustup_val);
-        if let Some(remapped) =
-            remap_single_path(&rustup_path, workspace_root, mounts, external_grants)
-        {
+        if let Some(remapped) = remap_single_path(
+            &rustup_path,
+            workspace_root,
+            mounts,
+            external_grants,
+            container_home,
+        ) {
             env.insert(
                 "RUSTUP_HOME".to_string(),
                 remapped.to_string_lossy().to_string(),
@@ -179,9 +187,13 @@ pub fn remap_path_environment(
     // 3. Remap HOME
     if let Some(home_val) = env.get("HOME").cloned() {
         let home_path = PathBuf::from(&home_val);
-        if let Some(remapped) =
-            remap_single_path(&home_path, workspace_root, mounts, external_grants)
-        {
+        if let Some(remapped) = remap_single_path(
+            &home_path,
+            workspace_root,
+            mounts,
+            external_grants,
+            container_home,
+        ) {
             env.insert("HOME".to_string(), remapped.to_string_lossy().to_string());
         } else {
             env.insert(
@@ -202,31 +214,15 @@ pub fn remap_single_path(
     workspace_root: &Path,
     mounts: &[MountSpec],
     external_grants: &[PathBuf],
+    container_home: &Path,
 ) -> Option<PathBuf> {
-    if path.starts_with("/workspace")
-        || path.starts_with("/scratch")
-        || path.starts_with("/tmp")
-        || path.starts_with("/opt")
-    {
-        return Some(path.to_path_buf());
-    }
-
     let canon = path.canonicalize().ok();
     let mut candidates = vec![path];
     if let Some(c) = canon.as_deref().filter(|&c| c != path) {
         candidates.push(c);
     }
 
-    for candidate in &candidates {
-        if let Ok(rel) = candidate.strip_prefix(workspace_root) {
-            return Some(if rel.as_os_str().is_empty() {
-                PathBuf::from("/workspace")
-            } else {
-                Path::new("/workspace").join(rel)
-            });
-        }
-    }
-
+    // 1. Check actual mounts first (host path mapped to container target)
     for mount in mounts {
         let Ok(target) = mount.normalized_target() else {
             continue;
@@ -240,11 +236,23 @@ pub fn remap_single_path(
                 });
             }
         }
-        if path.starts_with(&target) {
+        if path == target || path.starts_with(&target) {
             return Some(path.to_path_buf());
         }
     }
 
+    // 2. Check workspace mapping (host workspace path mapped to /workspace)
+    for candidate in &candidates {
+        if let Ok(rel) = candidate.strip_prefix(workspace_root) {
+            return Some(if rel.as_os_str().is_empty() {
+                PathBuf::from("/workspace")
+            } else {
+                Path::new("/workspace").join(rel)
+            });
+        }
+    }
+
+    // 3. Check external capability grants (mirrored directly in container)
     for grant in external_grants {
         let grant_canon = grant.canonicalize().unwrap_or_else(|_| grant.clone());
         for candidate in &candidates {
@@ -256,6 +264,16 @@ pub fn remap_single_path(
                 return Some(path.to_path_buf());
             }
         }
+    }
+
+    // 4. Check already-valid container paths
+    if path.starts_with("/workspace")
+        || path.starts_with("/scratch")
+        || path.starts_with("/opt/orbit-rust")
+        || path == container_home
+        || path.starts_with(container_home)
+    {
+        return Some(path.to_path_buf());
     }
 
     None
@@ -329,5 +347,45 @@ mod tests {
 
         // HOME should be set to container home
         assert_eq!(env.get("HOME"), Some(&"/tmp/home".to_string()));
+    }
+
+    #[test]
+    fn test_remap_path_environment_host_tmp_and_opt_mounts() {
+        let temp = tempfile::tempdir().unwrap();
+        let ws = temp.path().canonicalize().unwrap();
+
+        let host_tmp_cache = temp.path().join("tmp_cargo_cache");
+        std::fs::create_dir(&host_tmp_cache).unwrap();
+        let host_tmp_canon = host_tmp_cache.canonicalize().unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert(
+            "CARGO_HOME".to_string(),
+            host_tmp_canon.to_string_lossy().to_string(),
+        );
+
+        let mounts = vec![MountSpec::read_only(&host_tmp_canon, "/opt/review")];
+        let container_home = Path::new("/tmp/home");
+
+        remap_path_environment(&mut env, &ws, &mounts, &[], container_home);
+
+        // Host /tmp/... cache mounted to /opt/review must remap to /opt/review, NOT remain host /tmp/...
+        assert_eq!(env.get("CARGO_HOME"), Some(&"/opt/review".to_string()));
+
+        // An unmounted host /tmp path must NOT be treated as a container path; must fallback to container home
+        let outside_temp = tempfile::tempdir().unwrap();
+        let unmounted_tmp = outside_temp.path().join("unmounted_cargo");
+        std::fs::create_dir(&unmounted_tmp).unwrap();
+        let unmounted_canon = unmounted_tmp.canonicalize().unwrap();
+        let mut env_unmounted = BTreeMap::new();
+        env_unmounted.insert(
+            "CARGO_HOME".to_string(),
+            unmounted_canon.to_string_lossy().to_string(),
+        );
+        remap_path_environment(&mut env_unmounted, &ws, &[], &[], container_home);
+        assert_eq!(
+            env_unmounted.get("CARGO_HOME"),
+            Some(&"/tmp/home/.cargo".to_string())
+        );
     }
 }

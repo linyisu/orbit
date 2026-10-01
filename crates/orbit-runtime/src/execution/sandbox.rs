@@ -698,6 +698,185 @@ fn is_protected_directory(path: &Path, opaque_runtime_roots: &[PathBuf]) -> bool
     name == ".git" || is_opaque_runtime_root(path, opaque_runtime_roots)
 }
 
+struct ProtectedInodesAndRoots {
+    inodes: HashSet<(u64, u64)>,
+    opaque_roots: Vec<PathBuf>,
+}
+
+fn collect_all_protected_inodes(
+    policy: &EffectivePolicy,
+) -> Result<ProtectedInodesAndRoots, RuntimeError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut protected_inodes = HashSet::new();
+    let mut opaque_runtime_roots = Vec::new();
+
+    let protected = policy
+        .protected_paths
+        .read()
+        .map_err(|_| failed("protected path policy lock is poisoned"))?;
+
+    for path in protected.iter() {
+        if let Ok(meta) = std::fs::symlink_metadata(path) {
+            protected_inodes.insert((meta.dev(), meta.ino()));
+            if meta.is_dir() && !meta.file_type().is_symlink() {
+                collect_dir_inodes(path, &mut protected_inodes)?;
+                opaque_runtime_roots.push(path.clone());
+            }
+        }
+    }
+
+    let ws_target = policy.base.workspace.canonical();
+    if ws_target.is_dir() {
+        let mut queue = VecDeque::from([(PathBuf::new(), 0usize)]);
+        let mut count = 0usize;
+        const MAX_SCAN_DIRS: usize = 10_000;
+        const MAX_DEPTH: usize = 16;
+
+        while let Some((rel, depth)) = queue.pop_front() {
+            count += 1;
+            if count > MAX_SCAN_DIRS || depth > MAX_DEPTH {
+                break;
+            }
+
+            let current_host = ws_target.join(&rel);
+            let Ok(entries) = std::fs::read_dir(&current_host) else {
+                continue;
+            };
+
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                let child_rel = rel.join(&file_name);
+                let child_host = ws_target.join(&child_rel);
+                let Ok(meta) = std::fs::symlink_metadata(&child_host) else {
+                    continue;
+                };
+
+                let is_dir = meta.is_dir();
+                let is_symlink = meta.file_type().is_symlink();
+
+                if crate::filesystem::path_security::is_protected_workspace_name(&name) {
+                    protected_inodes.insert((meta.dev(), meta.ino()));
+                    if is_dir && !is_symlink {
+                        let _ = collect_dir_inodes(&child_host, &mut protected_inodes);
+                    }
+                    continue;
+                }
+
+                if is_dir && !is_symlink && depth < MAX_DEPTH {
+                    queue.push_back((child_rel, depth + 1));
+                }
+            }
+        }
+    }
+
+    Ok(ProtectedInodesAndRoots {
+        inodes: protected_inodes,
+        opaque_roots: opaque_runtime_roots,
+    })
+}
+
+fn validate_inode_against_protected(
+    canonical: &Path,
+    protected_inodes: &mut HashSet<(u64, u64)>,
+    opaque_runtime_roots: &[PathBuf],
+    scanned_opaque_roots: &mut HashSet<PathBuf>,
+    target_kind: &str,
+) -> Result<(), RuntimeError> {
+    use std::os::unix::fs::MetadataExt;
+
+    if let Ok(meta) = std::fs::symlink_metadata(canonical) {
+        if meta.is_file() && meta.nlink() > 1 {
+            collect_opaque_inodes_for_dev(
+                meta.dev(),
+                opaque_runtime_roots,
+                protected_inodes,
+                scanned_opaque_roots,
+            )?;
+        }
+
+        if protected_inodes.contains(&(meta.dev(), meta.ino())) {
+            return Err(failed(format!(
+                "{target_kind} '{}' is a hardlink alias of a protected path",
+                canonical.display()
+            )));
+        }
+
+        if meta.is_dir() && !meta.file_type().is_symlink() {
+            let mut queue = VecDeque::from([(canonical.to_path_buf(), 0usize)]);
+            let mut visited = 0usize;
+
+            const MAX_CAP_SCAN_ENTRIES: usize = 10_000;
+            const MAX_CAP_SCAN_DEPTH: usize = 16;
+
+            while let Some((curr, depth)) = queue.pop_front() {
+                let entries = std::fs::read_dir(&curr).map_err(|e| {
+                    failed(format!(
+                        "failed to read {target_kind} directory '{}': {e}",
+                        curr.display()
+                    ))
+                })?;
+
+                for entry in entries {
+                    let entry = entry.map_err(|e| {
+                        failed(format!(
+                            "failed to read entry in {target_kind} directory '{}': {e}",
+                            curr.display()
+                        ))
+                    })?;
+                    visited += 1;
+
+                    if visited > MAX_CAP_SCAN_ENTRIES {
+                        return Err(failed(format!(
+                            "{target_kind} directory '{}' exceeds maximum scan limit of {MAX_CAP_SCAN_ENTRIES} entries",
+                            canonical.display()
+                        )));
+                    }
+
+                    let em = entry.path().symlink_metadata().map_err(|e| {
+                        failed(format!(
+                            "failed to inspect entry in {target_kind} directory '{}': {e}",
+                            entry.path().display()
+                        ))
+                    })?;
+
+                    if em.is_file() && em.nlink() > 1 {
+                        collect_opaque_inodes_for_dev(
+                            em.dev(),
+                            opaque_runtime_roots,
+                            protected_inodes,
+                            scanned_opaque_roots,
+                        )?;
+                    }
+
+                    if protected_inodes.contains(&(em.dev(), em.ino())) {
+                        return Err(failed(format!(
+                            "{target_kind} directory '{}' contains hardlink to protected path at '{}'",
+                            canonical.display(),
+                            entry.path().display()
+                        )));
+                    }
+
+                    if em.is_dir() && !em.file_type().is_symlink() {
+                        if depth >= MAX_CAP_SCAN_DEPTH {
+                            return Err(failed(format!(
+                                "{target_kind} directory '{}' depth exceeds maximum limit of {MAX_CAP_SCAN_DEPTH} at '{}'",
+                                canonical.display(),
+                                entry.path().display()
+                            )));
+                        }
+
+                        queue.push_back((entry.path(), depth + 1));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn mount_capabilities(
     command: &mut Command,
     policy: &EffectivePolicy,
@@ -709,8 +888,6 @@ fn mount_capabilities(
     let mut protected_inodes = protected_inodes.clone();
     let mut scanned_opaque_roots = HashSet::new();
     let mut validate_cap = |canonical: &Path| -> Result<(), RuntimeError> {
-        use std::os::unix::fs::MetadataExt;
-
         if crate::execution::process::is_reserved_system_path(canonical) {
             return Err(failed(format!(
                 "capability target '{}' is a reserved runtime path",
@@ -740,95 +917,13 @@ fn mount_capabilities(
             }
         }
 
-        if let Ok(meta) = std::fs::symlink_metadata(canonical) {
-            if meta.is_file() && meta.nlink() > 1 {
-                collect_opaque_inodes_for_dev(
-                    meta.dev(),
-                    opaque_runtime_roots,
-                    &mut protected_inodes,
-                    &mut scanned_opaque_roots,
-                )?;
-            }
-
-            if protected_inodes.contains(&(meta.dev(), meta.ino())) {
-                return Err(failed(format!(
-                    "capability target '{}' is a hardlink alias of a protected path",
-                    canonical.display()
-                )));
-            }
-
-            if meta.is_dir() && !meta.file_type().is_symlink() {
-                let mut queue = VecDeque::from([(canonical.to_path_buf(), 0usize)]);
-                let mut visited = 0usize;
-
-                const MAX_CAP_SCAN_ENTRIES: usize = 10_000;
-                const MAX_CAP_SCAN_DEPTH: usize = 16;
-
-                while let Some((curr, depth)) = queue.pop_front() {
-                    let entries = std::fs::read_dir(&curr).map_err(|e| {
-                        failed(format!(
-                            "failed to read capability directory '{}': {e}",
-                            curr.display()
-                        ))
-                    })?;
-
-                    for entry in entries {
-                        let entry = entry.map_err(|e| {
-                            failed(format!(
-                                "failed to read entry in capability directory '{}': {e}",
-                                curr.display()
-                            ))
-                        })?;
-                        visited += 1;
-
-                        if visited > MAX_CAP_SCAN_ENTRIES {
-                            return Err(failed(format!(
-                                "capability directory '{}' exceeds maximum scan limit of {MAX_CAP_SCAN_ENTRIES} entries",
-                                canonical.display()
-                            )));
-                        }
-
-                        let em = entry.path().symlink_metadata().map_err(|e| {
-                            failed(format!(
-                                "failed to inspect entry in capability directory '{}': {e}",
-                                entry.path().display()
-                            ))
-                        })?;
-
-                        if em.is_file() && em.nlink() > 1 {
-                            collect_opaque_inodes_for_dev(
-                                em.dev(),
-                                opaque_runtime_roots,
-                                &mut protected_inodes,
-                                &mut scanned_opaque_roots,
-                            )?;
-                        }
-
-                        if protected_inodes.contains(&(em.dev(), em.ino())) {
-                            return Err(failed(format!(
-                                "capability directory '{}' contains hardlink to protected path at '{}'",
-                                canonical.display(),
-                                entry.path().display()
-                            )));
-                        }
-
-                        if em.is_dir() && !em.file_type().is_symlink() {
-                            if depth >= MAX_CAP_SCAN_DEPTH {
-                                return Err(failed(format!(
-                                    "capability directory '{}' depth exceeds maximum limit of {MAX_CAP_SCAN_DEPTH} at '{}'",
-                                    canonical.display(),
-                                    entry.path().display()
-                                )));
-                            }
-
-                            queue.push_back((entry.path(), depth + 1));
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        validate_inode_against_protected(
+            canonical,
+            &mut protected_inodes,
+            opaque_runtime_roots,
+            &mut scanned_opaque_roots,
+            "capability target",
+        )
     };
 
     for path in &policy.persistent_read_write {
@@ -1299,6 +1394,16 @@ fn validate_mount_source(source: &Path, policy: &EffectivePolicy) -> Result<Path
             )));
         }
     }
+
+    let mut collected = collect_all_protected_inodes(policy)?;
+    let mut scanned_opaque_roots = HashSet::new();
+    validate_inode_against_protected(
+        &canonical,
+        &mut collected.inodes,
+        &collected.opaque_roots,
+        &mut scanned_opaque_roots,
+        "mount source",
+    )?;
 
     Ok(canonical)
 }
@@ -2207,6 +2312,41 @@ mod tests {
 
         assert!(validate_mounts(&[ancestor], &policy).is_err());
         assert!(validate_mounts(&[exact], &policy).is_err());
+    }
+
+    #[test]
+    fn test_rejects_mount_source_hardlink_to_protected_path() {
+        let workspace = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let secret = source.path().join("secret.key");
+        std::fs::write(&secret, "super_sensitive_secret").unwrap();
+
+        let policy = EffectivePolicy::new(crate::policy::BasePolicy::new(
+            crate::filesystem::ResolvedPath::from_canonical(workspace.path()),
+        ));
+        policy.protected_paths.write().unwrap().push(secret.clone());
+
+        let cache = tempfile::tempdir().unwrap();
+        let hardlink = cache.path().join("alias_secret.key");
+        std::fs::hard_link(&secret, &hardlink).unwrap();
+
+        // 1. Mounting directory containing hardlink to protected file must be rejected
+        let cache_mount = MountSpec::read_only(cache.path(), "/opt/orbit-cache/cache");
+        let err = validate_mounts(&[cache_mount], &policy).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("contains hardlink to protected path"),
+            "unexpected error: {err}"
+        );
+
+        // 2. Mounting hardlink file directly must be rejected
+        let direct_mount = MountSpec::read_only(&hardlink, "/opt/orbit-cache/alias");
+        let err = validate_mounts(&[direct_mount], &policy).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("is a hardlink alias of a protected path"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
