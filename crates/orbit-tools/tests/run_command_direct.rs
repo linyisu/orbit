@@ -193,6 +193,64 @@ async fn run_command_respects_session_grants_for_outside_paths() {
 }
 
 #[tokio::test]
+async fn run_command_ignores_remote_session_grants_for_local_execution() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let outside_temp = tempfile::tempdir().unwrap();
+
+    let workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    let outside_file = outside_temp.path().join("remote_target.txt");
+    fs::write(&outside_file, "initial").unwrap();
+
+    // Grant is recorded for a remote environment, not local
+    let resolved = ResolvedPath::resolve(&outside_file, None).unwrap();
+    workspace.policy().record_grant(FilesystemGrant {
+        environment: EnvironmentId::Remote("cluster-1".into()),
+        path: resolved,
+        read: true,
+        write: true,
+    });
+
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+
+    let script = format!("echo 'attempt write' > {}", outside_file.display());
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function("test", "run_command", json!({ "command": script })),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    match &request.preview {
+        approval::ApprovalPreview::Command(preview) => {
+            assert!(
+                preview.external_capabilities.is_empty(),
+                "remote session grants must not appear in local preview capabilities"
+            );
+            assert!(
+                !preview.external_write,
+                "remote session grants must not set local external_write"
+            );
+        }
+        _ => panic!("expected command preview"),
+    }
+    request.decision.send(true).unwrap();
+
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
+    // Writing to outside file must fail because the grant was remote only
+    assert_ne!(value["exit_code"], 0);
+    assert_eq!(fs::read_to_string(&outside_file).unwrap().trim(), "initial");
+}
+
+#[tokio::test]
 async fn run_command_rejects_deprecated_writable_snapshot_flag() {
     let ws_temp = tempfile::tempdir().unwrap();
     let workspace = match Workspace::new(ws_temp.path()) {

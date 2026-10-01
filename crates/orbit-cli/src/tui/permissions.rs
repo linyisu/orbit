@@ -70,6 +70,7 @@ mod tests {
         let root = workspace.path();
         let cmd_read = ApprovalPreview::Command(CommandPreview {
             command: "pwd".into(),
+            cwd: None,
             timeout_seconds: 30,
             workspace_access: CommandWorkspaceAccess::Read,
             network_allowed: true,
@@ -78,6 +79,7 @@ mod tests {
         });
         let cmd_rw = ApprovalPreview::Command(CommandPreview {
             command: "cargo build".into(),
+            cwd: None,
             timeout_seconds: 30,
             workspace_access: CommandWorkspaceAccess::ReadWrite,
             network_allowed: true,
@@ -149,6 +151,7 @@ mod tests {
 
         let external_command = ApprovalPreview::Command(CommandPreview {
             command: "write outside".into(),
+            cwd: None,
             timeout_seconds: 30,
             workspace_access: CommandWorkspaceAccess::ReadWrite,
             network_allowed: true,

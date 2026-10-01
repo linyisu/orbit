@@ -25,6 +25,7 @@ pub enum CommandWorkspaceAccess {
 #[derive(Clone, Debug)]
 pub struct CommandPreview {
     pub command: String,
+    pub cwd: Option<String>,
     pub timeout_seconds: u64,
     pub workspace_access: CommandWorkspaceAccess,
     pub network_allowed: bool,

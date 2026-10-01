@@ -227,10 +227,21 @@ pub fn remap_single_path(
         let Ok(target) = mount.normalized_target() else {
             continue;
         };
+        let mount_source_canon = mount.source.canonicalize().ok();
         for candidate in &candidates {
             if let Ok(rel) = candidate.strip_prefix(&mount.source) {
                 return Some(if rel.as_os_str().is_empty() {
-                    target
+                    target.clone()
+                } else {
+                    target.join(rel)
+                });
+            }
+            if let Some(rel) = mount_source_canon
+                .as_ref()
+                .and_then(|sc| candidate.strip_prefix(sc).ok())
+            {
+                return Some(if rel.as_os_str().is_empty() {
+                    target.clone()
                 } else {
                     target.join(rel)
                 });
@@ -242,6 +253,7 @@ pub fn remap_single_path(
     }
 
     // 2. Check workspace mapping (host workspace path mapped to /workspace)
+    let ws_canon = workspace_root.canonicalize().ok();
     for candidate in &candidates {
         if let Ok(rel) = candidate.strip_prefix(workspace_root) {
             return Some(if rel.as_os_str().is_empty() {
@@ -250,19 +262,50 @@ pub fn remap_single_path(
                 Path::new("/workspace").join(rel)
             });
         }
+        if let Some(rel) = ws_canon
+            .as_ref()
+            .and_then(|wc| candidate.strip_prefix(wc).ok())
+        {
+            return Some(if rel.as_os_str().is_empty() {
+                PathBuf::from("/workspace")
+            } else {
+                Path::new("/workspace").join(rel)
+            });
+        }
     }
 
-    // 3. Check external capability grants (mirrored directly in container)
+    // 3. Check external capability grants (mirrored directly in container at canonical path)
     for grant in external_grants {
         let grant_canon = grant.canonicalize().unwrap_or_else(|_| grant.clone());
-        for candidate in &candidates {
-            if *candidate == grant
-                || candidate.starts_with(grant)
-                || *candidate == grant_canon
-                || candidate.starts_with(&grant_canon)
-            {
-                return Some(path.to_path_buf());
+        if let Some(ref c) = canon {
+            if let Ok(rel) = c.strip_prefix(&grant_canon) {
+                return Some(if rel.as_os_str().is_empty() {
+                    grant_canon.clone()
+                } else {
+                    grant_canon.join(rel)
+                });
             }
+            if let Ok(rel) = c.strip_prefix(grant) {
+                return Some(if rel.as_os_str().is_empty() {
+                    grant_canon.clone()
+                } else {
+                    grant_canon.join(rel)
+                });
+            }
+        }
+        if let Ok(rel) = path.strip_prefix(&grant_canon) {
+            return Some(if rel.as_os_str().is_empty() {
+                grant_canon.clone()
+            } else {
+                grant_canon.join(rel)
+            });
+        }
+        if let Ok(rel) = path.strip_prefix(grant) {
+            return Some(if rel.as_os_str().is_empty() {
+                grant_canon.clone()
+            } else {
+                grant_canon.join(rel)
+            });
         }
     }
 
@@ -387,5 +430,27 @@ mod tests {
             env_unmounted.get("CARGO_HOME"),
             Some(&"/tmp/home/.cargo".to_string())
         );
+    }
+
+    #[test]
+    fn test_remap_single_path_symlink_to_external_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let ws = temp.path().join("workspace");
+        std::fs::create_dir(&ws).unwrap();
+
+        let real_cache = temp.path().join("real_cargo_cache");
+        std::fs::create_dir(&real_cache).unwrap();
+        let real_cache_canon = real_cache.canonicalize().unwrap();
+
+        let symlink_cache = temp.path().join("symlink_cargo_cache");
+        std::os::unix::fs::symlink(&real_cache, &symlink_cache).unwrap();
+
+        let container_home = Path::new("/tmp/home");
+        let external_grants = vec![real_cache_canon.clone()];
+
+        // Passing the host symlink path to remap_single_path must return the canonical path mounted in the container
+        let remapped =
+            remap_single_path(&symlink_cache, &ws, &[], &external_grants, container_home);
+        assert_eq!(remapped, Some(real_cache_canon));
     }
 }

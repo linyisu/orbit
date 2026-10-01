@@ -104,8 +104,20 @@ pub(crate) fn prepare_execution_spec_and_policy(
         std::path::Path::new("/tmp/home")
     };
 
-    let mut external_paths = policy.external_read.clone();
-    external_paths.extend(policy.external_read_write.clone());
+    let mut external_paths = Vec::new();
+    for path in policy
+        .external_read
+        .iter()
+        .chain(policy.external_read_write.iter())
+    {
+        let resolved = ResolvedPath::resolve(path, Some(&env.workspace_root)).map_err(|e| {
+            crate::error::failed(format!(
+                "failed to resolve external path '{}': {e}",
+                path.display()
+            ))
+        })?;
+        external_paths.push(resolved.canonical().to_path_buf());
+    }
 
     crate::execution::environment::remap_path_environment(
         &mut merged_env,
@@ -158,15 +170,48 @@ pub(crate) fn prepare_execution_spec_and_policy(
         }
     }
 
-    for path in &policy.external_read {
-        effective
-            .persistent_read
-            .push(ResolvedPath::from_canonical(path));
-    }
-    for path in &policy.external_read_write {
-        effective
-            .persistent_read_write
-            .push(ResolvedPath::from_canonical(path));
+    {
+        let protected_guard = effective
+            .protected_paths
+            .read()
+            .map_err(|_| crate::error::failed("protected path policy lock is poisoned"))?;
+
+        for path in &policy.external_read {
+            let resolved = ResolvedPath::resolve(path, Some(&env.workspace_root)).map_err(|e| {
+                crate::error::failed(format!(
+                    "failed to resolve external_read path '{}': {e}",
+                    path.display()
+                ))
+            })?;
+            for prot in protected_guard.iter() {
+                if resolved.canonical() == prot || resolved.canonical().starts_with(prot) {
+                    return Err(crate::error::failed(format!(
+                        "external_read path '{}' overlaps protected path '{}'",
+                        resolved.canonical().display(),
+                        prot.display()
+                    )));
+                }
+            }
+            effective.persistent_read.push(resolved);
+        }
+        for path in &policy.external_read_write {
+            let resolved = ResolvedPath::resolve(path, Some(&env.workspace_root)).map_err(|e| {
+                crate::error::failed(format!(
+                    "failed to resolve external_read_write path '{}': {e}",
+                    path.display()
+                ))
+            })?;
+            for prot in protected_guard.iter() {
+                if resolved.canonical() == prot || resolved.canonical().starts_with(prot) {
+                    return Err(crate::error::failed(format!(
+                        "external_read_write path '{}' overlaps protected path '{}'",
+                        resolved.canonical().display(),
+                        prot.display()
+                    )));
+                }
+            }
+            effective.persistent_read_write.push(resolved);
+        }
     }
 
     Ok((spec, effective))
@@ -366,6 +411,39 @@ mod tests {
         assert_eq!(
             spec_mounted.env.get("RUSTUP_HOME"),
             Some(&"/tmp/home/.rustup".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prepare_spec_rejects_symlink_to_protected_file_in_external_read() {
+        let ws_temp = tempfile::tempdir().unwrap();
+        let ws = ws_temp.path().canonicalize().unwrap();
+        let env = ExecutionEnvironment::new(&ws, &ws).unwrap();
+
+        // Create a protected secret file inside workspace
+        let secret = ws.join("secret.env");
+        std::fs::write(&secret, "PASSWORD=123").unwrap();
+
+        // Create a symlink outside the workspace pointing to the protected secret
+        let outside_temp = tempfile::tempdir().unwrap();
+        let symlink_path = outside_temp.path().join("external_symlink");
+        std::os::unix::fs::symlink(&secret, &symlink_path).unwrap();
+
+        let policy = ExecutionPolicy::dev_default()
+            .with_protected_paths(vec![secret.clone()])
+            .with_external_read(vec![symlink_path]);
+
+        let req = ExecutionRequest::new("cat external_symlink", &ws, Duration::from_secs(5));
+        let result = prepare_execution_spec_and_policy(&req, &policy, &env);
+
+        assert!(
+            result.is_err(),
+            "external authorization pointing to a protected file via symlink must be rejected"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("overlaps protected path"),
+            "unexpected error message: {err}"
         );
     }
 }

@@ -325,6 +325,9 @@ impl Tool for RunCommand {
 
             if let Ok(store) = self.workspace.policy().session_grants().read() {
                 for grant in store.grants() {
+                    if !grant.environment.is_local() {
+                        continue;
+                    }
                     external_write |= grant.write;
                     let mode = if grant.write { "rw" } else { "ro" };
 
@@ -343,6 +346,7 @@ impl Tool for RunCommand {
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     command: args.command.clone(),
+                    cwd: args.cwd.clone().filter(|s| !s.is_empty()),
                     workspace_access,
                     timeout_seconds,
                     network_allowed,
@@ -445,6 +449,9 @@ impl Tool for RunCommand {
 
             if let Ok(store) = self.workspace.policy().session_grants().read() {
                 for grant in store.grants() {
+                    if !grant.environment.is_local() {
+                        continue;
+                    }
                     if grant.write {
                         execution_policy
                             .external_read_write

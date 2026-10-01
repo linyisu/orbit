@@ -480,6 +480,8 @@ impl BwrapSandboxBackend {
             writable_snapshot_source.is_some(),
             spec.scratch.is_some(),
             &spec.env,
+            mounts,
+            Some(policy),
         );
 
         Ok(command)
@@ -783,6 +785,7 @@ fn validate_inode_against_protected(
     opaque_runtime_roots: &[PathBuf],
     scanned_opaque_roots: &mut HashSet<PathBuf>,
     target_kind: &str,
+    max_scan_entries: Option<usize>,
 ) -> Result<(), RuntimeError> {
     use std::os::unix::fs::MetadataExt;
 
@@ -807,8 +810,7 @@ fn validate_inode_against_protected(
             let mut queue = VecDeque::from([(canonical.to_path_buf(), 0usize)]);
             let mut visited = 0usize;
 
-            const MAX_CAP_SCAN_ENTRIES: usize = 10_000;
-            const MAX_CAP_SCAN_DEPTH: usize = 16;
+            let max_depth = if max_scan_entries.is_some() { 16 } else { 64 };
 
             while let Some((curr, depth)) = queue.pop_front() {
                 let entries = std::fs::read_dir(&curr).map_err(|e| {
@@ -827,9 +829,9 @@ fn validate_inode_against_protected(
                     })?;
                     visited += 1;
 
-                    if visited > MAX_CAP_SCAN_ENTRIES {
+                    if let Some(limit) = max_scan_entries.filter(|&limit| visited > limit) {
                         return Err(failed(format!(
-                            "{target_kind} directory '{}' exceeds maximum scan limit of {MAX_CAP_SCAN_ENTRIES} entries",
+                            "{target_kind} directory '{}' exceeds maximum scan limit of {limit} entries",
                             canonical.display()
                         )));
                     }
@@ -848,20 +850,20 @@ fn validate_inode_against_protected(
                             protected_inodes,
                             scanned_opaque_roots,
                         )?;
-                    }
 
-                    if protected_inodes.contains(&(em.dev(), em.ino())) {
-                        return Err(failed(format!(
-                            "{target_kind} directory '{}' contains hardlink to protected path at '{}'",
-                            canonical.display(),
-                            entry.path().display()
-                        )));
+                        if protected_inodes.contains(&(em.dev(), em.ino())) {
+                            return Err(failed(format!(
+                                "{target_kind} directory '{}' contains hardlink to protected path at '{}'",
+                                canonical.display(),
+                                entry.path().display()
+                            )));
+                        }
                     }
 
                     if em.is_dir() && !em.file_type().is_symlink() {
-                        if depth >= MAX_CAP_SCAN_DEPTH {
+                        if depth >= max_depth {
                             return Err(failed(format!(
-                                "{target_kind} directory '{}' depth exceeds maximum limit of {MAX_CAP_SCAN_DEPTH} at '{}'",
+                                "{target_kind} directory '{}' depth exceeds maximum limit of {max_depth} at '{}'",
                                 canonical.display(),
                                 entry.path().display()
                             )));
@@ -923,6 +925,7 @@ fn mount_capabilities(
             opaque_runtime_roots,
             &mut scanned_opaque_roots,
             "capability target",
+            Some(10_000),
         )
     };
 
@@ -1403,6 +1406,7 @@ fn validate_mount_source(source: &Path, policy: &EffectivePolicy) -> Result<Path
         &collected.opaque_roots,
         &mut scanned_opaque_roots,
         "mount source",
+        None,
     )?;
 
     Ok(canonical)
@@ -1415,7 +1419,7 @@ fn mount_toolchain_and_mounts(
     policy: &EffectivePolicy,
 ) -> Result<(), RuntimeError> {
     if let Some(path) = rust_toolchain {
-        let path = path.canonicalize().map_err(failed)?;
+        let path = validate_mount_source(path, policy)?;
 
         if !path.join("bin/rustc").is_file()
             || !path.join("bin/cargo").is_file()
@@ -1471,6 +1475,8 @@ pub fn resolve_container_cwd(
         return cwd.to_path_buf();
     }
 
+    let cwd_canon = cwd.canonicalize().ok();
+
     if let Ok(rel) = cwd.strip_prefix(ws_target) {
         if rel.as_os_str().is_empty() {
             return PathBuf::from("/workspace");
@@ -1478,17 +1484,77 @@ pub fn resolve_container_cwd(
             return Path::new("/workspace").join(rel);
         }
     }
+    if let Some(rel) = cwd_canon
+        .as_ref()
+        .and_then(|cc| cc.strip_prefix(ws_target).ok())
+    {
+        return if rel.as_os_str().is_empty() {
+            PathBuf::from("/workspace")
+        } else {
+            Path::new("/workspace").join(rel)
+        };
+    }
+
+    let ws_canon = ws_target.canonicalize().ok();
+    if let Some(rel) = ws_canon.as_ref().and_then(|wc| cwd.strip_prefix(wc).ok()) {
+        return if rel.as_os_str().is_empty() {
+            PathBuf::from("/workspace")
+        } else {
+            Path::new("/workspace").join(rel)
+        };
+    }
+    if let Some(rel) = ws_canon
+        .as_ref()
+        .and_then(|wc| cwd_canon.as_ref().and_then(|cc| cc.strip_prefix(wc).ok()))
+    {
+        return if rel.as_os_str().is_empty() {
+            PathBuf::from("/workspace")
+        } else {
+            Path::new("/workspace").join(rel)
+        };
+    }
 
     for mount in mounts {
         let Ok(target) = mount.normalized_target() else {
             continue;
         };
+        let mount_source_canon = mount.source.canonicalize().ok();
         if let Ok(rel) = cwd.strip_prefix(&mount.source) {
-            if rel.as_os_str().is_empty() {
-                return target;
+            return if rel.as_os_str().is_empty() {
+                target
             } else {
-                return target.join(rel);
-            }
+                target.join(rel)
+            };
+        }
+        if let Some(rel) = mount_source_canon
+            .as_ref()
+            .and_then(|sc| cwd.strip_prefix(sc).ok())
+        {
+            return if rel.as_os_str().is_empty() {
+                target
+            } else {
+                target.join(rel)
+            };
+        }
+        if let Some(rel) = cwd_canon
+            .as_ref()
+            .and_then(|cc| cc.strip_prefix(&mount.source).ok())
+        {
+            return if rel.as_os_str().is_empty() {
+                target
+            } else {
+                target.join(rel)
+            };
+        }
+        if let Some(rel) = mount_source_canon
+            .as_ref()
+            .and_then(|sc| cwd_canon.as_ref().and_then(|cc| cc.strip_prefix(sc).ok()))
+        {
+            return if rel.as_os_str().is_empty() {
+                target
+            } else {
+                target.join(rel)
+            };
         }
         if cwd.starts_with(&target) {
             return cwd.to_path_buf();
@@ -1565,6 +1631,55 @@ fn mount_scratch_and_tmp(
     Ok(())
 }
 
+fn is_valid_container_path(
+    path_str: &str,
+    mounts: &[MountSpec],
+    policy: Option<&EffectivePolicy>,
+) -> bool {
+    let p = Path::new(path_str);
+    if p.starts_with("/workspace")
+        || p.starts_with("/scratch")
+        || p.starts_with("/tmp")
+        || p.starts_with("/opt/orbit-rust")
+    {
+        return true;
+    }
+    for m in mounts {
+        if m.normalized_target()
+            .map(|target| p == target || p.starts_with(&target))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    if let Some(policy) = policy {
+        for cap in &policy.persistent_read {
+            let c = cap.canonical();
+            if p == c || p.starts_with(c) {
+                return true;
+            }
+        }
+        for cap in &policy.persistent_read_write {
+            let c = cap.canonical();
+            if p == c || p.starts_with(c) {
+                return true;
+            }
+        }
+        if let Ok(store) = policy.session_grants.read() {
+            for grant in store.grants() {
+                if grant.environment.is_local() {
+                    let c = grant.path.canonical();
+                    if p == c || p.starts_with(c) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+#[allow(clippy::too_many_arguments)]
 fn configure_limits_and_entrypoint(
     command: &mut Command,
     prlimit: &Path,
@@ -1573,6 +1688,8 @@ fn configure_limits_and_entrypoint(
     is_writable_tmpfs: bool,
     persistent_home: bool,
     custom_env: &std::collections::BTreeMap<String, String>,
+    mounts: &[MountSpec],
+    policy: Option<&EffectivePolicy>,
 ) {
     let default_home = if persistent_home {
         "/scratch/home"
@@ -1593,7 +1710,7 @@ fn configure_limits_and_entrypoint(
     };
 
     let home_val = if let Some(h) = custom_env.get("HOME") {
-        if h.starts_with("/workspace") || h.starts_with("/scratch") || h.starts_with("/tmp") {
+        if is_valid_container_path(h, mounts, policy) {
             h.clone()
         } else {
             default_home.to_string()
@@ -1603,7 +1720,7 @@ fn configure_limits_and_entrypoint(
     };
 
     let tmpdir_val = if let Some(t) = custom_env.get("TMPDIR") {
-        if t.starts_with("/tmp") || t.starts_with("/workspace") || t.starts_with("/scratch") {
+        if is_valid_container_path(t, mounts, policy) {
             t.clone()
         } else {
             "/tmp".to_string()
@@ -1613,11 +1730,7 @@ fn configure_limits_and_entrypoint(
     };
 
     let cargo_home = if let Some(c) = custom_env.get("CARGO_HOME") {
-        if c.starts_with("/workspace")
-            || c.starts_with("/scratch")
-            || c.starts_with("/tmp")
-            || c.starts_with("/opt")
-        {
+        if is_valid_container_path(c, mounts, policy) {
             Some(c.clone())
         } else {
             Some(format!("{default_home}/.cargo"))
@@ -1629,11 +1742,7 @@ fn configure_limits_and_entrypoint(
     };
 
     let rustup_home = if let Some(r) = custom_env.get("RUSTUP_HOME") {
-        if r.starts_with("/workspace")
-            || r.starts_with("/scratch")
-            || r.starts_with("/tmp")
-            || r.starts_with("/opt")
-        {
+        if is_valid_container_path(r, mounts, policy) {
             Some(r.clone())
         } else {
             Some(format!("{default_home}/.rustup"))
@@ -2127,7 +2236,12 @@ pub async fn run_with_resources_and_output(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution::process::{is_reserved_mount_target, normalize_mount_target};
+    use crate::{
+        capability::NetworkPolicy,
+        execution::process::{is_reserved_mount_target, normalize_mount_target},
+        filesystem::ResolvedPath,
+        policy::BasePolicy,
+    };
 
     #[tokio::test]
     async fn capture_keeps_bounded_unicode_tail_and_counts_all_output() {
@@ -2965,6 +3079,8 @@ mod tests {
             false,
             false,
             &Default::default(),
+            &[],
+            None,
         );
 
         let limit_args = cmd_limits
@@ -2995,6 +3111,8 @@ mod tests {
             false,
             false,
             &Default::default(),
+            &[],
+            None,
         );
 
         let explicit_args = cmd_explicit
@@ -3078,6 +3196,8 @@ mod tests {
             false,
             false,
             &custom_env,
+            &[],
+            None,
         );
 
         let args = cmd
@@ -3108,5 +3228,128 @@ mod tests {
 
         let rustup_idx = args.iter().position(|a| a == "RUSTUP_HOME").unwrap();
         assert_eq!(args[rustup_idx + 1], "/tmp/home/.rustup");
+    }
+
+    #[test]
+    fn test_resolve_container_cwd_with_symlink_mounts() {
+        let temp = tempfile::tempdir().unwrap();
+        let ws = temp.path().join("workspace");
+        std::fs::create_dir(&ws).unwrap();
+
+        let real_cache = temp.path().join("real_cache");
+        std::fs::create_dir_all(real_cache.join("sub")).unwrap();
+        let real_cache_canon = real_cache.canonicalize().unwrap();
+
+        let symlink_cache = temp.path().join("symlink_cache");
+        std::os::unix::fs::symlink(&real_cache, &symlink_cache).unwrap();
+
+        // Mount configured using symlink source
+        let mounts = vec![MountSpec::read_only(&symlink_cache, "/opt/cache")];
+
+        // 1. CWD is the canonical real path inside the cache
+        let resolved = resolve_container_cwd(&ws, &mounts, Some(&real_cache_canon.join("sub")));
+        assert_eq!(resolved, PathBuf::from("/opt/cache/sub"));
+
+        // 2. CWD is the symlink path inside the cache
+        let resolved_sym = resolve_container_cwd(&ws, &mounts, Some(&symlink_cache.join("sub")));
+        assert_eq!(resolved_sym, PathBuf::from("/opt/cache/sub"));
+    }
+
+    #[test]
+    fn test_configure_limits_and_entrypoint_preserves_mounted_home() {
+        let mut cmd = Command::new("/usr/bin/bwrap");
+        let limits = ProcessLimits::default();
+        let mut custom_env = std::collections::BTreeMap::new();
+        custom_env.insert("HOME".to_string(), "/opt/review-home".to_string());
+        custom_env.insert(
+            "CARGO_HOME".to_string(),
+            "/opt/review-home/.cargo".to_string(),
+        );
+
+        let mounts = vec![MountSpec::read_write("/host/home", "/opt/review-home")];
+
+        configure_limits_and_entrypoint(
+            &mut cmd,
+            Path::new("/usr/bin/prlimit"),
+            &limits,
+            false,
+            false,
+            false,
+            &custom_env,
+            &mounts,
+            None,
+        );
+
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        let home_idx = args.iter().position(|a| a == "HOME").unwrap();
+        assert_eq!(args[home_idx + 1], "/opt/review-home");
+
+        let cargo_idx = args.iter().position(|a| a == "CARGO_HOME").unwrap();
+        assert_eq!(args[cargo_idx + 1], "/opt/review-home/.cargo");
+    }
+
+    #[test]
+    fn test_rust_toolchain_mount_rejects_protected_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let toolchain = temp.path().join("toolchain");
+        std::fs::create_dir_all(toolchain.join("bin")).unwrap();
+        std::fs::create_dir_all(toolchain.join("lib/rustlib")).unwrap();
+        std::fs::write(toolchain.join("bin/rustc"), "#!/bin/sh\n").unwrap();
+        std::fs::write(toolchain.join("bin/cargo"), "#!/bin/sh\n").unwrap();
+        let secret = toolchain.join("secret_token.txt");
+        std::fs::write(&secret, "super_secret").unwrap();
+
+        let base = BasePolicy {
+            workspace: ResolvedPath::resolve(temp.path(), None).unwrap(),
+            network: NetworkPolicy::Deny,
+        };
+        let policy = EffectivePolicy::new(base);
+        policy
+            .protected_paths
+            .write()
+            .unwrap()
+            .push(secret.canonicalize().unwrap());
+
+        let mut cmd = Command::new("/usr/bin/bwrap");
+        let result = mount_toolchain_and_mounts(&mut cmd, Some(&toolchain), &[], &policy);
+        assert!(
+            result.is_err(),
+            "toolchain containing protected path must be rejected"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("overlaps protected path"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_mount_source_allows_more_than_10000_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("large_cache");
+        std::fs::create_dir(&cache_dir).unwrap();
+
+        // Create 10,005 dummy files to exceed 10,000 entries
+        for i in 0..10_005 {
+            std::fs::write(cache_dir.join(format!("file_{i}.tmp")), b"").unwrap();
+        }
+
+        let base = BasePolicy {
+            workspace: ResolvedPath::resolve(temp.path(), None).unwrap(),
+            network: NetworkPolicy::Deny,
+        };
+        let policy = EffectivePolicy::new(base);
+
+        let validated = validate_mount_source(&cache_dir, &policy);
+        assert!(
+            validated.is_ok(),
+            "large mount source directory (> 10000 entries) must succeed, got: {:?}",
+            validated.err()
+        );
     }
 }

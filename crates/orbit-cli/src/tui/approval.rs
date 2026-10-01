@@ -160,7 +160,8 @@ pub(super) fn needed_height(preview: &orbit_tools::approval::ApprovalPreview) ->
     match preview {
         orbit_tools::approval::ApprovalPreview::Command(p) => {
             let cmd_lines = p.command.lines().count().clamp(1, 6) as u16;
-            2 + cmd_lines + 1
+            let cwd_lines = if p.cwd.is_some() { 1 } else { 0 };
+            2 + cmd_lines + cwd_lines + 1
         }
         orbit_tools::approval::ApprovalPreview::Write(_) => 10,
         orbit_tools::approval::ApprovalPreview::Delete(p) => {
@@ -369,6 +370,15 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             ];
 
             let mut lines = Vec::new();
+            if let Some(ref cwd) = preview.cwd {
+                lines.push(Line::from(vec![
+                    Span::styled("cwd: ", Style::default().fg(crate::tui::theme::THEME.muted)),
+                    Span::styled(
+                        visible(cwd),
+                        Style::default().fg(crate::tui::theme::THEME.description),
+                    ),
+                ]));
+            }
             for (i, line) in preview.command.lines().enumerate() {
                 let prefix = if i == 0 { "$ " } else { "  " };
                 lines.push(Line::from(vec![
