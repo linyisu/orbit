@@ -7,6 +7,10 @@ pub mod verification;
 
 pub use capability::{EnvironmentId, FilesystemAccess, FilesystemCapability, NetworkPolicy};
 pub use error::RuntimeError;
+pub use execution::{
+    BwrapBackend, ExecutionBackend, ExecutionEnvironment, ExecutionManager, ExecutionPolicy,
+    ExecutionRequest, ExecutionResult, ResourceLimits,
+};
 #[allow(deprecated)]
 pub use execution::{
     BwrapSandboxBackend, CommandResult, DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_MAX_MEMORY_BYTES,

@@ -1,5 +1,20 @@
+pub mod backend;
+pub mod environment;
+pub mod manager;
+pub mod output;
+pub mod policy;
 pub mod process;
+pub mod request;
+pub mod resources;
 pub mod sandbox;
+
+pub use backend::{BwrapBackend, ExecutionBackend};
+pub use environment::ExecutionEnvironment;
+pub use manager::ExecutionManager;
+pub use output::OutputPreview;
+pub use policy::ExecutionPolicy;
+pub use request::{ExecutionRequest, ExecutionResult};
+pub use resources::ResourceLimits;
 
 pub use process::{
     CommandResult, DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_MAX_MEMORY_BYTES, DEFAULT_MAX_OPEN_FILES,
