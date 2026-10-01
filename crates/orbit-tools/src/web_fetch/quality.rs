@@ -1,22 +1,23 @@
 //! Detect known JavaScript-only HTML shells before returning page content.
 
+const SHELL_MAX_CHARS: usize = 600;
+const SHELL_MESSAGES: &[&str] = &[
+    "for full functionality of this site it is necessary to enable javascript",
+    "you need to enable javascript to run this app",
+    "please enable javascript to continue",
+    "javascript is required to run this application",
+    "请启用javascript",
+    "请启用 javascript",
+];
+
 pub(super) fn javascript_shell(text: &str) -> bool {
     let text = text
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase();
-    text.len() < 600
-        && [
-            "for full functionality of this site it is necessary to enable javascript",
-            "you need to enable javascript to run this app",
-            "please enable javascript to continue",
-            "javascript is required to run this application",
-            "请启用javascript",
-            "请启用 javascript",
-        ]
-        .iter()
-        .any(|message| text.contains(message))
+    text.chars().count() < SHELL_MAX_CHARS
+        && SHELL_MESSAGES.iter().any(|message| text.contains(message))
 }
 
 #[cfg(test)]

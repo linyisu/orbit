@@ -37,6 +37,8 @@ futures-util = "0.3.31"
 tokio-tungstenite = "0.28.0"
 globset = "0.4.18"
 html2text = "0.17.1"
+encoding_rs = "0.8.35"
+httpdate = "1.0.3"
 ignore = "0.4.33"
 libc = "0.2.189"
 image = { version = "0.25.9", default-features = false, features = ["gif", "jpeg", "png", "webp"] }

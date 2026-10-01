@@ -26,7 +26,11 @@ pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
         results.push(SearchResult {
             title,
             url,
-            snippet: find(&card, "p").map(|node| text(&node)).unwrap_or_default(),
+            snippet: find_class(&card, "b_caption")
+                .and_then(|caption| find(&caption, "p"))
+                .or_else(|| find(&card, "p"))
+                .map(|node| text(&node))
+                .unwrap_or_default(),
         });
         if results.len() >= limit {
             break;
@@ -48,15 +52,23 @@ fn attr(node: &Handle, key: &str) -> Option<String> {
 
 fn collect(node: &Handle, cards: &mut Vec<Handle>) {
     // Restrict extraction to organic results, excluding navigation and ads.
-    if node.element_name().as_deref() == Some("li")
-        && attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == "b_algo"))
-    {
+    if attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == "b_algo")) {
         cards.push(node.clone());
         return;
     }
     for child in node.children.borrow().iter() {
         collect(child, cards);
     }
+}
+
+fn find_class(node: &Handle, class: &str) -> Option<Handle> {
+    if attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == class)) {
+        return Some(node.clone());
+    }
+    node.children
+        .borrow()
+        .iter()
+        .find_map(|child| find_class(child, class))
 }
 
 fn find(node: &Handle, tag: &str) -> Option<Handle> {
@@ -112,6 +124,14 @@ fn target(href: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parses_sanitized_live_result_cards() {
+        let results = parse_results(include_str!("fixtures/bing-results.html"), 10);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].url, "https://github.com/atx/wtype");
+        assert!(!results[0].snippet.is_empty());
+    }
+
     #[test]
     fn extracts_only_organic_results_and_keeps_snippets_with_their_card() {
         let body = r#"<h2><a href="https://example.org/ad">Ad</a></h2>

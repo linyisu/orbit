@@ -957,7 +957,7 @@ mod tests {
     #[tokio::test]
     async fn openai_chat_uses_chat_completions_and_bearer_auth() {
         let (base_url, request) = test_server(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"id\":\"chat-1\",\"model\":\"mock\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}",
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"id\":\"chat-1\",\"model\":\"mock\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello\",\"tool_calls\":null},\"finish_reason\":\"stop\"}]}",
         )
         .await;
         let client = client(
@@ -1097,7 +1097,7 @@ mod tests {
     async fn stream_accepts_done_frame_without_trailing_separator() {
         let (base_url, _) = test_server(concat!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
-            "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hello\",\"tool_calls\":null},\"finish_reason\":null}]}\n\n",
             "data: [DONE]",
         ))
         .await;

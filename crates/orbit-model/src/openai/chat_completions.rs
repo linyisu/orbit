@@ -199,6 +199,16 @@ pub(crate) fn stream(
     })
 }
 
+// Compatible gateways may encode absent optional arrays as explicit null.
+// Keep malformed non-array values and required completion choices as errors.
+fn null_as_empty<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Deserialize)]
 struct WireCompletionResponse {
     id: Option<String>,
@@ -216,13 +226,13 @@ struct WireChoice {
 #[derive(Deserialize)]
 struct WireMessage {
     content: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     tool_calls: Vec<ToolCall>,
 }
 
 #[derive(Deserialize)]
 struct WireStreamResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     choices: Vec<WireStreamChoice>,
     usage: Option<Usage>,
 }
@@ -237,7 +247,7 @@ struct WireStreamChoice {
 struct WireDelta {
     content: Option<String>,
     reasoning_content: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     tool_calls: Vec<WireToolCallDelta>,
 }
 
@@ -258,6 +268,33 @@ struct WireFunctionDelta {
 mod input_tests {
     use super::*;
     use crate::types::Attachment;
+
+    #[test]
+    fn optional_wire_arrays_accept_missing_null_and_empty_but_reject_wrong_types() {
+        for fields in [
+            json!({}),
+            json!({"tool_calls": null}),
+            json!({"tool_calls": []}),
+        ] {
+            let mut message = json!({"content": "hello"});
+            message
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            let parsed: WireMessage = serde_json::from_value(message.clone()).unwrap();
+            assert!(parsed.tool_calls.is_empty());
+            let parsed: WireDelta = serde_json::from_value(message).unwrap();
+            assert!(parsed.tool_calls.is_empty());
+        }
+        for invalid in [json!({}), json!("oops"), json!(1)] {
+            assert!(serde_json::from_value::<WireDelta>(json!({"tool_calls": invalid})).is_err());
+        }
+        let usage: WireStreamResponse = serde_json::from_value(json!({"choices": null})).unwrap();
+        assert!(usage.choices.is_empty());
+        assert!(
+            serde_json::from_value::<WireCompletionResponse>(json!({"choices": null})).is_err()
+        );
+    }
 
     #[test]
     fn replay_omits_empty_tool_calls_but_preserves_actual_calls() {

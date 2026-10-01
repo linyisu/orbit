@@ -58,7 +58,7 @@ fn attribute(node: &Handle, key: &str) -> Option<String> {
 }
 
 fn collect_headings(node: &Handle, headings: &mut Vec<Handle>) {
-    if node.element_name().as_deref() == Some("h3") {
+    if matches!(node.element_name().as_deref(), Some("h2" | "h3")) {
         headings.push(node.clone());
     }
     for child in node.children.borrow().iter() {
@@ -128,7 +128,7 @@ fn result_snippet(heading: &Handle) -> String {
 fn find_snippet(node: &Handle) -> Option<Handle> {
     if matches!(
         node.element_name().as_deref(),
-        Some("a" | "h3" | "script" | "style" | "nav")
+        Some("a" | "h2" | "h3" | "script" | "style" | "nav")
     ) {
         return None;
     }
@@ -147,6 +147,14 @@ fn find_snippet(node: &Handle) -> Option<Handle> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn accepts_alternate_heading_levels_and_reports_empty_challenge() {
+        let body = r#"<section><a href="https://example.org/a"><h2>Alternate heading</h2></a><div class="VwiC3b">A snippet</div></section>"#;
+        let results = parse_results(body, 10);
+        assert_eq!(results[0].title, "Alternate heading");
+        assert_eq!(results[0].snippet, "A snippet");
+        assert!(parse_results("<html>Please verify</html>", 10).is_empty());
+    }
     #[test]
     fn snippets_stay_inside_their_result_and_preserve_nested_text() {
         let html = r#"

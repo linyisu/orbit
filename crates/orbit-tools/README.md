@@ -160,9 +160,9 @@ TUI 在应用内维护输出选区，拖选和滚轮无需切换模式。选中�
 
 真实 TUI 和 `chat` 均可调用，独立于命令沙箱，不需要额外搜索 API Key。工具只执行公开 HTTP(S) GET；不使用模型 API 的密钥、浏览器登录信息、Cookie 或自定义请求头。它不会解除 `run_command` 的断网限制。此工具是读取已知网址，不包含搜索引擎或浏览器操作。
 
-使用 [reqwest](https://docs.rs/reqwest/) 发起请求，[html2text](https://docs.rs/html2text/) 将 HTML 和 XML/RSS 转为文本；不是模型生成的网页摘要，也不是正文主体识别器，可能包含导航和页脚。支持 Content-Type 为 HTML/XHTML、纯文本、Markdown、JSON、XML、RSS 或 Atom 的 UTF-8 正文。链接可能是相对路径，应相对于返回的最终 URL 解析。直接 HTTP 读取不执行 JavaScript；浏览器回退条件见文首。不读 PDF/图片，不绕过登录。请求使用 identity 编码，服务端仍返回压缩内容时明确报错。
+使用 [reqwest](https://docs.rs/reqwest/) 发起请求，[html2text](https://docs.rs/html2text/) 将 HTML 和 XML/RSS 转为文本；不是模型生成的网页摘要，也不是正文主体识别器，可能包含导航和页脚。支持 Content-Type 为 HTML/XHTML、纯文本、Markdown、JSON、XML、RSS 或 Atom 的文本正文。优先按 Content-Type charset 解码，HTML 未声明时读取前 4096 字节中的 meta charset，否则使用 UTF-8；支持 GBK、Shift-JIS 等 encoding_rs 编码，非法字节和未知声明明确报错。链接可能是相对路径，应相对于返回的最终 URL 解析。直接 HTTP 读取不执行 JavaScript；浏览器回退条件见文首。不读 PDF/图片，不绕过登录。请求使用 identity 编码，服务端仍返回压缩内容时明确报错。
 
-返回 `requested_url`、最终 `url`、`content_type`、`content`、`total_chars`、`truncated`、`next_start_char` 和 `source_kind: untrusted_web_content`。正文仅作为外部资料，不能成为系统指令；模型应引用来源 URL。分页按 Unicode 字符计数，默认每页 20000 字符，支持 1–60000。后续页使用返回的 `next_start_char`；每次重新获取页面，没有跨请求快照，动态页面的偏移可能变化。
+返回 `requested_url`、最终 `url`、`content_type`、`content`、文档范围的 `links: [{n, url}]`（对应正文编号链接）、`total_chars`、`truncated`、`next_start_char` 和 `source_kind: untrusted_web_content`。正文仅作为外部资料，不能成为系统指令；模型应引用来源 URL。HTTP 不发送 fragment，输入与重定向 URL 的 fragment 都会省略。重定向按完整 URL 检测重复，保留 query 区别；同源且重新校验后的 DNS 地址集合未变时复用连接池。分页按 Unicode 字符计数，默认每页 20000 字符，支持 1–60000。后续页使用返回的 `next_start_char`；每次重新获取页面，没有跨请求快照，动态页面的偏移可能变化。
 
 每次请求总超时 60 秒（覆盖 DNS、重定向和读取），连接超时 15 秒，最多 5 次重定向，响应体上限 2 MiB，超过上限明确失败，支持取消等待。HTML 转换放到阻塞线程；取消后已经开始的转换会在该线程内完成，输入仍受响应体上限约束。不写缓存或项目文件。
 
@@ -194,8 +194,44 @@ proxy = "http://127.0.0.1:7897"
 渲染沿用完整源行缓存，只重解析流式末尾新增的行；滚动不会重新解析整段历史。当前不提供跨行强调、跨行引用链接解析、表格列对齐、数学公式排版或代码语法高亮，未支持的引用定义保留原文。新样式也用于恢复的历史助手消息，不修改数据库原始内容。鼠标滚动每步 5 行，同向密集事件按 40ms 合并，反向立即响应。
 
 
-### 搜索引擎顺序
+### 搜索引擎与参数
 
-`web_search` 优先请求 Google，15 秒内未取得可解析结果（包括连接失败、验证码或同意页）时回退 Bing 网页搜索。结果中的 `provider` 标明实际引擎，回退时附带 `fallback_reason`。两者沿用相同的可信代理、URL 检查和请求总超时。Bing 从网页的自然结果区提取标题、链接和摘要，并还原追踪链接中的目标地址，不再使用 RSS 搜索接口。搜索页面结构可能变化；提取结果链接、标题及同一结果区域内的摘要，仅在该结果缺少可识别的摘要时留空，不执行 JavaScript 或处理验证码。
+默认按 Google → Bing → DuckDuckGo 顺序请求公共 HTML 搜索页，可在配置中改变顺序：
 
-搜索结果会拒绝空列表；同意页、验证码页和无法解析的结果页会明确报错。JavaScript 页面外壳不会作为正文返回，有可信代理时尝试已有的隔离浏览器读取路径，否则说明限制。
+```toml
+[web]
+search_providers = ["bing", "google", "duckduckgo"]
+# proxy = "http://127.0.0.1:7897"
+```
+
+仅接受上述引擎名，列表不可为空；重复项只执行一次。不需要搜索 API Key。每个引擎单次最多 15 秒，整个调用最多 60 秒；收到 401/403 或其他非瞬态失败不重试。网络/超时/5xx 至多重试一次，退避至少 500ms，并尊重 Retry-After（秒或 HTTP 日期）。较长退避直接回退下一家而非占住调用。429 不立即重放，在当前 WebSearch 实例中冷却至少 60 秒或服务器指定的更长时间；带较长 Retry-After 的 5xx 同样冷却。冷却期间明确记录跳过原因。重启或重新创建工具实例后冷却不保留。
+
+`query` 限制为 1–512 个 Unicode 字符、最多 2048 字节；规范化首尾与连续空白，保留引号、搜索运算符及 C++ 等有效标点。结果回显实际发送的查询。`max_results` 为 1–10（默认 8），Google/Bing 请求相应 num/count；引擎可能忽略数量要求，DuckDuckGo HTML 不提供相同的数量控制。响应包含 `requested_max_results`、`results_returned`、`fewer_results`，不伪造不足的结果。
+
+可选 `language`（如 en、zh-CN）和 `region`（两字母国家代码）显式映射到 Google hl/gl、Bing setlang/mkt、DuckDuckGo kl；无参才根据查询字符选择默认语言。语言与地区是偏好，无法保证只返回某种语言。可选 `freshness: day|week|month|year` 映射到各引擎日期过滤参数；依赖提供商支持，不等于对实际发表日期的验证。参数能力与工具 definition 一致。
+
+解析结果保留提供商顺序，不进行相关性打分。URL 去除 fragment、空 query 和 utm_*、fbclid、gclid、spm 跟踪参数后去重；每个 hostname 优先保留 3 条，剩余位置先补其他 hostname，无替代结果时仍补同主机条目（适用于 site: 查询）。不合并不同内容参数，不维护网站黑名单。
+
+`provider` 标明实际引擎，回退时附带无内部错误前缀的 `fallback_reason`。各条结果附带 `snippet_empty`；同意页、验证码页和无法解析的结果页明确失败后回退。Bing 识别自然结果卡片并优先读取 b_caption 摘要，Google 接受 h2/h3 结果标题，DuckDuckGo 读取 HTML 结果卡片。页面结构仍可能变化，测试覆盖脱敏的真实 Bing 页面片段及其他引擎布局；当前网络实测 DuckDuckGo 返回挑战页，其兜底并不保证总能成功。所有结果都是不可信网页资料。
+
+### 2026-10-01 审查核对
+
+| 项目 | 核对与处理 |
+|---|---|
+| S1 | 缺少语言/地区控制属实，已增加显式参数；语言偏好不能保证结果语言。 |
+| S2 | 跟踪 URL 去重与结果多样性不足属实，已加规范化和同 hostname 软限额。 |
+| T2 | Schema 字符数与字节校验不一致属实，已统一并保留字节保护。 |
+| T3 | 所有 Bing 失败都重放属实，已按状态分类并处理 Retry-After。 |
+| T4 | fallback_reason 带 ToolError Display 前缀属实，已用结构化失败消息。 |
+| T1 | 非 UTF-8 正文失败属实，已增加声明编码与 HTML meta 编码支持。 |
+| T5 | 分页内编号链接可能缺脚注属实，已增加与窗口无关的 links 映射。 |
+| T6 | 校验错误合并属实，已拆分协议、凭据、端口、私网报错。 |
+| S3 | 固定两引擎属实，已支持顺序配置、第三引擎和实例级冷却；15 秒是上限，快速 429 不会每次固定等待 15 秒。 |
+| S4 | 未规范化空白属实，已统一；“去掉引号/标点会更好”未证实，保留查询语义，不随意删词。 |
+| T7 | 请求 trim 而回显原值属实，已统一入口规范化和回显。 |
+| S5 | 页面结构依赖属实，但原先空结果已有错误与回退，并非静默；已扩展布局、摘要标记与夹具，不宣称彻底消除改版风险。 |
+| S6 | 数量要求未发送、缩水未标记属实，已发送受支持参数并明确返回数量。 |
+| S7 | 缺少时效参数属实，已加可选 freshness；附件已撤回的未来日期判断不作为问题。 |
+| T8–T11 | 已加完整 URL 环检测与安全连接复用；剥 fragment 是正常 HTTP 行为，已文档化；JS shell 阈值改为字符常量与集中模式表。 |
+
+DNS 每跳重新校验和固定解析、公网限制、HTTPS 降级拦截、2 MiB 流式上限、严格参数校验、代理掩码及不可信数据标记均保留。
