@@ -1507,10 +1507,48 @@ fn configure_limits_and_entrypoint(
         "/tmp".to_string()
     };
 
+    let cargo_home = if let Some(c) = custom_env.get("CARGO_HOME") {
+        if c.starts_with("/workspace")
+            || c.starts_with("/scratch")
+            || c.starts_with("/tmp")
+            || c.starts_with("/opt")
+        {
+            Some(c.clone())
+        } else {
+            Some(format!("{default_home}/.cargo"))
+        }
+    } else if has_rust {
+        Some(format!("{default_home}/.cargo"))
+    } else {
+        None
+    };
+
+    let rustup_home = if let Some(r) = custom_env.get("RUSTUP_HOME") {
+        if r.starts_with("/workspace")
+            || r.starts_with("/scratch")
+            || r.starts_with("/tmp")
+            || r.starts_with("/opt")
+        {
+            Some(r.clone())
+        } else {
+            Some(format!("{default_home}/.rustup"))
+        }
+    } else if has_rust {
+        Some(format!("{default_home}/.rustup"))
+    } else {
+        None
+    };
+
     let mut env_map = std::collections::BTreeMap::new();
     env_map.insert("PATH".to_string(), path_val);
     env_map.insert("HOME".to_string(), home_val);
     env_map.insert("TMPDIR".to_string(), tmpdir_val);
+    if let Some(c) = cargo_home {
+        env_map.insert("CARGO_HOME".to_string(), c);
+    }
+    if let Some(r) = rustup_home {
+        env_map.insert("RUSTUP_HOME".to_string(), r);
+    }
     env_map.insert(
         "LANG".to_string(),
         custom_env
@@ -1543,7 +1581,15 @@ fn configure_limits_and_entrypoint(
     for (k, v) in custom_env {
         if matches!(
             k.as_str(),
-            "PATH" | "HOME" | "TMPDIR" | "LANG" | "TERM" | "COLORTERM" | "CLICOLOR_FORCE"
+            "PATH"
+                | "HOME"
+                | "TMPDIR"
+                | "LANG"
+                | "TERM"
+                | "COLORTERM"
+                | "CLICOLOR_FORCE"
+                | "CARGO_HOME"
+                | "RUSTUP_HOME"
         ) {
             continue;
         }
@@ -2881,6 +2927,8 @@ mod tests {
         custom_env.insert("CUSTOM_VAR".to_string(), "my_value".to_string());
         custom_env.insert("OPENAI_API_KEY".to_string(), "leak_secret".to_string());
         custom_env.insert("PATH".to_string(), "/custom/bin:/usr/bin".to_string());
+        custom_env.insert("CARGO_HOME".to_string(), "/home/user/.cargo".to_string());
+        custom_env.insert("RUSTUP_HOME".to_string(), "/home/user/.rustup".to_string());
 
         configure_limits_and_entrypoint(
             &mut cmd,
@@ -2913,5 +2961,12 @@ mod tests {
             args[path_idx + 1],
             "/opt/orbit-rust/bin:/custom/bin:/usr/bin"
         );
+
+        // Host CARGO_HOME and RUSTUP_HOME should be remapped to container home
+        let cargo_idx = args.iter().position(|a| a == "CARGO_HOME").unwrap();
+        assert_eq!(args[cargo_idx + 1], "/tmp/home/.cargo");
+
+        let rustup_idx = args.iter().position(|a| a == "RUSTUP_HOME").unwrap();
+        assert_eq!(args[rustup_idx + 1], "/tmp/home/.rustup");
     }
 }

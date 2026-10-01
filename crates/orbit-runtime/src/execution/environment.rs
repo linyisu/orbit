@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::error::{RuntimeError, failed};
+use crate::{
+    error::{RuntimeError, failed},
+    execution::process::MountSpec,
+};
 
 /// ExecutionEnvironment resolves and sanitizes the workspace environment, toolchain paths,
 /// and environment variables for subprocess execution.
@@ -56,6 +59,24 @@ impl ExecutionEnvironment {
             self.env_vars.insert(key, val.into());
         }
     }
+
+    /// Remaps path-based environment variables (including CARGO_HOME and RUSTUP_HOME)
+    /// against authorized mounts and external capability grants, ensuring that unmounted
+    /// host paths do not leak into the sandboxed subprocess where they are inaccessible.
+    pub fn resolve_path_environment(
+        &mut self,
+        mounts: &[MountSpec],
+        external_grants: &[PathBuf],
+        container_home: &Path,
+    ) {
+        remap_path_environment(
+            &mut self.env_vars,
+            &self.workspace_root,
+            mounts,
+            external_grants,
+            container_home,
+        );
+    }
 }
 
 /// Identifies sensitive keys (e.g. AI provider API keys, Orbit secrets) that must never
@@ -102,6 +123,144 @@ fn populate_safe_environment(env: &mut BTreeMap<String, String>) {
     }
 }
 
+/// Remaps environment variables that contain host filesystem paths (CARGO_HOME, RUSTUP_HOME, HOME)
+/// to their corresponding container paths based on authorized mounts and external capability grants.
+/// If a host path is not authorized/mounted into the container, it is safely remapped to
+/// container-local storage under `container_home` (e.g. /scratch/home or /tmp/home) so subprocesses
+/// do not fail on missing host directories.
+pub fn remap_path_environment(
+    env: &mut BTreeMap<String, String>,
+    workspace_root: &Path,
+    mounts: &[MountSpec],
+    external_grants: &[PathBuf],
+    container_home: &Path,
+) {
+    // 1. Remap CARGO_HOME
+    if let Some(cargo_val) = env.get("CARGO_HOME").cloned() {
+        let cargo_path = PathBuf::from(&cargo_val);
+        if let Some(remapped) =
+            remap_single_path(&cargo_path, workspace_root, mounts, external_grants)
+        {
+            env.insert(
+                "CARGO_HOME".to_string(),
+                remapped.to_string_lossy().to_string(),
+            );
+        } else {
+            env.insert(
+                "CARGO_HOME".to_string(),
+                container_home.join(".cargo").to_string_lossy().to_string(),
+            );
+        }
+    } else {
+        env.insert(
+            "CARGO_HOME".to_string(),
+            container_home.join(".cargo").to_string_lossy().to_string(),
+        );
+    }
+
+    // 2. Remap RUSTUP_HOME
+    if let Some(rustup_val) = env.get("RUSTUP_HOME").cloned() {
+        let rustup_path = PathBuf::from(&rustup_val);
+        if let Some(remapped) =
+            remap_single_path(&rustup_path, workspace_root, mounts, external_grants)
+        {
+            env.insert(
+                "RUSTUP_HOME".to_string(),
+                remapped.to_string_lossy().to_string(),
+            );
+        } else {
+            env.insert(
+                "RUSTUP_HOME".to_string(),
+                container_home.join(".rustup").to_string_lossy().to_string(),
+            );
+        }
+    }
+
+    // 3. Remap HOME
+    if let Some(home_val) = env.get("HOME").cloned() {
+        let home_path = PathBuf::from(&home_val);
+        if let Some(remapped) =
+            remap_single_path(&home_path, workspace_root, mounts, external_grants)
+        {
+            env.insert("HOME".to_string(), remapped.to_string_lossy().to_string());
+        } else {
+            env.insert(
+                "HOME".to_string(),
+                container_home.to_string_lossy().to_string(),
+            );
+        }
+    } else {
+        env.insert(
+            "HOME".to_string(),
+            container_home.to_string_lossy().to_string(),
+        );
+    }
+}
+
+pub fn remap_single_path(
+    path: &Path,
+    workspace_root: &Path,
+    mounts: &[MountSpec],
+    external_grants: &[PathBuf],
+) -> Option<PathBuf> {
+    if path.starts_with("/workspace")
+        || path.starts_with("/scratch")
+        || path.starts_with("/tmp")
+        || path.starts_with("/opt")
+    {
+        return Some(path.to_path_buf());
+    }
+
+    let canon = path.canonicalize().ok();
+    let mut candidates = vec![path];
+    if let Some(c) = canon.as_deref().filter(|&c| c != path) {
+        candidates.push(c);
+    }
+
+    for candidate in &candidates {
+        if let Ok(rel) = candidate.strip_prefix(workspace_root) {
+            return Some(if rel.as_os_str().is_empty() {
+                PathBuf::from("/workspace")
+            } else {
+                Path::new("/workspace").join(rel)
+            });
+        }
+    }
+
+    for mount in mounts {
+        let Ok(target) = mount.normalized_target() else {
+            continue;
+        };
+        for candidate in &candidates {
+            if let Ok(rel) = candidate.strip_prefix(&mount.source) {
+                return Some(if rel.as_os_str().is_empty() {
+                    target
+                } else {
+                    target.join(rel)
+                });
+            }
+        }
+        if path.starts_with(&target) {
+            return Some(path.to_path_buf());
+        }
+    }
+
+    for grant in external_grants {
+        let grant_canon = grant.canonicalize().unwrap_or_else(|_| grant.clone());
+        for candidate in &candidates {
+            if *candidate == grant
+                || candidate.starts_with(grant)
+                || *candidate == grant_canon
+                || candidate.starts_with(&grant_canon)
+            {
+                return Some(path.to_path_buf());
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +296,38 @@ mod tests {
         // Safe variables can be set
         env.set_var("CUSTOM_VAR", "hello");
         assert_eq!(env.env_vars.get("CUSTOM_VAR"), Some(&"hello".to_string()));
+    }
+
+    #[test]
+    fn test_remap_path_environment() {
+        let temp = tempfile::tempdir().unwrap();
+        let ws = temp.path().canonicalize().unwrap();
+        let mut env = BTreeMap::new();
+        env.insert("CARGO_HOME".to_string(), "/home/user/.cargo".to_string());
+        env.insert("RUSTUP_HOME".to_string(), "/home/user/.rustup".to_string());
+
+        let mounts = vec![MountSpec::read_only(
+            "/home/user/.cargo",
+            "/opt/orbit-cache/cargo",
+        )];
+        let external_grants = vec![PathBuf::from("/var/shared")];
+        let container_home = Path::new("/tmp/home");
+
+        remap_path_environment(&mut env, &ws, &mounts, &external_grants, container_home);
+
+        // Mounted CARGO_HOME should be remapped to mount target
+        assert_eq!(
+            env.get("CARGO_HOME"),
+            Some(&"/opt/orbit-cache/cargo".to_string())
+        );
+
+        // Unmounted RUSTUP_HOME should be safely remapped to container home
+        assert_eq!(
+            env.get("RUSTUP_HOME"),
+            Some(&"/tmp/home/.rustup".to_string())
+        );
+
+        // HOME should be set to container home
+        assert_eq!(env.get("HOME"), Some(&"/tmp/home".to_string()));
     }
 }

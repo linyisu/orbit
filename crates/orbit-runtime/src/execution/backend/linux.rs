@@ -47,7 +47,7 @@ impl ExecutionBackend for BwrapBackend {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<ExecutionResult, RuntimeError>> + Send + 'a>>
     {
         Box::pin(async move {
-            let (spec, effective) = prepare_execution_spec_and_policy(request, policy, env);
+            let (spec, effective) = prepare_execution_spec_and_policy(request, policy, env)?;
 
             let cmd_res = self
                 .inner
@@ -78,7 +78,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
     request: &ExecutionRequest,
     policy: &ExecutionPolicy,
     env: &ExecutionEnvironment,
-) -> (ProcessSpec, EffectivePolicy) {
+) -> Result<(ProcessSpec, EffectivePolicy), RuntimeError> {
     let mut spec = ProcessSpec::new(&request.command, request.timeout);
 
     let effective_cwd =
@@ -97,6 +97,24 @@ pub(crate) fn prepare_execution_spec_and_policy(
             merged_env.insert(key.clone(), val.clone());
         }
     }
+
+    let container_home = if request.scratch.is_some() {
+        std::path::Path::new("/scratch/home")
+    } else {
+        std::path::Path::new("/tmp/home")
+    };
+
+    let mut external_paths = policy.external_read.clone();
+    external_paths.extend(policy.external_read_write.clone());
+
+    crate::execution::environment::remap_path_environment(
+        &mut merged_env,
+        &env.workspace_root,
+        &policy.mounts,
+        &external_paths,
+        container_home,
+    );
+
     spec.env = merged_env;
 
     spec.scratch = request.scratch.clone();
@@ -118,6 +136,28 @@ pub(crate) fn prepare_execution_spec_and_policy(
 
     let mut effective = EffectivePolicy::new(base_policy);
 
+    {
+        let mut protected_guard = effective
+            .protected_paths
+            .write()
+            .map_err(|_| crate::error::failed("protected path policy lock is poisoned"))?;
+        for path in policy
+            .protected_paths
+            .iter()
+            .chain(policy.opaque_runtime_roots.iter())
+        {
+            let abs_path = if path.is_absolute() {
+                path.clone()
+            } else {
+                env.workspace_root.join(path)
+            };
+            let canon = abs_path.canonicalize().unwrap_or(abs_path);
+            if !protected_guard.contains(&canon) {
+                protected_guard.push(canon);
+            }
+        }
+    }
+
     for path in &policy.external_read {
         effective
             .persistent_read
@@ -129,7 +169,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
             .push(ResolvedPath::from_canonical(path));
     }
 
-    (spec, effective)
+    Ok((spec, effective))
 }
 
 #[cfg(test)]
@@ -148,17 +188,17 @@ mod tests {
 
         // 1. Empty cwd defaults to env.cwd
         let req_empty = ExecutionRequest::new("ls", "", Duration::from_secs(5));
-        let (spec1, _) = prepare_execution_spec_and_policy(&req_empty, &policy, &env);
+        let (spec1, _) = prepare_execution_spec_and_policy(&req_empty, &policy, &env).unwrap();
         assert_eq!(spec1.cwd, Some(ws.clone()));
 
         // 2. Relative cwd is joined with env.cwd
         let req_rel = ExecutionRequest::new("ls", "crates/sub", Duration::from_secs(5));
-        let (spec2, _) = prepare_execution_spec_and_policy(&req_rel, &policy, &env);
+        let (spec2, _) = prepare_execution_spec_and_policy(&req_rel, &policy, &env).unwrap();
         assert_eq!(spec2.cwd, Some(ws.join("crates/sub")));
 
         // 3. Absolute cwd is preserved
         let req_abs = ExecutionRequest::new("ls", "/var/custom", Duration::from_secs(5));
-        let (spec3, _) = prepare_execution_spec_and_policy(&req_abs, &policy, &env);
+        let (spec3, _) = prepare_execution_spec_and_policy(&req_abs, &policy, &env).unwrap();
         assert_eq!(spec3.cwd, Some(PathBuf::from("/var/custom")));
     }
 
@@ -179,7 +219,7 @@ mod tests {
         let policy = ExecutionPolicy::dev_default().with_env_overrides(overrides);
         let req = ExecutionRequest::new("ls", &ws, Duration::from_secs(5));
 
-        let (spec, _) = prepare_execution_spec_and_policy(&req, &policy, &env);
+        let (spec, _) = prepare_execution_spec_and_policy(&req, &policy, &env).unwrap();
         assert_eq!(spec.env.get("BASE_VAR"), Some(&"base_val".to_string()));
         assert_eq!(
             spec.env.get("OVERRIDE_VAR"),
@@ -206,7 +246,7 @@ mod tests {
             .with_external_read_write(vec![ext_write.clone()]);
 
         let req = ExecutionRequest::new("cargo check", &ws, Duration::from_secs(10));
-        let (spec, effective) = prepare_execution_spec_and_policy(&req, &policy, &env);
+        let (spec, effective) = prepare_execution_spec_and_policy(&req, &policy, &env).unwrap();
 
         // Mounts remain in spec.mounts for bwrap container mounting
         assert_eq!(spec.mounts, vec![mount]);
@@ -233,6 +273,99 @@ mod tests {
                 .persistent_read_write
                 .iter()
                 .any(|p| p.canonical() == std::path::Path::new("/host/packages"))
+        );
+    }
+
+    #[test]
+    fn test_prepare_spec_protects_paths_and_opaque_roots_against_mounts() {
+        let ws_temp = tempfile::tempdir().unwrap();
+        let ws = ws_temp.path().canonicalize().unwrap();
+        let env = ExecutionEnvironment::new(&ws, &ws).unwrap();
+
+        let external_temp = tempfile::tempdir().unwrap();
+        let secret_file = external_temp.path().join("secret.key");
+        std::fs::write(&secret_file, "SENSITIVE_SECRET").unwrap();
+        let secret_file_canon = secret_file.canonicalize().unwrap();
+
+        let opaque_dir = external_temp.path().join("opaque_runtime");
+        std::fs::create_dir(&opaque_dir).unwrap();
+        let opaque_dir_canon = opaque_dir.canonicalize().unwrap();
+
+        let policy = ExecutionPolicy::dev_default()
+            .with_protected_paths(vec![secret_file_canon.clone()])
+            .with_opaque_runtime_roots(vec![opaque_dir_canon.clone()]);
+
+        let req = ExecutionRequest::new("cat", &ws, Duration::from_secs(5));
+        let (spec, effective) = prepare_execution_spec_and_policy(&req, &policy, &env).unwrap();
+
+        // 1. Both protected_paths and opaque_runtime_roots are registered in effective.protected_paths
+        let protected = effective.protected_paths.read().unwrap();
+        assert!(protected.contains(&secret_file_canon));
+        assert!(protected.contains(&opaque_dir_canon));
+        drop(protected);
+
+        // 2. Mounting the parent directory of a protected file is rejected
+        let parent_mount = MountSpec::read_only(external_temp.path(), "/opt/leak");
+        assert!(
+            crate::execution::sandbox::validate_mounts(&[parent_mount], &effective).is_err(),
+            "mounting parent directory of a protected path must be rejected"
+        );
+
+        // 3. Mounting the protected file directly is rejected
+        let exact_mount = MountSpec::read_only(&secret_file, "/opt/leak_exact");
+        assert!(
+            crate::execution::sandbox::validate_mounts(&[exact_mount], &effective).is_err(),
+            "mounting a protected file directly must be rejected"
+        );
+
+        // 4. Mounting an opaque runtime root or its subpath is rejected
+        let opaque_mount = MountSpec::read_only(&opaque_dir, "/opt/leak_opaque");
+        assert!(
+            crate::execution::sandbox::validate_mounts(&[opaque_mount], &effective).is_err(),
+            "mounting an opaque runtime root must be rejected"
+        );
+
+        // 5. Spec retains protected paths and opaque roots for container masking
+        assert_eq!(spec.protected_paths, vec![secret_file_canon]);
+        assert_eq!(spec.opaque_runtime_roots, vec![opaque_dir_canon]);
+    }
+
+    #[test]
+    fn test_prepare_spec_remaps_rust_toolchain_env_vars() {
+        let ws_temp = tempfile::tempdir().unwrap();
+        let ws = ws_temp.path().canonicalize().unwrap();
+        let mut env = ExecutionEnvironment::new(&ws, &ws).unwrap();
+        env.set_var("CARGO_HOME", "/home/user/.cargo");
+        env.set_var("RUSTUP_HOME", "/home/user/.rustup");
+
+        // Case 1: unmounted host paths are safely remapped to container home
+        let policy_unmounted = ExecutionPolicy::dev_default();
+        let req = ExecutionRequest::new("cargo build", &ws, Duration::from_secs(10));
+        let (spec_unmounted, _) =
+            prepare_execution_spec_and_policy(&req, &policy_unmounted, &env).unwrap();
+
+        assert_eq!(
+            spec_unmounted.env.get("CARGO_HOME"),
+            Some(&"/tmp/home/.cargo".to_string())
+        );
+        assert_eq!(
+            spec_unmounted.env.get("RUSTUP_HOME"),
+            Some(&"/tmp/home/.rustup".to_string())
+        );
+
+        // Case 2: mounted cache path is remapped to container mount target
+        let cache_mount = MountSpec::read_only("/home/user/.cargo", "/opt/orbit-cache/cargo");
+        let policy_mounted = ExecutionPolicy::dev_default().with_mounts(vec![cache_mount]);
+        let (spec_mounted, _) =
+            prepare_execution_spec_and_policy(&req, &policy_mounted, &env).unwrap();
+
+        assert_eq!(
+            spec_mounted.env.get("CARGO_HOME"),
+            Some(&"/opt/orbit-cache/cargo".to_string())
+        );
+        assert_eq!(
+            spec_mounted.env.get("RUSTUP_HOME"),
+            Some(&"/tmp/home/.rustup".to_string())
         );
     }
 }
