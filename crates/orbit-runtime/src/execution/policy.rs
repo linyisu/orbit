@@ -12,6 +12,8 @@ pub struct ExecutionPolicy {
     pub read_only_workspace: bool,
     pub network: NetworkPolicy,
     pub mounts: Vec<MountSpec>,
+    pub external_read: Vec<PathBuf>,
+    pub external_read_write: Vec<PathBuf>,
     pub protected_paths: Vec<PathBuf>,
     pub opaque_runtime_roots: Vec<PathBuf>,
     pub resources: ResourceLimits,
@@ -26,6 +28,8 @@ impl ExecutionPolicy {
             read_only_workspace: false,
             network: NetworkPolicy::Deny,
             mounts: Vec::new(),
+            external_read: Vec::new(),
+            external_read_write: Vec::new(),
             protected_paths: Vec::new(),
             opaque_runtime_roots: Vec::new(),
             resources: ResourceLimits::default(),
@@ -40,6 +44,8 @@ impl ExecutionPolicy {
             read_only_workspace: true,
             network: NetworkPolicy::Deny,
             mounts: Vec::new(),
+            external_read: Vec::new(),
+            external_read_write: Vec::new(),
             protected_paths: Vec::new(),
             opaque_runtime_roots: Vec::new(),
             resources: ResourceLimits::default(),
@@ -63,6 +69,16 @@ impl ExecutionPolicy {
         self
     }
 
+    pub fn with_external_read(mut self, paths: Vec<PathBuf>) -> Self {
+        self.external_read = paths;
+        self
+    }
+
+    pub fn with_external_read_write(mut self, paths: Vec<PathBuf>) -> Self {
+        self.external_read_write = paths;
+        self
+    }
+
     pub fn with_protected_paths(mut self, paths: Vec<PathBuf>) -> Self {
         self.protected_paths = paths;
         self
@@ -80,6 +96,11 @@ impl ExecutionPolicy {
 
     pub fn with_rust_toolchain(mut self, toolchain: Option<PathBuf>) -> Self {
         self.rust_toolchain = toolchain;
+        self
+    }
+
+    pub fn with_env_overrides(mut self, env: BTreeMap<String, String>) -> Self {
+        self.env_overrides = env;
         self
     }
 }
@@ -106,11 +127,17 @@ mod tests {
 
     #[test]
     fn execution_policy_builders() {
+        let mut env = BTreeMap::new();
+        env.insert("CARGO_INCREMENTAL".to_string(), "0".to_string());
+
         let policy = ExecutionPolicy::dev_default()
             .with_network(NetworkPolicy::Allow)
             .with_read_write(false)
             .with_protected_paths(vec![PathBuf::from("/etc/secret")])
-            .with_opaque_runtime_roots(vec![PathBuf::from("/var/cache")]);
+            .with_opaque_runtime_roots(vec![PathBuf::from("/var/cache")])
+            .with_external_read(vec![PathBuf::from("/usr/include")])
+            .with_external_read_write(vec![PathBuf::from("/var/log")])
+            .with_env_overrides(env.clone());
 
         assert!(policy.read_only_workspace);
         assert_eq!(policy.network, NetworkPolicy::Allow);
@@ -119,5 +146,8 @@ mod tests {
             policy.opaque_runtime_roots,
             vec![PathBuf::from("/var/cache")]
         );
+        assert_eq!(policy.external_read, vec![PathBuf::from("/usr/include")]);
+        assert_eq!(policy.external_read_write, vec![PathBuf::from("/var/log")]);
+        assert_eq!(policy.env_overrides, env);
     }
 }

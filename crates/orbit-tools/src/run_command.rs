@@ -20,7 +20,10 @@ use crate::approval::{
 };
 use orbit_runtime::{
     RuntimeError,
-    execution::{BwrapSandboxBackend, OutputLog, ProcessSpec, SandboxBackend},
+    execution::{
+        BwrapBackend, ExecutionBackend, ExecutionEnvironment, ExecutionPolicy, ExecutionRequest,
+        OutputLog,
+    },
     filesystem::Workspace,
 };
 
@@ -37,6 +40,8 @@ pub struct RunCommand {
 #[serde(deny_unknown_fields)]
 struct Arguments {
     command: String,
+    #[serde(default)]
+    cwd: Option<String>,
     #[serde(default)]
     workspace_access: CommandWorkspaceAccess,
     #[serde(default)]
@@ -227,6 +232,10 @@ impl Tool for RunCommand {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "The shell command to execute" },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory for the command. Relative paths are resolved against the workspace root. Defaults to the workspace root."
+                    },
                     "workspace_access": {
                         "type": "string",
                         "enum": ["read", "read_write"],
@@ -273,6 +282,26 @@ impl Tool for RunCommand {
                     "'writable_snapshot' is deprecated. Orbit executes directly in the workspace with protected path masking. For workspace write access, specify 'workspace_access': 'read_write'.",
                 ));
             }
+
+            let requested_cwd = match args.cwd {
+                Some(ref dir) => {
+                    let dir_path = PathBuf::from(dir);
+                    if dir_path.is_absolute() {
+                        dir_path
+                    } else {
+                        self.workspace.root().join(dir_path)
+                    }
+                }
+                None => self.workspace.root().to_path_buf(),
+            };
+
+            let execution_env = ExecutionEnvironment::new(self.workspace.root(), &requested_cwd)
+                .map_err(|e| {
+                    invalid(format!(
+                        "invalid working directory '{}': {e}",
+                        requested_cwd.display()
+                    ))
+                })?;
 
             let workspace_access = args.workspace_access;
             let network_allowed = self.workspace.policy().network_policy().is_allowed();
@@ -377,27 +406,65 @@ impl Tool for RunCommand {
                     ),
                 };
 
-            let backend = BwrapSandboxBackend::new()?;
-            let mut spec = ProcessSpec::new(args.command, Duration::from_secs(timeout_seconds));
-            spec.read_only_workspace = workspace_access == CommandWorkspaceAccess::Read;
-            spec.protected_paths = self.workspace.protected().to_vec();
-            spec.opaque_runtime_roots = self.workspace.opaque_runtime_roots().to_vec();
-            spec.scratch = scratch.clone();
-            spec.rust_toolchain = self.limits.rust_toolchain.clone();
-            spec.mounts = self
+            let backend = BwrapBackend::new()?;
+            let mut request = ExecutionRequest::new(
+                args.command,
+                execution_env.cwd.clone(),
+                Duration::from_secs(timeout_seconds),
+            )
+            .with_verification(fingerprint, workspace_files, skipped_entries);
+
+            if let Some(s) = scratch.as_ref() {
+                request = request.with_scratch(s);
+            }
+
+            let effective_policy = self.workspace.policy().effective_policy();
+            let mut execution_policy = ExecutionPolicy::dev_default();
+            execution_policy.read_only_workspace = workspace_access == CommandWorkspaceAccess::Read;
+            execution_policy.network = self.workspace.policy().network_policy();
+            execution_policy.mounts = self
                 .limits
                 .dependency_caches
                 .iter()
                 .map(DependencyCache::to_mount_spec)
                 .collect();
-            spec.limits = self.limits.process_limits.clone();
-            spec.workspace_files = workspace_files;
-            spec.skipped_entries = skipped_entries;
-            spec.fingerprint = fingerprint;
+            execution_policy.protected_paths = self.workspace.protected().to_vec();
+            execution_policy.opaque_runtime_roots = self.workspace.opaque_runtime_roots().to_vec();
+            execution_policy.resources = self.limits.process_limits.clone().into();
+            execution_policy.rust_toolchain = self.limits.rust_toolchain.clone();
+            execution_policy.external_read = effective_policy
+                .persistent_read
+                .iter()
+                .map(|p| p.canonical().to_path_buf())
+                .collect();
+            execution_policy.external_read_write = effective_policy
+                .persistent_read_write
+                .iter()
+                .map(|p| p.canonical().to_path_buf())
+                .collect();
 
-            let policy = self.workspace.policy().effective_policy();
+            if let Ok(store) = self.workspace.policy().session_grants().read() {
+                for grant in store.grants() {
+                    if grant.write {
+                        execution_policy
+                            .external_read_write
+                            .push(grant.path.canonical().to_path_buf());
+                    } else {
+                        execution_policy
+                            .external_read
+                            .push(grant.path.canonical().to_path_buf());
+                    }
+                }
+            }
+
             let mut result = backend
-                .run(spec, policy, output_log, cancellation.clone())
+                .execute(
+                    &request,
+                    &execution_policy,
+                    &execution_env,
+                    output_log,
+                    cancellation.clone(),
+                )
                 .await?;
 
             let post_scan = orbit_runtime::execution::scan_workspace_summary(
@@ -512,6 +579,7 @@ mod configuration_tests {
         let props = def.function.parameters["properties"].as_object().unwrap();
 
         assert!(props.contains_key("command"));
+        assert!(props.contains_key("cwd"));
         assert!(props.contains_key("workspace_access"));
         assert!(props.contains_key("timeout_seconds"));
         assert!(!props.contains_key("writable_snapshot"));

@@ -410,3 +410,84 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
     assert!(warning.contains("input workspace fingerprint unavailable"));
     assert!(warning.contains("output workspace fingerprint unavailable"));
 }
+
+#[tokio::test]
+async fn run_command_executes_in_specified_cwd() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let sub = ws_temp.path().join("crates").join("my_crate");
+    fs::create_dir_all(&sub).unwrap();
+
+    let workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace.clone(), sender);
+
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "test",
+                "run_command",
+                json!({
+                    "command": "pwd && echo 'from_sub' > output.txt",
+                    "cwd": "crates/my_crate",
+                    "workspace_access": "read_write"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    request.decision.send(true).unwrap();
+
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
+    assert_eq!(value["exit_code"], 0);
+    assert_eq!(
+        value["stdout"].as_str().unwrap().lines().next().unwrap(),
+        "/workspace/crates/my_crate"
+    );
+    assert_eq!(
+        fs::read_to_string(sub.join("output.txt")).unwrap().trim(),
+        "from_sub"
+    );
+}
+
+#[tokio::test]
+async fn run_command_rejects_nonexistent_cwd() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    let (sender, _receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+
+    let result = tool
+        .execute(
+            ToolCall::function(
+                "test",
+                "run_command",
+                json!({
+                    "command": "true",
+                    "cwd": "nonexistent_dir"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+
+    assert!(result.is_err());
+    match result {
+        Err(orbit_agent::tool::ToolError::InvalidArguments { message, .. }) => {
+            assert!(message.contains("invalid working directory"));
+        }
+        other => panic!("expected InvalidArguments error, got {:?}", other),
+    }
+}

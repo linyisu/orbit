@@ -2,7 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use crate::verification::VerificationEvidence;
+use crate::verification::{VerificationEvidence, WorkspaceFingerprint};
 
 /// ExecutionRequest encapsulates a command execution request with its working
 /// directory, timeouts, and optional session scratch storage.
@@ -13,6 +13,9 @@ pub struct ExecutionRequest {
     pub timeout: Duration,
     pub foreground_wait: Option<Duration>,
     pub scratch: Option<PathBuf>,
+    pub fingerprint: Option<WorkspaceFingerprint>,
+    pub workspace_files: usize,
+    pub skipped_entries: usize,
 }
 
 impl ExecutionRequest {
@@ -23,6 +26,9 @@ impl ExecutionRequest {
             timeout,
             foreground_wait: None,
             scratch: None,
+            fingerprint: None,
+            workspace_files: 0,
+            skipped_entries: 0,
         }
     }
 
@@ -33,6 +39,18 @@ impl ExecutionRequest {
 
     pub fn with_scratch(mut self, scratch: impl Into<PathBuf>) -> Self {
         self.scratch = Some(scratch.into());
+        self
+    }
+
+    pub fn with_verification(
+        mut self,
+        fingerprint: Option<WorkspaceFingerprint>,
+        workspace_files: usize,
+        skipped_entries: usize,
+    ) -> Self {
+        self.fingerprint = fingerprint;
+        self.workspace_files = workspace_files;
+        self.skipped_entries = skipped_entries;
         self
     }
 }

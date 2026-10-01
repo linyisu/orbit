@@ -107,12 +107,10 @@ impl ResourceLimits {
 impl From<ProcessLimits> for ResourceLimits {
     fn from(limits: ProcessLimits) -> Self {
         Self {
-            max_memory_bytes: (limits.max_memory_bytes != UNLIMITED)
-                .then_some(limits.max_memory_bytes),
-            max_file_size_bytes: (limits.max_file_size_bytes != UNLIMITED)
-                .then_some(limits.max_file_size_bytes),
-            max_processes: (limits.max_processes != UNLIMITED).then_some(limits.max_processes),
-            max_open_files: (limits.max_open_files != UNLIMITED).then_some(limits.max_open_files),
+            max_memory_bytes: Some(limits.max_memory_bytes),
+            max_file_size_bytes: Some(limits.max_file_size_bytes),
+            max_processes: Some(limits.max_processes),
+            max_open_files: Some(limits.max_open_files),
         }
     }
 }
@@ -148,5 +146,19 @@ mod tests {
         let converted = custom.to_process_limits();
         assert_eq!(converted.max_memory_bytes, 1024 * 1024 * 1024);
         assert_eq!(converted.max_file_size_bytes, 100 * 1024 * 1024);
+    }
+
+    #[test]
+    fn resource_limits_preserves_unlimited_round_trip() {
+        let original = ProcessLimits {
+            max_memory_bytes: 0,
+            max_file_size_bytes: 0,
+            max_processes: 0,
+            max_open_files: 0,
+        };
+
+        let resource_limits = ResourceLimits::from(original.clone());
+        let round_trip = resource_limits.to_process_limits();
+        assert_eq!(original, round_trip);
     }
 }

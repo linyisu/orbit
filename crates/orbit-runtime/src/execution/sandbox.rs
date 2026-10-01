@@ -469,6 +469,9 @@ impl BwrapSandboxBackend {
             &spec.opaque_runtime_roots,
         )?;
 
+        let container_cwd = resolve_container_cwd(ws_target, mounts, spec.cwd.as_deref());
+        command.arg("--chdir").arg(container_cwd);
+
         configure_limits_and_entrypoint(
             &mut command,
             &self.prlimit_path,
@@ -476,6 +479,7 @@ impl BwrapSandboxBackend {
             rust_toolchain.is_some(),
             writable_snapshot_source.is_some(),
             spec.scratch.is_some(),
+            &spec.env,
         );
 
         Ok(command)
@@ -1345,6 +1349,54 @@ fn mount_toolchain_and_mounts(
     Ok(())
 }
 
+pub fn resolve_container_cwd(
+    ws_target: &Path,
+    mounts: &[MountSpec],
+    cwd: Option<&Path>,
+) -> PathBuf {
+    let Some(cwd) = cwd else {
+        return PathBuf::from("/workspace");
+    };
+
+    if cwd.as_os_str().is_empty() || cwd == Path::new(".") {
+        return PathBuf::from("/workspace");
+    }
+
+    if cwd.starts_with("/workspace") {
+        return cwd.to_path_buf();
+    }
+
+    if let Ok(rel) = cwd.strip_prefix(ws_target) {
+        if rel.as_os_str().is_empty() {
+            return PathBuf::from("/workspace");
+        } else {
+            return Path::new("/workspace").join(rel);
+        }
+    }
+
+    for mount in mounts {
+        let Ok(target) = mount.normalized_target() else {
+            continue;
+        };
+        if let Ok(rel) = cwd.strip_prefix(&mount.source) {
+            if rel.as_os_str().is_empty() {
+                return target;
+            } else {
+                return target.join(rel);
+            }
+        }
+        if cwd.starts_with(&target) {
+            return cwd.to_path_buf();
+        }
+    }
+
+    if cwd.is_relative() {
+        return Path::new("/workspace").join(cwd);
+    }
+
+    cwd.to_path_buf()
+}
+
 fn mount_scratch_and_tmp(
     command: &mut Command,
     scratch: Option<&Path>,
@@ -1405,8 +1457,6 @@ fn mount_scratch_and_tmp(
         }
     }
 
-    command.args(["--chdir", "/workspace"]);
-
     Ok(())
 }
 
@@ -1417,41 +1467,99 @@ fn configure_limits_and_entrypoint(
     has_rust: bool,
     is_writable_tmpfs: bool,
     persistent_home: bool,
+    custom_env: &std::collections::BTreeMap<String, String>,
 ) {
-    command.args([
-        "--clearenv",
-        "--setenv",
-        "PATH",
-        if has_rust {
-            "/opt/orbit-rust/bin:/usr/bin:/bin"
+    let default_home = if persistent_home {
+        "/scratch/home"
+    } else {
+        "/tmp/home"
+    };
+
+    let path_val = if let Some(p) = custom_env.get("PATH") {
+        if has_rust && !p.split(':').any(|part| part == "/opt/orbit-rust/bin") {
+            format!("/opt/orbit-rust/bin:{p}")
         } else {
-            "/usr/bin:/bin"
-        },
-        "--setenv",
-        "HOME",
-        if persistent_home {
-            "/scratch/home"
+            p.clone()
+        }
+    } else if has_rust {
+        "/opt/orbit-rust/bin:/usr/bin:/bin".to_string()
+    } else {
+        "/usr/bin:/bin".to_string()
+    };
+
+    let home_val = if let Some(h) = custom_env.get("HOME") {
+        if h.starts_with("/workspace") || h.starts_with("/scratch") || h.starts_with("/tmp") {
+            h.clone()
         } else {
-            "/tmp/home"
-        },
-        "--setenv",
-        "TMPDIR",
-        "/tmp",
-        "--setenv",
-        "LANG",
-        "C.UTF-8",
-        "--setenv",
-        "TERM",
-        "xterm-256color",
-        "--setenv",
-        "COLORTERM",
-        "truecolor",
-        "--setenv",
-        "CLICOLOR_FORCE",
-        "1",
-        "--",
-        prlimit.to_str().unwrap_or("/usr/bin/prlimit"),
-    ]);
+            default_home.to_string()
+        }
+    } else {
+        default_home.to_string()
+    };
+
+    let tmpdir_val = if let Some(t) = custom_env.get("TMPDIR") {
+        if t.starts_with("/tmp") || t.starts_with("/workspace") || t.starts_with("/scratch") {
+            t.clone()
+        } else {
+            "/tmp".to_string()
+        }
+    } else {
+        "/tmp".to_string()
+    };
+
+    let mut env_map = std::collections::BTreeMap::new();
+    env_map.insert("PATH".to_string(), path_val);
+    env_map.insert("HOME".to_string(), home_val);
+    env_map.insert("TMPDIR".to_string(), tmpdir_val);
+    env_map.insert(
+        "LANG".to_string(),
+        custom_env
+            .get("LANG")
+            .cloned()
+            .unwrap_or_else(|| "C.UTF-8".to_string()),
+    );
+    env_map.insert(
+        "TERM".to_string(),
+        custom_env
+            .get("TERM")
+            .cloned()
+            .unwrap_or_else(|| "xterm-256color".to_string()),
+    );
+    env_map.insert(
+        "COLORTERM".to_string(),
+        custom_env
+            .get("COLORTERM")
+            .cloned()
+            .unwrap_or_else(|| "truecolor".to_string()),
+    );
+    env_map.insert(
+        "CLICOLOR_FORCE".to_string(),
+        custom_env
+            .get("CLICOLOR_FORCE")
+            .cloned()
+            .unwrap_or_else(|| "1".to_string()),
+    );
+
+    for (k, v) in custom_env {
+        if matches!(
+            k.as_str(),
+            "PATH" | "HOME" | "TMPDIR" | "LANG" | "TERM" | "COLORTERM" | "CLICOLOR_FORCE"
+        ) {
+            continue;
+        }
+        if !crate::execution::environment::is_sensitive_key(k) {
+            env_map.insert(k.clone(), v.clone());
+        }
+    }
+
+    command.arg("--clearenv");
+    for (k, v) in &env_map {
+        command.arg("--setenv").arg(k).arg(v);
+    }
+
+    command
+        .arg("--")
+        .arg(prlimit.to_str().unwrap_or("/usr/bin/prlimit"));
 
     if limits.max_memory_bytes != 0 && limits.max_memory_bytes != u64::MAX {
         command.arg(format!(
@@ -2105,6 +2213,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let spec = ProcessSpec {
             command: "echo test".into(),
+            cwd: None,
+            env: std::collections::BTreeMap::new(),
             timeout: Duration::from_secs(5),
             scratch: None,
             limits: ProcessLimits::default(),
@@ -2668,6 +2778,7 @@ mod tests {
             false,
             false,
             false,
+            &Default::default(),
         );
 
         let limit_args = cmd_limits
@@ -2697,6 +2808,7 @@ mod tests {
             false,
             false,
             false,
+            &Default::default(),
         );
 
         let explicit_args = cmd_explicit
@@ -2710,6 +2822,96 @@ mod tests {
             explicit_args
                 .iter()
                 .any(|a| a == "--fsize=10485760:10485760")
+        );
+    }
+
+    #[test]
+    fn test_resolve_container_cwd() {
+        let ws = Path::new("/home/user/project");
+        let mounts = vec![MountSpec::read_only("/host/cache", "/opt/cache")];
+
+        // Default workspace
+        assert_eq!(
+            resolve_container_cwd(ws, &mounts, None),
+            PathBuf::from("/workspace")
+        );
+        assert_eq!(
+            resolve_container_cwd(ws, &mounts, Some(Path::new(""))),
+            PathBuf::from("/workspace")
+        );
+        assert_eq!(
+            resolve_container_cwd(ws, &mounts, Some(Path::new("."))),
+            PathBuf::from("/workspace")
+        );
+
+        // Container path directly
+        assert_eq!(
+            resolve_container_cwd(ws, &mounts, Some(Path::new("/workspace/src"))),
+            PathBuf::from("/workspace/src")
+        );
+
+        // Subpath of workspace
+        assert_eq!(
+            resolve_container_cwd(
+                ws,
+                &mounts,
+                Some(Path::new("/home/user/project/crates/sub"))
+            ),
+            PathBuf::from("/workspace/crates/sub")
+        );
+
+        // Relative path
+        assert_eq!(
+            resolve_container_cwd(ws, &mounts, Some(Path::new("crates/sub"))),
+            PathBuf::from("/workspace/crates/sub")
+        );
+
+        // Mount mapping
+        assert_eq!(
+            resolve_container_cwd(ws, &mounts, Some(Path::new("/host/cache/packages"))),
+            PathBuf::from("/opt/cache/packages")
+        );
+    }
+
+    #[test]
+    fn test_configure_limits_and_entrypoint_env() {
+        let mut cmd = Command::new("/usr/bin/bwrap");
+        let limits = ProcessLimits::default();
+        let mut custom_env = std::collections::BTreeMap::new();
+        custom_env.insert("CUSTOM_VAR".to_string(), "my_value".to_string());
+        custom_env.insert("OPENAI_API_KEY".to_string(), "leak_secret".to_string());
+        custom_env.insert("PATH".to_string(), "/custom/bin:/usr/bin".to_string());
+
+        configure_limits_and_entrypoint(
+            &mut cmd,
+            Path::new("/usr/bin/prlimit"),
+            &limits,
+            true, // has_rust
+            false,
+            false,
+            &custom_env,
+        );
+
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        // Custom variable should be set
+        let custom_idx = args.iter().position(|a| a == "CUSTOM_VAR").unwrap();
+        assert_eq!(args[custom_idx - 1], "--setenv");
+        assert_eq!(args[custom_idx + 1], "my_value");
+
+        // Sensitive variable must be filtered out
+        assert!(!args.contains(&"OPENAI_API_KEY".to_string()));
+        assert!(!args.contains(&"leak_secret".to_string()));
+
+        // PATH should have rust prepended
+        let path_idx = args.iter().position(|a| a == "PATH").unwrap();
+        assert_eq!(
+            args[path_idx + 1],
+            "/opt/orbit-rust/bin:/custom/bin:/usr/bin"
         );
     }
 }

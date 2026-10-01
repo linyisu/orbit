@@ -209,6 +209,8 @@ pub fn is_reserved_system_path(path: &Path) -> bool {
 #[derive(Clone, Debug)]
 pub struct ProcessSpec {
     pub command: String,
+    pub cwd: Option<PathBuf>,
+    pub env: std::collections::BTreeMap<String, String>,
     pub timeout: Duration,
     pub scratch: Option<PathBuf>,
     pub limits: ProcessLimits,
@@ -226,6 +228,8 @@ impl ProcessSpec {
     pub fn new(command: impl Into<String>, timeout: Duration) -> Self {
         Self {
             command: command.into(),
+            cwd: None,
+            env: std::collections::BTreeMap::new(),
             timeout,
             scratch: None,
             limits: ProcessLimits::default(),
@@ -238,6 +242,16 @@ impl ProcessSpec {
             protected_paths: Vec::new(),
             opaque_runtime_roots: Vec::new(),
         }
+    }
+
+    pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
+    pub fn with_env(mut self, env: std::collections::BTreeMap<String, String>) -> Self {
+        self.env = env;
+        self
     }
 
     pub fn with_read_write_workspace(mut self, rw: bool) -> Self {
