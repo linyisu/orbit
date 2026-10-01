@@ -711,7 +711,18 @@ fn collect_all_protected_inodes(
     use std::os::unix::fs::MetadataExt;
 
     let mut protected_inodes = HashSet::new();
-    let mut opaque_runtime_roots = Vec::new();
+
+    let opaque_runtime_roots = policy
+        .opaque_runtime_roots
+        .read()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
+    for root in &opaque_runtime_roots {
+        if let Ok(meta) = std::fs::symlink_metadata(root) {
+            protected_inodes.insert((meta.dev(), meta.ino()));
+        }
+    }
 
     let protected = policy
         .protected_paths
@@ -721,9 +732,11 @@ fn collect_all_protected_inodes(
     for path in protected.iter() {
         if let Ok(meta) = std::fs::symlink_metadata(path) {
             protected_inodes.insert((meta.dev(), meta.ino()));
-            if meta.is_dir() && !meta.file_type().is_symlink() {
+            if meta.is_dir()
+                && !meta.file_type().is_symlink()
+                && !is_opaque_runtime_root(path, &opaque_runtime_roots)
+            {
                 collect_dir_inodes(path, &mut protected_inodes)?;
-                opaque_runtime_roots.push(path.clone());
             }
         }
     }
@@ -850,14 +863,14 @@ fn validate_inode_against_protected(
                             protected_inodes,
                             scanned_opaque_roots,
                         )?;
+                    }
 
-                        if protected_inodes.contains(&(em.dev(), em.ino())) {
-                            return Err(failed(format!(
-                                "{target_kind} directory '{}' contains hardlink to protected path at '{}'",
-                                canonical.display(),
-                                entry.path().display()
-                            )));
-                        }
+                    if protected_inodes.contains(&(em.dev(), em.ino())) {
+                        return Err(failed(format!(
+                            "{target_kind} directory '{}' contains hardlink to protected path at '{}'",
+                            canonical.display(),
+                            entry.path().display()
+                        )));
                     }
 
                     if em.is_dir() && !em.file_type().is_symlink() {
@@ -1398,6 +1411,22 @@ fn validate_mount_source(source: &Path, policy: &EffectivePolicy) -> Result<Path
         }
     }
 
+    let opaque_roots = policy
+        .opaque_runtime_roots
+        .read()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
+    for path in &opaque_roots {
+        if canonical.starts_with(path) || path.starts_with(&canonical) {
+            return Err(failed(format!(
+                "mount source '{}' overlaps protected path '{}'",
+                canonical.display(),
+                path.display()
+            )));
+        }
+    }
+
     let mut collected = collect_all_protected_inodes(policy)?;
     let mut scanned_opaque_roots = HashSet::new();
     validate_inode_against_protected(
@@ -1412,6 +1441,95 @@ fn validate_mount_source(source: &Path, policy: &EffectivePolicy) -> Result<Path
     Ok(canonical)
 }
 
+fn validate_toolchain_source(
+    source: &Path,
+    policy: &EffectivePolicy,
+) -> Result<PathBuf, RuntimeError> {
+    let canonical = source.canonicalize().map_err(failed)?;
+
+    if canonical == Path::new("/")
+        || canonical.starts_with("/proc")
+        || canonical.starts_with("/dev")
+        || canonical.starts_with("/sys")
+        || canonical.starts_with("/etc")
+    {
+        return Err(failed(format!(
+            "toolchain source '{}' is a reserved system path",
+            canonical.display()
+        )));
+    }
+
+    let protected = policy
+        .protected_paths
+        .read()
+        .map_err(|_| failed("protected path policy lock is poisoned"))?;
+
+    for path in protected.iter() {
+        if canonical.starts_with(path) || path.starts_with(&canonical) {
+            return Err(failed(format!(
+                "toolchain source '{}' overlaps protected path '{}'",
+                canonical.display(),
+                path.display()
+            )));
+        }
+    }
+
+    let opaque_roots = policy
+        .opaque_runtime_roots
+        .read()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
+    for path in &opaque_roots {
+        if canonical.starts_with(path) || path.starts_with(&canonical) {
+            return Err(failed(format!(
+                "toolchain source '{}' overlaps protected path '{}'",
+                canonical.display(),
+                path.display()
+            )));
+        }
+    }
+
+    let mut collected = collect_all_protected_inodes(policy)?;
+    let mut scanned_opaque_roots = HashSet::new();
+
+    if canonical == Path::new("/usr") {
+        let bin = canonical.join("bin");
+        if bin.is_dir() {
+            validate_inode_against_protected(
+                &bin,
+                &mut collected.inodes,
+                &collected.opaque_roots,
+                &mut scanned_opaque_roots,
+                "toolchain source",
+                Some(10_000),
+            )?;
+        }
+        let rustlib = canonical.join("lib/rustlib");
+        if rustlib.is_dir() {
+            validate_inode_against_protected(
+                &rustlib,
+                &mut collected.inodes,
+                &collected.opaque_roots,
+                &mut scanned_opaque_roots,
+                "toolchain source",
+                Some(10_000),
+            )?;
+        }
+    } else {
+        validate_inode_against_protected(
+            &canonical,
+            &mut collected.inodes,
+            &collected.opaque_roots,
+            &mut scanned_opaque_roots,
+            "toolchain source",
+            None,
+        )?;
+    }
+
+    Ok(canonical)
+}
+
 fn mount_toolchain_and_mounts(
     command: &mut Command,
     rust_toolchain: Option<&Path>,
@@ -1419,7 +1537,7 @@ fn mount_toolchain_and_mounts(
     policy: &EffectivePolicy,
 ) -> Result<(), RuntimeError> {
     if let Some(path) = rust_toolchain {
-        let path = validate_mount_source(path, policy)?;
+        let path = validate_toolchain_source(path, policy)?;
 
         if !path.join("bin/rustc").is_file()
             || !path.join("bin/cargo").is_file()
@@ -3350,6 +3468,107 @@ mod tests {
             validated.is_ok(),
             "large mount source directory (> 10000 entries) must succeed, got: {:?}",
             validated.err()
+        );
+    }
+
+    #[test]
+    fn test_mount_source_rejects_single_link_env_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let ws = temp.path().join("workspace");
+        std::fs::create_dir(&ws).unwrap();
+        let env_file = ws.join(".env");
+        std::fs::write(&env_file, "API_KEY=secret_val").unwrap();
+
+        let base = BasePolicy {
+            workspace: ResolvedPath::resolve(&ws, None).unwrap(),
+            network: NetworkPolicy::Deny,
+        };
+        let policy = EffectivePolicy::new(base);
+
+        // Mounting a review directory that points to the workspace containing single-link .env
+        let mount = MountSpec::read_only(&ws, "/opt/review");
+        let result = validate_mounts(&[mount], &policy);
+        assert!(
+            result.is_err(),
+            "mount source containing single-link .env must be rejected"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("contains hardlink to protected path")
+                || err.contains("overlaps protected path"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_toolchain_mount_succeeds_with_large_opaque_runtime_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let ws = temp.path().join("workspace");
+        std::fs::create_dir(&ws).unwrap();
+
+        // Create an unrelated opaque root with 20,001 entries
+        let opaque_root = temp.path().join("large_session_store");
+        std::fs::create_dir(&opaque_root).unwrap();
+        for i in 0..20_001 {
+            std::fs::write(opaque_root.join(format!("session_{i}.json")), b"{}").unwrap();
+        }
+
+        let toolchain = temp.path().join("toolchain");
+        std::fs::create_dir_all(toolchain.join("bin")).unwrap();
+        std::fs::create_dir_all(toolchain.join("lib/rustlib")).unwrap();
+        std::fs::write(toolchain.join("bin/rustc"), "#!/bin/sh\n").unwrap();
+        std::fs::write(toolchain.join("bin/cargo"), "#!/bin/sh\n").unwrap();
+
+        let base = BasePolicy {
+            workspace: ResolvedPath::resolve(&ws, None).unwrap(),
+            network: NetworkPolicy::Deny,
+        };
+        let policy = EffectivePolicy::new(base);
+        policy
+            .opaque_runtime_roots
+            .write()
+            .unwrap()
+            .push(opaque_root.canonicalize().unwrap());
+        policy
+            .protected_paths
+            .write()
+            .unwrap()
+            .push(opaque_root.canonicalize().unwrap());
+
+        let mut cmd = Command::new("/usr/bin/bwrap");
+        let result = mount_toolchain_and_mounts(&mut cmd, Some(&toolchain), &[], &policy);
+        assert!(
+            result.is_ok(),
+            "toolchain validation must succeed even if unrelated opaque root has > 20000 entries, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_system_rust_toolchain_in_usr_is_not_rejected_as_reserved() {
+        let temp = tempfile::tempdir().unwrap();
+        let ws = temp.path().join("workspace");
+        std::fs::create_dir(&ws).unwrap();
+
+        let base = BasePolicy {
+            workspace: ResolvedPath::resolve(&ws, None).unwrap(),
+            network: NetworkPolicy::Deny,
+        };
+        let policy = EffectivePolicy::new(base);
+
+        // Ordinary mount source rejects /usr as reserved system path
+        let err = validate_mount_source(Path::new("/usr"), &policy).unwrap_err();
+        assert!(
+            err.to_string().contains("is a reserved system path"),
+            "expected reserved system path error for /usr mount source, got: {err}"
+        );
+
+        // Toolchain source allows /usr (does not reject as reserved system path)
+        let toolchain_res = validate_toolchain_source(Path::new("/usr"), &policy);
+        assert!(
+            toolchain_res.is_ok(),
+            "validate_toolchain_source must allow /usr, got: {:?}",
+            toolchain_res.err()
         );
     }
 }

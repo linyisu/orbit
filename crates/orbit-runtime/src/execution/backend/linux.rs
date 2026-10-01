@@ -153,17 +153,39 @@ pub(crate) fn prepare_execution_spec_and_policy(
             .protected_paths
             .write()
             .map_err(|_| crate::error::failed("protected path policy lock is poisoned"))?;
-        for path in policy
-            .protected_paths
-            .iter()
-            .chain(policy.opaque_runtime_roots.iter())
-        {
+        for path in &policy.protected_paths {
             let abs_path = if path.is_absolute() {
                 path.clone()
             } else {
                 env.workspace_root.join(path)
             };
             let canon = abs_path.canonicalize().unwrap_or(abs_path);
+            if !protected_guard.contains(&canon) {
+                protected_guard.push(canon);
+            }
+        }
+    }
+
+    {
+        let mut opaque_guard = effective
+            .opaque_runtime_roots
+            .write()
+            .map_err(|_| crate::error::failed("opaque roots policy lock is poisoned"))?;
+        let mut protected_guard = effective
+            .protected_paths
+            .write()
+            .map_err(|_| crate::error::failed("protected path policy lock is poisoned"))?;
+
+        for path in &policy.opaque_runtime_roots {
+            let abs_path = if path.is_absolute() {
+                path.clone()
+            } else {
+                env.workspace_root.join(path)
+            };
+            let canon = abs_path.canonicalize().unwrap_or(abs_path);
+            if !opaque_guard.contains(&canon) {
+                opaque_guard.push(canon.clone());
+            }
             if !protected_guard.contains(&canon) {
                 protected_guard.push(canon);
             }

@@ -171,6 +171,7 @@ pub struct EffectivePolicy {
     pub persistent_read_write: Vec<ResolvedPath>,
     pub session_grants: Arc<RwLock<SessionGrantStore>>,
     pub protected_paths: Arc<RwLock<Vec<PathBuf>>>,
+    pub opaque_runtime_roots: Arc<RwLock<Vec<PathBuf>>>,
 }
 
 impl EffectivePolicy {
@@ -181,6 +182,7 @@ impl EffectivePolicy {
             persistent_read_write: Vec::new(),
             session_grants: Arc::new(RwLock::new(SessionGrantStore::new())),
             protected_paths: Arc::new(RwLock::new(Vec::new())),
+            opaque_runtime_roots: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
@@ -303,6 +305,7 @@ impl PolicyEngine {
                 persistent_read_write,
                 session_grants: Arc::new(RwLock::new(SessionGrantStore::new())),
                 protected_paths: Arc::new(RwLock::new(Vec::new())),
+                opaque_runtime_roots: Arc::new(RwLock::new(Vec::new())),
             }),
         })
     }
