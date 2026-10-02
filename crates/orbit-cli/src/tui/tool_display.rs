@@ -63,6 +63,26 @@ pub(super) fn git_summary(arguments: &str) -> String {
     structured::summary(arguments)
 }
 
+pub(super) fn command_output_summary(arguments: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(arguments) else {
+        return String::new();
+    };
+    let output_id = value["output_id"].as_str().unwrap_or_default();
+    if output_id.is_empty() {
+        return String::new();
+    }
+    let stream = value["stream"].as_str().unwrap_or("stdout");
+    let stream_suffix = if stream == "stderr" { " [stderr]" } else { "" };
+
+    if let Some(seq_str) = output_id.rsplit('-').next()
+        && let Ok(seq) = seq_str.parse::<u64>()
+    {
+        format!("终端 #{}{stream_suffix} ({output_id})", seq + 1)
+    } else {
+        format!("终端 {output_id}{stream_suffix}")
+    }
+}
+
 
 pub(super) fn write_file_preview(arguments: &str, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(arguments).ok()?;
@@ -1348,5 +1368,37 @@ mod tests {
         assert_eq!(preview.len(), 2);
         assert_eq!(preview[0].to_string(), "- old line");
         assert_eq!(preview[1].to_string(), "+ new line");
+    }
+
+    #[test]
+    fn command_output_summary_displays_terminal_number_and_id() {
+        let args1 = json!({
+            "output_id": "cmd-12345-67890-0",
+            "stream": "stdout"
+        })
+        .to_string();
+        assert_eq!(
+            command_output_summary(&args1),
+            "终端 #1 (cmd-12345-67890-0)"
+        );
+
+        let args2 = json!({
+            "output_id": "cmd-12345-67890-1",
+            "stream": "stderr"
+        })
+        .to_string();
+        assert_eq!(
+            command_output_summary(&args2),
+            "终端 #2 [stderr] (cmd-12345-67890-1)"
+        );
+
+        let args3 = json!({
+            "output_id": "cmd-custom"
+        })
+        .to_string();
+        assert_eq!(
+            command_output_summary(&args3),
+            "终端 cmd-custom"
+        );
     }
 }

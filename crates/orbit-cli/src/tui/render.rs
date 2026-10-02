@@ -1402,6 +1402,8 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         super::tool_display::git_summary(&row.arguments)
     } else if row.name == "read_file" {
         read_file_summary(&row.arguments, &row.output)
+    } else if row.name == "read_command_output" {
+        super::tool_display::command_output_summary(&row.arguments)
     } else {
         tool_summary(&row.arguments)
     };
@@ -1516,6 +1518,8 @@ pub(super) fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -
         super::tool_display::search_summary(&row.arguments)
     } else if row.name == "read_file" {
         read_file_summary(&row.arguments, &row.output)
+    } else if row.name == "read_command_output" {
+        super::tool_display::command_output_summary(&row.arguments)
     } else if !expanded {
         tool_summary(&row.arguments)
     } else {

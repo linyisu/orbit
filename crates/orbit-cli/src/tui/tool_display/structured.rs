@@ -55,8 +55,8 @@ impl View {
     fn paging(&mut self, value: &Value) {
         if value["has_more"] == true {
             self.note(&match value["next_offset"].as_u64() {
-                Some(offset) => format!("尚有后续结果，需再次查询  offset={offset}"),
-                None => "尚有后续结果，需再次查询".into(),
+                Some(offset) => format!("... 另有后续记录 (offset={offset})"),
+                None => "... 另有后续记录".into(),
             });
         }
 
@@ -138,7 +138,11 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
     let mut view = View::new(expanded, width);
 
     if let Some(commits) = value["commits"].as_array() {
-        view.note(&format!("本页 {} 条提交", commits.len()));
+        if !commits.is_empty() {
+            view.note(&format!("提交历史 ({} 条):", commits.len()));
+        } else {
+            view.note("无提交历史记录");
+        }
         let limit = if expanded { commits.len() } else { 4 };
 
         for commit in commits.iter().take(limit) {
@@ -206,7 +210,7 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
         }
 
         view.note(if entries.is_empty() {
-            "当前查询无变更"
+            "工作区干净 (无变更)"
         } else {
             "索引 / 工作区  路径"
         });
@@ -231,18 +235,22 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
         view.hidden |= branch["oid"].is_string();
         view.omitted(entries.len().saturating_sub(limit), "个变更");
     } else if let Some(lines) = value["lines"].as_array() {
-        view.note(&format!(
-            "{}  本页 {} 行",
-            if value["staged"] == true {
-                "暂存区差异"
-            } else {
-                "工作区差异"
-            },
-            lines.len()
-        ));
-
         if lines.is_empty() {
-            view.note("当前查询无差异");
+            view.note(if value["staged"] == true {
+                "暂存区无差异"
+            } else {
+                "工作区无差异"
+            });
+        } else {
+            view.note(&format!(
+                "{} ({} 行):",
+                if value["staged"] == true {
+                    "暂存区差异"
+                } else {
+                    "工作区差异"
+                },
+                lines.len()
+            ));
         }
 
         let limit = if expanded { lines.len() } else { 8 };
