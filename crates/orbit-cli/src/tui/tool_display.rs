@@ -749,8 +749,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
 fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     let content = value["content"].as_str()?;
     let path = value["path"].as_str().unwrap_or_default();
-    let start = value["start_line"].as_u64()?;
-    let end = value["end_line"].as_u64()?;
+    let end = value["end_line"].as_u64().unwrap_or(1);
     let rows: Vec<_> = content
         .lines()
         .map(|line| {
@@ -765,7 +764,6 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
         return Some(out);
     }
 
-    note(&mut out, &format!("第 {start}–{end} 行"), width);
     let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
     let syntax = super::languages::syntax_for_label(path);
 
@@ -1061,11 +1059,11 @@ mod tests {
 
         let collapsed = lines(&row, false, 32).unwrap();
 
-        assert_eq!(collapsed.len(), 4);
-        assert!(collapsed[1].to_string().ends_with('…'));
+        assert_eq!(collapsed.len(), 3);
+        assert!(collapsed[0].to_string().ends_with('…'));
 
         let expanded = lines(&row, true, 32).unwrap();
-        let reconstructed = expanded[1..expanded.len() - 2]
+        let reconstructed = expanded[..expanded.len() - 2]
             .iter()
             .map(|line| {
                 let text = line.to_string();
@@ -1092,8 +1090,8 @@ mod tests {
             );
             let view = lines(&file, false, 80).unwrap();
 
-            assert_eq!(view[1].to_string(), "       1 │ first");
-            assert_eq!(view[2].to_string(), "       2 │ second");
+            assert_eq!(view[0].to_string(), "       1 │ first");
+            assert_eq!(view[1].to_string(), "       2 │ second");
         }
     }
 

@@ -1102,8 +1102,16 @@ pub(super) fn transcript_lines_at_width(
             }
 
             TranscriptItem::Assistant(text) => {
+                let text = text.trim();
                 if text.is_empty() {
                     continue;
+                }
+
+                if lines
+                    .last()
+                    .is_some_and(|line| !line.to_string().trim().is_empty())
+                {
+                    lines.push(Line::from(""));
                 }
 
                 let mut code = None;
