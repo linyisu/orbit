@@ -97,6 +97,7 @@ pub struct Theme {
     pub tool_summary: Color,
     pub tool_hover: Color,
     pub tool_divider: Color,
+    pub tool_border: Color,
 }
 
 impl Default for Theme {
@@ -196,6 +197,7 @@ impl Theme {
             tool_summary: Color::Rgb(160, 165, 175),  // Muted Slate Gray
             tool_hover: Color::Rgb(140, 225, 170),    // Bright Emerald Mint (Hover)
             tool_divider: Color::Rgb(110, 125, 145),  // Tool Card Divider
+            tool_border: Color::Rgb(135, 145, 160),   // Tool Card Enclosure Border
         }
     }
 }

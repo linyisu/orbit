@@ -643,8 +643,9 @@ impl TranscriptLayout {
             .filter_map(|i| entry.rows.get(*i))
             .find(|row| row.start <= relative && relative < row.start + row.height)?;
         let column = usize::from(point.0 - area.x);
+        let gutter_width = row.gutter.as_ref().map_or(0, |gutter| gutter.width as usize);
 
-        (column < row.line.width()).then_some(index)
+        (column < gutter_width + row.line.width()).then_some(index)
     }
 
     pub fn height(&self) -> usize {

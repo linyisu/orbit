@@ -1543,37 +1543,36 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
         return vec![first_line, Line::from("")];
     }
 
-    // Expanded state: rounded enclosed card
-    let border_style = Style::default().fg(crate::tui::theme::THEME.border_muted);
-    let card_width = width.saturating_sub(2).min(118);
-    let inner_width = usize::from(card_width).saturating_sub(4);
+    // Expanded state: rounded enclosed card flush with user input frame
+    if width < 4 {
+        return vec![Line::from(title_spans), Line::from("")];
+    }
+
+    let border_style = Style::default().fg(crate::tui::theme::THEME.tool_border);
+    let inner_width = usize::from(width).saturating_sub(4);
 
     let mut card_lines = Vec::new();
 
-    // 1. Top border: "  ╭─────────╮"
-    card_lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(format!("╭{}╮", "─".repeat(inner_width + 2)), border_style),
-    ]));
+    // 1. Top border: "╭─────────╮"
+    card_lines.push(Line::from(Span::styled(
+        format!("╭{}╮", "─".repeat(inner_width + 2)),
+        border_style,
+    )));
 
-    // 2. Header line inside box: "  │ tool_name command... │"
+    // 2. Header line inside box: "│ tool_name command... │"
     let header_line = Line::from(title_spans);
     let (wrapped_header, _) = super::transcript::wrap_line(&header_line, inner_width as u16);
     for h_line in wrapped_header {
         let h_pad = inner_width.saturating_sub(h_line.width());
-        let mut framed_header = vec![
-            Span::raw("  "),
-            Span::styled("│ ", border_style),
-        ];
+        let mut framed_header = vec![Span::styled("│ ", border_style)];
         framed_header.extend(h_line.spans);
         framed_header.push(Span::raw(" ".repeat(h_pad)));
         framed_header.push(Span::styled(" │", border_style));
         card_lines.push(Line::from(framed_header));
     }
 
-    // 3. Breathing blank line: "  │               │"
+    // 3. Breathing blank line: "│               │"
     card_lines.push(Line::from(vec![
-        Span::raw("  "),
         Span::styled("│ ", border_style),
         Span::raw(" ".repeat(inner_width)),
         Span::styled(" │", border_style),
@@ -1621,10 +1620,7 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
         let (wrapped, _) = super::transcript::wrap_line(&line, inner_width as u16);
         for sub in wrapped {
             let pad = inner_width.saturating_sub(sub.width());
-            let mut spans = vec![
-                Span::raw("  "),
-                Span::styled("│ ", border_style),
-            ];
+            let mut spans = vec![Span::styled("│ ", border_style)];
             spans.extend(sub.spans);
             spans.push(Span::raw(" ".repeat(pad)));
             spans.push(Span::styled(" │", border_style));
@@ -1632,11 +1628,11 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
         }
     }
 
-    // 5. Bottom border: "  ╰─────────╯"
-    card_lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(format!("╰{}╯", "─".repeat(inner_width + 2)), border_style),
-    ]));
+    // 5. Bottom border: "╰─────────╯"
+    card_lines.push(Line::from(Span::styled(
+        format!("╰{}╯", "─".repeat(inner_width + 2)),
+        border_style,
+    )));
 
     // 6. Trailing empty separator line
     card_lines.push(Line::from(""));
@@ -2443,13 +2439,17 @@ mod tests {
         // Expanded state: rounded box with breathing blank line and line-numbered code
         let expanded = tool_card(&row, true, 80);
         assert!(expanded.len() >= 5);
-        assert!(expanded[0].to_string().contains('╭') && expanded[0].to_string().contains('╮'));
+        assert!(expanded[0].to_string().starts_with('╭') && expanded[0].to_string().ends_with('╮'));
         assert!(expanded[1].to_string().contains("write_file hello.py"));
-        assert!(expanded[2].to_string().starts_with("  │") && expanded[2].to_string().ends_with('│'));
+        assert!(expanded[2].to_string().starts_with("│ ") && expanded[2].to_string().ends_with(" │"));
         assert!(expanded[3].to_string().contains("1 print(\"Hello, world!\")"));
         let bottom = &expanded[expanded.len() - 2];
-        assert!(bottom.to_string().contains('╰') && bottom.to_string().contains('╯'));
+        assert!(bottom.to_string().starts_with('╰') && bottom.to_string().ends_with('╯'));
         assert!(expanded.last().unwrap().to_string().is_empty());
+
+        for line in &expanded[..expanded.len() - 1] {
+            assert_eq!(line.width(), 80);
+        }
 
         // Click testing: any position inside the card (top border, header, blank line, code, bottom border) returns Some(0)
         let items = vec![TranscriptItem::Tool(row)];
@@ -2459,9 +2459,11 @@ mod tests {
         layout.update(&items, Some(0), 80);
         let card_height = layout.height() - 1;
         for y in 0..card_height {
+            assert_eq!(layout.disclosure_at(&items, area, 0, (0, y as u16)), Some(0));
             assert_eq!(layout.disclosure_at(&items, area, 0, (2, y as u16)), Some(0));
             assert_eq!(layout.disclosure_at(&items, area, 0, (30, y as u16)), Some(0));
             assert_eq!(layout.disclosure_at(&items, area, 0, (70, y as u16)), Some(0));
+            assert_eq!(layout.disclosure_at(&items, area, 0, (79, y as u16)), Some(0));
             assert_eq!(layout.disclosure_at(&items, area, 0, (80, y as u16)), None);
         }
     }
