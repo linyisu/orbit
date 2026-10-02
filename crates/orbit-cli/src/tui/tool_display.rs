@@ -64,7 +64,7 @@ pub(super) fn git_summary(arguments: &str) -> String {
 }
 
 
-pub(super) fn write_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line<'static>>> {
+pub(super) fn write_file_preview(arguments: &str, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(arguments).ok()?;
     let content = value["content"].as_str()?;
     let path = value["path"].as_str().unwrap_or_default();
@@ -76,33 +76,12 @@ pub(super) fn write_file_preview(arguments: &str, _width: u16) -> Option<Vec<Lin
             Style::default().fg(SECONDARY),
         ))]);
     }
-    let digits = total_lines.to_string().len();
-    let syntax = super::languages::syntax_for_label(path)
-        .unwrap_or_else(|| super::languages::SYNTAXES.find_syntax_plain_text());
-    let mut highlighter = HighlightLines::new(syntax, &crate::tui::theme::CODE_THEME);
+    let digits = total_lines.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
+    let syntax = super::languages::syntax_for_label(path);
     let mut out = Vec::new();
     for (index, line) in lines.into_iter().enumerate() {
-        let num = index + 1;
-        let num_span = Span::styled(
-            format!("{num:>digits$} "),
-            Style::default().fg(crate::tui::theme::THEME.line_number),
-        );
-        let mut line_spans = vec![num_span];
-        if let Ok(tokens) = highlighter.highlight_line(line, &super::languages::SYNTAXES) {
-            line_spans.extend(tokens.into_iter().map(|(style, text)| {
-                let c = style.foreground;
-                Span::styled(
-                    safe_output(text),
-                    Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
-                )
-            }));
-        } else {
-            line_spans.push(Span::styled(
-                safe_output(line),
-                Style::default().fg(crate::tui::theme::THEME.output_foreground),
-            ));
-        }
-        out.push(Line::from(line_spans));
+        let num = (index + 1) as u64;
+        source(&mut out, num, digits, line, None, syntax, true, width);
     }
     Some(out)
 }
@@ -1125,8 +1104,8 @@ mod tests {
         .to_string();
         let preview = write_file_preview(&args, 80).expect("preview should succeed");
         assert_eq!(preview.len(), 2);
-        assert_eq!(preview[0].to_string(), "1 print(\"Hello, world!\")");
-        assert_eq!(preview[1].to_string(), "2 print(42)");
+        assert_eq!(preview[0].to_string(), "       1 │ print(\"Hello, world!\")");
+        assert_eq!(preview[1].to_string(), "       2 │ print(42)");
     }
 
     #[test]

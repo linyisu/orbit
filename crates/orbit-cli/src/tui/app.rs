@@ -435,6 +435,13 @@ impl UiState {
 
             AgentEvent::ToolStarted { call } => {
                 self.finish_thinking();
+                if let Some(TranscriptItem::Assistant(content)) = self.transcript.last_mut() {
+                    if content.trim().is_empty() {
+                        self.transcript.pop();
+                    } else {
+                        *content = content.trim().to_owned();
+                    }
+                }
                 self.tool_calls += 1;
                 self.transcript.push(TranscriptItem::Tool(ToolRow {
                     id: call.id,
@@ -452,6 +459,13 @@ impl UiState {
                 self.update_tool(&call, ToolStatus::Failed, error);
             }
             AgentEvent::Completed { .. } => {
+                if let Some(TranscriptItem::Assistant(content)) = self.transcript.last_mut() {
+                    if content.trim().is_empty() {
+                        self.transcript.pop();
+                    } else {
+                        *content = content.trim().to_owned();
+                    }
+                }
                 self.status = RunStatus::Completed;
                 self.finish_clock();
             }

@@ -1085,6 +1085,7 @@ pub(super) fn transcript_lines_at_width(
     for item in items {
         match item {
             TranscriptItem::User(text) => {
+                let text = text.trim();
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(vec![
                         Span::styled(
@@ -1115,8 +1116,14 @@ pub(super) fn transcript_lines_at_width(
                 }
 
                 let mut code = None;
+                let mut prev_empty = false;
 
                 for (index, line) in text.lines().enumerate() {
+                    let is_empty = line.trim().is_empty();
+                    if is_empty && prev_empty {
+                        continue;
+                    }
+                    prev_empty = is_empty;
                     lines.push(assistant_line(line, index, &mut code));
                 }
 
@@ -2442,7 +2449,7 @@ mod tests {
         assert!(expanded[0].to_string().starts_with('╭') && expanded[0].to_string().ends_with('╮'));
         assert!(expanded[1].to_string().contains("write_file hello.py"));
         assert!(expanded[2].to_string().starts_with("│ ") && expanded[2].to_string().ends_with(" │"));
-        assert!(expanded[3].to_string().contains("1 print(\"Hello, world!\")"));
+        assert!(expanded[3].to_string().contains("1 │ print(\"Hello, world!\")"));
         let bottom = &expanded[expanded.len() - 2];
         assert!(bottom.to_string().starts_with('╰') && bottom.to_string().ends_with('╯'));
         assert!(expanded.last().unwrap().to_string().is_empty());
