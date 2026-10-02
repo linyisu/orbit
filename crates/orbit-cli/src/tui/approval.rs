@@ -160,18 +160,33 @@ pub(super) fn needed_height(preview: &orbit_tools::approval::ApprovalPreview) ->
     match preview {
         orbit_tools::approval::ApprovalPreview::Command(p) => {
             let cmd_lines = p.command.lines().count().clamp(1, 6) as u16;
-            let cwd_lines = if p.cwd.is_some() { 1 } else { 0 };
-            2 + cmd_lines + cwd_lines + 1
+            let mut extra = 0;
+            if p.cwd.is_some() {
+                extra += 1;
+            }
+            if let Some(git) = &p.git {
+                match &git.kind {
+                    orbit_runtime::git::GitOperationKind::Dangerous { .. }
+                    | orbit_runtime::git::GitOperationKind::RemoteWrite { .. }
+                    | orbit_runtime::git::GitOperationKind::BranchSwitchOrRebase { .. }
+                    | orbit_runtime::git::GitOperationKind::LocalWrite { .. }
+                    | orbit_runtime::git::GitOperationKind::ConfigMutation { .. } => {
+                        extra += 1;
+                    }
+                    _ => {}
+                }
+            }
+            4 + extra + cmd_lines
         }
         orbit_tools::approval::ApprovalPreview::Write(_) => 10,
         orbit_tools::approval::ApprovalPreview::Delete(p) => {
             let lines = p.before.lines().count().clamp(1, 6) as u16;
-            2 + lines + 1
+            4 + lines
         }
-        orbit_tools::approval::ApprovalPreview::Capability(_) => 6,
+        orbit_tools::approval::ApprovalPreview::Capability(_) => 7,
         orbit_tools::approval::ApprovalPreview::Mcp(p) => {
             let arg_lines = p.arguments.lines().count().clamp(1, 4) as u16;
-            2 + arg_lines + 1
+            4 + arg_lines
         }
     }
 }
@@ -179,6 +194,10 @@ pub(super) fn needed_height(preview: &orbit_tools::approval::ApprovalPreview) ->
 pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     if file_modal(state) {
         draw_file_modal(frame, state);
+        return;
+    }
+
+    if area.height < 3 || area.width < 10 {
         return;
     }
 
@@ -194,49 +213,34 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .as_ref()
         .expect("approval screen requires a proposal");
 
-    let panel_block = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(Style::default().fg(crate::tui::theme::THEME.accent));
-    let inner_area = panel_block.inner(area);
-    frame.render_widget(panel_block, area);
-
-    let areas = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(inner_area);
-
-    let (title, lines) = match proposal {
+    let (border_color, title, header_lines, body_lines) = match proposal {
         orbit_tools::approval::ApprovalPreview::Write(preview) => {
             let before = preview.before.as_deref().unwrap_or_default();
             let after = preview.after.as_str();
             let op = if preview.before.is_some() {
-                "修改"
+                "修改文件"
             } else {
-                "新建"
+                "新建文件"
             };
-            let title = vec![
-                Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                    Span::styled(
-                        "权限确认",
-                        Style::default().fg(crate::tui::theme::THEME.white),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        format!("  → {op} "),
-                        Style::default().fg(crate::tui::theme::THEME.label_muted),
-                    ),
-                    Span::styled(
-                        preview.path.clone(),
-                        Style::default()
-                            .fg(crate::tui::theme::THEME.strong)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-            ];
+            let border_color = crate::tui::theme::THEME.accent;
+            let title = Line::from(vec![
+                Span::raw(" "),
+                Span::styled("📝 ", Style::default().fg(border_color)),
+                Span::styled(
+                    format!("{op} · "),
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.white)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    preview.path.clone(),
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
+            ]);
+
             let diff = similar::TextDiff::configure()
                 .timeout(std::time::Duration::from_millis(250))
                 .diff_lines(before, after);
@@ -281,6 +285,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 let text =
                     super::render::safe_output(change.value().trim_end_matches(['\r', '\n']));
                 let mut spans = vec![
+                    Span::raw("  "),
                     Span::styled(
                         format!("{line_no} "),
                         Style::default().fg(crate::tui::theme::THEME.line_number),
@@ -302,46 +307,43 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             }
 
             if diff_lines.is_empty() {
-                diff_lines.push(Line::from("（无内容差异）"));
+                diff_lines.push(Line::from("  （无内容差异）"));
             }
 
-            (title, diff_lines)
+            (border_color, title, Vec::new(), diff_lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Delete(preview) => {
-            let title = vec![
-                Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.error)),
-                    Span::styled(
-                        "权限确认",
-                        Style::default().fg(crate::tui::theme::THEME.white),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        "  × 删除文件 ",
-                        Style::default().fg(crate::tui::theme::THEME.error),
-                    ),
-                    Span::styled(
-                        preview.path.clone(),
-                        Style::default()
-                            .fg(crate::tui::theme::THEME.strong)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-            ];
+            let border_color = crate::tui::theme::THEME.danger;
+            let title = Line::from(vec![
+                Span::raw(" "),
+                Span::styled("🗑️ ", Style::default().fg(border_color)),
+                Span::styled(
+                    "删除文件 · ",
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.white)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    preview.path.clone(),
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.error)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
+            ]);
             let diff_lines = preview
                 .before
                 .lines()
                 .map(|line| {
                     Line::styled(
-                        format!("- {line}"),
+                        format!("  - {line}"),
                         Style::default().fg(crate::tui::theme::THEME.error),
                     )
                 })
                 .collect::<Vec<_>>();
 
-            (title, diff_lines)
+            (border_color, title, Vec::new(), diff_lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
@@ -349,12 +351,8 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 orbit_tools::approval::CommandWorkspaceAccess::Read => "只读",
                 orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => "读写",
             };
-            let tag = if preview.network_allowed {
-                format!(" · {access} · 联网")
-            } else {
-                format!(" · {access}")
-            };
-            let title = if let Some(git) = &preview.git {
+
+            let (border_color, icon, title_text, git_notice) = if let Some(git) = &preview.git {
                 match &git.kind {
                     orbit_runtime::git::GitOperationKind::RemoteWrite {
                         remote,
@@ -366,39 +364,19 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                             (Some(s), Some(t)) => format!("{s} -> {remote}/{t}"),
                             _ => remote.clone(),
                         };
-                        vec![
-                            Line::from(vec![
-                                Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                                Span::styled(
-                                    "Git 远端推送授权",
-                                    Style::default().fg(crate::tui::theme::THEME.white),
-                                ),
-                                Span::styled(
-                                    format!(" · 目标: {branch_str}"),
-                                    Style::default().fg(crate::tui::theme::THEME.accent),
-                                ),
-                            ]),
-                            Line::from(vec![Span::styled(
-                                "  # 远端代码发布写入（需要独立推送授权，工作区写入与联网不代表同意发布）",
-                                Style::default().fg(crate::tui::theme::THEME.description),
-                            )]),
-                        ]
+                        (
+                            crate::tui::theme::THEME.tool_running,
+                            "🚀",
+                            "Git 远端推送授权".to_string(),
+                            Some(format!("目标: {branch_str} · 远端代码发布写入（需独立授权）")),
+                        )
                     }
-                    orbit_runtime::git::GitOperationKind::Dangerous { subcommand, reason } => {
-                        vec![
-                            Line::from(vec![
-                                Span::styled("⚠️ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                                Span::styled(
-                                    format!("高危 Git 操作确认 · {subcommand}"),
-                                    Style::default().fg(crate::tui::theme::THEME.white).add_modifier(Modifier::BOLD),
-                                ),
-                            ]),
-                            Line::from(vec![Span::styled(
-                                format!("  # 风险提示: {reason}（不能被常规写入权限自动放行）"),
-                                Style::default().fg(crate::tui::theme::THEME.accent),
-                            )]),
-                        ]
-                    }
+                    orbit_runtime::git::GitOperationKind::Dangerous { subcommand, reason } => (
+                        crate::tui::theme::THEME.danger,
+                        "⚠️",
+                        format!("高危 Git 操作确认 · {subcommand}"),
+                        Some(format!("风险提示: {reason}（不能被常规写入权限自动放行）")),
+                    ),
                     orbit_runtime::git::GitOperationKind::BranchSwitchOrRebase {
                         subcommand,
                         target,
@@ -407,89 +385,90 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                         let desc = risk_notice
                             .as_deref()
                             .unwrap_or("切换分支或变基可能影响未提交工作区修改");
-                        vec![
-                            Line::from(vec![
-                                Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                                Span::styled(
-                                    format!("Git 分支操作 · {subcommand} -> {target}"),
-                                    Style::default().fg(crate::tui::theme::THEME.white),
-                                ),
-                                Span::styled(tag.clone(), Style::default().fg(crate::tui::theme::THEME.muted)),
-                            ]),
-                            Line::from(vec![Span::styled(
-                                format!("  # {desc}"),
-                                Style::default().fg(crate::tui::theme::THEME.description),
-                            )]),
-                        ]
+                        (
+                            crate::tui::theme::THEME.tool_running,
+                            "🔀",
+                            format!("Git 分支操作 · {subcommand} -> {target}"),
+                            Some(desc.to_string()),
+                        )
                     }
-                    orbit_runtime::git::GitOperationKind::LocalWrite { subcommand, description } => {
-                        vec![
-                            Line::from(vec![
-                                Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                                Span::styled(
-                                    format!("Git 本地写入 · {subcommand}"),
-                                    Style::default().fg(crate::tui::theme::THEME.white),
-                                ),
-                                Span::styled(tag.clone(), Style::default().fg(crate::tui::theme::THEME.muted)),
-                            ]),
-                            Line::from(vec![Span::styled(
-                                format!("  # {description}"),
-                                Style::default().fg(crate::tui::theme::THEME.description),
-                            )]),
-                        ]
-                    }
+                    orbit_runtime::git::GitOperationKind::LocalWrite {
+                        subcommand,
+                        description,
+                    } => (
+                        crate::tui::theme::THEME.accent,
+                        "📦",
+                        format!("Git 本地写入 · {subcommand}"),
+                        Some(description.clone()),
+                    ),
                     orbit_runtime::git::GitOperationKind::ConfigMutation { key, .. } => {
                         let target_key = key.as_deref().unwrap_or("仓库配置/Hooks");
-                        vec![
-                            Line::from(vec![
-                                Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                                Span::styled(
-                                    "Git 配置与钩子保护",
-                                    Style::default().fg(crate::tui::theme::THEME.white),
-                                ),
-                                Span::styled(format!(" · {target_key}"), Style::default().fg(crate::tui::theme::THEME.muted)),
-                            ]),
-                            Line::from(vec![Span::styled(
-                                "  # 修改仓库配置或 Hook 脚本，需要独立授权",
-                                Style::default().fg(crate::tui::theme::THEME.description),
-                            )]),
-                        ]
+                        (
+                            crate::tui::theme::THEME.tool_running,
+                            "🛡️",
+                            "Git 配置与钩子保护".to_string(),
+                            Some(format!("目标: {target_key} · 修改仓库配置或 Hook 脚本需独立授权")),
+                        )
                     }
-                    _ => vec![
-                        Line::from(vec![
-                            Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                            Span::styled(
-                                "权限确认",
-                                Style::default().fg(crate::tui::theme::THEME.white),
-                            ),
-                            Span::styled(tag.clone(), Style::default().fg(crate::tui::theme::THEME.muted)),
-                        ]),
-                        Line::from(vec![Span::styled(
-                            "  # 执行命令",
-                            Style::default().fg(crate::tui::theme::THEME.description),
-                        )]),
-                    ],
+                    _ => (
+                        crate::tui::theme::THEME.accent,
+                        "⚡",
+                        "命令执行确认".to_string(),
+                        None,
+                    ),
                 }
             } else {
-                vec![
-                    Line::from(vec![
-                        Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                        Span::styled(
-                            "权限确认",
-                            Style::default().fg(crate::tui::theme::THEME.white),
-                        ),
-                        Span::styled(tag, Style::default().fg(crate::tui::theme::THEME.muted)),
-                    ]),
-                    Line::from(vec![Span::styled(
-                        "  # 执行命令",
-                        Style::default().fg(crate::tui::theme::THEME.description),
-                    )]),
-                ]
+                (
+                    crate::tui::theme::THEME.accent,
+                    "⚡",
+                    "命令执行确认".to_string(),
+                    None,
+                )
             };
 
-            let mut lines = Vec::new();
+            let mut title_spans = vec![
+                Span::raw(" "),
+                Span::styled(format!("{icon} "), Style::default().fg(border_color)),
+                Span::styled(
+                    title_text,
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.white)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    format!("[{access}]"),
+                    Style::default().fg(crate::tui::theme::THEME.accent),
+                ),
+            ];
+            if preview.network_allowed {
+                title_spans.push(Span::raw(" "));
+                title_spans.push(Span::styled(
+                    "[联网]",
+                    Style::default().fg(crate::tui::theme::THEME.tool_running),
+                ));
+            }
+            title_spans.push(Span::raw(" "));
+            let title = Line::from(title_spans);
+
+            let mut header_lines = Vec::new();
+            if let Some(notice) = git_notice {
+                let is_danger = border_color == crate::tui::theme::THEME.danger;
+                header_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        notice,
+                        Style::default().fg(if is_danger {
+                            crate::tui::theme::THEME.danger
+                        } else {
+                            crate::tui::theme::THEME.description
+                        }),
+                    ),
+                ]));
+            }
             if let Some(ref cwd) = preview.cwd {
-                lines.push(Line::from(vec![
+                header_lines.push(Line::from(vec![
+                    Span::raw("  "),
                     Span::styled("cwd: ", Style::default().fg(crate::tui::theme::THEME.muted)),
                     Span::styled(
                         visible(cwd),
@@ -497,55 +476,59 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                     ),
                 ]));
             }
+
+            let mut body_lines = Vec::new();
             for (i, line) in preview.command.lines().enumerate() {
-                let prefix = if i == 0 { "$ " } else { "  " };
-                lines.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(crate::tui::theme::THEME.muted)),
+                let prefix = if i == 0 { "  $ " } else { "    " };
+                body_lines.push(Line::from(vec![
+                    Span::styled(
+                        prefix,
+                        Style::default().fg(border_color).add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(
                         visible(line),
-                        Style::default().fg(crate::tui::theme::THEME.approval_link),
+                        Style::default()
+                            .fg(crate::tui::theme::THEME.white)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]));
             }
 
-            (title, lines)
+            (border_color, title, header_lines, body_lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Mcp(preview) => {
-            let title = vec![
-                Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                    Span::styled(
-                        "权限确认",
-                        Style::default().fg(crate::tui::theme::THEME.white),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        "  ⚙ 调用工具 ",
-                        Style::default().fg(crate::tui::theme::THEME.label_muted),
-                    ),
-                    Span::styled(
-                        format!("{}::{}", preview.server, preview.tool),
-                        Style::default()
-                            .fg(crate::tui::theme::THEME.strong)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-            ];
+            let border_color = crate::tui::theme::THEME.accent;
+            let title = Line::from(vec![
+                Span::raw(" "),
+                Span::styled("🔌 ", Style::default().fg(border_color)),
+                Span::styled(
+                    "工具调用确认 · ",
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.white)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{}::{}", preview.server, preview.tool),
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.strong)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
+            ]);
 
-            let lines = preview
+            let body_lines = preview
                 .arguments
                 .split('\n')
                 .map(|line| {
                     Line::styled(
-                        visible(line),
+                        format!("  {}", visible(line)),
                         Style::default().fg(crate::tui::theme::THEME.approval_link),
                     )
                 })
                 .collect();
 
-            (title, lines)
+            (border_color, title, Vec::new(), body_lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Capability(preview) => {
@@ -554,51 +537,72 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             } else {
                 "读取"
             };
-            let title = vec![
-                Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                    Span::styled(
-                        "权限确认",
-                        Style::default().fg(crate::tui::theme::THEME.white),
-                    ),
-                    Span::styled(
-                        format!(" · {access_desc}"),
-                        Style::default().fg(crate::tui::theme::THEME.label_muted),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        "  ← 访问外部路径 ",
-                        Style::default().fg(crate::tui::theme::THEME.label_muted),
-                    ),
-                    Span::styled(
-                        preview.path.display().to_string(),
-                        Style::default()
-                            .fg(crate::tui::theme::THEME.strong)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-            ];
+            let border_color = crate::tui::theme::THEME.accent;
+            let title = Line::from(vec![
+                Span::raw(" "),
+                Span::styled("📂 ", Style::default().fg(border_color)),
+                Span::styled(
+                    "外部路径访问确认 · ",
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.white)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    access_desc,
+                    Style::default().fg(crate::tui::theme::THEME.accent),
+                ),
+                Span::raw(" "),
+            ]);
 
-            let mut lines = Vec::new();
+            let mut header_lines = Vec::new();
             if !preview.reason.is_empty() {
-                lines.push(Line::styled(
-                    format!("理由：{}", preview.reason),
-                    Style::default().fg(crate::tui::theme::THEME.description),
-                ));
-                lines.push(Line::from(""));
+                header_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("理由: ", Style::default().fg(crate::tui::theme::THEME.muted)),
+                    Span::styled(
+                        &preview.reason,
+                        Style::default().fg(crate::tui::theme::THEME.description),
+                    ),
+                ]));
             }
-            lines.push(Line::styled(
-                format!("- {}/*", preview.path.display()),
+            let body_lines = vec![Line::styled(
+                format!("  - {}/*", preview.path.display()),
                 Style::default().fg(crate::tui::theme::THEME.approval_foreground),
-            ));
+            )];
 
-            (title, lines)
+            (border_color, title, header_lines, body_lines)
         }
     };
 
-    frame.render_widget(Paragraph::new(title), areas[0]);
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let panel_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(title);
+    let inner_area = panel_block.inner(area);
+    frame.render_widget(panel_block, area);
+
+    let header_height = if !header_lines.is_empty() && inner_area.height >= 4 {
+        header_lines.len().min(2) as u16
+    } else {
+        0
+    };
+    let show_gap = inner_area.height >= header_height + 3;
+    let gap_height = if show_gap { 1 } else { 0 };
+
+    let areas = Layout::vertical([
+        Constraint::Length(header_height),
+        Constraint::Min(1),
+        Constraint::Length(gap_height),
+        Constraint::Length(1),
+    ])
+    .split(inner_area);
+
+    if header_height > 0 {
+        frame.render_widget(Paragraph::new(header_lines), areas[0]);
+    }
+
+    let paragraph = Paragraph::new(body_lines).wrap(Wrap { trim: false });
     state.approval_max_scroll = paragraph
         .line_count(areas[1].width)
         .saturating_sub(areas[1].height as usize)
@@ -608,58 +612,86 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         paragraph.scroll((state.approval_scroll as u16, 0)),
         areas[1],
     );
-    draw_options(frame, state, areas[2]);
+
+    draw_options(frame, state, areas[3]);
     state.selection.approval = areas[1];
     state.approval_shown = true;
 }
 
 fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let opt0_x = area.x + 1;
+    let opt0_w = 12;
+    let opt1_x = opt0_x + opt0_w + 2;
+    let opt1_w = 12;
+    let opt2_x = opt1_x + opt1_w + 2;
+    let opt2_w = 8;
+
     state.approval_options = vec![
-        (Rect::new(area.x + 1, area.y, 12, 1).intersection(area), 0),
-        (Rect::new(area.x + 15, area.y, 10, 1).intersection(area), 1),
-        (Rect::new(area.x + 27, area.y, 8, 1).intersection(area), 2),
+        (Rect::new(opt0_x, area.y, opt0_w, 1).intersection(area), 0),
+        (Rect::new(opt1_x, area.y, opt1_w, 1).intersection(area), 1),
+        (Rect::new(opt2_x, area.y, opt2_w, 1).intersection(area), 2),
     ];
-    let selected_style = Style::default()
+
+    let selected_style_normal = Style::default()
         .bg(crate::tui::theme::THEME.accent)
         .fg(crate::tui::theme::THEME.on_accent)
         .add_modifier(Modifier::BOLD);
+    let selected_style_danger = Style::default()
+        .bg(crate::tui::theme::THEME.danger)
+        .fg(crate::tui::theme::THEME.white)
+        .add_modifier(Modifier::BOLD);
     let normal_style = Style::default().fg(crate::tui::theme::THEME.approval_detail);
+    let normal_style_danger = Style::default().fg(crate::tui::theme::THEME.approval_muted);
 
-    let options = Line::from(vec![
+    let mut spans = vec![
         Span::raw(" "),
         Span::styled(
-            " 允许一次 ",
+            "[ 允许一次 ]",
             if state.approval_choice == 0 {
-                selected_style
+                selected_style_normal
             } else {
                 normal_style
             },
         ),
         Span::raw("  "),
         Span::styled(
-            " 始终允许 ",
+            "[ 始终允许 ]",
             if state.approval_choice == 1 {
-                selected_style
+                selected_style_normal
             } else {
                 normal_style
             },
         ),
         Span::raw("  "),
         Span::styled(
-            "  拒绝  ",
+            "[ 拒绝 ]",
             if state.approval_choice == 2 {
-                selected_style
+                selected_style_danger
             } else {
-                normal_style
+                normal_style_danger
             },
         ),
-        Span::raw("   "),
-        Span::styled(
-            "Tab 切换 · Enter 确认 · Esc 拒绝",
+    ];
+
+    let hint_text = if area.width >= 74 {
+        "   Tab 切换 · Enter 确认 · Esc 拒绝"
+    } else if area.width >= 58 {
+        "   Tab · Enter · Esc"
+    } else {
+        ""
+    };
+    if !hint_text.is_empty() {
+        spans.push(Span::styled(
+            hint_text,
             Style::default().fg(crate::tui::theme::THEME.approval_muted),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(options), area);
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
@@ -1021,5 +1053,109 @@ mod render_tests {
             text.replace(' ', "").contains("允许") && text.replace(' ', "").contains("拒绝"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn command_approval_card_renders_rounded_frame_and_buttons() {
+        use crossterm::event::{MouseButton, MouseEvent};
+        use orbit_tools::approval::{CommandPreview, CommandWorkspaceAccess};
+
+        let mut state = UiState::new("mock");
+        state.approval = Some(orbit_tools::approval::ApprovalPreview::Command(
+            CommandPreview {
+                command: "mkdir -p demo".into(),
+                workspace_access: CommandWorkspaceAccess::ReadWrite,
+                network_allowed: true,
+                cwd: Some("/home/user/repo".into()),
+                timeout_seconds: 30,
+                external_capabilities: Vec::new(),
+                external_write: false,
+                git: None,
+            },
+        ));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| draw(f, &mut state)).unwrap();
+
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        let flat = text.replace(' ', "");
+        assert!(text.contains("mkdir -p demo"), "{text}");
+        assert!(flat.contains("命令执行确认"), "{text}");
+        assert!(flat.contains("[读写]"), "{text}");
+        assert!(flat.contains("[联网]"), "{text}");
+        assert!(flat.contains("cwd:/home/user/repo"), "{text}");
+        assert!(state.approval_shown);
+        assert_eq!(state.approval_options.len(), 3);
+
+        // Test clicking each option on the actual rendered button Rects
+        let (opt0_rect, _) = state.approval_options[0];
+        let (opt1_rect, _) = state.approval_options[1];
+        let (opt2_rect, _) = state.approval_options[2];
+
+        let click = |x, y| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+
+        assert_eq!(
+            handle(&mut state, click(opt0_rect.x + 1, opt0_rect.y)),
+            Action::Approve
+        );
+        assert_eq!(
+            handle(&mut state, click(opt1_rect.x + 1, opt1_rect.y)),
+            Action::AlwaysAllow
+        );
+        assert_eq!(
+            handle(&mut state, click(opt2_rect.x + 1, opt2_rect.y)),
+            Action::Deny
+        );
+    }
+
+    #[test]
+    fn git_dangerous_card_shows_risk_and_badges() {
+        use orbit_tools::approval::{CommandPreview, CommandWorkspaceAccess};
+
+        let mut state = UiState::new("mock");
+        state.approval = Some(orbit_tools::approval::ApprovalPreview::Command(
+            CommandPreview {
+                command: "git reset --hard HEAD~1".into(),
+                workspace_access: CommandWorkspaceAccess::ReadWrite,
+                network_allowed: false,
+                cwd: None,
+                timeout_seconds: 30,
+                external_capabilities: Vec::new(),
+                external_write: false,
+                git: orbit_runtime::git::GitCommandAnalysis::parse("git reset --hard HEAD~1"),
+            },
+        ));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| draw(f, &mut state)).unwrap();
+
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        let flat = text.replace(' ', "");
+
+        assert!(flat.contains("高危Git操作确认·reset"), "{text}");
+        assert!(flat.contains("风险提示"), "{text}");
+        assert!(text.contains("git reset --hard HEAD~1"), "{text}");
+        assert!(flat.contains("[读写]"), "{text}");
+        assert!(!flat.contains("[联网]"), "{text}");
     }
 }
