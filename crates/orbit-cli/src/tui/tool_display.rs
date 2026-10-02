@@ -35,6 +35,8 @@ pub(super) fn toggle_line(expanded: bool, width: u16) -> Line<'static> {
     ])
 }
 
+use syntect::easy::HighlightLines;
+
 pub(super) fn search_summary(arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(arguments) else {
         return String::new();
@@ -43,7 +45,7 @@ pub(super) fn search_summary(arguments: &str) -> String {
     let query = super::render::compact_preview(value["query"].as_str().unwrap_or_default(), 100);
     let path = super::render::compact_preview(value["path"].as_str().unwrap_or("."), 100);
 
-    format!("{} {path}", Value::String(query))
+    format!("\"{}\"({path})", query)
 }
 
 pub(super) fn memory_summary(arguments: &str) -> String {
@@ -65,6 +67,7 @@ pub(super) fn git_summary(arguments: &str) -> String {
 pub(super) fn write_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(arguments).ok()?;
     let content = value["content"].as_str()?;
+    let path = value["path"].as_str().unwrap_or_default();
     let lines: Vec<_> = content.lines().collect();
     let total_lines = lines.len();
     if total_lines == 0 {
@@ -74,25 +77,32 @@ pub(super) fn write_file_preview(arguments: &str, _width: u16) -> Option<Vec<Lin
         ))]);
     }
     let digits = total_lines.to_string().len();
+    let syntax = super::languages::syntax_for_label(path)
+        .unwrap_or_else(|| super::languages::SYNTAXES.find_syntax_plain_text());
+    let mut highlighter = HighlightLines::new(syntax, &crate::tui::theme::CODE_THEME);
     let mut out = Vec::new();
-    for (index, line) in lines.into_iter().take(200).enumerate() {
+    for (index, line) in lines.into_iter().enumerate() {
         let num = index + 1;
-        out.push(Line::from(vec![
-            Span::styled(
-                format!("{num:>digits$} "),
-                Style::default().fg(crate::tui::theme::THEME.line_number),
-            ),
-            Span::styled(
+        let num_span = Span::styled(
+            format!("{num:>digits$} "),
+            Style::default().fg(crate::tui::theme::THEME.line_number),
+        );
+        let mut line_spans = vec![num_span];
+        if let Ok(tokens) = highlighter.highlight_line(line, &super::languages::SYNTAXES) {
+            line_spans.extend(tokens.into_iter().map(|(style, text)| {
+                let c = style.foreground;
+                Span::styled(
+                    safe_output(text),
+                    Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
+                )
+            }));
+        } else {
+            line_spans.push(Span::styled(
                 safe_output(line),
                 Style::default().fg(crate::tui::theme::THEME.output_foreground),
-            ),
-        ]));
-    }
-    if total_lines > 200 {
-        out.push(Line::from(Span::styled(
-            format!("… 另有 {} 行", total_lines - 200),
-            Style::default().fg(SECONDARY),
-        )));
+            ));
+        }
+        out.push(Line::from(line_spans));
     }
     Some(out)
 }
@@ -102,13 +112,13 @@ pub(super) fn edit_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line
     let old_text = value["old_text"].as_str()?;
     let new_text = value["new_text"].as_str()?;
     let mut out = Vec::new();
-    for line in old_text.lines().take(100) {
+    for line in old_text.lines() {
         out.push(Line::from(Span::styled(
             format!("- {line}"),
             Style::default().fg(crate::tui::theme::THEME.diff_removed),
         )));
     }
-    for line in new_text.lines().take(100) {
+    for line in new_text.lines() {
         out.push(Line::from(Span::styled(
             format!("+ {line}"),
             Style::default().fg(crate::tui::theme::THEME.diff_added),
@@ -162,7 +172,47 @@ fn marked_source(text: &str, matcher: Option<&Regex>) -> (String, Vec<Range<usiz
     (rendered, ranges)
 }
 
-fn source_spans(text: &str, marks: &[Range<usize>], range: Range<usize>) -> Vec<Span<'static>> {
+fn push_unmarked_spans(
+    spans: &mut Vec<Span<'static>>,
+    text: &str,
+    range: Range<usize>,
+    tokens: Option<&[(Range<usize>, syntect::highlighting::Style)]>,
+) {
+    if range.start >= range.end {
+        return;
+    }
+    let Some(tokens) = tokens else {
+        spans.push(Span::raw(text[range].to_owned()));
+        return;
+    };
+
+    let mut cur = range.start;
+    for (token_range, style) in tokens {
+        if token_range.end <= cur || token_range.start >= range.end {
+            continue;
+        }
+        let seg_start = cur.max(token_range.start);
+        let seg_end = range.end.min(token_range.end);
+        if seg_start < seg_end {
+            let c = style.foreground;
+            spans.push(Span::styled(
+                text[seg_start..seg_end].to_owned(),
+                Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
+            ));
+            cur = seg_end;
+        }
+    }
+    if cur < range.end {
+        spans.push(Span::raw(text[cur..range.end].to_owned()));
+    }
+}
+
+fn source_spans(
+    text: &str,
+    marks: &[Range<usize>],
+    range: Range<usize>,
+    tokens: Option<&[(Range<usize>, syntect::highlighting::Style)]>,
+) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut offset = range.start;
 
@@ -175,7 +225,7 @@ fn source_spans(text: &str, marks: &[Range<usize>], range: Range<usize>) -> Vec<
         }
 
         if offset < start {
-            spans.push(Span::raw(text[offset..start].to_owned()));
+            push_unmarked_spans(&mut spans, text, offset..start, tokens);
         }
 
         spans.push(Span::styled(
@@ -186,10 +236,31 @@ fn source_spans(text: &str, marks: &[Range<usize>], range: Range<usize>) -> Vec<
     }
 
     if offset < range.end {
-        spans.push(Span::raw(text[offset..range.end].to_owned()));
+        push_unmarked_spans(&mut spans, text, offset..range.end, tokens);
     }
 
     spans
+}
+
+pub(super) fn web_fetch_preview(output: &str, _width: u16) -> Option<Vec<Line<'static>>> {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return Some(vec![Line::from(Span::styled(
+            "(empty response)",
+            Style::default().fg(SECONDARY),
+        ))]);
+    }
+
+    let mut out = Vec::new();
+    let mut fence = None;
+    for (index, line) in trimmed.lines().enumerate() {
+        let mut rendered = super::markdown::line(line, index, &mut fence);
+        if rendered.spans.first().is_some_and(|s| s.content == "  ") {
+            rendered.spans.remove(0);
+        }
+        out.push(rendered);
+    }
+    Some(out)
 }
 
 pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
@@ -222,6 +293,7 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
             expanded,
             width,
         ),
+        "web_fetch" => web_fetch_preview(&row.output, width),
         _ => structured::fallback(row, expanded, width),
     }
 }
@@ -440,12 +512,14 @@ fn note(out: &mut Vec<Line<'static>>, text: &str, width: u16) {
     )));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn source(
     out: &mut Vec<Line<'static>>,
     number: u64,
     digits: usize,
     text: &str,
     matcher: Option<&Regex>,
+    syntax: Option<&syntect::parsing::SyntaxReference>,
     expanded: bool,
     width: u16,
 ) {
@@ -457,6 +531,19 @@ fn source(
         note(out, &format!("{number}: {text}"), width);
         return;
     }
+
+    let tokens: Option<Vec<(Range<usize>, syntect::highlighting::Style)>> = syntax.and_then(|syn| {
+        let mut highlighter = HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
+        let line_tokens = highlighter.highlight_line(&text, &super::languages::SYNTAXES).ok()?;
+        let mut ranges = Vec::new();
+        let mut offset = 0;
+        for (style, slice) in line_tokens {
+            let end = offset + slice.len();
+            ranges.push((offset..end, style));
+            offset = end;
+        }
+        Some(ranges)
+    });
 
     let style = Style::default().fg(if matcher.is_some() { ACCENT } else { SECONDARY });
     let mut push = |range: Range<usize>, continuation: bool, leading: bool, trailing: bool| {
@@ -473,7 +560,7 @@ fn source(
             spans.push(Span::raw("…"));
         }
 
-        spans.extend(source_spans(&text, &marks, range));
+        spans.extend(source_spans(&text, &marks, range, tokens.as_deref()));
 
         if trailing {
             spans.push(Span::raw("…"));
@@ -609,6 +696,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
         }
 
         note(&mut out, path, width);
+        let syntax = super::languages::syntax_for_label(path);
         let mut previous = None;
 
         for (line, (text, matched)) in rows {
@@ -626,6 +714,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
                 digits,
                 text,
                 if matched { matcher.as_ref() } else { None },
+                syntax,
                 expanded,
                 width,
             );
@@ -659,6 +748,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
 
 fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     let content = value["content"].as_str()?;
+    let path = value["path"].as_str().unwrap_or_default();
     let start = value["start_line"].as_u64()?;
     let end = value["end_line"].as_u64()?;
     let rows: Vec<_> = content
@@ -677,9 +767,10 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
 
     note(&mut out, &format!("第 {start}–{end} 行"), width);
     let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
+    let syntax = super::languages::syntax_for_label(path);
 
     for (number, text) in rows.iter().take(if expanded { usize::MAX } else { 4 }) {
-        source(&mut out, *number, digits, text, None, expanded, width);
+        source(&mut out, *number, digits, text, None, syntax, expanded, width);
     }
 
     if !expanded && rows.len() > 4 {
@@ -839,9 +930,9 @@ mod tests {
         assert!(
             view[0]
                 .to_string()
-                .contains("search_text \"workspace snapshot\" crates/orbit-tools/src")
+                .contains("search_text \"workspace snapshot\"(crates/orbit-tools/src)")
         );
-        assert_eq!(search_summary(r#"{"query":"foo"}"#), "\"foo\" .");
+        assert_eq!(search_summary(r#"{"query":"foo"}"#), "\"foo\"(.)");
     }
 
     #[test]
@@ -866,7 +957,7 @@ mod tests {
         ] {
             let pattern = matcher(&config).unwrap();
             let mut view = vec![];
-            source(&mut view, 1, 4, text, Some(&pattern), true, 80);
+            source(&mut view, 1, 4, text, Some(&pattern), None, true, 80);
 
             assert_eq!(highlighted(&view), expected);
         }
@@ -878,7 +969,7 @@ mod tests {
     fn highlight_survives_wrapping_and_focuses_long_line_previews() {
         let pattern = matcher(&json!({ "query": "^ABCDEFGH$", "regex": true })).unwrap();
         let mut view = vec![];
-        source(&mut view, 123, 4, "ABCDEFGH", Some(&pattern), true, 15);
+        source(&mut view, 123, 4, "ABCDEFGH", Some(&pattern), None, true, 15);
 
         assert_eq!(view.len(), 2);
         assert_eq!(highlighted(&view), "ABCDEFGH");
@@ -889,7 +980,7 @@ mod tests {
 
         for width in [11, 12, 32, 80] {
             let mut view = vec![];
-            source(&mut view, 1, 4, &text, Some(&pattern), false, width);
+            source(&mut view, 1, 4, &text, Some(&pattern), None, false, width);
 
             assert!(view.iter().all(|line| line.width() <= usize::from(width)));
 

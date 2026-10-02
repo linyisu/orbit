@@ -88,40 +88,29 @@ pub(super) fn files(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
         .trim_end_matches('/');
     let base = base.strip_prefix("./").unwrap_or(base);
     let prefix = format!("{base}/");
-    let directories = entries.iter().filter(|e| e["kind"] == "directory").count();
     let mut view = View::new(expanded, width);
 
     if entries.is_empty() {
-        view.note("当前查询未返回条目");
-    } else {
-        view.note(&format!(
-            "本页 {} 个文件  {directories} 个目录",
-            entries.len() - directories
-        ));
+        view.note("(空目录)");
+        return Some(view.finish());
     }
 
     let limit = if expanded { entries.len() } else { 6 };
 
     for entry in entries.iter().take(limit) {
         let path = entry["path"].as_str()?;
-        // Keep every nested component; only remove the queried root already
-        // visible in the tool header. Never reduce distinct paths to basenames.
         let path = path.strip_prefix(&prefix).unwrap_or(path);
 
         if entry["kind"] == "directory" {
-            view.push(&format!("{path}/"), ACCENT);
+            view.push(&format!("{path}/"), crate::tui::theme::THEME.md_h4_plus);
         } else {
-            view.push(path, Color::Reset);
+            view.push(path, crate::tui::theme::THEME.output_foreground);
         }
     }
 
-    view.omitted(entries.len().saturating_sub(limit), "个条目");
-
-    if let Some(skipped) = value["skipped_entries"].as_u64().filter(|n| *n > 0) {
-        view.note(&format!("跳过 {skipped} 个不可展示条目"));
+    if !expanded && entries.len() > limit {
+        view.omitted(entries.len().saturating_sub(limit), "个条目");
     }
-
-    view.paging(&value);
 
     Some(view.finish())
 }
@@ -350,7 +339,7 @@ mod tests {
         let original = row.output.clone();
         let preview = text(&files(&row, false, 80).unwrap());
 
-        assert!(preview.contains("本页 6 个文件  1 个目录"));
+        assert!(!preview.contains("本页"));
         assert!(preview.contains("中文/"));
         assert!(preview.contains("a/mod.rs") && preview.contains("b/mod.rs"));
         assert!(!preview.contains("src/"));
@@ -359,7 +348,7 @@ mod tests {
         let expanded = text(&files(&row, true, 80).unwrap());
 
         assert!(expanded.contains("f.rs") && expanded.contains("[收起]"));
-        assert!(expanded.contains("需再次查询  offset=7"));
+        assert!(!expanded.contains("需再次查询"));
         assert_eq!(row.output, original);
     }
     #[test]

@@ -26,10 +26,6 @@ const MUTED: Color = Color::Reset;
 const BORDER: Color = THEME.border;
 const MAX_COMMAND_MENU_ITEMS: usize = 8;
 
-fn muted(text: impl Into<String>) -> Span<'static> {
-    Span::styled(text.into(), Style::default().fg(MUTED))
-}
-
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let hover = state.pending_list_hover.take();
     draw_contents(frame, state);
@@ -1348,6 +1344,28 @@ pub(super) fn parse_ansi_to_spans(text: &str) -> Vec<Span<'static>> {
     }
 }
 
+fn read_file_summary(arguments: &str, output: &str) -> String {
+    let args = serde_json::from_str::<serde_json::Value>(arguments).ok();
+    let path = args.as_ref().and_then(|v| v["path"].as_str()).unwrap_or_default();
+    let out = serde_json::from_str::<serde_json::Value>(output).ok();
+
+    let start = out.as_ref()
+        .and_then(|v| v["start_line"].as_u64())
+        .or_else(|| args.as_ref().and_then(|v| v["start_line"].as_u64()));
+    let end = out.as_ref()
+        .and_then(|v| v["end_line"].as_u64())
+        .or_else(|| {
+            let max = args.as_ref().and_then(|v| v["max_lines"].as_u64())?;
+            Some(start.unwrap_or(1).saturating_add(max).saturating_sub(1))
+        });
+
+    match (start, end) {
+        (Some(s), Some(e)) => format!("{path}[{s}..{e}]"),
+        (Some(s), None) => format!("{path}[{s}..]"),
+        _ => path.to_owned(),
+    }
+}
+
 fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let (marker, color) = match row.status {
@@ -1362,6 +1380,8 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         super::tool_display::memory_summary(&row.arguments)
     } else if row.name == "git_inspect" {
         super::tool_display::git_summary(&row.arguments)
+    } else if row.name == "read_file" {
+        read_file_summary(&row.arguments, &row.output)
     } else {
         tool_summary(&row.arguments)
     };
@@ -1383,26 +1403,6 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         return lines;
     }
 
-    if expanded
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.arguments)
-        && value["command"].is_null()
-    {
-        let arguments = value["command"].as_str().map(str::to_owned).or_else(|| {
-            value
-                .as_object()
-                .filter(|object| !object.is_empty())
-                .and_then(|_| serde_json::to_string_pretty(&value).ok())
-        });
-
-        if let Some(arguments) = arguments {
-            lines.extend(
-                arguments
-                    .lines()
-                    .map(|line| Line::from(muted(format!("    {line}")))),
-            );
-        }
-    }
-
     let output = serde_json::from_str::<serde_json::Value>(&row.output)
         .ok()
         .and_then(|value| {
@@ -1411,41 +1411,40 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
                     .get("running")
                     .and_then(|r| r.as_bool())
                     .unwrap_or(false);
-                let retained = value["output_id"]
-                    .as_str()
-                    .map(|id| format!(" · output {id}"))
-                    .unwrap_or_default();
                 let verification_error = value["verification_error"].as_str();
-                let verification_badge = if verification_error.is_some() {
-                    " · 验证不可用"
-                } else {
-                    ""
-                };
-
                 let verification_detail = verification_error
                     .map(|error| format!("\n验证：{error}"))
                     .unwrap_or_default();
 
-                let header = if is_running {
-                    "运行中…".to_string()
-                } else {
-                    format!(
-                        "exit {} · {} ms · timeout {} · truncated {}{}{}",
-                        value["exit_code"],
-                        value["elapsed_ms"],
-                        value["timed_out"],
-                        value["output_truncated"],
-                        retained,
-                        verification_badge,
-                    )
-                };
+                let stdout = value["stdout"].as_str().unwrap_or_default();
+                let stderr = value["stderr"].as_str().unwrap_or_default();
 
-                Some(format!(
-                    "{header}\n{}{}{}",
-                    value["stdout"].as_str().unwrap_or_default(),
-                    value["stderr"].as_str().unwrap_or_default(),
-                    verification_detail,
-                ))
+                if is_running {
+                    Some(format!("运行中…\n{stdout}{stderr}{verification_detail}"))
+                } else {
+                    let mut text = String::new();
+                    if !stdout.is_empty() {
+                        text.push_str(stdout);
+                    }
+                    if !stderr.is_empty() {
+                        if !text.is_empty() && !text.ends_with('\n') {
+                            text.push('\n');
+                        }
+                        text.push_str(stderr);
+                    }
+                    if !verification_detail.is_empty() {
+                        if !text.is_empty() && !text.ends_with('\n') {
+                            text.push('\n');
+                        }
+                        text.push_str(&verification_detail);
+                    }
+                    if text.is_empty()
+                        && let Some(code) = value["exit_code"].as_i64().filter(|c| *c != 0)
+                    {
+                        text = format!("(exit {code})");
+                    }
+                    Some(text)
+                }
             } else if let Some(bytes) = value["written_bytes"].as_u64() {
                 Some(format!(
                     "已{} · {bytes} 字节",
@@ -1497,16 +1496,9 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
         })
         .unwrap_or("");
     let command = if row.name == "search_text" {
-        arguments
-            .as_ref()
-            .map(|value| {
-                format!(
-                    "{} {}",
-                    value["query"],
-                    value["path"].as_str().unwrap_or(".")
-                )
-            })
-            .unwrap_or_default()
+        super::tool_display::search_summary(&row.arguments)
+    } else if row.name == "read_file" {
+        read_file_summary(&row.arguments, &row.output)
     } else if !expanded {
         tool_summary(&row.arguments)
     } else {
