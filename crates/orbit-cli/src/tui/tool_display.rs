@@ -61,6 +61,63 @@ pub(super) fn git_summary(arguments: &str) -> String {
     structured::summary(arguments)
 }
 
+
+pub(super) fn write_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line<'static>>> {
+    let value: Value = serde_json::from_str(arguments).ok()?;
+    let content = value["content"].as_str()?;
+    let lines: Vec<_> = content.lines().collect();
+    let total_lines = lines.len();
+    if total_lines == 0 {
+        return Some(vec![Line::from(Span::styled(
+            "(empty file)",
+            Style::default().fg(SECONDARY),
+        ))]);
+    }
+    let digits = total_lines.to_string().len();
+    let mut out = Vec::new();
+    for (index, line) in lines.into_iter().take(200).enumerate() {
+        let num = index + 1;
+        out.push(Line::from(vec![
+            Span::styled(
+                format!("{num:>digits$} "),
+                Style::default().fg(crate::tui::theme::THEME.line_number),
+            ),
+            Span::styled(
+                safe_output(line),
+                Style::default().fg(crate::tui::theme::THEME.output_foreground),
+            ),
+        ]));
+    }
+    if total_lines > 200 {
+        out.push(Line::from(Span::styled(
+            format!("… 另有 {} 行", total_lines - 200),
+            Style::default().fg(SECONDARY),
+        )));
+    }
+    Some(out)
+}
+
+pub(super) fn edit_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line<'static>>> {
+    let value: Value = serde_json::from_str(arguments).ok()?;
+    let old_text = value["old_text"].as_str()?;
+    let new_text = value["new_text"].as_str()?;
+    let mut out = Vec::new();
+    for line in old_text.lines().take(100) {
+        out.push(Line::from(Span::styled(
+            format!("- {line}"),
+            Style::default().fg(crate::tui::theme::THEME.diff_removed),
+        )));
+    }
+    for line in new_text.lines().take(100) {
+        out.push(Line::from(Span::styled(
+            format!("+ {line}"),
+            Style::default().fg(crate::tui::theme::THEME.diff_added),
+        )));
+    }
+    Some(out)
+}
+
+
 // Use the search tool's literal/regex and Unicode case-folding semantics.
 fn matcher(value: &Value) -> Option<Regex> {
     let query = value["query"].as_str()?;
@@ -141,6 +198,8 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
     }
 
     match row.name.as_str() {
+        "write_file" => write_file_preview(&row.arguments, width),
+        "edit_file" => edit_file_preview(&row.arguments, width),
         "list_files" => structured::files(row, expanded, width),
         "git_inspect" => structured::git(row, expanded, width),
         "project_overview" => overview(
@@ -966,5 +1025,32 @@ mod tests {
         invalid.status = ToolStatus::Failed;
 
         assert!(lines(&invalid, false, 80).is_none());
+    }
+
+    #[test]
+    fn write_file_preview_shows_line_numbers() {
+        let args = json!({
+            "path": "hello.py",
+            "content": "print(\"Hello, world!\")\nprint(42)"
+        })
+        .to_string();
+        let preview = write_file_preview(&args, 80).expect("preview should succeed");
+        assert_eq!(preview.len(), 2);
+        assert_eq!(preview[0].to_string(), "1 print(\"Hello, world!\")");
+        assert_eq!(preview[1].to_string(), "2 print(42)");
+    }
+
+    #[test]
+    fn edit_file_preview_shows_diff_lines() {
+        let args = json!({
+            "path": "test.txt",
+            "old_text": "old line",
+            "new_text": "new line"
+        })
+        .to_string();
+        let preview = edit_file_preview(&args, 80).expect("preview should succeed");
+        assert_eq!(preview.len(), 2);
+        assert_eq!(preview[0].to_string(), "- old line");
+        assert_eq!(preview[1].to_string(), "+ new line");
     }
 }

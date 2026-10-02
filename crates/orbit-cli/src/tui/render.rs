@@ -1377,6 +1377,12 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         ),
     ]));
 
+    if let Some(output) = super::tool_display::lines(row, expanded, width) {
+        lines.extend(output);
+        lines.push(Line::from(""));
+        return lines;
+    }
+
     if expanded
         && let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.arguments)
         && value["command"].is_null()
@@ -1395,12 +1401,6 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
                     .map(|line| Line::from(muted(format!("    {line}")))),
             );
         }
-    }
-
-    if let Some(output) = super::tool_display::lines(row, expanded, width) {
-        lines.extend(output);
-        lines.push(Line::from(""));
-        return lines;
     }
 
     let output = serde_json::from_str::<serde_json::Value>(&row.output)
@@ -1486,46 +1486,7 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
             Line::from(""),
         ];
     }
-    let inner = width.saturating_sub(2);
-    let mut details = tool_details(row, expanded, inner);
-    details.remove(0);
-    let toggle = super::tool_display::toggle_line(expanded, inner);
-    let collapse = super::tool_display::toggle_line(true, inner);
-    details.retain(|line| *line != toggle && *line != collapse);
-    while details
-        .last()
-        .is_some_and(|line| line.to_string().trim().is_empty())
-    {
-        details.pop();
-    }
-    let mut body = Vec::new();
-    for mut line in details {
-        // Remove only the old presentation inset, retaining indentation in the result itself.
-        if line.to_string().starts_with("    ") {
-            let mut remaining = 4;
-            for span in &mut line.spans {
-                let count = span
-                    .content
-                    .chars()
-                    .take_while(|c| *c == ' ')
-                    .count()
-                    .min(remaining);
-                span.content = span.content[count..].to_owned().into();
-                remaining -= count;
-                if remaining == 0 {
-                    break;
-                }
-            }
-        }
-        for span in &mut line.spans {
-            span.content = safe_output(&span.content).into();
-        }
-        body.extend(super::transcript::wrap_line(&line, inner).0);
-    }
-    let hidden = !expanded && body.len() > 3;
-    if !expanded {
-        body.truncate(3);
-    }
+
     let arguments = serde_json::from_str::<serde_json::Value>(&row.arguments).ok();
     let command = arguments
         .as_ref()
@@ -1551,6 +1512,7 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
     } else {
         command.to_owned()
     };
+
     let title_spans = if command.is_empty() {
         vec![Span::styled(
             safe_output(&row.name),
@@ -1566,50 +1528,120 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
             ),
         ]
     };
-    let title_line = Line::from(title_spans);
-    let title_width = inner;
-    let mut lines = if expanded {
-        super::transcript::wrap_line(&title_line, title_width).0
-    } else {
-        vec![
-            super::transcript::wrap_line(&title_line, title_width)
-                .0
-                .into_iter()
-                .next()
-                .unwrap_or(title_line),
-        ]
-    };
-    for line in &mut lines {
-        line.spans.insert(0, Span::raw("  "));
+
+    // Collapsed state: strictly 1 command line with colored command name and dimmed action summary
+    if !expanded {
+        let mut full_title_spans = vec![Span::raw("  ")];
+        full_title_spans.extend(title_spans);
+        let title_line = Line::from(full_title_spans);
+        let title_width = width.saturating_sub(2);
+        let first_line = super::transcript::wrap_line(&title_line, title_width)
+            .0
+            .into_iter()
+            .next()
+            .unwrap_or(title_line);
+        return vec![first_line, Line::from("")];
     }
 
-    let show_body = expanded;
+    // Expanded state: rounded enclosed card
+    let border_style = Style::default().fg(crate::tui::theme::THEME.border_muted);
+    let card_width = width.saturating_sub(2).min(118);
+    let inner_width = usize::from(card_width).saturating_sub(4);
 
-    if !show_body || body.is_empty() {
-        lines.push(Line::from(""));
-        return lines;
-    }
+    let mut card_lines = Vec::new();
 
-    let divider = Line::from(vec![
+    // 1. Top border: "  ╭─────────╮"
+    card_lines.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled(
-            "─".repeat(inner as usize),
-            Style::default().fg(THEME.tool_divider),
-        ),
-    ]);
-    lines.push(divider.clone());
-    for mut line in body.into_iter().chain(hidden.then(|| Line::from("…"))) {
+        Span::styled(format!("╭{}╮", "─".repeat(inner_width + 2)), border_style),
+    ]));
+
+    // 2. Header line inside box: "  │ tool_name command... │"
+    let header_line = Line::from(title_spans);
+    let (wrapped_header, _) = super::transcript::wrap_line(&header_line, inner_width as u16);
+    for h_line in wrapped_header {
+        let h_pad = inner_width.saturating_sub(h_line.width());
+        let mut framed_header = vec![
+            Span::raw("  "),
+            Span::styled("│ ", border_style),
+        ];
+        framed_header.extend(h_line.spans);
+        framed_header.push(Span::raw(" ".repeat(h_pad)));
+        framed_header.push(Span::styled(" │", border_style));
+        card_lines.push(Line::from(framed_header));
+    }
+
+    // 3. Breathing blank line: "  │               │"
+    card_lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("│ ", border_style),
+        Span::raw(" ".repeat(inner_width)),
+        Span::styled(" │", border_style),
+    ]));
+
+    // 4. Content / Body lines
+    let mut details = tool_details(row, true, inner_width as u16);
+    if !details.is_empty() {
+        details.remove(0);
+    }
+    let toggle = super::tool_display::toggle_line(true, inner_width as u16);
+    let collapse = super::tool_display::toggle_line(false, inner_width as u16);
+    details.retain(|line| *line != toggle && *line != collapse);
+    while details
+        .last()
+        .is_some_and(|line| line.to_string().trim().is_empty())
+    {
+        details.pop();
+    }
+
+    for mut line in details {
+        if line.to_string().starts_with("    ") {
+            let mut remaining = 4;
+            for span in &mut line.spans {
+                let count = span
+                    .content
+                    .chars()
+                    .take_while(|c| *c == ' ')
+                    .count()
+                    .min(remaining);
+                span.content = span.content[count..].to_owned().into();
+                remaining -= count;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
         for span in &mut line.spans {
+            span.content = safe_output(&span.content).into();
             if span.style.fg == Some(Color::Reset) || span.style.fg.is_none() {
                 span.style = span.style.fg(crate::tui::theme::THEME.output_muted);
             }
         }
-        line.spans.insert(0, Span::raw("  "));
-        lines.push(line);
+
+        let (wrapped, _) = super::transcript::wrap_line(&line, inner_width as u16);
+        for sub in wrapped {
+            let pad = inner_width.saturating_sub(sub.width());
+            let mut spans = vec![
+                Span::raw("  "),
+                Span::styled("│ ", border_style),
+            ];
+            spans.extend(sub.spans);
+            spans.push(Span::raw(" ".repeat(pad)));
+            spans.push(Span::styled(" │", border_style));
+            card_lines.push(Line::from(spans));
+        }
     }
-    lines.push(divider);
-    lines.push(Line::from(""));
-    lines
+
+    // 5. Bottom border: "  ╰─────────╯"
+    card_lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("╰{}╯", "─".repeat(inner_width + 2)), border_style),
+    ]));
+
+    // 6. Trailing empty separator line
+    card_lines.push(Line::from(""));
+
+    card_lines
 }
 
 fn tool_summary(arguments: &str) -> String {
@@ -1656,58 +1688,11 @@ fn tool_summary(arguments: &str) -> String {
 }
 
 fn tool_header_line_count(row: &super::app::ToolRow, expanded: bool, width: u16) -> usize {
-    let width = if width == u16::MAX { 120 } else { width };
-    if width < 10 {
-        return 1;
-    }
-    let inner = width.saturating_sub(2);
-    let arguments = serde_json::from_str::<serde_json::Value>(&row.arguments).ok();
-    let command = arguments
-        .as_ref()
-        .and_then(|value| {
-            ["command", "query", "url", "path"]
-                .iter()
-                .find_map(|key| value[*key].as_str())
-        })
-        .unwrap_or("");
-    let command = if row.name == "search_text" {
-        arguments
-            .as_ref()
-            .map(|value| {
-                format!(
-                    "{} {}",
-                    value["query"],
-                    value["path"].as_str().unwrap_or(".")
-                )
-            })
-            .unwrap_or_default()
-    } else if !expanded {
-        tool_summary(&row.arguments)
-    } else {
-        command.to_owned()
-    };
-    let title_spans = if command.is_empty() {
-        vec![Span::raw(safe_output(&row.name))]
-    } else {
-        vec![
-            Span::raw(safe_output(&row.name)),
-            Span::raw(" "),
-            Span::raw(safe_output(&command)),
-        ]
-    };
-    let title_line = Line::from(title_spans);
-    let title_width = inner;
-    if expanded {
-        super::transcript::wrap_line(&title_line, title_width)
-            .0
-            .len()
-            .max(1)
-    } else {
-        1
-    }
+    let _ = (row, width);
+    if !expanded { 1 } else { 2 }
 }
 
-fn is_shell_preamble(line: &str) -> bool {
+pub(super) fn is_shell_preamble(line: &str) -> bool {
     let compact = line.split_whitespace().collect::<String>();
     compact.starts_with("set-")
         && compact[4..]
@@ -2076,7 +2061,8 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(full.starts_with("  run_command"));
+        assert!(full.contains("run_command"));
+        assert!(full.contains('╭') && full.contains('╰'));
         assert!(full.contains("end-0"));
         assert_eq!(full.matches("end-0").count(), 1);
 
@@ -2426,6 +2412,58 @@ mod tests {
                 .count()
                 < 170
         );
+    }
+
+    #[test]
+    fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
+        use super::super::app::ToolRow;
+        use ratatui::layout::Rect;
+
+        let row = ToolRow {
+            id: "write_1".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({
+                "path": "hello.py",
+                "content": "print(\"Hello, world!\")"
+            })
+            .to_string(),
+            status: ToolStatus::Finished,
+            output: serde_json::json!({ "written_bytes": 22, "created": true }).to_string(),
+        };
+
+        // Collapsed state: strictly single line command + empty line
+        let collapsed = tool_card(&row, false, 80);
+        assert_eq!(collapsed.len(), 2);
+        assert!(collapsed[0].to_string().starts_with("  write_file hello.py"));
+        assert!(!collapsed[0].to_string().contains('✓'));
+        assert!(!collapsed[0].to_string().contains('⟳'));
+        assert!(!collapsed[0].to_string().contains('✗'));
+        assert!(collapsed[1].to_string().is_empty());
+
+        // Expanded state: rounded box with breathing blank line and line-numbered code
+        let expanded = tool_card(&row, true, 80);
+        assert!(expanded.len() >= 5);
+        assert!(expanded[0].to_string().contains('╭') && expanded[0].to_string().contains('╮'));
+        assert!(expanded[1].to_string().contains("write_file hello.py"));
+        assert!(expanded[2].to_string().starts_with("  │") && expanded[2].to_string().ends_with('│'));
+        assert!(expanded[3].to_string().contains("1 print(\"Hello, world!\")"));
+        let bottom = &expanded[expanded.len() - 2];
+        assert!(bottom.to_string().contains('╰') && bottom.to_string().contains('╯'));
+        assert!(expanded.last().unwrap().to_string().is_empty());
+
+        // Click testing: any position inside the card (top border, header, blank line, code, bottom border) returns Some(0)
+        let items = vec![TranscriptItem::Tool(row)];
+        let mut layout = super::super::transcript::TranscriptLayout::default();
+        let area = Rect::new(0, 0, 80, 40);
+
+        layout.update(&items, Some(0), 80);
+        let card_height = layout.height() - 1;
+        for y in 0..card_height {
+            assert_eq!(layout.disclosure_at(&items, area, 0, (2, y as u16)), Some(0));
+            assert_eq!(layout.disclosure_at(&items, area, 0, (30, y as u16)), Some(0));
+            assert_eq!(layout.disclosure_at(&items, area, 0, (70, y as u16)), Some(0));
+            assert_eq!(layout.disclosure_at(&items, area, 0, (80, y as u16)), None);
+        }
     }
 
     #[test]
