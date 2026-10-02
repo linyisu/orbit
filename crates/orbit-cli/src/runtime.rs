@@ -78,10 +78,13 @@ pub async fn workspace_tools(
         let command = RunCommand::with_limits(workspace.clone(), approvals, command_limits.clone());
         let command = if let Some(scratch) = scratch {
             if let Some(database) = database {
-                tools.register(orbit_tools::export_artifact::ExportArtifact::new(
-                    scratch.clone(),
-                    database.with_extension("artifacts"),
-                ));
+                tools.register(
+                    orbit_tools::export_artifact::ExportArtifact::new(
+                        scratch.clone(),
+                        database.with_extension("artifacts"),
+                    )
+                    .with_workspace(workspace.clone()),
+                );
             }
 
             command.with_scratch(scratch)
