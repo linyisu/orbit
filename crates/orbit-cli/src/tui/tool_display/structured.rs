@@ -41,6 +41,56 @@ impl View {
         }
     }
 
+    fn push_spans(&mut self, spans: Vec<Span<'static>>) {
+        let available = self.width.saturating_sub(4);
+        let prefix_width = usize::from(self.width).min(4);
+        let prefix = " ".repeat(prefix_width);
+
+        let sanitized: Vec<Span<'static>> = spans
+            .into_iter()
+            .map(|mut s| {
+                s.content = safe_output(&s.content).into();
+                s
+            })
+            .collect();
+
+        let raw_line = Line::from(sanitized);
+        let total_w = raw_line.width();
+        self.hidden |= total_w > usize::from(available);
+
+        if available == 0 {
+            self.lines.push(Line::from(vec![Span::raw(prefix)]));
+            return;
+        }
+
+        let parts = if self.expanded && available >= 2 {
+            super::super::transcript::wrap_line(&raw_line, available).0
+        } else {
+            let mut clipped_spans = Vec::new();
+            let mut remaining = usize::from(available);
+            for span in raw_line.spans {
+                let sw = span.width();
+                if sw <= remaining {
+                    remaining -= sw;
+                    clipped_spans.push(span);
+                } else if remaining > 0 {
+                    let clipped_text = clipped(&span.content, remaining);
+                    clipped_spans.push(Span::styled(clipped_text, span.style));
+                    break;
+                } else {
+                    break;
+                }
+            }
+            vec![Line::from(clipped_spans)]
+        };
+
+        for p in parts {
+            let mut line_spans = vec![Span::raw(prefix.clone())];
+            line_spans.extend(p.spans);
+            self.lines.push(Line::from(line_spans));
+        }
+    }
+
     fn note(&mut self, text: &str) {
         self.push(text, SECONDARY);
     }
@@ -285,6 +335,255 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
     Some(view.finish())
 }
 
+pub(super) fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+pub(super) fn command_output(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    let value: Value = serde_json::from_str(&row.output).ok()?;
+    let content = value["content"].as_str()?;
+    let stream = value["stream"].as_str().unwrap_or("stdout");
+    let offset = value["offset"].as_u64().unwrap_or(0);
+    let next_offset = value["next_offset"].as_u64().unwrap_or(0);
+    let total = value["total_retained_bytes"].as_u64().unwrap_or(0);
+    let truncated = value["truncated"].as_bool().unwrap_or(false);
+
+    let theme = &crate::tui::theme::THEME;
+    let mut view = View::new(expanded, width);
+
+    let stream_color = if stream == "stderr" { theme.error } else { theme.accent };
+    let stream_badge = if stream == "stderr" { "[STDERR]" } else { "[STDOUT]" };
+    let range_str = if total > 0 {
+        let pct = format!(" · {:.0}%", (next_offset as f64 / total as f64 * 100.0).min(100.0));
+        format!("字节 {}..{} (共 {}{pct})", format_bytes(offset), format_bytes(next_offset), format_bytes(total))
+    } else {
+        format!("字节 {}..{}", format_bytes(offset), format_bytes(next_offset))
+    };
+
+    view.push_spans(vec![
+        Span::styled(format!("{stream_badge} "), Style::default().fg(stream_color).add_modifier(Modifier::BOLD)),
+        Span::styled(range_str, Style::default().fg(theme.tool_detail)),
+    ]);
+
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        view.note("(空输出)");
+    } else {
+        let limit = if expanded { lines.len() } else { 6 };
+        for line in lines.iter().take(limit) {
+            let spans = super::super::render::parse_ansi_to_spans(line);
+            view.push_spans(spans);
+        }
+        if !expanded && lines.len() > limit {
+            view.omitted(lines.len().saturating_sub(limit), "行输出");
+        }
+    }
+
+    if truncated || (total > 0 && next_offset < total) {
+        view.push_spans(vec![
+            Span::styled(
+                format!("… 尚有后续输出 (next_offset = {next_offset}, 可使用 read_command_output 继续查询)"),
+                Style::default().fg(theme.tool_running),
+            ),
+        ]);
+    }
+
+    Some(view.finish())
+}
+
+pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    let value: Value = serde_json::from_str(&row.output).ok()?;
+    let results = value["results"].as_array()?;
+    let provider = value["provider"].as_str().unwrap_or("Web");
+    let theme = &crate::tui::theme::THEME;
+    let mut view = View::new(expanded, width);
+
+    let count = results.len();
+    view.push_spans(vec![
+        Span::styled("🔍 搜索结果 · ", Style::default().fg(theme.accent)),
+        Span::styled(format!("来源: {provider} (共 {count} 条)"), Style::default().fg(theme.tool_detail)),
+    ]);
+
+    if results.is_empty() {
+        view.note("未找到相关搜索结果");
+    } else {
+        let limit = if expanded { results.len() } else { 3 };
+        for (i, item) in results.iter().take(limit).enumerate() {
+            let title = item["title"].as_str().unwrap_or("(无标题)");
+            let url = item["url"].as_str().unwrap_or("");
+            let snippet = item["snippet"].as_str().unwrap_or("");
+
+            view.push_spans(vec![
+                Span::styled(format!("{}. ", i + 1), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                Span::styled(title.to_owned(), Style::default().fg(theme.output_foreground).add_modifier(Modifier::BOLD)),
+            ]);
+
+            if !url.is_empty() {
+                view.push_spans(vec![
+                    Span::styled(format!("   {url}"), Style::default().fg(theme.md_link)),
+                ]);
+            }
+
+            if !snippet.is_empty() {
+                view.push_spans(vec![
+                    Span::styled(format!("   {snippet}"), Style::default().fg(theme.output_muted)),
+                ]);
+            }
+        }
+
+        if !expanded && results.len() > limit {
+            view.omitted(results.len().saturating_sub(limit), "条结果");
+        }
+    }
+
+    if let Some(reason) = value["fallback_reason"].as_str() {
+        view.push_spans(vec![
+            Span::styled(format!("注意: {reason}"), Style::default().fg(theme.tool_running)),
+        ]);
+    }
+
+    Some(view.finish())
+}
+
+pub(super) fn document(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    let value: Value = serde_json::from_str(&row.output).ok()?;
+    let path = value["path"].as_str().unwrap_or_default();
+    let format = value["format"].as_str().unwrap_or("doc");
+    let content = value["content"].as_str()?;
+    let start_char = value["start_char"].as_u64().unwrap_or(0);
+    let total_chars = value["total_chars"].as_u64().unwrap_or(0);
+    let truncated = value["truncated"].as_bool().unwrap_or(false);
+    let next_start = value["next_start_char"].as_u64();
+
+    let theme = &crate::tui::theme::THEME;
+    let mut view = View::new(expanded, width);
+
+    let format_badge = format.to_ascii_uppercase();
+    let end_char = start_char + content.chars().count() as u64;
+    view.push_spans(vec![
+        Span::styled(format!("[{format_badge}] "), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(path.to_owned(), Style::default().fg(theme.output_foreground)),
+        Span::styled(format!(" · 字符 {start_char}..{end_char} (共 {total_chars})"), Style::default().fg(theme.tool_detail)),
+    ]);
+
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        view.note("(空文档)");
+    } else {
+        let limit = if expanded { lines.len() } else { 6 };
+        for line in lines.iter().take(limit) {
+            view.push(line, theme.output_foreground);
+        }
+        if !expanded && lines.len() > limit {
+            view.omitted(lines.len().saturating_sub(limit), "行");
+        }
+    }
+
+    if truncated && let Some(next) = next_start {
+        view.push_spans(vec![
+            Span::styled(
+                format!("… 尚有后续字符 (next_start_char = {next}, 可使用 read_document 继续查看)"),
+                Style::default().fg(theme.tool_running),
+            ),
+        ]);
+    }
+
+    Some(view.finish())
+}
+
+pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    let value: Value = serde_json::from_str(&row.output).ok()?;
+    let status = value["status"].as_str().unwrap_or("unknown");
+    let theme = &crate::tui::theme::THEME;
+    let mut view = View::new(true, width);
+
+    if status == "granted" {
+        view.push_spans(vec![
+            Span::styled("✓ 外部目录访问授权已授予 (Granted)", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+        ]);
+        if let Some(cap) = value.get("capability") {
+            let path = cap["path"].as_str().unwrap_or("");
+            let access = cap["access"].as_str().unwrap_or("");
+            let access_label = match access {
+                "read_write" | "write" => "读写 (read_write)",
+                "read" => "只读 (read)",
+                other => other,
+            };
+            view.push(&format!("  路径: {path}"), theme.output_foreground);
+            view.push(&format!("  模式: {access_label}"), theme.tool_detail);
+        }
+    } else {
+        view.push_spans(vec![
+            Span::styled("× 外部目录访问授权被拒绝 (Denied)", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+        ]);
+        if let Some(msg) = value["message"].as_str() {
+            view.push(&format!("  原因: {msg}"), theme.output_muted);
+        }
+    }
+
+    Some(view.finish())
+}
+
+pub(super) fn export_artifact(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    let value: Value = serde_json::from_str(&row.output).ok()?;
+    let path = value["path"].as_str().unwrap_or_default();
+    let name = value["name"].as_str().unwrap_or_default();
+    let bytes = value["bytes"].as_u64().unwrap_or(0);
+    let sha256 = value["sha256"].as_str().unwrap_or_default();
+    let theme = &crate::tui::theme::THEME;
+    let mut view = View::new(true, width);
+
+    view.push_spans(vec![
+        Span::styled("📦 工件已成功导出", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+    ]);
+    view.push(&format!("  文件: {name} ({})", format_bytes(bytes)), theme.output_foreground);
+    view.push(&format!("  路径: {path}"), theme.tool_detail);
+    if !sha256.is_empty() {
+        let short_sha = if sha256.len() > 16 { &sha256[..16] } else { sha256 };
+        view.push(&format!("  哈希: sha256:{short_sha}…"), theme.output_muted);
+    }
+
+    Some(view.finish())
+}
+
+pub(super) fn git_export_patch(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    let value: Value = serde_json::from_str(&row.output).ok()?;
+    let path = value["path"].as_str().unwrap_or_default();
+    let bytes = value["bytes"].as_u64().unwrap_or(0);
+    let theme = &crate::tui::theme::THEME;
+    let mut view = View::new(true, width);
+
+    view.push_spans(vec![
+        Span::styled("📦 Git 补丁已导出", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+    ]);
+    view.push(&format!("  大小: {} ({bytes} 字节)", format_bytes(bytes)), theme.output_foreground);
+    view.push(&format!("  路径: {path}"), theme.tool_detail);
+
+    Some(view.finish())
+}
+
+pub(super) fn read_image(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    let value: Value = serde_json::from_str(&row.output).ok()?;
+    let path = value["path"].as_str().unwrap_or_default();
+    let theme = &crate::tui::theme::THEME;
+    let mut view = View::new(true, width);
+
+    view.push_spans(vec![
+        Span::styled("🖼️ 图像已载入上下文 · ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(path.to_owned(), Style::default().fg(theme.output_foreground)),
+    ]);
+
+    Some(view.finish())
+}
+
 pub(super) fn fallback(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
 
@@ -303,8 +602,25 @@ pub(super) fn fallback(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<
 
     let mut view = View::new(expanded, width);
 
-    for line in lines.iter().take(limit) {
-        view.push(line, Color::Reset);
+    let syntax = super::super::languages::syntax_for_label("json");
+    if let Some(syn) = syntax {
+        let mut highlighter = HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
+        for line in lines.iter().take(limit) {
+            if let Ok(line_tokens) = highlighter.highlight_line(line, &super::super::languages::SYNTAXES) {
+                let mut spans = Vec::new();
+                for (style, slice) in line_tokens {
+                    let c = style.foreground;
+                    spans.push(Span::styled(slice.to_owned(), Style::default().fg(Color::Rgb(c.r, c.g, c.b))));
+                }
+                view.push_spans(spans);
+            } else {
+                view.push(line, Color::Reset);
+            }
+        }
+    } else {
+        for line in lines.iter().take(limit) {
+            view.push(line, Color::Reset);
+        }
     }
 
     view.omitted(lines.len().saturating_sub(limit), "行");
@@ -438,6 +754,57 @@ mod tests {
             ),
             tool("git_inspect", json!({ "lines": [long], "staged": false })),
             tool(
+                "read_command_output",
+                json!({
+                    "output_id": "p-0",
+                    "stream": "stdout",
+                    "offset": 0,
+                    "next_offset": 100,
+                    "total_retained_bytes": 200,
+                    "truncated": true,
+                    "content": long
+                }),
+            ),
+            tool(
+                "web_search",
+                json!({
+                    "query": "test",
+                    "provider": "google",
+                    "results": [{ "title": long, "url": "https://example.com", "snippet": long }],
+                    "results_returned": 1
+                }),
+            ),
+            tool(
+                "read_document",
+                json!({
+                    "path": "doc.csv",
+                    "format": "csv",
+                    "content": long,
+                    "start_char": 0,
+                    "total_chars": 100,
+                    "truncated": false
+                }),
+            ),
+            tool(
+                "request_capability",
+                json!({
+                    "status": "granted",
+                    "capability": { "path": long, "access": "read_write" }
+                }),
+            ),
+            tool(
+                "export_artifact",
+                json!({ "path": long, "name": "f.txt", "bytes": 128, "sha256": "abc" }),
+            ),
+            tool(
+                "git_export_patch",
+                json!({ "path": long, "bytes": 64, "sha256": "def" }),
+            ),
+            tool(
+                "read_image",
+                json!({ "path": long, "loaded": true }),
+            ),
+            tool(
                 "extension_tool",
                 json!({
                     "nested": { "list": [long, "second"] }
@@ -476,5 +843,135 @@ mod tests {
             .collect::<String>();
 
         assert_eq!(joined, original);
+    }
+    #[test]
+    fn command_output_view_formats_stream_range_and_truncation() {
+        let row = tool(
+            "read_command_output",
+            json!({
+                "output_id": "proc-0",
+                "stream": "stdout",
+                "offset": 0,
+                "next_offset": 1024,
+                "total_retained_bytes": 4096,
+                "truncated": true,
+                "content": "line 1\nline 2\n"
+            }),
+        );
+        let rendered = text(&super::command_output(&row, false, 80).unwrap());
+        assert!(rendered.contains("[STDOUT]"));
+        assert!(rendered.contains("字节 0 B..1.0 KB"));
+        assert!(rendered.contains("line 1"));
+        assert!(rendered.contains("line 2"));
+        assert!(rendered.contains("next_offset = 1024"));
+    }
+    #[test]
+    fn web_search_view_formats_results_and_links() {
+        let row = tool(
+            "web_search",
+            json!({
+                "query": "rust lang",
+                "provider": "DuckDuckGo",
+                "results": [
+                    {
+                        "title": "Rust Programming Language",
+                        "url": "https://www.rust-lang.org",
+                        "snippet": "Empowering everyone to build reliable software."
+                    }
+                ],
+                "results_returned": 1,
+                "requested_max_results": 5,
+                "fewer_results": false
+            }),
+        );
+        let rendered = text(&super::web_search(&row, false, 80).unwrap());
+        assert!(rendered.contains("🔍 搜索结果 · 来源: DuckDuckGo"));
+        assert!(rendered.contains("1. Rust Programming Language"));
+        assert!(rendered.contains("https://www.rust-lang.org"));
+        assert!(rendered.contains("Empowering everyone"));
+    }
+    #[test]
+    fn document_view_formats_format_and_characters() {
+        let row = tool(
+            "read_document",
+            json!({
+                "path": "data.csv",
+                "format": "csv",
+                "content": "col1,col2\nval1,val2",
+                "start_char": 0,
+                "total_chars": 20,
+                "truncated": false
+            }),
+        );
+        let rendered = text(&super::document(&row, true, 80).unwrap());
+        assert!(rendered.contains("[CSV] data.csv"));
+        assert!(rendered.contains("col1,col2"));
+        assert!(rendered.contains("val1,val2"));
+    }
+    #[test]
+    fn capability_view_formats_granted_and_denied() {
+        let granted_row = tool(
+            "request_capability",
+            json!({
+                "status": "granted",
+                "capability": {
+                    "path": "/opt/cargo",
+                    "access": "read_write"
+                }
+            }),
+        );
+        let rendered = text(&super::capability(&granted_row, true, 80).unwrap());
+        assert!(rendered.contains("✓ 外部目录访问授权已授予"));
+        assert!(rendered.contains("/opt/cargo"));
+        assert!(rendered.contains("读写"));
+
+        let denied_row = tool(
+            "request_capability",
+            json!({
+                "status": "denied",
+                "message": "User denied permission"
+            }),
+        );
+        let rendered = text(&super::capability(&denied_row, true, 80).unwrap());
+        assert!(rendered.contains("× 外部目录访问授权被拒绝"));
+        assert!(rendered.contains("User denied permission"));
+    }
+    #[test]
+    fn artifact_and_patch_and_image_views_format_cleanly() {
+        let artifact_row = tool(
+            "export_artifact",
+            json!({
+                "path": "/artifacts/chart.png",
+                "name": "chart.png",
+                "bytes": 2048,
+                "sha256": "abcdef1234567890abcdef"
+            }),
+        );
+        let rendered = text(&super::export_artifact(&artifact_row, true, 80).unwrap());
+        assert!(rendered.contains("📦 工件已成功导出"));
+        assert!(rendered.contains("chart.png (2.0 KB)"));
+        assert!(rendered.contains("sha256:abcdef1234567890…"));
+
+        let patch_row = tool(
+            "git_export_patch",
+            json!({
+                "path": "/artifacts/diff.patch",
+                "bytes": 1024,
+                "sha256": "123456"
+            }),
+        );
+        let rendered = text(&super::git_export_patch(&patch_row, true, 80).unwrap());
+        assert!(rendered.contains("📦 Git 补丁已导出"));
+        assert!(rendered.contains("1.0 KB"));
+
+        let image_row = tool(
+            "read_image",
+            json!({
+                "path": "img.png",
+                "loaded": true
+            }),
+        );
+        let rendered = text(&super::read_image(&image_row, true, 80).unwrap());
+        assert!(rendered.contains("🖼️ 图像已载入上下文 · img.png"));
     }
 }

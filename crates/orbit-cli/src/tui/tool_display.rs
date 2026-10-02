@@ -83,6 +83,94 @@ pub(super) fn command_output_summary(arguments: &str) -> String {
     }
 }
 
+pub(super) fn web_search_summary(arguments: &str, output: Option<&str>) -> String {
+    let args: Value = serde_json::from_str(arguments).unwrap_or_default();
+    let query = args["query"].as_str().unwrap_or_default();
+    let query_preview = super::render::compact_preview(query, 60);
+
+    if let Some(out_str) = output
+        && let Ok(out_val) = serde_json::from_str::<Value>(out_str)
+        && let Some(provider) = out_val["provider"].as_str()
+        && let Some(count) = out_val["results_returned"].as_u64()
+    {
+        format!("\"{query_preview}\" ({provider} · {count} 结果)")
+    } else {
+        format!("\"{query_preview}\"")
+    }
+}
+
+pub(super) fn document_summary(arguments: &str, output: Option<&str>) -> String {
+    let args: Value = serde_json::from_str(arguments).unwrap_or_default();
+    let path = args["path"].as_str().unwrap_or_default();
+    let path_preview = super::render::compact_preview(path, 60);
+
+    if let Some(out_str) = output
+        && let Ok(out_val) = serde_json::from_str::<Value>(out_str)
+        && let Some(fmt) = out_val["format"].as_str()
+    {
+        format!("{path_preview} [{}]", fmt.to_ascii_uppercase())
+    } else {
+        path_preview
+    }
+}
+
+pub(super) fn capability_summary(arguments: &str) -> String {
+    let args: Value = serde_json::from_str(arguments).unwrap_or_default();
+    let path = args["path"].as_str().unwrap_or_default();
+    let access = args["access"].as_str().unwrap_or("read");
+    let access_label = if access == "read_write" || access == "write" { "读写" } else { "只读" };
+    format!("{access_label} · {path}")
+}
+
+pub(super) fn export_artifact_summary(arguments: &str, output: Option<&str>) -> String {
+    let args: Value = serde_json::from_str(arguments).unwrap_or_default();
+    let path = args["path"].as_str().unwrap_or_default();
+    if let Some(out_str) = output
+        && let Ok(out_val) = serde_json::from_str::<Value>(out_str)
+        && let Some(bytes) = out_val["bytes"].as_u64()
+    {
+        let name = out_val["name"].as_str().unwrap_or(path);
+        format!("{name} ({})", structured::format_bytes(bytes))
+    } else {
+        path.to_owned()
+    }
+}
+
+pub(super) fn git_export_patch_summary(output: Option<&str>) -> String {
+    if let Some(out_str) = output
+        && let Ok(out_val) = serde_json::from_str::<Value>(out_str)
+        && let Some(bytes) = out_val["bytes"].as_u64()
+    {
+        format!("补丁 ({})", structured::format_bytes(bytes))
+    } else {
+        "导出补丁".to_owned()
+    }
+}
+
+pub(super) fn read_image_summary(arguments: &str) -> String {
+    let args: Value = serde_json::from_str(arguments).unwrap_or_default();
+    let path = args["path"].as_str().unwrap_or_default();
+    super::render::compact_preview(path, 60)
+}
+
+pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String {
+    match name {
+        "search_text" => search_summary(arguments),
+        "memory_save" => memory_summary(arguments),
+        "git_inspect" => git_summary(arguments),
+        "read_file" => super::render::read_file_summary(arguments, output),
+        "read_command_output" => command_output_summary(arguments),
+        "web_search" => web_search_summary(arguments, Some(output)),
+        "read_document" => document_summary(arguments, Some(output)),
+        "request_capability" => capability_summary(arguments),
+        "export_artifact" => export_artifact_summary(arguments, Some(output)),
+        "git_export_patch" => git_export_patch_summary(Some(output)),
+        "read_image" => read_image_summary(arguments),
+        _ => super::render::default_tool_summary(arguments),
+    }
+}
+
+
 
 pub(super) fn write_file_preview(arguments: &str, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(arguments).ok()?;
@@ -242,7 +330,29 @@ fn source_spans(
 }
 
 pub(super) fn web_fetch_preview(output: &str, _width: u16) -> Option<Vec<Line<'static>>> {
-    let trimmed = output.trim();
+    let (text, header_spans) = if let Ok(val) = serde_json::from_str::<Value>(output) {
+        let content = val["content"].as_str().unwrap_or(output).to_owned();
+        let url = val["url"].as_str().or_else(|| val["requested_url"].as_str()).unwrap_or_default();
+        let start = val["start_char"].as_u64().unwrap_or(0);
+        let total = val["total_chars"].as_u64().unwrap_or(0);
+        let theme = &crate::tui::theme::THEME;
+        let mut spans = vec![
+            Span::styled("🌐 ", Style::default().fg(theme.accent)),
+            Span::styled(url.to_owned(), Style::default().fg(theme.md_link)),
+        ];
+        if total > 0 {
+            let end = start + content.chars().count() as u64;
+            spans.push(Span::styled(
+                format!(" · 字符 {start}..{end} (共 {total})"),
+                Style::default().fg(theme.tool_detail),
+            ));
+        }
+        (content, Some(spans))
+    } else {
+        (output.to_owned(), None)
+    };
+
+    let trimmed = text.trim();
     if trimmed.is_empty() {
         return Some(vec![Line::from(Span::styled(
             "(empty response)",
@@ -251,6 +361,9 @@ pub(super) fn web_fetch_preview(output: &str, _width: u16) -> Option<Vec<Line<'s
     }
 
     let mut out = Vec::new();
+    if let Some(header) = header_spans {
+        out.push(Line::from(header));
+    }
     let mut fence = None;
     for (index, line) in trimmed.lines().enumerate() {
         let mut rendered = super::markdown::line(line, index, &mut fence);
@@ -293,6 +406,13 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
             width,
         ),
         "web_fetch" => web_fetch_preview(&row.output, width),
+        "web_search" => structured::web_search(row, expanded, width),
+        "read_command_output" => structured::command_output(row, expanded, width),
+        "read_document" => structured::document(row, expanded, width),
+        "request_capability" => structured::capability(row, expanded, width),
+        "export_artifact" => structured::export_artifact(row, expanded, width),
+        "git_export_patch" => structured::git_export_patch(row, expanded, width),
+        "read_image" => structured::read_image(row, expanded, width),
         _ => structured::fallback(row, expanded, width),
     }
 }

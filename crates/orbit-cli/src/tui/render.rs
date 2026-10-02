@@ -1364,7 +1364,7 @@ pub(super) fn parse_ansi_to_spans(text: &str) -> Vec<Span<'static>> {
     }
 }
 
-fn read_file_summary(arguments: &str, output: &str) -> String {
+pub(super) fn read_file_summary(arguments: &str, output: &str) -> String {
     let args = serde_json::from_str::<serde_json::Value>(arguments).ok();
     let path = args.as_ref().and_then(|v| v["path"].as_str()).unwrap_or_default();
     let out = serde_json::from_str::<serde_json::Value>(output).ok();
@@ -1394,19 +1394,7 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         ToolStatus::Failed => ("×", TOOL_FAILED),
     };
 
-    let summary = if row.name == "search_text" {
-        super::tool_display::search_summary(&row.arguments)
-    } else if row.name == "memory_save" {
-        super::tool_display::memory_summary(&row.arguments)
-    } else if row.name == "git_inspect" {
-        super::tool_display::git_summary(&row.arguments)
-    } else if row.name == "read_file" {
-        read_file_summary(&row.arguments, &row.output)
-    } else if row.name == "read_command_output" {
-        super::tool_display::command_output_summary(&row.arguments)
-    } else {
-        tool_summary(&row.arguments)
-    };
+    let summary = super::tool_display::tool_summary(&row.name, &row.arguments, &row.output);
 
     lines.push(Line::from(vec![
         Span::styled(format!("  {marker} "), Style::default().fg(color)),
@@ -1446,7 +1434,15 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
                 } else {
                     let mut text = String::new();
                     if !stdout.is_empty() {
-                        text.push_str(stdout);
+                        let trimmed = stdout.trim();
+                        if (trimmed.starts_with('{') || trimmed.starts_with('['))
+                            && let Ok(json_val) = serde_json::from_str::<serde_json::Value>(trimmed)
+                            && let Ok(pretty) = serde_json::to_string_pretty(&json_val)
+                        {
+                            text.push_str(&pretty);
+                        } else {
+                            text.push_str(stdout);
+                        }
                     }
                     if !stderr.is_empty() {
                         if !text.is_empty() && !text.ends_with('\n') {
@@ -1459,6 +1455,12 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
                             text.push('\n');
                         }
                         text.push_str(&verification_detail);
+                    }
+                    if let Some(output_id) = value["output_id"].as_str() {
+                        if !text.is_empty() && !text.ends_with('\n') {
+                            text.push('\n');
+                        }
+                        text.push_str(&format!("[完整输出已留存: {output_id} · 可使用 read_command_output 查询]"));
                     }
                     if text.is_empty()
                         && let Some(code) = value["exit_code"].as_i64().filter(|c| *c != 0)
@@ -1481,8 +1483,28 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
             }
         })
         .unwrap_or_else(|| row.output.clone());
-    for line in output.lines() {
-        lines.push(Line::from(parse_ansi_to_spans(line)));
+
+    let syntax = super::languages::syntax_for_label("json");
+    let is_json_output = (output.trim_start().starts_with('{') || output.trim_start().starts_with('['))
+        && serde_json::from_str::<serde_json::Value>(&output).is_ok();
+    if is_json_output && let Some(syn) = syntax {
+        let mut highlighter = syntect::easy::HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
+        for line in output.lines() {
+            if let Ok(line_tokens) = highlighter.highlight_line(line, &super::languages::SYNTAXES) {
+                let mut spans = Vec::new();
+                for (style, slice) in line_tokens {
+                    let c = style.foreground;
+                    spans.push(Span::styled(slice.to_owned(), Style::default().fg(Color::Rgb(c.r, c.g, c.b))));
+                }
+                lines.push(Line::from(spans));
+            } else {
+                lines.push(Line::from(parse_ansi_to_spans(line)));
+            }
+        }
+    } else {
+        for line in output.lines() {
+            lines.push(Line::from(parse_ansi_to_spans(line)));
+        }
     }
 
     lines.push(super::tool_display::toggle_line(true, width));
@@ -1514,14 +1536,8 @@ pub(super) fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -
                 .find_map(|key| value[*key].as_str())
         })
         .unwrap_or("");
-    let command = if row.name == "search_text" {
-        super::tool_display::search_summary(&row.arguments)
-    } else if row.name == "read_file" {
-        read_file_summary(&row.arguments, &row.output)
-    } else if row.name == "read_command_output" {
-        super::tool_display::command_output_summary(&row.arguments)
-    } else if !expanded {
-        tool_summary(&row.arguments)
+    let command = if !expanded {
+        super::tool_display::tool_summary(&row.name, &row.arguments, &row.output)
     } else {
         command.to_owned()
     };
@@ -1650,7 +1666,10 @@ pub(super) fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -
     card_lines
 }
 
-fn tool_summary(arguments: &str) -> String {
+#[cfg(test)]
+pub(super) use default_tool_summary as tool_summary;
+
+pub(super) fn default_tool_summary(arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
         return String::new();
     };
