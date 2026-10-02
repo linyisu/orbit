@@ -1380,7 +1380,7 @@ pub(super) fn read_file_summary(arguments: &str, output: &str) -> String {
         });
 
     match (start, end) {
-        (Some(s), Some(e)) => format!("{path}[{s}..{e}]"),
+        (Some(s), Some(e)) => format!("{path}[{s}..={e}]"),
         (Some(s), None) => format!("{path}[{s}..]"),
         _ => path.to_owned(),
     }

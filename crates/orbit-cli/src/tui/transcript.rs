@@ -248,6 +248,15 @@ impl Entry {
         width: u16,
         mut links: Vec<super::markdown::LinkTarget>,
     ) {
+        // Markdown rules occupy the entire transcript row, including the usual gutter.
+        let mut visible = line.spans.iter().filter(|span| !span.content.trim().is_empty());
+        if let Some(rule) = visible.next()
+            && visible.next().is_none()
+            && rule.style.fg == Some(super::theme::THEME.md_rule)
+            && rule.content.chars().all(|ch| ch == '─')
+        {
+            line = Line::styled("─".repeat(usize::from(width)), rule.style);
+        }
         render::sanitize_line(&mut line);
         let original = line.to_string();
         let gutter = take_gutter(&mut line);
@@ -760,6 +769,21 @@ impl TranscriptLayout {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn markdown_rule_occupies_one_full_row_after_resize() {
+        let items = vec![super::TranscriptItem::Assistant("before\n---\nafter\n".into())];
+        let mut layout = super::TranscriptLayout::default();
+        for width in [80, 180, 40] {
+            layout.update(&items, None, width);
+            let entry = &layout.entries[0];
+            let rule = &entry.rows[1];
+            assert_eq!(rule.line.to_string(), "─".repeat(usize::from(width)));
+            assert_eq!(rule.height, 1);
+            assert!(rule.gutter.is_none());
+            assert_eq!(rule.wrapped[0].width(), usize::from(width));
+        }
+    }
+
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
 
