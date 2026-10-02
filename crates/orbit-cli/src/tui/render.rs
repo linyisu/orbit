@@ -1082,7 +1082,7 @@ pub(super) fn transcript_lines_at_width(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    for item in items {
+    for (index, item) in items.iter().enumerate() {
         match item {
             TranscriptItem::User(text) => {
                 let text = text.trim();
@@ -1166,17 +1166,22 @@ pub(super) fn transcript_lines_at_width(
             }
 
             TranscriptItem::Tool(row) => {
-                // A tool is a separate execution step. Keep one measured row
-                // around it so reasoning, results, and adjacent tools do not
-                // visually collapse into a single block.
-                if lines
-                    .last()
-                    .is_some_and(|line| !line.to_string().trim().is_empty())
+                let prev_is_tool =
+                    index > 0 && matches!(items.get(index - 1), Some(TranscriptItem::Tool(_)));
+                if !prev_is_tool
+                    && lines
+                        .last()
+                        .is_some_and(|line| !line.to_string().trim().is_empty())
                 {
                     lines.push(Line::from(""));
                 }
 
                 lines.extend(tool_card(row, expanded, width));
+
+                let next_is_tool = matches!(items.get(index + 1), Some(TranscriptItem::Tool(_)));
+                if !next_is_tool {
+                    lines.push(Line::from(""));
+                }
             }
 
             TranscriptItem::CommandResult(text) => {
@@ -1484,7 +1489,7 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
     lines
 }
 
-fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
+pub(super) fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
     let width = if width == u16::MAX { 120 } else { width };
     let color = match row.status {
         ToolStatus::Running => TOOL_RUNNING,
@@ -1492,13 +1497,10 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
         ToolStatus::Failed => TOOL_FAILED,
     };
     if width < 10 {
-        return vec![
-            Line::styled(
-                super::tool_display::clipped(&row.name, width as usize),
-                Style::default().fg(color),
-            ),
-            Line::from(""),
-        ];
+        return vec![Line::styled(
+            super::tool_display::clipped(&row.name, width as usize),
+            Style::default().fg(color),
+        )];
     }
 
     let arguments = serde_json::from_str::<serde_json::Value>(&row.arguments).ok();
@@ -1547,12 +1549,12 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
             .into_iter()
             .next()
             .unwrap_or(title_line);
-        return vec![first_line, Line::from("")];
+        return vec![first_line];
     }
 
     // Expanded state: rounded enclosed card flush with user input frame
     if width < 4 {
-        return vec![Line::from(title_spans), Line::from("")];
+        return vec![Line::from(title_spans)];
     }
 
     let border_style = Style::default().fg(crate::tui::theme::THEME.tool_border);
@@ -1640,9 +1642,6 @@ fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<
         format!("╰{}╯", "─".repeat(inner_width + 2)),
         border_style,
     )));
-
-    // 6. Trailing empty separator line
-    card_lines.push(Line::from(""));
 
     card_lines
 }
@@ -2434,27 +2433,25 @@ mod tests {
             output: serde_json::json!({ "written_bytes": 22, "created": true }).to_string(),
         };
 
-        // Collapsed state: strictly single line command + empty line
+        // Collapsed state: strictly single line command
         let collapsed = tool_card(&row, false, 80);
-        assert_eq!(collapsed.len(), 2);
+        assert_eq!(collapsed.len(), 1);
         assert!(collapsed[0].to_string().starts_with("  write_file hello.py"));
         assert!(!collapsed[0].to_string().contains('✓'));
         assert!(!collapsed[0].to_string().contains('⟳'));
         assert!(!collapsed[0].to_string().contains('✗'));
-        assert!(collapsed[1].to_string().is_empty());
 
         // Expanded state: rounded box with breathing blank line and line-numbered code
         let expanded = tool_card(&row, true, 80);
-        assert!(expanded.len() >= 5);
+        assert!(expanded.len() >= 4);
         assert!(expanded[0].to_string().starts_with('╭') && expanded[0].to_string().ends_with('╮'));
         assert!(expanded[1].to_string().contains("write_file hello.py"));
         assert!(expanded[2].to_string().starts_with("│ ") && expanded[2].to_string().ends_with(" │"));
         assert!(expanded[3].to_string().contains("1 │ print(\"Hello, world!\")"));
-        let bottom = &expanded[expanded.len() - 2];
+        let bottom = &expanded[expanded.len() - 1];
         assert!(bottom.to_string().starts_with('╰') && bottom.to_string().ends_with('╯'));
-        assert!(expanded.last().unwrap().to_string().is_empty());
 
-        for line in &expanded[..expanded.len() - 1] {
+        for line in &expanded {
             assert_eq!(line.width(), 80);
         }
 
@@ -2473,6 +2470,38 @@ mod tests {
             assert_eq!(layout.disclosure_at(&items, area, 0, (79, y as u16)), Some(0));
             assert_eq!(layout.disclosure_at(&items, area, 0, (80, y as u16)), None);
         }
+    }
+
+    #[test]
+    fn consecutive_tools_do_not_have_blank_line_between_them() {
+        use super::super::app::ToolRow;
+
+        let row1 = ToolRow {
+            id: "1".into(),
+            name: "run_command".into(),
+            arguments: serde_json::json!({ "command": "git status" }).to_string(),
+            status: ToolStatus::Finished,
+            output: "clean".into(),
+        };
+        let row2 = ToolRow {
+            id: "2".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({ "path": "main.rs" }).to_string(),
+            status: ToolStatus::Finished,
+            output: "fn main() {}".into(),
+        };
+        let items = vec![TranscriptItem::Tool(row1), TranscriptItem::Tool(row2)];
+        let lines = transcript_lines(&items, false);
+        // lines[0] = row1, lines[1] = row2, lines[2] = trailing empty line after tool block
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].to_string().contains("run_command"));
+        assert!(lines[1].to_string().contains("read_file"));
+        assert!(lines[2].to_string().is_empty());
+
+        let mut layout = super::super::transcript::TranscriptLayout::default();
+        layout.update(&items, None, 80);
+        // In layout: entry 0 = row1 (height 1), entry 1 = row2 + trailing empty line (height 2) -> total 3
+        assert_eq!(layout.height(), 3);
     }
 
     #[test]

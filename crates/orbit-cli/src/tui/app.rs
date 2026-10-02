@@ -450,6 +450,8 @@ impl UiState {
                     status: ToolStatus::Running,
                     output: String::new(),
                 }));
+                self.transcript_layout
+                    .invalidate_from(self.transcript.len().saturating_sub(2));
             }
 
             AgentEvent::ToolFinished { call, content, .. } => {

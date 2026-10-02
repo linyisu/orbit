@@ -547,10 +547,27 @@ impl TranscriptLayout {
                     *entry = Entry::default();
                     entry.user(text, width);
                 }
+                TranscriptItem::Tool(row) => {
+                    *entry = Entry::default();
+                    let item_index = first + relative;
+                    let is_expanded = expanded.contains(&item_index);
+                    let next_is_tool =
+                        matches!(items.get(item_index + 1), Some(TranscriptItem::Tool(_)));
+
+                    for line in render::tool_card(row, is_expanded, width) {
+                        if !line.to_string().is_empty() {
+                            entry.disclosures.push(entry.rows.len());
+                        }
+                        entry.push(line, width);
+                    }
+
+                    if !next_is_tool {
+                        entry.push(Line::from(""), width);
+                    }
+                }
                 _ => {
                     *entry = Entry::default();
-                    let collapsible =
-                        matches!(item, TranscriptItem::Tool(_) | TranscriptItem::Thinking(_));
+                    let collapsible = matches!(item, TranscriptItem::Thinking(_));
                     let toggle = collapsible.then(|| {
                         super::tool_display::toggle_line(
                             expanded.contains(&(first + relative)),
@@ -558,15 +575,12 @@ impl TranscriptLayout {
                         )
                     });
 
-                    let tool = matches!(item, TranscriptItem::Tool(_));
                     for line in render::transcript_lines_at_width(
                         std::slice::from_ref(item),
                         expanded.contains(&(first + relative)),
                         width,
                     ) {
-                        // A click toggles the card; drag selection remains handled separately.
-                        if (tool && !line.to_string().is_empty())
-                            || (collapsible && entry.rows.is_empty())
+                        if (collapsible && entry.rows.is_empty())
                             || toggle.as_ref() == Some(&line)
                         {
                             entry.disclosures.push(entry.rows.len());
