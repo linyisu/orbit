@@ -1,81 +1,32 @@
-# 复制为 config.toml，填写密钥并选择默认供应商。
-default_provider = "openai"
+# 默认供应商（对应下方 [providers.<名称>]）
+default_provider = "deepseek"
 
-# 默认上下文窗口（含输出额度），可在模型中覆盖。
-context_tokens = 128000
-# 自动整理上下文，保留完整会话记录。
-auto_compact = true
-# 单次模型输出上限，包含思考内容。
-max_output_tokens = 32000
-# 每次用户请求的轮数和工具调用上限；0 表示不限。
-max_turns = 75
-max_tool_calls = 500
+# 可选：任务轮数与工具调用上限（默认 300 轮、2000 次工具调用；设为 0 表示不限制）
+# max_turns = 0
+# max_tool_calls = 0
 
+# --- 供应商配置示例 ---
+
+# 示例 1：DeepSeek (API Key 认证)
+[providers.deepseek]
+api_format = "openai_chat_completions" # 可选: openai_chat_completions, openai_responses, anthropic_messages
+base_url = "https://api.deepseek.com/v1"
+api_key = "replace-with-deepseek-key"  # 也可用 credential = "凭据名" 引用 orbit auth 保存的凭据
+
+[[providers.deepseek.models]]
+id = "deepseek-chat"
+
+[[providers.deepseek.models]]
+id = "deepseek-reasoner"
+reasoning = { adapter = "openai_chat", efforts = ["high"], default = "high" }
+
+# 示例 2：OpenAI (支持多模态视觉输入与思考强度调节)
 [providers.openai]
 api_format = "openai_responses"
 base_url = "https://api.openai.com/v1"
-# 也可用 orbit auth set-key 保存密钥，再将 api_key 替换为 credential = "凭据名"。
 api_key = "replace-with-openai-key"
-timeout_seconds = 600
-# 响应开始前的临时网络错误重试次数。
-max_retries = 2
 
-# 模型支持图片输入时，设置 supports_vision = true。
 [[providers.openai.models]]
 id = "gpt-5.6-sol"
-context_tokens = 128000
 supports_vision = true
-# efforts 仅填写模型支持的思考强度；default 为默认值，none 表示关闭思考。
-reasoning = { adapter = "openai_responses", efforts = ["none", "minimal", "low", "medium", "high", "xhigh"], default = "high" }
-
-[[providers.openai.models]]
-id = "gpt-6-astra"
-context_tokens = 128000
-supports_vision = true
-reasoning = { adapter = "openai_responses", efforts = ["none", "minimal", "low", "medium", "high", "xhigh"], default = "high" }
-
-[providers.deepseek]
-api_format = "anthropic_messages"
-base_url = "https://api.deepseek.com/anthropic"
-api_key = "replace-with-deepseek-key"
-timeout_seconds = 600
-max_retries = 2
-
-# adapter 按接口协议转换思考参数，通常无需 extra。
-[[providers.deepseek.models]]
-id = "deepseek-flash"
-context_tokens = 128000
-reasoning = { adapter = "anthropic_messages", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high" }
-
-[[providers.deepseek.models]]
-id = "deepseek-pro"
-context_tokens = 128000
-reasoning = { adapter = "anthropic_messages", efforts = ["minimal", "low", "medium", "high", "xhigh"], default = "high" }
-
-[command]
-default_timeout_seconds = 120
-max_timeout_seconds = 600
-max_scan_mib = 64
-max_scan_entries = 10000
-dependency_caches = []
-verification_commands = {}
-
-# 可选：授权访问工作区外的已有路径，只读与读写范围不可重叠。
-# [permissions]
-# read = ["/opt/datasets"]
-# read_write = ["/var/log/myproject"]
-
-# 可选：仅供 web_fetch 使用的可信代理；未设置时直连。
-[web]
-# proxy = "http://127.0.0.1:7897"
-
-# 可选：启用本地 stdio MCP 服务。
-# [mcp.servers.files]
-# enabled = true # 必须显式启用。
-# command = "npx"
-# args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-# timeout_seconds = 120
-# 工具白名单；空列表表示全部工具。
-# tools = ["read_file", "list_directory"]
-# 按需传入服务所需的环境变量。
-# env = { API_TOKEN = "replace-with-token" }
+reasoning = { adapter = "openai_responses", efforts = ["none", "low", "medium", "high"], default = "high" }

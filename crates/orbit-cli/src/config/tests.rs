@@ -280,11 +280,13 @@ fn example_configuration_uses_valid_model_capability_profiles() {
     let config = FileConfig::load(&path, &path.with_extension("auth")).unwrap();
     let models = config.model_options().unwrap();
 
-    assert_eq!(models.len(), 4);
+    assert_eq!(models.len(), 3);
+    assert_eq!(config.default_provider, "deepseek");
+    assert!(models.iter().any(|model| model.supports_vision));
     assert!(
         models
             .iter()
-            .all(|model| !model.reasoning_efforts.is_empty())
+            .any(|model| !model.reasoning_efforts.is_empty())
     );
 }
 
