@@ -128,20 +128,20 @@ mod tests {
     fn parses_sanitized_live_result_cards() {
         let results = parse_results(include_str!("fixtures/bing-results.html"), 10);
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].url, "https://github.com/atx/wtype");
+        assert_eq!(results[0].url, "https://github.com/linyisu/orbit");
         assert!(!results[0].snippet.is_empty());
     }
 
     #[test]
     fn extracts_only_organic_results_and_keeps_snippets_with_their_card() {
         let body = r#"<h2><a href="https://example.org/ad">Ad</a></h2>
-        <li class="b_algo"><h2><a href="https://github.com/atx/wtype">wtype &amp; Wayland</a></h2><div class="b_caption"><p>Keyboard <b>input</b>.</p></div></li>
+        <li class="b_algo"><h2><a href="https://github.com/linyisu/orbit">Orbit &amp; Wayland</a></h2><div class="b_caption"><p>Keyboard <b>input</b>.</p></div></li>
         <li class="b_algo"><h2><a href="https://example.org/empty">No snippet</a></h2></li>
         <li class="b_algo"><h2><a href="http://127.0.0.1/private">Private</a></h2><p>Secret</p></li>
-        <li class="b_algo"><h2><a href="https://github.com/atx/wtype">Duplicate</a></h2></li>"#;
+        <li class="b_algo"><h2><a href="https://github.com/linyisu/orbit">Duplicate</a></h2></li>"#;
         let results = parse_results(body, 10);
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].title, "wtype & Wayland");
+        assert_eq!(results[0].title, "Orbit & Wayland");
         assert_eq!(results[0].snippet, "Keyboard input.");
         assert!(results[1].snippet.is_empty());
         assert_eq!(parse_results(body, 1).len(), 1);
@@ -149,13 +149,13 @@ mod tests {
     }
     #[test]
     fn decodes_tracking_links_and_validates_destination() {
-        let encoded = URL_SAFE_NO_PAD.encode("https://github.com/atx/wtype");
+        let encoded = URL_SAFE_NO_PAD.encode("https://github.com/linyisu/orbit");
         assert_eq!(
             target(&format!("/ck/a?!&&u=a1{encoded}")),
-            Some("https://github.com/atx/wtype".into())
+            Some("https://github.com/linyisu/orbit".into())
         );
         let encoded = URL_SAFE_NO_PAD.encode("http://127.0.0.1/private");
         assert!(target(&format!("/ck/a?u=a1{encoded}")).is_none());
-        assert!(target("/search?q=wtype").is_none());
+        assert!(target("/search?q=orbit").is_none());
     }
 }
