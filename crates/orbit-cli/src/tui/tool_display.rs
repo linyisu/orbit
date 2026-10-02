@@ -535,7 +535,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
     if let Some(refs) = value.get("references").and_then(|v| v.as_array()).filter(|r| !r.is_empty()) {
         push_blank(&mut raw_lines);
         push_line(&mut raw_lines, 0, vec![
-            Span::styled("🔗 引用候选:", strong_style),
+            Span::styled("🔗 跨文件引用 (References):", strong_style),
         ]);
         for item in refs.iter().take(6) {
             let path = item["path"].as_str().unwrap_or_default();
@@ -549,25 +549,38 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         }
     }
 
-    // 7. Symbols
+    // 7. Symbols -> Code Outline (AST)
     if let Some(symbols) = value.get("symbols").and_then(|v| v.as_array()).filter(|s| !s.is_empty()) {
         push_blank(&mut raw_lines);
         push_line(&mut raw_lines, 0, vec![
-            Span::styled("🔍 核心符号:", strong_style),
+            Span::styled("🔍 代码大纲 (AST):", strong_style),
         ]);
         let limit = 8;
         for symbol in symbols.iter().take(limit) {
             let path = symbol["path"].as_str().unwrap_or_default();
             let line = symbol.get("line").and_then(|l| l.as_u64()).unwrap_or(0);
             let name = symbol["name"].as_str().unwrap_or_default();
-            push_line(&mut raw_lines, 1, vec![
+            let kind = symbol["kind"].as_str().unwrap_or_default();
+            let signature = symbol["signature"].as_str().unwrap_or_default();
+
+            let mut spans = vec![
                 Span::styled(format!("{path}:{line}  "), detail_style),
                 Span::styled(name.to_owned(), accent_style.add_modifier(Modifier::BOLD)),
-            ]);
+            ];
+
+            if !kind.is_empty() {
+                spans.push(Span::styled(format!(" [{kind}]"), muted_style));
+            }
+
+            if !signature.is_empty() && signature != name {
+                spans.push(Span::styled(format!("  {signature}"), detail_style));
+            }
+
+            push_line(&mut raw_lines, 1, spans);
         }
         if symbols.len() > limit {
             push_line(&mut raw_lines, 1, vec![
-                Span::styled(format!("... 另有 {} 个符号候选", symbols.len() - limit), muted_style),
+                Span::styled(format!("... 另有 {} 个定义", symbols.len() - limit), muted_style),
             ]);
         }
     }

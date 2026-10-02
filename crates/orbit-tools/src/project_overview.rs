@@ -16,6 +16,7 @@ use std::{
     sync::LazyLock,
 };
 use tokio_util::sync::CancellationToken;
+use tree_sitter::{Node, Parser};
 
 const MAX_VISITED: usize = 20_000;
 const MAX_FILES: usize = 4_000;
@@ -110,18 +111,30 @@ fn invalid(message: impl Into<String>) -> ToolError {
 }
 
 fn language(path: &Path) -> Option<&'static str> {
-    Some(match path.extension()?.to_str()? {
-        "rs" => "Rust",
-        "py" => "Python",
-        "js" | "jsx" | "mjs" | "cjs" => "JavaScript",
-        "ts" | "tsx" => "TypeScript",
-        "go" => "Go",
-        "java" => "Java",
-        "cs" => "C#",
-        "c" | "h" => "C",
-        "cc" | "cpp" | "hpp" => "C++",
-        "rb" => "Ruby",
-        "sh" | "bash" => "Shell",
+    let ext = path.extension()?.to_str()?;
+    let lang = tokei::LanguageType::from_file_extension(ext)?;
+    Some(match lang {
+        tokei::LanguageType::Rust => "Rust",
+        tokei::LanguageType::Python => "Python",
+        tokei::LanguageType::JavaScript => "JavaScript",
+        tokei::LanguageType::TypeScript => "TypeScript",
+        tokei::LanguageType::Go => "Go",
+        tokei::LanguageType::Java => "Java",
+        tokei::LanguageType::CSharp => "C#",
+        tokei::LanguageType::C | tokei::LanguageType::CHeader => "C",
+        tokei::LanguageType::Cpp | tokei::LanguageType::CppHeader => "C++",
+        tokei::LanguageType::Ruby => "Ruby",
+        tokei::LanguageType::Bash => "Shell",
+        tokei::LanguageType::Php => "PHP",
+        tokei::LanguageType::Kotlin => "Kotlin",
+        tokei::LanguageType::Swift => "Swift",
+        tokei::LanguageType::Scala => "Scala",
+        tokei::LanguageType::Dart => "Dart",
+        tokei::LanguageType::Lua => "Lua",
+        tokei::LanguageType::Zig => "Zig",
+        tokei::LanguageType::Elixir => "Elixir",
+        tokei::LanguageType::Haskell => "Haskell",
+        tokei::LanguageType::OCaml => "OCaml",
         _ => return None,
     })
 }
@@ -358,18 +371,24 @@ fn collect(
                 .unwrap()
                 .push(manifest_evidence(path, &text));
         } else {
-            let mut candidates = symbols(path, &text);
-            candidates.sort_by_key(|(_, name)| std::cmp::Reverse(relevance(name, &terms)));
+            let mut candidates = extract_symbols(path, &text);
+            candidates.sort_by_key(|cand| std::cmp::Reverse(relevance(&cand.name, &terms)));
 
             if candidates.len() > 8 {
                 result["truncated"]["content"] = json!(true);
             }
 
-            for (line, name) in candidates.into_iter().take(8) {
+            for cand in candidates.into_iter().take(8) {
                 result["symbols"]
                     .as_array_mut()
                     .unwrap()
-                    .push(json!({ "path": path, "line": line, "name": name }));
+                    .push(json!({
+                        "path": path,
+                        "line": cand.line,
+                        "name": cand.name,
+                        "kind": cand.kind,
+                        "signature": cand.signature,
+                    }));
             }
 
             sources.push((path.clone(), text));
@@ -628,41 +647,561 @@ fn bound_metadata(value: &mut Value, truncated: &mut bool) {
     }
 }
 
-fn symbols<'a>(path: &Path, text: &'a str) -> Vec<(usize, &'a str)> {
-    static RUST: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:fn|struct|enum|trait|mod)\s+([A-Za-z_][A-Za-z_0-9]*)").unwrap()
-    });
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AstSymbol {
+    pub name: String,
+    pub kind: String,
+    pub line: usize,
+    pub signature: String,
+}
 
-    static PYTHON: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:async\s+)?(?:def|class)\s+([A-Za-z_][A-Za-z_0-9]*)").unwrap()
-    });
+fn clean_signature(sig: &str) -> String {
+    sig.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
-    static SCRIPT: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|const|let)\s+([A-Za-z_$][A-Za-z_$0-9]*)").unwrap()
-    });
-
-    static GO: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:func\s+(?:\([^)]*\)\s*)?|type\s+)([A-Za-z_][A-Za-z_0-9]*)").unwrap()
-    });
-
-    let matcher = match language(path) {
-        Some("Rust") => &*RUST,
-        Some("Python") => &*PYTHON,
-        Some("JavaScript" | "TypeScript") => &*SCRIPT,
-        Some("Go") => &*GO,
-        _ => return vec![],
+fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
+    let mut parser = Parser::new();
+    let lang = tree_sitter_rust::LANGUAGE.into();
+    if parser.set_language(&lang).is_err() {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return Vec::new();
     };
+    let root = tree.root_node();
+    let bytes = source.as_bytes();
+    let mut symbols = Vec::new();
+
+    let mut cursor = root.walk();
+    for node in root.children(&mut cursor) {
+        match node.kind() {
+            "function_item" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let mut start = node.start_byte();
+                    let mut item_cursor = node.walk();
+                    for child in node.children(&mut item_cursor) {
+                        if child.kind() == "attribute_item" {
+                            start = child.end_byte();
+                        } else {
+                            break;
+                        }
+                    }
+                    let raw_sig = source.get(start..sig_end).unwrap_or("").trim_end_matches(';').trim();
+                    let signature = clean_signature(raw_sig);
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "function".into(),
+                        line: node.start_position().row + 1,
+                        signature,
+                    });
+                }
+            }
+            "struct_item" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let mut start = node.start_byte();
+                    let mut item_cursor = node.walk();
+                    for child in node.children(&mut item_cursor) {
+                        if child.kind() == "attribute_item" {
+                            start = child.end_byte();
+                        } else {
+                            break;
+                        }
+                    }
+                    let raw_sig = source.get(start..sig_end).unwrap_or("").trim_end_matches(';').trim();
+                    let signature = clean_signature(raw_sig);
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "struct".into(),
+                        line: node.start_position().row + 1,
+                        signature,
+                    });
+                }
+            }
+            "enum_item" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let mut start = node.start_byte();
+                    let mut item_cursor = node.walk();
+                    for child in node.children(&mut item_cursor) {
+                        if child.kind() == "attribute_item" {
+                            start = child.end_byte();
+                        } else {
+                            break;
+                        }
+                    }
+                    let raw_sig = source.get(start..sig_end).unwrap_or("").trim_end_matches(';').trim();
+                    let signature = clean_signature(raw_sig);
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "enum".into(),
+                        line: node.start_position().row + 1,
+                        signature,
+                    });
+                }
+            }
+            "trait_item" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let mut start = node.start_byte();
+                    let mut item_cursor = node.walk();
+                    for child in node.children(&mut item_cursor) {
+                        if child.kind() == "attribute_item" {
+                            start = child.end_byte();
+                        } else {
+                            break;
+                        }
+                    }
+                    let raw_sig = source.get(start..sig_end).unwrap_or("").trim_end_matches(';').trim();
+                    let signature = clean_signature(raw_sig);
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "trait".into(),
+                        line: node.start_position().row + 1,
+                        signature,
+                    });
+                }
+            }
+            "type_item" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let raw_sig = source.get(node.start_byte()..node.end_byte()).unwrap_or("").trim_end_matches(';').trim();
+                    let signature = clean_signature(raw_sig);
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "type".into(),
+                        line: node.start_position().row + 1,
+                        signature,
+                    });
+                }
+            }
+            "impl_item" => {
+                let body_node = node.child_by_field_name("body").or_else(|| {
+                    let mut c = node.walk();
+                    node.children(&mut c).find(|n| n.kind() == "declaration_list")
+                });
+                if let Some(body) = body_node {
+                    let mut body_cursor = body.walk();
+                    for child in body.children(&mut body_cursor) {
+                        if child.kind() == "function_item"
+                            && let Some(name_node) = child.child_by_field_name("name")
+                        {
+                            let name = name_node.utf8_text(bytes).unwrap_or_default();
+                            let sig_end = child.child_by_field_name("body")
+                                .map(|b| b.start_byte())
+                                .unwrap_or_else(|| child.end_byte());
+                            let mut start = child.start_byte();
+                            let mut item_cursor = child.walk();
+                            for c in child.children(&mut item_cursor) {
+                                if c.kind() == "attribute_item" {
+                                    start = c.end_byte();
+                                } else {
+                                    break;
+                                }
+                            }
+                            let raw_sig = source.get(start..sig_end).unwrap_or("").trim_end_matches(';').trim();
+                            let signature = clean_signature(raw_sig);
+                            symbols.push(AstSymbol {
+                                name: name.to_string(),
+                                kind: "method".into(),
+                                line: child.start_position().row + 1,
+                                signature,
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    symbols
+}
+
+fn extract_python_symbols(source: &str) -> Vec<AstSymbol> {
+    let mut parser = Parser::new();
+    if parser.set_language(&tree_sitter_python::LANGUAGE.into()).is_err() {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return Vec::new();
+    };
+    let root = tree.root_node();
+    let bytes = source.as_bytes();
+    let mut symbols = Vec::new();
+
+    fn process_py_node(node: Node, bytes: &[u8], source: &str, is_method: bool, symbols: &mut Vec<AstSymbol>) {
+        match node.kind() {
+            "decorated_definition" => {
+                let def_node = node.child_by_field_name("definition").or_else(|| {
+                    let mut c = node.walk();
+                    node.children(&mut c).find(|n| n.kind() == "function_definition" || n.kind() == "class_definition")
+                });
+                if let Some(def) = def_node {
+                    process_py_node(def, bytes, source, is_method, symbols);
+                }
+            }
+            "function_definition" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim().trim_end_matches(':').trim();
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: if is_method { "method".into() } else { "function".into() },
+                        line: node.start_position().row + 1,
+                        signature: clean_signature(raw_sig),
+                    });
+                }
+            }
+            "class_definition" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim().trim_end_matches(':').trim();
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "class".into(),
+                        line: node.start_position().row + 1,
+                        signature: clean_signature(raw_sig),
+                    });
+                    if let Some(body) = node.child_by_field_name("body") {
+                        let mut body_cursor = body.walk();
+                        for child in body.children(&mut body_cursor) {
+                            process_py_node(child, bytes, source, true, symbols);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut cursor = root.walk();
+    for node in root.children(&mut cursor) {
+        process_py_node(node, bytes, source, false, &mut symbols);
+    }
+    symbols
+}
+
+fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
+    let mut parser = Parser::new();
+    let lang = match ext {
+        "ts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        "tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        _ => tree_sitter_javascript::LANGUAGE.into(),
+    };
+    if parser.set_language(&lang).is_err() {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return Vec::new();
+    };
+    let root = tree.root_node();
+    let bytes = source.as_bytes();
+    let mut symbols = Vec::new();
+
+    fn process_js_node(node: Node, bytes: &[u8], source: &str, is_export: bool, symbols: &mut Vec<AstSymbol>) {
+        match node.kind() {
+            "export_statement" => {
+                let decl = node.child_by_field_name("declaration").or_else(|| {
+                    let mut c = node.walk();
+                    node.children(&mut c).find(|n| {
+                        matches!(
+                            n.kind(),
+                            "function_declaration"
+                                | "class_declaration"
+                                | "interface_declaration"
+                                | "type_alias_declaration"
+                                | "lexical_declaration"
+                        )
+                    })
+                });
+                if let Some(decl) = decl {
+                    process_js_node(decl, bytes, source, true, symbols);
+                }
+            }
+            "function_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    let sig = clean_signature(raw_sig);
+                    let signature = if is_export && !sig.starts_with("export") {
+                        format!("export {sig}")
+                    } else {
+                        sig
+                    };
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "function".into(),
+                        line: node.start_position().row + 1,
+                        signature,
+                    });
+                }
+            }
+            "class_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    let sig = clean_signature(raw_sig);
+                    let signature = if is_export && !sig.starts_with("export") {
+                        format!("export {sig}")
+                    } else {
+                        sig
+                    };
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "class".into(),
+                        line: node.start_position().row + 1,
+                        signature,
+                    });
+                    if let Some(body) = node.child_by_field_name("body") {
+                        let mut body_cursor = body.walk();
+                        for child in body.children(&mut body_cursor) {
+                            if child.kind() == "method_definition"
+                                && let Some(m_name) = child.child_by_field_name("name")
+                            {
+                                let m_sig_end = child.child_by_field_name("body")
+                                    .map(|b| b.start_byte())
+                                    .unwrap_or_else(|| child.end_byte());
+                                let m_raw = source.get(child.start_byte()..m_sig_end).unwrap_or("").trim();
+                                symbols.push(AstSymbol {
+                                    name: m_name.utf8_text(bytes).unwrap_or_default().to_string(),
+                                    kind: "method".into(),
+                                    line: child.start_position().row + 1,
+                                    signature: clean_signature(m_raw),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            "interface_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    let sig = clean_signature(raw_sig);
+                    let signature = if is_export && !sig.starts_with("export") {
+                        format!("export {sig}")
+                    } else {
+                        sig
+                    };
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "interface".into(),
+                        line: node.start_position().row + 1,
+                        signature,
+                    });
+                }
+            }
+            "type_alias_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let raw_sig = source.get(node.start_byte()..node.end_byte()).unwrap_or("").trim().trim_end_matches(';').trim();
+                    let sig = clean_signature(raw_sig);
+                    let signature = if is_export && !sig.starts_with("export") {
+                        format!("export {sig}")
+                    } else {
+                        sig
+                    };
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "type".into(),
+                        line: node.start_position().row + 1,
+                        signature,
+                    });
+                }
+            }
+            "lexical_declaration" => {
+                let mut decl_cursor = node.walk();
+                for child in node.children(&mut decl_cursor) {
+                    if child.kind() == "variable_declarator"
+                        && let Some(name_node) = child.child_by_field_name("name")
+                    {
+                        let name = name_node.utf8_text(bytes).unwrap_or_default();
+                        let val_start = child.child_by_field_name("value").map(|v| v.start_byte()).unwrap_or_else(|| child.end_byte());
+                        let raw_sig = source.get(node.start_byte()..val_start).unwrap_or("").trim().trim_end_matches('=').trim();
+                        let sig = clean_signature(raw_sig);
+                        let signature = if is_export && !sig.starts_with("export") {
+                            format!("export {sig}")
+                        } else {
+                            sig
+                        };
+                        symbols.push(AstSymbol {
+                            name: name.to_string(),
+                            kind: "variable".into(),
+                            line: child.start_position().row + 1,
+                            signature,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut cursor = root.walk();
+    for node in root.children(&mut cursor) {
+        process_js_node(node, bytes, source, false, &mut symbols);
+    }
+    symbols
+}
+
+fn extract_go_symbols(source: &str) -> Vec<AstSymbol> {
+    let mut parser = Parser::new();
+    if parser.set_language(&tree_sitter_go::LANGUAGE.into()).is_err() {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return Vec::new();
+    };
+    let root = tree.root_node();
+    let bytes = source.as_bytes();
+    let mut symbols = Vec::new();
+
+    let mut cursor = root.walk();
+    for node in root.children(&mut cursor) {
+        match node.kind() {
+            "function_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "function".into(),
+                        line: node.start_position().row + 1,
+                        signature: clean_signature(raw_sig),
+                    });
+                }
+            }
+            "method_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let sig_end = node.child_by_field_name("body")
+                        .map(|b| b.start_byte())
+                        .unwrap_or_else(|| node.end_byte());
+                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    symbols.push(AstSymbol {
+                        name: name.to_string(),
+                        kind: "method".into(),
+                        line: node.start_position().row + 1,
+                        signature: clean_signature(raw_sig),
+                    });
+                }
+            }
+            "type_declaration" => {
+                let mut type_cursor = node.walk();
+                for child in node.children(&mut type_cursor) {
+                    if child.kind() == "type_spec"
+                        && let Some(name_node) = child.child_by_field_name("name")
+                    {
+                        let name = name_node.utf8_text(bytes).unwrap_or_default();
+                        let type_node = child.child_by_field_name("type");
+                        let kind = match type_node.map(|t| t.kind()) {
+                            Some("struct_type") => "struct",
+                            Some("interface_type") => "interface",
+                            _ => "type",
+                        };
+                        let sig_end = type_node
+                            .and_then(|t| {
+                                let mut c = t.walk();
+                                t.children(&mut c).find(|n| {
+                                    n.kind() == "field_declaration_list"
+                                        || n.kind() == "method_spec_list"
+                                        || n.kind() == "block"
+                                })
+                            })
+                            .map(|b| b.start_byte())
+                            .unwrap_or_else(|| child.end_byte());
+                        let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                        symbols.push(AstSymbol {
+                            name: name.to_string(),
+                            kind: kind.into(),
+                            line: child.start_position().row + 1,
+                            signature: clean_signature(raw_sig),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    symbols
+}
+
+fn extract_fallback_symbols(path: &Path, text: &str) -> Vec<AstSymbol> {
+    static FALLBACK: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:unsafe\s+)?(?:fn|func|def|class|struct|enum|trait|interface|type)\s+([A-Za-z_$][A-Za-z0-9_$]*)").unwrap()
+    });
+
+    if language(path).is_none() {
+        return Vec::new();
+    }
 
     text.lines()
         .enumerate()
         .filter_map(|(index, line)| {
-            matcher
-                .captures(line)
-                .and_then(|c| c.get(1))
-                .map(|name| (index + 1, name.as_str()))
+            FALLBACK.captures(line).and_then(|c| c.get(1)).map(|m| {
+                let name = m.as_str().to_string();
+                let sig = clean_signature(line.trim_end_matches('{').trim_end_matches(':').trim());
+                AstSymbol {
+                    name,
+                    kind: "symbol".into(),
+                    line: index + 1,
+                    signature: sig,
+                }
+            })
         })
         .take(128)
         .collect()
+}
+
+fn extract_symbols(path: &Path, source: &str) -> Vec<AstSymbol> {
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or_default();
+    let symbols = match ext {
+        "rs" => extract_rust_symbols(source),
+        "py" => extract_python_symbols(source),
+        "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" => extract_ts_js_symbols(source, ext),
+        "go" => extract_go_symbols(source),
+        _ => Vec::new(),
+    };
+    if symbols.is_empty() {
+        extract_fallback_symbols(path, source)
+    } else {
+        symbols
+    }
 }
 
 fn bound(mut result: Value, budget: usize) -> Result<String, ToolError> {
@@ -1040,5 +1579,78 @@ mod task_retrieval_tests {
             );
             assert_eq!(result["truncated"]["content"], true);
         }
+    }
+
+    #[test]
+    fn tree_sitter_ast_extraction_multi_language() {
+        // Rust
+        let rust_code = r#"
+pub struct Engine;
+
+impl Engine {
+    pub fn start(&self) -> bool {
+        true
+    }
+}
+
+pub async fn run_service() -> Result<(), String> {
+    Ok(())
+}
+"#;
+        let rs_syms = extract_symbols(Path::new("src/engine.rs"), rust_code);
+        assert!(rs_syms.iter().any(|s| s.name == "Engine" && s.kind == "struct" && s.signature.contains("pub struct Engine")));
+        assert!(rs_syms.iter().any(|s| s.name == "start" && s.kind == "method" && s.signature.contains("pub fn start")));
+        assert!(rs_syms.iter().any(|s| s.name == "run_service" && s.kind == "function" && s.signature.contains("pub async fn run_service")));
+
+        // Python
+        let py_code = r#"
+class Worker:
+    def __init__(self, name: str):
+        self.name = name
+
+    def execute(self):
+        pass
+
+def launch_worker():
+    pass
+"#;
+        let py_syms = extract_symbols(Path::new("worker.py"), py_code);
+        assert!(py_syms.iter().any(|s| s.name == "Worker" && s.kind == "class"));
+        assert!(py_syms.iter().any(|s| s.name == "execute" && s.kind == "method"));
+        assert!(py_syms.iter().any(|s| s.name == "launch_worker" && s.kind == "function"));
+
+        // TypeScript
+        let ts_code = r#"
+export interface UserConfig {
+    timeout: number;
+}
+
+export function createClient(config: UserConfig) {
+    return null;
+}
+"#;
+        let ts_syms = extract_symbols(Path::new("src/client.ts"), ts_code);
+        assert!(ts_syms.iter().any(|s| s.name == "UserConfig" && s.kind == "interface" && s.signature.contains("export interface UserConfig")));
+        assert!(ts_syms.iter().any(|s| s.name == "createClient" && s.kind == "function" && s.signature.contains("export function createClient")));
+
+        // Go
+        let go_code = r#"
+package main
+
+type Config struct {
+    Port int
+}
+
+func (c *Config) Validate() error {
+    return nil
+}
+
+func Serve() {
+}
+"#;
+        let go_syms = extract_symbols(Path::new("main.go"), go_code);
+        assert!(go_syms.iter().any(|s| s.name == "Config" && s.kind == "struct"));
+        assert!(go_syms.iter().any(|s| s.name == "Validate" && s.kind == "method"));
+        assert!(go_syms.iter().any(|s| s.name == "Serve" && s.kind == "function"));
     }
 }
