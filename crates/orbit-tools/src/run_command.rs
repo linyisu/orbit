@@ -216,7 +216,7 @@ impl Tool for RunCommand {
         ToolDefinition::function(
             "run_command",
             format!(
-                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (requires approval in Auto mode). Protected paths (.env*, .git, orbit config/db) existing at startup are isolated and masked; fixed sensitive roots (.git, .env, .env.local) are preserved and masked against replacement. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network follows the configured command policy and network-enabled commands require approval in Auto mode. Enforces execution timeout, private script execution, and resource limits (memory, file size, processes, open files). /tmp is a disposable tmpfs. Persistent scratch is mounted at /scratch when configured to retain files across commands and session resume; HOME is /scratch/home in that case, or disposable /tmp/home without scratch. Write generated files to /scratch or a writable workspace path if they must survive another command. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Never automatically retry a denied command. Read-only cache mounts: {}. Host-configured verification commands: {}.",
+                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (requires approval in Auto mode). Native Git commands (git status, diff, log, add, commit, push, etc.) are fully supported directly with fine-grained authorization: read-only queries run automatically, local writes (add/commit) require local Git write authorization, and remote push requires dedicated remote approval. Protected paths (.env*, orbit config/db) are isolated and masked; repository configuration (.git/config, hooks) is protected against unauthorized tampering. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network follows the configured command policy. Enforces execution timeout, private script execution, and resource limits. /tmp is a disposable tmpfs. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
                 serde_json::to_string(
                     &self
                         .limits
@@ -343,6 +343,8 @@ impl Tool for RunCommand {
                     .push(format!("{} (ro, dependency cache)", cache.path.display()));
             }
 
+            let git_analysis = orbit_runtime::git::GitCommandAnalysis::parse(&args.command);
+
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     command: args.command.clone(),
@@ -352,6 +354,7 @@ impl Tool for RunCommand {
                     network_allowed,
                     external_capabilities,
                     external_write,
+                    git: git_analysis.clone(),
                 }),
                 decision: sender,
             };
@@ -436,6 +439,7 @@ impl Tool for RunCommand {
             execution_policy.opaque_runtime_roots = self.workspace.opaque_runtime_roots().to_vec();
             execution_policy.resources = self.limits.process_limits.clone().into();
             execution_policy.rust_toolchain = self.limits.rust_toolchain.clone();
+            execution_policy.unmask_git = true;
             execution_policy.external_read = effective_policy
                 .persistent_read
                 .iter()

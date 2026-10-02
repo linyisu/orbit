@@ -76,6 +76,7 @@ mod tests {
             network_allowed: true,
             external_capabilities: Vec::new(),
             external_write: false,
+            git: None,
         });
         let cmd_rw = ApprovalPreview::Command(CommandPreview {
             command: "cargo build".into(),
@@ -85,6 +86,7 @@ mod tests {
             network_allowed: true,
             external_capabilities: Vec::new(),
             external_write: false,
+            git: None,
         });
         let write = ApprovalPreview::Write(WritePreview {
             path: "file".into(),
@@ -157,9 +159,47 @@ mod tests {
             network_allowed: true,
             external_capabilities: Vec::new(),
             external_write: true,
+            git: None,
         });
 
         assert!(!Mode::Auto.allows(&external_command, root));
+
+        // Test Git permissions in Auto mode
+        let git_status = ApprovalPreview::Command(CommandPreview {
+            command: "git status".into(),
+            cwd: None,
+            timeout_seconds: 30,
+            workspace_access: CommandWorkspaceAccess::Read,
+            network_allowed: false,
+            external_capabilities: Vec::new(),
+            external_write: false,
+            git: orbit_runtime::git::GitCommandAnalysis::parse("git status"),
+        });
+        assert!(Mode::Auto.allows(&git_status, root));
+
+        let git_push = ApprovalPreview::Command(CommandPreview {
+            command: "git push origin main".into(),
+            cwd: None,
+            timeout_seconds: 30,
+            workspace_access: CommandWorkspaceAccess::ReadWrite,
+            network_allowed: true,
+            external_capabilities: Vec::new(),
+            external_write: false,
+            git: orbit_runtime::git::GitCommandAnalysis::parse("git push origin main"),
+        });
+        assert!(!Mode::Auto.allows(&git_push, root));
+
+        let git_reset_hard = ApprovalPreview::Command(CommandPreview {
+            command: "git reset --hard".into(),
+            cwd: None,
+            timeout_seconds: 30,
+            workspace_access: CommandWorkspaceAccess::ReadWrite,
+            network_allowed: false,
+            external_capabilities: Vec::new(),
+            external_write: false,
+            git: orbit_runtime::git::GitCommandAnalysis::parse("git reset --hard"),
+        });
+        assert!(!Mode::Auto.allows(&git_reset_hard, root));
         assert_eq!(Mode::default(), Mode::Auto);
         assert_eq!(Mode::Auto.next().next().next(), Mode::Auto);
         assert_eq!(Mode::parse("yolo"), Some(Mode::Yolo));

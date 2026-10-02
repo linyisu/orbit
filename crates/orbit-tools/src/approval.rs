@@ -32,6 +32,7 @@ pub struct CommandPreview {
     pub external_capabilities: Vec<String>,
     /// The command can write outside the workspace through an existing grant.
     pub external_write: bool,
+    pub git: Option<orbit_runtime::git::GitCommandAnalysis>,
 }
 
 /// The file tool has already validated this path. Resolve its parent again for
@@ -60,9 +61,19 @@ pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
 /// Auto mode permits read-only, offline commands and workspace-local file
 /// edits. Shell commands with network, workspace writes, or external mounts
 /// require approval because their effects cannot be inferred from the text.
+/// Native Git read-only queries (status, diff, log, etc.) are allowed automatically.
 pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
     match preview {
         ApprovalPreview::Command(command) => {
+            if let Some(git) = &command.git
+                && matches!(
+                    git.kind,
+                    orbit_runtime::git::GitOperationKind::ReadOnlyQuery { .. }
+                )
+            {
+                return true;
+            }
+
             !command.network_allowed
                 && command.workspace_access == CommandWorkspaceAccess::Read
                 && !command.external_write

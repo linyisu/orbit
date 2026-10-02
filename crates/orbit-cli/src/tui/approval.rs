@@ -354,20 +354,138 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             } else {
                 format!(" · {access}")
             };
-            let title = vec![
-                Line::from(vec![
-                    Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
-                    Span::styled(
-                        "权限确认",
-                        Style::default().fg(crate::tui::theme::THEME.white),
-                    ),
-                    Span::styled(tag, Style::default().fg(crate::tui::theme::THEME.muted)),
-                ]),
-                Line::from(vec![Span::styled(
-                    "  # 执行命令",
-                    Style::default().fg(crate::tui::theme::THEME.description),
-                )]),
-            ];
+            let title = if let Some(git) = &preview.git {
+                match &git.kind {
+                    orbit_runtime::git::GitOperationKind::RemoteWrite {
+                        remote,
+                        source_branch,
+                        target_branch,
+                    } => {
+                        let branch_str = match (source_branch, target_branch) {
+                            (Some(s), Some(t)) if s == t => format!("{remote}/{t}"),
+                            (Some(s), Some(t)) => format!("{s} -> {remote}/{t}"),
+                            _ => remote.clone(),
+                        };
+                        vec![
+                            Line::from(vec![
+                                Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                                Span::styled(
+                                    "Git 远端推送授权",
+                                    Style::default().fg(crate::tui::theme::THEME.white),
+                                ),
+                                Span::styled(
+                                    format!(" · 目标: {branch_str}"),
+                                    Style::default().fg(crate::tui::theme::THEME.accent),
+                                ),
+                            ]),
+                            Line::from(vec![Span::styled(
+                                "  # 远端代码发布写入（需要独立推送授权，工作区写入与联网不代表同意发布）",
+                                Style::default().fg(crate::tui::theme::THEME.description),
+                            )]),
+                        ]
+                    }
+                    orbit_runtime::git::GitOperationKind::Dangerous { subcommand, reason } => {
+                        vec![
+                            Line::from(vec![
+                                Span::styled("⚠️ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                                Span::styled(
+                                    format!("高危 Git 操作确认 · {subcommand}"),
+                                    Style::default().fg(crate::tui::theme::THEME.white).add_modifier(Modifier::BOLD),
+                                ),
+                            ]),
+                            Line::from(vec![Span::styled(
+                                format!("  # 风险提示: {reason}（不能被常规写入权限自动放行）"),
+                                Style::default().fg(crate::tui::theme::THEME.accent),
+                            )]),
+                        ]
+                    }
+                    orbit_runtime::git::GitOperationKind::BranchSwitchOrRebase {
+                        subcommand,
+                        target,
+                        risk_notice,
+                    } => {
+                        let desc = risk_notice
+                            .as_deref()
+                            .unwrap_or("切换分支或变基可能影响未提交工作区修改");
+                        vec![
+                            Line::from(vec![
+                                Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                                Span::styled(
+                                    format!("Git 分支操作 · {subcommand} -> {target}"),
+                                    Style::default().fg(crate::tui::theme::THEME.white),
+                                ),
+                                Span::styled(tag.clone(), Style::default().fg(crate::tui::theme::THEME.muted)),
+                            ]),
+                            Line::from(vec![Span::styled(
+                                format!("  # {desc}"),
+                                Style::default().fg(crate::tui::theme::THEME.description),
+                            )]),
+                        ]
+                    }
+                    orbit_runtime::git::GitOperationKind::LocalWrite { subcommand, description } => {
+                        vec![
+                            Line::from(vec![
+                                Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                                Span::styled(
+                                    format!("Git 本地写入 · {subcommand}"),
+                                    Style::default().fg(crate::tui::theme::THEME.white),
+                                ),
+                                Span::styled(tag.clone(), Style::default().fg(crate::tui::theme::THEME.muted)),
+                            ]),
+                            Line::from(vec![Span::styled(
+                                format!("  # {description}"),
+                                Style::default().fg(crate::tui::theme::THEME.description),
+                            )]),
+                        ]
+                    }
+                    orbit_runtime::git::GitOperationKind::ConfigMutation { key, .. } => {
+                        let target_key = key.as_deref().unwrap_or("仓库配置/Hooks");
+                        vec![
+                            Line::from(vec![
+                                Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                                Span::styled(
+                                    "Git 配置与钩子保护",
+                                    Style::default().fg(crate::tui::theme::THEME.white),
+                                ),
+                                Span::styled(format!(" · {target_key}"), Style::default().fg(crate::tui::theme::THEME.muted)),
+                            ]),
+                            Line::from(vec![Span::styled(
+                                "  # 修改仓库配置或 Hook 脚本，需要独立授权",
+                                Style::default().fg(crate::tui::theme::THEME.description),
+                            )]),
+                        ]
+                    }
+                    _ => vec![
+                        Line::from(vec![
+                            Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                            Span::styled(
+                                "权限确认",
+                                Style::default().fg(crate::tui::theme::THEME.white),
+                            ),
+                            Span::styled(tag.clone(), Style::default().fg(crate::tui::theme::THEME.muted)),
+                        ]),
+                        Line::from(vec![Span::styled(
+                            "  # 执行命令",
+                            Style::default().fg(crate::tui::theme::THEME.description),
+                        )]),
+                    ],
+                }
+            } else {
+                vec![
+                    Line::from(vec![
+                        Span::styled("△ ", Style::default().fg(crate::tui::theme::THEME.accent)),
+                        Span::styled(
+                            "权限确认",
+                            Style::default().fg(crate::tui::theme::THEME.white),
+                        ),
+                        Span::styled(tag, Style::default().fg(crate::tui::theme::THEME.muted)),
+                    ]),
+                    Line::from(vec![Span::styled(
+                        "  # 执行命令",
+                        Style::default().fg(crate::tui::theme::THEME.description),
+                    )]),
+                ]
+            };
 
             let mut lines = Vec::new();
             if let Some(ref cwd) = preview.cwd {

@@ -437,11 +437,12 @@ impl BwrapSandboxBackend {
                 command.arg("--bind").arg(ws_target).arg("/workspace");
             }
 
-            let (masked, inodes) = collect_masked_paths(
+            let (masked, mut inodes) = collect_masked_paths(
                 ws_target,
                 &spec.protected_paths,
                 &spec.opaque_runtime_roots,
                 spec.read_only_workspace,
+                spec.unmask_git,
                 placeholder_guard,
             )?;
 
@@ -453,6 +454,15 @@ impl BwrapSandboxBackend {
                         command.args(["--ro-bind", "/dev/null", path_str]);
                     }
                 }
+            }
+
+            if spec.unmask_git {
+                apply_git_mounts(
+                    &mut command,
+                    ws_target,
+                    spec.read_only_workspace,
+                    &mut inodes,
+                )?;
             }
 
             inodes
@@ -981,6 +991,98 @@ fn mount_capabilities(
     Ok(())
 }
 
+fn apply_git_mounts(
+    command: &mut Command,
+    ws_target: &Path,
+    read_only_workspace: bool,
+    protected_inodes: &mut HashSet<(u64, u64)>,
+) -> Result<(), RuntimeError> {
+    use std::os::unix::fs::MetadataExt;
+    use crate::git::discovery::GitRepositoryInfo;
+
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    command.env("GIT_PAGER", "cat");
+
+    if read_only_workspace {
+        command.env("GIT_OPTIONAL_LOCKS", "0");
+    }
+
+    let Some(repo) = GitRepositoryInfo::discover(ws_target).map_err(|e| {
+        failed(format!("failed to inspect git repository: {e}"))
+    })? else {
+        return Ok(());
+    };
+
+    if !repo.is_gitfile {
+        if !read_only_workspace {
+            let config = repo.config_path();
+            if config.exists() {
+                command.arg("--ro-bind").arg(&config).arg("/workspace/.git/config");
+                if let Ok(meta) = std::fs::symlink_metadata(&config) {
+                    protected_inodes.insert((meta.dev(), meta.ino()));
+                }
+            }
+            let wt_config = repo.worktree_config_path();
+            if wt_config.exists() {
+                command
+                    .arg("--ro-bind")
+                    .arg(&wt_config)
+                    .arg("/workspace/.git/config.worktree");
+                if let Ok(meta) = std::fs::symlink_metadata(&wt_config) {
+                    protected_inodes.insert((meta.dev(), meta.ino()));
+                }
+            }
+            let hooks = repo.hooks_path();
+            if hooks.exists() {
+                command.arg("--ro-bind").arg(&hooks).arg("/workspace/.git/hooks");
+                if let Ok(meta) = std::fs::symlink_metadata(&hooks) {
+                    protected_inodes.insert((meta.dev(), meta.ino()));
+                }
+            }
+        }
+    } else {
+        // Worktree or Submodule
+        let is_outside_ws = !repo.git_dir.starts_with(ws_target);
+        if is_outside_ws {
+            if read_only_workspace {
+                command.arg("--ro-bind").arg(&repo.git_dir).arg(&repo.git_dir);
+                if repo.common_dir != repo.git_dir && !repo.common_dir.starts_with(ws_target) {
+                    command.arg("--ro-bind").arg(&repo.common_dir).arg(&repo.common_dir);
+                }
+            } else {
+                command.arg("--bind").arg(&repo.git_dir).arg(&repo.git_dir);
+                if repo.common_dir != repo.git_dir && !repo.common_dir.starts_with(ws_target) {
+                    command.arg("--bind").arg(&repo.common_dir).arg(&repo.common_dir);
+                }
+
+                let config = repo.config_path();
+                if config.exists() {
+                    command.arg("--ro-bind").arg(&config).arg(&config);
+                    if let Ok(meta) = std::fs::symlink_metadata(&config) {
+                        protected_inodes.insert((meta.dev(), meta.ino()));
+                    }
+                }
+                let wt_config = repo.worktree_config_path();
+                if wt_config.exists() {
+                    command.arg("--ro-bind").arg(&wt_config).arg(&wt_config);
+                    if let Ok(meta) = std::fs::symlink_metadata(&wt_config) {
+                        protected_inodes.insert((meta.dev(), meta.ino()));
+                    }
+                }
+                let hooks = repo.hooks_path();
+                if hooks.exists() {
+                    command.arg("--ro-bind").arg(&hooks).arg(&hooks);
+                    if let Ok(meta) = std::fs::symlink_metadata(&hooks) {
+                        protected_inodes.insert((meta.dev(), meta.ino()));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub type MaskedPathsAndInodes = (Vec<(PathBuf, bool)>, HashSet<(u64, u64)>);
 
 struct WorkspaceEntry {
@@ -997,6 +1099,7 @@ fn collect_masked_paths(
     protected_paths: &[PathBuf],
     opaque_runtime_roots: &[PathBuf],
     read_only_workspace: bool,
+    unmask_git: bool,
     placeholder_guard: &mut PlaceholderGuard,
 ) -> Result<MaskedPathsAndInodes, RuntimeError> {
     use std::os::unix::fs::MetadataExt;
@@ -1008,7 +1111,12 @@ fn collect_masked_paths(
     let mut all_protected = protected_paths.to_vec();
 
     if !read_only_workspace {
-        for name in [".git", ".env", ".env.local"] {
+        let names = if unmask_git {
+            &[".env", ".env.local"][..]
+        } else {
+            &[".git", ".env", ".env.local"][..]
+        };
+        for name in names {
             let candidate = ws_target.join(name);
 
             if !all_protected.contains(&candidate) {
@@ -1019,6 +1127,9 @@ fn collect_masked_paths(
 
     // 1. Process all_protected
     for protected in &all_protected {
+        if unmask_git && protected.file_name().is_some_and(|n| n == ".git") {
+            continue;
+        }
         let rel = protected
             .strip_prefix(ws_target)
             .ok()
@@ -1232,8 +1343,11 @@ fn collect_masked_paths(
             let dev = meta.dev();
             let ino = meta.ino();
 
-            let is_protected_name =
-                crate::filesystem::path_security::is_protected_workspace_name(&name);
+            let is_protected_name = if unmask_git && name == ".git" {
+                false
+            } else {
+                crate::filesystem::path_security::is_protected_workspace_name(&name)
+            };
 
             if is_protected_name {
                 protected_inodes.insert((dev, ino));
@@ -2647,6 +2761,7 @@ mod tests {
             fingerprint: Some(WorkspaceFingerprint::default()),
             protected_paths: Vec::new(),
             opaque_runtime_roots: Vec::new(),
+            unmask_git: false,
         };
         let formatted: Vec<String> = spec
             .mounts
@@ -2712,6 +2827,7 @@ mod tests {
                 &protected_paths,
                 &opaque_runtime_roots,
                 true,
+                false,
                 &mut guard,
             )
             .unwrap();
@@ -2749,6 +2865,7 @@ mod tests {
                 ws,
                 &protected_paths,
                 &opaque_runtime_roots,
+                false,
                 false,
                 &mut guard,
             )
@@ -2806,6 +2923,7 @@ mod tests {
                 std::slice::from_ref(&artifact_dir),
                 &[],
                 true,
+                false,
                 &mut guard,
             )
             .unwrap();
@@ -2828,7 +2946,7 @@ mod tests {
             let fresh_ws = tempfile::tempdir().unwrap();
             let mut guard = PlaceholderGuard::new();
             let (masked, _) =
-                collect_masked_paths(fresh_ws.path(), &[], &[], false, &mut guard).unwrap();
+                collect_masked_paths(fresh_ws.path(), &[], &[], false, false, &mut guard).unwrap();
 
             // .git (dir) and .env (file) were created as placeholders and masked!
             assert!(fresh_ws.path().join(".git").is_dir());
@@ -2850,6 +2968,31 @@ mod tests {
             assert!(!fresh_ws.path().join(".git").exists());
             assert!(!fresh_ws.path().join(".env").exists());
         }
+
+        // Case E: When unmask_git is true, .git is left unmasked while .env remains protected
+        {
+            let git_ws = tempfile::tempdir().unwrap();
+            let dot_git = git_ws.path().join(".git");
+            std::fs::create_dir(&dot_git).unwrap();
+            std::fs::write(git_ws.path().join(".env"), "SECRET=val").unwrap();
+
+            let mut guard = PlaceholderGuard::new();
+            let (masked, _) =
+                collect_masked_paths(git_ws.path(), &[], &[], false, true, &mut guard).unwrap();
+
+            // .git is NOT masked
+            assert!(
+                !masked
+                    .iter()
+                    .any(|(p, _)| p == Path::new("/workspace/.git"))
+            );
+            // .env is STILL masked
+            assert!(
+                masked
+                    .iter()
+                    .any(|(p, is_dir)| p == Path::new("/workspace/.env") && !*is_dir)
+            );
+        }
     }
 
     #[test]
@@ -2866,6 +3009,7 @@ mod tests {
             std::slice::from_ref(&config_file),
             &[],
             true,
+            false,
             &mut guard,
         )
         .unwrap();
@@ -3028,6 +3172,7 @@ mod tests {
             std::slice::from_ref(&external_storage),
             std::slice::from_ref(&external_storage),
             false,
+            false,
             &mut guard,
         )
         .unwrap();
@@ -3056,6 +3201,7 @@ mod tests {
             ws,
             &protected_paths,
             &opaque_runtime_roots,
+            false,
             false,
             &mut guard,
         )
@@ -3092,7 +3238,7 @@ mod tests {
 
         let mut guard = PlaceholderGuard::new();
         let (masked, inodes) =
-            collect_masked_paths(ws, &protected_paths, &[], false, &mut guard).unwrap();
+            collect_masked_paths(ws, &protected_paths, &[], false, false, &mut guard).unwrap();
 
         // The secret files inside external directory MUST be collected into protected_inodes
         let secret_meta1 = std::fs::symlink_metadata(&secret_file).unwrap();
@@ -3149,6 +3295,7 @@ mod tests {
             ws,
             &protected_paths,
             &opaque_runtime_roots,
+            false,
             false,
             &mut guard,
         )

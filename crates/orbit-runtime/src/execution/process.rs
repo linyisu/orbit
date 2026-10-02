@@ -21,6 +21,16 @@ pub enum MountAccess {
     ReadWrite,
 }
 
+impl MountAccess {
+    pub fn is_read_only(&self) -> bool {
+        matches!(self, Self::ReadOnly)
+    }
+
+    pub fn is_read_write(&self) -> bool {
+        matches!(self, Self::ReadWrite)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MountSpec {
     pub source: PathBuf,
@@ -222,6 +232,7 @@ pub struct ProcessSpec {
     pub fingerprint: Option<WorkspaceFingerprint>,
     pub protected_paths: Vec<PathBuf>,
     pub opaque_runtime_roots: Vec<PathBuf>,
+    pub unmask_git: bool,
 }
 
 impl ProcessSpec {
@@ -241,6 +252,7 @@ impl ProcessSpec {
             fingerprint: None,
             protected_paths: Vec::new(),
             opaque_runtime_roots: Vec::new(),
+            unmask_git: false,
         }
     }
 

@@ -724,6 +724,19 @@ pub async fn run(
                                             session.store.grant_tui_file(session.id(), &p.path).await?;
                                             state.session_allowed_files.insert(p.path.clone());
                                         }
+                                        orbit_tools::approval::ApprovalPreview::Command(cmd) => {
+                                            if let Some(git) = &cmd.git {
+                                                match git.kind {
+                                                    orbit_runtime::git::GitOperationKind::LocalWrite { .. } => {
+                                                        state.session_git_local_write = true;
+                                                    }
+                                                    orbit_runtime::git::GitOperationKind::RemoteWrite { .. } => {
+                                                        state.session_git_remote_write = true;
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
                                         _ => {}
                                     }
                                     let _ = request.decision.send(true);
@@ -1066,6 +1079,15 @@ pub async fn run(
                             let active_context_tokens = state.context_tokens;
                             let retry_prompt = prompt.clone();
                             let retry_attachments = attachments.clone();
+
+                            let lower = prompt.to_lowercase();
+                            if (lower.contains("提交") && (lower.contains("推送") || lower.contains("push")))
+                                || (lower.contains("commit") && lower.contains("push"))
+                            {
+                                state.session_git_local_write = true;
+                                state.session_git_remote_write = true;
+                            }
+
                             let started = start_agent_run(
                                 prompt,
                                 attachments,
@@ -1113,6 +1135,21 @@ pub async fn run(
                         }
                         orbit_tools::approval::ApprovalPreview::Delete(p) => {
                             state.session_allowed_files.contains(&p.path)
+                        }
+                        orbit_tools::approval::ApprovalPreview::Command(cmd) => {
+                            if let Some(git) = &cmd.git {
+                                match git.kind {
+                                    orbit_runtime::git::GitOperationKind::LocalWrite { .. } => {
+                                        state.session_git_local_write
+                                    }
+                                    orbit_runtime::git::GitOperationKind::RemoteWrite { .. } => {
+                                        state.session_git_remote_write
+                                    }
+                                    _ => false,
+                                }
+                            } else {
+                                false
+                            }
                         }
                         _ => false,
                     };

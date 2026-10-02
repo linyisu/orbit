@@ -2,6 +2,7 @@ pub mod capability;
 pub mod error;
 pub mod execution;
 pub mod filesystem;
+pub mod git;
 pub mod policy;
 pub mod verification;
 

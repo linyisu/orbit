@@ -19,6 +19,7 @@ pub struct ExecutionPolicy {
     pub resources: ResourceLimits,
     pub rust_toolchain: Option<PathBuf>,
     pub env_overrides: BTreeMap<String, String>,
+    pub unmask_git: bool,
 }
 
 impl ExecutionPolicy {
@@ -35,6 +36,7 @@ impl ExecutionPolicy {
             resources: ResourceLimits::default(),
             rust_toolchain: None,
             env_overrides: BTreeMap::new(),
+            unmask_git: false,
         }
     }
 
@@ -51,7 +53,13 @@ impl ExecutionPolicy {
             resources: ResourceLimits::default(),
             rust_toolchain: None,
             env_overrides: BTreeMap::new(),
+            unmask_git: false,
         }
+    }
+
+    pub fn with_unmask_git(mut self, unmask_git: bool) -> Self {
+        self.unmask_git = unmask_git;
+        self
     }
 
     pub fn with_read_write(mut self, rw: bool) -> Self {

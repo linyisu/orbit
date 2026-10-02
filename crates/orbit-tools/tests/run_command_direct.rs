@@ -279,7 +279,7 @@ async fn run_command_rejects_deprecated_writable_snapshot_flag() {
 }
 
 #[tokio::test]
-async fn run_command_masks_protected_files_and_git_directory_even_with_read_write() {
+async fn run_command_masks_sensitive_files_and_protects_git_config_even_with_read_write() {
     let ws_temp = tempfile::tempdir().unwrap();
     let mut workspace = match Workspace::new(ws_temp.path()) {
         Ok(w) => w,
@@ -307,7 +307,7 @@ async fn run_command_masks_protected_files_and_git_directory_even_with_read_writ
                 "test",
                 "run_command",
                 json!({
-                    "command": "cat /workspace/.env 2>/dev/null || true; cat /workspace/.git/config 2>/dev/null || true; cat /workspace/config.toml 2>/dev/null || true; echo hacked > /workspace/.env 2>/dev/null || true; rm -rf /workspace/.git 2>/dev/null || true; rm -f /workspace/config.toml 2>/dev/null || true",
+                    "command": "cat /workspace/.env 2>/dev/null || true; cat /workspace/config.toml 2>/dev/null || true; echo hacked > /workspace/.env 2>/dev/null || true; rm -rf /workspace/.git 2>/dev/null || true; echo hacked_config > /workspace/.git/config 2>/dev/null || true; rm -f /workspace/config.toml 2>/dev/null || true",
                     "workspace_access": "read_write"
                 }),
             ),
@@ -326,10 +326,9 @@ async fn run_command_masks_protected_files_and_git_directory_even_with_read_writ
     let stdout = value["stdout"].as_str().unwrap_or("");
 
     assert!(!stdout.contains("SECRET_ENV_KEY"));
-    assert!(!stdout.contains("SECRET_GIT_CONFIG"));
     assert!(!stdout.contains("SECRET_CONFIG_DATA"));
 
-    // Verify host files are unchanged
+    // Verify host files are unchanged (rm -rf .git and config overwrite failed)
     assert_eq!(
         fs::read_to_string(&env_file).unwrap(),
         "SECRET_ENV_KEY=12345\n"
@@ -342,6 +341,91 @@ async fn run_command_masks_protected_files_and_git_directory_even_with_read_writ
         fs::read_to_string(&config_file).unwrap(),
         "SECRET_CONFIG_DATA=xyz\n"
     );
+}
+
+#[tokio::test]
+async fn run_command_allows_native_git_status_and_commit_in_sandbox() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let workspace = match Workspace::new(ws_temp.path()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    // Initialize git repository on host
+    let status = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(ws_temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.name", "Orbit Tester"])
+        .current_dir(ws_temp.path())
+        .status();
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.email", "test@orbit.local"])
+        .current_dir(ws_temp.path())
+        .status();
+
+    fs::write(ws_temp.path().join("initial.txt"), "hello git\n").unwrap();
+
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+
+    // 1. Run git status in read-only mode (Auto mode should auto-allow)
+    let call = ToolCall::function(
+        "test",
+        "run_command",
+        json!({
+            "command": "git status --short",
+            "workspace_access": "read"
+        }),
+    );
+    let t1 = tool.clone();
+    let task = tokio::spawn(async move {
+        t1.execute(call, CancellationToken::new()).await
+    });
+    let req = receiver.recv().await.unwrap();
+    // Verify git analysis was attached
+    assert!(matches!(
+        req.preview,
+        approval::ApprovalPreview::Command(ref cmd) if cmd.git.is_some()
+    ));
+    req.decision.send(true).unwrap();
+
+    let out = task.await.unwrap().unwrap();
+    let val: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    let stdout = val["stdout"].as_str().unwrap_or("");
+    assert!(stdout.contains("initial.txt"));
+
+    // 2. Run git add & commit in read-write mode
+    let call_commit = ToolCall::function(
+        "test",
+        "run_command",
+        json!({
+            "command": "git add initial.txt && git commit -m 'initial commit'",
+            "workspace_access": "read_write"
+        }),
+    );
+    let t2 = tool.clone();
+    let task2 = tokio::spawn(async move {
+        t2.execute(call_commit, CancellationToken::new()).await
+    });
+    let req2 = receiver.recv().await.unwrap();
+    req2.decision.send(true).unwrap();
+
+    let out2 = task2.await.unwrap().unwrap();
+    let val2: serde_json::Value = serde_json::from_str(&out2.content).unwrap();
+    assert_eq!(val2["exit_code"], 0);
+
+    // Verify git commit succeeded by checking log on host
+    let log = std::process::Command::new("git")
+        .args(["log", "--oneline"])
+        .current_dir(ws_temp.path())
+        .output()
+        .unwrap();
+    let log_str = String::from_utf8_lossy(&log.stdout);
+    assert!(log_str.contains("initial commit"));
 }
 
 #[tokio::test]
