@@ -198,19 +198,79 @@ pub(super) fn edit_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line
     let value: Value = serde_json::from_str(arguments).ok()?;
     let old_text = value["old_text"].as_str()?;
     let new_text = value["new_text"].as_str()?;
+    let path = value["path"].as_str().unwrap_or_default();
+
+    let syntax = super::languages::syntax_for_label(path)
+        .unwrap_or_else(|| super::languages::SYNTAXES.find_syntax_plain_text());
+
     let mut out = Vec::new();
+    let diff_rem_bg = crate::tui::theme::THEME.diff_removed_bg;
+    let diff_add_bg = crate::tui::theme::THEME.diff_added_bg;
+    let diff_rem_fg = crate::tui::theme::THEME.diff_removed;
+    let diff_add_fg = crate::tui::theme::THEME.diff_added;
+
+    let mut highlighter_old = HighlightLines::new(syntax, &crate::tui::theme::CODE_THEME);
     for line in old_text.lines() {
-        out.push(Line::from(Span::styled(
-            format!("- {line}"),
-            Style::default().fg(crate::tui::theme::THEME.diff_removed),
-        )));
+        let text = safe_output(line);
+        let mut spans = vec![Span::styled(
+            "- ",
+            Style::default()
+                .fg(diff_rem_fg)
+                .bg(diff_rem_bg)
+                .add_modifier(Modifier::BOLD),
+        )];
+
+        if let Ok(tokens) = highlighter_old.highlight_line(&text, &super::languages::SYNTAXES) {
+            for (style, token) in tokens {
+                let c = style.foreground;
+                spans.push(Span::styled(
+                    token.to_owned(),
+                    Style::default()
+                        .fg(Color::Rgb(c.r, c.g, c.b))
+                        .bg(diff_rem_bg),
+                ));
+            }
+        } else {
+            spans.push(Span::styled(
+                text,
+                Style::default().fg(diff_rem_fg).bg(diff_rem_bg),
+            ));
+        }
+
+        out.push(Line::from(spans));
     }
+
+    let mut highlighter_new = HighlightLines::new(syntax, &crate::tui::theme::CODE_THEME);
     for line in new_text.lines() {
-        out.push(Line::from(Span::styled(
-            format!("+ {line}"),
-            Style::default().fg(crate::tui::theme::THEME.diff_added),
-        )));
+        let text = safe_output(line);
+        let mut spans = vec![Span::styled(
+            "+ ",
+            Style::default()
+                .fg(diff_add_fg)
+                .bg(diff_add_bg)
+                .add_modifier(Modifier::BOLD),
+        )];
+
+        if let Ok(tokens) = highlighter_new.highlight_line(&text, &super::languages::SYNTAXES) {
+            for (style, token) in tokens {
+                let c = style.foreground;
+                spans.push(Span::styled(
+                    token.to_owned(),
+                    Style::default()
+                        .fg(Color::Rgb(c.r, c.g, c.b))
+                        .bg(diff_add_bg),
+                ));
+            }
+        } else {
+            spans.push(Span::styled(
+                text,
+                Style::default().fg(diff_add_fg).bg(diff_add_bg),
+            ));
+        }
+
+        out.push(Line::from(spans));
     }
+
     Some(out)
 }
 
@@ -1488,6 +1548,36 @@ mod tests {
         assert_eq!(preview.len(), 2);
         assert_eq!(preview[0].to_string(), "- old line");
         assert_eq!(preview[1].to_string(), "+ new line");
+        assert_eq!(
+            preview[0].spans[0].style.bg,
+            Some(crate::tui::theme::THEME.diff_removed_bg)
+        );
+        assert_eq!(
+            preview[1].spans[0].style.bg,
+            Some(crate::tui::theme::THEME.diff_added_bg)
+        );
+
+        // Test with Python code to ensure syntax highlighting and background are applied
+        let py_args = json!({
+            "path": "demo.py",
+            "old_text": "x = 1",
+            "new_text": "def foo():\n    return 42"
+        })
+        .to_string();
+        let py_preview = edit_file_preview(&py_args, 80).expect("py preview should succeed");
+        assert_eq!(py_preview.len(), 3);
+        assert_eq!(py_preview[0].to_string(), "- x = 1");
+        assert_eq!(py_preview[1].to_string(), "+ def foo():");
+        assert_eq!(py_preview[2].to_string(), "+     return 42");
+        for span in &py_preview[0].spans {
+            assert_eq!(span.style.bg, Some(crate::tui::theme::THEME.diff_removed_bg));
+        }
+        for span in &py_preview[1].spans {
+            assert_eq!(span.style.bg, Some(crate::tui::theme::THEME.diff_added_bg));
+        }
+        for span in &py_preview[2].spans {
+            assert_eq!(span.style.bg, Some(crate::tui::theme::THEME.diff_added_bg));
+        }
     }
 
     #[test]

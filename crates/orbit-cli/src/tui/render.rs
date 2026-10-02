@@ -1649,10 +1649,29 @@ pub(super) fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -
         let (wrapped, _) = super::transcript::wrap_line(&line, inner_width as u16);
         for sub in wrapped {
             let pad = inner_width.saturating_sub(sub.width());
-            let mut spans = vec![Span::styled("│ ", border_style)];
+            let line_bg = sub
+                .spans
+                .first()
+                .and_then(|s| s.style.bg)
+                .filter(|bg| sub.spans.iter().all(|s| s.style.bg == Some(*bg)));
+
+            let mut spans = if let Some(bg) = line_bg {
+                vec![
+                    Span::styled("│", border_style),
+                    Span::styled(" ", Style::default().bg(bg)),
+                ]
+            } else {
+                vec![Span::styled("│ ", border_style)]
+            };
             spans.extend(sub.spans);
-            spans.push(Span::raw(" ".repeat(pad)));
-            spans.push(Span::styled(" │", border_style));
+            if let Some(bg) = line_bg {
+                spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+                spans.push(Span::styled(" ", Style::default().bg(bg)));
+                spans.push(Span::styled("│", border_style));
+            } else {
+                spans.push(Span::raw(" ".repeat(pad)));
+                spans.push(Span::styled(" │", border_style));
+            }
             card_lines.push(Line::from(spans));
         }
     }
@@ -2493,6 +2512,50 @@ mod tests {
             assert_eq!(layout.disclosure_at(&items, area, 0, (79, y as u16)), Some(0));
             assert_eq!(layout.disclosure_at(&items, area, 0, (80, y as u16)), None);
         }
+    }
+
+    #[test]
+    fn tool_card_edit_file_renders_diff_backgrounds_across_row() {
+        use super::super::app::ToolRow;
+
+        let row = ToolRow {
+            id: "edit_1".into(),
+            name: "edit_file".into(),
+            arguments: serde_json::json!({
+                "path": "hello.py",
+                "old_text": "x = 1",
+                "new_text": "x = 2"
+            })
+            .to_string(),
+            status: ToolStatus::Finished,
+            output: "success".into(),
+        };
+
+        let card = tool_card(&row, true, 80);
+        for line in &card {
+            assert_eq!(line.width(), 80);
+        }
+
+        let rem_line = card
+            .iter()
+            .find(|l| l.to_string().contains("- x = 1"))
+            .expect("removed line found");
+        let add_line = card
+            .iter()
+            .find(|l| l.to_string().contains("+ x = 2"))
+            .expect("added line found");
+
+        let rem_bg = Some(crate::tui::theme::THEME.diff_removed_bg);
+        assert_eq!(rem_line.spans[0].content, "│");
+        assert_eq!(rem_line.spans[1].style.bg, rem_bg);
+        assert_eq!(rem_line.spans.last().unwrap().content, "│");
+        assert_eq!(rem_line.spans[rem_line.spans.len() - 2].style.bg, rem_bg);
+
+        let add_bg = Some(crate::tui::theme::THEME.diff_added_bg);
+        assert_eq!(add_line.spans[0].content, "│");
+        assert_eq!(add_line.spans[1].style.bg, add_bg);
+        assert_eq!(add_line.spans.last().unwrap().content, "│");
+        assert_eq!(add_line.spans[add_line.spans.len() - 2].style.bg, add_bg);
     }
 
     #[test]
