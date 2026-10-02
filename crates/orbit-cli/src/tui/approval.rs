@@ -213,25 +213,31 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .as_ref()
         .expect("approval screen requires a proposal");
 
-    let (border_color, title, header_lines, body_lines) = match proposal {
+    let border_color = crate::tui::theme::THEME.accent;
+
+    let (title, header_lines, body_lines) = match proposal {
         orbit_tools::approval::ApprovalPreview::Write(preview) => {
             let before = preview.before.as_deref().unwrap_or_default();
             let after = preview.after.as_str();
-            let op = if preview.before.is_some() {
-                "修改文件"
+            let op_tag = if preview.before.is_some() {
+                "[修改文件]"
             } else {
-                "新建文件"
+                "[新建文件]"
             };
-            let border_color = crate::tui::theme::THEME.accent;
             let title = Line::from(vec![
                 Span::raw(" "),
-                Span::styled("📝 ", Style::default().fg(border_color)),
                 Span::styled(
-                    format!("{op} · "),
+                    "权限确认",
                     Style::default()
                         .fg(crate::tui::theme::THEME.white)
                         .add_modifier(Modifier::BOLD),
                 ),
+                Span::raw("  "),
+                Span::styled(
+                    op_tag,
+                    Style::default().fg(crate::tui::theme::THEME.accent),
+                ),
+                Span::raw(" "),
                 Span::styled(
                     preview.path.clone(),
                     Style::default()
@@ -310,20 +316,24 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 diff_lines.push(Line::from("  （无内容差异）"));
             }
 
-            (border_color, title, Vec::new(), diff_lines)
+            (title, Vec::new(), diff_lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Delete(preview) => {
-            let border_color = crate::tui::theme::THEME.danger;
             let title = Line::from(vec![
                 Span::raw(" "),
-                Span::styled("🗑️ ", Style::default().fg(border_color)),
                 Span::styled(
-                    "删除文件 · ",
+                    "权限确认",
                     Style::default()
                         .fg(crate::tui::theme::THEME.white)
                         .add_modifier(Modifier::BOLD),
                 ),
+                Span::raw("  "),
+                Span::styled(
+                    "[删除文件]",
+                    Style::default().fg(crate::tui::theme::THEME.error),
+                ),
+                Span::raw(" "),
                 Span::styled(
                     preview.path.clone(),
                     Style::default()
@@ -343,7 +353,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 })
                 .collect::<Vec<_>>();
 
-            (border_color, title, Vec::new(), diff_lines)
+            (title, Vec::new(), diff_lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
@@ -352,85 +362,10 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => "读写",
             };
 
-            let (border_color, icon, title_text, git_notice) = if let Some(git) = &preview.git {
-                match &git.kind {
-                    orbit_runtime::git::GitOperationKind::RemoteWrite {
-                        remote,
-                        source_branch,
-                        target_branch,
-                    } => {
-                        let branch_str = match (source_branch, target_branch) {
-                            (Some(s), Some(t)) if s == t => format!("{remote}/{t}"),
-                            (Some(s), Some(t)) => format!("{s} -> {remote}/{t}"),
-                            _ => remote.clone(),
-                        };
-                        (
-                            crate::tui::theme::THEME.tool_running,
-                            "🚀",
-                            "Git 远端推送授权".to_string(),
-                            Some(format!("目标: {branch_str} · 远端代码发布写入（需独立授权）")),
-                        )
-                    }
-                    orbit_runtime::git::GitOperationKind::Dangerous { subcommand, reason } => (
-                        crate::tui::theme::THEME.danger,
-                        "⚠️",
-                        format!("高危 Git 操作确认 · {subcommand}"),
-                        Some(format!("风险提示: {reason}（不能被常规写入权限自动放行）")),
-                    ),
-                    orbit_runtime::git::GitOperationKind::BranchSwitchOrRebase {
-                        subcommand,
-                        target,
-                        risk_notice,
-                    } => {
-                        let desc = risk_notice
-                            .as_deref()
-                            .unwrap_or("切换分支或变基可能影响未提交工作区修改");
-                        (
-                            crate::tui::theme::THEME.tool_running,
-                            "🔀",
-                            format!("Git 分支操作 · {subcommand} -> {target}"),
-                            Some(desc.to_string()),
-                        )
-                    }
-                    orbit_runtime::git::GitOperationKind::LocalWrite {
-                        subcommand,
-                        description,
-                    } => (
-                        crate::tui::theme::THEME.accent,
-                        "📦",
-                        format!("Git 本地写入 · {subcommand}"),
-                        Some(description.clone()),
-                    ),
-                    orbit_runtime::git::GitOperationKind::ConfigMutation { key, .. } => {
-                        let target_key = key.as_deref().unwrap_or("仓库配置/Hooks");
-                        (
-                            crate::tui::theme::THEME.tool_running,
-                            "🛡️",
-                            "Git 配置与钩子保护".to_string(),
-                            Some(format!("目标: {target_key} · 修改仓库配置或 Hook 脚本需独立授权")),
-                        )
-                    }
-                    _ => (
-                        crate::tui::theme::THEME.accent,
-                        "⚡",
-                        "命令执行确认".to_string(),
-                        None,
-                    ),
-                }
-            } else {
-                (
-                    crate::tui::theme::THEME.accent,
-                    "⚡",
-                    "命令执行确认".to_string(),
-                    None,
-                )
-            };
-
             let mut title_spans = vec![
                 Span::raw(" "),
-                Span::styled(format!("{icon} "), Style::default().fg(border_color)),
                 Span::styled(
-                    title_text,
+                    "权限确认",
                     Style::default()
                         .fg(crate::tui::theme::THEME.white)
                         .add_modifier(Modifier::BOLD),
@@ -445,26 +380,92 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 title_spans.push(Span::raw(" "));
                 title_spans.push(Span::styled(
                     "[联网]",
-                    Style::default().fg(crate::tui::theme::THEME.tool_running),
+                    Style::default().fg(crate::tui::theme::THEME.accent),
                 ));
             }
             title_spans.push(Span::raw(" "));
             let title = Line::from(title_spans);
 
             let mut header_lines = Vec::new();
-            if let Some(notice) = git_notice {
-                let is_danger = border_color == crate::tui::theme::THEME.danger;
-                header_lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        notice,
-                        Style::default().fg(if is_danger {
-                            crate::tui::theme::THEME.danger
-                        } else {
-                            crate::tui::theme::THEME.description
-                        }),
-                    ),
-                ]));
+            if let Some(git) = &preview.git {
+                match &git.kind {
+                    orbit_runtime::git::GitOperationKind::RemoteWrite {
+                        remote,
+                        source_branch,
+                        target_branch,
+                    } => {
+                        let branch_str = match (source_branch, target_branch) {
+                            (Some(s), Some(t)) if s == t => format!("{remote}/{t}"),
+                            (Some(s), Some(t)) => format!("{s} -> {remote}/{t}"),
+                            _ => remote.clone(),
+                        };
+                        header_lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(
+                                "远端推送: ",
+                                Style::default().fg(crate::tui::theme::THEME.muted),
+                            ),
+                            Span::styled(
+                                branch_str,
+                                Style::default().fg(crate::tui::theme::THEME.accent),
+                            ),
+                        ]));
+                    }
+                    orbit_runtime::git::GitOperationKind::Dangerous { subcommand, reason } => {
+                        header_lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(
+                                format!("高危操作 ({subcommand}): "),
+                                Style::default()
+                                    .fg(crate::tui::theme::THEME.danger)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                reason.clone(),
+                                Style::default().fg(crate::tui::theme::THEME.danger),
+                            ),
+                        ]));
+                    }
+                    orbit_runtime::git::GitOperationKind::BranchSwitchOrRebase {
+                        subcommand,
+                        target,
+                        risk_notice,
+                    } => {
+                        let desc = risk_notice
+                            .as_deref()
+                            .unwrap_or("可能影响未提交工作区修改");
+                        header_lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(
+                                format!("分支操作: {subcommand} -> {target}（{desc}）"),
+                                Style::default().fg(crate::tui::theme::THEME.description),
+                            ),
+                        ]));
+                    }
+                    orbit_runtime::git::GitOperationKind::LocalWrite {
+                        subcommand,
+                        description,
+                    } => {
+                        header_lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(
+                                format!("本地写入 ({subcommand}): {description}"),
+                                Style::default().fg(crate::tui::theme::THEME.description),
+                            ),
+                        ]));
+                    }
+                    orbit_runtime::git::GitOperationKind::ConfigMutation { key, .. } => {
+                        let target_key = key.as_deref().unwrap_or("仓库配置/Hooks");
+                        header_lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(
+                                format!("配置保护: {target_key}"),
+                                Style::default().fg(crate::tui::theme::THEME.description),
+                            ),
+                        ]));
+                    }
+                    _ => {}
+                }
             }
             if let Some(ref cwd) = preview.cwd {
                 header_lines.push(Line::from(vec![
@@ -483,7 +484,9 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 body_lines.push(Line::from(vec![
                     Span::styled(
                         prefix,
-                        Style::default().fg(border_color).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(crate::tui::theme::THEME.accent)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         visible(line),
@@ -494,25 +497,27 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 ]));
             }
 
-            (border_color, title, header_lines, body_lines)
+            (title, header_lines, body_lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Mcp(preview) => {
-            let border_color = crate::tui::theme::THEME.accent;
             let title = Line::from(vec![
                 Span::raw(" "),
-                Span::styled("🔌 ", Style::default().fg(border_color)),
                 Span::styled(
-                    "工具调用确认 · ",
+                    "权限确认",
                     Style::default()
                         .fg(crate::tui::theme::THEME.white)
                         .add_modifier(Modifier::BOLD),
                 ),
+                Span::raw("  "),
+                Span::styled(
+                    "[工具调用]",
+                    Style::default().fg(crate::tui::theme::THEME.accent),
+                ),
+                Span::raw(" "),
                 Span::styled(
                     format!("{}::{}", preview.server, preview.tool),
-                    Style::default()
-                        .fg(crate::tui::theme::THEME.strong)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(crate::tui::theme::THEME.strong),
                 ),
                 Span::raw(" "),
             ]);
@@ -528,25 +533,24 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 })
                 .collect();
 
-            (border_color, title, Vec::new(), body_lines)
+            (title, Vec::new(), body_lines)
         }
 
         orbit_tools::approval::ApprovalPreview::Capability(preview) => {
             let access_desc = if preview.access.allows_write() {
-                "读写"
+                "[外部读写]"
             } else {
-                "读取"
+                "[外部读取]"
             };
-            let border_color = crate::tui::theme::THEME.accent;
             let title = Line::from(vec![
                 Span::raw(" "),
-                Span::styled("📂 ", Style::default().fg(border_color)),
                 Span::styled(
-                    "外部路径访问确认 · ",
+                    "权限确认",
                     Style::default()
                         .fg(crate::tui::theme::THEME.white)
                         .add_modifier(Modifier::BOLD),
                 ),
+                Span::raw("  "),
                 Span::styled(
                     access_desc,
                     Style::default().fg(crate::tui::theme::THEME.accent),
@@ -570,7 +574,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 Style::default().fg(crate::tui::theme::THEME.approval_foreground),
             )];
 
-            (border_color, title, header_lines, body_lines)
+            (title, header_lines, body_lines)
         }
     };
 
@@ -647,7 +651,7 @@ fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     let normal_style = Style::default().fg(crate::tui::theme::THEME.approval_detail);
     let normal_style_danger = Style::default().fg(crate::tui::theme::THEME.approval_muted);
 
-    let mut spans = vec![
+    let spans = vec![
         Span::raw(" "),
         Span::styled(
             "[ 允许一次 ]",
@@ -676,20 +680,6 @@ fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             },
         ),
     ];
-
-    let hint_text = if area.width >= 74 {
-        "   Tab 切换 · Enter 确认 · Esc 拒绝"
-    } else if area.width >= 58 {
-        "   Tab · Enter · Esc"
-    } else {
-        ""
-    };
-    if !hint_text.is_empty() {
-        spans.push(Span::styled(
-            hint_text,
-            Style::default().fg(crate::tui::theme::THEME.approval_muted),
-        ));
-    }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -1087,10 +1077,11 @@ mod render_tests {
 
         let flat = text.replace(' ', "");
         assert!(text.contains("mkdir -p demo"), "{text}");
-        assert!(flat.contains("命令执行确认"), "{text}");
+        assert!(flat.contains("权限确认"), "{text}");
         assert!(flat.contains("[读写]"), "{text}");
         assert!(flat.contains("[联网]"), "{text}");
         assert!(flat.contains("cwd:/home/user/repo"), "{text}");
+        assert!(!text.contains("Tab 切换"), "{text}");
         assert!(state.approval_shown);
         assert_eq!(state.approval_options.len(), 3);
 
@@ -1152,10 +1143,11 @@ mod render_tests {
             .collect();
         let flat = text.replace(' ', "");
 
-        assert!(flat.contains("高危Git操作确认·reset"), "{text}");
-        assert!(flat.contains("风险提示"), "{text}");
+        assert!(flat.contains("权限确认"), "{text}");
+        assert!(flat.contains("高危操作(reset)"), "{text}");
         assert!(text.contains("git reset --hard HEAD~1"), "{text}");
         assert!(flat.contains("[读写]"), "{text}");
         assert!(!flat.contains("[联网]"), "{text}");
+        assert!(!text.contains("Tab 切换"), "{text}");
     }
 }
