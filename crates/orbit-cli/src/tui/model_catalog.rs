@@ -175,6 +175,7 @@ mod tests {
 base_url = "http://127.0.0.1:9/v1"
 api_key = "orbit-fixture"
 managed_models = true
+auto_refresh_models = false
 [[providers.orbit.models]]
 id = "orbit-thinking"
 {reasoning}

@@ -378,7 +378,7 @@ async fn editing_keeps_credentials_and_independent_model_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     let auth = temp.path().join("auth");
-    let original = "# keep this comment\ndefault_provider = 'gateway'\n[providers.gateway]\napi_format = 'openai_responses'\nbase_url = 'http://localhost:8080/v1'\ncredential = 'existing'\ntimeout_seconds = 123\nmodels = [{ id = 'a' }, { id = 'b' }]\n";
+    let original = "# keep this comment\ndefault_provider = 'gateway'\n[providers.gateway]\napi_format = 'openai_responses'\nbase_url = 'http://localhost:8080/v1'\nauto_refresh_models = false\ncredential = 'existing'\ntimeout_seconds = 123\nmodels = [{ id = 'a' }, { id = 'b' }]\n";
     std::fs::write(&path, original).unwrap();
     let store = orbit_auth::AuthStore::new(auth.clone()).unwrap();
     store

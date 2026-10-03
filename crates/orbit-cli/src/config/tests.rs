@@ -57,11 +57,13 @@ reasoning = { adapter = "openai_chat", efforts = ["low", "max"], default = "low"
 fn provider_debug_redacts_credentials() {
     let provider = ProviderConfig {
         managed_models: false,
+        auto_refresh_models: true,
         api_format: ApiFormat::OpenaiChatCompletions,
         base_url: "https://example.com/v1".into(),
         api_key: "test-secret".into(),
         credential: None,
         models: Vec::new(),
+        configured_models: None,
         timeout_seconds: 30,
         max_retries: 0,
     };

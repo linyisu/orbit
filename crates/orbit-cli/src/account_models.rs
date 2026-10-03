@@ -1,133 +1,227 @@
-//! Account model discovery and a bounded, credential-scoped metadata cache.
+//! Provider model discovery and a bounded, credential-scoped metadata cache.
 use std::{
     path::Path,
     time::{Duration, SystemTime},
 };
 
 use anyhow::{Context, Result, ensure};
+use futures_util::{StreamExt, stream};
 use orbit_model::{
     client::ApiFormat,
     types::{ReasoningAdapter, ReasoningEffort},
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
-use crate::config::{FileConfig, ModelProfile, ReasoningProfile};
+use crate::config::{FileConfig, ModelProfile, ProviderConfig, ReasoningProfile};
 
 pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
-    let Some(directory) = config.auth_directory.clone() else {
+    let Some(directory) = config.auth_directory.as_ref() else {
         return Vec::new();
     };
-    let mut diagnostics = Vec::new();
+    let mut jobs = Vec::new();
     for (name, provider) in &mut config.providers {
-        if provider.managed_models {
-            continue;
+        if provider.auto_refresh_models && supported(provider.api_format, &provider.base_url) {
+            jobs.push(refresh_connection(name, provider, directory, force));
         }
-        let Some(credential) = provider.credential.clone() else {
-            continue;
-        };
-        if !supported(provider.api_format, &provider.base_url) {
-            continue;
-        }
-        let reference = orbit_auth::CredentialRef {
-            directory: directory.clone(),
-            name: credential.clone(),
-        };
-        let result = async {
-            let info = orbit_auth::AuthStore::new(directory.clone())?.list()?.into_iter()
-                .find(|info| info.name == credential).context("账号尚未登录")?;
-            let binding = json!({ "name": credential, "account": info.account,
-                "account_id": info.account_id, "project": info.project_id, "endpoint": provider.base_url });
-            let cache_dir = directory.join("model-catalog");
-            let filename = credential.bytes().map(|b| format!("{b:02x}")).collect::<String>();
-            let path = cache_dir.join(format!("{filename}.json"));
-            let cached = read_cache(&path, &binding);
-            let fresh = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok())
-                .and_then(|time| SystemTime::now().duration_since(time).ok())
-                .is_some_and(|age| age < Duration::from_secs(900));
-            let payload = if let Some(cached) = cached.as_ref().filter(|_| !force && fresh) {
-                cached.clone()
-            } else {
-                match orbit_model::discovery::discover(&reference, provider.api_format, &provider.base_url).await {
-                    Ok(payload) => {
-                        normalize(provider.api_format, &payload)?;
-                        std::fs::create_dir_all(&cache_dir)?;
-                        let mut file = tempfile::NamedTempFile::new_in(&cache_dir)?;
-                        use std::io::Write;
-                        file.write_all(serde_json::to_string(&json!({ "binding": binding, "payload": payload }))?.as_bytes())?;
-                        file.as_file().sync_all()?;
-                        file.persist(&path)?;
-                        payload
-                    }
-                    Err(error) => {
-                        diagnostics.push(format!("{name}：模型刷新失败，保留缓存或现有目录：{error}"));
-                        match cached { Some(payload) => payload, None => return Ok::<_, anyhow::Error>(()), }
-                    }
-                }
-            };
-            let (models, _) = normalize(provider.api_format, &payload)?;
-            merge_discovered_models(provider, models);
-            Ok(())
-        }.await;
-        if let Err(error) = result {
-            diagnostics.push(format!("{name}：模型目录更新失败：{error}"));
-        }
+    }
+    let mut diagnostics = stream::iter(jobs)
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    diagnostics.sort();
+    diagnostics
+}
+
+async fn refresh_connection(
+    name: &str,
+    provider: &mut ProviderConfig,
+    directory: &Path,
+    force: bool,
+) -> Vec<String> {
+    let mut diagnostics = Vec::new();
+    if let Err(error) = refresh_provider(name, provider, directory, force, &mut diagnostics).await {
+        diagnostics.push(format!("{name}：模型目录更新失败：{error}"));
     }
     diagnostics
 }
 
-fn merge_discovered_models(
-    provider: &mut crate::config::ProviderConfig,
-    models: Vec<ModelProfile>,
-) {
-    if provider.api_format == ApiFormat::GoogleCodeAssist {
-        // The bundled catalog describes wire formats, not account availability.
-        // Only a successful discovery (or its account-bound cache) reaches here.
+async fn refresh_provider(
+    name: &str,
+    provider: &mut ProviderConfig,
+    directory: &Path,
+    force: bool,
+    diagnostics: &mut Vec<String>,
+) -> Result<()> {
+    let reference = provider
+        .credential
+        .as_ref()
+        .map(|name| orbit_auth::CredentialRef {
+            directory: directory.to_path_buf(),
+            name: name.clone(),
+        });
+    let identity = if let Some(reference) = &reference {
+        let info = orbit_auth::AuthStore::new(directory.to_path_buf())?
+            .list()?
+            .into_iter()
+            .find(|info| info.name == reference.name)
+            .context("账号尚未登录")?;
+        let revision = if info.kind == orbit_auth::CredentialKind::ApiKey {
+            std::fs::metadata(directory.join(format!("{}.json", reference.name)))
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos().to_string())
+        } else {
+            None
+        };
+        json!({ "name": reference.name, "kind": info.kind, "endpoint": info.endpoint,
+            "account": info.account, "account_id": info.account_id, "project": info.project_id,
+            "revision": revision })
+    } else {
+        json!({ "key_fingerprint": fingerprint(&provider.api_key) })
+    };
+    let binding = json!({ "version": 2, "identity": identity,
+        "format": provider.api_format, "endpoint": provider.base_url.trim_end_matches('/') });
+    let cache_dir = directory.join("model-catalog");
+    let path = cache_dir.join(format!("{}.json", fingerprint(name)));
+    let cached = read_cache(&path, &binding);
+    let fresh = std::fs::metadata(&path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|time| SystemTime::now().duration_since(time).ok())
+        .is_some_and(|age| age < Duration::from_secs(900));
+    let payload = if let Some(cached) = cached.as_ref().filter(|_| !force && fresh) {
+        cached.clone()
+    } else {
+        let discovered = async {
+            let payload = if matches!(
+                provider.api_format,
+                ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
+            ) {
+                orbit_model::discovery::discover(
+                    reference.as_ref().context("套餐账号需要已保存的认证")?,
+                    provider.api_format,
+                    &provider.base_url,
+                )
+                .await?
+            } else if let Some(reference) = &reference {
+                orbit_model::discovery::discover_saved_api_catalog(
+                    reference,
+                    &provider.base_url,
+                    provider.api_format,
+                )
+                .await?
+            } else {
+                orbit_model::discovery::discover_api_catalog(
+                    &provider.base_url,
+                    provider.api_format,
+                    &provider.api_key,
+                )
+                .await?
+            };
+            normalize(provider.api_format, &payload)?;
+            Ok::<_, anyhow::Error>(payload)
+        }
+        .await;
+        match discovered {
+            Ok(payload) => {
+                let write = (|| -> Result<()> {
+                    let mut directories = std::fs::DirBuilder::new();
+                    directories.recursive(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::DirBuilderExt;
+                        directories.mode(0o700);
+                    }
+                    directories.create(&cache_dir)?;
+                    let mut file = tempfile::NamedTempFile::new_in(&cache_dir)?;
+                    use std::io::Write;
+                    file.write_all(
+                        serde_json::to_string(&json!({ "binding": binding, "payload": payload }))?
+                            .as_bytes(),
+                    )?;
+                    file.as_file().sync_all()?;
+                    file.persist(&path)?;
+                    Ok(())
+                })();
+                if let Err(error) = write {
+                    diagnostics.push(format!("{name}：模型缓存写入失败：{error}"));
+                }
+                payload
+            }
+            Err(error) => {
+                diagnostics.push(format!("{name}：模型刷新失败，保留缓存或现有目录：{error}"));
+                match cached {
+                    Some(payload) => payload,
+                    None => return Ok(()),
+                }
+            }
+        }
+    };
+    let (models, _) = normalize(provider.api_format, &payload)?;
+    merge_discovered_models(provider, models);
+    Ok(())
+}
+
+fn merge_discovered_models(provider: &mut ProviderConfig, models: Vec<ModelProfile>) {
+    if models.is_empty() {
+        return;
+    }
+    let configured = provider
+        .configured_models
+        .get_or_insert_with(|| provider.models.clone());
+    let quota_catalog = provider.api_format == ApiFormat::GoogleCodeAssist
+        && provider.base_url.trim_end_matches('/') == "https://cloudcode-pa.googleapis.com";
+    if !provider.managed_models && !quota_catalog {
         provider
             .models
             .retain(|existing| models.iter().any(|model| model.id == existing.id));
     }
-
-    for model in models {
+    for mut model in models {
+        if let Some(explicit) = configured.iter().find(|entry| entry.id == model.id) {
+            model.max_output_tokens = explicit.max_output_tokens.or(model.max_output_tokens);
+            model.context_tokens = explicit.context_tokens.or(model.context_tokens);
+            model.input_context_tokens =
+                explicit.input_context_tokens.or(model.input_context_tokens);
+            model.supports_vision = explicit.supports_vision.or(model.supports_vision);
+            model.reasoning = explicit.reasoning.clone().or(model.reasoning);
+        }
         if let Some(existing) = provider
             .models
             .iter_mut()
             .find(|entry| entry.id == model.id)
         {
-            if existing.context_tokens.is_none() {
-                existing.context_tokens = model.context_tokens;
-            }
-            if existing.input_context_tokens.is_none() {
-                existing.input_context_tokens = model.input_context_tokens;
-            }
-            if existing.supports_vision.is_none() {
-                existing.supports_vision = model.supports_vision;
-            }
-            if existing.reasoning.is_none() {
-                existing.reasoning = model.reasoning;
-            }
-        } else {
+            *existing = model;
+        } else if !provider.managed_models {
             provider.models.push(model);
         }
     }
 }
 
 fn supported(format: ApiFormat, base: &str) -> bool {
-    matches!(
-        (format, base.trim_end_matches('/')),
-        (
-            ApiFormat::GoogleCodeAssist,
-            "https://daily-cloudcode-pa.googleapis.com"
-        ) | (
-            ApiFormat::ChatgptCodex,
-            "https://chatgpt.com/backend-api/codex"
-        ) | (
-            ApiFormat::OpenaiChatCompletions,
-            "https://api.deepseek.com/v1"
-        ) | (
-            ApiFormat::OpenaiChatCompletions,
-            "https://open.bigmodel.cn/api/coding/paas/v4"
-        )
-    )
+    match format {
+        ApiFormat::OpenaiChatCompletions
+        | ApiFormat::OpenaiResponses
+        | ApiFormat::AnthropicMessages => true,
+        ApiFormat::GoogleCodeAssist => matches!(
+            base.trim_end_matches('/'),
+            "https://daily-cloudcode-pa.googleapis.com" | "https://cloudcode-pa.googleapis.com"
+        ),
+        ApiFormat::ChatgptCodex => {
+            base.trim_end_matches('/') == "https://chatgpt.com/backend-api/codex"
+        }
+    }
+}
+
+fn fingerprint(value: &str) -> String {
+    Sha256::digest(value.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn read_cache(path: &Path, binding: &Value) -> Option<Value> {
@@ -144,17 +238,55 @@ pub(crate) fn normalize(
 ) -> Result<(Vec<ModelProfile>, Vec<String>)> {
     let mut models = Vec::new();
     let mut unavailable = Vec::new();
-    if format == ApiFormat::OpenaiChatCompletions {
+    if matches!(
+        format,
+        ApiFormat::OpenaiChatCompletions
+            | ApiFormat::OpenaiResponses
+            | ApiFormat::AnthropicMessages
+    ) {
         let entries = payload["data"]
             .as_array()
             .context("模型目录缺少 data 数组")?;
         for entry in entries {
-            let id = entry["id"].as_str().context("模型目录缺少 id")?;
+            let mut model: ModelProfile = serde_json::from_value(entry.clone())?;
+            if format == ApiFormat::AnthropicMessages {
+                anthropic_capabilities(&mut model, entry)?;
+            }
             ensure!(
-                !id.is_empty() && !id.chars().any(char::is_control),
+                !model.id.trim().is_empty()
+                    && model.id.len() <= 256
+                    && !model.id.chars().any(char::is_control),
                 "模型 ID 无效"
             );
-            models.push(serde_json::from_value(json!({ "id": id }))?);
+            if models
+                .iter()
+                .any(|existing: &ModelProfile| existing.id == model.id)
+            {
+                continue;
+            }
+            ensure!(
+                model.context_tokens.is_none_or(|tokens| tokens >= 8192)
+                    && model
+                        .input_context_tokens
+                        .is_none_or(|tokens| tokens >= 8192)
+                    && model.max_output_tokens.is_none_or(|tokens| tokens > 0),
+                "模型容量无效：{}",
+                model.id
+            );
+            if let Some(reasoning) = &model.reasoning {
+                let adapter = match format {
+                    ApiFormat::OpenaiResponses => ReasoningAdapter::OpenaiResponses,
+                    ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
+                    _ => ReasoningAdapter::OpenaiChat,
+                };
+                ensure!(
+                    reasoning.adapter == adapter && reasoning.efforts.contains(&reasoning.default),
+                    "模型思考能力无效：{}",
+                    model.id
+                );
+                crate::config::validate_reasoning_extra(&model.id, format, &reasoning.extra)?;
+            }
+            models.push(model);
         }
         ensure!(!models.is_empty(), "账号未返回可用模型");
     } else if format == ApiFormat::ChatgptCodex {
@@ -191,6 +323,21 @@ pub(crate) fn normalize(
                 entry["input_modalities"].as_array().is_some_and(|m| m.iter().any(|v| v == "image")),
                 default.map(|default| json!({ "adapter": "openai_responses", "efforts": efforts, "default": default })))?);
         }
+    } else if let Some(buckets) = payload["buckets"].as_array() {
+        // Quota buckets identify models, but omission or zero quota does not retire them.
+        // https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/code_assist/types.ts
+        for bucket in buckets {
+            if let Some(id) = bucket["modelId"].as_str()
+                && !models.iter().any(|model| model.id == id)
+            {
+                ensure!(
+                    !id.trim().is_empty() && id.len() <= 256 && !id.chars().any(char::is_control),
+                    "模型 ID 无效"
+                );
+                models.push(serde_json::from_value(json!({ "id": id }))?);
+            }
+        }
+        ensure!(!models.is_empty(), "配额接口未返回模型 ID，保留现有目录");
     } else {
         let entries = payload["models"]
             .as_object()
@@ -240,6 +387,55 @@ pub(crate) fn normalize(
         }
     }
     Ok((models, unavailable))
+}
+
+// https://platform.claude.com/docs/en/api/models/list
+fn anthropic_capabilities(model: &mut ModelProfile, entry: &Value) -> Result<()> {
+    if model.input_context_tokens.is_none() {
+        model.input_context_tokens = entry["max_input_tokens"]
+            .as_u64()
+            .map(usize::try_from)
+            .transpose()?;
+    }
+    if model.max_output_tokens.is_none() {
+        model.max_output_tokens = entry["max_tokens"]
+            .as_u64()
+            .map(u32::try_from)
+            .transpose()?;
+    }
+    let capabilities = &entry["capabilities"];
+    if model.supports_vision.is_none() {
+        model.supports_vision = capabilities["image_input"]["supported"].as_bool();
+    }
+    if model.reasoning.is_none()
+        && capabilities["effort"]["supported"] == true
+        && capabilities["thinking"]["types"]["adaptive"]["supported"] == true
+    {
+        let efforts = [
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::Max,
+        ]
+        .into_iter()
+        .filter(|effort| capabilities["effort"][effort.as_str()]["supported"] == true)
+        .collect::<Vec<_>>();
+        if let Some(default) = efforts
+            .iter()
+            .find(|&&effort| effort == ReasoningEffort::High)
+            .or_else(|| efforts.last())
+            .copied()
+        {
+            model.reasoning = Some(ReasoningProfile {
+                adapter: ReasoningAdapter::AnthropicMessages,
+                efforts,
+                default,
+                extra: toml::Table::new(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn profile(
@@ -309,6 +505,306 @@ pub(crate) fn default_reasoning(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn provider(format: ApiFormat, managed: bool) -> ProviderConfig {
+        serde_json::from_value(
+            json!({"api_format": format, "base_url": "https://orbit.example/v1",
+            "managed_models": managed, "models": [
+                {"id": "orbit-live", "context_tokens": 100000, "supports_vision": false},
+                {"id": "orbit-retired"}
+            ]}),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn refresh_updates_remote_capabilities_but_preserves_explicit_fields_and_choices() {
+        for managed in [false, true] {
+            let mut provider = provider(ApiFormat::OpenaiResponses, managed);
+            for (effort, output) in [("high", 32000), ("low", 64000)] {
+                let (models, _) = normalize(ApiFormat::OpenaiResponses, &json!({"data": [
+                    {"id": "orbit-live", "context_tokens": 200000, "supports_vision": true,
+                     "max_output_tokens": output,
+                     "reasoning": {"adapter": "openai_responses", "efforts": [effort], "default": effort}},
+                    {"id": "orbit-new"}
+                ]})).unwrap();
+                merge_discovered_models(&mut provider, models);
+                let live = &provider.models[0];
+                assert_eq!(live.context_tokens, Some(100000));
+                assert_eq!(live.supports_vision, Some(false));
+                assert_eq!(live.max_output_tokens, Some(output));
+                assert_eq!(live.reasoning.as_ref().unwrap().default.as_str(), effort);
+                assert_eq!(provider.models.len(), 2);
+                assert_eq!(
+                    provider.models[1].id,
+                    if managed {
+                        "orbit-retired"
+                    } else {
+                        "orbit-new"
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_defaults_yield_to_discovered_capacity() {
+        let mut config = FileConfig::parse(
+            r#"default_provider = "orbit"
+[providers.orbit]
+api_format = "google_code_assist"
+base_url = "https://daily-cloudcode-pa.googleapis.com"
+credential = "orbit-fixture"
+models = [{id = "orbit-configured"}]
+"#,
+            Path::new("/tmp/orbit-fixture-auth"),
+        )
+        .unwrap();
+        let provider = config.providers.get_mut("orbit").unwrap();
+        let id = provider.models[1].id.clone();
+        let model: ModelProfile =
+            serde_json::from_value(json!({"id": id, "context_tokens": 4000000,
+            "supports_vision": false}))
+            .unwrap();
+        merge_discovered_models(provider, vec![model]);
+        assert_eq!(provider.models.len(), 1);
+        assert_eq!(provider.models[0].context_tokens, Some(4000000));
+        assert_eq!(provider.models[0].supports_vision, Some(false));
+    }
+
+    #[test]
+    fn anthropic_discovery_uses_advertised_capacity_vision_and_adaptive_efforts() {
+        let (models, _) = normalize(
+            ApiFormat::AnthropicMessages,
+            &json!({"data": [{
+            "id": "orbit-adaptive", "max_input_tokens": 1000000, "max_tokens": 64000,
+            "capabilities": {
+                "image_input": {"supported": true},
+                "thinking": {"types": {"adaptive": {"supported": true}}},
+                "effort": {"supported": true, "low": {"supported": true},
+                    "medium": {"supported": false}, "high": {"supported": true},
+                    "max": {"supported": true}, "future": {"supported": true}}
+            }
+        }, {"id": "orbit-unknown"}]}),
+        )
+        .unwrap();
+        let profile = &models[0];
+        assert_eq!(profile.input_context_tokens, Some(1000000));
+        assert_eq!(profile.max_output_tokens, Some(64000));
+        assert_eq!(profile.supports_vision, Some(true));
+        let reasoning = profile.reasoning.as_ref().unwrap();
+        assert_eq!(reasoning.adapter, ReasoningAdapter::AnthropicMessages);
+        assert_eq!(reasoning.default, ReasoningEffort::High);
+        assert_eq!(
+            reasoning.efforts,
+            [
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max
+            ]
+        );
+        assert!(models[1].reasoning.is_none());
+        assert!(models[1].supports_vision.is_none());
+    }
+
+    #[test]
+    fn google_quota_models_do_not_retire_unlisted_or_exhausted_models() {
+        let mut provider = provider(ApiFormat::GoogleCodeAssist, false);
+        provider.base_url = "https://cloudcode-pa.googleapis.com".into();
+        let (models, _) = normalize(
+            ApiFormat::GoogleCodeAssist,
+            &json!({"buckets": [
+                {"modelId": "orbit-live", "remainingFraction": 0},
+                {"modelId": "orbit-new", "remainingFraction": 1},
+                {"modelId": "orbit-new", "tokenType": "REQUESTS"}
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(models.len(), 2);
+        assert!(models.iter().all(|model| model.reasoning.is_none()));
+        merge_discovered_models(&mut provider, models);
+        assert_eq!(provider.models.len(), 3);
+        assert_eq!(provider.models[0].id, "orbit-live");
+        assert_eq!(provider.models[1].id, "orbit-retired");
+        assert_eq!(provider.models[2].id, "orbit-new");
+        assert!(supported(provider.api_format, &provider.base_url));
+    }
+
+    async fn serve_catalog(listener: tokio::net::TcpListener, payload: Value) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(socket.read_u8().await.unwrap());
+        }
+        let body = payload.to_string();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        String::from_utf8(request).unwrap().to_ascii_lowercase()
+    }
+
+    #[tokio::test]
+    async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("auth");
+        let store = orbit_auth::AuthStore::new(directory.clone()).unwrap();
+        let mut providers = serde_json::Map::new();
+        let mut servers = Vec::new();
+        for (name, format, saved, key, managed) in [
+            (
+                "orbit-chat",
+                ApiFormat::OpenaiChatCompletions,
+                false,
+                "orbit-inline",
+                false,
+            ),
+            (
+                "orbit-responses",
+                ApiFormat::OpenaiResponses,
+                true,
+                "orbit-saved",
+                true,
+            ),
+            (
+                "orbit-anthropic",
+                ApiFormat::AnthropicMessages,
+                false,
+                "orbit-anthropic-key",
+                false,
+            ),
+            (
+                "orbit-local",
+                ApiFormat::OpenaiChatCompletions,
+                false,
+                "",
+                false,
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/orbit/v1", listener.local_addr().unwrap());
+            let mut connection = json!({"api_format": format, "base_url": endpoint,
+                "managed_models": managed, "models": [{"id": "orbit-live"}]});
+            if saved {
+                store
+                    .set_api_key(name, key.into(), &endpoint)
+                    .await
+                    .unwrap();
+                connection["credential"] = json!(name);
+            } else {
+                connection["api_key"] = json!(key);
+            }
+            providers.insert(name.into(), connection);
+            servers.push((
+                name,
+                format,
+                key,
+                tokio::spawn(serve_catalog(
+                    listener,
+                    json!({"data": [
+                        {"id": "orbit-live", "context_tokens": 200000}, {"id": "orbit-new"}
+                    ]}),
+                )),
+            ));
+        }
+        providers.insert(
+            "orbit-failure".into(),
+            json!({"base_url": "http://127.0.0.1:0/v1",
+            "models": [{"id": "orbit-fallback"}]}),
+        );
+        providers.insert(
+            "orbit-disabled".into(),
+            json!({"base_url": "http://127.0.0.1:0/v1",
+            "auto_refresh_models": false, "models": [{"id": "orbit-manual"}]}),
+        );
+        let value = json!({"default_provider": "orbit-chat", "providers": providers});
+        let mut config: FileConfig = serde_json::from_value(value.clone()).unwrap();
+        config.auth_directory = Some(directory.clone());
+        let diagnostics = refresh(&mut config, false).await;
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics[0].starts_with("orbit-failure："));
+        for (name, format, key, task) in servers {
+            let request = task.await.unwrap();
+            assert!(request.starts_with("get /orbit/v1/models "));
+            if format == ApiFormat::AnthropicMessages {
+                assert!(request.contains(&format!("x-api-key: {key}")));
+                assert!(request.contains("anthropic-version: 2023-06-01"));
+            } else if !key.is_empty() {
+                assert!(request.contains(&format!("authorization: bearer {key}")));
+            } else {
+                assert!(!request.contains("authorization:") && !request.contains("x-api-key:"));
+            }
+            assert_eq!(
+                config.providers[name].models[0].context_tokens,
+                Some(200000)
+            );
+            assert_eq!(
+                config.providers[name].models.len(),
+                if name == "orbit-responses" { 1 } else { 2 }
+            );
+        }
+        let mut reloaded: FileConfig = serde_json::from_value(value.clone()).unwrap();
+        reloaded.auth_directory = Some(directory.clone());
+        reloaded
+            .providers
+            .get_mut("orbit-failure")
+            .unwrap()
+            .auto_refresh_models = false;
+        assert!(refresh(&mut reloaded, false).await.is_empty());
+        assert_eq!(
+            reloaded.providers["orbit-chat"].models[0].context_tokens,
+            Some(200000)
+        );
+        assert_eq!(
+            reloaded.providers["orbit-disabled"].models[0].id,
+            "orbit-manual"
+        );
+        let files = std::fs::read_dir(directory.join("model-catalog"))
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 4);
+        for file in files {
+            let text = std::fs::read_to_string(file.unwrap().path()).unwrap();
+            assert!(
+                !text.contains("orbit-inline")
+                    && !text.contains("orbit-saved")
+                    && !text.contains("orbit-anthropic-key")
+            );
+        }
+        let mut rotated: FileConfig = serde_json::from_value(value).unwrap();
+        rotated.auth_directory = Some(directory.clone());
+        rotated
+            .providers
+            .get_mut("orbit-failure")
+            .unwrap()
+            .auto_refresh_models = false;
+        rotated.providers.get_mut("orbit-chat").unwrap().api_key = "orbit-rotated-inline".into();
+        let endpoint = rotated.providers["orbit-responses"].base_url.clone();
+        store
+            .set_api_key("orbit-responses", "orbit-rotated-saved".into(), &endpoint)
+            .await
+            .unwrap();
+        let diagnostics = refresh(&mut rotated, false).await;
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        assert!(
+            rotated.providers["orbit-chat"].models[0]
+                .context_tokens
+                .is_none()
+        );
+        assert!(
+            rotated.providers["orbit-responses"].models[0]
+                .context_tokens
+                .is_none()
+        );
+    }
 
     #[test]
     fn reasoning_defaults_require_a_verified_model_endpoint_and_protocol() {

@@ -1039,6 +1039,7 @@ mod config_tests {
             r#"default_provider = "test"
 [providers.test]
 base_url = "http://127.0.0.1:1/v1"
+auto_refresh_models = false
 api_key = "test-only"
 [[providers.test.models]]
 id = "test"
@@ -1115,6 +1116,7 @@ id = "test"
             r#"default_provider = "test"
 [providers.test]
 base_url = "http://127.0.0.1:1/v1"
+auto_refresh_models = false
 api_key = "test-only"
 models = [{ id = "test" }]
 "#,

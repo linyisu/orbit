@@ -67,8 +67,13 @@ pub(crate) struct ProviderConfig {
     pub(crate) credential: Option<String>,
     /// The first model is selected when Orbit starts with this provider.
     pub(crate) models: Vec<ModelProfile>,
+    // Explicit profiles remain authoritative across repeated catalog refreshes.
+    #[serde(skip)]
+    pub(crate) configured_models: Option<Vec<ModelProfile>>,
     #[serde(default)]
     pub(crate) managed_models: bool,
+    #[serde(default = "default_auto_refresh_models")]
+    pub(crate) auto_refresh_models: bool,
     #[serde(default = "default_timeout_seconds")]
     pub(crate) timeout_seconds: u64,
     /// Number of retries after a failed request that has not produced headers.
@@ -128,6 +133,10 @@ fn default_auto_compact() -> bool {
     true
 }
 
+fn default_auto_refresh_models() -> bool {
+    true
+}
+
 fn default_context_tokens() -> usize {
     128_000
 }
@@ -140,7 +149,11 @@ fn default_max_tool_calls() -> usize {
     2000
 }
 
-fn validate_reasoning_extra(model: &str, api_format: ApiFormat, extra: &toml::Table) -> Result<()> {
+pub(crate) fn validate_reasoning_extra(
+    model: &str,
+    api_format: ApiFormat,
+    extra: &toml::Table,
+) -> Result<()> {
     // `extra` is for provider extensions. These fields are owned by Orbit's
     // request encoder; accepting them here would silently replace the model,
     // transport shape, output budget, or tool contract.
@@ -215,6 +228,9 @@ pub(crate) fn antigravity_profiles() -> Result<Vec<ModelProfile>> {
 impl FileConfig {
     pub(crate) fn merge_account_models(&mut self) -> Result<()> {
         for provider in self.providers.values_mut() {
+            provider
+                .configured_models
+                .get_or_insert_with(|| provider.models.clone());
             if provider.managed_models
                 || provider.api_format != ApiFormat::GoogleCodeAssist
                 || provider.credential.is_none()
