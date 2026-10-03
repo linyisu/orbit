@@ -5,10 +5,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use orbit_model::{client::ApiFormat, types::ReasoningEffort};
+use orbit_model::{
+    client::ApiFormat,
+    types::{ReasoningAdapter, ReasoningEffort},
+};
 use serde_json::{Value, json};
 
-use crate::config::{FileConfig, ModelProfile};
+use crate::config::{FileConfig, ModelProfile, ReasoningProfile};
 
 pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
     let Some(directory) = config.auth_directory.clone() else {
@@ -271,9 +274,96 @@ pub(crate) fn default_vision(format: ApiFormat, base: &str, id: &str) -> bool {
     )
 }
 
+/// Defaults for official models whose discovery response contains only IDs.
+/// https://api-docs.deepseek.com/api/create-chat-completion/ (checked 2026-10-03).
+pub(crate) fn default_reasoning(
+    format: ApiFormat,
+    base: &str,
+    id: &str,
+) -> Option<ReasoningProfile> {
+    if !matches!(
+        base.trim_end_matches('/'),
+        "https://api.deepseek.com" | "https://api.deepseek.com/v1"
+    ) || !matches!(id, "deepseek-flash" | "deepseek-v4-pro")
+    {
+        return None;
+    }
+    let adapter = match format {
+        ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
+        ApiFormat::OpenaiResponses => ReasoningAdapter::OpenaiResponses,
+        _ => return None,
+    };
+    Some(ReasoningProfile {
+        adapter,
+        efforts: vec![
+            ReasoningEffort::None,
+            ReasoningEffort::Low,
+            ReasoningEffort::High,
+            ReasoningEffort::Max,
+        ],
+        default: ReasoningEffort::High,
+        extra: toml::Table::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reasoning_defaults_require_a_verified_model_endpoint_and_protocol() {
+        for (format, adapter) in [
+            (
+                ApiFormat::OpenaiChatCompletions,
+                ReasoningAdapter::OpenaiChat,
+            ),
+            (
+                ApiFormat::OpenaiResponses,
+                ReasoningAdapter::OpenaiResponses,
+            ),
+        ] {
+            for base in ["https://api.deepseek.com", "https://api.deepseek.com/v1/"] {
+                for id in ["deepseek-flash", "deepseek-v4-pro"] {
+                    let profile = default_reasoning(format, base, id).unwrap();
+                    assert_eq!(profile.adapter, adapter);
+                    assert_eq!(profile.default, ReasoningEffort::High);
+                    assert_eq!(
+                        profile.efforts,
+                        vec![
+                            ReasoningEffort::None,
+                            ReasoningEffort::Low,
+                            ReasoningEffort::High,
+                            ReasoningEffort::Max
+                        ]
+                    );
+                }
+            }
+        }
+        assert!(
+            default_reasoning(
+                ApiFormat::OpenaiChatCompletions,
+                "https://orbit.example/v1",
+                "deepseek-flash"
+            )
+            .is_none()
+        );
+        assert!(
+            default_reasoning(
+                ApiFormat::OpenaiChatCompletions,
+                "https://api.deepseek.com/v1",
+                "orbit-unreviewed"
+            )
+            .is_none()
+        );
+        assert!(
+            default_reasoning(
+                ApiFormat::AnthropicMessages,
+                "https://api.deepseek.com/v1",
+                "deepseek-flash"
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn antigravity_discovery_removes_retired_models_and_preserves_available_settings() {

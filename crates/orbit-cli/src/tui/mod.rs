@@ -18,6 +18,7 @@ mod icons;
 pub mod input;
 mod languages;
 mod markdown;
+mod model_catalog;
 mod navigation;
 mod overlay;
 mod permissions;
@@ -240,6 +241,8 @@ pub async fn run(
     let mut resume_task: Option<ResumeTask> = None;
     let mut marketplace_task: Option<MarketplaceTask> = None;
     let mut model_refresh: Option<ModelRefreshTask> = None;
+    let mut catalog_watcher =
+        model_catalog::Watcher::new(options.config.clone(), options.auth_directory.clone());
     let mut pending_guidance = Vec::new();
     let mut retry_submit = false;
     let mut restore_queue = std::collections::VecDeque::new();
@@ -373,7 +376,18 @@ pub async fn run(
             }
             if model_refresh.as_ref().is_some_and(|task| task.is_finished()) {
                 let result = model_refresh.take().expect("model refresh task").await;
+                let refreshed = matches!(&result, Ok(Ok(_)));
                 background::model_refresh_result(result, &mut state, &mut model_options);
+                if refreshed {
+                    catalog_watcher.resynchronize();
+                    model_catalog::publish(model_options.clone(), &mut state, &mut model_options, &mut background_runs, &mut tabs);
+                }
+                dirty = true;
+            }
+            if task.is_none() && local_task.is_none() && resume_task.is_none() && history_replay.is_none()
+                && model_catalog::reconcile(&mut state, &mut model, &model_options)
+            {
+                refresh_context_usage(&mut state, &history, &tools);
                 dirty = true;
             }
             let key = (session.id().to_owned(), state.input.text.clone());
@@ -968,13 +982,7 @@ pub async fn run(
                                 }
                                 if prompt.trim() == "/model refresh" {
                                     if model_refresh.is_none() {
-                                        let config_path = options.config.clone();
-                                        let auth_directory = options.auth_directory.clone();
-                                        model_refresh = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-                                            let mut config = crate::config::FileConfig::load(&config_path, &auth_directory)?;
-                                            let diagnostics = crate::account_models::refresh(&mut config, true).await;
-                                            Ok((config.model_options()?, diagnostics))
-                                        })));
+                                        model_refresh = Some(model_catalog::refresh(options.config.clone(), options.auth_directory.clone(), true));
                                     }
                                     continue;
                                 }
@@ -986,8 +994,7 @@ pub async fn run(
 
                                     match connect::run(&mut terminal, &mut events, options).await {
                                         Ok(Some(models)) => {
-                                            model_options = models;
-                                            state.model_completions = model_options.iter().map(ModelOption::qualified_name).collect();
+                                            model_catalog::publish(models, &mut state, &mut model_options, &mut background_runs, &mut tabs);
                                             let current = model_options.iter().find(|choice| choice.qualified_name() == state.model)
                                                 .or_else(|| model_options.first()).map(ModelOption::qualified_name);
                                             if let Some(current) = current {
@@ -1342,7 +1349,24 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
-                    dirty |= background::poll(&mut background_runs, &mut tabs, &mut session_sync).await?;
+                    if let Some(result) = catalog_watcher.poll().await {
+                        match result {
+                            Ok((models, diagnostics)) => {
+                                model_catalog::publish(models, &mut state, &mut model_options, &mut background_runs, &mut tabs);
+                                state.transcript.extend(diagnostics.into_iter().map(TranscriptItem::Notice));
+                            }
+                            Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("模型配置更新失败，保留现有配置：{error}"))),
+                        }
+                        dirty = true;
+                    }
+                    let (background_changed, catalog_refreshed) = background::poll(&mut background_runs, &mut tabs, &mut session_sync, &mut model_options).await?;
+                    if catalog_refreshed {
+                        catalog_watcher.resynchronize();
+                    }
+                    if background_changed {
+                        state.model_completions = model_options.iter().map(ModelOption::qualified_name).collect();
+                        dirty = true;
+                    }
                     if state.thinking_hover_started.is_some_and(|started| started.elapsed() < Duration::from_millis(160)) { dirty = true; }
                     if branch_task.as_ref().is_some_and(|task| task.is_finished())
                         && let Ok((workspace, branch)) = branch_task.take().unwrap().await

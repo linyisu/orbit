@@ -1,4 +1,58 @@
 use super::*;
+
+#[test]
+fn managed_deepseek_models_inherit_defaults_and_preserve_explicit_reasoning() {
+    let input = r#"default_provider = "orbit"
+[providers.orbit]
+base_url = "https://api.deepseek.com/v1/"
+credential = "orbit-fixture"
+managed_models = true
+[[providers.orbit.models]]
+id = "deepseek-flash"
+[[providers.orbit.models]]
+id = "deepseek-v4-pro"
+reasoning = { adapter = "openai_chat", efforts = ["low", "max"], default = "low" }
+"#;
+    let config = FileConfig::parse(input, Path::new("/tmp/orbit-fixture-auth")).unwrap();
+    assert!(config.providers["orbit"].models[0].reasoning.is_none());
+    let choices = config.model_options().unwrap();
+    assert_eq!(choices.len(), 2);
+    assert_eq!(
+        choices[0].config.reasoning_effort,
+        Some(ReasoningEffort::High)
+    );
+    assert_eq!(
+        choices[0].config.reasoning_adapter,
+        Some(ReasoningAdapter::OpenaiChat)
+    );
+    assert_eq!(
+        choices[0].reasoning_efforts,
+        vec![
+            ReasoningEffort::None,
+            ReasoningEffort::Low,
+            ReasoningEffort::High,
+            ReasoningEffort::Max
+        ]
+    );
+    assert_eq!(
+        choices[1].config.reasoning_effort,
+        Some(ReasoningEffort::Low)
+    );
+    assert_eq!(
+        choices[1].reasoning_efforts,
+        vec![ReasoningEffort::Low, ReasoningEffort::Max]
+    );
+
+    let mut discovered: FileConfig = toml::from_str(input).unwrap();
+    discovered.auth_directory = config.auth_directory.clone();
+    discovered.providers.get_mut("orbit").unwrap().models[0].reasoning = None;
+    assert_eq!(
+        discovered.model_options().unwrap()[0]
+            .config
+            .reasoning_effort,
+        Some(ReasoningEffort::High)
+    );
+}
 #[test]
 fn provider_debug_redacts_credentials() {
     let provider = ProviderConfig {

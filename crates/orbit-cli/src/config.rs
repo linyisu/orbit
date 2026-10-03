@@ -437,7 +437,12 @@ impl FileConfig {
                     || model.context_tokens.unwrap_or(self.context_tokens),
                     |input| input.saturating_add(max_output_tokens as usize),
                 );
-                let reasoning = model.reasoning.as_ref();
+                let default_reasoning = crate::account_models::default_reasoning(
+                    provider.api_format,
+                    &provider.base_url,
+                    &model.id,
+                );
+                let reasoning = model.reasoning.as_ref().or(default_reasoning.as_ref());
                 let supports_vision = model.supports_vision.unwrap_or_else(|| {
                     crate::account_models::default_vision(
                         provider.api_format,

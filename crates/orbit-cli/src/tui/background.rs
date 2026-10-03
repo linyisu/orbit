@@ -176,8 +176,10 @@ pub(super) async fn poll(
     runs: &mut Runs,
     tabs: &mut tabs::Tabs,
     sync: &mut session_sync::SessionSync,
-) -> Result<bool> {
+    model_options: &mut Vec<ModelOption>,
+) -> Result<(bool, bool)> {
     let mut changed = false;
+    let mut refreshed_models = None;
     for (id, run) in runs.iter_mut() {
         let Some(tab) = tabs.parked_mut(id) else {
             continue;
@@ -197,7 +199,11 @@ pub(super) async fn poll(
             .is_some_and(|task| task.is_finished())
         {
             let result = run.model_refresh.take().unwrap().await;
+            let refreshed = matches!(&result, Ok(Ok(_)));
             model_refresh_result(result, &mut tab.state, &mut run.model_options);
+            if refreshed {
+                refreshed_models = Some(run.model_options.clone());
+            }
             changed = true;
         }
         if run
@@ -237,6 +243,17 @@ pub(super) async fn poll(
             changed = true;
         }
         if run.task.is_none() {
+            if run.local_task.is_none()
+                && run.history_replay.is_none()
+                && super::model_catalog::reconcile(
+                    &mut tab.state,
+                    &mut tab.model,
+                    &run.model_options,
+                )
+            {
+                refresh_context_usage(&mut tab.state, &tab.history, &run.tools);
+                changed = true;
+            }
             continue;
         }
         if let Some(receiver) = &mut run.receiver {
@@ -299,6 +316,7 @@ pub(super) async fn poll(
             .await?;
         }
         tab.state.apply(event);
+        super::model_catalog::reconcile(&mut tab.state, &mut tab.model, &run.model_options);
         refresh_context_usage(&mut tab.state, &tab.history, &run.tools);
         session_sync::publish(&tab.session, &tab.state, finished_run).await?;
         run.receiver = None;
@@ -343,10 +361,14 @@ pub(super) async fn poll(
         }
         changed = true;
     }
+    let catalog_refreshed = refreshed_models.is_some();
+    if let Some(models) = refreshed_models {
+        super::model_catalog::publish_background(models, model_options, runs, tabs);
+    }
     for id in tabs.prune_closed(runs) {
         runs.remove(&id);
     }
-    Ok(changed)
+    Ok((changed, catalog_refreshed))
 }
 
 pub(super) async fn shutdown(runs: &mut Runs, tabs: &mut tabs::Tabs) -> Result<()> {
@@ -510,6 +532,81 @@ models = [{ id = "mock" }]
     }
 
     #[tokio::test]
+    async fn refreshed_capabilities_reach_parked_tabs_after_their_reply_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = options(dir.path());
+        let mut setup = crate::prepare_tui(&options, dir.path(), None)
+            .await
+            .unwrap();
+        let id = setup.session.id().to_owned();
+        let (run, release, _) = running(&mut setup, "orbit-refresh").await;
+        let mut choices = setup.resources.budget.model_options.clone();
+        choices[0].reasoning_efforts = vec![orbit_model::types::ReasoningEffort::High];
+        choices[0].config.reasoning_adapter =
+            Some(orbit_model::types::ReasoningAdapter::OpenaiChat);
+        choices[0].config.reasoning_effort = Some(orbit_model::types::ReasoningEffort::High);
+        let mut session = setup.session;
+        let mut model = setup.resources.model;
+        let mut state = UiState::new("test::mock");
+        state.submit("orbit-refresh".into());
+        let mut history = Vec::new();
+        let mut tabs = tabs::Tabs::new(&session);
+        let next = session.prepare_new("test::mock".into()).await.unwrap();
+        let next_model = model.clone();
+        tabs.activate(
+            &mut session,
+            &mut state,
+            &mut model,
+            &mut history,
+            (next, UiState::new("test::mock"), next_model, Vec::new()),
+        );
+        let mut runs = Runs::from([(id.clone(), run)]);
+        let mut model_options = Vec::new();
+        super::super::model_catalog::publish(
+            choices,
+            &mut state,
+            &mut model_options,
+            &mut runs,
+            &mut tabs,
+        );
+        let mut sync = session_sync::SessionSync::default();
+        for _ in 0..40 {
+            tokio::task::yield_now().await;
+            poll(&mut runs, &mut tabs, &mut sync, &mut model_options)
+                .await
+                .unwrap();
+        }
+        let tab = tabs.parked_mut(&id).unwrap();
+        assert_eq!(tab.model.config().reasoning_effort, None);
+        assert_eq!(tab.state.reasoning_effort, None);
+        assert_eq!(tab.state.model_completions, vec!["test::mock"]);
+        release.send(()).unwrap();
+        time::timeout(Duration::from_secs(2), async {
+            while runs[&id].task.is_some() {
+                poll(&mut runs, &mut tabs, &mut sync, &mut model_options)
+                    .await
+                    .unwrap();
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let tab = tabs.parked_mut(&id).unwrap();
+        assert_eq!(
+            tab.model.config().reasoning_effort,
+            Some(orbit_model::types::ReasoningEffort::High)
+        );
+        assert_eq!(
+            tab.state.reasoning_effort,
+            tab.model.config().reasoning_effort
+        );
+        assert_eq!(
+            tab.state.reasoning_efforts,
+            model_options[0].reasoning_efforts
+        );
+    }
+
+    #[tokio::test]
     async fn two_background_runs_stream_finish_and_keep_resources_and_approvals_separate() {
         let dir = tempfile::tempdir().unwrap();
         let options = options(dir.path());
@@ -587,7 +684,9 @@ models = [{ id = "mock" }]
             .unwrap();
         for _ in 0..40 {
             tokio::task::yield_now().await;
-            poll(&mut runs, &mut tabs, &mut sync).await.unwrap();
+            poll(&mut runs, &mut tabs, &mut sync, &mut Vec::new())
+                .await
+                .unwrap();
         }
         assert_eq!(session.id(), third_id);
         assert!(state.transcript.is_empty());
@@ -657,7 +756,9 @@ models = [{ id = "mock" }]
         second_release.send(()).unwrap();
         time::timeout(Duration::from_secs(2), async {
             loop {
-                poll(&mut runs, &mut tabs, &mut sync).await.unwrap();
+                poll(&mut runs, &mut tabs, &mut sync, &mut Vec::new())
+                    .await
+                    .unwrap();
                 if runs.values().all(|run| run.task.is_none()) {
                     break;
                 }
@@ -728,7 +829,9 @@ models = [{ id = "mock" }]
         let mut sync = session_sync::SessionSync::default();
         time::timeout(Duration::from_secs(2), async {
             while runs.contains_key(&id) {
-                poll(&mut runs, &mut tabs, &mut sync).await.unwrap();
+                poll(&mut runs, &mut tabs, &mut sync, &mut Vec::new())
+                    .await
+                    .unwrap();
                 tokio::task::yield_now().await;
             }
         })
@@ -811,7 +914,9 @@ models = [{ id = "mock" }]
         release.send(()).unwrap();
         time::timeout(Duration::from_secs(2), async {
             while runs[&id].busy() {
-                poll(&mut runs, &mut tabs, &mut sync).await.unwrap();
+                poll(&mut runs, &mut tabs, &mut sync, &mut Vec::new())
+                    .await
+                    .unwrap();
                 tokio::task::yield_now().await;
             }
         })
