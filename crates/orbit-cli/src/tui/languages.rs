@@ -90,6 +90,18 @@ fn syntax(language: &Language) -> Option<&'static SyntaxReference> {
         .and_then(|name| SYNTAXES.find_syntax_by_name(name))
 }
 
+pub(super) fn label_key(info: &str) -> String {
+    let full = normalized_label(info);
+    let token = full
+        .split_whitespace()
+        .next()
+        .unwrap_or("text")
+        .trim_start_matches('.');
+    language(&full)
+        .or_else(|| language(token))
+        .map_or_else(|| token.to_owned(), |language| language.id.clone())
+}
+
 pub(super) fn syntax_for_label(info: &str) -> Option<&'static SyntaxReference> {
     let full = normalized_label(info);
     if let Some(language) = language(&full) {
@@ -172,8 +184,25 @@ mod tests {
                     "{}: {label}",
                     language.id
                 );
+                assert_eq!(label_key(label), language.id, "{label}");
             }
         }
+    }
+
+    #[test]
+    fn badge_identity_preserves_languages_without_highlighting_and_ignores_attributes() {
+        for label in ["rust", "RS", "{.rs}", "language-RUST", "rs title=Orbit"] {
+            assert_eq!(label_key(label), "rust", "{label}");
+        }
+        for label in ["powershell", "pwsh", "PowerShell"] {
+            assert_eq!(label_key(label), "powershell", "{label}");
+        }
+        assert_eq!(label_key(""), "text");
+        assert_eq!(
+            label_key("invented-language title=Orbit"),
+            "invented-language"
+        );
+        assert_eq!(label_key("v"), "v");
     }
 
     #[test]

@@ -192,6 +192,28 @@ impl Theme {
 
 pub const THEME: Theme = Theme::dark();
 
+/// Stable language hues with a bounded brightness, including unknown languages.
+pub(super) fn code_label_color(key: &str) -> Color {
+    let hash = key.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    });
+    let hue = ((hash ^ (hash >> 32)) % 1536) as u16;
+    let low = 146 + ((hash >> 40) % 16) as u8;
+    let high = 208 + ((hash >> 48) % 16) as u8;
+    let offset = ((hue % 256) * u16::from(high - low) / 255) as u8;
+    let rising = low + offset;
+    let falling = high - offset;
+    let (red, green, blue) = match hue / 256 {
+        0 => (high, rising, low),
+        1 => (falling, high, low),
+        2 => (low, high, rising),
+        3 => (low, falling, high),
+        4 => (rising, low, high),
+        _ => (high, low, falling),
+    };
+    Color::Rgb(red, green, blue)
+}
+
 pub(super) fn desaturate_ansi_color(color: Color) -> Color {
     let (r, g, b) = match color {
         Color::Rgb(r, g, b) => (r, g, b),

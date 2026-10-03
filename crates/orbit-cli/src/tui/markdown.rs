@@ -8,7 +8,8 @@ use ratatui::{
 
 use super::{
     code::Highlighter,
-    languages::{is_markdown_label, syntax_for_label},
+    languages::{is_markdown_label, label_key},
+    theme::code_label_color,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -21,6 +22,7 @@ pub(super) struct CodeFence {
     markdown_source: bool,
     nested_fences: Vec<(char, usize)>,
     highlighter: Highlighter,
+    color: Color,
 }
 
 pub(super) type Fence = Option<CodeFence>;
@@ -726,14 +728,15 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             && code.nested_fences.is_empty()
         {
             let indent = " ".repeat(code.indent);
+            let color = code.color;
             *fence = None;
-            return Line::styled(format!("  {indent}└─"), Style::default().fg(SECONDARY));
+            return Line::styled(format!("  {indent}╰─"), Style::default().fg(color));
         }
 
         let indent = " ".repeat(code.indent);
         let mut spans = vec![Span::styled(
             format!("  {indent}│ "),
-            Style::default().fg(SECONDARY),
+            Style::default().fg(code.color),
         )];
 
         let code_line = source.strip_prefix(&indent).unwrap_or(source);
@@ -746,7 +749,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
     {
         let indent = source.len() - trimmed.len();
         let label = trimmed[count..].trim();
-        let resolved = syntax_for_label(label);
+        let color = code_label_color(&label_key(label));
         *fence = Some(CodeFence {
             indent,
             delimiter: marker,
@@ -754,19 +757,20 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             markdown_source: is_markdown_label(label),
             nested_fences: Vec::new(),
             highlighter: Highlighter::new(label),
+            color,
         });
         let indent_str = " ".repeat(indent);
-        return Line::styled(
-            format!(
-                "  {indent_str}┌─ {label}{}",
-                if !label.is_empty() && resolved.is_none() {
-                    " · 纯文本"
-                } else {
-                    ""
-                }
+        let label = if label.is_empty() { "text" } else { label };
+        return Line::from(vec![
+            Span::styled(format!("  {indent_str}╭─"), Style::default().fg(color)),
+            Span::styled(
+                format!(" {label} "),
+                Style::default()
+                    .fg(THEME.on_accent)
+                    .bg(color)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Style::default().fg(SECONDARY),
-        );
+        ]);
     }
 
     let mut spans = vec![Span::raw("  ")];
@@ -930,6 +934,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::languages::syntax_for_label;
 
     #[test]
     fn indented_code_preserves_unicode_and_shorter_indentation() {
@@ -1010,7 +1015,7 @@ mod tests {
     fn indented_code_fence_inside_list_aligns_border_and_strips_leading_indent() {
         let mut fence = None;
         let open = line("    ```rust", 0, &mut fence);
-        assert_eq!(open.to_string(), "      ┌─ rust");
+        assert_eq!(open.to_string(), "      ╭─ rust ");
 
         let code = line("    let x = 42;", 1, &mut fence);
         assert_eq!(code.to_string(), "      │ let x = 42;");
@@ -1019,7 +1024,46 @@ mod tests {
         assert_eq!(nested_code.to_string(), "      │     let y = x + 1;");
 
         let close = line("    ```", 3, &mut fence);
-        assert_eq!(close.to_string(), "      └─");
+        assert_eq!(close.to_string(), "      ╰─");
+    }
+
+    #[test]
+    fn code_badges_share_alias_colors_and_keep_unsupported_code_unchanged() {
+        let mut colors = Vec::new();
+        for (label, alias) in [
+            ("rust", "RS"),
+            ("r", "R"),
+            ("powershell", "pwsh"),
+            ("python", "py"),
+        ] {
+            let header = line(&format!("```{label}"), 0, &mut None);
+            let badge = &header.spans[1];
+            let alias_header = line(&format!("```{alias}"), 0, &mut None);
+            assert_eq!(badge.style.bg, alias_header.spans[1].style.bg);
+            assert_eq!(header.spans[0].style.fg, badge.style.bg);
+            assert_eq!(badge.style.fg, Some(THEME.on_accent));
+            assert!(badge.style.add_modifier.contains(Modifier::BOLD));
+            assert!(!colors.contains(&badge.style.bg), "{label}");
+            colors.push(badge.style.bg);
+        }
+
+        for (label, title) in [
+            ("powershell", "powershell"),
+            ("orbit-script", "orbit-script"),
+            ("", "text"),
+        ] {
+            let mut fence = None;
+            let header = line(&format!("```{label}"), 0, &mut fence);
+            assert_eq!(header.to_string(), format!("  ╭─ {title} "));
+            let color = header.spans[1].style.bg;
+            let source = r".\orbit\Scripts\orbit.exe --version # 中文";
+            let body = line(source, 1, &mut fence);
+            assert_eq!(body.to_string(), format!("  │ {source}"));
+            assert_eq!(body.spans[0].style.fg, color);
+            let closing = line("```", 2, &mut fence);
+            assert_eq!(closing.style.fg, color);
+            assert!(fence.is_none());
+        }
     }
 
     #[test]
@@ -1246,7 +1290,7 @@ mod tests {
     fn code_fences_require_matching_delimiter_and_length() {
         let mut fence = None;
 
-        assert_eq!(line("````rust", 0, &mut fence).to_string(), "  ┌─ rust");
+        assert_eq!(line("````rust", 0, &mut fence).to_string(), "  ╭─ rust ");
         assert_eq!(line("```", 1, &mut fence).to_string(), "  │ ```");
         assert_eq!(line("**code**", 2, &mut fence).to_string(), "  │ **code**");
 
@@ -1272,7 +1316,7 @@ mod tests {
 
         assert_eq!(
             line("````markdown", 0, &mut fence).to_string(),
-            "  ┌─ markdown"
+            "  ╭─ markdown "
         );
         assert_eq!(line("# 标题", 1, &mut fence).to_string(), "  │ # 标题");
         assert_eq!(
@@ -1285,7 +1329,7 @@ mod tests {
         );
         assert_eq!(line("```", 4, &mut fence).to_string(), "  │ ```");
         assert!(fence.is_some());
-        assert_eq!(line("````", 5, &mut fence).to_string(), "  └─");
+        assert_eq!(line("````", 5, &mut fence).to_string(), "  ╰─");
         assert!(fence.is_none());
     }
 
@@ -1311,7 +1355,7 @@ mod tests {
             line("# still source", 4, &mut fence).to_string(),
             "  │ # still source"
         );
-        assert_eq!(line("```", 5, &mut fence).to_string(), "  └─");
+        assert_eq!(line("```", 5, &mut fence).to_string(), "  ╰─");
         assert!(fence.is_none());
     }
 }

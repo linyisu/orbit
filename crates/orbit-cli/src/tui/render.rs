@@ -1892,6 +1892,9 @@ pub(super) fn thinking_line(
     // uniform 30% neutral wash across prose, Markdown and syntax colors.
     for span in &mut rendered.spans {
         span.style = span.style.fg(desaturate_for_thinking(span.style.fg));
+        if let Some(background) = span.style.bg {
+            span.style = span.style.bg(desaturate_for_thinking(Some(background)));
+        }
     }
 
     if !has_thinking_rail {
@@ -3876,7 +3879,18 @@ mod tests {
     #[test]
     fn thinking_code_keeps_a_compound_thinking_and_code_rail() {
         let mut code = None;
-        thinking_line("```markdown", 0, &mut code);
+        let header = thinking_line("```markdown", 0, &mut code);
+        let badge = header
+            .spans
+            .iter()
+            .find(|span| span.style.bg.is_some())
+            .unwrap();
+        let original = assistant_line("```markdown", 0, &mut None);
+        assert_eq!(
+            badge.style.bg,
+            Some(desaturate_for_thinking(original.spans[1].style.bg))
+        );
+        assert_eq!(badge.content, " markdown ");
         let line = thinking_line(
             "  nested source that should wrap inside the thought",
             1,
