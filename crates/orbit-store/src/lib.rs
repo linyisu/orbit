@@ -10,3 +10,5 @@ pub mod tui_sessions;
 pub mod types;
 
 pub mod tui_windows;
+
+pub mod subagents;

@@ -51,6 +51,33 @@ pub trait ModelBackend: Send + Sync {
     ) -> StreamFuture<'a>;
 }
 
+impl<T: ModelBackend + ?Sized> ModelBackend for Arc<T> {
+    fn supports_vision(&self) -> bool {
+        (**self).supports_vision()
+    }
+    fn stream_with_retries<'a>(
+        &'a self,
+        request: ChatRequest,
+        cancellation: CancellationToken,
+    ) -> ObservedStreamFuture<'a> {
+        (**self).stream_with_retries(request, cancellation)
+    }
+    fn complete<'a>(
+        &'a self,
+        request: ChatRequest,
+        cancellation: CancellationToken,
+    ) -> CompletionFuture<'a> {
+        (**self).complete(request, cancellation)
+    }
+    fn stream<'a>(
+        &'a self,
+        request: ChatRequest,
+        cancellation: CancellationToken,
+    ) -> StreamFuture<'a> {
+        (**self).stream(request, cancellation)
+    }
+}
+
 #[derive(Clone)]
 pub struct ModelClientBackend {
     client: ModelClient,

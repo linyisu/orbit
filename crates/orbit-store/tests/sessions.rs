@@ -210,7 +210,7 @@ async fn rejects_a_database_from_a_newer_schema() {
     let store = Store::open(db.path()).await.unwrap();
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=21").unwrap();
+    connection.execute_batch("PRAGMA user_version=22").unwrap();
     drop(connection);
 
     let error = Store::open(db.path())
@@ -1225,7 +1225,7 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
                 .unwrap(),
-            20
+            21
         );
     }
 }

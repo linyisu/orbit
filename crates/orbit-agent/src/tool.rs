@@ -105,6 +105,7 @@ pub trait Tool: Send + Sync {
 pub struct ToolRegistry {
     tools: Arc<HashMap<String, Arc<dyn Tool>>>,
     background: crate::background::BackgroundJobs,
+    additional_tasks: Vec<crate::background::BackgroundJobs>,
 }
 
 impl ToolRegistry {
@@ -114,6 +115,14 @@ impl ToolRegistry {
 
     pub fn background_jobs(&self) -> &crate::background::BackgroundJobs {
         &self.background
+    }
+
+    pub fn add_task_group(&mut self, tasks: crate::background::BackgroundJobs) {
+        self.additional_tasks.push(tasks);
+    }
+
+    pub fn task_groups(&self) -> impl Iterator<Item = &crate::background::BackgroundJobs> {
+        std::iter::once(&self.background).chain(self.additional_tasks.iter())
     }
 
     pub fn register<T>(&mut self, tool: T)

@@ -32,6 +32,8 @@ pub(crate) struct FileConfig {
     #[serde(default)]
     pub(crate) command: orbit_tools::run_command::CommandLimits,
     #[serde(default)]
+    pub(crate) subagents: crate::subagents::SubagentConfig,
+    #[serde(default)]
     pub(crate) compaction: orbit_agent::compaction::CompactionSettings,
     #[serde(default)]
     pub(crate) web: orbit_tools::web_fetch::WebConfig,
@@ -265,6 +267,7 @@ impl FileConfig {
 
         config.auth_directory = Some(auth_directory.to_path_buf());
         config.merge_account_models()?;
+        config.subagents.validate()?;
 
         if config.context_tokens < 8192 {
             bail!("context_tokens must be at least 8192");

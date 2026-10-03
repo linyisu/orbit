@@ -8,6 +8,7 @@ pub mod compaction;
 pub mod context;
 pub mod error;
 pub mod events;
+pub mod inbox;
 pub mod memory;
 pub mod model;
 pub mod tool;

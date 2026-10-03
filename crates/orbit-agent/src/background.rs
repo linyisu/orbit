@@ -65,10 +65,20 @@ struct State {
     active: bool,
 }
 
-#[derive(Default)]
 struct Inner {
     state: Mutex<State>,
     changed: Notify,
+    capacity: usize,
+}
+
+impl Default for Inner {
+    fn default() -> Self {
+        Self {
+            state: Mutex::default(),
+            changed: Notify::new(),
+            capacity: MAX_BACKGROUND_COMMANDS,
+        }
+    }
 }
 
 /// Shared by one session's tools and Agent. Processes never write conversation
@@ -155,6 +165,55 @@ pub(crate) struct Completion {
 }
 
 impl BackgroundJobs {
+    pub fn with_capacity(capacity: usize) -> Result<Self, ToolError> {
+        if !(1..=MAX_RETAINED_JOBS).contains(&capacity) {
+            return Err(ToolError::ExecutionFailed(
+                "background task capacity must be between 1 and 128".into(),
+            ));
+        }
+        Ok(Self(Arc::new(Inner {
+            capacity,
+            ..Default::default()
+        })))
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.0.capacity
+    }
+
+    /// Restore durable receipts before a run. Completed recovery records do
+    /// not consume concurrency slots or the live-job retention quota.
+    pub fn restore_result(
+        &self,
+        call: ToolCall,
+        label: String,
+        output: ToolOutput,
+    ) -> Result<JobSnapshot, ToolError> {
+        let mut state = self.0.state.lock().expect("background jobs lock poisoned");
+        if state.active {
+            return Err(ToolError::ExecutionFailed(
+                "restore task results before starting an Agent run".into(),
+            ));
+        }
+        let id = next_id();
+        let job = Job {
+            call,
+            label: bounded(&label, 512),
+            generation: state.generation + 1,
+            cancellation: CancellationToken::new(),
+            started: Instant::now(),
+            elapsed_ms: Some(0),
+            output_id: None,
+            result: Some(Ok(output)),
+            cancelled: false,
+            observed: false,
+            delivered: false,
+        };
+        let snapshot = job.snapshot(&id, true);
+        state.jobs.insert(id, job);
+        Ok(snapshot)
+    }
+
     pub(crate) fn begin_run(&self) -> Result<RunGuard, ToolError> {
         let mut state = self.0.state.lock().expect("background jobs lock poisoned");
         if state.active {
@@ -203,11 +262,7 @@ impl BackgroundJobs {
         Fut: Future<Output = Result<ToolOutput, ToolError>> + Send + 'static,
     {
         let cancellation = parent.child_token();
-        let id = format!(
-            "job-{}-{}",
-            std::process::id(),
-            JOB_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        );
+        let id = next_id();
         let snapshot = {
             let mut state = self.0.state.lock().expect("background jobs lock poisoned");
             if parent.is_cancelled() {
@@ -218,10 +273,11 @@ impl BackgroundJobs {
                 .values()
                 .filter(|job| job.result.is_none())
                 .count()
-                >= MAX_BACKGROUND_COMMANDS
+                >= self.0.capacity
             {
                 return Err(ToolError::ExecutionFailed(format!(
-                    "at most {MAX_BACKGROUND_COMMANDS} background commands may run per session; wait for an existing job"
+                    "at most {} background tasks may run in this group; wait for an existing job",
+                    self.0.capacity
                 )));
             }
             while state.jobs.len() >= MAX_RETAINED_JOBS {
@@ -284,7 +340,7 @@ impl BackgroundJobs {
         include_result: bool,
     ) -> Result<Vec<JobSnapshot>, ToolError> {
         let state = self.0.state.lock().expect("background jobs lock poisoned");
-        let ids = selected_ids(&state, ids)?;
+        let ids = selected_ids(&state, ids, self.0.capacity)?;
         Ok(ids
             .iter()
             .map(|id| state.jobs[id].snapshot(id, include_result))
@@ -293,7 +349,7 @@ impl BackgroundJobs {
 
     pub fn cancel(&self, ids: &[String]) -> Result<Vec<JobSnapshot>, ToolError> {
         let state = self.0.state.lock().expect("background jobs lock poisoned");
-        let ids = selected_ids(&state, ids)?;
+        let ids = selected_ids(&state, ids, self.0.capacity)?;
         for id in &ids {
             if state.jobs[id].result.is_none() {
                 state.jobs[id].cancellation.cancel();
@@ -326,7 +382,7 @@ impl BackgroundJobs {
                     .map(|(id, _)| id.clone())
                     .collect()
             } else {
-                selected_ids(&state, ids)?
+                selected_ids(&state, ids, self.0.capacity)?
             }
         };
         loop {
@@ -450,13 +506,13 @@ impl Job {
             Some(Err(_)) => JobStatus::Failed,
             Some(Ok(output)) => {
                 let result = serde_json::from_str::<serde_json::Value>(&output.content).ok();
-                if result
-                    .as_ref()
-                    .is_some_and(|value| value["cancelled"] == true)
-                {
+                if result.as_ref().is_some_and(|value| {
+                    value["cancelled"] == true || value["status"] == "cancelled"
+                }) {
                     JobStatus::Cancelled
                 } else if result.as_ref().is_some_and(|value| {
                     value["timed_out"] == true
+                        || matches!(value["status"].as_str(), Some("failed" | "interrupted"))
                         || value.get("exit_code").is_some_and(|code| code != 0)
                 }) {
                     JobStatus::Failed
@@ -487,7 +543,7 @@ impl Job {
     }
 }
 
-fn selected_ids(state: &State, ids: &[String]) -> Result<Vec<String>, ToolError> {
+fn selected_ids(state: &State, ids: &[String], capacity: usize) -> Result<Vec<String>, ToolError> {
     if ids.is_empty() {
         return Ok(state
             .jobs
@@ -496,10 +552,9 @@ fn selected_ids(state: &State, ids: &[String]) -> Result<Vec<String>, ToolError>
             .map(|(id, _)| id.clone())
             .collect());
     }
-    if ids.len() > MAX_BACKGROUND_COMMANDS || ids.iter().collect::<HashSet<_>>().len() != ids.len()
-    {
+    if ids.len() > capacity || ids.iter().collect::<HashSet<_>>().len() != ids.len() {
         return Err(ToolError::ExecutionFailed(format!(
-            "specify up to {MAX_BACKGROUND_COMMANDS} distinct command job IDs"
+            "specify up to {capacity} distinct task IDs"
         )));
     }
     for id in ids {
@@ -514,6 +569,14 @@ fn unknown(id: &str) -> ToolError {
     ToolError::ExecutionFailed(format!(
         "unknown command job {id}; jobs belong to this session and do not survive an Orbit restart"
     ))
+}
+
+fn next_id() -> String {
+    format!(
+        "job-{}-{}",
+        std::process::id(),
+        JOB_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn millis(duration: std::time::Duration) -> u64 {

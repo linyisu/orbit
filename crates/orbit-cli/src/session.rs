@@ -206,7 +206,12 @@ impl HistoryReplay {
                 self.run_start = Some(state.transcript.len());
                 state.input.history.push(run.prompt.clone());
 
-                if run.prompt != "/compact" {
+                let queued_input = run
+                    .events
+                    .iter()
+                    .take_while(|event| !matches!(event, AgentEvent::TurnStarted { .. }))
+                    .any(|event| matches!(event, AgentEvent::InputReceived { .. }));
+                if run.prompt != "/compact" && !queued_input {
                     // Do not reset the reader's scroll position between runs.
                     let (scroll, follow) = (state.scroll, state.follow_bottom);
                     state.submit(run.prompt.clone());

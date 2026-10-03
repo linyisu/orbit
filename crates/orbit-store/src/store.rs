@@ -56,7 +56,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 20,
+                version <= 21,
                 "database schema {version} is newer than this Orbit supports"
             );
 
@@ -353,6 +353,7 @@ impl Store {
                 ); PRAGMA user_version=20;")?;
             }
 
+            if version < 21 { crate::subagents::migrate(&connection)?; }
             connection.execute_batch("COMMIT;")?;
 
             Ok(Self {
@@ -427,7 +428,7 @@ impl Store {
 
     pub async fn list(&self) -> Result<Vec<Session>> {
         self.access(|conn| {
-            let mut statement = conn.prepare("SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.reasoning_effort,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id ORDER BY s.updated_at DESC, s.rowid DESC")?;
+            let mut statement = conn.prepare("SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.reasoning_effort,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE NOT EXISTS(SELECT 1 FROM agent_sessions a WHERE a.session_id=s.id) ORDER BY s.updated_at DESC, s.rowid DESC")?;
             Ok(statement.query_map([], session_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
@@ -555,19 +556,38 @@ impl Store {
 
         let id = id.to_owned();
         let path = self.path.clone();
-        let lock_path = path.with_extension("session-locks").join(&id);
-        let lease_path = lock_path.clone();
-        let lease = tokio::task::spawn_blocking(move || -> Result<File> {
-            let lock_root = path.with_extension("session-locks");
-            std::fs::create_dir_all(&lock_root)?;
-            ensure_real_directory_if_present(&lock_root)?;
-            let lock = private_file(&lease_path)?;
+        let parent_id = id.clone();
+        let parent_lease = tokio::task::spawn_blocking(move || -> Result<File> {
+            let root = path.with_extension("session-locks");
+            std::fs::create_dir_all(&root)?;
+            ensure_real_directory_if_present(&root)?;
+            let lock = private_file(&root.join(parent_id))?;
             lock.try_lock()
                 .context("session is open; close it before deleting")?;
-
             Ok(lock)
         })
         .await??;
+        let mut session_ids = self
+            .subagents(&id)
+            .await?
+            .into_iter()
+            .map(|a| a.id)
+            .collect::<Vec<_>>();
+        let lease_ids = session_ids.clone();
+        let lock_root = self.path.with_extension("session-locks");
+        let leases = tokio::task::spawn_blocking(move || -> Result<Vec<File>> {
+            lease_ids
+                .into_iter()
+                .map(|session_id| {
+                    let lock = private_file(&lock_root.join(session_id))?;
+                    lock.try_lock()
+                        .context("subagent is open; close it before deleting")?;
+                    Ok(lock)
+                })
+                .collect()
+        })
+        .await??;
+        session_ids.push(id.clone());
 
         let sidecar_path = self.path.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -581,6 +601,7 @@ impl Store {
         .await??;
 
         let session_id = id.clone();
+        let delete_ids = session_ids.clone();
         let deleted = self
             .access(move |conn| {
                 let transaction = conn.transaction()?;
@@ -591,12 +612,11 @@ impl Store {
                 )?;
 
                 if exists {
-                    transaction.execute(
-                        "DELETE FROM events WHERE run_id IN (SELECT id FROM runs WHERE session_id=?1)",
-                        [&session_id],
-                    )?;
-                    transaction.execute("DELETE FROM runs WHERE session_id=?1", [&session_id])?;
-                    transaction.execute("DELETE FROM sessions WHERE id=?1", [&session_id])?;
+                    for id in delete_ids {
+                        transaction.execute("DELETE FROM events WHERE run_id IN (SELECT id FROM runs WHERE session_id=?1)", [&id])?;
+                        transaction.execute("DELETE FROM runs WHERE session_id=?1", [&id])?;
+                        transaction.execute("DELETE FROM sessions WHERE id=?1", [&id])?;
+                    }
                 }
 
                 transaction.commit()?;
@@ -607,36 +627,38 @@ impl Store {
 
         let cleanup_path = self.path.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            for extension in ["workspaces", "command-output", "artifacts"] {
-                let root = cleanup_path.with_extension(extension);
+            for id in session_ids {
+                for extension in ["workspaces", "command-output", "artifacts"] {
+                    let root = cleanup_path.with_extension(extension);
 
-                if !ensure_real_directory_if_present(&root)? {
-                    continue;
+                    if !ensure_real_directory_if_present(&root)? {
+                        continue;
+                    }
+
+                    let directory = root.join(&id);
+
+                    match std::fs::symlink_metadata(&directory) {
+                        Ok(metadata) if metadata.file_type().is_symlink() => {
+                            std::fs::remove_file(&directory)?;
+                        }
+                        Ok(metadata) if metadata.is_dir() => {
+                            std::fs::remove_dir_all(&directory)?;
+                        }
+                        Ok(_) => {
+                            std::fs::remove_file(&directory)?;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                    }
                 }
 
-                let directory = root.join(&id);
-
-                match std::fs::symlink_metadata(&directory) {
-                    Ok(metadata) if metadata.file_type().is_symlink() => {
-                        std::fs::remove_file(&directory)?;
-                    }
-                    Ok(metadata) if metadata.is_dir() => {
-                        std::fs::remove_dir_all(&directory)?;
-                    }
-                    Ok(_) => {
-                        std::fs::remove_file(&directory)?;
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
-                }
+                std::fs::remove_file(cleanup_path.with_extension("session-locks").join(id))?;
             }
-
-            std::fs::remove_file(lock_path)?;
-
             Ok(())
         })
         .await??;
-        drop(lease);
+        drop(leases);
+        drop(parent_lease);
 
         Ok(deleted)
     }
@@ -1560,6 +1582,33 @@ impl SessionWriter {
         events: Vec<AgentEvent>,
         history: Option<Vec<ChatMessage>>,
     ) -> Result<()> {
+        self.finish_with_result(status, events, history, None).await
+    }
+
+    pub async fn finish_subagent(
+        &mut self,
+        status: &str,
+        history: Option<Vec<ChatMessage>>,
+        parent: String,
+        invocation: i64,
+        result: serde_json::Value,
+    ) -> Result<()> {
+        self.finish_with_result(
+            status,
+            Vec::new(),
+            history,
+            Some((parent, invocation, result)),
+        )
+        .await
+    }
+
+    async fn finish_with_result(
+        &mut self,
+        status: &str,
+        events: Vec<AgentEvent>,
+        history: Option<Vec<ChatMessage>>,
+        agent_result: Option<(String, i64, serde_json::Value)>,
+    ) -> Result<()> {
         ensure!(
             matches!(status, "completed" | "failed" | "cancelled"),
             "invalid terminal status"
@@ -1588,11 +1637,17 @@ impl SessionWriter {
                     )?;
                 }
 
+                if let Some((parent,invocation,result)) = agent_result {
+                    ensure!(transaction.execute("UPDATE agent_invocations SET result=?4 WHERE id=?1 AND parent_session_id=?2 AND child_session_id=?3 AND result IS NULL",params![invocation,parent,id,serde_json::to_string(&result)?])? == 1,"subagent invocation is unavailable or already finished");
+                }
                 transaction.execute(
                     "UPDATE runs SET status=?2,elapsed_ms=?3 WHERE id=?1",
                     params![run, status, elapsed_ms],
                 )?;
 
+                if status == "cancelled" {
+                    transaction.execute("UPDATE agent_invocations SET delivered=1 WHERE parent_run_id=?1",[run])?;
+                }
                 if let Some(history) = history {
                     transaction.execute(
                         "UPDATE sessions SET history=?2 WHERE id=?1",

@@ -486,7 +486,14 @@ impl UiState {
             AgentEvent::ToolBackgrounded { call, content, .. } => {
                 self.update_tool(&call, ToolStatus::Running, content);
             }
-            AgentEvent::WaitingForCommands { .. } => {
+            AgentEvent::InputReceived { content, .. } => {
+                self.finish_thinking();
+                self.finish_assistant();
+                let first = self.transcript.len();
+                self.transcript.push(TranscriptItem::User(content));
+                self.transcript_layout.invalidate_from(first);
+            }
+            AgentEvent::WaitingForCommands { .. } | AgentEvent::WaitingForTasks { .. } => {
                 self.background_waiting = true;
                 self.finish_thinking();
                 self.model_started_at = None;

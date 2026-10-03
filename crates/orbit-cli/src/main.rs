@@ -31,6 +31,7 @@ mod runtime;
 mod session;
 mod session_title;
 mod skills;
+mod subagents;
 mod tui;
 mod verification;
 
@@ -198,6 +199,8 @@ impl ChatMode {
 enum ChatCapability {
     /// Every optional tool group below.
     All,
+    /// Independent read-only delegated sessions.
+    Subagents,
     /// web_search and web_fetch.
     Web,
     /// Configured local MCP processes and their tools.
@@ -517,6 +520,16 @@ pub(crate) async fn prepare_tui_resources(
     history::register(&mut tools, session.store.clone(), memory_scope.clone());
     project_state::register(&mut tools, session.store.clone(), memory_scope.clone());
     skills.register_tool(&mut tools);
+    subagents::register(
+        &mut tools,
+        session.store.clone(),
+        session.id().into(),
+        config_path.clone(),
+        options.auth_directory.clone(),
+        instructions.clone(),
+        file_config.subagents.clone(),
+    )
+    .await?;
 
     Ok(TuiResources {
         cursor_trail: file_config.tui.cursor_trail,
@@ -697,6 +710,21 @@ async fn chat(
 
     if capability_is_disabled(&disabled, ChatCapability::Files) {
         tools.remove("verification_status");
+    }
+
+    if session.store.is_subagent(session.id()).await? {
+        subagents::restrict_child_tools(&mut tools);
+    } else if !capability_is_disabled(&disabled, ChatCapability::Subagents) {
+        subagents::register(
+            &mut tools,
+            session.store.clone(),
+            session.id().into(),
+            config_path.clone(),
+            auth_directory.clone(),
+            instructions.clone(),
+            file_config.subagents.clone(),
+        )
+        .await?;
     }
 
     let mut messages = session.snapshot.history.clone();
@@ -896,6 +924,18 @@ fn disable_chat_capabilities(
     tools: &mut orbit_agent::tool::ToolRegistry,
     disabled: &BTreeSet<ChatCapability>,
 ) {
+    if capability_is_disabled(disabled, ChatCapability::Subagents) {
+        for name in [
+            "spawn_agent",
+            "send_agent_message",
+            "wait_agents",
+            "read_agent",
+            "cancel_agents",
+        ] {
+            tools.remove(name);
+        }
+    }
+
     if capability_is_disabled(disabled, ChatCapability::History) {
         tools.remove("read_history");
     }

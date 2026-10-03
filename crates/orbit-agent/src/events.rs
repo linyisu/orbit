@@ -33,6 +33,13 @@ pub enum AgentEvent {
     WaitingForCommands {
         job_ids: Vec<String>,
     },
+    WaitingForTasks {
+        job_ids: Vec<String>,
+    },
+    InputReceived {
+        message_id: i64,
+        content: String,
+    },
     ToolFinished {
         call: ToolCall,
         content: String,

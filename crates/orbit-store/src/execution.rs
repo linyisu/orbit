@@ -73,6 +73,19 @@ impl Journal {
             }
 
             for event in events {
+                match &event {
+                    AgentEvent::InputReceived { message_id, .. } => {
+                        transaction.execute("UPDATE agent_messages SET received=1 WHERE id=?1 AND session_id=?2",params![message_id,session])?;
+                    }
+                    AgentEvent::ToolFinished { call, content, .. } if matches!(call.function.name.as_str(), "spawn_agent" | "send_agent_message") => {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
+                            && let Some(id) = value.get("invocation_id").and_then(|id|id.as_i64()) {
+                            transaction.execute("UPDATE agent_invocations SET delivered=1 WHERE id=?1 AND parent_session_id=?2 AND result IS NOT NULL",params![id,session])?;
+                        }
+                    }
+                    _ => {}
+                }
+
                 transaction.execute("INSERT INTO events(run_id,payload,created_at_ms) VALUES(?1,?2,CAST(unixepoch('subsec') * 1000 AS INTEGER))",params![run,serde_json::to_string(&event)?])?;
             }
 
@@ -97,6 +110,7 @@ impl ExecutionJournal for Journal {
                 | AgentEvent::ToolBackgrounded { .. }
                 | AgentEvent::ToolFinished { .. }
                 | AgentEvent::ToolFailed { .. }
+                | AgentEvent::InputReceived { .. }
         ) {
             journal_lock(&self.pending).push(event);
         }
