@@ -4,7 +4,7 @@
 
 ## 架构与核心组件
 
-- **非阻塞数据管道**：所有数据库读写操作均通过 Tokio 的 `spawn_blocking` 派发到专用阻塞线程池执行，坚决杜绝文件 I/O 阻塞 TUI 事件循环。
+- **非阻塞数据管道**：SQLite 读写通过 `access` / `read_access` 在 `spawn_blocking` 中执行。目录、锁文件与部分侧车文件操作仍有同步路径，不应把这一点理解为所有文件 I/O 都异步。
 - **并发与持久性模型**：
   - 开启 SQLite WAL（Write-Ahead Logging）模式，实现读写互不阻塞。
   - 强制启用外键约束，保证关联数据的完整性与级联安全。
@@ -23,7 +23,7 @@ orbit.db
 ├── events                    # 细粒度界面渲染事件流 (thinking, text, tool_call, tool_result)
 ├── session_messages          # 只追加的规范消息日志 (带 SHA-256 完整性哈希)
 ├── context_archives          # 原始上下文压缩前快照 (带哈希去重与分页检索)
-├── summary_checkpoints       # 结构化增量摘要进度与来源指纹游标
+├── compaction_progress       # 结构化增量摘要进度与来源指纹游标
 ├── execution_checkpoints     # 工具调用执行检查点 (用于故障中断识别)
 └── tui_windows               # 活跃 TUI 窗口注册与跨会话恢复快照
 ```
@@ -33,12 +33,12 @@ orbit.db
 Orbit 将“展示事件”、“当前模型上下文”与“规范原始消息”严格分层：
 
 1. **`session_messages`（规范日志）**：
-   只追加记录所有用户输入、模型回复与工具返回内容。每条消息计算 SHA-256 内容摘要，作为不可篡改的会话真理来源（Source of Truth）。
+   只追加记录所有用户输入、模型回复与工具返回内容。每条消息保存 SHA-256 内容摘要，回读时校验正文是否与已存哈希一致。它是规范历史来源，不是密码学意义上的不可篡改日志；具有数据库写权限的人可以同时改写正文与哈希。
 2. **`sessions.history`（模型上下文投影）**：
    保存当前轮次模型所实际感知到的消息数组。在触发 `/compact` 或自动分层整理时，仅替换此上下文投影，而不修改 `session_messages` 规范日志。
 3. **`context_archives`（上下文归档）**：
    在精简工具大文本前，将整段历史完整持久化为只读快照。相同内容通过哈希复用归档 ID，供模型通过 `read_history` 安全分页检索。
-4. **`summary_checkpoints`（摘要检查点）**：
+4. **`compaction_progress`（摘要检查点）**：
    记录已成功完成的结构化摘要内容、来源指纹及进度游标。当后续任务失败或中断时，已保存的有效摘要可被复用，无需从头重算。
 
 ---

@@ -30,3 +30,20 @@ api_key = "replace-with-openai-key"
 id = "gpt-5.6-sol"
 supports_vision = true
 reasoning = { adapter = "openai_responses", efforts = ["none", "low", "medium", "high"], default = "high" }
+
+
+# --- 命令与交付预算 ---
+[command]
+network = "allow" # 允许显式申请联网；run_command 单次请求默认 network="deny"
+read_file_scan_bytes = 67108864 # 每次文件读取最多扫描 64 MiB；0 表示不限扫描量
+
+[command.artifacts]
+max_file_bytes = 1073741824 # 1 GiB；0 表示不限
+max_session_bytes = 4294967296 # 4 GiB；0 表示不限
+max_files = 128 # 0 表示不限
+
+[permissions]
+# 用户明确确认这些文件是可公开的模板后，填写工作区内的精确路径。
+# 读取与写入分别授权；write_templates 同时允许读取。不会按文件后缀自动信任。
+read_templates = [] # 例如 [".env.example"]
+write_templates = []

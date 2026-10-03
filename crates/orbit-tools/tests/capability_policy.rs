@@ -53,6 +53,8 @@ fn persistent_workspace_policy_grants_configured_external_paths() {
     let workspace = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
 
     let permissions = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
         read: vec![tmp_cache.path().to_path_buf()],
         read_write: vec![tmp_logs.path().to_path_buf()],
     };

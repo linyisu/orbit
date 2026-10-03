@@ -98,9 +98,11 @@ pub(crate) fn collect_opaque_inodes_for_dev(
 /// File tools reject inode aliases of reserved workspace names as well as
 /// literal paths. The command sandbox performs this same check while building
 /// its mount masks; ordinary single-link reads need no extra traversal.
-pub(crate) fn is_reserved_workspace_inode(
+pub(crate) fn is_reserved_workspace_inode_with_templates(
     root: &Path,
     candidate: (u64, u64),
+    read: &[std::path::PathBuf],
+    write: &[std::path::PathBuf],
 ) -> Result<bool, RuntimeError> {
     let mut queue = VecDeque::from([(root.to_path_buf(), 0usize)]);
     let mut visited = 0usize;
@@ -123,7 +125,9 @@ pub(crate) fn is_reserved_workspace_inode(
             let meta = std::fs::symlink_metadata(&path).map_err(failed)?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            let reserved = super::path_security::is_protected_workspace_name(&name);
+            let reserved = super::path_security::is_protected_workspace_name(&name)
+                && !read.contains(&path)
+                && !write.contains(&path);
 
             if reserved {
                 if (meta.dev(), meta.ino()) == candidate {

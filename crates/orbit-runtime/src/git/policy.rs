@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum GitOperationKind {
     /// Read-only inspection (status, diff, log, branch --list, etc.)
     /// Allowed automatically without interactive confirmation.
-    ReadOnlyQuery {
-        subcommand: String,
-    },
+    ReadOnlyQuery { subcommand: String },
     /// Normal local modification (add, normal commit, create branch, stash, etc.)
     /// Requires local Git write authorization; not prompted repeatedly in the same session.
     LocalWrite {
@@ -30,10 +28,7 @@ pub enum GitOperationKind {
     },
     /// High-risk or destructive operation (force push, reset --hard, clean -fd, delete branch).
     /// Always requires explicit confirmation, never bypassed by ordinary write permissions.
-    Dangerous {
-        subcommand: String,
-        reason: String,
-    },
+    Dangerous { subcommand: String, reason: String },
     /// Modification to repository configuration (.git/config), worktree config, or hooks.
     /// Requires independent dedicated authorization.
     ConfigMutation {
@@ -42,9 +37,7 @@ pub enum GitOperationKind {
     },
     /// Compound commands (&&, ||, ;, pipes, subshells) or unrecognized git commands/scripts.
     /// Must fall back to regular Shell approval and not claim to be a safe Git operation.
-    CompoundOrShell {
-        reason: String,
-    },
+    CompoundOrShell { reason: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,7 +85,7 @@ impl GitCommandAnalysis {
         };
 
         let first = &words[0];
-        if first != "git" && !first.ends_with("/git") {
+        if first != "git" && first != "/usr/bin/git" && first != "/bin/git" {
             return None;
         }
 
@@ -107,12 +100,24 @@ impl GitCommandAnalysis {
             }
 
             match arg.as_str() {
-                "--help" | "--version" | "--paginate" | "-p" | "--no-pager"
-                | "--no-replace-objects" | "--literal-pathspecs" | "--bare" => {
+                "--help"
+                | "--version"
+                | "--paginate"
+                | "-p"
+                | "--no-pager"
+                | "--no-replace-objects"
+                | "--literal-pathspecs"
+                | "--bare" => {
                     idx += 1;
                 }
                 "-C" | "--git-dir" | "--work-tree" | "--namespace" => {
-                    idx += 2; // skip flag and directory argument
+                    return Some(Self {
+                        raw_command: trimmed.into(),
+                        subcommand: String::new(),
+                        kind: GitOperationKind::CompoundOrShell {
+                            reason: "显式选择其他仓库，按通用 Shell 请求审批".into(),
+                        },
+                    });
                 }
                 "-c" => {
                     if idx + 1 < words.len() {
@@ -123,10 +128,22 @@ impl GitCommandAnalysis {
                     }
                 }
                 _ if arg.starts_with("-C") => {
-                    idx += 1;
+                    return Some(Self {
+                        raw_command: trimmed.into(),
+                        subcommand: String::new(),
+                        kind: GitOperationKind::CompoundOrShell {
+                            reason: "显式选择其他仓库，按通用 Shell 请求审批".into(),
+                        },
+                    });
                 }
                 _ if arg.starts_with("--git-dir=") || arg.starts_with("--work-tree=") => {
-                    idx += 1;
+                    return Some(Self {
+                        raw_command: trimmed.into(),
+                        subcommand: String::new(),
+                        kind: GitOperationKind::CompoundOrShell {
+                            reason: "显式选择其他仓库，按通用 Shell 请求审批".into(),
+                        },
+                    });
                 }
                 _ if arg.starts_with("-c") => {
                     inline_config_keys.push(arg[2..].to_string());
@@ -141,10 +158,13 @@ impl GitCommandAnalysis {
 
         // Check if inline config attempts to mutate hooks or execution config
         for key_val in inline_config_keys {
-            let key = key_val.split('=').next().unwrap_or("").trim().to_lowercase();
-            if key == "core.hookspath"
-                || key == "core.sshcommand"
-                || key.starts_with("credential.")
+            let key = key_val
+                .split('=')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            if key == "core.hookspath" || key == "core.sshcommand" || key.starts_with("credential.")
             {
                 return Some(Self {
                     raw_command: trimmed.to_string(),
@@ -181,9 +201,8 @@ impl GitCommandAnalysis {
 }
 
 fn contains_git_word(text: &str) -> bool {
-    text.split_whitespace().any(|word| {
-        word == "git" || word.starts_with("git ") || word.ends_with("/git")
-    })
+    text.split_whitespace()
+        .any(|word| word == "git" || word.starts_with("git ") || word.ends_with("/git"))
 }
 
 fn contains_compound_shell_syntax(text: &str) -> bool {
@@ -198,6 +217,8 @@ fn contains_compound_shell_syntax(text: &str) -> bool {
             '\\' => {
                 chars.next(); // skip escaped char
             }
+            '`' if !in_single_quote => return true,
+            '$' if !in_single_quote && chars.peek() == Some(&'(') => return true,
             _ if in_single_quote || in_double_quote => {}
             '&' | '|' | ';' | '\n' | '`' | '>' | '<' => return true,
             '$' if chars.peek() == Some(&'(') => return true,
@@ -210,32 +231,44 @@ fn contains_compound_shell_syntax(text: &str) -> bool {
 
 fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
     match subcmd {
-        "status" | "diff" | "log" | "show" | "rev-parse" | "describe" | "cat-file"
-        | "ls-files" | "ls-tree" | "grep" | "shortlog" | "blame" | "check-ignore"
-        | "check-attr" | "whatchanged" | "count-objects" => {
-            GitOperationKind::ReadOnlyQuery {
-                subcommand: subcmd.to_string(),
+        "status" | "diff" | "log" | "show" | "rev-parse" | "describe" | "cat-file" | "ls-files"
+        | "ls-tree" | "grep" | "shortlog" | "blame" | "check-ignore" | "check-attr"
+        | "whatchanged" | "count-objects" => {
+            if args
+                .iter()
+                .any(|a| a == "--output" || a.starts_with("--output="))
+            {
+                GitOperationKind::CompoundOrShell {
+                    reason: "Git output file requires ordinary Shell approval".into(),
+                }
+            } else {
+                GitOperationKind::ReadOnlyQuery {
+                    subcommand: subcmd.to_string(),
+                }
             }
         }
 
         "remote" => {
             if args.is_empty()
-                || args.iter().any(|a| a == "-v" || a == "--verbose")
+                || args.iter().all(|a| a == "-v" || a == "--verbose")
                 || args.first().is_some_and(|a| a == "show" || a == "get-url")
             {
                 GitOperationKind::ReadOnlyQuery {
                     subcommand: subcmd.to_string(),
                 }
             } else {
-                GitOperationKind::LocalWrite {
-                    subcommand: subcmd.to_string(),
-                    description: format!("修改远端配置: git remote {}", args.join(" ")),
+                GitOperationKind::ConfigMutation {
+                    key: Some("remote".into()),
+                    value: None,
                 }
             }
         }
 
         "branch" => {
-            if args.iter().any(|a| a == "-D" || a == "-d" || a == "--delete") {
+            if args
+                .iter()
+                .any(|a| a == "-D" || a == "-d" || a == "--delete")
+            {
                 return GitOperationKind::Dangerous {
                     subcommand: "branch".into(),
                     reason: "删除分支".into(),
@@ -325,13 +358,16 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
         }
 
         "checkout" => {
-            if args.iter().any(|a| a == "-f" || a == "--force") {
+            if args
+                .iter()
+                .any(|a| a == "-f" || a == "--force" || a == "-B")
+            {
                 return GitOperationKind::Dangerous {
                     subcommand: "checkout".into(),
                     reason: "强制检出 (checkout --force) 将丢弃未保存修改".into(),
                 };
             }
-            if args.iter().any(|a| a == "-b" || a == "-B") {
+            if args.iter().any(|a| a == "-b") {
                 return GitOperationKind::LocalWrite {
                     subcommand: "checkout".into(),
                     description: format!("创建并切换新分支: git checkout {}", args.join(" ")),
@@ -350,13 +386,23 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
         }
 
         "switch" => {
-            if args.iter().any(|a| a == "-f" || a == "--force" || a == "--discard-changes") {
+            if args.iter().any(|a| {
+                a == "-f"
+                    || a == "--force"
+                    || a == "--discard-changes"
+                    || a == "-C"
+                    || a == "--force-create"
+                    || a.starts_with("--force-create=")
+            }) {
                 return GitOperationKind::Dangerous {
                     subcommand: "switch".into(),
                     reason: "强制切换分支将丢弃未保存修改".into(),
                 };
             }
-            if args.iter().any(|a| a == "-c" || a == "-C" || a == "--create") {
+            if args
+                .iter()
+                .any(|a| a == "-c" || a == "-C" || a == "--create")
+            {
                 return GitOperationKind::LocalWrite {
                     subcommand: "switch".into(),
                     description: format!("创建并切换新分支: git switch {}", args.join(" ")),
@@ -406,9 +452,13 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                 a == "--force"
                     || a == "-f"
                     || a == "--force-with-lease"
+                    || a.starts_with("--force-with-lease=")
+                    || a == "--mirror"
                     || a == "--force-if-includes"
             });
-            let is_delete = args.iter().any(|a| a == "--delete" || a == "-d");
+            let is_delete = args
+                .iter()
+                .any(|a| a == "--delete" || a == "-d" || a.starts_with(':'));
             let has_plus_ref = args
                 .iter()
                 .filter(|a| !a.starts_with('-'))
@@ -424,6 +474,32 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                 return GitOperationKind::Dangerous {
                     subcommand: "push".into(),
                     reason: "删除远端分支".into(),
+                };
+            }
+
+            if args.iter().any(|a| {
+                a.starts_with('-')
+                    && !matches!(
+                        a.as_str(),
+                        "--" | "-v"
+                            | "--verbose"
+                            | "-q"
+                            | "--quiet"
+                            | "--porcelain"
+                            | "-n"
+                            | "--dry-run"
+                            | "--progress"
+                            | "--no-progress"
+                            | "--atomic"
+                            | "--follow-tags"
+                            | "--tags"
+                            | "--all"
+                            | "-u"
+                            | "--set-upstream"
+                    )
+            }) {
+                return GitOperationKind::CompoundOrShell {
+                    reason: "未知 push 选项，不能复用普通远端写入授权".into(),
                 };
             }
 
@@ -557,16 +633,26 @@ mod tests {
     #[test]
     fn parses_local_writes() {
         let add = GitCommandAnalysis::parse("git add src/main.rs").unwrap();
-        assert!(matches!(add.kind, GitOperationKind::LocalWrite { ref subcommand, .. } if subcommand == "add"));
+        assert!(
+            matches!(add.kind, GitOperationKind::LocalWrite { ref subcommand, .. } if subcommand == "add")
+        );
 
         let commit = GitCommandAnalysis::parse("git commit -m 'feat: test'").unwrap();
-        assert!(matches!(commit.kind, GitOperationKind::LocalWrite { ref subcommand, .. } if subcommand == "commit"));
+        assert!(
+            matches!(commit.kind, GitOperationKind::LocalWrite { ref subcommand, .. } if subcommand == "commit")
+        );
 
         let new_branch = GitCommandAnalysis::parse("git checkout -b feature/xyz").unwrap();
-        assert!(matches!(new_branch.kind, GitOperationKind::LocalWrite { .. }));
+        assert!(matches!(
+            new_branch.kind,
+            GitOperationKind::LocalWrite { .. }
+        ));
 
         let new_branch2 = GitCommandAnalysis::parse("git switch -c feature/xyz").unwrap();
-        assert!(matches!(new_branch2.kind, GitOperationKind::LocalWrite { .. }));
+        assert!(matches!(
+            new_branch2.kind,
+            GitOperationKind::LocalWrite { .. }
+        ));
     }
 
     #[test]
@@ -644,16 +730,68 @@ mod tests {
 
     #[test]
     fn detects_config_and_hooks_injection() {
-        let inline_hook = GitCommandAnalysis::parse("git -c core.hooksPath=/tmp/pwn status").unwrap();
-        assert!(matches!(inline_hook.kind, GitOperationKind::ConfigMutation { .. }));
+        let inline_hook =
+            GitCommandAnalysis::parse("git -c core.hooksPath=/tmp/pwn status").unwrap();
+        assert!(matches!(
+            inline_hook.kind,
+            GitOperationKind::ConfigMutation { .. }
+        ));
 
         let inline_ssh = GitCommandAnalysis::parse("git -c core.sshCommand=evil push").unwrap();
-        assert!(matches!(inline_ssh.kind, GitOperationKind::ConfigMutation { .. }));
+        assert!(matches!(
+            inline_ssh.kind,
+            GitOperationKind::ConfigMutation { .. }
+        ));
 
         let config_set = GitCommandAnalysis::parse("git config user.name 'Test'").unwrap();
-        assert!(matches!(config_set.kind, GitOperationKind::ConfigMutation { .. }));
+        assert!(matches!(
+            config_set.kind,
+            GitOperationKind::ConfigMutation { .. }
+        ));
 
         let config_get = GitCommandAnalysis::parse("git config user.name").unwrap();
-        assert!(matches!(config_get.kind, GitOperationKind::ReadOnlyQuery { .. }));
+        assert!(matches!(
+            config_get.kind,
+            GitOperationKind::ReadOnlyQuery { .. }
+        ));
+    }
+    #[test]
+    fn rejects_quoted_substitutions_and_classifies_destructive_variants() {
+        for command in [
+            "git status \"$(touch file)\"",
+            "git status \"`touch file`\"",
+        ] {
+            assert!(matches!(
+                GitCommandAnalysis::parse(command).unwrap().kind,
+                GitOperationKind::CompoundOrShell { .. }
+            ));
+        }
+        for command in [
+            "git push --force-with-lease=main origin main",
+            "git push --mirror origin",
+            "git push origin :main",
+            "git checkout -B main",
+            "git switch -C main",
+        ] {
+            assert!(
+                matches!(
+                    GitCommandAnalysis::parse(command).unwrap().kind,
+                    GitOperationKind::Dangerous { .. }
+                ),
+                "{command}"
+            );
+        }
+        assert!(matches!(
+            GitCommandAnalysis::parse("git remote add -v origin https://example.com/repo")
+                .unwrap()
+                .kind,
+            GitOperationKind::ConfigMutation { .. }
+        ));
+        assert!(matches!(
+            GitCommandAnalysis::parse("git diff --output=result")
+                .unwrap()
+                .kind,
+            GitOperationKind::CompoundOrShell { .. }
+        ));
     }
 }

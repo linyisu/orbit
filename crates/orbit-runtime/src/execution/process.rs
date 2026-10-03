@@ -233,6 +233,7 @@ pub struct ProcessSpec {
     pub protected_paths: Vec<PathBuf>,
     pub opaque_runtime_roots: Vec<PathBuf>,
     pub unmask_git: bool,
+    pub allow_git_config_write: bool,
 }
 
 impl ProcessSpec {
@@ -253,6 +254,7 @@ impl ProcessSpec {
             protected_paths: Vec::new(),
             opaque_runtime_roots: Vec::new(),
             unmask_git: false,
+            allow_git_config_write: false,
         }
     }
 

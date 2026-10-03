@@ -11,10 +11,28 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ArtifactLimits {
+    pub max_file_bytes: u64,
+    pub max_session_bytes: u64,
+    pub max_files: usize,
+}
+impl Default for ArtifactLimits {
+    fn default() -> Self {
+        Self {
+            max_file_bytes: 1024 * 1024 * 1024,
+            max_session_bytes: 4 * 1024 * 1024 * 1024,
+            max_files: 128,
+        }
+    }
+}
+
 pub struct ExportArtifact {
     scratch: ScratchDirectory,
     directory: PathBuf,
     workspace: Option<Workspace>,
+    limits: ArtifactLimits,
 }
 
 impl ExportArtifact {
@@ -23,7 +41,13 @@ impl ExportArtifact {
             scratch,
             directory,
             workspace: None,
+            limits: ArtifactLimits::default(),
         }
+    }
+
+    pub fn with_limits(mut self, limits: ArtifactLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     pub fn with_workspace(mut self, workspace: Workspace) -> Self {
@@ -43,7 +67,7 @@ impl Tool for ExportArtifact {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "export_artifact",
-            "Export a regular file from the current session's /scratch or workspace to Orbit's private host artifact directory for the user to open. Supports binary files. path can be relative to /scratch (e.g. 'file.txt' or '/scratch/file.txt') or relative to the workspace root (e.g. 'dist/app.bin' or '/workspace/dist/app.bin'); maximum 64 MiB per file, 128 files / 256 MiB per session. Does not overwrite project files or existing artifacts; symlinks and traversal are rejected. Returns the actual host path, size and SHA-256.",
+            "Export a regular file from the current session's /scratch or workspace to Orbit's private host artifact directory for the user to open. Supports binary files. path can be relative to /scratch (e.g. 'file.txt' or '/scratch/file.txt') or relative to the workspace root (e.g. 'dist/app.bin' or '/workspace/dist/app.bin'); configurable quotas (default 1 GiB per file, 128 files / 4 GiB per session). Does not overwrite project files or existing artifacts; internal symlinks are resolved safely; escaping links and traversal are rejected. Returns the actual host path, size and SHA-256.",
             json!({
                 "type": "object",
                 "properties": {
@@ -68,9 +92,17 @@ impl Tool for ExportArtifact {
             let scratch = self.scratch.read().expect("scratch lock poisoned").clone();
             let workspace = self.workspace.clone();
             let directory = self.directory.clone();
+            let limits = self.limits.clone();
 
             tokio::task::spawn_blocking(move || {
-                export(&scratch, workspace.as_ref(), &directory, args, token)
+                export_with_limits(
+                    &scratch,
+                    workspace.as_ref(),
+                    &directory,
+                    args,
+                    token,
+                    &limits,
+                )
             })
             .await
             .map_err(failed)?
@@ -82,12 +114,31 @@ fn failed(error: impl std::fmt::Display) -> ToolError {
     ToolError::ExecutionFailed(error.to_string())
 }
 
+#[cfg(test)]
 fn export(
     scratch: &Path,
     workspace: Option<&Workspace>,
     parent: &Path,
     args: Arguments,
     token: CancellationToken,
+) -> Result<ToolOutput, ToolError> {
+    export_with_limits(
+        scratch,
+        workspace,
+        parent,
+        args,
+        token,
+        &ArtifactLimits::default(),
+    )
+}
+
+fn export_with_limits(
+    scratch: &Path,
+    workspace: Option<&Workspace>,
+    parent: &Path,
+    args: Arguments,
+    token: CancellationToken,
+    limits: &ArtifactLimits,
 ) -> Result<ToolOutput, ToolError> {
     if token.is_cancelled() {
         return Err(ToolError::Cancelled);
@@ -134,7 +185,7 @@ fn export(
 
     let scratch_ws = Workspace::new(scratch).map_err(failed)?;
 
-    let file = if let Some(rel) = raw_path.strip_prefix("/scratch/") {
+    let mut file = if let Some(rel) = raw_path.strip_prefix("/scratch/") {
         scratch_ws
             .open_read(Path::new(rel))
             .map_err(|e| failed(format!("cannot open file '{rel}' in /scratch: {e}")))?
@@ -187,16 +238,11 @@ fn export(
         }
     };
 
-    let mut bytes = Vec::new();
-    file.take(64 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(failed)?;
-
-    if bytes.len() > 64 * 1024 * 1024 {
-        return Err(failed("artifact exceeds 64 MiB"));
-    }
-    if token.is_cancelled() {
-        return Err(ToolError::Cancelled);
+    use std::os::unix::fs::MetadataExt;
+    let before = file.metadata().map_err(failed)?;
+    let size = before.len();
+    if limits.max_file_bytes != 0 && size > limits.max_file_bytes {
+        return Err(failed("artifact exceeds configured file quota"));
     }
 
     use std::os::unix::fs::DirBuilderExt;
@@ -224,17 +270,43 @@ fn export(
     }
 
     let destination = parent.join(scratch.file_name().unwrap());
+    // A filesystem lock serializes quota checks and publication across processes.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(destination.join(".quota-lock"))
+        .map_err(failed)?;
+    loop {
+        if token.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                std::thread::sleep(std::time::Duration::from_millis(10))
+            }
+            Err(error) => return Err(failed(error)),
+        }
+    }
     let (count, total) = std::fs::read_dir(&destination)
         .map_err(failed)?
         .try_fold((0usize, 0u64), |(count, total), entry| {
-            let metadata = entry?.metadata()?;
+            let entry = entry?;
+            if entry.file_name() == ".quota-lock" {
+                return Ok((count, total));
+            }
+            let metadata = entry.metadata()?;
             Ok::<_, std::io::Error>((count + 1, total.saturating_add(metadata.len())))
         })
         .map_err(failed)?;
 
-    if count >= 128 || total.saturating_add(bytes.len() as u64) > 256 * 1024 * 1024 {
+    if (limits.max_files != 0 && count >= limits.max_files)
+        || (limits.max_session_bytes != 0 && total.saturating_add(size) > limits.max_session_bytes)
+    {
         return Err(failed(
-            "session artifact quota reached: 128 files / 256 MiB; existing artifacts were preserved",
+            "session artifact quota reached; existing artifacts were preserved",
         ));
     }
 
@@ -243,7 +315,47 @@ fn export(
         .suffix(&format!("-{name}"))
         .tempfile_in(&destination)
         .map_err(failed)?;
-    output.write_all(&bytes).map_err(failed)?;
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    let mut copied = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        if token.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let n = file.read(&mut buffer).map_err(failed)?;
+        if n == 0 {
+            break;
+        }
+        copied += n as u64;
+        if (limits.max_file_bytes != 0 && copied > limits.max_file_bytes)
+            || (limits.max_session_bytes != 0
+                && total.saturating_add(copied) > limits.max_session_bytes)
+        {
+            return Err(failed("artifact grew beyond configured quota during copy"));
+        }
+        output.write_all(&buffer[..n]).map_err(failed)?;
+        hash.update(&buffer[..n]);
+    }
+
+    let after = file.metadata().map_err(failed)?;
+    if (
+        before.len(),
+        before.mtime(),
+        before.mtime_nsec(),
+        before.ctime(),
+        before.ctime_nsec(),
+    ) != (
+        after.len(),
+        after.mtime(),
+        after.mtime_nsec(),
+        after.ctime(),
+        after.ctime_nsec(),
+    ) {
+        return Err(failed(
+            "artifact changed during copy; retry after generation finishes",
+        ));
+    }
     output.as_file().sync_all().map_err(failed)?;
 
     if token.is_cancelled() {
@@ -256,7 +368,7 @@ fn export(
         .map_err(failed)?;
 
     Ok(ToolOutput::text(
-        json!({ "path": path, "name": name, "bytes": bytes.len(), "sha256": orbit_runtime::execution::content_hash(&bytes) })
+        json!({ "path": path, "name": name, "bytes": copied, "sha256": hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>() })
         .to_string(),
     ))
 }
@@ -325,7 +437,7 @@ mod tests {
                 },
                 CancellationToken::new()
             )
-            .is_err()
+            .is_ok()
         );
     }
 
@@ -338,11 +450,7 @@ mod tests {
 
         let ws_dir = root.path().join("workspace");
         std::fs::create_dir_all(ws_dir.join("demo")).unwrap();
-        std::fs::write(
-            ws_dir.join("demo/demo-artifact.txt"),
-            b"workspace content",
-        )
-        .unwrap();
+        std::fs::write(ws_dir.join("demo/demo-artifact.txt"), b"workspace content").unwrap();
         let ws = Workspace::new(&ws_dir).unwrap();
 
         let parent = root.path().join("artifacts");
@@ -432,5 +540,41 @@ mod tests {
             std::fs::read(res4["path"].as_str().unwrap()).unwrap(),
             b"workspace content"
         );
+    }
+    #[test]
+    fn streams_large_artifacts_and_cleans_up_quota_failures() {
+        let root = tempfile::tempdir().unwrap();
+        let scratch = root.path().join("session");
+        std::fs::create_dir(&scratch).unwrap();
+        let file = std::fs::File::create(scratch.join("large.bin")).unwrap();
+        file.set_len(65 * 1024 * 1024).unwrap();
+        let parent = root.path().join("artifacts");
+        let args = || Arguments {
+            path: "large.bin".into(),
+            name: None,
+        };
+        let result = export(&scratch, None, &parent, args(), CancellationToken::new()).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(value["bytes"], 65 * 1024 * 1024);
+        let limits = ArtifactLimits {
+            max_file_bytes: 70 * 1024 * 1024,
+            max_session_bytes: 66 * 1024 * 1024,
+            max_files: 128,
+        };
+        assert!(
+            export_with_limits(
+                &scratch,
+                None,
+                &parent,
+                args(),
+                CancellationToken::new(),
+                &limits
+            )
+            .is_err()
+        );
+        assert_eq!(
+            std::fs::read_dir(parent.join("session")).unwrap().count(),
+            2
+        ); // artifact + quota lock
     }
 }

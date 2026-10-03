@@ -140,6 +140,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
     spec.workspace_files = request.workspace_files;
     spec.skipped_entries = request.skipped_entries;
     spec.unmask_git = policy.unmask_git;
+    spec.allow_git_config_write = policy.allow_git_config_write;
 
     let ws_resolved = ResolvedPath::from_canonical(&env.workspace_root);
     let base_policy = BasePolicy {
@@ -148,6 +149,8 @@ pub(crate) fn prepare_execution_spec_and_policy(
     };
 
     let mut effective = EffectivePolicy::new(base_policy);
+    effective.read_templates = policy.read_templates.clone();
+    effective.write_templates = policy.write_templates.clone();
 
     {
         let mut protected_guard = effective

@@ -2,7 +2,7 @@
 
 `orbit-runtime` 是 Orbit 的底层执行与安全子系统，负责工作区安全抽象、细粒度权限控制、文件系统边界隔离、沙箱容器化执行以及工作区状态验证。
 
-它确保 Agent 能够在合法的已授权边界内自由进行代码编辑、构建和测试，同时通过操作系统级沙箱严格防范权限越界、敏感凭据泄露以及恶意命令攻击。
+它为命令执行提供操作系统级隔离，为文件工具提供路径与文件描述符校验。具体可访问资源取决于执行策略、挂载与授权；这些机制不等于对任意命令或外部程序的行为保证。
 
 ## 架构与核心子系统
 
@@ -20,6 +20,7 @@ orbit-runtime/
 │   ├── workspace.rs     # Workspace 结构体与保护路径注册
 │   ├── path_security.rs # 符号链接穿越防护与规范化
 │   └── inodes.rs        # Inode 收集、深度限制与硬链接延迟扫描
+├── git/             # 原生 Git 命令分类、仓库布局发现与挂载计划
 ├── policy.rs        # PolicyEngine、EffectivePolicy、SessionGrantStore
 ├── capability.rs    # FilesystemCapability、EnvironmentId、NetworkPolicy
 └── verification.rs  # FileFingerprint、WorkspaceFingerprint、版本证据对比
@@ -32,22 +33,22 @@ orbit-runtime/
 执行体系将操作的“执行上下文”、“权限范围”与“底层机制”解耦：
 
 - **`ExecutionRequest`**：
-  封装纯粹的命令执行意图，包含执行命令行（`command_line`）、指定工作目录（`cwd`）、超时时限（`timeout`）与协作取消令牌（`cancellation_token`）。不负责挂载计算与环境发现。
+  包含命令文本（`command`）、工作目录（`cwd`）、超时（`timeout`）、可选 scratch 路径与核验信息。取消令牌单独传给执行后端，不是请求结构体字段。
 - **`ExecutionEnvironment`**：
   封装目标执行环境的静态属性：
   - `workspace_root`：工作区根目录的规范路径。
-  - `cwd`：经过容器内部路径映射后的有效执行目录（正确映射工作区或外部挂载目标）。
+  - `cwd`：宿主侧规范化工作目录；执行后端根据工作区与授权挂载映射容器路径。
   - `env_vars`：经过严格脱敏的环境变量集合，自动过滤 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY` 等敏感凭据；对 `PATH`、`HOME`、`CARGO_HOME`、`RUSTUP_HOME` 根据容器挂载目标进行精确重映射。
-  - `mounts`：经过安全校验的只读或读写挂载映射表（`MountSpec`）。
+  - 挂载列表属于 `ExecutionPolicy.mounts`，不存放在 `ExecutionEnvironment` 中。
 - **`ExecutionPolicy`**：
   定义本次执行的动态授权约束：
-  - `workspace_access`：`ReadOnly`（默认）或 `ReadWrite`。
+  - `read_only_workspace`：布尔值；`read_only()` 构造只读策略，`dev_default()` 构造读写策略。工具 `run_command` 的 `workspace_access` 默认是 `read`。
   - `network`：`Allow` 或 `Deny`。
   - `external_read` / `external_read_write`：外部路径授权。
   - `rust_toolchain`：显式指定的 Rust 工具链路径。
-  - `resource_limits`：显式资源限制（文件大小、内存地址空间、进程数、文件描述符）。
+  - `resources`：资源限制（文件大小、内存地址空间、进程数、文件描述符）；`unmask_git` 控制是否启用原生 Git 元数据挂载。
 - **`ExecutionResult`**：
-  包含子进程的退出状态码（`exit_code`）、分别保留末尾 32 KiB 的标准输出与标准错误文本、实际输出的总字节数、截断指示标记（`truncated`）以及执行耗时。
+  包含子进程的退出状态码（`exit_code`）、分别保留末尾 32 KiB 的标准输出与标准错误文本、实际输出的总字节数、截断指示标记（`output_truncated`）以及执行耗时。
 
 ---
 
@@ -58,7 +59,7 @@ orbit-runtime/
 ### 命名空间与隔离边界
 - 独立 PID、IPC、UTS 与 User 命名空间；清空 Linux capabilities，禁用嵌套命名空间。
 - 网络控制：当网络策略为 `Deny` 时，强制创建独立 Network 命名空间（仅回环接口，无网络链路）。
-- 基础根系统：`/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 及动态链接库缓存以只读模式绑定挂载。`/tmp` 为独立的 64 MiB 临时内存文件系统；`/dev` 仅挂载最小化基础设备节点（`null`, `zero`, `urandom` 等）。
+- 基础根系统：`/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 及动态链接库缓存以只读模式绑定挂载。正常执行时 `/tmp` 绑定本次命令的磁盘临时目录；未提供临时目录的组装路径使用 64 MiB tmpfs；`/dev` 仅挂载最小化基础设备节点（`null`, `zero`, `urandom` 等）。
 - 宿主凭据隔离：不暴露宿主 `$HOME`、SSH Agent、Git 凭据助手或系统密钥环。
 
 ### Seccomp 系统调用过滤
@@ -67,8 +68,8 @@ orbit-runtime/
 - 过滤器加载失败时坚决拒绝启动子进程，确保 fail-closed。
 
 ### 资源配额 (`prlimit`)
-- 单个文件写入上限：默认 64 MiB。
-- 虚拟内存地址空间：默认 4 GiB。
+- 单个文件写入上限：默认 `0`（不限）；可通过 `ProcessLimits.max_file_size_bytes` 设置。
+- 虚拟内存地址空间：默认 `0`（不限）；可通过 `ProcessLimits.max_memory_bytes` 设置。
 - 最大打开文件描述符：默认 1024。
 - 最大并发进程/线程数：默认 1024。
 - 针对用户显式设置的无限制模式（0），进行精确的单向与往返转换，杜绝静默回退。
@@ -79,11 +80,11 @@ orbit-runtime/
 
 ### 安全路径打开
 - `Workspace` 面向 Unix 系统设计，内部使用 `rustix` 的目录描述符与 `openat` 配合 `O_NOFOLLOW` 逐级解析。
-- 坚决杜绝符号链接逃逸与 `..` 相对路径跨出工作区，消除 TOCTOU（Time-of-check to time-of-use）竞争漏洞。
+- 工作区文件通过目录描述符解析内部符号链接，最多 32 层；链接目标的 `..` 只能回退到工作区根以内，绝对链接目标必须仍在工作区内。输入路径中的 `..` 仍拒绝。每一级与最终文件均检查保护目标，外部路径另需有效授权。
 
 ### 受保护路径（Protected Paths）与遮蔽（Masking）
-- 默认保护路径：`.git`、`.env`、`.env.*`、加载的 Orbit 数据库文件、会话日志与会话锁文件。
-- 直接在真实工作区内执行命令时，工作区内的受保护路径会在容器启动时挂载只读 `/dev/null`（或空 tmpfs）进行彻底遮蔽。
+- 文件工具保护 `.git`、`.env`、`.env.*` 与临时写入元数据；CLI 还注册数据库、认证与会话存储路径。`.env.example` 等模板默认也受保护；用户可通过 `[permissions].read_templates` / `write_templates` 授予精确模板路径例外，不能覆盖注册的认证和数据库保护路径。
+- 命令沙箱对受保护文件绑定只读 `/dev/null`，对目录绑定空只读 tmpfs。例外是 `run_command` 当前设置 `unmask_git=true`：原生 Git 元数据可见，其读写随工作区访问模式变化，已有 config、config.worktree 和 hooks 默认只读；批准的配置操作可通过 `allow_git_config_write` 放行。
 - 单链接与多链接 Inode 检查：
   - `collect_all_protected_inodes` 递归收集工作区内受保护文件与目录的 Inode。
   - 无论是单链接文件（如普通 `.env`）还是硬链接别名，均会纳入受保护 Inode 集合；任何自定义挂载源若包含这些 Inode，均会在挂载前被直接拒绝。
@@ -107,14 +108,18 @@ orbit-runtime/
 
 - **策略决策分层**：
   - 沙箱层决定进程能够看到的物理路径与挂载。
-  - 审批层（`PolicyEngine`）基于用户策略模式（`ask` / `auto` / `yolo`）决定本次操作是否需要用户确认。
+  - `PolicyEngine` 校验文件系统能力及外部授权；CLI/TUI 的审批模式决定工具请求是否自动批准。Git 分类与已有会话授权也参与审批。
   - 资源配额层决定单次操作的执行时长与空间消耗。
 - **能力授权分类**：
-  - `WorkspaceAccess::ReadOnly` / `ReadWrite`。
+  - 工具层 `CommandWorkspaceAccess::Read` / `ReadWrite`，对应参数 `read` / `read_write`；执行层使用 `read_only_workspace`。
   - `FilesystemCapability`：区分外部只读路径与外部读写路径。
   - 会话授权作用域：`SessionGrantStore` 严格区分本地环境与远程会话，仅当 `grant.environment.is_local()` 为真时才在本机命令沙箱中转换为有效挂载，防止跨环境越权。
 
 ---
+
+### 原生 Git 的当前边界
+
+`git/discovery.rs` 发现普通仓库及 gitfile 布局，`git/policy.rs` 为审批提供命令分类。`git/mount.rs` 的 `GitMountPlan` 是独立计划结构；当前真实执行使用 `sandbox.rs::apply_git_mounts`，配置写入批准通过 `allow_git_config_write` 传入真实挂载路径，外部 Git 目录需要匹配外部读/写授权并校验保护冲突。命令分类仍是审批辅助，不能替代执行层的工作区、网络及挂载权限约束。
 
 ## 5. 工作区状态核验 (`verification`)
 

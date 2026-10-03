@@ -26,13 +26,50 @@ fn default_chars() -> usize {
     DEFAULT_CHARS
 }
 
+const INDEX_STRIDE: usize = 4096;
+
+struct Converted {
+    text: String,
+    total_chars: usize,
+    offsets: Vec<usize>,
+}
+impl Converted {
+    fn new(text: String) -> Self {
+        let mut offsets = Vec::new();
+        let mut total_chars = 0;
+        for (index, (offset, _)) in text.char_indices().enumerate() {
+            if index % INDEX_STRIDE == 0 {
+                offsets.push(offset);
+            }
+            total_chars += 1;
+        }
+        Self {
+            text,
+            total_chars,
+            offsets,
+        }
+    }
+}
+
 pub struct ReadDocument {
     workspace: Workspace,
+    worker: Option<std::path::PathBuf>,
+    cache:
+        tokio::sync::Mutex<std::collections::VecDeque<(String, String, std::sync::Arc<Converted>)>>,
 }
 
 impl ReadDocument {
     pub fn new(workspace: Workspace) -> Self {
-        Self { workspace }
+        Self {
+            workspace,
+            worker: None,
+            cache: tokio::sync::Mutex::new(Default::default()),
+        }
+    }
+
+    pub fn with_worker(mut self, worker: std::path::PathBuf) -> Self {
+        self.worker = Some(worker);
+        self
     }
 }
 
@@ -70,11 +107,84 @@ impl Tool for ReadDocument {
 
             let workspace = self.workspace.clone();
             let token = cancellation.clone();
-
-            tokio::task::spawn_blocking(move || convert(workspace, arguments, token))
-                .await
-                .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
-                .map(ToolOutput::text)
+            let path = arguments.path.clone();
+            let (bytes, extension) =
+                tokio::task::spawn_blocking(move || read_source(workspace, &path, token))
+                    .await
+                    .map_err(failed)??;
+            use std::os::unix::fs::MetadataExt;
+            let worker_version = match &self.worker {
+                Some(path) => {
+                    let metadata = std::fs::metadata(path).map_err(failed)?;
+                    format!(
+                        "{}:{}:{}:{}:{}:{}:{}",
+                        metadata.dev(),
+                        metadata.ino(),
+                        metadata.len(),
+                        metadata.mtime(),
+                        metadata.mtime_nsec(),
+                        metadata.ctime(),
+                        metadata.ctime_nsec()
+                    )
+                }
+                None => env!("CARGO_PKG_VERSION").to_owned(),
+            };
+            let key = format!(
+                "{}:{}:{}",
+                orbit_runtime::execution::content_hash(&bytes),
+                extension,
+                worker_version
+            );
+            let mut cache = tokio::select! {
+                _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+                guard = self.cache.lock() => guard,
+            };
+            let (format, markdown) =
+                if let Some(index) = cache.iter().position(|(k, _, _)| k == &key) {
+                    let entry = cache.remove(index).unwrap();
+                    let result = (entry.1.clone(), entry.2.clone());
+                    cache.push_back(entry);
+                    result
+                } else {
+                    let format = anydoc::Format::from_bytes(&bytes)
+                        .or_else(|| anydoc::Format::from_path(Path::new(&arguments.path)))
+                        .ok_or_else(|| failed("unsupported document content and file extension"))?;
+                    let text = if let Some(worker) = &self.worker {
+                        convert_worker(worker, &bytes, &extension, cancellation.clone()).await?
+                    } else {
+                        // Only unit tests exercise the parser directly; production requires a worker.
+                        #[cfg(test)]
+                        {
+                            anydoc::to_markdown_bytes(&bytes, format).map_err(failed)?
+                        }
+                        #[cfg(not(test))]
+                        {
+                            return Err(failed("document worker executable is unavailable"));
+                        }
+                    };
+                    if text.len() > 64 * 1024 * 1024 {
+                        return Err(failed("converted document exceeds 64 MiB"));
+                    }
+                    let format = format!("{format:?}").to_ascii_lowercase();
+                    let markdown = std::sync::Arc::new(Converted::new(text));
+                    while !cache.is_empty()
+                        && (cache.len() >= 4
+                            || cache
+                                .iter()
+                                .map(|(_, _, text)| text.text.len())
+                                .sum::<usize>()
+                                + markdown.text.len()
+                                > 64 * 1024 * 1024)
+                    {
+                        cache.pop_front();
+                    }
+                    cache.push_back((key, format.clone(), markdown.clone()));
+                    (format, markdown)
+                };
+            if cancellation.is_cancelled() {
+                return Err(ToolError::Cancelled);
+            }
+            page(arguments, &format, &markdown).map(ToolOutput::text)
         })
     }
 }
@@ -86,40 +196,123 @@ fn invalid(message: impl Into<String>) -> ToolError {
     }
 }
 
-fn convert(
+fn failed(error: impl std::fmt::Display) -> ToolError {
+    ToolError::ExecutionFailed(error.to_string())
+}
+
+fn read_source(
     workspace: Workspace,
-    arguments: Arguments,
+    path: &str,
+    cancellation: CancellationToken,
+) -> Result<(Vec<u8>, String), ToolError> {
+    use std::os::unix::fs::MetadataExt;
+    let mut file = workspace.authorize_read(Path::new(path)).map_err(failed)?;
+    let before = file.metadata().map_err(failed)?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let count = file.read(&mut buffer).map_err(failed)?;
+        if count == 0 {
+            break;
+        }
+        if bytes.len() + count > MAX_FILE_BYTES as usize {
+            return Err(failed("document exceeds 32 MiB"));
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+    let after = file.metadata().map_err(failed)?;
+    if (
+        before.len(),
+        before.mtime(),
+        before.mtime_nsec(),
+        before.ctime(),
+        before.ctime_nsec(),
+    ) != (
+        after.len(),
+        after.mtime(),
+        after.mtime_nsec(),
+        after.ctime(),
+        after.ctime_nsec(),
+    ) {
+        return Err(failed(
+            "document changed during read; retry after writing finishes",
+        ));
+    }
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !extension.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(invalid("invalid document extension"));
+    }
+    Ok((bytes, extension))
+}
+
+async fn convert_worker(
+    worker: &Path,
+    bytes: &[u8],
+    extension: &str,
     cancellation: CancellationToken,
 ) -> Result<String, ToolError> {
-    let path = Path::new(&arguments.path);
-    let mut file = workspace
-        .authorize_read(path)
-        .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
-    let mut bytes = Vec::new();
-    file.by_ref()
-        .take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
-
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err(ToolError::ExecutionFailed(format!(
-            "document exceeds the {} MiB read limit",
-            MAX_FILE_BYTES / 1024 / 1024
-        )));
-    }
-    if cancellation.is_cancelled() {
+    use orbit_runtime::execution::{
+        BwrapBackend, ExecutionBackend, ExecutionEnvironment, ExecutionPolicy, ExecutionRequest,
+        MountSpec, ResourceLimits,
+    };
+    let input = tempfile::tempdir().map_err(failed)?;
+    let scratch = tempfile::tempdir().map_err(failed)?;
+    std::fs::write(input.path().join(format!("source.{extension}")), bytes).map_err(failed)?;
+    let request = ExecutionRequest::new(format!("/opt/orbit-document-worker --internal-document-worker /workspace/source.{extension} /scratch/document.md"), input.path(), std::time::Duration::from_secs(60)).with_scratch(scratch.path());
+    let environment = ExecutionEnvironment::new(input.path(), input.path()).map_err(failed)?;
+    let mut policy = ExecutionPolicy::read_only();
+    policy.mounts = vec![MountSpec::read_only(worker, "/opt/orbit-document-worker")];
+    policy.resources = ResourceLimits {
+        max_memory_bytes: Some(512 * 1024 * 1024),
+        max_file_size_bytes: Some(64 * 1024 * 1024),
+        max_processes: Some(64),
+        max_open_files: Some(128),
+    };
+    let result = BwrapBackend::new()
+        .map_err(failed)?
+        .execute(&request, &policy, &environment, None, cancellation)
+        .await
+        .map_err(failed)?;
+    if result.cancelled {
         return Err(ToolError::Cancelled);
     }
+    if result.timed_out {
+        return Err(failed("document conversion timed out after 60 seconds"));
+    }
+    if result.exit_code != Some(0) {
+        return Err(failed(format!(
+            "document conversion failed: {}",
+            result.stderr
+        )));
+    }
+    std::fs::read_to_string(scratch.path().join("document.md")).map_err(failed)
+}
 
+/// Private CLI worker entry point, invoked only inside the conversion sandbox.
+pub fn document_worker(input: &Path, output: &Path) -> Result<(), String> {
+    let bytes = std::fs::read(input).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err("document exceeds 32 MiB".into());
+    }
     let format = anydoc::Format::from_bytes(&bytes)
-        .or_else(|| anydoc::Format::from_path(path))
-        .ok_or_else(|| {
-            ToolError::ExecutionFailed("unsupported document content and file extension".into())
-        })?;
-    let markdown = anydoc::to_markdown_bytes(&bytes, format).map_err(|error| {
-        ToolError::ExecutionFailed(format!("document conversion failed: {error}"))
-    })?;
-    let total_chars = markdown.chars().count();
+        .or_else(|| anydoc::Format::from_path(input))
+        .ok_or("unsupported document format")?;
+    let markdown = anydoc::to_markdown_bytes(&bytes, format).map_err(|e| e.to_string())?;
+    if markdown.len() > 64 * 1024 * 1024 {
+        return Err("converted document exceeds 64 MiB".into());
+    }
+    std::fs::write(output, markdown).map_err(|e| e.to_string())
+}
+
+fn page(arguments: Arguments, format: &str, markdown: &Converted) -> Result<String, ToolError> {
+    let total_chars = markdown.total_chars;
 
     if arguments.start_char > total_chars {
         return Err(invalid(format!(
@@ -127,16 +320,21 @@ fn convert(
         )));
     }
 
-    let content: String = markdown
+    let offset = markdown
+        .offsets
+        .get(arguments.start_char / INDEX_STRIDE)
+        .copied()
+        .unwrap_or(markdown.text.len());
+    let content: String = markdown.text[offset..]
         .chars()
-        .skip(arguments.start_char)
+        .skip(arguments.start_char % INDEX_STRIDE)
         .take(arguments.max_chars)
         .collect();
     let next = arguments.start_char + content.chars().count();
 
     Ok(json!({
         "path": arguments.path,
-        "format": format!("{format:?}").to_ascii_lowercase(),
+        "format": format,
         "content": content,
         "start_char": arguments.start_char,
         "total_chars": total_chars,
@@ -160,7 +358,8 @@ mod tests {
             "name,value\nalpha,1\nbeta,2\n",
         )
         .unwrap();
-        let tool = ReadDocument::new(Workspace::new(directory.path()).unwrap());
+        let mut tool = ReadDocument::new(Workspace::new(directory.path()).unwrap());
+        tool.worker = None;
         let call = ToolCall::function(
             "doc-1",
             "read_document",
@@ -174,5 +373,34 @@ mod tests {
         assert_eq!(first["truncated"], true);
         assert!(first["next_start_char"].as_u64().unwrap() > 0);
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn indexed_pages_preserve_unicode_across_sparse_index_boundaries() {
+        let document = Converted::new("中a".repeat(10_000));
+        for start in [0, 4095, 4096, 4097, 19990, 20000] {
+            let output: serde_json::Value = serde_json::from_str(
+                &page(
+                    Arguments {
+                        path: "sample.csv".into(),
+                        start_char: start,
+                        max_chars: 17,
+                    },
+                    "csv",
+                    &document,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                output["content"],
+                document
+                    .text
+                    .chars()
+                    .skip(start)
+                    .take(17)
+                    .collect::<String>()
+            );
+            assert_eq!(output["total_chars"], 20_000);
+        }
     }
 }

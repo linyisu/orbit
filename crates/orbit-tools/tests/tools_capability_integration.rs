@@ -241,7 +241,8 @@ async fn external_special_readers_integration() {
         .save(&ext_img)
         .unwrap();
 
-    let doc_tool = ReadDocument::new(workspace.clone());
+    let doc_tool = ReadDocument::new(workspace.clone())
+        .with_worker(env!("CARGO_BIN_EXE_orbit-document-worker").into());
     let img_tool = ReadImage::new(
         workspace.clone(),
         ImageAssets::for_database(&db_temp.path().join("orbit.db")),

@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use crate::{
     capability::NetworkPolicy,
-    filesystem::inodes::{collect_dir_inodes, is_reserved_workspace_inode},
+    filesystem::inodes::collect_dir_inodes,
     filesystem::path_security::ResolvedPath,
     policy::{PolicyEngine, WorkspacePermissions},
 };
@@ -135,6 +135,19 @@ impl Workspace {
         }
 
         let effective = policy.effective_policy();
+        for template in effective
+            .read_templates
+            .iter()
+            .chain(effective.write_templates.iter())
+        {
+            if self
+                .protected
+                .iter()
+                .any(|p| template.starts_with(p) || p.starts_with(template))
+            {
+                return Err(WorkspaceError::ProtectedPath);
+            }
+        }
 
         for p in &self.protected {
             for grant in effective
@@ -193,6 +206,14 @@ impl Workspace {
         }
 
         let effective = self.policy.effective_policy();
+        if effective
+            .read_templates
+            .iter()
+            .chain(effective.write_templates.iter())
+            .any(|p| p.starts_with(&resolved) || resolved.starts_with(p))
+        {
+            return Err(WorkspaceError::ProtectedPath);
+        }
 
         for grant in effective
             .persistent_read
@@ -245,7 +266,17 @@ impl Workspace {
                 Component::Normal(name) => {
                     let name_text = name.to_string_lossy();
 
-                    if super::path_security::is_protected_workspace_name(&name_text) {
+                    if super::path_security::is_protected_workspace_name(&name_text)
+                        && !self
+                            .policy
+                            .effective_policy()
+                            .read_templates
+                            .iter()
+                            .chain(self.policy.effective_policy().write_templates.iter())
+                            .any(|p| {
+                                p == &self.path.join(parts.iter().collect::<PathBuf>()).join(name)
+                            })
+                    {
                         return Err(WorkspaceError::ProtectedPath);
                     }
 
@@ -273,28 +304,103 @@ impl Workspace {
         Ok(relative)
     }
 
+    /// Resolve links through directory descriptors, with no canonicalize/open gap.
+    /// Link targets may traverse upward only within the workspace root.
     pub fn write_parent(&self, path: &Path) -> Result<(File, std::ffi::OsString), WorkspaceError> {
+        self.resolve_parent(path, true)
+    }
+
+    fn resolve_parent(
+        &self,
+        path: &Path,
+        write: bool,
+    ) -> Result<(File, std::ffi::OsString), WorkspaceError> {
+        use std::collections::VecDeque;
+        use std::os::unix::ffi::OsStringExt;
         let relative = self.checked_relative(path)?;
-        let mut directory = self.root.try_clone()?;
-
-        for name in relative.parent().ok_or(WorkspaceError::InvalidPath)?.iter() {
-            directory = File::from(
-                openat(
-                    &directory,
-                    name,
-                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-                    Mode::empty(),
-                )
-                .map_err(io::Error::from)?,
-            );
+        let mut pending: VecDeque<std::ffi::OsString> =
+            relative.iter().map(|n| n.to_owned()).collect();
+        let mut stack = vec![self.root.try_clone()?];
+        let mut resolved = PathBuf::new();
+        let mut links = 0;
+        while let Some(name) = pending.pop_front() {
+            if name == "." {
+                continue;
+            }
+            if name == ".." {
+                if stack.len() == 1 {
+                    return Err(WorkspaceError::InvalidPath);
+                }
+                stack.pop();
+                resolved.pop();
+                continue;
+            }
+            let candidate = resolved.join(&name);
+            self.checked_relative(&candidate)?;
+            let effective = self.policy.effective_policy();
+            let absolute = self.path.join(&candidate);
+            if write
+                && effective.read_templates.contains(&absolute)
+                && !effective.write_templates.contains(&absolute)
+            {
+                return Err(WorkspaceError::ProtectedPath);
+            }
+            let directory = stack.last().unwrap();
+            match rustix::fs::readlinkat(directory, &name, Vec::new()) {
+                Ok(target) => {
+                    links += 1;
+                    if links > 32 {
+                        return Err(WorkspaceError::Io(io::Error::other(
+                            "symlink loop or link depth exceeds 32",
+                        )));
+                    }
+                    let target = PathBuf::from(std::ffi::OsString::from_vec(target.into_bytes()));
+                    let target = if target.is_absolute() {
+                        let relative_target = target
+                            .strip_prefix(&self.path)
+                            .map_err(|_| WorkspaceError::InvalidPath)?
+                            .to_path_buf();
+                        stack.truncate(1);
+                        resolved.clear();
+                        relative_target
+                    } else {
+                        target
+                    };
+                    let mut components: VecDeque<_> = target
+                        .components()
+                        .filter_map(|c| match c {
+                            Component::Normal(n) => Some(n.to_owned()),
+                            Component::ParentDir => Some(std::ffi::OsString::from("..")),
+                            Component::CurDir => None,
+                            _ => Some(std::ffi::OsString::from("..")),
+                        })
+                        .collect();
+                    components.append(&mut pending);
+                    pending = components;
+                }
+                Err(rustix::io::Errno::INVAL | rustix::io::Errno::NOENT) => {
+                    if pending.is_empty() {
+                        return Ok((directory.try_clone()?, name));
+                    }
+                    let next = File::from(
+                        openat(
+                            directory,
+                            &name,
+                            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                            Mode::empty(),
+                        )
+                        .map_err(io::Error::from)?,
+                    );
+                    self.check_protected_metadata(&next.metadata()?)?;
+                    stack.push(next);
+                    resolved.push(name);
+                }
+                Err(error) => return Err(WorkspaceError::Io(error.into())),
+            }
         }
-
         Ok((
-            directory,
-            relative
-                .file_name()
-                .ok_or(WorkspaceError::InvalidPath)?
-                .to_owned(),
+            stack.last().unwrap().try_clone()?,
+            std::ffi::OsString::from("."),
         ))
     }
 
@@ -302,7 +408,7 @@ impl Workspace {
         let directory = if path.as_os_str().is_empty() {
             self.root.try_clone()?
         } else {
-            let (parent, name) = self.write_parent(path)?;
+            let (parent, name) = self.resolve_parent(path, false)?;
 
             File::from(
                 openat(
@@ -353,8 +459,13 @@ impl Workspace {
         }
         if metadata.is_file()
             && metadata.nlink() > 1
-            && is_reserved_workspace_inode(&self.path, (metadata.dev(), metadata.ino()))
-                .map_err(|error| WorkspaceError::PermissionDenied(error.to_string()))?
+            && super::inodes::is_reserved_workspace_inode_with_templates(
+                &self.path,
+                (metadata.dev(), metadata.ino()),
+                &self.policy.effective_policy().read_templates,
+                &self.policy.effective_policy().write_templates,
+            )
+            .map_err(|error| WorkspaceError::PermissionDenied(error.to_string()))?
         {
             return Err(WorkspaceError::ProtectedPath);
         }
@@ -553,38 +664,22 @@ impl Workspace {
     }
 
     pub fn open_read(&self, path: &Path) -> Result<File, WorkspaceError> {
-        let relative = self.checked_relative(path)?;
-        let parts: Vec<_> = relative.iter().collect();
-        // Each component is opened relative to an already-open directory, never via a
-        // canonicalize-then-open path that could follow a swapped symlink.
-        let mut directory = self.root.try_clone()?;
-
-        for (index, name) in parts.iter().enumerate() {
-            let last = index + 1 == parts.len();
-            let mut flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
-
-            if !last {
-                flags |= OFlags::DIRECTORY;
-            }
-
-            let fd = openat(&directory, *name, flags, Mode::empty()).map_err(io::Error::from)?;
-            let file = File::from(fd);
-
-            if last {
-                let metadata = file.metadata()?;
-
-                if !metadata.is_file() {
-                    return Err(WorkspaceError::NotFile);
-                }
-
-                self.check_protected_metadata(&metadata)?;
-                return Ok(file);
-            }
-
-            directory = file;
+        let (parent, name) = self.resolve_parent(path, false)?;
+        let file = File::from(
+            openat(
+                &parent,
+                &name,
+                OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+                Mode::empty(),
+            )
+            .map_err(io::Error::from)?,
+        );
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(WorkspaceError::NotFile);
         }
-
-        Err(WorkspaceError::InvalidPath)
+        self.check_protected_metadata(&metadata)?;
+        Ok(file)
     }
 
     pub fn authorize_read(&self, path: &Path) -> Result<File, WorkspaceError> {
@@ -749,6 +844,8 @@ mod tests {
 
         // 1. configure_policy with permissions covering db_file fails upfront
         let perms = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             read: vec![outside_dir.path().to_path_buf()],
             read_write: Vec::new(),
         };
@@ -763,6 +860,8 @@ mod tests {
         let other_outside = tempdir().unwrap();
         let mut ws2 = Workspace::new(ws_dir.path()).unwrap();
         let perms2 = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             read: vec![other_outside.path().to_path_buf()],
             read_write: Vec::new(),
         };
@@ -787,6 +886,8 @@ mod tests {
 
         // 1. Configure valid initial policy
         let initial_perms = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             read: vec![valid_dir.path().to_path_buf()],
             read_write: Vec::new(),
         };
@@ -801,6 +902,8 @@ mod tests {
 
         // 2. Attempt to configure conflicting policy (covering secret_file)
         let bad_perms = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             read: vec![invalid_dir.path().to_path_buf()],
             read_write: Vec::new(),
         };

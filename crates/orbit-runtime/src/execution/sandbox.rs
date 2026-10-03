@@ -405,6 +405,7 @@ impl BwrapSandboxBackend {
 
         command
             .env_clear()
+            .arg("--clearenv")
             .stdin(Stdio::from(seccomp))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -420,7 +421,7 @@ impl BwrapSandboxBackend {
 
         let ws_target = custom_workspace.unwrap_or_else(|| policy.base.workspace.canonical());
 
-        let protected_inodes = if let Some(source) = writable_snapshot_source {
+        let mut protected_inodes = if let Some(source) = writable_snapshot_source {
             command.arg("--ro-bind").arg(source).arg("/orbit-source");
             command.args([
                 "--size",
@@ -437,13 +438,15 @@ impl BwrapSandboxBackend {
                 command.arg("--bind").arg(ws_target).arg("/workspace");
             }
 
-            let (masked, mut inodes) = collect_masked_paths(
+            let (masked, inodes) = collect_masked_paths_with_templates(
                 ws_target,
                 &spec.protected_paths,
                 &spec.opaque_runtime_roots,
                 spec.read_only_workspace,
                 spec.unmask_git,
                 placeholder_guard,
+                &policy.read_templates,
+                &policy.write_templates,
             )?;
 
             for (container_path, is_dir) in masked {
@@ -456,18 +459,20 @@ impl BwrapSandboxBackend {
                 }
             }
 
-            if spec.unmask_git {
-                apply_git_mounts(
-                    &mut command,
-                    ws_target,
-                    spec.read_only_workspace,
-                    &mut inodes,
-                )?;
-            }
-
             inodes
         };
 
+        for template in &policy.read_templates {
+            if !policy.write_templates.contains(template) {
+                let rel = template
+                    .strip_prefix(ws_target)
+                    .map_err(|_| failed("template outside workspace"))?;
+                command
+                    .arg("--ro-bind")
+                    .arg(template)
+                    .arg(Path::new("/workspace").join(rel));
+            }
+        }
         mount_scratch_and_tmp(&mut command, spec.scratch.as_deref(), task_tmp)?;
         mount_toolchain_and_mounts(&mut command, rust_toolchain, mounts, policy)?;
         mount_capabilities(
@@ -478,6 +483,19 @@ impl BwrapSandboxBackend {
             &protected_inodes,
             &spec.opaque_runtime_roots,
         )?;
+
+        if spec.unmask_git {
+            apply_git_mounts(
+                &mut command,
+                ws_target,
+                spec.read_only_workspace,
+                &mut protected_inodes,
+                policy,
+                spec.allow_git_config_write,
+                &spec.protected_paths,
+                &spec.opaque_runtime_roots,
+            )?;
+        }
 
         let container_cwd = resolve_container_cwd(ws_target, mounts, spec.cwd.as_deref());
         command.arg("--chdir").arg(container_cwd);
@@ -996,34 +1014,147 @@ fn apply_git_mounts(
     ws_target: &Path,
     read_only_workspace: bool,
     protected_inodes: &mut HashSet<(u64, u64)>,
+    policy: &EffectivePolicy,
+    allow_config_write: bool,
+    protected_paths: &[PathBuf],
+    opaque_roots: &[PathBuf],
 ) -> Result<(), RuntimeError> {
-    use std::os::unix::fs::MetadataExt;
     use crate::git::discovery::GitRepositoryInfo;
+    use std::os::unix::fs::MetadataExt;
 
-    command.env("GIT_TERMINAL_PROMPT", "0");
-    command.env("GIT_PAGER", "cat");
+    command.args(["--setenv", "GIT_TERMINAL_PROMPT", "0"]);
+    command.args(["--setenv", "GIT_PAGER", "cat"]);
 
     if read_only_workspace {
-        command.env("GIT_OPTIONAL_LOCKS", "0");
+        command.args(["--setenv", "GIT_OPTIONAL_LOCKS", "0"]);
     }
 
-    let Some(repo) = GitRepositoryInfo::discover(ws_target).map_err(|e| {
-        failed(format!("failed to inspect git repository: {e}"))
-    })? else {
+    let Some(repo) = GitRepositoryInfo::discover(ws_target)
+        .map_err(|e| failed(format!("failed to inspect git repository: {e}")))?
+    else {
         return Ok(());
     };
 
+    for directory in [&repo.git_dir, &repo.common_dir] {
+        if directory.starts_with(ws_target) {
+            continue;
+        }
+        let allowed = policy
+            .persistent_read_write
+            .iter()
+            .any(|p| directory.starts_with(p.canonical()))
+            || (read_only_workspace
+                && policy
+                    .persistent_read
+                    .iter()
+                    .any(|p| directory.starts_with(p.canonical())))
+            || policy
+                .session_grants
+                .read()
+                .map_err(|_| failed("grant lock poisoned"))?
+                .grants()
+                .iter()
+                .any(|g| {
+                    g.environment.is_local()
+                        && directory.starts_with(g.path.canonical())
+                        && if read_only_workspace { g.read } else { g.write }
+                });
+        if !allowed {
+            return Err(failed(format!(
+                "external Git metadata '{}' requires request_capability",
+                directory.display()
+            )));
+        }
+        validate_mount_source(directory, policy)?;
+        if protected_paths
+            .iter()
+            .any(|p| p.starts_with(directory) || directory.starts_with(p))
+        {
+            return Err(failed(
+                "external Git metadata conflicts with protected path",
+            ));
+        }
+        validate_inode_against_protected(
+            directory,
+            protected_inodes,
+            opaque_roots,
+            &mut HashSet::new(),
+            "Git metadata",
+            Some(10_000),
+        )?;
+    }
+
+    // Config/hook bind sources must not turn a symlink into an unauthorized host mount.
+    for source in [
+        repo.config_path(),
+        repo.worktree_config_path(),
+        repo.hooks_path(),
+    ] {
+        if !source.exists() {
+            continue;
+        }
+        let canonical = source.canonicalize().map_err(failed)?;
+        if protected_paths
+            .iter()
+            .any(|p| p.starts_with(&canonical) || canonical.starts_with(p))
+        {
+            return Err(failed(
+                "Git configuration or hooks conflict with a protected path",
+            ));
+        }
+        if !canonical.starts_with(ws_target) {
+            let needs_write = allow_config_write && !read_only_workspace;
+            let allowed = policy
+                .persistent_read_write
+                .iter()
+                .any(|p| canonical.starts_with(p.canonical()))
+                || (!needs_write
+                    && policy
+                        .persistent_read
+                        .iter()
+                        .any(|p| canonical.starts_with(p.canonical())))
+                || policy
+                    .session_grants
+                    .read()
+                    .map_err(|_| failed("grant lock poisoned"))?
+                    .grants()
+                    .iter()
+                    .any(|g| {
+                        g.environment.is_local()
+                            && canonical.starts_with(g.path.canonical())
+                            && if needs_write { g.write } else { g.read }
+                    });
+            if !allowed {
+                return Err(failed(
+                    "external Git configuration or hooks require request_capability",
+                ));
+            }
+            validate_mount_source(&canonical, policy)?;
+        }
+        validate_inode_against_protected(
+            &canonical,
+            protected_inodes,
+            opaque_roots,
+            &mut HashSet::new(),
+            "Git config/hooks",
+            Some(10_000),
+        )?;
+    }
+
     if !repo.is_gitfile {
-        if !read_only_workspace {
+        if !read_only_workspace && !allow_config_write {
             let config = repo.config_path();
-            if config.exists() {
-                command.arg("--ro-bind").arg(&config).arg("/workspace/.git/config");
+            if config.exists() && !allow_config_write {
+                command
+                    .arg("--ro-bind")
+                    .arg(&config)
+                    .arg("/workspace/.git/config");
                 if let Ok(meta) = std::fs::symlink_metadata(&config) {
                     protected_inodes.insert((meta.dev(), meta.ino()));
                 }
             }
             let wt_config = repo.worktree_config_path();
-            if wt_config.exists() {
+            if wt_config.exists() && !allow_config_write {
                 command
                     .arg("--ro-bind")
                     .arg(&wt_config)
@@ -1033,8 +1164,11 @@ fn apply_git_mounts(
                 }
             }
             let hooks = repo.hooks_path();
-            if hooks.exists() {
-                command.arg("--ro-bind").arg(&hooks).arg("/workspace/.git/hooks");
+            if hooks.exists() && !allow_config_write {
+                command
+                    .arg("--ro-bind")
+                    .arg(&hooks)
+                    .arg("/workspace/.git/hooks");
                 if let Ok(meta) = std::fs::symlink_metadata(&hooks) {
                     protected_inodes.insert((meta.dev(), meta.ino()));
                 }
@@ -1045,32 +1179,41 @@ fn apply_git_mounts(
         let is_outside_ws = !repo.git_dir.starts_with(ws_target);
         if is_outside_ws {
             if read_only_workspace {
-                command.arg("--ro-bind").arg(&repo.git_dir).arg(&repo.git_dir);
+                command
+                    .arg("--ro-bind")
+                    .arg(&repo.git_dir)
+                    .arg(&repo.git_dir);
                 if repo.common_dir != repo.git_dir && !repo.common_dir.starts_with(ws_target) {
-                    command.arg("--ro-bind").arg(&repo.common_dir).arg(&repo.common_dir);
+                    command
+                        .arg("--ro-bind")
+                        .arg(&repo.common_dir)
+                        .arg(&repo.common_dir);
                 }
             } else {
                 command.arg("--bind").arg(&repo.git_dir).arg(&repo.git_dir);
                 if repo.common_dir != repo.git_dir && !repo.common_dir.starts_with(ws_target) {
-                    command.arg("--bind").arg(&repo.common_dir).arg(&repo.common_dir);
+                    command
+                        .arg("--bind")
+                        .arg(&repo.common_dir)
+                        .arg(&repo.common_dir);
                 }
 
                 let config = repo.config_path();
-                if config.exists() {
+                if config.exists() && !allow_config_write {
                     command.arg("--ro-bind").arg(&config).arg(&config);
                     if let Ok(meta) = std::fs::symlink_metadata(&config) {
                         protected_inodes.insert((meta.dev(), meta.ino()));
                     }
                 }
                 let wt_config = repo.worktree_config_path();
-                if wt_config.exists() {
+                if wt_config.exists() && !allow_config_write {
                     command.arg("--ro-bind").arg(&wt_config).arg(&wt_config);
                     if let Ok(meta) = std::fs::symlink_metadata(&wt_config) {
                         protected_inodes.insert((meta.dev(), meta.ino()));
                     }
                 }
                 let hooks = repo.hooks_path();
-                if hooks.exists() {
+                if hooks.exists() && !allow_config_write {
                     command.arg("--ro-bind").arg(&hooks).arg(&hooks);
                     if let Ok(meta) = std::fs::symlink_metadata(&hooks) {
                         protected_inodes.insert((meta.dev(), meta.ino()));
@@ -1094,6 +1237,7 @@ struct WorkspaceEntry {
     is_file: bool,
 }
 
+#[cfg(test)]
 fn collect_masked_paths(
     ws_target: &Path,
     protected_paths: &[PathBuf],
@@ -1101,6 +1245,29 @@ fn collect_masked_paths(
     read_only_workspace: bool,
     unmask_git: bool,
     placeholder_guard: &mut PlaceholderGuard,
+) -> Result<MaskedPathsAndInodes, RuntimeError> {
+    collect_masked_paths_with_templates(
+        ws_target,
+        protected_paths,
+        opaque_runtime_roots,
+        read_only_workspace,
+        unmask_git,
+        placeholder_guard,
+        &[],
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_masked_paths_with_templates(
+    ws_target: &Path,
+    protected_paths: &[PathBuf],
+    opaque_runtime_roots: &[PathBuf],
+    read_only_workspace: bool,
+    unmask_git: bool,
+    placeholder_guard: &mut PlaceholderGuard,
+    read_templates: &[PathBuf],
+    write_templates: &[PathBuf],
 ) -> Result<MaskedPathsAndInodes, RuntimeError> {
     use std::os::unix::fs::MetadataExt;
 
@@ -1343,7 +1510,10 @@ fn collect_masked_paths(
             let dev = meta.dev();
             let ino = meta.ino();
 
-            let is_protected_name = if unmask_git && name == ".git" {
+            let is_protected_name = if (unmask_git && name == ".git")
+                || read_templates.contains(&child_host)
+                || write_templates.contains(&child_host)
+            {
                 false
             } else {
                 crate::filesystem::path_security::is_protected_workspace_name(&name)
@@ -1410,9 +1580,27 @@ fn collect_masked_paths(
         }
     }
 
+    for template in read_templates.iter().chain(write_templates.iter()) {
+        let metadata = std::fs::metadata(template).map_err(failed)?;
+        if protected_inodes.contains(&(metadata.dev(), metadata.ino())) {
+            return Err(failed("trusted template aliases a protected file"));
+        }
+    }
+    // A read-only template's hardlink aliases must not provide a writable route.
+    for template in read_templates
+        .iter()
+        .filter(|p| !write_templates.contains(p))
+    {
+        if let Ok(metadata) = std::fs::symlink_metadata(template) {
+            protected_inodes.insert((metadata.dev(), metadata.ino()));
+        }
+    }
     // Mask all files matching protected_inodes (including discovered aliases).
     for entry in files_to_check {
-        if protected_inodes.contains(&(entry.dev, entry.ino)) {
+        if protected_inodes.contains(&(entry.dev, entry.ino))
+            && !(read_templates.contains(&ws_target.join(&entry.relative))
+                && !protected_paths.contains(&ws_target.join(&entry.relative)))
+        {
             let container_path = Path::new("/workspace").join(&entry.relative);
 
             if seen.insert(container_path.clone()) {
@@ -2044,7 +2232,6 @@ fn configure_limits_and_entrypoint(
         }
     }
 
-    command.arg("--clearenv");
     for (k, v) in &env_map {
         command.arg("--setenv").arg(k).arg(v);
     }
@@ -2762,6 +2949,7 @@ mod tests {
             protected_paths: Vec::new(),
             opaque_runtime_roots: Vec::new(),
             unmask_git: false,
+            allow_git_config_write: false,
         };
         let formatted: Vec<String> = spec
             .mounts

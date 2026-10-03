@@ -7,7 +7,7 @@
 - **协议抽象与适配** (`client.rs`, `openai/`, `anthropic/`, `google.rs`):
   - 统一将各供应商的专有 API 映射为标准化请求与响应流。
   - 支持五类核心 API 格式：
-    1. `openai_chat`：标准 OpenAI Chat Completions 协议（`/chat/completions`）。
+    1. `openai_chat_completions`：标准 OpenAI Chat Completions 协议（`/chat/completions`）。
     2. `openai_responses`：OpenAI Responses API 协议（`/responses`）。
     3. `chatgpt_codex`：ChatGPT Codex 协议（基于 SSE 的流式端点）。
     4. `anthropic_messages`：Anthropic Messages 协议（`/v1/messages`）。
@@ -15,11 +15,10 @@
 - **流式事件流** (`types.rs`):
   - 统一解析 SSE 数据分块，向调用者输出类型化 `StreamEvent`：
     - `TextDelta`：模型生成的增量文本内容。
-    - `ThinkingDelta`：模型的内部思考链（Reasoning / Thinking）增量文本。
-    - `ToolCallStarted` / `ToolCallDelta` / `ToolCallFinished`：流式累积组装的结构化工具调用。
-    - `SignatureDelta`：Google 协议特有的工具调用验证签名。
+    - `ReasoningDelta`：模型的内部思考链（Reasoning / Thinking）增量文本。
+    - `ToolCallDelta`：增量工具调用字段与可选 `metadata`；Google thought signature 通过工具调用元数据传递。工具开始/完成事件属于 Agent 生命周期，不是模型 `StreamEvent`。
     - `Completed`：响应结束标记，携带结束原因（`stop`、`tool_use`、`max_tokens` 等）。
-    - `Usage`：服务端上报的输入、输出及总 token 统计。
+    - Usage 是 `Completed.usage` 的可选字段，不是独立流事件。
 - **思考推理适配器** (`reasoning.rs`):
   - 针对不同厂商的思考配置提供标准化抽象，支持 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 七档思考强度。
   - 自动转译为目标协议参数：OpenAI Chat 的 `reasoning_effort`、OpenAI Responses 的 `reasoning.effort`、Anthropic Messages 的 `thinking` 与 `output_config.effort`、Google 的 `thinkingLevel`。
@@ -34,6 +33,8 @@
 
 ### 消息体系 (`ChatMessage`)
 
+下面仅示意常用字段；完整定义以 `types.rs` 为准。
+
 ```rust
 pub enum ChatMessage {
     System { content: String },
@@ -44,7 +45,7 @@ pub enum ChatMessage {
 ```
 
 - 保证工具调用（`Assistant { tool_calls }`）与工具回执（`Tool { tool_call_id, content }`）的协议配对完整性。
-- `User` 消息可携带图片附件（`Attachment::Image`），自动校验文件大小与 MIME 类型并编码为对应格式。
+- `User` 消息可携带图片附件（`Attachment::Image`），请求编码支持附件大小/MIME 校验；CLI/tools 的图片导入路径额外解码验证内容并按需缩放。
 
 ### 工具定义 (`ToolDefinition`)
 
@@ -83,7 +84,7 @@ reasoning = { adapter = "google", efforts = ["minimal", "low", "medium", "high"]
 - `context_tokens`：声明模型支持的最大总上下文窗口大小。
 - `input_context_tokens`：针对输入输出配额独立的模型（例如 DeepSeek 或部分新型 API），明确指定独立输入上限，避免双重扣除输出预算。
 - `max_output_tokens`：单次请求允许生成的最大输出 token 数量。
-- `extra`：允许注入供应商或特定中转站所需的附加自定义 JSON 参数，但不可覆盖核心参数。
+- `reasoning.extra`：推理配置下的扩展 TOML 表。CLI 校验禁止覆盖核心请求字段及已配置的 effort；库内的合并函数本身可覆盖字段，直接调用库的调用方需要自行约束扩展内容。
 
 ## 测试与质量验证
 

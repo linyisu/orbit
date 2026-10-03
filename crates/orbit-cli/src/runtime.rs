@@ -4,11 +4,10 @@ use anyhow::Result;
 use orbit_agent::tool::ToolRegistry;
 use orbit_runtime::filesystem::Workspace;
 use orbit_tools::{
-    approval::ApprovalSender, edit_file::EditFile,
-    image_assets::ImageAssets, list_files::ListFiles, read_command_output::ReadCommandOutput,
-    read_document::ReadDocument, read_file::ReadFile, read_image::ReadImage,
-    request_capability::RequestCapability, run_command::RunCommand, search_text::SearchText,
-    write_file::WriteFile,
+    approval::ApprovalSender, edit_file::EditFile, image_assets::ImageAssets,
+    list_files::ListFiles, read_command_output::ReadCommandOutput, read_document::ReadDocument,
+    read_file::ReadFile, read_image::ReadImage, request_capability::RequestCapability,
+    run_command::RunCommand, search_text::SearchText, write_file::WriteFile,
 };
 
 pub struct WorkspaceRuntime {
@@ -42,8 +41,10 @@ pub async fn workspace_tools(
         command_limits.network,
     )?;
     let mut tools = ToolRegistry::new();
-    tools.register(ReadFile::new(workspace.clone()));
-    tools.register(ReadDocument::new(workspace.clone()));
+    tools.register(
+        ReadFile::new(workspace.clone()).with_scan_budget(command_limits.read_file_scan_bytes),
+    );
+    tools.register(ReadDocument::new(workspace.clone()).with_worker(std::env::current_exe()?));
 
     if let Some(database) = database {
         tools.register(ReadImage::new(
@@ -72,6 +73,10 @@ pub async fn workspace_tools(
     let mcp_approvals = approvals.clone();
 
     if let Some(approvals) = approvals {
+        tools.register(
+            orbit_tools::git_push::GitPush::new(workspace.clone(), approvals.clone())
+                .with_limits(&command_limits),
+        );
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
         tools.register(RequestCapability::new(workspace.clone(), approvals.clone()));
@@ -83,7 +88,8 @@ pub async fn workspace_tools(
                         scratch.clone(),
                         database.with_extension("artifacts"),
                     )
-                    .with_workspace(workspace.clone()),
+                    .with_workspace(workspace.clone())
+                    .with_limits(command_limits.artifacts.clone()),
                 );
             }
 

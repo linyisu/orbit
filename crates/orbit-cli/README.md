@@ -8,11 +8,12 @@
 orbit-cli/
 ├── src/
 │   ├── main.rs            # 命令行入口、子命令分发与信号处理
-│   ├── commands/          # 子命令实现 (chat, auth, sessions, projects, etc.)
+│   ├── auth_cli.rs        # 认证子命令；chat/sessions/projects 分发与实现位于 main.rs
 │   ├── config.rs          # 配置文件解析、校验与运行时参数构造
 │   ├── connections.rs     # 服务连接的持久化与热重载
 │   └── tui/               # 现代化终端用户界面
-│       ├── app.rs         # TUI 主应用状态机与主事件循环
+│       ├── mod.rs         # TUI 主事件循环与运行协调
+│       ├── app.rs         # UI 状态与事件应用
 │       ├── frames.rs      # 帧调度器 (~120 FPS 限制与流式分批刷新)
 │       ├── transcript.rs  # 对话流排版、行高缓存与二分视口定位
 │       ├── session_sync.rs# 多窗口会话增量同步与回放
@@ -65,7 +66,7 @@ Orbit 原生支持在多个终端窗口或终端会话中同时打开和协同�
   - 支持任意自定义 Base URL（兼容本地 Ollama、vLLM 或第三方中转网关）。
   - 点击“读取模型”自动向服务的 `/models` 接口查询可用模型列表，无需逐个手填。
   - 支持原地展开模型高级设置：上下文总额度、独立输入窗口、最大输出上限、多模态支持以及思考强度档位。
-- **凭据安全隔离**：录入的 API Key 统一由 `orbit-auth` 写入独立的受信凭据库，配置文件中仅保存引用标记，杜绝明文密钥暴露。
+- **凭据安全隔离**：通过 `/connect` 录入的 API Key 由 `orbit-auth` 写入独立凭据库，连接配置使用 `credential` 引用。手写配置仍支持明文 `api_key`（示例配置也展示该字段），不要把含真实密钥的配置提交到版本库。
 
 ---
 

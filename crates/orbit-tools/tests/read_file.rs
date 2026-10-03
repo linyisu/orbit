@@ -62,7 +62,7 @@ async fn reads_numbered_unicode_lines_and_reports_remaining_content() {
     let value: Value = serde_json::from_str(&output).unwrap();
 
     assert_eq!(value["content"], "2: second\n");
-    assert_eq!(value["total_lines"], 3);
+    assert!(value["total_lines"].is_null());
     assert_eq!(value["truncated"], true);
 }
 
@@ -205,7 +205,6 @@ async fn validates_ranges_and_rejects_binary_oversized_and_nonregular_files() {
         json!({ "path": "text", "max_lines": 501 }),
         json!({ "path": "text", "extra": true }),
         json!({ "path": "binary" }),
-        json!({ "path": "large" }),
         json!({ "path": "directory" }),
         json!({ "path": "missing" }),
     ] {
@@ -368,4 +367,138 @@ async fn read_file_can_read_granted_outside_path() {
     let value: Value = serde_json::from_str(&output).unwrap();
 
     assert_eq!(value["content"], "1: granted outside content\n");
+}
+
+#[tokio::test]
+async fn reads_middle_of_large_files_and_resumes_versioned_cursor() {
+    let root = Fixture::new();
+    let text = "data\n".repeat(300_000);
+    fs::write(root.0.join("large.txt"), text).unwrap();
+    let tool = root.tool();
+    let first: Value = serde_json::from_str(
+        &tool
+            .execute(
+                call(json!({"path":"large.txt", "start_line":200_000, "max_lines":2})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first["content"], "200000: data\n200001: data\n");
+    let second: Value = serde_json::from_str(
+        &tool
+            .execute(
+                call(json!({"path":"large.txt", "cursor":first["next_cursor"], "max_lines":1})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(second["content"], "200002: data\n");
+    fs::write(root.0.join("large.txt"), "changed").unwrap();
+    assert!(
+        tool.execute(
+            call(json!({"path":"large.txt", "cursor":first["next_cursor"]})),
+            CancellationToken::new()
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("changed")
+    );
+}
+
+#[tokio::test]
+async fn permits_internal_links_and_rejects_secret_targets_and_loops() {
+    let root = Fixture::new();
+    fs::create_dir(root.0.join("actual")).unwrap();
+    fs::write(root.0.join("actual/file"), "inside").unwrap();
+    fs::write(root.0.join(".env"), "secret").unwrap();
+    std::os::unix::fs::symlink("actual", root.0.join("alias")).unwrap();
+    std::os::unix::fs::symlink(".env", root.0.join("secret-alias")).unwrap();
+    std::os::unix::fs::symlink("loop", root.0.join("loop")).unwrap();
+    let tool = root.tool();
+    assert!(
+        tool.execute(call(json!({"path":"alias/file"})), CancellationToken::new())
+            .await
+            .unwrap()
+            .contains("inside")
+    );
+    for path in ["secret-alias", "loop"] {
+        assert!(
+            tool.execute(call(json!({"path":path})), CancellationToken::new())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn template_trust_is_exact_and_read_write_is_separate() {
+    let root = Fixture::new();
+    fs::write(root.0.join(".env.example"), "EXAMPLE=1").unwrap();
+    fs::write(root.0.join(".env.local"), "SECRET=1").unwrap();
+    let mut workspace = Workspace::new(&root.0).unwrap();
+    workspace
+        .configure_policy(
+            orbit_runtime::policy::WorkspacePermissions {
+                read_templates: vec![".env.example".into()],
+                ..Default::default()
+            },
+            orbit_runtime::capability::NetworkPolicy::Deny,
+        )
+        .unwrap();
+    assert!(
+        workspace
+            .open_read(std::path::Path::new(".env.example"))
+            .is_ok()
+    );
+    assert!(
+        workspace
+            .open_read(std::path::Path::new(".env.local"))
+            .is_err()
+    );
+    assert!(
+        workspace
+            .authorize_write_parent(std::path::Path::new(".env.example"))
+            .is_err()
+    );
+    workspace
+        .configure_policy(
+            orbit_runtime::policy::WorkspacePermissions {
+                write_templates: vec![".env.example".into()],
+                ..Default::default()
+            },
+            orbit_runtime::capability::NetworkPolicy::Deny,
+        )
+        .unwrap();
+    assert!(
+        workspace
+            .authorize_write_parent(std::path::Path::new(".env.example"))
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn four_byte_unicode_at_eof_never_exceeds_content_budget() {
+    let root = Fixture::new();
+    let original = format!("a{}", "😀".repeat(8191));
+    fs::write(root.0.join("exact.txt"), &original).unwrap();
+    let output: Value = serde_json::from_str(
+        &root
+            .tool()
+            .execute(call(json!({"path":"exact.txt"})), CancellationToken::new())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let content = output["content"].as_str().unwrap();
+    assert!(content.len() <= 32 * 1024);
+    assert_eq!(
+        content.strip_prefix("1: ").unwrap().trim_end_matches('\n'),
+        original
+    );
+    assert_eq!(output["truncated"], false);
 }

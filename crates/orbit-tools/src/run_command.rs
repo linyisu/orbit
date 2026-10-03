@@ -40,6 +40,8 @@ pub struct RunCommand {
 #[serde(deny_unknown_fields)]
 struct Arguments {
     command: String,
+    #[serde(default = "offline_network")]
+    network: orbit_runtime::capability::NetworkPolicy,
     #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
@@ -48,6 +50,10 @@ struct Arguments {
     writable_snapshot: bool,
     #[serde(default)]
     timeout_seconds: Option<u64>,
+}
+
+fn offline_network() -> orbit_runtime::capability::NetworkPolicy {
+    orbit_runtime::capability::NetworkPolicy::Deny
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -62,6 +68,8 @@ pub struct CommandLimits {
     #[serde(alias = "writable_snapshot_mib")]
     pub legacy_writable_snapshot_mib: Option<usize>,
     pub process_limits: ProcessLimits,
+    pub artifacts: crate::export_artifact::ArtifactLimits,
+    pub read_file_scan_bytes: u64,
     pub dependency_caches: Vec<DependencyCache>,
     pub verification_commands: std::collections::BTreeMap<String, String>,
     pub default_timeout_seconds: u64,
@@ -113,6 +121,8 @@ impl Default for CommandLimits {
             max_scan_entries: 10_000,
             legacy_writable_snapshot_mib: None,
             process_limits: ProcessLimits::default(),
+            artifacts: Default::default(),
+            read_file_scan_bytes: 64 * 1024 * 1024,
             dependency_caches: Vec::new(),
             verification_commands: Default::default(),
             default_timeout_seconds: 120,
@@ -216,7 +226,7 @@ impl Tool for RunCommand {
         ToolDefinition::function(
             "run_command",
             format!(
-                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (requires approval in Auto mode). Native Git commands (git status, diff, log, add, commit, push, etc.) are fully supported directly with fine-grained authorization: read-only queries run automatically, local writes (add/commit) require local Git write authorization, and remote push requires dedicated remote approval. Protected paths (.env*, orbit config/db) are isolated and masked; repository configuration (.git/config, hooks) is protected against unauthorized tampering. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network follows the configured command policy. Enforces execution timeout, private script execution, and resource limits. /tmp is a disposable tmpfs. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
+                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (requires approval in Auto mode). Native Git commands are available within the requested sandbox permissions. Offline read-only queries may run automatically; writes and network requests follow approval policy. Use git_push for an ordinary HTTPS push requiring host credentials. Protected paths (.env*, orbit config/db) are isolated and masked; Existing repository configuration and hooks are read-only unless an explicitly approved configuration operation requests read_write. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is denied by default; request network=allow explicitly, subject to the configured policy and approval. Enforces execution timeout, private script execution, and resource limits. /tmp is a disposable command temporary directory. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
                 serde_json::to_string(
                     &self
                         .limits
@@ -232,6 +242,7 @@ impl Tool for RunCommand {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "The shell command to execute" },
+                    "network": { "type": "string", "enum": ["deny", "allow"], "default": "deny", "description": "Request network access explicitly; cannot exceed the configured policy" },
                     "cwd": {
                         "type": "string",
                         "description": "Optional working directory for the command. Relative paths are resolved against the workspace root. Defaults to the workspace root."
@@ -304,7 +315,13 @@ impl Tool for RunCommand {
                 })?;
 
             let workspace_access = args.workspace_access;
-            let network_allowed = self.workspace.policy().network_policy().is_allowed();
+            if args.network.is_allowed()
+                && (!self.workspace.policy().network_policy().is_allowed()
+                    || !self.limits.network.is_allowed())
+            {
+                return Err(invalid("network access is disabled by the command policy"));
+            }
+            let network_allowed = args.network.is_allowed();
             let mut external_capabilities = Vec::new();
             let mut external_write = false;
 
@@ -428,7 +445,7 @@ impl Tool for RunCommand {
             let effective_policy = self.workspace.policy().effective_policy();
             let mut execution_policy = ExecutionPolicy::dev_default();
             execution_policy.read_only_workspace = workspace_access == CommandWorkspaceAccess::Read;
-            execution_policy.network = self.workspace.policy().network_policy();
+            execution_policy.network = args.network;
             execution_policy.mounts = self
                 .limits
                 .dependency_caches
@@ -440,6 +457,18 @@ impl Tool for RunCommand {
             execution_policy.resources = self.limits.process_limits.clone().into();
             execution_policy.rust_toolchain = self.limits.rust_toolchain.clone();
             execution_policy.unmask_git = true;
+            execution_policy.allow_git_config_write = workspace_access
+                == CommandWorkspaceAccess::ReadWrite
+                && orbit_runtime::git::GitCommandAnalysis::parse(&request.command).is_some_and(
+                    |g| {
+                        matches!(
+                            g.kind,
+                            orbit_runtime::git::GitOperationKind::ConfigMutation { .. }
+                        )
+                    },
+                );
+            execution_policy.read_templates = effective_policy.read_templates.clone();
+            execution_policy.write_templates = effective_policy.write_templates.clone();
             execution_policy.external_read = effective_policy
                 .persistent_read
                 .iter()

@@ -35,27 +35,93 @@ pub struct CommandPreview {
     pub git: Option<orbit_runtime::git::GitCommandAnalysis>,
 }
 
-/// The file tool has already validated this path. Resolve its parent again for
-/// the approval policy so a symlinked directory cannot make an outside write
-/// look like a workspace-local edit.
-pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
+impl CommandPreview {
+    pub fn request_grant_key(&self, workspace: &Path) -> String {
+        format!(
+            "{}:{:?}:{}:{:?}:{}:{}:{:?}",
+            workspace.display(),
+            self.cwd,
+            self.command,
+            self.workspace_access,
+            self.network_allowed,
+            self.external_write,
+            self.external_capabilities
+        )
+    }
+    /// Bind reuse to the exact approved request and repository configuration.
+    pub fn git_grant_key(&self, workspace: &Path) -> Option<String> {
+        use std::io::Read;
+        let root = workspace.canonicalize().ok()?;
+        let cwd = self.cwd.as_deref().map(Path::new).unwrap_or(workspace);
+        let cwd = if cwd.is_absolute() {
+            cwd.to_owned()
+        } else {
+            root.join(cwd)
+        };
+        let repo = cwd
+            .ancestors()
+            .take_while(|path| path.starts_with(&root))
+            .find_map(|path| {
+                orbit_runtime::git::GitRepositoryInfo::discover(path)
+                    .ok()
+                    .flatten()
+            })?;
+        let mut bytes = Vec::new();
+        for config in [repo.config_path(), repo.worktree_config_path()] {
+            if config.exists() {
+                use std::os::unix::fs::MetadataExt;
+                let metadata = std::fs::symlink_metadata(&config).ok()?;
+                if metadata.file_type().is_symlink() || metadata.nlink() != 1 {
+                    return None;
+                }
+                std::fs::File::open(config)
+                    .ok()?
+                    .take(1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)
+                    .ok()?;
+                if bytes.len() > 1024 * 1024 {
+                    return None;
+                }
+            }
+        }
+        Some(format!(
+            "{}:{:?}:{}:{:?}:{}:{:?}:{}",
+            repo.git_dir.display(),
+            self.cwd,
+            self.command,
+            self.workspace_access,
+            self.network_allowed,
+            self.external_capabilities,
+            orbit_runtime::execution::content_hash(&bytes)
+        ))
+    }
+}
+
+/// Bind reusable file approvals to the actual target, including final symlinks.
+pub fn file_grant_key(path: &str, workspace: &Path) -> Option<String> {
     let path = Path::new(path);
-    let Some(parent) = path.parent() else {
-        return false;
+    let requested = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        workspace.join(path)
     };
+    let canonical = match requested.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => requested
+            .parent()?
+            .canonicalize()
+            .ok()?
+            .join(requested.file_name()?),
+        Err(_) => return None,
+    };
+    Some(canonical.to_str()?.to_owned())
+}
+
+pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
     let Some(root) = workspace.canonicalize().ok() else {
         return false;
     };
-
-    let candidate = if parent.is_absolute() {
-        parent.to_path_buf()
-    } else {
-        root.join(parent)
-    };
-
-    candidate
-        .canonicalize()
-        .is_ok_and(|resolved| resolved.starts_with(root))
+    file_grant_key(path, &root).is_some_and(|path| Path::new(&path).starts_with(root))
 }
 
 /// Auto mode permits read-only, offline commands and workspace-local file
@@ -65,15 +131,15 @@ pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
 pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
     match preview {
         ApprovalPreview::Command(command) => {
-            if let Some(git) = &command.git
-                && matches!(
+            if command.git.as_ref().is_some_and(|git| {
+                matches!(
                     git.kind,
-                    orbit_runtime::git::GitOperationKind::ReadOnlyQuery { .. }
+                    orbit_runtime::git::GitOperationKind::Dangerous { .. }
+                        | orbit_runtime::git::GitOperationKind::ConfigMutation { .. }
                 )
-            {
-                return true;
+            }) {
+                return false;
             }
-
             !command.network_allowed
                 && command.workspace_access == CommandWorkspaceAccess::Read
                 && !command.external_write
@@ -127,7 +193,7 @@ pub fn channel() -> (ApprovalSender, ApprovalReceiver) {
 
 #[cfg(test)]
 mod tests {
-    use super::workspace_local_file;
+    use super::*;
 
     #[test]
     fn workspace_write_scope_resolves_parent_symlinks() {
@@ -152,5 +218,55 @@ mod tests {
 
             assert!(!workspace_local_file("linked/data.txt", root.path()));
         }
+    }
+    #[test]
+    fn git_query_does_not_override_network_or_filesystem_permissions() {
+        let root = tempfile::tempdir().unwrap();
+        let mut command = CommandPreview {
+            command: "git status".into(),
+            cwd: None,
+            timeout_seconds: 30,
+            workspace_access: CommandWorkspaceAccess::Read,
+            network_allowed: false,
+            external_write: false,
+            external_capabilities: Vec::new(),
+            git: orbit_runtime::git::GitCommandAnalysis::parse("git status"),
+        };
+        assert!(auto_allows(
+            &ApprovalPreview::Command(command.clone()),
+            root.path()
+        ));
+        command.network_allowed = true;
+        assert!(!auto_allows(
+            &ApprovalPreview::Command(command.clone()),
+            root.path()
+        ));
+        command.network_allowed = false;
+        command.workspace_access = CommandWorkspaceAccess::ReadWrite;
+        assert!(!auto_allows(
+            &ApprovalPreview::Command(command.clone()),
+            root.path()
+        ));
+        command.workspace_access = CommandWorkspaceAccess::Read;
+        command.external_capabilities.push("outside".into());
+        assert!(!auto_allows(
+            &ApprovalPreview::Command(command),
+            root.path()
+        ));
+    }
+    #[test]
+    fn final_link_target_controls_local_write_and_grant_reuse() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("inside"), "inside").unwrap();
+        std::fs::write(outside.path().join("external"), "outside").unwrap();
+        let alias = workspace.path().join("alias");
+        std::os::unix::fs::symlink("inside", &alias).unwrap();
+        let initial = file_grant_key("alias", workspace.path()).unwrap();
+        assert!(workspace_local_file("alias", workspace.path()));
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("external"), &alias).unwrap();
+        assert!(!workspace_local_file("alias", workspace.path()));
+        assert_ne!(file_grant_key("alias", workspace.path()).unwrap(), initial);
     }
 }

@@ -20,6 +20,9 @@ pub struct ExecutionPolicy {
     pub rust_toolchain: Option<PathBuf>,
     pub env_overrides: BTreeMap<String, String>,
     pub unmask_git: bool,
+    pub allow_git_config_write: bool,
+    pub read_templates: Vec<PathBuf>,
+    pub write_templates: Vec<PathBuf>,
 }
 
 impl ExecutionPolicy {
@@ -37,6 +40,9 @@ impl ExecutionPolicy {
             rust_toolchain: None,
             env_overrides: BTreeMap::new(),
             unmask_git: false,
+            allow_git_config_write: false,
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
         }
     }
 
@@ -54,6 +60,9 @@ impl ExecutionPolicy {
             rust_toolchain: None,
             env_overrides: BTreeMap::new(),
             unmask_git: false,
+            allow_git_config_write: false,
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
         }
     }
 

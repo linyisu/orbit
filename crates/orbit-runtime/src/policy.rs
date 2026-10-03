@@ -157,6 +157,11 @@ impl BasePolicy {
 /// Persistent workspace permissions loaded from project or user configuration (e.g. orbit.toml).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorkspacePermissions {
+    /// Exact environment template paths explicitly trusted by the user.
+    #[serde(default)]
+    pub read_templates: Vec<PathBuf>,
+    #[serde(default)]
+    pub write_templates: Vec<PathBuf>,
     #[serde(default)]
     pub read: Vec<PathBuf>,
     #[serde(default)]
@@ -167,6 +172,8 @@ pub struct WorkspacePermissions {
 #[derive(Clone, Debug)]
 pub struct EffectivePolicy {
     pub base: BasePolicy,
+    pub read_templates: Vec<PathBuf>,
+    pub write_templates: Vec<PathBuf>,
     pub persistent_read: Vec<ResolvedPath>,
     pub persistent_read_write: Vec<ResolvedPath>,
     pub session_grants: Arc<RwLock<SessionGrantStore>>,
@@ -178,6 +185,8 @@ impl EffectivePolicy {
     pub fn new(base: BasePolicy) -> Self {
         Self {
             base,
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             persistent_read: Vec::new(),
             persistent_read_write: Vec::new(),
             session_grants: Arc::new(RwLock::new(SessionGrantStore::new())),
@@ -250,6 +259,22 @@ impl PolicyEngine {
             Ok(())
         };
 
+        let validate_templates = |paths: Vec<PathBuf>| -> Result<Vec<PathBuf>, RuntimeError> {
+            paths.into_iter().map(|path| {
+                let candidate = if path.is_absolute() { path } else { base_dir.join(path) };
+                if std::fs::symlink_metadata(&candidate).map_err(failed)?.file_type().is_symlink() { return Err(failed("template authorization requires an ordinary file, not a symlink")); }
+                let canonical = std::fs::canonicalize(&candidate).map_err(failed)?;
+                let rel = canonical.strip_prefix(base_dir).map_err(|_| failed("template must be inside workspace"))?;
+                let name = canonical.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if !name.starts_with(".env.") || !canonical.is_file() || rel.parent().is_some_and(|p| p.components().any(|c| crate::filesystem::path_security::is_protected_workspace_name(&c.as_os_str().to_string_lossy()))) {
+                    return Err(failed("template authorization requires an exact ordinary .env.* file inside workspace"));
+                }
+                Ok(canonical)
+            }).collect()
+        };
+        let read_templates = validate_templates(permissions.read_templates)?;
+        let write_templates = validate_templates(permissions.write_templates)?;
+
         let mut persistent_read = Vec::new();
 
         for p in permissions.read {
@@ -301,6 +326,8 @@ impl PolicyEngine {
         Ok(Self {
             policy: Arc::new(EffectivePolicy {
                 base: BasePolicy { workspace, network },
+                read_templates,
+                write_templates,
                 persistent_read,
                 persistent_read_write,
                 session_grants: Arc::new(RwLock::new(SessionGrantStore::new())),
@@ -437,6 +464,19 @@ impl PolicyEngine {
                         let name = component.as_os_str().to_string_lossy();
 
                         if crate::filesystem::path_security::is_protected_workspace_name(&name) {
+                            let template_read = self
+                                .policy
+                                .read_templates
+                                .iter()
+                                .chain(self.policy.write_templates.iter())
+                                .any(|p| p == canon);
+                            let template_write =
+                                self.policy.write_templates.iter().any(|p| p == canon);
+                            if template_write
+                                || (template_read && !capability.access.allows_write())
+                            {
+                                continue;
+                            }
                             return PolicyDecision::Denied(format!(
                                 "path '{}' is protected metadata and cannot be granted",
                                 canon.display()
@@ -730,6 +770,8 @@ mod tests {
 
         // 1. Non-existent path rejected
         let perms_nonexistent = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             read: vec![tmp_ext.path().join("nonexistent")],
             read_write: Vec::new(),
         };
@@ -741,6 +783,8 @@ mod tests {
 
         // 2. Workspace ancestor rejected
         let perms_ancestor = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             read: vec![tmp_ws.path().parent().unwrap().to_path_buf()],
             read_write: Vec::new(),
         };
@@ -752,6 +796,8 @@ mod tests {
 
         // 3. Inside workspace rejected
         let perms_inside = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             read: vec![tmp_ws.path().join("src")],
             read_write: Vec::new(),
         };
@@ -765,6 +811,8 @@ mod tests {
         let sub_dir = ext_dir.join("secret");
         std::fs::create_dir_all(&sub_dir).unwrap();
         let perms_overlap = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             read_write: vec![ext_dir.clone()],
             read: vec![sub_dir.clone()],
         };
@@ -779,6 +827,8 @@ mod tests {
         let sub_rw = ext_dir.join("sub_rw");
         std::fs::create_dir_all(&sub_rw).unwrap();
         let perms_redundant = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
             read_write: vec![ext_dir.clone(), sub_rw],
             read: Vec::new(),
         };

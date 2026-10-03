@@ -65,16 +65,19 @@ supports_vision = true
 reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
 ```
 
-API Key 也可独立保存并通过管道安全录入，避免明文泄露到 shell 历史中：
+API Key 可通过 `orbit auth set-key` 的交互输入录入。使用 `--stdin` 时应从已有的安全输入源读取；不要把真实密钥写成 shell 命令字面量。以下 Bash 示例隐藏输入，命令历史不包含密钥正文：
 
-```sh
-echo "sk-secret-token" | orbit auth set-key my-provider --base-url https://api.example.com/v1 --stdin
+```bash
+read -r -s -p "API key: " orbit_api_key_input
+printf '\n'
+printf '%s' "$orbit_api_key_input" | orbit auth set-key my-provider --base-url https://api.example.com/v1 --stdin
+unset orbit_api_key_input
 ```
 
 ## 存储安全与隔离模型
 
 1. **存储路径**：默认存放在 `$XDG_CONFIG_HOME/orbit/auth`（或 `~/.config/orbit/auth`），可通过全局参数 `--auth-dir` 自定义。
-2. **文件权限与并发锁**：目录权限强制为 `0700`，凭据文件权限强制为 `0600`。多进程并发刷新时通过操作系统文件排他锁与原子临时文件重命名（atomic rename）保证数据一致性与零损坏。
+2. **文件权限与并发锁**：目录权限强制为 `0700`，凭据文件权限强制为 `0600`。多进程并发刷新时通过操作系统文件排他锁与原子临时文件重命名（atomic rename）串行化刷新并避免直接覆盖半写入文件；存储或刷新失败仍会返回错误。
 3. **凭据隔离**：
    - 凭据目录受 Orbit 运行时保护系统严格监管，被列入沙箱受保护路径，禁止沙箱内命令或工具访问。
    - API Key 严格绑定录入时的目标服务地址；OAuth 令牌仅允许向各官方服务及协议端点发送，禁止转发到自定义网关。

@@ -382,9 +382,7 @@ async fn run_command_allows_native_git_status_and_commit_in_sandbox() {
         }),
     );
     let t1 = tool.clone();
-    let task = tokio::spawn(async move {
-        t1.execute(call, CancellationToken::new()).await
-    });
+    let task = tokio::spawn(async move { t1.execute(call, CancellationToken::new()).await });
     let req = receiver.recv().await.unwrap();
     // Verify git analysis was attached
     assert!(matches!(
@@ -408,9 +406,8 @@ async fn run_command_allows_native_git_status_and_commit_in_sandbox() {
         }),
     );
     let t2 = tool.clone();
-    let task2 = tokio::spawn(async move {
-        t2.execute(call_commit, CancellationToken::new()).await
-    });
+    let task2 =
+        tokio::spawn(async move { t2.execute(call_commit, CancellationToken::new()).await });
     let req2 = receiver.recv().await.unwrap();
     req2.decision.send(true).unwrap();
 
@@ -755,4 +752,116 @@ async fn run_command_rejects_mount_containing_hardlink_to_protected_path() {
         }
         other => panic!("expected ExecutionFailed error, got {:?}", other),
     }
+}
+
+#[tokio::test]
+async fn network_request_defaults_offline_and_cannot_exceed_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = Workspace::new(root.path()).unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace.clone(), sender);
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function("network", "run_command", json!({"command":"pwd"})),
+            CancellationToken::new(),
+        )
+        .await
+    });
+    let request = receiver.recv().await.unwrap();
+    if let approval::ApprovalPreview::Command(command) = &request.preview {
+        assert!(!command.network_allowed);
+        assert!(approval::auto_allows(&request.preview, root.path()));
+    } else {
+        panic!("command preview expected");
+    }
+    request.decision.send(false).unwrap();
+    assert!(task.await.unwrap().is_err());
+    let mut offline = workspace;
+    offline
+        .configure_policy(
+            Default::default(),
+            orbit_runtime::capability::NetworkPolicy::Deny,
+        )
+        .unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(offline, sender);
+    assert!(
+        tool.execute(
+            ToolCall::function(
+                "network",
+                "run_command",
+                json!({"command":"pwd", "network":"allow"})
+            ),
+            CancellationToken::new()
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("network access is disabled")
+    );
+    assert!(receiver.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn read_only_templates_and_their_aliases_stay_read_only_in_commands() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join(".env.example"), "EXAMPLE=1\n").unwrap();
+    fs::hard_link(root.path().join(".env.example"), root.path().join("alias")).unwrap();
+    let mut workspace = Workspace::new(root.path()).unwrap();
+    workspace
+        .configure_policy(
+            orbit_runtime::policy::WorkspacePermissions {
+                read_templates: vec![".env.example".into()],
+                ..Default::default()
+            },
+            orbit_runtime::capability::NetworkPolicy::Deny,
+        )
+        .unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+    let task = tokio::spawn(async move {
+        tool.execute(ToolCall::function("template", "run_command", json!({"command":"cat /workspace/.env.example; echo changed > /workspace/alias; echo changed > /workspace/.env.example", "workspace_access":"read_write"})), CancellationToken::new()).await
+    });
+    receiver.recv().await.unwrap().decision.send(true).unwrap();
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    assert!(value["stdout"].as_str().unwrap().contains("EXAMPLE=1"));
+    assert_ne!(value["exit_code"], 0);
+    assert_eq!(
+        fs::read_to_string(root.path().join(".env.example")).unwrap(),
+        "EXAMPLE=1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("alias")).unwrap(),
+        "EXAMPLE=1\n"
+    );
+}
+
+#[tokio::test]
+async fn git_config_symlink_cannot_expose_a_protected_host_file() {
+    let root = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let secret = private.path().join("credential");
+    fs::write(&secret, "SECRET_AUTH_VALUE").unwrap();
+    fs::create_dir(root.path().join(".git")).unwrap();
+    std::os::unix::fs::symlink(&secret, root.path().join(".git/config")).unwrap();
+    let mut workspace = Workspace::new(root.path()).unwrap();
+    workspace.protect(&secret).unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "config",
+                "run_command",
+                json!({"command":"cat /workspace/.git/config","workspace_access":"read_write"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+    receiver.recv().await.unwrap().decision.send(true).unwrap();
+    let error = task.await.unwrap().unwrap_err();
+    assert!(error.to_string().contains("protected path"));
+    assert!(!error.to_string().contains("SECRET_AUTH_VALUE"));
 }

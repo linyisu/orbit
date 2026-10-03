@@ -717,24 +717,29 @@ pub async fn run(
                                 if let Some(request) = pending.take() {
                                     match &request.preview {
                                         orbit_tools::approval::ApprovalPreview::Write(p) => {
-                                            session.store.grant_tui_file(session.id(), &p.path).await?;
-                                            state.session_allowed_files.insert(p.path.clone());
+                                            if let Some(key) = orbit_tools::approval::file_grant_key(&p.path, std::path::Path::new(&session.snapshot.session.workspace)) {
+                                                session.store.grant_tui_file(session.id(), &key).await?;
+                                                state.session_allowed_files.insert(key);
+                                            }
                                         }
                                         orbit_tools::approval::ApprovalPreview::Delete(p) => {
-                                            session.store.grant_tui_file(session.id(), &p.path).await?;
-                                            state.session_allowed_files.insert(p.path.clone());
+                                            if let Some(key) = orbit_tools::approval::file_grant_key(&p.path, std::path::Path::new(&session.snapshot.session.workspace)) {
+                                                session.store.grant_tui_file(session.id(), &key).await?;
+                                                state.session_allowed_files.insert(key);
+                                            }
                                         }
                                         orbit_tools::approval::ApprovalPreview::Command(cmd) => {
                                             if let Some(git) = &cmd.git {
                                                 match git.kind {
-                                                    orbit_runtime::git::GitOperationKind::LocalWrite { .. } => {
-                                                        state.session_git_local_write = true;
-                                                    }
-                                                    orbit_runtime::git::GitOperationKind::RemoteWrite { .. } => {
-                                                        state.session_git_remote_write = true;
+                                                    orbit_runtime::git::GitOperationKind::LocalWrite { .. }
+                                                    | orbit_runtime::git::GitOperationKind::RemoteWrite { .. }
+                                                    | orbit_runtime::git::GitOperationKind::ReadOnlyQuery { .. } => {
+                                                        if let Some(key) = cmd.git_grant_key(std::path::Path::new(&session.snapshot.session.workspace)) { state.session_git_commands.insert(key); }
                                                     }
                                                     _ => {}
                                                 }
+                                            } else {
+                                                state.session_commands.insert(cmd.request_grant_key(std::path::Path::new(&session.snapshot.session.workspace)));
                                             }
                                         }
                                         _ => {}
@@ -1080,14 +1085,6 @@ pub async fn run(
                             let retry_prompt = prompt.clone();
                             let retry_attachments = attachments.clone();
 
-                            let lower = prompt.to_lowercase();
-                            if (lower.contains("提交") && (lower.contains("推送") || lower.contains("push")))
-                                || (lower.contains("commit") && lower.contains("push"))
-                            {
-                                state.session_git_local_write = true;
-                                state.session_git_remote_write = true;
-                            }
-
                             let started = start_agent_run(
                                 prompt,
                                 attachments,
@@ -1131,24 +1128,23 @@ pub async fn run(
                     session_sync::sync_mode(&session.store, session.id(), &mut state).await?;
                     let auto_allowed = match &request.preview {
                         orbit_tools::approval::ApprovalPreview::Write(p) => {
-                            state.session_allowed_files.contains(&p.path)
+                            orbit_tools::approval::file_grant_key(&p.path, std::path::Path::new(&session.snapshot.session.workspace)).is_some_and(|key| state.session_allowed_files.contains(&key))
                         }
                         orbit_tools::approval::ApprovalPreview::Delete(p) => {
-                            state.session_allowed_files.contains(&p.path)
+                            orbit_tools::approval::file_grant_key(&p.path, std::path::Path::new(&session.snapshot.session.workspace)).is_some_and(|key| state.session_allowed_files.contains(&key))
                         }
                         orbit_tools::approval::ApprovalPreview::Command(cmd) => {
                             if let Some(git) = &cmd.git {
                                 match git.kind {
-                                    orbit_runtime::git::GitOperationKind::LocalWrite { .. } => {
-                                        state.session_git_local_write
-                                    }
-                                    orbit_runtime::git::GitOperationKind::RemoteWrite { .. } => {
-                                        state.session_git_remote_write
+                                    orbit_runtime::git::GitOperationKind::LocalWrite { .. }
+                                    | orbit_runtime::git::GitOperationKind::RemoteWrite { .. }
+                                    | orbit_runtime::git::GitOperationKind::ReadOnlyQuery { .. } => {
+                                        cmd.git_grant_key(std::path::Path::new(&session.snapshot.session.workspace)).is_some_and(|key| state.session_git_commands.contains(&key))
                                     }
                                     _ => false,
                                 }
                             } else {
-                                false
+                                state.session_commands.contains(&cmd.request_grant_key(std::path::Path::new(&session.snapshot.session.workspace)))
                             }
                         }
                         _ => false,

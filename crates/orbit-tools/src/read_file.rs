@@ -1,4 +1,8 @@
-use std::{io::Read, path::Path};
+use std::os::unix::fs::MetadataExt;
+use std::{
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    path::Path,
+};
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
@@ -8,19 +12,43 @@ use tokio_util::sync::CancellationToken;
 
 use orbit_runtime::filesystem::Workspace;
 
-const MAX_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadArguments {
     path: String,
+    #[serde(default)]
+    cursor: Option<Cursor>,
     #[serde(default = "first_line")]
     start_line: usize,
     #[serde(default)]
     start_char: usize,
     #[serde(default = "default_limit")]
     max_lines: usize,
+}
+
+#[derive(serde::Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Cursor {
+    version: String,
+    offset: u64,
+    line: usize,
+    character: usize,
+}
+
+fn version(metadata: &std::fs::Metadata) -> String {
+    format!(
+        "{}:{}:{}:{}:{}:{}:{}",
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec()
+    )
 }
 
 fn first_line() -> usize {
@@ -33,11 +61,22 @@ fn default_limit() -> usize {
 
 pub struct ReadFile {
     workspace: Workspace,
+    scan_budget: u64,
 }
 
 impl ReadFile {
     pub fn new(workspace: Workspace) -> Self {
-        Self { workspace }
+        Self {
+            workspace,
+            scan_budget: MAX_SCAN_BYTES,
+        }
+    }
+}
+
+impl ReadFile {
+    pub fn with_scan_budget(mut self, bytes: u64) -> Self {
+        self.scan_budget = bytes;
+        self
     }
 }
 
@@ -45,11 +84,12 @@ impl Tool for ReadFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_file",
-            "Read a UTF-8 file inside the workspace (or outside path granted via request_capability). Use a relative path or granted outside path, and optional 1-based start_line/max_lines. If a long line is truncated, resume with the returned next_start_line and next_start_char (Unicode character offset within that line). Returns JSON with numbered lines. Symlinks and protected configuration files are rejected. Maximum file size: 1 MiB; maximum content field: 32 KiB.",
+            "Read a UTF-8 file inside the workspace (or outside path granted via request_capability). Use a relative path or granted outside path, and optional 1-based start_line/max_lines. If a long line is truncated, resume with the returned next_start_line and next_start_char (Unicode character offset within that line). Returns JSON with numbered lines. Protected configuration files are rejected. Reads incrementally with a configurable scan budget per call (default 64 MiB) and 32 KiB content limit. Resume using next_cursor to avoid rescanning; cursors are rejected if the file changed. total_lines is null until EOF is reached.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" },
+                    "cursor": { "type": "object", "description": "Pass next_cursor unchanged to resume this file version", "properties": {"version": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "line": {"type": "integer", "minimum": 1}, "character": {"type": "integer", "minimum": 0}}, "required": ["version", "offset", "line", "character"], "additionalProperties": false },
                     "start_line": { "type": "integer", "minimum": 1, "default": 1 },
                     "start_char": { "type": "integer", "minimum": 0, "default": 0 },
                     "max_lines": { "type": "integer", "minimum": 1, "maximum": 500, "default": 200 }
@@ -79,7 +119,9 @@ impl Tool for ReadFile {
 
             let workspace = self.workspace.clone();
             let token = cancellation.clone();
-            let task = tokio::task::spawn_blocking(move || read(workspace, arguments, token));
+            let budget = self.scan_budget;
+            let task =
+                tokio::task::spawn_blocking(move || read(workspace, arguments, token, budget));
 
             tokio::select! {
                 _ = cancellation.cancelled() => Err(ToolError::Cancelled),
@@ -100,113 +142,146 @@ fn read(
     workspace: Workspace,
     arguments: ReadArguments,
     cancellation: CancellationToken,
+    scan_budget: u64,
 ) -> Result<String, ToolError> {
-    let file = workspace
+    let mut file = workspace
         .authorize_read(Path::new(&arguments.path))
-        .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
-    let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
-
-    if cancellation.is_cancelled() {
-        return Err(ToolError::Cancelled);
-    }
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err(ToolError::ExecutionFailed(
-            "file exceeds the 1 MiB read limit".into(),
-        ));
-    }
-
-    let text = String::from_utf8(bytes)
-        .map_err(|_| ToolError::ExecutionFailed("file is not UTF-8 text".into()))?;
-
-    if text.contains('\0') {
-        return Err(ToolError::ExecutionFailed(
-            "binary files are not supported".into(),
-        ));
-    }
-
-    let lines: Vec<_> = text.lines().collect();
-
-    if arguments.start_line > lines.len().max(1) {
-        return Err(invalid(format!(
-            "start_line exceeds file length ({} lines)",
-            lines.len()
-        )));
-    }
-    if arguments.start_char
-        > lines
-            .get(arguments.start_line - 1)
-            .map_or(0, |line| line.chars().count())
-    {
-        return Err(invalid("start_char exceeds the selected line length"));
-    }
-
+        .map_err(failed)?;
+    let snapshot = version(&file.metadata().map_err(failed)?);
+    let (mut line, mut character, offset) = if let Some(cursor) = &arguments.cursor {
+        if cursor.version != snapshot
+            || cursor.line == 0
+            || cursor.offset > file.metadata().map_err(failed)?.len()
+        {
+            return Err(invalid(
+                "cursor is invalid or file changed; read again without cursor",
+            ));
+        }
+        (cursor.line, cursor.character, cursor.offset)
+    } else {
+        (1, 0, 0)
+    };
+    file.seek(SeekFrom::Start(offset)).map_err(failed)?;
+    let mut reader = BufReader::new(file);
+    let start_line = arguments
+        .cursor
+        .as_ref()
+        .map_or(arguments.start_line, |c| c.line);
+    let start_char = arguments
+        .cursor
+        .as_ref()
+        .map_or(arguments.start_char, |c| c.character);
+    let mut position = offset;
+    let mut scanned = 0u64;
     let mut content = String::new();
-    let mut end_line = arguments.start_line.saturating_sub(1);
-    let mut continuation = None;
-
-    for (index, line) in lines
-        .iter()
-        .enumerate()
-        .skip(arguments.start_line - 1)
-        .take(arguments.max_lines)
-    {
-        let skipped = if index + 1 == arguments.start_line {
-            arguments.start_char
-        } else {
-            0
-        };
-
-        let line = line.chars().skip(skipped).collect::<String>();
-        let prefix = format!("{}: ", index + 1);
-        let available = MAX_OUTPUT_BYTES.saturating_sub(content.len());
-
-        if prefix.len() + line.len() + 1 > available {
-            if available <= prefix.len() {
-                continuation = Some((index + 1, skipped));
-                break;
-            }
-
-            let mut end = 0;
-            let mut characters = 0;
-
-            for character in line.chars() {
-                if end + character.len_utf8() > available - prefix.len() {
-                    break;
-                }
-
-                end += character.len_utf8();
-                characters += 1;
-            }
-
-            content.push_str(&prefix);
-            content.push_str(&line[..end]);
-            end_line = index + 1;
-            continuation = Some((index + 1, skipped + characters));
+    let mut end_line = start_line.saturating_sub(1);
+    let mut prefix_written = false;
+    let mut eof = false;
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        if scan_budget != 0 && scanned >= scan_budget {
+            return Err(failed(
+                "read scan budget exceeded; request a nearer range or use a continuation cursor",
+            ));
+        }
+        if reader.fill_buf().map_err(failed)?.is_empty() {
+            eof = true;
             break;
         }
-
-        content.push_str(&prefix);
-        content.push_str(&line);
-        content.push('\n');
-        end_line = index + 1;
+        if line >= start_line.saturating_add(arguments.max_lines) {
+            break;
+        }
+        let selected = line >= start_line && (line != start_line || character >= start_char);
+        let prefix = if selected && !prefix_written {
+            format!("{line}: ")
+        } else {
+            String::new()
+        };
+        // Reserve enough for any UTF-8 scalar before consuming it.
+        if selected && MAX_OUTPUT_BYTES - content.len() < prefix.len() + 4 {
+            break;
+        }
+        let scalar = read_scalar(&mut reader)?;
+        let bytes = scalar.len_utf8() as u64;
+        scanned += bytes;
+        position += bytes;
+        if scalar == '\r' && reader.fill_buf().map_err(failed)?.first() == Some(&b'\n') {
+            continue;
+        }
+        if scalar == '\0' {
+            return Err(failed("binary files are not supported"));
+        }
+        if selected {
+            content.push_str(&prefix);
+            prefix_written = true;
+            end_line = line;
+            if scalar == '\n' && content.ends_with('\r') {
+                content.pop();
+            }
+            content.push(scalar);
+        }
+        if scalar == '\n' {
+            if line == start_line && character < start_char {
+                return Err(invalid("start_char exceeds the selected line length"));
+            }
+            line = line
+                .checked_add(1)
+                .ok_or_else(|| invalid("line offset overflow"))?;
+            character = 0;
+            prefix_written = false;
+        } else {
+            character = character
+                .checked_add(1)
+                .ok_or_else(|| invalid("character offset overflow"))?;
+        }
     }
-
-    let continuation =
-        continuation.or_else(|| (end_line < lines.len()).then_some((end_line + 1, 0)));
-
+    let total_at_eof = if character == 0 { line - 1 } else { line };
+    if eof && (start_line > total_at_eof.max(1) || line == start_line && character < start_char) {
+        return Err(invalid("requested range exceeds file length"));
+    }
+    if eof && prefix_written && !content.ends_with('\n') && content.len() < MAX_OUTPUT_BYTES {
+        content.push('\n');
+    }
+    if snapshot != version(&reader.get_ref().metadata().map_err(failed)?) {
+        return Err(failed("file changed during read; retry"));
+    }
+    let next = (!eof).then_some(Cursor {
+        version: snapshot,
+        offset: position,
+        line,
+        character,
+    });
+    let total_lines = eof.then_some(if character == 0 { line - 1 } else { line });
     Ok(json!({
-        "path": arguments.path,
-        "start_line": arguments.start_line,
-        "start_char": arguments.start_char,
-        "end_line": end_line,
-        "total_lines": lines.len(),
-        "truncated": continuation.is_some(),
-        "next_start_line": continuation.map(|(line, _)| line),
-        "next_start_char": continuation.map(|(_, character)| character),
+        "path": arguments.path, "start_line": start_line, "start_char": start_char,
+        "end_line": end_line, "total_lines": total_lines,
+        "truncated": !eof, "next_start_line": next.as_ref().map(|c| c.line),
+        "next_start_char": next.as_ref().map(|c| c.character), "next_cursor": next,
         "content": content
     })
     .to_string())
+}
+
+fn failed(error: impl std::fmt::Display) -> ToolError {
+    ToolError::ExecutionFailed(error.to_string())
+}
+
+fn read_scalar(reader: &mut impl Read) -> Result<char, ToolError> {
+    let mut bytes = [0u8; 4];
+    reader.read_exact(&mut bytes[..1]).map_err(failed)?;
+    let length = match bytes[0] {
+        0..=0x7f => 1,
+        0xc2..=0xdf => 2,
+        0xe0..=0xef => 3,
+        0xf0..=0xf4 => 4,
+        _ => return Err(failed("file is not UTF-8 text")),
+    };
+    reader.read_exact(&mut bytes[1..length]).map_err(failed)?;
+    std::str::from_utf8(&bytes[..length])
+        .map_err(|_| failed("file is not UTF-8 text"))?
+        .chars()
+        .next()
+        .ok_or_else(|| failed("invalid UTF-8 scalar"))
 }
