@@ -1095,6 +1095,75 @@ id = "test"
         assert_eq!(std::env::current_dir().unwrap(), original_cwd);
     }
 
+    #[tokio::test]
+    async fn fresh_launch_uses_its_directory_instead_of_the_previous_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first");
+        let second = directory.path().join("second/subdirectory");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("marker.txt"), "previous workspace").unwrap();
+        std::fs::write(second.join("marker.txt"), "launch workspace").unwrap();
+        let config = first.join("config.toml");
+        std::fs::write(
+            &config,
+            r#"default_provider = "test"
+[providers.test]
+base_url = "http://127.0.0.1:1/v1"
+api_key = "test-only"
+models = [{ id = "test" }]
+"#,
+        )
+        .unwrap();
+        let options = TuiOptions {
+            auth_directory: directory.path().join("auth"),
+            config,
+            database: directory.path().join("sessions.db"),
+            allow_mcp_start: false,
+            home: None,
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        let previous = prepare_tui(&options, &first, None).await.unwrap();
+        let fresh = prepare_tui(&options, &second, None).await.unwrap();
+        assert_ne!(previous.session.id(), fresh.session.id());
+        assert_ne!(
+            previous.session.snapshot.session.project_id,
+            fresh.session.snapshot.session.project_id,
+        );
+        assert_eq!(fresh.resources.workspace.root(), second);
+        assert_eq!(
+            fresh.session.snapshot.session.workspace,
+            second.to_str().unwrap()
+        );
+        assert_eq!(
+            fresh
+                .session
+                .store
+                .session(fresh.session.id())
+                .await
+                .unwrap()
+                .workspace,
+            second.to_str().unwrap(),
+        );
+        let output = fresh
+            .resources
+            .tools
+            .execute(
+                orbit_model::types::ToolCall::function(
+                    "read",
+                    "read_file",
+                    serde_json::json!({"path": "marker.txt"}),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(output.content.contains("launch workspace"));
+        assert!(!output.content.contains("previous workspace"));
+    }
+
     #[test]
     fn chat_capability_filter_removes_groups_before_request_assembly() {
         let mut tools = ToolRegistry::new();
