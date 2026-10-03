@@ -1221,38 +1221,11 @@ pub(super) fn transcript_lines_at_width(
             }
 
             TranscriptItem::Thinking(row) => {
-                if row.finished {
-                    let label = row.elapsed.map_or_else(
-                        || "思考".to_owned(),
-                        |elapsed| {
-                            if elapsed.as_secs_f64() < 0.1 {
-                                "思考 <0.1s".into()
-                            } else {
-                                format!("思考 {:.1}s", elapsed.as_secs_f64())
-                            }
-                        },
-                    );
-                    lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(label, Style::default().fg(THINKING_MUTED)),
-                    ]));
-
-                    if !expanded {
-                        lines.push(Line::from(""));
-                        continue;
-                    }
-                }
-
-                let text = row.content.trim_end();
-                let mut code = None;
-
-                for (index, line) in text.lines().enumerate() {
-                    lines.push(thinking_line(line, index, &mut code));
-                }
-
-                if !text.is_empty() {
-                    lines.push(Line::from(""));
-                }
+                lines.extend(
+                    thinking_card_with_links(row, expanded)
+                        .into_iter()
+                        .map(|linked| linked.line),
+                );
             }
 
             TranscriptItem::Tool(row) => {
@@ -1674,6 +1647,13 @@ pub(super) fn tool_card_with_links(
             ),
         ]
     };
+    let title = |line| {
+        let mut linked = LinkedLine::plain(line);
+        if row.name == "web_fetch" {
+            linked.links.clear();
+        }
+        linked
+    };
 
     // Collapsed state: strictly 1 command line with colored command name and dimmed action summary
     if !expanded {
@@ -1681,7 +1661,7 @@ pub(super) fn tool_card_with_links(
         full_title_spans.extend(title_spans);
         let title_line = Line::from(full_title_spans);
         let title_width = width.saturating_sub(2);
-        let first_line = LinkedLine::plain(title_line)
+        let first_line = title(title_line)
             .wrap(title_width)
             .into_iter()
             .next()
@@ -1691,7 +1671,7 @@ pub(super) fn tool_card_with_links(
 
     // Expanded state: rounded enclosed card flush with user input frame
     if width < 4 {
-        return vec![LinkedLine::plain(Line::from(title_spans))];
+        return vec![title(Line::from(title_spans))];
     }
 
     let border_style = Style::default().fg(crate::tui::theme::THEME.tool_border);
@@ -1699,35 +1679,24 @@ pub(super) fn tool_card_with_links(
 
     let mut card_lines = Vec::new();
 
-    card_lines.push(LinkedLine::plain(Line::from(Span::styled(
+    card_lines.push(LinkedLine::chrome(Line::from(Span::styled(
         format!("╭{}╮", "─".repeat(inner_width + 2)),
         border_style,
     ))));
 
     let header_line = Line::from(title_spans);
-    for h_line in LinkedLine::plain(header_line).wrap(inner_width as u16) {
+    for h_line in title(header_line).wrap(inner_width as u16) {
         let h_pad = inner_width.saturating_sub(h_line.line.width());
-        let mut framed_header = vec![Span::styled("│ ", border_style)];
-        let offset = framed_header[0].content.len();
-        let links = h_line
-            .links
-            .into_iter()
-            .map(|mut link| {
-                link.start += offset;
-                link.end += offset;
-                link
-            })
-            .collect();
-        framed_header.extend(h_line.line.spans);
-        framed_header.push(Span::raw(" ".repeat(h_pad)));
-        framed_header.push(Span::styled(" │", border_style));
-        card_lines.push(LinkedLine {
-            line: Line::from(framed_header),
-            links,
-        });
+        card_lines.push(h_line.framed(
+            vec![Span::styled("│ ", border_style)],
+            vec![
+                Span::raw(" ".repeat(h_pad)),
+                Span::styled(" │", border_style),
+            ],
+        ));
     }
 
-    card_lines.push(LinkedLine::plain(Line::from(vec![
+    card_lines.push(LinkedLine::chrome(Line::from(vec![
         Span::styled("│ ", border_style),
         Span::raw(" ".repeat(inner_width)),
         Span::styled(" │", border_style),
@@ -1748,10 +1717,9 @@ pub(super) fn tool_card_with_links(
     }
 
     for mut linked in details {
-        let line = &mut linked.line;
-        if line.to_string().starts_with("    ") {
+        if linked.line.to_string().starts_with("    ") {
             let mut remaining = 4;
-            for span in &mut line.spans {
+            for span in &mut linked.line.spans {
                 let count = span
                     .content
                     .chars()
@@ -1764,15 +1732,9 @@ pub(super) fn tool_card_with_links(
                     break;
                 }
             }
-            linked.links.retain_mut(|link| {
-                if link.end <= 4 {
-                    return false;
-                }
-                link.start = link.start.saturating_sub(4);
-                link.end -= 4;
-                true
-            });
+            linked.shift_offsets(-4);
         }
+        let line = &mut linked.line;
         for span in &mut line.spans {
             span.content = safe_output(&span.content).into();
             span.style = line.style.patch(span.style);
@@ -1792,41 +1754,28 @@ pub(super) fn tool_card_with_links(
                 .and_then(|s| s.style.bg)
                 .filter(|bg| sub.line.spans.iter().all(|s| s.style.bg == Some(*bg)));
 
-            let mut spans = if let Some(bg) = line_bg {
-                vec![
-                    Span::styled("│", border_style),
-                    Span::styled(" ", Style::default().bg(bg)),
-                ]
+            let (leading, trailing) = if let Some(bg) = line_bg {
+                (
+                    vec![
+                        Span::styled("│", border_style),
+                        Span::styled(" ", Style::default().bg(bg)),
+                    ],
+                    vec![
+                        Span::styled(" ".repeat(pad + 1), Style::default().bg(bg)),
+                        Span::styled("│", border_style),
+                    ],
+                )
             } else {
-                vec![Span::styled("│ ", border_style)]
+                (
+                    vec![Span::styled("│ ", border_style)],
+                    vec![Span::raw(" ".repeat(pad)), Span::styled(" │", border_style)],
+                )
             };
-            let offset = spans.iter().map(|span| span.content.len()).sum::<usize>();
-            let links = sub
-                .links
-                .into_iter()
-                .map(|mut link| {
-                    link.start += offset;
-                    link.end += offset;
-                    link
-                })
-                .collect();
-            spans.extend(sub.line.spans);
-            if let Some(bg) = line_bg {
-                spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
-                spans.push(Span::styled(" ", Style::default().bg(bg)));
-                spans.push(Span::styled("│", border_style));
-            } else {
-                spans.push(Span::raw(" ".repeat(pad)));
-                spans.push(Span::styled(" │", border_style));
-            }
-            card_lines.push(LinkedLine {
-                line: Line::from(spans),
-                links,
-            });
+            card_lines.push(sub.framed(leading, trailing));
         }
     }
 
-    card_lines.push(LinkedLine::plain(Line::from(Span::styled(
+    card_lines.push(LinkedLine::chrome(Line::from(Span::styled(
         format!("╰{}╯", "─".repeat(inner_width + 2)),
         border_style,
     ))));
@@ -1901,53 +1850,93 @@ pub(super) fn assistant_line(
     super::markdown::line(line, index, code)
 }
 
+pub(super) fn thinking_card_with_links(
+    row: &super::app::ThinkingRow,
+    expanded: bool,
+) -> Vec<super::markdown::LinkedLine> {
+    use super::markdown::LinkedLine;
+    let mut lines = Vec::new();
+    if row.finished {
+        let label = row.elapsed.map_or_else(
+            || "思考".to_owned(),
+            |elapsed| {
+                if elapsed.as_secs_f64() < 0.1 {
+                    "思考 <0.1s".into()
+                } else {
+                    format!("思考 {:.1}s", elapsed.as_secs_f64())
+                }
+            },
+        );
+        lines.push(LinkedLine::plain(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(label, Style::default().fg(THINKING_MUTED)),
+        ])));
+        if !expanded {
+            lines.push(LinkedLine::plain(Line::from("")));
+            return lines;
+        }
+    }
+    let text = row.content.trim_end();
+    let context = super::markdown::Context::new(text);
+    let mut code = None;
+    for (index, line) in text.lines().enumerate() {
+        lines.push(thinking_linked(context.linked_line(line, index, &mut code)));
+    }
+    if !text.is_empty() {
+        lines.push(LinkedLine::plain(Line::from("")));
+    }
+    lines
+}
+
+#[cfg(test)]
 pub(super) fn thinking_line(
     line: &str,
     index: usize,
     code: &mut super::markdown::Fence,
 ) -> Line<'static> {
-    let mut rendered = super::markdown::line(line, index, code);
-    // `markdown::line` reserves two columns for ordinary transcript content.
-    // Replace that indentation with a muted thinking rail while retaining the
-    // markdown spans behind it.
-    let mut has_thinking_rail = false;
+    thinking_linked_line(line, index, code).line
+}
 
-    if let Some(first) = rendered.spans.first_mut() {
-        // Keep both rails for code inside a thought: `┊` identifies reasoning
-        // and `│` identifies the Markdown code block. They are one compound
-        // gutter so wrapped code lines reserve their combined width.
-        if first.content == "  │ " {
-            first.content = "  ┊ │ ".into();
-            has_thinking_rail = true;
-        } else if let Some(rest) = first.content.strip_prefix("  ") {
-            if rest.is_empty() {
-                rendered.spans.remove(0);
-            } else {
-                first.content = rest.to_owned().into();
-            }
-        }
-    }
+#[cfg(test)]
+pub(super) fn thinking_linked_line(
+    line: &str,
+    index: usize,
+    code: &mut super::markdown::Fence,
+) -> super::markdown::LinkedLine {
+    thinking_linked(super::markdown::linked_line(line, index, code))
+}
 
-    // Markdown still contributes structure and semantic color. Apply only a
-    // uniform 30% neutral wash across prose, Markdown and syntax colors.
+pub(super) fn thinking_linked(
+    mut linked: super::markdown::LinkedLine,
+) -> super::markdown::LinkedLine {
+    let rendered = &mut linked.line;
+    let style = rendered.style;
+    rendered.style = Style::default();
     for span in &mut rendered.spans {
+        span.style = style.patch(span.style);
         span.style = span.style.fg(desaturate_for_thinking(span.style.fg));
         if let Some(background) = span.style.bg {
             span.style = span.style.bg(desaturate_for_thinking(Some(background)));
         }
     }
 
-    if !has_thinking_rail {
-        rendered.spans.insert(
-            0,
-            Span::styled(
-                "  ┊ ",
-                Style::default().fg(crate::tui::theme::THEME.thinking_rail),
-            ),
-        );
+    // Reserve the outer rail separately so code rails keep their own color.
+    if let Some(first) = rendered.spans.first_mut()
+        && let Some(rest) = first.content.strip_prefix("  ")
+    {
+        if rest.is_empty() {
+            rendered.spans.remove(0);
+        } else {
+            first.content = rest.to_owned().into();
+        }
+        linked.shift_offsets(-2);
     }
-
-    rendered
+    linked.line.spans.insert(
+        0,
+        Span::styled("  ┊ ", Style::default().fg(THEME.thinking_rail)),
+    );
+    linked.shift_offsets("  ┊ ".len() as isize);
+    linked
 }
 
 pub(super) fn sanitize_line(line: &mut Line<'_>) {
@@ -2860,16 +2849,10 @@ mod tests {
                     "{name} {width}"
                 );
                 assert!(
-                    if source {
-                        width == 10
-                            || links
-                                .iter()
-                                .any(|link| link.url == "https://orbit.example/code")
-                    } else {
-                        !links
+                    width == 10
+                        || links
                             .iter()
-                            .any(|link| link.url == "https://orbit.example/code")
-                    },
+                            .any(|link| link.url == "https://orbit.example/code"),
                     "{name} {width}"
                 );
                 for linked in &card {
@@ -2891,6 +2874,7 @@ mod tests {
                     } else {
                         assert!(text.contains("• Orbit uses Rust."));
                         assert!(text.contains('┬'));
+                        assert!(!text.contains("https://orbit.example/docs"));
                     }
                 }
                 if !source {
@@ -2905,6 +2889,40 @@ mod tests {
                 }
             }
             assert_eq!(row.output, original);
+        }
+    }
+
+    #[test]
+    fn web_fetch_title_is_not_a_link_but_wrapped_body_urls_keep_the_full_target() {
+        use super::super::app::ToolRow;
+        let url = "https://orbit.example/docs/rendering/";
+        let row = ToolRow {
+            id: "orbit-fetch".into(), name: "web_fetch".into(),
+            arguments: serde_json::json!({"url":url}).to_string(),
+            status: ToolStatus::Finished,
+            output: serde_json::json!({"url":url, "content":"[Orbit 文档](https://orbit.example/docs/rendering/)", "total_chars":64}).to_string(),
+        };
+        for width in [16, 32, 80] {
+            let collapsed = tool_card_with_links(&row, false, width);
+            assert!(collapsed.iter().all(|line| line.links.is_empty()));
+            let expanded = tool_card_with_links(&row, true, width);
+            let blank = expanded
+                .iter()
+                .position(|line| line.line.to_string().trim_matches(['│', ' ']).is_empty())
+                .unwrap();
+            assert!(expanded[..blank].iter().all(|line| line.links.is_empty()));
+            let targets: Vec<_> = expanded[blank..]
+                .iter()
+                .flat_map(|line| &line.links)
+                .collect();
+            assert!(targets.len() > 1);
+            assert!(targets.iter().all(|link| link.url == url));
+            assert!(expanded.iter().any(|line| line.links.iter().any(|link| {
+                line.line
+                    .to_string()
+                    .get(link.start..link.end)
+                    .is_some_and(|label| label.contains("Orbit"))
+            })));
         }
     }
 
@@ -3929,7 +3947,18 @@ mod tests {
             &mut code,
         );
 
-        assert_eq!(line.spans[0].content, "  ┊ │ ");
+        assert_eq!(line.spans[0].content, "  ┊ ");
+        assert_eq!(line.spans[0].style.fg, Some(THEME.thinking_rail));
+        assert_eq!(line.spans[1].content, "│ ");
+        let color = super::super::theme::code_label_color("markdown");
+        assert_eq!(
+            line.spans[1].style.fg,
+            Some(desaturate_for_thinking(Some(color)))
+        );
+        let closing = thinking_line("```", 2, &mut code);
+        assert_eq!(closing.spans[0].style.fg, Some(THEME.thinking_rail));
+        assert_eq!(closing.spans[1].content, "╰─");
+        assert_eq!(closing.spans[1].style.fg, line.spans[1].style.fg);
     }
 
     #[test]

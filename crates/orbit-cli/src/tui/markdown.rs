@@ -1,6 +1,6 @@
 //! Render complete source lines incrementally; never reparse the conversation on scroll.
 //! CommonMark inline syntax is handled by pulldown-cmark, not regex replacements.
-use pulldown_cmark::{Event, Options, Parser, Tag};
+use pulldown_cmark::{BrokenLink, BrokenLinkCallback, CowStr, Event, Options, Parser, Tag};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -65,6 +65,13 @@ impl LinkedLine {
         Self { line, links }
     }
 
+    pub fn chrome(line: Line<'static>) -> Self {
+        Self {
+            line,
+            links: Vec::new(),
+        }
+    }
+
     pub fn shift_offsets(&mut self, amount: isize) {
         self.links.retain_mut(|link| {
             link.start = link.start.saturating_add_signed(amount);
@@ -73,19 +80,109 @@ impl LinkedLine {
         });
     }
 
+    pub fn framed(mut self, leading: Vec<Span<'static>>, trailing: Vec<Span<'static>>) -> Self {
+        self.shift_offsets(leading.iter().map(|span| span.content.len()).sum::<usize>() as isize);
+        self.line.spans.splice(0..0, leading);
+        self.line.spans.extend(trailing);
+        self.line.style = Style::default();
+        self
+    }
+
     pub fn wrap(self, width: u16) -> Vec<Self> {
         super::transcript::wrap_linked_line(self, width)
     }
 }
 
+#[derive(Default)]
+pub(super) struct Context<'a> {
+    parser: Option<Parser<'a>>,
+}
+
+impl<'a> Context<'a> {
+    pub fn new(source: &'a str) -> Self {
+        Self {
+            parser: source
+                .contains('[')
+                .then(|| Parser::new_ext(source, Options::ENABLE_TABLES)),
+        }
+    }
+
+    pub fn definitions(&self) -> Vec<(String, String, Option<String>)> {
+        let mut definitions = self.parser.as_ref().map_or_else(Vec::new, |parser| {
+            parser
+                .reference_definitions()
+                .iter()
+                .map(|(label, definition)| {
+                    (
+                        label.to_owned(),
+                        definition.dest.to_string(),
+                        definition.title.as_ref().map(ToString::to_string),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        definitions.sort();
+        definitions
+    }
+
+    fn parse<'s>(
+        &self,
+        source: &'s str,
+        options: Options,
+    ) -> Parser<'s, impl BrokenLinkCallback<'s> + '_> {
+        Parser::new_with_broken_link_callback(
+            source,
+            options,
+            Some(move |link: BrokenLink<'s>| {
+                let definition = self
+                    .parser
+                    .as_ref()?
+                    .reference_definitions()
+                    .get(&link.reference)?;
+                Some((
+                    CowStr::from(definition.dest.to_string()),
+                    CowStr::from(
+                        definition
+                            .title
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .unwrap_or_default(),
+                    ),
+                ))
+            }),
+        )
+    }
+}
+
+#[cfg(test)]
+pub(super) fn linked_line(source: &str, index: usize, fence: &mut Fence) -> LinkedLine {
+    Context::default().linked_line(source, index, fence)
+}
+
+impl Context<'_> {
+    pub fn linked_line(&self, source: &str, index: usize, fence: &mut Fence) -> LinkedLine {
+        let was_code = fence.is_some();
+        let mut line = self.line(source, index, fence);
+        super::render::sanitize_line(&mut line);
+        let code = was_code || fence.is_some();
+        let links = if code {
+            plain_links(&line.to_string())
+        } else {
+            self.links(source, &line)
+        };
+        LinkedLine { line, links }
+    }
+}
+
 pub(super) fn document(source: &str, width: u16) -> Vec<LinkedLine> {
+    let context = Context::new(source);
     let mut out = Vec::new();
     let mut remaining = source;
     let mut fence = None;
     let mut index = 0;
     while !remaining.is_empty() {
         if fence.is_none()
-            && let Some((bytes, lines)) = table(remaining, width)
+            && let Some((bytes, lines)) = context.table(remaining, width)
         {
             out.extend(lines);
             index += remaining[..bytes].lines().count();
@@ -95,22 +192,14 @@ pub(super) fn document(source: &str, width: u16) -> Vec<LinkedLine> {
 
         let part = remaining.split_inclusive('\n').next().unwrap();
         let source = part.trim_end_matches(['\r', '\n']);
-        let was_code = fence.is_some();
-        let mut line = line(source, index, &mut fence);
-        super::render::sanitize_line(&mut line);
-        let links = if was_code || fence.is_some() {
-            Vec::new()
-        } else {
-            links(source, &line)
-        };
-        out.push(LinkedLine { line, links });
+        out.push(context.linked_line(source, index, &mut fence));
         remaining = &remaining[part.len()..];
         index += 1;
     }
     out
 }
 
-pub(super) fn expand_rule(line: &mut Line<'static>, width: u16) {
+pub(super) fn expand_rule(line: &mut Line<'static>, width: u16) -> bool {
     let mut visible = line
         .spans
         .iter()
@@ -121,12 +210,12 @@ pub(super) fn expand_rule(line: &mut Line<'static>, width: u16) {
         && rule.content.chars().all(|ch| ch == '─')
     {
         *line = Line::from(Span::styled("─".repeat(usize::from(width)), rule.style));
+        return true;
     }
+    false
 }
 
 use super::theme::THEME;
-
-const SECONDARY: Color = THEME.secondary;
 
 pub(super) fn mark_style(style: Style) -> Style {
     style.fg(THEME.md_mark).add_modifier(Modifier::UNDERLINED)
@@ -161,7 +250,7 @@ fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
                     ch.is_whitespace()
                         || matches!(
                             ch,
-                            '<' | '>' | '"' | '\'' | '，' | '。' | '！' | '？' | '；' | '：'
+                            '<' | '>' | '"' | '\'' | '`' | '，' | '。' | '！' | '？' | '；' | '：'
                         )
                 })
                 .unwrap_or(remainder.len());
@@ -386,232 +475,244 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
     }
 }
 
-/// Map visible Markdown labels and destinations to byte ranges before wrapping.
-pub(super) fn links(source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
-    let mut active: Option<(String, String)> = None;
-    let mut parsed = Vec::new();
-
-    for event in Parser::new_ext(
-        source,
-        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
-    ) {
-        match event {
-            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
-                active = Some((dest_url.into_string(), String::new()));
-            }
-            Event::Text(text) | Event::Code(text) if active.is_some() => {
-                active.as_mut().unwrap().1.push_str(&text);
-            }
-            Event::Text(text) => {
-                parsed.extend(
-                    bare_urls(&text)
-                        .into_iter()
-                        .map(|(range, url)| (text[range].to_owned(), url)),
-                );
-            }
-            Event::End(pulldown_cmark::TagEnd::Link | pulldown_cmark::TagEnd::Image) => {
-                if let Some((url, label)) = active.take()
-                    && !label.is_empty()
-                {
-                    parsed.push((label, url));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let text = rendered.to_string();
-    let mut cursor = 0;
-
-    let mut styled_ranges = Vec::new();
-    let mut offset = 0;
-    for span in &rendered.spans {
-        let end = offset + span.content.len();
-        if span.style.add_modifier.contains(Modifier::UNDERLINED) {
-            styled_ranges.push(offset..end);
-        }
-        offset = end;
-    }
-    let mut targets: Vec<_> = parsed
-        .into_iter()
-        .filter_map(|(label, url)| {
-            let start = text[cursor..]
-                .match_indices(&label)
-                .map(|(start, _)| start + cursor)
-                .find(|start| styled_ranges.iter().any(|range| range.contains(start)))?;
-            let end = start + label.len();
-            cursor = end;
-            Some(LinkTarget { start, end, url })
-        })
-        .collect();
-    // Destinations printed beside Markdown labels are actionable too.
-    offset = 0;
-    for span in &rendered.spans {
-        if span.style.fg == Some(SECONDARY) && span.content.starts_with(" (") {
-            targets.extend(plain_links(&span.content).into_iter().map(|mut target| {
-                target.start += offset;
-                target.end += offset;
-                target
-            }));
-        }
-        offset += span.content.len();
-    }
-    targets
+#[cfg(test)]
+fn links(source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
+    Context::default().links(source, rendered)
 }
 
-/// Parse only a possible table at the current source position. The caller keeps
-/// an open table provisional so new rows can adjust column widths during streaming.
-pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<LinkedLine>)> {
-    if !source.lines().next()?.contains('|') {
-        return None;
-    }
+impl Context<'_> {
+    /// Map visible Markdown labels and destinations to byte ranges before wrapping.
+    pub fn links(&self, source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
+        let mut active: Option<(String, String)> = None;
+        let mut parsed = Vec::new();
 
-    let mut events = Parser::new_ext(source, Options::ENABLE_TABLES).into_offset_iter();
-    let (Event::Start(Tag::Table(alignments)), _) = events.next()? else {
-        return None;
-    };
-
-    let mut rows: Vec<Vec<LinkedLine>> = Vec::new();
-    let mut end = 0;
-
-    for (event, range) in events {
-        match event {
-            Event::Start(Tag::TableHead | Tag::TableRow) => rows.push(Vec::new()),
-            Event::Start(Tag::TableCell) => {
-                let cell_source = source[range].trim().replace(r"\|", "|");
-                let mut cell = line(&cell_source, 1, &mut None);
-                cell.spans.remove(0);
-                super::render::sanitize_line(&mut cell);
-                let links = links(&cell_source, &cell);
-                rows.last_mut()?.push(LinkedLine { line: cell, links });
+        for event in self.parse(
+            source,
+            Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
+        ) {
+            match event {
+                Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
+                    active = Some((dest_url.into_string(), String::new()));
+                }
+                Event::Text(text) | Event::Code(text) if active.is_some() => {
+                    active.as_mut().unwrap().1.push_str(&text);
+                }
+                Event::Text(text) => {
+                    parsed.extend(
+                        bare_urls(&text)
+                            .into_iter()
+                            .map(|(range, url)| (text[range].to_owned(), url)),
+                    );
+                }
+                Event::End(pulldown_cmark::TagEnd::Link | pulldown_cmark::TagEnd::Image) => {
+                    if let Some((url, label)) = active.take()
+                        && !label.is_empty()
+                    {
+                        parsed.push((label, url));
+                    }
+                }
+                _ => {}
             }
-            Event::End(pulldown_cmark::TagEnd::Table) => {
-                end = range.end;
-                break;
-            }
-            _ => {}
         }
+
+        let text = rendered.to_string();
+        let mut cursor = 0;
+
+        let mut styled_ranges = Vec::new();
+        let mut offset = 0;
+        for span in &rendered.spans {
+            let end = offset + span.content.len();
+            if span.style.add_modifier.contains(Modifier::UNDERLINED) {
+                styled_ranges.push(offset..end);
+            }
+            offset = end;
+        }
+        let mut targets: Vec<_> = parsed
+            .into_iter()
+            .filter_map(|(label, url)| {
+                let start = text[cursor..]
+                    .match_indices(&label)
+                    .map(|(start, _)| start + cursor)
+                    .find(|start| styled_ranges.iter().any(|range| range.contains(start)))?;
+                let end = start + label.len();
+                cursor = end;
+                Some(LinkTarget { start, end, url })
+            })
+            .collect();
+        for link in plain_links(&text) {
+            if !targets
+                .iter()
+                .any(|target| target.start < link.end && target.end > link.start)
+            {
+                targets.push(link);
+            }
+        }
+        targets
     }
+}
 
-    if end == 0 || rows.is_empty() {
-        return None;
-    }
+#[cfg(test)]
+fn table(source: &str, width: u16) -> Option<(usize, Vec<LinkedLine>)> {
+    Context::default().table(source, width)
+}
 
-    let cols = alignments.len();
-    let available = usize::from(width).saturating_sub(3 * cols + 3);
+impl Context<'_> {
+    /// Parse only a possible table at the current source position. The caller keeps
+    /// an open table provisional so new rows can adjust column widths during streaming.
+    pub fn table(&self, source: &str, width: u16) -> Option<(usize, Vec<LinkedLine>)> {
+        if !source.lines().next()?.contains('|') {
+            return None;
+        }
 
-    // On narrow terminals use labelled cells rather than losing columns/content.
-    if available < cols * 3 {
-        return Some((end, labelled_table_rows(&rows)));
-    }
-
-    let mut widths: Vec<usize> = (0..cols)
-        .map(|i| {
-            rows.iter()
-                .filter_map(|r| r.get(i))
-                .map(|cell| cell.line.width())
-                .max()
-                .unwrap_or(1)
-                .max(3)
-        })
-        .collect();
-
-    while widths.iter().sum::<usize>() > available {
-        let Some(i) = (0..cols).max_by_key(|&i| widths[i]) else {
-            break;
+        let mut events = self
+            .parse(source, Options::ENABLE_TABLES)
+            .into_offset_iter();
+        let (Event::Start(Tag::Table(alignments)), _) = events.next()? else {
+            return None;
         };
 
-        widths[i] -= 1;
-    }
+        let mut rows: Vec<Vec<LinkedLine>> = Vec::new();
+        let mut end = 0;
 
-    let border = |left: &str, join: &str, right: &str| LinkedLine {
-        line: Line::styled(
-            format!(
-                "  {left}{}{right}",
-                widths
-                    .iter()
-                    .map(|w| "─".repeat(w + 2))
-                    .collect::<Vec<_>>()
-                    .join(join)
-            ),
-            Style::default().fg(THEME.md_table_border),
-        ),
-        links: Vec::new(),
-    };
-    let mut lines = vec![border("┌", "┬", "┐")];
+        for (event, range) in events {
+            match event {
+                Event::Start(Tag::TableHead | Tag::TableRow) => rows.push(Vec::new()),
+                Event::Start(Tag::TableCell) => {
+                    let cell_source = source[range].trim().replace(r"\|", "|");
+                    let mut cell = self.line(&cell_source, 1, &mut None);
+                    cell.spans.remove(0);
+                    super::render::sanitize_line(&mut cell);
+                    let links = self.links(&cell_source, &cell);
+                    rows.last_mut()?.push(LinkedLine { line: cell, links });
+                }
+                Event::End(pulldown_cmark::TagEnd::Table) => {
+                    end = range.end;
+                    break;
+                }
+                _ => {}
+            }
+        }
 
-    for (r, row) in rows.iter().enumerate() {
-        let cells: Vec<_> = row
-            .iter()
-            .zip(&widths)
-            .map(|(cell, w)| wrap_cell(cell, *w))
+        if end == 0 || rows.is_empty() {
+            return None;
+        }
+
+        let cols = alignments.len();
+        let available = usize::from(width).saturating_sub(3 * cols + 3);
+
+        // On narrow terminals use labelled cells rather than losing columns/content.
+        if available < cols * 3 {
+            return Some((end, labelled_table_rows(&rows)));
+        }
+
+        let mut widths: Vec<usize> = (0..cols)
+            .map(|i| {
+                rows.iter()
+                    .filter_map(|r| r.get(i))
+                    .map(|cell| cell.line.width())
+                    .max()
+                    .unwrap_or(1)
+                    .max(3)
+            })
             .collect();
 
-        for n in 0..cells.iter().map(Vec::len).max().unwrap_or(1) {
-            let mut spans = vec![Span::styled(
-                "  │",
+        while widths.iter().sum::<usize>() > available {
+            let Some(i) = (0..cols).max_by_key(|&i| widths[i]) else {
+                break;
+            };
+
+            widths[i] -= 1;
+        }
+
+        let border = |left: &str, join: &str, right: &str| {
+            LinkedLine::chrome(Line::styled(
+                format!(
+                    "  {left}{}{right}",
+                    widths
+                        .iter()
+                        .map(|w| "─".repeat(w + 2))
+                        .collect::<Vec<_>>()
+                        .join(join)
+                ),
                 Style::default().fg(THEME.md_table_border),
-            )];
-            let mut links = Vec::new();
-            let mut byte_offset = spans[0].content.len();
+            ))
+        };
+        let mut lines = vec![border("┌", "┬", "┐")];
 
-            for i in 0..cols {
-                let cell = cells.get(i).and_then(|c| c.get(n));
-                let padding = widths[i].saturating_sub(cell.map_or(0, |cell| cell.line.width()));
-                let left = match alignments[i] {
-                    pulldown_cmark::Alignment::Right => padding,
-                    pulldown_cmark::Alignment::Center => padding / 2,
-                    _ => 0,
-                };
+        for (r, row) in rows.iter().enumerate() {
+            let cells: Vec<_> = row
+                .iter()
+                .zip(&widths)
+                .map(|(cell, w)| wrap_cell(cell, *w))
+                .collect();
 
-                spans.push(Span::raw(" ".repeat(left + 1)));
-                byte_offset += left + 1;
-                if let Some(cell) = cell {
-                    links.extend(cell.links.iter().cloned().map(|mut link| {
-                        link.start += byte_offset;
-                        link.end += byte_offset;
-                        link
-                    }));
-                    byte_offset += cell.line.to_string().len();
-                    spans.extend(cell.line.spans.iter().cloned().map(|mut span| {
-                        if r == 0 {
-                            span.style = span
-                                .style
-                                .add_modifier(Modifier::BOLD)
-                                .fg(THEME.md_table_header);
-                        }
-
-                        span
-                    }));
-                }
-                spans.push(Span::raw(" ".repeat(padding - left + 1)));
-                spans.push(Span::styled(
-                    "│",
+            for n in 0..cells.iter().map(Vec::len).max().unwrap_or(1) {
+                let mut spans = vec![Span::styled(
+                    "  │",
                     Style::default().fg(THEME.md_table_border),
-                ));
-                byte_offset += padding - left + 1 + "│".len();
+                )];
+                let mut links = Vec::new();
+                let mut byte_offset = spans[0].content.len();
+
+                for i in 0..cols {
+                    let cell = cells.get(i).and_then(|c| c.get(n));
+                    let padding =
+                        widths[i].saturating_sub(cell.map_or(0, |cell| cell.line.width()));
+                    let left = match alignments[i] {
+                        pulldown_cmark::Alignment::Right => padding,
+                        pulldown_cmark::Alignment::Center => padding / 2,
+                        _ => 0,
+                    };
+
+                    spans.push(Span::raw(" ".repeat(left + 1)));
+                    byte_offset += left + 1;
+                    if let Some(cell) = cell {
+                        links.extend(cell.links.iter().cloned().map(|mut link| {
+                            link.start += byte_offset;
+                            link.end += byte_offset;
+                            link
+                        }));
+                        byte_offset += cell.line.to_string().len();
+                        spans.extend(cell.line.spans.iter().cloned().map(|mut span| {
+                            if r == 0 {
+                                span.style = span
+                                    .style
+                                    .add_modifier(Modifier::BOLD)
+                                    .fg(THEME.md_table_header);
+                            }
+
+                            span
+                        }));
+                    }
+                    spans.push(Span::raw(" ".repeat(padding - left + 1)));
+                    spans.push(Span::styled(
+                        "│",
+                        Style::default().fg(THEME.md_table_border),
+                    ));
+                    byte_offset += padding - left + 1 + "│".len();
+                }
+
+                lines.push(LinkedLine {
+                    line: Line::from(spans),
+                    links,
+                });
             }
 
-            lines.push(LinkedLine {
-                line: Line::from(spans),
-                links,
-            });
-        }
+            if r + 1 < rows.len() {
+                let mut separator = border("├", "┼", "┤");
 
-        if r + 1 < rows.len() {
-            let mut separator = border("├", "┼", "┤");
+                if r > 0 {
+                    separator.line.style = Style::default().fg(THEME.md_table_separator);
+                }
 
-            if r > 0 {
-                separator.line.style = Style::default().fg(THEME.md_table_separator);
+                lines.push(separator);
             }
-
-            lines.push(separator);
         }
+
+        lines.push(border("└", "┴", "┘"));
+
+        Some((end, lines))
     }
-
-    lines.push(border("└", "┴", "┘"));
-
-    Some((end, lines))
 }
 
 fn labelled_table_rows(rows: &[Vec<LinkedLine>]) -> Vec<LinkedLine> {
@@ -713,243 +814,235 @@ fn is_fence_opening(marker: char, count: usize, trimmed: &str) -> bool {
         && !trimmed[count..].trim().is_empty()
 }
 
-pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'static> {
-    let trimmed = source.trim_start();
-    let marker = trimmed.chars().next().unwrap_or(' ');
-    let count = trimmed.chars().take_while(|c| *c == marker).count();
+pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'static> {
+    Context::default().line(source, index, fence)
+}
 
-    if let Some(code) = fence {
-        // Models frequently show a Markdown document inside a Markdown fence,
-        // using ordinary triple fences rather than a longer outer delimiter.
-        // Preserve those nested fences as source so their closing marker cannot
-        // accidentally terminate the surrounding example.
-        let mut closed_nested_fence = false;
+impl Context<'_> {
+    pub fn line(&self, source: &str, _index: usize, fence: &mut Fence) -> Line<'static> {
+        let trimmed = source.trim_start();
+        let marker = trimmed.chars().next().unwrap_or(' ');
+        let count = trimmed.chars().take_while(|c| *c == marker).count();
 
-        if code.markdown_source {
-            if let Some(&(delimiter, length)) = code.nested_fences.last() {
-                if marker == delimiter && count >= length && trimmed[count..].trim().is_empty() {
-                    code.nested_fences.pop();
-                    closed_nested_fence = true;
+        if let Some(code) = fence {
+            // Models frequently show a Markdown document inside a Markdown fence,
+            // using ordinary triple fences rather than a longer outer delimiter.
+            // Preserve those nested fences as source so their closing marker cannot
+            // accidentally terminate the surrounding example.
+            let mut closed_nested_fence = false;
+
+            if code.markdown_source {
+                if let Some(&(delimiter, length)) = code.nested_fences.last() {
+                    if marker == delimiter && count >= length && trimmed[count..].trim().is_empty()
+                    {
+                        code.nested_fences.pop();
+                        closed_nested_fence = true;
+                    }
+                } else if is_fence_opening(marker, count, trimmed) {
+                    code.nested_fences.push((marker, count));
                 }
-            } else if is_fence_opening(marker, count, trimmed) {
-                code.nested_fences.push((marker, count));
             }
-        }
 
-        if !closed_nested_fence
-            && marker == code.delimiter
-            && count >= code.length
-            && trimmed[count..].trim().is_empty()
-            && code.nested_fences.is_empty()
-        {
+            if !closed_nested_fence
+                && marker == code.delimiter
+                && count >= code.length
+                && trimmed[count..].trim().is_empty()
+                && code.nested_fences.is_empty()
+            {
+                let indent = " ".repeat(code.indent);
+                let color = code.color;
+                *fence = None;
+                return Line::styled(format!("  {indent}╰─"), Style::default().fg(color));
+            }
+
             let indent = " ".repeat(code.indent);
-            let color = code.color;
-            *fence = None;
-            return Line::styled(format!("  {indent}╰─"), Style::default().fg(color));
+            let code_line = source.strip_prefix(&indent).unwrap_or(source);
+            return code
+                .renderer
+                .render(
+                    code_line,
+                    super::code::Options {
+                        gutter: super::code::Gutter::Rail {
+                            indent: code.indent + 2,
+                            color: code.color,
+                        },
+                        ..Default::default()
+                    },
+                )
+                .remove(0);
+        }
+        if matches!(marker, '`' | '~')
+            && count >= 3
+            && !(marker == '`' && trimmed[count..].contains('`'))
+        {
+            let indent = source.len() - trimmed.len();
+            let label = trimmed[count..].trim();
+            let color = code_label_color(&label_key(label));
+            *fence = Some(CodeFence {
+                indent,
+                delimiter: marker,
+                length: count,
+                markdown_source: is_markdown_label(label),
+                nested_fences: Vec::new(),
+                renderer: Renderer::new(label),
+                color,
+            });
+            let indent_str = " ".repeat(indent);
+            let label = if label.is_empty() { "text" } else { label };
+            return Line::from(vec![
+                Span::styled(format!("  {indent_str}╭─"), Style::default().fg(color)),
+                Span::styled(
+                    format!(" {label} "),
+                    Style::default()
+                        .fg(THEME.on_accent)
+                        .bg(color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]);
         }
 
-        let indent = " ".repeat(code.indent);
-        let code_line = source.strip_prefix(&indent).unwrap_or(source);
-        return code
-            .renderer
-            .render(
-                code_line,
-                super::code::Options {
-                    gutter: super::code::Gutter::Rail {
-                        indent: 2 + code.indent,
-                        color: code.color,
-                    },
-                    ..Default::default()
-                },
-            )
-            .remove(0);
-    }
-    if matches!(marker, '`' | '~')
-        && count >= 3
-        && !(marker == '`' && trimmed[count..].contains('`'))
-    {
+        let mut spans = vec![Span::raw("  ")];
         let indent = source.len() - trimmed.len();
-        let label = trimmed[count..].trim();
-        let color = code_label_color(&label_key(label));
-        *fence = Some(CodeFence {
-            indent,
-            delimiter: marker,
-            length: count,
-            markdown_source: is_markdown_label(label),
-            nested_fences: Vec::new(),
-            renderer: Renderer::new(label),
-            color,
-        });
-        let indent_str = " ".repeat(indent);
-        let label = if label.is_empty() { "text" } else { label };
-        return Line::from(vec![
-            Span::styled(format!("  {indent_str}╭─"), Style::default().fg(color)),
-            Span::styled(
-                format!(" {label} "),
-                Style::default()
-                    .fg(THEME.on_accent)
-                    .bg(color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]);
-    }
 
-    let mut spans = vec![Span::raw("  ")];
-    let indent = source.len() - trimmed.len();
+        if indent > 0 {
+            spans.push(Span::raw(source[..indent].to_owned()));
+        }
 
-    if indent > 0 {
-        spans.push(Span::raw(source[..indent].to_owned()));
-    }
+        let beginning = spans.len();
+        let mut style = Style::default();
+        let mut stack = Vec::new();
+        let mut ordered = None;
+        let recover_cjk_strong = !trimmed.contains(r"\**") && !trimmed.contains(r"\*\*");
+        let recover_mark = !trimmed.contains(r"\==");
 
-    let beginning = spans.len();
-    let mut style = Style::default();
-    let mut stack = Vec::new();
-    let mut ordered = None;
-    let mut links: Vec<(usize, String)> = Vec::new();
-    let recover_cjk_strong = !trimmed.contains(r"\**") && !trimmed.contains(r"\*\*");
-    let recover_mark = !trimmed.contains(r"\==");
+        for event in self.parse(
+            trimmed,
+            Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
+        ) {
+            match event {
+                Event::Start(tag) => {
+                    stack.push(style);
 
-    for event in Parser::new_ext(
-        trimmed,
-        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
-    ) {
-        match event {
-            Event::Start(tag) => {
-                stack.push(style);
-
-                match tag {
-                    Tag::Heading { level, .. } => {
-                        let color = match level {
-                            pulldown_cmark::HeadingLevel::H1 => THEME.md_h1,
-                            pulldown_cmark::HeadingLevel::H2 => THEME.md_h2,
-                            pulldown_cmark::HeadingLevel::H3 => THEME.md_h3,
-                            _ => THEME.md_h4_plus,
-                        };
-                        style = style.fg(color).add_modifier(Modifier::BOLD);
-                    }
-                    Tag::Strong => {
-                        let fg = if style.add_modifier.contains(Modifier::ITALIC) {
-                            THEME.md_bold_italic
-                        } else {
-                            THEME.md_bold
-                        };
-                        style = style.fg(fg).add_modifier(Modifier::BOLD);
-                    }
-                    Tag::Emphasis => {
-                        let fg = if style.add_modifier.contains(Modifier::BOLD) {
-                            THEME.md_bold_italic
-                        } else {
-                            THEME.md_italic
-                        };
-                        style = style.fg(fg).add_modifier(Modifier::ITALIC);
-                    }
-                    Tag::Strikethrough => {
-                        style = style
-                            .fg(THEME.md_strikethrough)
-                            .add_modifier(Modifier::CROSSED_OUT);
-                    }
-                    Tag::BlockQuote(_) => {
-                        spans.push(Span::styled("▎ ", Style::default().fg(THEME.md_quote_rail)));
-                        style = style.fg(THEME.md_quote_text);
-                    }
-                    Tag::List(start) => ordered = start,
-                    Tag::Item => spans.push(Span::styled(
-                        ordered.map_or("• ".into(), |n| format!("{n}. ")),
-                        Style::default().fg(if ordered.is_some() {
-                            THEME.md_ordered_bullet
-                        } else {
-                            THEME.md_unordered_bullet
-                        }),
-                    )),
-                    Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
-                        links.push((spans.len(), dest_url.into_string()));
-                        style = style.fg(THEME.md_link).add_modifier(Modifier::UNDERLINED);
-                    }
-                    _ => {}
-                }
-            }
-
-            Event::End(tag) => {
-                style = stack.pop().unwrap_or_default();
-
-                if matches!(
-                    tag,
-                    pulldown_cmark::TagEnd::Link | pulldown_cmark::TagEnd::Image
-                ) && let Some((start, url)) = links.pop()
-                {
-                    let label: String = spans[start..].iter().map(|s| s.content.as_ref()).collect();
-
-                    if !url.is_empty() && label != url {
-                        spans.push(Span::styled(
-                            format!(" ({url})"),
-                            Style::default().fg(SECONDARY),
-                        ));
+                    match tag {
+                        Tag::Heading { level, .. } => {
+                            let color = match level {
+                                pulldown_cmark::HeadingLevel::H1 => THEME.md_h1,
+                                pulldown_cmark::HeadingLevel::H2 => THEME.md_h2,
+                                pulldown_cmark::HeadingLevel::H3 => THEME.md_h3,
+                                _ => THEME.md_h4_plus,
+                            };
+                            style = style.fg(color).add_modifier(Modifier::BOLD);
+                        }
+                        Tag::Strong => {
+                            let fg = if style.add_modifier.contains(Modifier::ITALIC) {
+                                THEME.md_bold_italic
+                            } else {
+                                THEME.md_bold
+                            };
+                            style = style.fg(fg).add_modifier(Modifier::BOLD);
+                        }
+                        Tag::Emphasis => {
+                            let fg = if style.add_modifier.contains(Modifier::BOLD) {
+                                THEME.md_bold_italic
+                            } else {
+                                THEME.md_italic
+                            };
+                            style = style.fg(fg).add_modifier(Modifier::ITALIC);
+                        }
+                        Tag::Strikethrough => {
+                            style = style
+                                .fg(THEME.md_strikethrough)
+                                .add_modifier(Modifier::CROSSED_OUT);
+                        }
+                        Tag::BlockQuote(_) => {
+                            spans
+                                .push(Span::styled("▎ ", Style::default().fg(THEME.md_quote_rail)));
+                            style = style.fg(THEME.md_quote_text);
+                        }
+                        Tag::List(start) => ordered = start,
+                        Tag::Item => spans.push(Span::styled(
+                            ordered.map_or("• ".into(), |n| format!("{n}. ")),
+                            Style::default().fg(if ordered.is_some() {
+                                THEME.md_ordered_bullet
+                            } else {
+                                THEME.md_unordered_bullet
+                            }),
+                        )),
+                        Tag::Link { .. } | Tag::Image { .. } => {
+                            style = style.fg(THEME.md_link).add_modifier(Modifier::UNDERLINED);
+                        }
+                        _ => {}
                     }
                 }
-            }
 
-            Event::Text(text) => {
-                push_text_with_cjk_strong(
-                    &mut spans,
-                    &text,
-                    style,
-                    recover_cjk_strong,
-                    recover_mark,
-                );
-            }
+                Event::End(_) => {
+                    style = stack.pop().unwrap_or_default();
+                }
 
-            Event::Html(text) | Event::InlineHtml(text) => {
-                spans.push(Span::styled(text.into_string(), style))
-            }
-            Event::Code(text) => spans.push(Span::styled(
-                text.into_string(),
-                style.fg(THEME.md_inline_code).add_modifier(Modifier::BOLD),
-            )),
-            Event::Rule => spans.push(Span::styled(
-                "────────────────────────",
-                Style::default().fg(THEME.md_rule),
-            )),
+                Event::Text(text) => {
+                    push_text_with_cjk_strong(
+                        &mut spans,
+                        &text,
+                        style,
+                        recover_cjk_strong,
+                        recover_mark,
+                    );
+                }
 
-            Event::TaskListMarker(done) => {
-                let checkbox = format!("{} ", icons::checkbox(done));
+                Event::Html(text) | Event::InlineHtml(text) => {
+                    spans.push(Span::styled(text.into_string(), style))
+                }
+                Event::Code(text) => spans.push(Span::styled(
+                    text.into_string(),
+                    style.fg(THEME.md_inline_code).add_modifier(Modifier::BOLD),
+                )),
+                Event::Rule => spans.push(Span::styled(
+                    "────────────────────────",
+                    Style::default().fg(THEME.md_rule),
+                )),
 
-                if let Some(marker) = spans.iter_mut().rev().find(|span| {
-                    span.content == "• "
-                        || span.content.strip_suffix(". ").is_some_and(|number| {
-                            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-                        })
-                }) {
-                    marker.content = checkbox.into();
-                    marker.style = Style::default().fg(if done {
-                        THEME.md_task_done
-                    } else {
-                        THEME.secondary
-                    });
-                } else {
-                    spans.push(Span::styled(
-                        checkbox,
-                        Style::default().fg(if done {
+                Event::TaskListMarker(done) => {
+                    let checkbox = format!("{} ", icons::checkbox(done));
+
+                    if let Some(marker) = spans.iter_mut().rev().find(|span| {
+                        span.content == "• "
+                            || span.content.strip_suffix(". ").is_some_and(|number| {
+                                !number.is_empty()
+                                    && number.bytes().all(|byte| byte.is_ascii_digit())
+                            })
+                    }) {
+                        marker.content = checkbox.into();
+                        marker.style = Style::default().fg(if done {
                             THEME.md_task_done
                         } else {
                             THEME.secondary
-                        }),
-                    ));
+                        });
+                    } else {
+                        spans.push(Span::styled(
+                            checkbox,
+                            Style::default().fg(if done {
+                                THEME.md_task_done
+                            } else {
+                                THEME.secondary
+                            }),
+                        ));
+                    }
                 }
+
+                Event::SoftBreak | Event::HardBreak => {}
+                _ => {}
             }
-
-            Event::SoftBreak | Event::HardBreak => {}
-            _ => {}
         }
+
+        recover_split_strong(&mut spans, beginning, recover_cjk_strong);
+
+        // Reference definitions and incomplete constructs must never disappear.
+        if spans.len() == beginning && !trimmed.is_empty() {
+            push_text_with_bare_links(&mut spans, trimmed, Style::default(), false);
+        }
+
+        Line::from(spans)
     }
-
-    recover_split_strong(&mut spans, beginning, recover_cjk_strong);
-
-    // Reference definitions and incomplete constructs must never disappear.
-    if spans.len() == beginning && !trimmed.is_empty() {
-        spans.push(Span::raw(trimmed.to_owned()));
-    }
-
-    Line::from(spans)
 }
 
 #[cfg(test)]
@@ -1162,10 +1255,7 @@ mod tests {
     fn formats_inline_styles_without_modifying_code_or_urls() {
         let value = render("**重点**，*斜体*，~~删除~~，`**原样**` [文档](https://example.com)");
 
-        assert_eq!(
-            value.to_string(),
-            "  重点，斜体，删除，**原样** 文档 (https://example.com)"
-        );
+        assert_eq!(value.to_string(), "  重点，斜体，删除，**原样** 文档");
         assert!(
             value
                 .spans
@@ -1228,43 +1318,58 @@ mod tests {
             vec![
                 "https://example.com/docs?from=orbit".to_owned(),
                 "https://www.rust-lang.org/learn".to_owned(),
+                "https://code.invalid".to_owned(),
             ]
         );
     }
 
     #[test]
-    fn repeated_prose_does_not_steal_link_label_hits_and_destinations_are_actionable() {
-        let source = "文档之前的文档 [文档](https://example.com/first) 与 [**文档**](https://example.com/second)";
+    fn repeated_prose_does_not_steal_link_label_hits_when_destinations_are_hidden() {
+        let source = "文档之前的文档 [文档](https://orbit.example/first) 与 [**文档**](https://orbit.example/second)";
         let rendered = render(source);
         let text = rendered.to_string();
         let targets = links(source, &rendered);
-        assert_eq!(targets.len(), 4);
-        for (label, target) in [
-            (
-                "文档 (https://example.com/first)",
-                "https://example.com/first",
-            ),
-            (
-                "文档 (https://example.com/second)",
-                "https://example.com/second",
-            ),
-        ] {
-            let start = text.find(label).unwrap();
-            assert!(
-                targets
-                    .iter()
-                    .any(|link| link.start == start && link.url == target)
-            );
-            assert!(
-                targets
-                    .iter()
-                    .any(|link| &text[link.start..link.end] == target && link.url == target)
-            );
+        assert_eq!(text, "  文档之前的文档 文档 与 文档");
+        assert_eq!(targets.len(), 2);
+        for (link, target) in targets.iter().zip(["first", "second"]) {
+            assert_eq!(&text[link.start..link.end], "文档");
+            assert_eq!(link.url, format!("https://orbit.example/{target}"));
+            assert!(link.start >= "  文档之前的文档 ".len());
         }
+    }
+
+    #[test]
+    fn reference_links_images_and_bare_definitions_keep_targets_without_printing_destinations() {
+        let source = "[Orbit 文档][docs] 与 ![Orbit 图片](https://orbit.example/image)\n\n| 项 | 地址 |\n|---|---|\n| 文档 | [Orbit][DOCS] |\n\n[docs]: https://orbit.example/docs/ \"Orbit Guide\"\n";
+        let lines = document(source, 80);
+        assert_eq!(lines[0].line.to_string(), "  Orbit 文档 与 Orbit 图片");
+        let targets: Vec<_> = lines
+            .iter()
+            .flat_map(|line| {
+                line.links.iter().map(move |link| {
+                    let text = line.line.to_string();
+                    (text[link.start..link.end].to_owned(), link.url.as_str())
+                })
+            })
+            .collect();
+        for (label, target) in [
+            ("Orbit 文档", "https://orbit.example/docs/"),
+            ("Orbit 图片", "https://orbit.example/image"),
+            ("Orbit", "https://orbit.example/docs/"),
+            ("https://orbit.example/docs/", "https://orbit.example/docs/"),
+        ] {
+            assert!(targets.contains(&(label.to_owned(), target)), "{targets:?}");
+        }
+        let definition = lines
+            .iter()
+            .find(|line| line.line.to_string().contains("[docs]:"))
+            .unwrap();
         assert!(
-            targets
+            definition
+                .line
+                .spans
                 .iter()
-                .all(|link| link.start >= "  文档之前的文档 ".len())
+                .any(|span| span.style.fg == Some(THEME.md_link))
         );
     }
 

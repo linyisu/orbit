@@ -59,9 +59,13 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
         .first()
         .is_some_and(|span| is_rail_gutter(span.content.as_ref()))
     {
-        let span = line.spans.remove(0);
-        let width = span.width() as u16;
-        let gutter = Line::from(span);
+        let count = line
+            .spans
+            .iter()
+            .take_while(|span| is_rail_gutter(&span.content))
+            .count();
+        let gutter = Line::from(line.spans.drain(..count).collect::<Vec<_>>());
+        let width = gutter.width() as u16;
         return Some(Gutter {
             first: gutter.clone(),
             continuation: gutter,
@@ -276,6 +280,7 @@ struct Entry {
     logical_index: usize,
     code: super::markdown::Fence,
     observed_bytes: Option<usize>,
+    references: Vec<(String, String, Option<String>)>,
 }
 
 impl Entry {
@@ -287,17 +292,22 @@ impl Entry {
 
     fn push_with_links(
         &mut self,
-        mut line: Line<'static>,
+        line: Line<'static>,
         width: u16,
-        mut links: Vec<super::markdown::LinkTarget>,
+        links: Vec<super::markdown::LinkTarget>,
     ) {
+        self.push_linked(super::markdown::LinkedLine { line, links }, width);
+    }
+
+    fn push_linked(&mut self, mut linked: super::markdown::LinkedLine, width: u16) {
+        let line = &mut linked.line;
         // Markdown rules occupy the entire transcript row, including the usual gutter.
-        super::markdown::expand_rule(&mut line, width);
-        render::sanitize_line(&mut line);
+        super::markdown::expand_rule(line, width);
+        render::sanitize_line(line);
         let original = line.to_string();
-        let gutter = take_gutter(&mut line);
+        let gutter = take_gutter(line);
         let removed = original.len().saturating_sub(line.to_string().len());
-        links.retain_mut(|link| {
+        linked.links.retain_mut(|link| {
             if link.end <= removed {
                 return false;
             }
@@ -308,14 +318,14 @@ impl Entry {
             true
         });
         let content_width = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
-        let (wrapped, ranges) = wrap_line(&line, content_width);
+        let (wrapped, ranges) = wrap_line(line, content_width);
         let height = wrapped.len();
         self.rows.push(Row {
             gutter,
-            line,
+            line: linked.line,
             wrapped,
             ranges,
-            links,
+            links: linked.links,
             start: self.height,
             height,
         });
@@ -333,6 +343,18 @@ impl Entry {
             return;
         }
 
+        let context = if text[self.parsed_bytes..].contains('[') {
+            let context = super::markdown::Context::new(text);
+            let definitions = context.definitions();
+            if definitions != self.references {
+                *self = Self::default();
+                self.references = definitions;
+            }
+            context
+        } else {
+            super::markdown::Context::default()
+        };
+
         self.rows.truncate(self.stable_rows);
         self.height = self.rows.last().map_or(0, |row| row.start + row.height);
         let mut code = self.code.clone();
@@ -342,10 +364,10 @@ impl Entry {
         while consumed < text.len() {
             if !thinking
                 && code.is_none()
-                && let Some((bytes, lines)) = super::markdown::table(&text[consumed..], width)
+                && let Some((bytes, lines)) = context.table(&text[consumed..], width)
             {
                 for line in lines {
-                    self.push_with_links(line.line, width, line.links);
+                    self.push_linked(line, width);
                 }
 
                 index += text[consumed..consumed + bytes].lines().count();
@@ -377,21 +399,13 @@ impl Entry {
                 part
             };
 
-            let was_code = code.is_some();
-            let mut rendered = if thinking {
-                render::thinking_line(line, index, &mut code)
+            let rendered = context.linked_line(line, index, &mut code);
+            let rendered = if thinking {
+                render::thinking_linked(rendered)
             } else {
-                render::assistant_line(line, index, &mut code)
+                rendered
             };
-            render::sanitize_line(&mut rendered);
-
-            let links = if !was_code {
-                super::markdown::links(line, &rendered)
-            } else {
-                Default::default()
-            };
-
-            self.push_with_links(rendered, width, links);
+            self.push_linked(rendered, width);
             index += 1;
             consumed += part.len();
 
@@ -451,15 +465,15 @@ impl Entry {
         let border = ratatui::style::Style::default().fg(crate::tui::theme::THEME.accent);
         let top_label = format!("╭─{icon}─");
         let trailing = "─".repeat(usize::from(width) - top_label.width() - 1);
-        self.push(
-            Line::from(vec![
+        self.push_linked(
+            super::markdown::LinkedLine::chrome(Line::from(vec![
                 Span::styled("╭─", border),
                 Span::styled(
                     icon.to_owned(),
                     border.add_modifier(ratatui::style::Modifier::BOLD),
                 ),
                 Span::styled(format!("─{trailing}╮"), border),
-            ]),
+            ])),
             width,
         );
         let inner_width = width - 4;
@@ -472,29 +486,21 @@ impl Entry {
 
             for line in content.wrap(inner_width) {
                 let padding = usize::from(inner_width).saturating_sub(line.line.width());
-                let mut spans = vec![Span::styled("│ ", border)];
-                let offset = spans[0].content.len();
-                let links = line
-                    .links
-                    .into_iter()
-                    .map(|mut link| {
-                        link.start += offset;
-                        link.end += offset;
-                        link
-                    })
-                    .collect();
-                spans.extend(line.line.spans);
-                spans.push(Span::raw(" ".repeat(padding)));
-                spans.push(Span::styled(" │", border));
-                self.push_with_links(Line::from(spans), width, links);
+                self.push_linked(
+                    line.framed(
+                        vec![Span::styled("│ ", border)],
+                        vec![Span::raw(" ".repeat(padding)), Span::styled(" │", border)],
+                    ),
+                    width,
+                );
             }
         }
 
-        self.push(
-            Line::from(Span::styled(
+        self.push_linked(
+            super::markdown::LinkedLine::chrome(Line::from(Span::styled(
                 format!("╰{}╯", "─".repeat(usize::from(width) - 2)),
                 border,
-            )),
+            ))),
             width,
         );
         self.push(Line::from(""), width);
@@ -606,6 +612,16 @@ impl TranscriptLayout {
                 TranscriptItem::Thinking(row) if !row.finished => {
                     entry.stream(row.content.trim_end(), true, width)
                 }
+                TranscriptItem::Thinking(row) => {
+                    *entry = Entry::default();
+                    let is_expanded = expanded.contains(&(first + relative));
+                    for line in render::thinking_card_with_links(row, is_expanded) {
+                        if entry.rows.is_empty() {
+                            entry.disclosures.push(0);
+                        }
+                        entry.push_linked(line, width);
+                    }
+                }
                 TranscriptItem::User(text) => {
                     *entry = Entry::default();
                     entry.user(text, width);
@@ -621,7 +637,7 @@ impl TranscriptLayout {
                         if !line.line.to_string().is_empty() {
                             entry.disclosures.push(entry.rows.len());
                         }
-                        entry.push_with_links(line.line, width, line.links);
+                        entry.push_linked(line, width);
                     }
 
                     if !next_is_tool {
@@ -998,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_click_targets_link_labels_but_not_code_source() {
+    fn ctrl_click_targets_link_labels_and_urls_in_code_source() {
         let mut layout = TranscriptLayout::default();
         let area = Rect::new(0, 0, 18, 8);
         layout.update(
@@ -1030,9 +1046,15 @@ mod tests {
             area.width,
         );
 
-        assert!((area.y..area.bottom()).all(|y| {
-            (area.x..area.right()).all(|x| code_layout.link_at(area, 0, (x, y)).is_none())
-        }));
+        let targets: HashSet<_> = (0..code_layout.height())
+            .flat_map(|offset| {
+                let layout = &code_layout;
+                (area.y..area.bottom()).flat_map(move |y| {
+                    (area.x..area.right()).filter_map(move |x| layout.link_at(area, offset, (x, y)))
+                })
+            })
+            .collect();
+        assert_eq!(targets, HashSet::from(["https://example.com/no"]));
     }
 
     #[test]
@@ -1115,6 +1137,38 @@ mod tests {
                 },
                 "width {width}"
             );
+        }
+    }
+
+    #[test]
+    fn streamed_reference_definitions_update_prior_labels_without_reparsing_on_scroll() {
+        let mut layout = TranscriptLayout::default();
+        let initial = "阅读 [Orbit 文档][DOCS]\n\n";
+        let text = format!("{initial}[docs]: https://orbit.example/docs/ \"Orbit\"\n");
+        let mut items = [TranscriptItem::Assistant(initial.into())];
+        layout.update(&items, None, 24);
+        assert!(layout.entries[0].rows[0].links.is_empty());
+        for end in initial.len()..=text.len() {
+            if !text.is_char_boundary(end) {
+                continue;
+            }
+            items[0] = TranscriptItem::Assistant(text[..end].into());
+            layout.invalidate_from(0);
+            layout.update(&items, None, 24);
+        }
+        let label = &layout.entries[0].rows[0];
+        assert_eq!(label.line.to_string(), "阅读 Orbit 文档");
+        assert_eq!(label.links.len(), 1);
+        assert_eq!(label.links[0].url, "https://orbit.example/docs/");
+        let stable = layout.entries[0].parsed_bytes;
+        layout.update(&items, None, 24);
+        assert_eq!(layout.entries[0].parsed_bytes, stable);
+        let mut fresh = TranscriptLayout::default();
+        fresh.update(&items, None, 24);
+        assert_eq!(layout.height(), fresh.height());
+        for (cached, rebuilt) in layout.entries[0].rows.iter().zip(&fresh.entries[0].rows) {
+            assert_eq!(cached.line, rebuilt.line);
+            assert_eq!(cached.links, rebuilt.links);
         }
     }
 
