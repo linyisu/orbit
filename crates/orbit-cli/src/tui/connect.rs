@@ -143,7 +143,11 @@ pub(super) async fn run(
                 } else {
                     ""
                 };
-                let label = format!(" {name}{status} ");
+                let label = super::render::padded_label(
+                    &format!("{name}{status}"),
+                    inner.width as usize,
+                    1,
+                );
                 if let Some(row) = rows.last_mut() {
                     row.width = row
                         .width

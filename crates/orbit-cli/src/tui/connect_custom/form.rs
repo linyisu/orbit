@@ -177,12 +177,12 @@ pub(super) async fn choose(
             {
                 let index = offset + (point.y - viewport.y) as usize;
                 if let Some(choice) = choices.get(index) {
-                    let hit = Rect::new(
-                        viewport.x + 1,
-                        point.y,
-                        viewport.width.saturating_sub(2).min(choice.width() as u16),
+                    let label = crate::tui::render::padded_label(
+                        choice,
+                        viewport.width.saturating_sub(2) as usize,
                         1,
                     );
+                    let hit = Rect::new(viewport.x + 1, point.y, label.width() as u16, 1);
                     if hit.contains(point) {
                         selected = index;
                     }
@@ -194,14 +194,19 @@ pub(super) async fn choose(
                 .skip(offset)
                 .take(viewport.height as usize)
             {
+                let label = crate::tui::render::padded_label(
+                    choice,
+                    viewport.width.saturating_sub(2) as usize,
+                    1,
+                );
                 let row = Rect::new(
                     viewport.x + 1,
                     viewport.y + (index - offset) as u16,
-                    viewport.width.saturating_sub(2).min(choice.width() as u16),
+                    label.width() as u16,
                     1,
                 );
                 frame.render_widget(
-                    Paragraph::new(choice.as_str()).style(if index == selected {
+                    Paragraph::new(label).style(if index == selected {
                         Style::default()
                             .bg(ACCENT)
                             .fg(crate::tui::theme::THEME.on_accent)

@@ -51,7 +51,11 @@ pub(super) fn draw(
                 ("添加模型", Action::Add),
                 ("全选 / 取消全选", Action::All),
             ] {
-                let label = format!(" {label} ");
+                let label = crate::tui::render::padded_label(
+                    label,
+                    rect.right().saturating_sub(x) as usize,
+                    1,
+                );
                 let button = Rect::new(
                     x,
                     rect.y,
@@ -75,7 +79,11 @@ pub(super) fn draw(
             let mut x = rect.x + 20.min(rect.width);
             for j in 1..=7 {
                 let field = &panel.models[i].reasoning[j];
-                let label = format!(" {} ", field.label);
+                let label = crate::tui::render::padded_label(
+                    &field.label,
+                    rect.right().saturating_sub(x) as usize,
+                    1,
+                );
                 let button = Rect::new(
                     x,
                     rect.y,
@@ -121,7 +129,11 @@ pub(super) fn draw(
                         "Anthropic Messages" => "Messages",
                         other => other,
                     };
-                    let label = format!(" {label} ");
+                    let label = crate::tui::render::padded_label(
+                        label,
+                        rect.right().saturating_sub(x) as usize,
+                        1,
+                    );
                     let button = Rect::new(
                         x,
                         rect.y,
@@ -160,12 +172,17 @@ pub(super) fn draw(
             } else {
                 rect.width
             };
-            let hit = Rect::new(rect.x, rect.y, width.min(row.label.width() as u16), 1);
+            let label = if row.target.is_some() {
+                crate::tui::render::padded_label(&row.label, width as usize, 1)
+            } else {
+                crate::tui::render::fit_label(&row.label, width as usize, false)
+            };
+            let hit = Rect::new(rect.x, rect.y, label.width() as u16, 1);
             let hover = panel.pointer.is_some_and(|p| hit.contains(p));
             let active = row.target.is_some()
                 && (hover || panel.pointer.is_none() && row.target == Some(panel.focus));
             frame.render_widget(
-                Paragraph::new(row.label.clone()).style(if active {
+                Paragraph::new(label).style(if active {
                     Style::default()
                         .fg(crate::tui::theme::THEME.on_accent)
                         .bg(ACCENT)
@@ -182,12 +199,15 @@ pub(super) fn draw(
                     ("设置", Action::Expand(i), 16),
                     ("默认", Action::Default(i), 8),
                 ] {
-                    let button = Rect::new(
-                        rect.right().saturating_sub(back),
+                    let mut button = Rect::new(
+                        rect.x + rect.width.saturating_sub(back),
                         rect.y,
-                        4.min(rect.width),
+                        6.min(rect.width),
                         1,
-                    );
+                    )
+                    .intersection(rect);
+                    let label = crate::tui::render::padded_label(label, button.width as usize, 1);
+                    button.width = label.width() as u16;
                     let active = panel.pointer.is_some_and(|p| button.contains(p))
                         || panel.pointer.is_none() && panel.focus == Target::Action(action);
                     frame.render_widget(

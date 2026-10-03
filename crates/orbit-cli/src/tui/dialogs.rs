@@ -863,7 +863,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         }
 
         frame.render_widget(Paragraph::new(heading).wrap(Wrap { trim: false }), header);
-        let title_width = body.width.saturating_sub(2) as usize;
+        let title_width = body.width.saturating_sub(4) as usize;
         let title_elapsed = picker.prepare_title_scroll(title_width);
         let visible = (body.height as usize / 2).max(1);
         if !state.dialog_manual_scroll {
@@ -913,24 +913,25 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
             let title_text = if confirming {
                 let label = "⚠ 确认删除？再按 Del 或 Enter 确认，其他键取消";
-                format!(
-                    "  {}",
-                    super::render::scrolling_title(label, title_width, None)
-                )
+                super::render::scrolling_title(label, title_width, None)
             } else {
-                format!(
-                    "  {}",
-                    super::render::scrolling_title(
-                        &clean(&session.title),
-                        title_width,
-                        if selected { title_elapsed } else { None },
-                    )
+                super::render::scrolling_title(
+                    &clean(&session.title),
+                    title_width,
+                    if selected { title_elapsed } else { None },
                 )
             };
 
-            lines.push(Line::styled(title_text, title_style));
             lines.push(Line::styled(
-                format!("  {}", format_session_time(session.updated_at)),
+                super::render::padded_label(&title_text, body.width as usize, 2),
+                title_style,
+            ));
+            lines.push(Line::styled(
+                super::render::padded_label(
+                    &format_session_time(session.updated_at),
+                    body.width as usize,
+                    2,
+                ),
                 subtitle_style,
             ));
         }
@@ -1027,23 +1028,24 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 Style::default()
             };
 
+            let label = format!(
+                "{}. {}{}{}{}",
+                ordinal,
+                model.model,
+                if model.supports_vision {
+                    "  (视觉)"
+                } else {
+                    ""
+                },
+                if model.default_for_provider {
+                    "  (默认)"
+                } else {
+                    ""
+                },
+                if current { "  (当前)" } else { "" },
+            );
             lines.push(Line::styled(
-                format!(
-                    "  {}. {}{}{}{}",
-                    ordinal,
-                    model.model,
-                    if model.supports_vision {
-                        "  (视觉)"
-                    } else {
-                        ""
-                    },
-                    if model.default_for_provider {
-                        "  (默认)"
-                    } else {
-                        ""
-                    },
-                    if current { "  (当前)" } else { "" },
-                ),
+                super::render::padded_label(&label, body.width as usize, 2),
                 style,
             ));
         }
@@ -1263,16 +1265,17 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     Style::default().add_modifier(Modifier::BOLD)
                 };
 
+                let label = format!(
+                    "{}{}",
+                    if dialog.is_enabled(market, plugin) {
+                        "✓ "
+                    } else {
+                        ""
+                    },
+                    clean(&plugin.name)
+                );
                 entries.push(Line::styled(
-                    format!(
-                        "  {}{}",
-                        if dialog.is_enabled(market, plugin) {
-                            "✓ "
-                        } else {
-                            ""
-                        },
-                        clean(&plugin.name)
-                    ),
+                    super::render::padded_label(&label, body.width as usize, 2),
                     style,
                 ));
                 entries.push(Line::styled(
@@ -1344,7 +1347,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     Style::default().add_modifier(Modifier::BOLD)
                 };
 
-                entries.push(Line::styled(format!("  {}", clean(&market.name)), style));
+                entries.push(Line::styled(
+                    super::render::padded_label(&clean(&market.name), body.width as usize, 2),
+                    style,
+                ));
                 entries.push(Line::styled(
                     format!(
                         "  {} · {} 个插件",

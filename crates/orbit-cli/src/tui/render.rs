@@ -267,6 +267,14 @@ pub(super) fn fit_label(text: &str, width: usize, tail: bool) -> String {
     }
 }
 
+/// Reserve equal padding on both sides before clipping a control label.
+pub(super) fn padded_label(text: &str, width: usize, padding: usize) -> String {
+    let padding = padding.min(width.saturating_sub(1) / 2);
+    let space = " ".repeat(padding);
+    let label = fit_label(text, width.saturating_sub(2 * padding), false);
+    format!("{space}{label}{space}")
+}
+
 struct FooterLayout {
     line: Line<'static>,
     context_offset: Option<u16>,
@@ -2155,28 +2163,20 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             background.fg(MUTED)
         };
         let text = format!(
-            "   {:<width$} {}",
+            "{:<width$} {}",
             safe_output(command.display.as_deref().unwrap_or(&command.name)),
             safe_output(&command.description),
             width = super::commands::COMMAND_NAME_WIDTH,
         );
 
-        // Match the three-column inset on the left, even for short arguments.
-        let text = format!(
-            "{}   ",
-            fit_label(
-                text.trim_end(),
-                area.width.saturating_sub(3) as usize,
-                false
-            )
-        );
+        let text = padded_label(text.trim_end(), area.width as usize, 3);
         let width =
             unicode_width::UnicodeWidthStr::width(text.as_str()).min(area.width as usize) as u16;
         state
             .menu_rows
             .push((Rect::new(area.x, area.y + row as u16, width, 1), index));
         frame.render_widget(
-            Paragraph::new(fit_label(&text, area.width as usize, false)).style(style),
+            Paragraph::new(text).style(style),
             Rect::new(area.x, area.y + row as u16, width, 1),
         );
     }
