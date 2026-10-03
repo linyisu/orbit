@@ -1111,7 +1111,7 @@ mod tests {
 
     #[test]
     fn unicode_line_breaks_fill_cjk_rows_and_quotes_keep_a_continuous_rail() {
-        let source = "前缀 + 杂乱客厅背景 后文";
+        let source = "前缀 + 沙箱工具测试 后文";
         let ranges = wrap_ranges(source, 10);
 
         assert!(source[ranges[0].clone()].width() >= 9);

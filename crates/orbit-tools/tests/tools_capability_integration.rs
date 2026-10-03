@@ -222,14 +222,14 @@ async fn external_special_readers_integration() {
     let ext_doc = ext_dir.join("data.csv");
     fs::write(&ext_doc, "name,value\nalpha,1\nbeta,2\n").unwrap();
 
-    let ext_rtf = ext_dir.join("book.rtf");
+    let ext_rtf = ext_dir.join("orbit-guide.rtf");
     fs::write(
         &ext_rtf,
-        "{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Courier;}}\\f0\\fs24 Rust for Rustaceans}",
+        "{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Courier;}}\\f0\\fs24 Orbit tool guide}",
     )
     .unwrap();
 
-    let ext_img = ext_dir.join("photo.png");
+    let ext_img = ext_dir.join("orbit-fixture.png");
     image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
         .save(&ext_img)
         .unwrap();
@@ -304,7 +304,7 @@ async fn external_special_readers_integration() {
         .unwrap();
 
     assert!(rtf_out.content.contains("local_document_markdown"));
-    assert!(rtf_out.content.contains("Rust for Rustaceans"));
+    assert!(rtf_out.content.contains("Orbit tool guide"));
 
     let img_out = img_tool
         .execute(

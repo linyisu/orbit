@@ -1180,12 +1180,13 @@ mod tests {
 
     #[test]
     fn recovers_model_style_strong_markers_next_to_cjk_text() {
-        let value =
-            render(r#"4. **图一的技术质量明显"更认真"**：但这是一张**"我拍的天空"**的记录照。"#);
+        let value = render(
+            r#"4. **Orbit 的测试数据需要"可重复"**：这里使用**"虚构的示例"**验证文本渲染。"#,
+        );
 
         assert!(!value.to_string().contains("**"), "{value:?}");
         assert!(value.spans.iter().any(|span| {
-            span.content == "\"我拍的天空\"" && span.style.add_modifier.contains(Modifier::BOLD)
+            span.content == "\"虚构的示例\"" && span.style.add_modifier.contains(Modifier::BOLD)
         }));
 
         let escaped = render(r"保留 \*\*字面量\*\*");
