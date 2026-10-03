@@ -949,7 +949,6 @@ pub async fn run(
                                                         model_options = prepared.budget.model_options;
                                                         memory_scope = prepared.budget.memory_scope;
                                                         refresh_context_usage(&mut state, &history, &tools);
-                                                        state.transcript.push(TranscriptItem::CommandResult(format!("已切换至工作区 {}", state.workspace)));
                                                         dirty = true;
                                                         frames.request(time::Instant::now());
                                                     }

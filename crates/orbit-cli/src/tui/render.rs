@@ -2505,11 +2505,11 @@ mod tests {
             status: RunStatus::Idle,
             active: true,
         });
-        state.transcript.push(TranscriptItem::CommandResult(
-            "已切换至工作区 /orbit".into(),
-        ));
+        state
+            .transcript
+            .push(TranscriptItem::CommandResult("Orbit 命令输出".into()));
         let screen = render(&mut state, 140, 40);
-        assert!(screen.replace(' ', "").contains("已切换至工作区/orbit"));
+        assert!(screen.replace(' ', "").contains("Orbit命令输出"));
         assert!(state.input_area.x > 20);
         let mut model = orbit_model::client::ModelClient::new(Default::default()).unwrap();
         let mut history = Vec::new();
@@ -2548,7 +2548,7 @@ mod tests {
         assert!(state.max_scroll > 0);
         state.scroll_up(state.max_scroll);
         let screen = render(&mut state, 140, 40);
-        assert!(screen.replace(' ', "").contains("已切换至工作区/orbit"));
+        assert!(screen.replace(' ', "").contains("Orbit命令输出"));
         state.scroll_down(state.max_scroll);
         let screen = render(&mut state, 140, 40);
         assert!(screen.replace(' ', "").contains("未知命令"));
