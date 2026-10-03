@@ -81,7 +81,9 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     state.tab_areas.clear();
     state.tab_close_areas.clear();
     state.new_tab_area = Rect::default();
+    state.subagent_parent_area = Rect::default();
     let home = !state.has_conversation()
+        && state.subagent_parent.is_none()
         && !state.tabs.is_empty()
         && state.resume_loading.is_none()
         && state.approval.is_none()
@@ -151,7 +153,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(approval_height),
-        Constraint::Length(0),
+        Constraint::Length(u16::from(state.subagent_parent.is_some())),
         Constraint::Length(input_height + attachment_height + details_height + 3),
         Constraint::Length(0),
         Constraint::Length(1),
@@ -197,6 +199,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         areas[6] = Rect::new(x, areas[4].bottom(), content_width, 1);
     }
 
+    let parent_area = areas[3];
     let menu_height = panel_height.min(areas[4].y.saturating_sub(area.y + 1));
     areas[3] = Rect::new(
         areas[4].x,
@@ -228,6 +231,9 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         state.selection.approval = areas[2];
     }
 
+    if menu_height == 0 {
+        super::subagents::draw_parent(frame, state, parent_area);
+    }
     draw_panel(frame, state, areas[3]);
     draw_composer(frame, state, areas[4], input_lines, cursor);
     draw_status(frame, state, areas[5]);
@@ -1605,6 +1611,9 @@ pub(super) fn tool_card_with_links(
 ) -> Vec<super::markdown::LinkedLine> {
     use super::markdown::LinkedLine;
     let width = if width == u16::MAX { 120 } else { width };
+    if let Some(lines) = super::subagents::card(row, expanded, width) {
+        return lines;
+    }
     let color = match row.status {
         ToolStatus::Running => TOOL_RUNNING,
         ToolStatus::Finished => TOOL_FINISHED,
@@ -1659,8 +1668,8 @@ pub(super) fn tool_card_with_links(
     if !expanded {
         let mut full_title_spans = vec![Span::raw("  ")];
         full_title_spans.extend(title_spans);
-        let title_line = Line::from(full_title_spans);
         let title_width = width.saturating_sub(2);
+        let title_line = Line::from(full_title_spans);
         let first_line = title(title_line)
             .wrap(title_width)
             .into_iter()

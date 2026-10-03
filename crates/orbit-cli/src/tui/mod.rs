@@ -28,6 +28,7 @@ mod restore;
 mod search;
 mod selection;
 mod session_sync;
+mod subagents;
 mod tabs;
 pub mod terminal;
 pub mod theme;
@@ -196,6 +197,7 @@ pub async fn run(
     state.completion_home = options.home.clone();
     state.skill_completions = skills.completions();
     state.workspace = session.snapshot.session.workspace.clone();
+    state.subagent_parent = session.store.subagent_parent(session.id()).await?;
     let mut move_notice = moved.then(|| format!("Moved to {}", state.workspace));
     if history_replay.is_none()
         && let Some(notice) = move_notice.take()
@@ -226,6 +228,7 @@ pub async fn run(
     let mut tabs = tabs::Tabs::new(&session);
     tabs.persist(&session).await?;
     let mut session_sync = session_sync::SessionSync::default();
+    let mut subagent_progress = subagents::Progress::default();
     let mut sync_checked = std::time::Instant::now();
     let editor = editor::Editor::new(options.editor_command.clone());
     let mut events = EventStream::new();
@@ -583,6 +586,11 @@ pub async fn run(
                         continue;
                     }
 
+                    if let Some(changed) = subagents::handle_parent(&mut state, &event) {
+                        if changed {dirty = true;frames.request(time::Instant::now());}
+                        if !matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) {continue;}
+                    }
+
                     // Handle the overlay before any obscured transcript hit targets.
                     if state.picker.is_none() && state.model_picker.is_none()
                         && state.marketplace_dialog.is_none() && !state.show_help
@@ -726,7 +734,9 @@ pub async fn run(
                         {
                             state.selection.clear();
 
-                            if let Err(error) = open_link_in_browser(&url) {
+                            if let Some(id) = subagent_link_id(&url) {
+                                state.resume_request = Some(id.to_owned());
+                            } else if let Err(error) = open_link_in_browser(&url) {
                                 state.transcript.push(TranscriptItem::Error(format!(
                                     "无法打开链接：{error}"
                                 )));
@@ -743,7 +753,7 @@ pub async fn run(
                         continue;
                     }
                     if let Some((x, y)) = state.selection.click(&event)
-                        && toggle_transcript_at(&mut state, (x, y)) {
+                        && (open_subagent_at(&mut state, (x,y)) || toggle_transcript_at(&mut state, (x, y))) {
                         continue;
                     }
 
@@ -1173,6 +1183,20 @@ pub async fn run(
                     }
                 }
                 _ = command_ticks.tick(), if state.status == app::RunStatus::Running => {
+                    for (index,item) in state.transcript.iter_mut().enumerate() {
+                        let TranscriptItem::Tool(row)=item else {continue;};
+                        if !matches!(row.name.as_str(),"spawn_agent"|"send_agent_message") || row.status!=app::ToolStatus::Running {continue;}
+                        let Ok(mut value)=serde_json::from_str::<serde_json::Value>(&row.output) else {continue;};
+                        let Some(id)=value["job_id"].as_str() else {continue;};
+                        let snapshot=tools.task_groups().skip(1).find_map(|jobs|jobs.snapshots(&[id.to_owned()],false).ok()).and_then(|mut jobs|jobs.pop());
+                        if let Some(snapshot)=snapshot {
+                            let seconds=snapshot.elapsed_ms/1000;
+                            if value["elapsed_seconds"].as_u64()!=Some(seconds) {
+                                value["elapsed_seconds"]=seconds.into();row.output=value.to_string();
+                                state.transcript_layout.invalidate_from(index);dirty=true;frames.request(time::Instant::now());
+                            }
+                        }
+                    }
                     if let Ok(dir) = session.command_output.read() {
                         for (index, item) in state.transcript.iter_mut().enumerate() {
                             let TranscriptItem::Tool(row) = item else { continue; };
@@ -1410,6 +1434,9 @@ pub async fn run(
                             dirty |= session_sync::sync_runtime(&session.store, session.id(), &mut state).await?;
                         }
                         dirty |= tabs.synchronize_parked(&mut session_sync, &background_runs).await?;
+                        if history_replay.is_none() {
+                            dirty |= subagent_progress.poll(&session.store, &mut state).await?;
+                        }
                     }
                     dirty |= session.poll_title().await.unwrap_or(false);
                     dirty |= tabs.poll_titles().await;
@@ -2890,6 +2917,31 @@ fn browser_url(value: &str) -> Result<url::Url> {
     }
 
     Ok(url)
+}
+
+fn open_subagent_at(state: &mut UiState, point: (u16, u16)) -> bool {
+    let offset = if state.follow_bottom {
+        state.max_scroll
+    } else {
+        state.max_scroll.saturating_sub(state.scroll)
+    };
+    let target = state
+        .transcript_layout
+        .link_at(state.selection.viewport, offset, point)
+        .and_then(subagent_link_id)
+        .map(str::to_owned);
+    if let Some(id) = target {
+        state.selection.clear();
+        state.resume_request = Some(id);
+        true
+    } else {
+        false
+    }
+}
+
+fn subagent_link_id(value: &str) -> Option<&str> {
+    let id = value.strip_prefix("orbit://session/")?;
+    (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
 }
 
 fn open_link_in_browser(value: &str) -> Result<()> {
@@ -4650,5 +4702,51 @@ id = "orbit-model"
 
         assert!(queue_attachment(&mut state, image("test.png")));
         assert_eq!(state.attachments.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod subagent_tests {
+    use super::*;
+
+    #[test]
+    fn child_session_links_route_inside_tui_without_opening_a_browser() {
+        assert_eq!(
+            subagent_link_id("orbit://session/00000000000000000000000000000001"),
+            Some("00000000000000000000000000000001")
+        );
+        for target in [
+            "https://orbit.example/",
+            "orbit://session/../orbit.db",
+            "orbit://session/00000000000000000000000000000001/extra",
+        ] {
+            assert!(subagent_link_id(target).is_none());
+        }
+        let mut state = UiState::new("orbit::model");
+        let id = "00000000000000000000000000000001";
+        state
+            .transcript
+            .push(TranscriptItem::User("inspect Orbit".into()));
+        state.transcript.push(TranscriptItem::Tool(app::ToolRow{id:"child".into(),name:"spawn_agent".into(),arguments:"{\"task\":\"inspect\"}".into(),output:serde_json::json!({"agent_id":id,"role":"explore","model":"orbit::model","status":"running"}).to_string(),status:app::ToolStatus::Running}));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut state))
+            .unwrap();
+        let area = state.selection.viewport;
+        let point = (area.y..area.bottom())
+            .find_map(|y| {
+                (area.x..area.right()).find_map(|x| {
+                    state
+                        .transcript_layout
+                        .link_at(area, state.max_scroll, (x, y))
+                        .is_some_and(|url| subagent_link_id(url) == Some(id))
+                        .then_some((x, y))
+                })
+            })
+            .expect("live child view link is visible");
+        assert!(open_subagent_at(&mut state, point));
+        assert_eq!(state.resume_request.as_deref(), Some(id));
+        assert!(state.expanded.is_empty());
     }
 }

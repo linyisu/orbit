@@ -17,6 +17,7 @@ pub(super) async fn bind(
         )
         .await?;
     state.workspace = session.snapshot.session.workspace.clone();
+    state.subagent_parent = session.store.subagent_parent(session.id()).await?;
     state.cursor_motion.enabled = resources.cursor_trail;
     state.cursor_motion.clear();
     state.auto_compact = resources.budget.auto_compact;

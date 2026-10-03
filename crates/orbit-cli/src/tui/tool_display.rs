@@ -323,6 +323,12 @@ fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
     Some(out)
 }
 
+pub(super) fn agent_session_id(output: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(output).ok()?;
+    let id = value["agent_id"].as_str()?;
+    (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| id.to_owned())
+}
+
 pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<LinkedLine>> {
     if row.status != ToolStatus::Finished {
         return None;
@@ -1666,5 +1672,39 @@ mod tests {
         })
         .to_string();
         assert_eq!(command_output_summary(&args3), "终端 cmd-custom");
+    }
+}
+
+#[cfg(test)]
+mod subagent_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn child_cards_expose_live_and_completed_session_links_at_narrow_widths() {
+        let id = "00000000000000000000000000000001";
+        for status in [ToolStatus::Running, ToolStatus::Finished] {
+            let row=ToolRow{id:"orbit-child-call".into(),name:"spawn_agent".into(),arguments:json!({"task":"审查 Orbit 中文标题与很长的补充上下文"}).to_string(),output:json!({"agent_id":id,"role":"review","model":"orbit::model","status":if status==ToolStatus::Running {"running"} else {"completed"},"summary":"**检查完成**"}).to_string(),status};
+            for width in [12, 30, 80] {
+                let collapsed = super::super::render::tool_card_with_links(&row, false, width);
+                assert_eq!(collapsed.len(), 2);
+                assert!(collapsed[0].line.to_string().contains("查看"));
+                assert!(collapsed[0].line.width() <= usize::from(width));
+                let link = &collapsed[0].links[0];
+                assert_eq!(link.url, format!("orbit://session/{id}"));
+                assert_eq!(
+                    &collapsed[0].line.to_string()[link.start..link.end],
+                    " 查看"
+                );
+                let expanded = super::super::render::tool_card_with_links(&row, true, width);
+                assert!(
+                    expanded
+                        .iter()
+                        .flat_map(|l| &l.links)
+                        .any(|l| l.url == format!("orbit://session/{id}"))
+                );
+            }
+        }
+        assert!(agent_session_id("{\"agent_id\":\"../orbit.db\"}").is_none());
     }
 }
