@@ -13,7 +13,9 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
     backend::{Backend, CrosstermBackend},
+    buffer::{Buffer, CellDiffOption, CellWidth},
     layout::Rect,
+    style::Color,
 };
 
 pub type AppTerminal = Terminal<CrosstermBackend<Stdout>>;
@@ -37,6 +39,27 @@ fn prime_full_redraw<B: Backend>(terminal: &mut Terminal<B>) {
     terminal.swap_buffers();
 }
 
+fn mark_background_edges(buffer: &mut Buffer) {
+    // Replacing an old wide glyph can spread the new background to its other
+    // half. Repaint the boundary even when the next blank matches the cache.
+    let area = buffer.area;
+    for y in area.top()..area.bottom() {
+        let mut x = area.left();
+        while x < area.right() {
+            let cell = &buffer[(x, y)];
+            let next = x.saturating_add(cell.cell_width().max(1));
+            if next < area.right()
+                && cell.bg != Color::Reset
+                && cell.bg != buffer[(next, y)].bg
+                && buffer[(next, y)].diff_option == CellDiffOption::None
+            {
+                buffer[(next, y)].set_diff_option(CellDiffOption::AlwaysUpdate);
+            }
+            x = next;
+        }
+    }
+}
+
 fn draw_buffer<B: Backend>(
     terminal: &mut Terminal<B>,
     render: impl FnOnce(&mut Frame<'_>),
@@ -44,6 +67,7 @@ fn draw_buffer<B: Backend>(
     {
         let mut frame = terminal.get_frame();
         render(&mut frame);
+        mark_background_edges(frame.buffer_mut());
     }
     terminal.flush()?;
     terminal.swap_buffers();
@@ -239,5 +263,42 @@ mod tests {
             terminal.backend().buffer()[(3, 3)].bg,
             crate::tui::theme::THEME.accent
         );
+    }
+
+    #[test]
+    fn scrolling_a_code_badge_over_cjk_repaints_its_trailing_blank() {
+        use ratatui::style::Color;
+
+        let mut layout = super::super::transcript::TranscriptLayout::default();
+        layout.update(
+            &[super::super::app::TranscriptItem::Assistant(
+                "Orbit: 中文标签\n```python\nprint('Orbit')\n```\n后文".into(),
+            )],
+            None,
+            30,
+        );
+        let mut terminal = Terminal::new(TestBackend::new(30, 2)).unwrap();
+
+        for _ in 0..3 {
+            draw_buffer(&mut terminal, |frame| layout.draw(frame, frame.area(), 0)).unwrap();
+            let previous = terminal.backend().buffer().clone();
+            assert_eq!(previous[(11, 0)].symbol(), "文");
+            assert_eq!(previous[(11, 0)].bg, Color::Reset);
+
+            draw_buffer(&mut terminal, |frame| layout.draw(frame, frame.area(), 1)).unwrap();
+            let current = terminal.backend().buffer();
+            assert_eq!(current[(11, 0)].symbol(), " ");
+            assert_ne!(current[(11, 0)].bg, Color::Reset);
+            assert_eq!(current[(12, 0)].symbol(), " ");
+            assert_eq!(current[(12, 0)].bg, Color::Reset);
+            assert!(
+                previous.diff(current).iter().any(|(x, y, cell)| {
+                    (*x, *y) == (12, 0) && cell.symbol() == " " && cell.bg == Color::Reset
+                }),
+                "the terminal must receive a background reset after the badge's final padding cell"
+            );
+
+            draw_buffer(&mut terminal, |frame| layout.draw(frame, frame.area(), 3)).unwrap();
+        }
     }
 }
