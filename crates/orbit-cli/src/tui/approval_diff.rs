@@ -6,10 +6,7 @@ use ratatui::{
 use similar::{DiffTag, TextDiff};
 use std::time::Duration;
 
-use super::{
-    render::{fit_label, safe_output},
-    transcript::wrap_line,
-};
+use super::{render::fit_label, transcript::wrap_line};
 
 const FOLDED_COLOR: Color = crate::tui::theme::THEME.secondary;
 
@@ -19,21 +16,34 @@ pub(super) struct Cache {
     after: String,
     widths: (u16, u16),
     full: bool,
+    path: String,
     pub left: Vec<Line<'static>>,
     pub right: Vec<Line<'static>>,
 }
 
 impl Cache {
-    pub fn matches(&self, before: &str, after: &str, widths: (u16, u16), full: bool) -> bool {
-        self.before == before && self.after == after && self.widths == widths && self.full == full
+    pub fn matches(
+        &self,
+        before: &str,
+        after: &str,
+        widths: (u16, u16),
+        full: bool,
+        path: &str,
+    ) -> bool {
+        self.before == before
+            && self.after == after
+            && self.widths == widths
+            && self.full == full
+            && self.path == path
     }
 
-    pub fn new(before: &str, after: &str, widths: (u16, u16), full: bool) -> Self {
+    pub fn new(before: &str, after: &str, widths: (u16, u16), full: bool, path: &str) -> Self {
         let mut cache = Self {
             before: before.into(),
             after: after.into(),
             widths,
             full,
+            path: path.into(),
             left: vec![],
             right: vec![],
         };
@@ -47,6 +57,8 @@ impl Cache {
             .to_string()
             .len()
             .max(4);
+        let old_lines = super::code::file_lines(path, before);
+        let new_lines = super::code::file_lines(path, after);
 
         for op in diff.ops() {
             let old = op.old_range();
@@ -72,9 +84,9 @@ impl Cache {
                 }
 
                 let left = (index < old.len())
-                    .then(|| (old.start + index + 1, diff.old_slices()[old.start + index]));
+                    .then(|| (old.start + index + 1, &old_lines[old.start + index]));
                 let right = (index < new.len())
-                    .then(|| (new.start + index + 1, diff.new_slices()[new.start + index]));
+                    .then(|| (new.start + index + 1, &new_lines[new.start + index]));
                 let mut left = side(left, digits, if equal { ' ' } else { '-' }, widths.0);
                 let mut right = side(right, digits, if equal { ' ' } else { '+' }, widths.1);
                 let height = left.len().max(right.len());
@@ -90,7 +102,7 @@ impl Cache {
 }
 
 fn side(
-    content: Option<(usize, &str)>,
+    content: Option<(usize, &Line<'static>)>,
     digits: usize,
     marker: char,
     width: u16,
@@ -99,7 +111,6 @@ fn side(
         return vec![Line::default()];
     };
 
-    let text = safe_output(text.strip_suffix('\n').unwrap_or(text));
     let style = Style::default().fg(match marker {
         '-' => crate::tui::theme::THEME.diff_removed,
         '+' => crate::tui::theme::THEME.diff_added,
@@ -115,7 +126,18 @@ fn side(
         )];
     }
 
-    let (wrapped, _) = wrap_line(&Line::styled(text, style), width - prefix_width as u16);
+    let mut text = text.clone();
+    let background = match marker {
+        '-' => Some(crate::tui::theme::THEME.diff_removed_bg),
+        '+' => Some(crate::tui::theme::THEME.diff_added_bg),
+        _ => None,
+    };
+    if let Some(background) = background {
+        for span in &mut text.spans {
+            span.style = span.style.bg(background);
+        }
+    }
+    let (wrapped, _) = wrap_line(&text, width - prefix_width as u16);
 
     wrapped
         .into_iter()
@@ -157,6 +179,7 @@ mod tests {
             "same\n这是一段很长的替换文本abcdefghijk\ninserted\ntail\n",
             (20, 20),
             true,
+            "orbit.txt",
         );
 
         assert_eq!(diff.left.len(), diff.right.len());
@@ -185,7 +208,7 @@ mod tests {
                 .any(|line| line.to_string().starts_with("+   3 │ "))
         );
 
-        let deleted = Cache::new("a\nb\nc\n", "a\nc\n", (30, 30), true);
+        let deleted = Cache::new("a\nb\nc\n", "a\nc\n", (30, 30), true, "orbit.txt");
 
         assert_eq!(deleted.left[2].to_string().split("│ ").last(), Some("c"));
         assert_eq!(deleted.right[2].to_string().split("│ ").last(), Some("c"));
@@ -196,8 +219,8 @@ mod tests {
     fn folds_only_unchanged_lines_and_handles_new_empty_and_small_files() {
         let before = format!("{}old\n", "unchanged\n".repeat(100));
         let after = format!("{}new\n", "unchanged\n".repeat(100));
-        let folded = Cache::new(&before, &after, (40, 40), false);
-        let full = Cache::new(&before, &after, (40, 40), true);
+        let folded = Cache::new(&before, &after, (40, 40), false, "orbit.txt");
+        let full = Cache::new(&before, &after, (40, 40), true, "orbit.txt");
 
         assert!(folded.left.len() < full.left.len());
 
@@ -227,10 +250,12 @@ mod tests {
                 .iter()
                 .any(|line| line.to_string().contains("new"))
         );
-        assert!(folded.matches(&before, &after, (40, 40), false));
-        assert!(!folded.matches(&before, &after, (30, 40), false));
+        assert!(folded.matches(&before, &after, (40, 40), false, "orbit.txt"));
+        assert!(!folded.matches(&before, &after, (30, 40), false, "orbit.txt"));
+        assert!(!folded.matches(&before, &after, (40, 40), false, "orbit.rs"));
 
-        let one_side_missing_newline = Cache::new("before\n", "after", (40, 40), false);
+        let one_side_missing_newline =
+            Cache::new("before\n", "after", (40, 40), false, "orbit.txt");
 
         assert_eq!(
             one_side_missing_newline.left.len(),
@@ -245,7 +270,7 @@ mod tests {
 
         for width in [0, 1, 8, 9, 20] {
             for (a, b) in [("", "新内容\u{1b}\t\n"), ("old", ""), ("", "")] {
-                let diff = Cache::new(a, b, (width, width), true);
+                let diff = Cache::new(a, b, (width, width), true, "orbit.txt");
 
                 assert_eq!(diff.left.len(), diff.right.len());
                 assert!(

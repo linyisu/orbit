@@ -4,8 +4,7 @@ use super::*;
 const ADDED: Color = crate::tui::theme::THEME.patch_added;
 const REMOVED: Color = crate::tui::theme::THEME.diff_removed;
 
-// Format each logical line before transcript layout so wrapped continuations
-// retain the tool gutter. Never run tool data through Markdown.
+// Format metadata literally before layout so wrapped continuations retain the tool gutter.
 struct View {
     lines: Vec<Line<'static>>,
     expanded: bool,
@@ -499,6 +498,30 @@ pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Ve
 }
 
 pub(super) fn document(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    document_with_links(row, expanded, width).map(|lines| {
+        lines
+            .into_iter()
+            .flat_map(|linked| linked.wrap(width))
+            .map(|linked| {
+                if linked.line.width() > usize::from(width) {
+                    Line::from(super::super::render::fit_label(
+                        &linked.line.to_string(),
+                        usize::from(width),
+                        false,
+                    ))
+                } else {
+                    linked.line
+                }
+            })
+            .collect()
+    })
+}
+
+pub(super) fn document_with_links(
+    row: &ToolRow,
+    expanded: bool,
+    width: u16,
+) -> Option<Vec<LinkedLine>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
     let path = value["path"].as_str().unwrap_or_default();
     let format = value["format"].as_str().unwrap_or("doc");
@@ -530,17 +553,15 @@ pub(super) fn document(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<
         ),
     ]);
 
-    let lines: Vec<&str> = content.lines().collect();
-    if lines.is_empty() {
+    let mut out: Vec<_> = view.lines.drain(..).map(LinkedLine::plain).collect();
+    let lines = markdown_preview(content, width);
+    let total_lines = lines.len();
+    let limit = if expanded { lines.len() } else { 6 };
+    out.extend(lines.into_iter().take(limit));
+    if content.is_empty() {
         view.note("(空文档)");
-    } else {
-        let limit = if expanded { lines.len() } else { 6 };
-        for line in lines.iter().take(limit) {
-            view.push(line, theme.output_foreground);
-        }
-        if !expanded && lines.len() > limit {
-            view.omitted(lines.len().saturating_sub(limit), "行");
-        }
+    } else if !expanded {
+        view.omitted(total_lines.saturating_sub(limit), "行");
     }
 
     if truncated && let Some(next) = next_start {
@@ -550,7 +571,8 @@ pub(super) fn document(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<
         )]);
     }
 
-    Some(view.finish())
+    out.extend(view.finish().into_iter().map(LinkedLine::plain));
+    Some(out)
 }
 
 pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
@@ -694,30 +716,9 @@ pub(super) fn fallback(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<
 
     let mut view = View::new(expanded, width);
 
-    let syntax = super::super::languages::syntax_for_label("json");
-    if let Some(syn) = syntax {
-        let mut highlighter = HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
-        for line in lines.iter().take(limit) {
-            if let Ok(line_tokens) =
-                highlighter.highlight_line(line, &super::super::languages::SYNTAXES)
-            {
-                let mut spans = Vec::new();
-                for (style, slice) in line_tokens {
-                    let c = style.foreground;
-                    spans.push(Span::styled(
-                        slice.to_owned(),
-                        Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
-                    ));
-                }
-                view.push_spans(spans);
-            } else {
-                view.push(line, Color::Reset);
-            }
-        }
-    } else {
-        for line in lines.iter().take(limit) {
-            view.push(line, Color::Reset);
-        }
+    let mut highlighter = Highlighter::new("json");
+    for line in lines.iter().take(limit) {
+        view.push_spans(highlighter.line(line).spans);
     }
 
     view.omitted(lines.len().saturating_sub(limit), "行");

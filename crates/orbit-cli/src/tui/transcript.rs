@@ -206,6 +206,46 @@ pub(super) fn wrap_line(
     (lines, ranges)
 }
 
+pub(super) fn wrap_linked_line(
+    mut linked: super::markdown::LinkedLine,
+    width: u16,
+) -> Vec<super::markdown::LinkedLine> {
+    let original = linked.line.clone();
+    let gutter = take_gutter(&mut linked.line).filter(|gutter| gutter.width < width);
+    if gutter.is_none() {
+        linked.line = original.clone();
+    }
+    let removed = original.to_string().len() - linked.line.to_string().len();
+    let available = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
+    let (lines, ranges) = wrap_line(&linked.line, available);
+    lines
+        .into_iter()
+        .zip(ranges)
+        .enumerate()
+        .map(|(index, (mut line, range))| {
+            let prefix = gutter.as_ref().map(|gutter| {
+                if index == 0 {
+                    &gutter.first
+                } else {
+                    &gutter.continuation
+                }
+            });
+            let offset = prefix.map_or(0, |prefix| prefix.to_string().len());
+            let links = linked
+                .links
+                .iter()
+                .filter_map(|link| {
+                    link.slice(&(range.start + removed..range.end + removed), offset)
+                })
+                .collect();
+            if let Some(prefix) = prefix {
+                line.spans.splice(0..0, prefix.spans.iter().cloned());
+            }
+            super::markdown::LinkedLine { line, links }
+        })
+        .collect()
+}
+
 fn byte_at_column(text: &str, range: &Range<usize>, column: u16) -> Option<usize> {
     let mut used = 0;
 
@@ -251,17 +291,7 @@ impl Entry {
         mut links: Vec<super::markdown::LinkTarget>,
     ) {
         // Markdown rules occupy the entire transcript row, including the usual gutter.
-        let mut visible = line
-            .spans
-            .iter()
-            .filter(|span| !span.content.trim().is_empty());
-        if let Some(rule) = visible.next()
-            && visible.next().is_none()
-            && rule.style.fg == Some(super::theme::THEME.md_rule)
-            && rule.content.chars().all(|ch| ch == '─')
-        {
-            line = Line::styled("─".repeat(usize::from(width)), rule.style);
-        }
+        super::markdown::expand_rule(&mut line, width);
         render::sanitize_line(&mut line);
         let original = line.to_string();
         let gutter = take_gutter(&mut line);
@@ -1033,6 +1063,44 @@ mod tests {
                     assert!(link.url.ends_with("/one") || link.url.ends_with("/two"));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn markdown_file_links_remain_actionable_after_resize_and_scroll() {
+        use super::super::app::{ToolRow, ToolStatus};
+        let items = [TranscriptItem::Tool(ToolRow {
+            id: "orbit-doc".into(),
+            name: "read_file".into(),
+            arguments: r#"{"path":"docs/Orbit Guide.md"}"#.into(),
+            status: ToolStatus::Finished,
+            output: serde_json::json!({
+                "path": "docs/Orbit Guide.md",
+                "content": "1: # Orbit\n2: \n3: | 名称 | 链接 |\n4: | --- | --- |\n5: | [Orbit](https://orbit.example/first) | [Orbit](https://orbit.example/second) |\n6: \n7: ```markdown\n8: [Orbit](https://orbit.example/code)\n9: ```\n"
+            }).to_string(),
+        })];
+        let mut layout = TranscriptLayout::default();
+        for width in [80, 16, 32, 10, 80] {
+            layout.update(&items, Some(0), width);
+            let area = Rect::new(3, 2, width, 7);
+            let mut targets = HashSet::new();
+            for offset in 0..layout.height() {
+                for y in area.y..area.bottom() {
+                    for x in area.x..area.right() {
+                        if let Some(url) = layout.link_at(area, offset, (x, y)) {
+                            targets.insert(url.to_owned());
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                targets,
+                HashSet::from([
+                    "https://orbit.example/first".to_owned(),
+                    "https://orbit.example/second".to_owned(),
+                ]),
+                "width {width}"
+            );
         }
     }
 

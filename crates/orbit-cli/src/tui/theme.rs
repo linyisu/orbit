@@ -289,25 +289,6 @@ pub(super) fn tab_hover_background(elapsed: std::time::Duration) -> Color {
     let shade = 48 + (elapsed.as_millis().min(240) / 10) as u8;
     Color::Rgb(shade, shade - 8, shade - 10)
 }
-pub(super) fn diff_syntax_color(
-    color: syntect::highlighting::Color,
-    tag: similar::ChangeTag,
-) -> Color {
-    let tint = match tag {
-        similar::ChangeTag::Delete => THEME.error,
-        similar::ChangeTag::Insert => THEME.success,
-        similar::ChangeTag::Equal => return Color::Rgb(color.r, color.g, color.b),
-    };
-    let Color::Rgb(r, g, b) = tint else {
-        return tint;
-    };
-    Color::Rgb(
-        ((color.r as u16 + r as u16) / 2) as u8,
-        ((color.g as u16 + g as u16) / 2) as u8,
-        ((color.b as u16 + b as u16) / 2) as u8,
-    )
-}
-
 pub(super) fn ansi_color(code: u16) -> Option<Color> {
     match code {
         30 => Some(Color::Black),

@@ -1402,7 +1402,12 @@ pub(super) fn read_file_summary(arguments: &str, output: &str) -> String {
     }
 }
 
-fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
+fn tool_details(
+    row: &super::app::ToolRow,
+    expanded: bool,
+    width: u16,
+) -> Vec<super::markdown::LinkedLine> {
+    use super::markdown::LinkedLine;
     let mut lines = Vec::new();
     let (marker, color) = match row.status {
         ToolStatus::Running => ("◌", TOOL_RUNNING),
@@ -1423,9 +1428,10 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         ),
     ]));
 
-    if let Some(output) = super::tool_display::lines(row, expanded, width) {
+    if let Some(output) = super::tool_display::linked_lines(row, expanded, width) {
+        let mut lines: Vec<_> = lines.into_iter().map(LinkedLine::plain).collect();
         lines.extend(output);
-        lines.push(Line::from(""));
+        lines.push(LinkedLine::plain(Line::from("")));
         return lines;
     }
 
@@ -1502,27 +1508,13 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         })
         .unwrap_or_else(|| row.output.clone());
 
-    let syntax = super::languages::syntax_for_label("json");
     let is_json_output = (output.trim_start().starts_with('{')
         || output.trim_start().starts_with('['))
         && serde_json::from_str::<serde_json::Value>(&output).is_ok();
-    if is_json_output && let Some(syn) = syntax {
-        let mut highlighter =
-            syntect::easy::HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
+    if is_json_output {
+        let mut highlighter = super::code::Highlighter::new("json");
         for line in output.lines() {
-            if let Ok(line_tokens) = highlighter.highlight_line(line, &super::languages::SYNTAXES) {
-                let mut spans = Vec::new();
-                for (style, slice) in line_tokens {
-                    let c = style.foreground;
-                    spans.push(Span::styled(
-                        slice.to_owned(),
-                        Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
-                    ));
-                }
-                lines.push(Line::from(spans));
-            } else {
-                lines.push(Line::from(parse_ansi_to_spans(line)));
-            }
+            lines.push(highlighter.line(line));
         }
     } else {
         for line in output.lines() {
@@ -1533,7 +1525,7 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
     lines.push(super::tool_display::toggle_line(true, width));
 
     lines.push(Line::from(""));
-    lines
+    lines.into_iter().map(LinkedLine::plain).collect()
 }
 
 pub(super) fn tool_card(
@@ -1661,15 +1653,16 @@ pub(super) fn tool_card_with_links(
     }
     let toggle = super::tool_display::toggle_line(true, inner_width as u16);
     let collapse = super::tool_display::toggle_line(false, inner_width as u16);
-    details.retain(|line| *line != toggle && *line != collapse);
+    details.retain(|linked| linked.line != toggle && linked.line != collapse);
     while details
         .last()
-        .is_some_and(|line| line.to_string().trim().is_empty())
+        .is_some_and(|linked| linked.line.to_string().trim().is_empty())
     {
         details.pop();
     }
 
-    for mut line in details {
+    for mut linked in details {
+        let line = &mut linked.line;
         if line.to_string().starts_with("    ") {
             let mut remaining = 4;
             for span in &mut line.spans {
@@ -1685,15 +1678,26 @@ pub(super) fn tool_card_with_links(
                     break;
                 }
             }
+            linked.links.retain_mut(|link| {
+                if link.end <= 4 {
+                    return false;
+                }
+                link.start = link.start.saturating_sub(4);
+                link.end -= 4;
+                true
+            });
         }
         for span in &mut line.spans {
             span.content = safe_output(&span.content).into();
+            span.style = line.style.patch(span.style);
             if span.style.fg == Some(Color::Reset) || span.style.fg.is_none() {
                 span.style = span.style.fg(crate::tui::theme::THEME.output_muted);
             }
         }
+        line.spans.retain(|span| !span.content.is_empty());
+        super::markdown::expand_rule(line, inner_width as u16);
 
-        for sub in LinkedLine::plain(line).wrap(inner_width as u16) {
+        for sub in linked.wrap(inner_width as u16) {
             let pad = inner_width.saturating_sub(sub.line.width());
             let line_bg = sub
                 .line
@@ -2643,6 +2647,138 @@ mod tests {
         assert_eq!(add_line.spans[1].style.bg, add_bg);
         assert_eq!(add_line.spans.last().unwrap().content, "│");
         assert_eq!(add_line.spans[add_line.spans.len() - 2].style.bg, add_bg);
+    }
+
+    #[test]
+    fn markdown_tool_previews_render_structure_and_preserve_links_after_wrapping() {
+        use super::super::app::ToolRow;
+        let content = "# Orbit Guide\n\n- **Orbit** uses `Rust`.\n\n| Item | Link |\n| --- | --- |\n| Docs | [Orbit](https://orbit.example/docs) |\n\n```rust\nlet url = \"https://orbit.example/code\";\n```\n\n---";
+        let numbered = content
+            .lines()
+            .enumerate()
+            .map(|(index, line)| format!("{}: {line}\n", index + 40))
+            .collect::<String>();
+        for name in ["read_file", "write_file", "web_fetch", "read_document"] {
+            let row = ToolRow {
+                id: "orbit-preview".into(),
+                name: name.into(),
+                arguments: serde_json::json!({ "path": "docs/Orbit Guide.MD", "content": content })
+                    .to_string(),
+                status: ToolStatus::Finished,
+                output: serde_json::json!({
+                    "path": "docs/Orbit Guide.MD",
+                    "format": "pdf",
+                    "content": if name == "read_file" { &numbered } else { content },
+                    "start_line": 40,
+                    "end_line": 53,
+                    "start_char": 0,
+                    "total_chars": content.chars().count(),
+                    "truncated": false
+                })
+                .to_string(),
+            };
+            let original = row.output.clone();
+            for width in [10, 16, 32, 80, 180] {
+                let card = tool_card_with_links(&row, true, width);
+                assert!(
+                    card.iter()
+                        .all(|line| line.line.width() == usize::from(width)),
+                    "{name} {width}"
+                );
+                let text = card
+                    .iter()
+                    .map(|linked| linked.line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(!text.contains("# Orbit Guide"), "{name} {width}");
+                let links: Vec<_> = card.iter().flat_map(|line| &line.links).collect();
+                assert!(
+                    links
+                        .iter()
+                        .any(|link| link.url == "https://orbit.example/docs"),
+                    "{name} {width}"
+                );
+                assert!(
+                    !links
+                        .iter()
+                        .any(|link| link.url == "https://orbit.example/code"),
+                    "{name} {width}"
+                );
+                for linked in &card {
+                    for link in &linked.links {
+                        let text = linked.line.to_string();
+                        let label = &text[link.start..link.end];
+                        assert!(
+                            !label.is_empty() && !label.contains('│'),
+                            "{name} {width}: {label}"
+                        );
+                    }
+                }
+                if width >= 32 {
+                    assert!(text.contains("Orbit Guide"));
+                    assert!(text.contains("• Orbit uses Rust."));
+                    assert!(text.contains('┬'));
+                }
+                assert!(
+                    card.iter()
+                        .any(|linked| linked.line.spans.iter().any(|span| {
+                            span.style.fg == Some(super::super::theme::THEME.md_rule)
+                                && span.content == "─".repeat(usize::from(width) - 4)
+                        })),
+                    "{name} {width}"
+                );
+            }
+            assert_eq!(row.output, original);
+        }
+    }
+
+    #[test]
+    fn source_colors_and_multiline_state_match_across_code_previews() {
+        use super::super::{app::ToolRow, approval_diff, markdown};
+        let content =
+            "/* Orbit block\nfn inside_comment() {}\n*/\nfn main() {\n    let name = \"orbit\";\n}";
+        let samples: Vec<_> = content.lines().collect();
+        let numbered = samples
+            .iter()
+            .enumerate()
+            .map(|(index, line)| format!("{}: {line}\n", index + 1))
+            .collect::<String>();
+        let tools: Vec<_> = ["read_file", "write_file", "edit_file"].into_iter().map(|name| ToolRow {
+            id: "orbit-code".into(),
+            name: name.into(),
+            arguments: serde_json::json!({ "path": "src/Orbit Code.RS", "content": content, "old_text": "", "new_text": content }).to_string(),
+            status: ToolStatus::Finished,
+            output: serde_json::json!({ "path": "src/Orbit Code.RS", "content": numbered, "end_line": samples.len() }).to_string(),
+        }).collect();
+        let cards: Vec<_> = tools.iter().map(|row| tool_card(row, true, 100)).collect();
+        let message = markdown::document(&format!("```rust\n{content}\n```"), 100);
+        let diff = approval_diff::Cache::new("", content, (100, 100), true, "src/Orbit Code.RS");
+        let colors = |line: &Line<'static>, source: &str| {
+            let start = line.to_string().find(source).unwrap();
+            let colors: Vec<_> = line
+                .spans
+                .iter()
+                .flat_map(|span| std::iter::repeat_n(span.style.fg, span.content.len()))
+                .collect();
+            colors[start..start + source.len()].to_vec()
+        };
+        for (index, sample) in samples.iter().enumerate() {
+            let expected = colors(&message[index + 1].line, sample);
+            for card in &cards {
+                assert_eq!(colors(&card[index + 3], sample), expected, "{sample}");
+            }
+            assert_eq!(colors(&diff.right[index], sample), expected, "{sample}");
+        }
+        let comment_colors = colors(&message[2].line, samples[1]);
+        assert!(
+            comment_colors
+                .iter()
+                .all(|color| *color == Some(Color::Rgb(120, 130, 145)))
+        );
+        assert_eq!(
+            colors(&message[4].line, samples[3])[0],
+            Some(Color::Rgb(198, 120, 221))
+        );
     }
 
     #[test]

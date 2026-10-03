@@ -6,8 +6,10 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use super::languages::{SYNTAXES, is_markdown_label, syntax_for_label};
-use syntect::{easy::HighlightLines, highlighting::HighlightState, parsing::ParseState};
+use super::{
+    code::Highlighter,
+    languages::{is_markdown_label, syntax_for_label},
+};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -18,7 +20,7 @@ pub(super) struct CodeFence {
     length: usize,
     markdown_source: bool,
     nested_fences: Vec<(char, usize)>,
-    state: (HighlightState, ParseState),
+    highlighter: Highlighter,
 }
 
 pub(super) type Fence = Option<CodeFence>;
@@ -55,23 +57,57 @@ impl LinkedLine {
     }
 
     pub fn wrap(self, width: u16) -> Vec<Self> {
-        let (lines, ranges) = super::transcript::wrap_line(&self.line, width);
-        lines
-            .into_iter()
-            .zip(ranges)
-            .map(|(line, range)| Self {
-                line,
-                links: self
-                    .links
-                    .iter()
-                    .filter_map(|link| link.slice(&range, 0))
-                    .collect(),
-            })
-            .collect()
+        super::transcript::wrap_linked_line(self, width)
     }
 }
 
-use super::theme::{CODE_THEME, THEME};
+pub(super) fn document(source: &str, width: u16) -> Vec<LinkedLine> {
+    let mut out = Vec::new();
+    let mut remaining = source;
+    let mut fence = None;
+    let mut index = 0;
+    while !remaining.is_empty() {
+        if fence.is_none()
+            && let Some((bytes, lines)) = table(remaining, width)
+        {
+            out.extend(lines);
+            index += remaining[..bytes].lines().count();
+            remaining = &remaining[bytes..];
+            continue;
+        }
+
+        let part = remaining.split_inclusive('\n').next().unwrap();
+        let source = part.trim_end_matches(['\r', '\n']);
+        let was_code = fence.is_some();
+        let mut line = line(source, index, &mut fence);
+        super::render::sanitize_line(&mut line);
+        let links = if was_code || fence.is_some() {
+            Vec::new()
+        } else {
+            links(source, &line)
+        };
+        out.push(LinkedLine { line, links });
+        remaining = &remaining[part.len()..];
+        index += 1;
+    }
+    out
+}
+
+pub(super) fn expand_rule(line: &mut Line<'static>, width: u16) {
+    let mut visible = line
+        .spans
+        .iter()
+        .filter(|span| !span.content.trim().is_empty());
+    if let Some(rule) = visible.next()
+        && visible.next().is_none()
+        && rule.style.fg == Some(THEME.md_rule)
+        && rule.content.chars().all(|ch| ch == '─')
+    {
+        *line = Line::from(Span::styled("─".repeat(usize::from(width)), rule.style));
+    }
+}
+
+use super::theme::THEME;
 
 const SECONDARY: Color = THEME.secondary;
 
@@ -694,33 +730,14 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             return Line::styled(format!("  {indent}└─"), Style::default().fg(SECONDARY));
         }
 
-        let mut highlighter =
-            HighlightLines::from_state(&CODE_THEME, code.state.0.clone(), code.state.1.clone());
         let indent = " ".repeat(code.indent);
         let mut spans = vec![Span::styled(
             format!("  {indent}│ "),
             Style::default().fg(SECONDARY),
         )];
 
-        let code_line =
-            if source.len() >= code.indent && source[..code.indent].chars().all(|c| c == ' ') {
-                &source[code.indent..]
-            } else {
-                source.trim_start()
-            };
-
-        match highlighter.highlight_line(code_line, &SYNTAXES) {
-            Ok(tokens) => spans.extend(tokens.into_iter().map(|(style, text)| {
-                let c = style.foreground;
-                Span::styled(
-                    text.to_owned(),
-                    Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
-                )
-            })),
-            Err(_) => spans.push(Span::raw(code_line.to_owned())),
-        }
-
-        code.state = highlighter.state();
+        let code_line = source.strip_prefix(&indent).unwrap_or(source);
+        spans.extend(code.highlighter.line(code_line).spans);
         return Line::from(spans);
     }
     if matches!(marker, '`' | '~')
@@ -730,14 +747,13 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
         let indent = source.len() - trimmed.len();
         let label = trimmed[count..].trim();
         let resolved = syntax_for_label(label);
-        let syntax = resolved.unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
         *fence = Some(CodeFence {
             indent,
             delimiter: marker,
             length: count,
             markdown_source: is_markdown_label(label),
             nested_fences: Vec::new(),
-            state: HighlightLines::new(syntax, &CODE_THEME).state(),
+            highlighter: Highlighter::new(label),
         });
         let indent_str = " ".repeat(indent);
         return Line::styled(
@@ -914,6 +930,21 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indented_code_preserves_unicode_and_shorter_indentation() {
+        let mut fence = None;
+        line("    ```rust", 0, &mut fence);
+        assert_eq!(line("中文", 1, &mut fence).to_string(), "      │ 中文");
+        assert_eq!(
+            line("  orbit", 2, &mut fence).to_string(),
+            "      │   orbit"
+        );
+        assert_eq!(
+            line("        orbit", 3, &mut fence).to_string(),
+            "      │     orbit"
+        );
+    }
 
     #[test]
     fn resolves_real_model_labels_aliases_attributes_and_filename_extensions() {

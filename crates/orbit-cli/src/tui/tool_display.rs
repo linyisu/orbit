@@ -14,6 +14,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     app::{ToolRow, ToolStatus},
+    code::Highlighter,
+    markdown::LinkedLine,
     render::safe_output,
 };
 
@@ -34,8 +36,6 @@ pub(super) fn toggle_line(expanded: bool, width: u16) -> Line<'static> {
         ),
     ])
 }
-
-use syntect::easy::HighlightLines;
 
 pub(super) fn search_summary(arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(arguments) else {
@@ -187,11 +187,20 @@ pub(super) fn write_file_preview(arguments: &str, width: u16) -> Option<Vec<Line
         ))]);
     }
     let digits = total_lines.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
-    let syntax = super::languages::syntax_for_label(path);
+    let mut highlighter = Highlighter::for_path(path);
     let mut out = Vec::new();
     for (index, line) in lines.into_iter().enumerate() {
         let num = (index + 1) as u64;
-        source(&mut out, num, digits, line, None, syntax, true, width);
+        source(
+            &mut out,
+            num,
+            digits,
+            line,
+            None,
+            &mut highlighter,
+            true,
+            width,
+        );
     }
     Some(out)
 }
@@ -202,16 +211,13 @@ pub(super) fn edit_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line
     let new_text = value["new_text"].as_str()?;
     let path = value["path"].as_str().unwrap_or_default();
 
-    let syntax = super::languages::syntax_for_label(path)
-        .unwrap_or_else(|| super::languages::SYNTAXES.find_syntax_plain_text());
-
     let mut out = Vec::new();
     let diff_rem_bg = crate::tui::theme::THEME.diff_removed_bg;
     let diff_add_bg = crate::tui::theme::THEME.diff_added_bg;
     let diff_rem_fg = crate::tui::theme::THEME.diff_removed;
     let diff_add_fg = crate::tui::theme::THEME.diff_added;
 
-    let mut highlighter_old = HighlightLines::new(syntax, &crate::tui::theme::CODE_THEME);
+    let mut highlighter_old = Highlighter::for_path(path);
     for line in old_text.lines() {
         let text = safe_output(line);
         let mut spans = vec![Span::styled(
@@ -222,27 +228,21 @@ pub(super) fn edit_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line
                 .add_modifier(Modifier::BOLD),
         )];
 
-        if let Ok(tokens) = highlighter_old.highlight_line(&text, &super::languages::SYNTAXES) {
-            for (style, token) in tokens {
-                let c = style.foreground;
-                spans.push(Span::styled(
-                    token.to_owned(),
-                    Style::default()
-                        .fg(Color::Rgb(c.r, c.g, c.b))
-                        .bg(diff_rem_bg),
-                ));
-            }
-        } else {
-            spans.push(Span::styled(
-                text,
-                Style::default().fg(diff_rem_fg).bg(diff_rem_bg),
-            ));
-        }
+        spans.extend(
+            highlighter_old
+                .line(&text)
+                .spans
+                .into_iter()
+                .map(|mut span| {
+                    span.style = span.style.bg(diff_rem_bg);
+                    span
+                }),
+        );
 
         out.push(Line::from(spans));
     }
 
-    let mut highlighter_new = HighlightLines::new(syntax, &crate::tui::theme::CODE_THEME);
+    let mut highlighter_new = Highlighter::for_path(path);
     for line in new_text.lines() {
         let text = safe_output(line);
         let mut spans = vec![Span::styled(
@@ -253,22 +253,16 @@ pub(super) fn edit_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line
                 .add_modifier(Modifier::BOLD),
         )];
 
-        if let Ok(tokens) = highlighter_new.highlight_line(&text, &super::languages::SYNTAXES) {
-            for (style, token) in tokens {
-                let c = style.foreground;
-                spans.push(Span::styled(
-                    token.to_owned(),
-                    Style::default()
-                        .fg(Color::Rgb(c.r, c.g, c.b))
-                        .bg(diff_add_bg),
-                ));
-            }
-        } else {
-            spans.push(Span::styled(
-                text,
-                Style::default().fg(diff_add_fg).bg(diff_add_bg),
-            ));
-        }
+        spans.extend(
+            highlighter_new
+                .line(&text)
+                .spans
+                .into_iter()
+                .map(|mut span| {
+                    span.style = span.style.bg(diff_add_bg);
+                    span
+                }),
+        );
 
         out.push(Line::from(spans));
     }
@@ -324,16 +318,11 @@ fn push_unmarked_spans(
     spans: &mut Vec<Span<'static>>,
     text: &str,
     range: Range<usize>,
-    tokens: Option<&[(Range<usize>, syntect::highlighting::Style)]>,
+    tokens: &[(Range<usize>, Style)],
 ) {
     if range.start >= range.end {
         return;
     }
-    let Some(tokens) = tokens else {
-        spans.push(Span::raw(text[range].to_owned()));
-        return;
-    };
-
     let mut cur = range.start;
     for (token_range, style) in tokens {
         if token_range.end <= cur || token_range.start >= range.end {
@@ -342,11 +331,7 @@ fn push_unmarked_spans(
         let seg_start = cur.max(token_range.start);
         let seg_end = range.end.min(token_range.end);
         if seg_start < seg_end {
-            let c = style.foreground;
-            spans.push(Span::styled(
-                text[seg_start..seg_end].to_owned(),
-                Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
-            ));
+            spans.push(Span::styled(text[seg_start..seg_end].to_owned(), *style));
             cur = seg_end;
         }
     }
@@ -359,7 +344,7 @@ fn source_spans(
     text: &str,
     marks: &[Range<usize>],
     range: Range<usize>,
-    tokens: Option<&[(Range<usize>, syntect::highlighting::Style)]>,
+    tokens: &[(Range<usize>, Style)],
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut offset = range.start;
@@ -390,7 +375,21 @@ fn source_spans(
     spans
 }
 
-pub(super) fn web_fetch_preview(output: &str, _width: u16) -> Option<Vec<Line<'static>>> {
+fn markdown_preview(content: &str, width: u16) -> Vec<LinkedLine> {
+    super::markdown::document(content, width.saturating_add(2))
+        .into_iter()
+        .map(|mut linked| {
+            linked.line.spans.insert(0, Span::raw("  "));
+            for link in &mut linked.links {
+                link.start += 2;
+                link.end += 2;
+            }
+            linked
+        })
+        .collect()
+}
+
+fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
     let (text, header_spans) = if let Ok(val) = serde_json::from_str::<Value>(output) {
         let content = val["content"].as_str().unwrap_or(output).to_owned();
         let url = val["url"]
@@ -418,25 +417,58 @@ pub(super) fn web_fetch_preview(output: &str, _width: u16) -> Option<Vec<Line<'s
 
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return Some(vec![Line::from(Span::styled(
+        return Some(vec![LinkedLine::plain(Line::from(Span::styled(
             "(empty response)",
             Style::default().fg(SECONDARY),
-        ))]);
+        )))]);
     }
 
     let mut out = Vec::new();
     if let Some(header) = header_spans {
-        out.push(Line::from(header));
+        out.push(LinkedLine::plain(Line::from(header)));
     }
-    let mut fence = None;
-    for (index, line) in trimmed.lines().enumerate() {
-        let mut rendered = super::markdown::line(line, index, &mut fence);
-        if rendered.spans.first().is_some_and(|s| s.content == "  ") {
-            rendered.spans.remove(0);
-        }
-        out.push(rendered);
-    }
+    out.extend(markdown_preview(trimmed, width));
     Some(out)
+}
+
+pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<LinkedLine>> {
+    if row.status != ToolStatus::Finished {
+        return None;
+    }
+    match row.name.as_str() {
+        "web_fetch" => return web_fetch_preview(&row.output, width),
+        "read_document" => return structured::document_with_links(row, expanded, width),
+        "read_file" | "write_file" => {
+            let value: Value = serde_json::from_str(if row.name == "read_file" {
+                &row.output
+            } else {
+                &row.arguments
+            })
+            .ok()?;
+            if super::languages::is_markdown_path(value["path"].as_str().unwrap_or_default()) {
+                let content = value["content"].as_str()?;
+                let text = if row.name == "read_file" {
+                    read_rows(content)?
+                        .into_iter()
+                        .map(|(_, text)| text)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    content.to_owned()
+                };
+                let mut out = markdown_preview(&text, width);
+                if out.is_empty() {
+                    out.push(LinkedLine::plain(Line::styled(
+                        "文件为空",
+                        Style::default().fg(SECONDARY),
+                    )));
+                }
+                return Some(out);
+            }
+        }
+        _ => {}
+    }
+    lines(row, expanded, width).map(|lines| lines.into_iter().map(LinkedLine::plain).collect())
 }
 
 pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
@@ -469,7 +501,8 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
             expanded,
             width,
         ),
-        "web_fetch" => web_fetch_preview(&row.output, width),
+        "web_fetch" => web_fetch_preview(&row.output, width)
+            .map(|lines| lines.into_iter().map(|linked| linked.line).collect()),
         "web_search" => structured::web_search(row, expanded, width),
         "read_command_output" => structured::command_output(row, expanded, width),
         "read_document" => structured::document(row, expanded, width),
@@ -1050,7 +1083,7 @@ fn source(
     digits: usize,
     text: &str,
     matcher: Option<&Regex>,
-    syntax: Option<&syntect::parsing::SyntaxReference>,
+    highlighter: &mut Highlighter,
     expanded: bool,
     width: u16,
 ) {
@@ -1063,21 +1096,18 @@ fn source(
         return;
     }
 
-    let tokens: Option<Vec<(Range<usize>, syntect::highlighting::Style)>> =
-        syntax.and_then(|syn| {
-            let mut highlighter = HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
-            let line_tokens = highlighter
-                .highlight_line(&text, &super::languages::SYNTAXES)
-                .ok()?;
-            let mut ranges = Vec::new();
-            let mut offset = 0;
-            for (style, slice) in line_tokens {
-                let end = offset + slice.len();
-                ranges.push((offset..end, style));
-                offset = end;
-            }
-            Some(ranges)
-        });
+    let mut offset = 0;
+    let tokens: Vec<_> = highlighter
+        .line(&text)
+        .spans
+        .into_iter()
+        .map(|span| {
+            let end = offset + span.content.len();
+            let range = offset..end;
+            offset = end;
+            (range, span.style)
+        })
+        .collect();
 
     let style = Style::default().fg(if matcher.is_some() { ACCENT } else { SECONDARY });
     let mut push = |range: Range<usize>, continuation: bool, leading: bool, trailing: bool| {
@@ -1094,7 +1124,7 @@ fn source(
             spans.push(Span::raw("…"));
         }
 
-        spans.extend(source_spans(&text, &marks, range, tokens.as_deref()));
+        spans.extend(source_spans(&text, &marks, range, &tokens));
 
         if trailing {
             spans.push(Span::raw("…"));
@@ -1230,7 +1260,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
         }
 
         note(&mut out, path, width);
-        let syntax = super::languages::syntax_for_label(path);
+        let mut highlighter = Highlighter::for_path(path);
         let mut previous = None;
 
         for (line, (text, matched)) in rows {
@@ -1240,6 +1270,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
 
             if previous.is_some_and(|last| line > last + 1) {
                 out.push(Line::default());
+                highlighter = Highlighter::for_path(path);
             }
 
             source(
@@ -1248,7 +1279,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
                 digits,
                 text,
                 if matched { matcher.as_ref() } else { None },
-                syntax,
+                &mut highlighter,
                 expanded,
                 width,
             );
@@ -1284,13 +1315,7 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     let content = value["content"].as_str()?;
     let path = value["path"].as_str().unwrap_or_default();
     let end = value["end_line"].as_u64().unwrap_or(1);
-    let rows: Vec<_> = content
-        .lines()
-        .map(|line| {
-            let (number, text) = line.split_once(": ")?;
-            Some((number.parse::<u64>().ok()?, text))
-        })
-        .collect::<Option<_>>()?;
+    let rows = read_rows(content)?;
     let mut out = Vec::new();
 
     if rows.is_empty() {
@@ -1299,11 +1324,18 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     }
 
     let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
-    let syntax = super::languages::syntax_for_label(path);
+    let mut highlighter = Highlighter::for_path(path);
 
     for (number, text) in rows.iter().take(if expanded { usize::MAX } else { 4 }) {
         source(
-            &mut out, *number, digits, text, None, syntax, expanded, width,
+            &mut out,
+            *number,
+            digits,
+            text,
+            None,
+            &mut highlighter,
+            expanded,
+            width,
         );
     }
 
@@ -1321,6 +1353,16 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     }
 
     Some(out)
+}
+
+fn read_rows(content: &str) -> Option<Vec<(u64, &str)>> {
+    content
+        .lines()
+        .map(|line| {
+            let (number, text) = line.split_once(": ")?;
+            Some((number.parse::<u64>().ok()?, text))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1491,7 +1533,16 @@ mod tests {
         ] {
             let pattern = matcher(&config).unwrap();
             let mut view = vec![];
-            source(&mut view, 1, 4, text, Some(&pattern), None, true, 80);
+            source(
+                &mut view,
+                1,
+                4,
+                text,
+                Some(&pattern),
+                &mut Highlighter::new(""),
+                true,
+                80,
+            );
 
             assert_eq!(highlighted(&view), expected);
         }
@@ -1509,7 +1560,7 @@ mod tests {
             4,
             "ABCDEFGH",
             Some(&pattern),
-            None,
+            &mut Highlighter::new(""),
             true,
             15,
         );
@@ -1523,7 +1574,16 @@ mod tests {
 
         for width in [11, 12, 32, 80] {
             let mut view = vec![];
-            source(&mut view, 1, 4, &text, Some(&pattern), None, false, width);
+            source(
+                &mut view,
+                1,
+                4,
+                &text,
+                Some(&pattern),
+                &mut Highlighter::new(""),
+                false,
+                width,
+            );
 
             assert!(view.iter().all(|line| line.width() <= usize::from(width)));
 
@@ -1578,6 +1638,37 @@ mod tests {
         assert!(text.contains("部分文件尚未搜索"));
         assert!(!text.contains("\"matches\""));
         assert_eq!(row.output, original);
+    }
+
+    #[test]
+    fn search_retains_syntax_state_in_context_and_resets_it_across_gaps() {
+        let row = row(
+            "search_text",
+            json!({
+                "query": "orbit",
+                "matches": [
+                    { "path": "src/orbit.rs", "line": 2, "text": "fn orbit_in_comment() {}",
+                      "context": [{ "line": 1, "text": "/*" }] },
+                    { "path": "src/orbit.rs", "line": 20, "text": "fn orbit() {}" }
+                ]
+            }),
+        );
+        let view = lines(&row, true, 80).unwrap();
+        for (number, expected) in [
+            (2, Color::Rgb(120, 130, 145)),
+            (20, Color::Rgb(198, 120, 221)),
+        ] {
+            let line = view
+                .iter()
+                .find(|line| line.to_string().contains(&format!("{number} │")))
+                .unwrap();
+            let keyword = line
+                .spans
+                .iter()
+                .find(|span| span.content.starts_with("fn"))
+                .unwrap();
+            assert_eq!(keyword.style.fg, Some(expected));
+        }
     }
 
     #[test]

@@ -115,6 +115,16 @@ pub(super) fn syntax_for_label(info: &str) -> Option<&'static SyntaxReference> {
     })
 }
 
+pub(super) fn syntax_for_path(path: &str) -> Option<&'static SyntaxReference> {
+    let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let extension = filename
+        .rsplit_once('.')
+        .map_or(filename, |(_, extension)| extension);
+    SYNTAXES
+        .find_syntax_by_extension(extension)
+        .or_else(|| SYNTAXES.find_syntax_by_extension(&extension.to_ascii_lowercase()))
+}
+
 pub(super) fn is_markdown_label(info: &str) -> bool {
     let full = normalized_label(info);
     let token = full
@@ -126,6 +136,13 @@ pub(super) fn is_markdown_label(info: &str) -> bool {
     language(&full)
         .or_else(|| language(token))
         .is_some_and(|language| language.markdown)
+}
+
+pub(super) fn is_markdown_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(is_markdown_label)
 }
 
 #[cfg(test)]
@@ -185,5 +202,23 @@ mod tests {
 
         assert!(!is_markdown_label("rust"));
         assert!(!is_markdown_label("unknown"));
+    }
+
+    #[test]
+    fn file_types_resolve_paths_with_spaces_and_preserve_extension_meanings() {
+        for path in ["docs/Orbit Guide.MD", "README.markdown", "docs/notes.mdx"] {
+            assert!(is_markdown_path(path), "{path}");
+        }
+        assert!(!is_markdown_path("src/markdown.rs"));
+        assert!(!is_markdown_path("docs.md/notes.txt"));
+        for path in ["src/Orbit Code.RS", r"C:\Orbit Code\main.rs"] {
+            assert_eq!(syntax_for_path(path).unwrap().name, "Rust", "{path}");
+        }
+        assert_eq!(
+            syntax_for_path("src/Orbit Module.v").unwrap().name,
+            "Verilog"
+        );
+        assert!(syntax_for_path("Dockerfile").is_some());
+        assert!(syntax_for_path("Makefile").is_some());
     }
 }

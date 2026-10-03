@@ -6,7 +6,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
-use syntect::easy::HighlightLines;
 
 use super::app::UiState;
 
@@ -248,9 +247,8 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 .timeout(std::time::Duration::from_millis(250))
                 .diff_lines(before, after);
 
-            let syntax = super::languages::syntax_for_label(&preview.path)
-                .unwrap_or_else(|| super::languages::SYNTAXES.find_syntax_plain_text());
-            let mut highlighter = HighlightLines::new(syntax, &super::theme::CODE_THEME);
+            let old_lines = super::code::file_lines(&preview.path, before);
+            let new_lines = super::code::file_lines(&preview.path, after);
 
             let mut diff_lines = Vec::new();
 
@@ -285,8 +283,6 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                     }
                 };
 
-                let text =
-                    super::render::safe_output(change.value().trim_end_matches(['\r', '\n']));
                 let mut spans = vec![
                     Span::raw("  "),
                     Span::styled(
@@ -296,14 +292,23 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                     Span::styled(format!("{sign} "), sign_style),
                 ];
 
-                if let Ok(tokens) = highlighter.highlight_line(&text, &super::languages::SYNTAXES) {
-                    for (style, token) in tokens {
-                        let c = style.foreground;
-                        let fg = super::theme::diff_syntax_color(c, tag);
-                        spans.push(Span::styled(token.to_owned(), Style::default().fg(fg)));
-                    }
+                let source = if tag == similar::ChangeTag::Delete {
+                    change.old_index().and_then(|index| old_lines.get(index))
                 } else {
-                    spans.push(Span::styled(text.to_owned(), sign_style));
+                    change.new_index().and_then(|index| new_lines.get(index))
+                };
+                let background = match tag {
+                    similar::ChangeTag::Delete => Some(super::theme::THEME.diff_removed_bg),
+                    similar::ChangeTag::Insert => Some(super::theme::THEME.diff_added_bg),
+                    similar::ChangeTag::Equal => None,
+                };
+                if let Some(source) = source {
+                    spans.extend(source.spans.iter().cloned().map(|mut span| {
+                        if let Some(background) = background {
+                            span.style = span.style.bg(background);
+                        }
+                        span
+                    }));
                 }
 
                 diff_lines.push(Line::from(spans));
@@ -339,14 +344,21 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 ),
                 Span::raw(" "),
             ]);
-            let diff_lines = preview
-                .before
-                .lines()
-                .map(|line| {
-                    Line::styled(
-                        format!("  - {line}"),
-                        Style::default().fg(crate::tui::theme::THEME.error),
-                    )
+            let diff_lines = super::code::file_lines(&preview.path, &preview.before)
+                .into_iter()
+                .enumerate()
+                .map(|(index, mut line)| {
+                    for span in &mut line.spans {
+                        span.style = span.style.bg(crate::tui::theme::THEME.diff_removed_bg);
+                    }
+                    line.spans.insert(
+                        0,
+                        Span::styled(
+                            format!("  {:>4} - ", index + 1),
+                            Style::default().fg(crate::tui::theme::THEME.error),
+                        ),
+                    );
+                    line
                 })
                 .collect::<Vec<_>>();
 
@@ -745,13 +757,14 @@ pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
     if state
         .approval_diff
         .as_ref()
-        .is_none_or(|cache| !cache.matches(before, after, widths, state.approval_expanded))
+        .is_none_or(|cache| !cache.matches(before, after, widths, state.approval_expanded, path))
     {
         state.approval_diff = Some(super::approval_diff::Cache::new(
             before,
             after,
             widths,
             state.approval_expanded,
+            path,
         ));
     }
 
@@ -929,6 +942,52 @@ mod render_tests {
     use super::*;
     use orbit_tools::approval::WritePreview;
     use ratatui::{Terminal, backend::TestBackend};
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn approval_keeps_old_and_new_syntax_states_independent() {
+        let mut state = UiState::new("mock");
+        state.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
+            WritePreview {
+                path: "src/Orbit Code.rs".into(),
+                before: Some("/* Orbit block\nfn orbit() {}\n*/\n".into()),
+                after: "// Orbit update\nfn orbit() {}\n".into(),
+            },
+        ));
+        let mut terminal = Terminal::new(TestBackend::new(100, 25)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let point = (0..25)
+            .find_map(|y| {
+                let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
+                row.find("fn orbit").map(|x| (row[..x].width() as u16, y))
+            })
+            .expect("unchanged source line is visible");
+        assert_eq!(buffer[point].fg, ratatui::style::Color::Rgb(198, 120, 221));
+
+        let cache = super::super::approval_diff::Cache::new(
+            "/* Orbit block\nfn orbit() {}\n*/\n",
+            "// Orbit update\nfn orbit() {}\n",
+            (50, 50),
+            true,
+            "src/Orbit Code.rs",
+        );
+        for (side, expected) in [
+            (&cache.left, ratatui::style::Color::Rgb(120, 130, 145)),
+            (&cache.right, ratatui::style::Color::Rgb(198, 120, 221)),
+        ] {
+            let line = side
+                .iter()
+                .find(|line| line.to_string().contains("fn orbit"))
+                .unwrap();
+            let keyword = line
+                .spans
+                .iter()
+                .find(|span| span.content.contains("fn"))
+                .unwrap();
+            assert_eq!(keyword.style.fg, Some(expected));
+        }
+    }
 
     #[test]
     fn preview_wheels_scroll_preview_and_outside_wheels_scroll_chat() {

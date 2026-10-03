@@ -3,6 +3,7 @@ mod approval;
 mod approval_diff;
 mod background;
 mod changes;
+mod code;
 pub mod commands;
 mod completion;
 mod connect;
