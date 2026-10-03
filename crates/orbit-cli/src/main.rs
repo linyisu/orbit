@@ -370,6 +370,7 @@ pub(crate) struct PreparedTui {
 }
 
 pub(crate) struct TuiResources {
+    cursor_trail: bool,
     model: ModelClient,
     model_name: String,
     tools: orbit_agent::tool::ToolRegistry,
@@ -518,6 +519,7 @@ pub(crate) async fn prepare_tui_resources(
     skills.register_tool(&mut tools);
 
     Ok(TuiResources {
+        cursor_trail: file_config.tui.cursor_trail,
         moved: false,
         workspace: runtime.workspace,
         command_limits: runtime.command_limits,

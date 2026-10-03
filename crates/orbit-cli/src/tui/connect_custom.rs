@@ -1,5 +1,5 @@
 //! Service setup and model selection, isolated from the conversation transcript.
-mod form;
+pub(super) mod form;
 mod model;
 mod models;
 mod panel;

@@ -2,7 +2,7 @@ use std::io::{self, Stdout, Write};
 
 use crossterm::{
     ExecutableCommand, QueueableCommand,
-    cursor::{Hide, Show},
+    cursor::{Hide, SetCursorStyle, Show},
     event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
     terminal::{
@@ -64,15 +64,12 @@ fn draw_buffer<B: Backend>(
     terminal: &mut Terminal<B>,
     render: impl FnOnce(&mut Frame<'_>),
 ) -> Result<(), B::Error> {
-    {
-        let mut frame = terminal.get_frame();
-        render(&mut frame);
-        mark_background_edges(frame.buffer_mut());
-    }
-    terminal.flush()?;
-    terminal.swap_buffers();
-
-    Backend::flush(terminal.backend_mut())
+    terminal
+        .draw(|frame| {
+            render(frame);
+            mark_background_edges(frame.buffer_mut());
+        })
+        .map(|_| ())
 }
 
 pub struct TerminalGuard;
@@ -83,6 +80,7 @@ fn restore() {
         io::stdout(),
         DisableMouseCapture,
         DisableBracketedPaste,
+        SetCursorStyle::DefaultUserShape,
         Show,
         LeaveAlternateScreen
     );
@@ -108,6 +106,7 @@ impl TerminalGuard {
             EnterAlternateScreen,
             EnableBracketedPaste,
             EnableMouseCapture,
+            SetCursorStyle::SteadyBlock,
             Hide
         )?;
         // Save and disable alternate-scroll translation: otherwise some terminals
@@ -135,6 +134,7 @@ pub fn resume(terminal: &mut AppTerminal) -> io::Result<()> {
         EnterAlternateScreen,
         EnableBracketedPaste,
         EnableMouseCapture,
+        SetCursorStyle::SteadyBlock,
         Hide
     )?;
     stdout.write_all(b"\x1b[?1002l\x1b[?1003h\x1b[?1007s\x1b[?1007l")?;
@@ -181,21 +181,6 @@ pub fn draw_synchronized(
     draw?;
 
     end
-}
-
-/// Keep the terminal IME anchor at the input caret without enabling cursor blink.
-/// Rendering (including frozen selection frames) can move the hardware cursor.
-pub fn anchor_cursor<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    position: Option<ratatui::layout::Position>,
-) -> Result<(), B::Error> {
-    terminal.hide_cursor()?;
-    if let Some(position) = position {
-        terminal.set_cursor_position(position)?;
-    }
-    terminal.backend_mut().flush()?;
-
-    Ok(())
 }
 
 #[cfg(test)]

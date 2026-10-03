@@ -162,6 +162,14 @@ pub(super) fn draw(
                     &field.hint,
                 );
                 frame.render_widget(Paragraph::new(line), rect);
+                if focused && !loading && rect.width > 0 {
+                    frame.set_cursor_position((
+                        rect.x
+                            + form::cursor_column(&field.input, rect.width as usize, field.secret)
+                                as u16,
+                        rect.y,
+                    ));
+                }
                 if !field.readonly {
                     hits.push((rect, Target::Field(id)));
                 }

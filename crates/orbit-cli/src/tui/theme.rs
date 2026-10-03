@@ -229,7 +229,7 @@ pub(super) fn selection_style(style: Style) -> Style {
         .remove_modifier(Modifier::REVERSED | Modifier::DIM)
 }
 
-fn color_rgb(color: Color) -> Option<(u8, u8, u8)> {
+pub(super) fn color_rgb(color: Color) -> Option<(u8, u8, u8)> {
     let index = match color {
         Color::Reset => return None,
         Color::Rgb(red, green, blue) => return Some((red, green, blue)),

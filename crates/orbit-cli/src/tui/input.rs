@@ -1,5 +1,20 @@
+use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Motion {
+    Left,
+    Right,
+    Home,
+    End,
+    Up,
+    Down,
+    Start,
+    Finish,
+    WordLeft,
+    WordRight,
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct InputState {
@@ -7,28 +22,132 @@ pub struct InputState {
     pub cursor: usize,
     pub history: Vec<String>,
     history_index: Option<usize>,
-    draft: String,
+    draft: Option<(String, usize)>,
     preferred_column: Option<usize>,
+    selection_anchor: Option<usize>,
 }
 
 impl InputState {
     pub fn insert(&mut self, text: &str) {
-        self.preferred_column = None;
-        let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        let text: String = text
-            .chars()
-            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
-            .collect();
-        let text = text.replace('\t', "    ");
-        self.text.insert_str(self.cursor, &text);
-        self.cursor += text.len();
-        self.history_index = None;
+        let text = Self::normalize(text);
+        if !text.is_empty() {
+            self.replace(self.selection().unwrap_or(self.cursor..self.cursor), &text);
+        }
     }
 
     pub fn set(&mut self, text: String) {
+        let text = Self::normalize(&text);
+        let cursor = text.len();
+        self.load(text, cursor);
+        self.history_index = None;
+        self.draft = None;
+    }
+
+    fn load(&mut self, text: String, cursor: usize) {
         self.preferred_column = None;
-        self.cursor = text.len();
         self.text = text;
+        self.cursor = self.boundary_after(cursor);
+        self.selection_anchor = None;
+    }
+
+    fn normalize(text: &str) -> String {
+        text.replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .chars()
+            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+            .collect::<String>()
+            .replace('\t', "    ")
+    }
+
+    fn boundary_after(&self, offset: usize) -> usize {
+        self.text
+            .grapheme_indices(true)
+            .map(|(index, _)| index)
+            .find(|index| *index >= offset.min(self.text.len()))
+            .unwrap_or(self.text.len())
+    }
+
+    // Editing can join previously separate graphemes across either side of the range.
+    fn replace(&mut self, range: Range<usize>, text: &str) {
+        let cursor = range.start + text.len();
+        self.text.replace_range(range, text);
+        self.cursor = self.boundary_after(cursor);
+        self.preferred_column = None;
+        self.history_index = None;
+        self.draft = None;
+        self.selection_anchor = None;
+    }
+
+    pub fn selection(&self) -> Option<Range<usize>> {
+        let anchor = self.selection_anchor?;
+        (anchor != self.cursor).then(|| anchor.min(self.cursor)..anchor.max(self.cursor))
+    }
+
+    pub fn selected_text(&self) -> Option<&str> {
+        self.selection().map(|range| &self.text[range])
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
+    pub fn select_all(&mut self) {
+        self.selection_anchor = Some(0);
+        self.cursor = self.text.len();
+        self.preferred_column = None;
+    }
+
+    pub fn set_cursor(&mut self, offset: usize) {
+        self.cursor = self.boundary_after(offset);
+        self.selection_anchor = None;
+        self.preferred_column = None;
+    }
+
+    pub(super) fn navigate(&mut self, motion: Motion, width: usize, selecting: bool) {
+        let selection = self.selection();
+        let anchor = selecting.then(|| self.selection_anchor.unwrap_or(self.cursor));
+        self.selection_anchor = None;
+        if !selecting && let Some(range) = selection {
+            match motion {
+                Motion::Left => {
+                    self.set_cursor(range.start);
+                    return;
+                }
+                Motion::Right => {
+                    self.set_cursor(range.end);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        match motion {
+            Motion::Left => self.move_left(),
+            Motion::Right => self.move_right(),
+            Motion::Home => self.home(),
+            Motion::End => self.end(),
+            Motion::Up => self.vertical(false, width, !selecting),
+            Motion::Down => self.vertical(true, width, !selecting),
+            Motion::Start => self.set_cursor(0),
+            Motion::Finish => self.set_cursor(self.text.len()),
+            Motion::WordLeft => {
+                let offset = self.text[..self.cursor]
+                    .split_word_bound_indices()
+                    .rev()
+                    .find(|(_, word)| !word.trim().is_empty())
+                    .map_or(0, |(index, _)| index);
+                self.set_cursor(offset);
+            }
+            Motion::WordRight => {
+                let offset = self.text[self.cursor..]
+                    .split_word_bound_indices()
+                    .find(|(_, word)| !word.trim().is_empty())
+                    .map_or(self.text.len(), |(index, word)| {
+                        self.cursor + index + word.len()
+                    });
+                self.set_cursor(offset);
+            }
+        }
+        self.selection_anchor = anchor;
     }
 
     pub fn clear(&mut self) {
@@ -36,36 +155,76 @@ impl InputState {
         self.text.clear();
         self.cursor = 0;
         self.history_index = None;
+        self.draft = None;
+        self.selection_anchor = None;
     }
 
     pub fn backspace(&mut self) {
+        if let Some(range) = self.selection() {
+            self.replace(range, "");
+            return;
+        }
         let end = self.cursor;
         self.move_left();
-        self.text.drain(self.cursor..end);
+        if self.cursor != end {
+            self.replace(self.cursor..end, "");
+        }
     }
 
     pub fn delete(&mut self) {
+        if let Some(range) = self.selection() {
+            self.replace(range, "");
+            return;
+        }
         let start = self.cursor;
         self.move_right();
-        self.text.drain(start..self.cursor);
-        self.cursor = start;
+        if self.cursor != start {
+            self.replace(start..self.cursor, "");
+        }
+    }
+
+    pub fn kill_to_home(&mut self) {
+        if let Some(range) = self.selection() {
+            self.replace(range, "");
+            return;
+        }
+        let end = self.cursor;
+        self.home();
+        if self.cursor != end {
+            self.replace(self.cursor..end, "");
+        }
+    }
+
+    pub fn kill_to_end(&mut self) {
+        if let Some(range) = self.selection() {
+            self.replace(range, "");
+            return;
+        }
+        let start = self.cursor;
+        self.end();
+        if self.cursor != start {
+            self.replace(start..self.cursor, "");
+        }
     }
 
     pub fn move_left(&mut self) {
         self.preferred_column = None;
-        self.cursor = self.text[..self.cursor]
+        self.cursor = self
+            .text
             .grapheme_indices(true)
-            .next_back()
+            .take_while(|(index, _)| *index < self.cursor)
+            .last()
             .map(|(i, _)| i)
             .unwrap_or(0);
     }
 
     pub fn move_right(&mut self) {
         self.preferred_column = None;
-        self.cursor = self.text[self.cursor..]
+        self.cursor = self
+            .text
             .grapheme_indices(true)
-            .nth(1)
-            .map(|(i, _)| self.cursor + i)
+            .find(|(index, _)| *index > self.cursor)
+            .map(|(i, _)| i)
             .unwrap_or(self.text.len());
     }
 
@@ -86,17 +245,18 @@ impl InputState {
     }
 
     pub fn take(&mut self) -> Option<String> {
-        let value = self.text.trim().to_owned();
-
-        if value.is_empty() {
+        if self.text.trim().is_empty() {
             return None;
         }
-
+        let value = self.text.clone();
         self.history.push(value.clone());
         self.clear();
-        self.draft.clear();
 
         Some(value)
+    }
+
+    pub fn browsing_history(&self) -> bool {
+        self.history_index.is_some()
     }
 
     pub fn history_up(&mut self) {
@@ -105,7 +265,7 @@ impl InputState {
         }
 
         if self.history_index.is_none() {
-            self.draft = self.text.clone();
+            self.draft = Some((self.text.clone(), self.cursor));
         }
 
         let index = self
@@ -113,7 +273,9 @@ impl InputState {
             .unwrap_or(self.history.len())
             .saturating_sub(1);
         self.history_index = Some(index);
-        self.set(self.history[index].clone());
+        let text = Self::normalize(&self.history[index]);
+        let cursor = text.len();
+        self.load(text, cursor);
     }
 
     pub fn history_down(&mut self) {
@@ -123,16 +285,19 @@ impl InputState {
 
         if index + 1 >= self.history.len() {
             self.history_index = None;
-            self.set(self.draft.clone());
+            if let Some((text, cursor)) = self.draft.take() {
+                self.load(text, cursor);
+            }
         } else {
             self.history_index = Some(index + 1);
-            self.set(self.history[index + 1].clone());
+            let text = Self::normalize(&self.history[index + 1]);
+            let cursor = text.len();
+            self.load(text, cursor);
         }
     }
 
-    /// Move through displayed rows before falling back to prompt history.
-    pub fn move_vertical(&mut self, down: bool, width: usize) {
-        let (_, positions) = self.layout(width);
+    fn vertical(&mut self, down: bool, width: usize, history: bool) {
+        let (lines, positions) = self.layout(width);
         let &(_, column, row) = positions.iter().find(|p| p.0 == self.cursor).unwrap();
         let target = if down {
             row.checked_add(1)
@@ -150,25 +315,56 @@ impl InputState {
         {
             self.cursor = index;
             self.preferred_column = Some(desired);
-        } else if down {
-            self.history_down();
-        } else {
-            self.history_up();
+        } else if history && (lines.len() == 1 || self.history_index.is_some()) {
+            if down {
+                self.history_down();
+            } else {
+                self.history_up();
+            }
         }
     }
 
-    pub fn move_to(&mut self, column: usize, row: usize, width: usize) {
-        let (_, positions) = self.layout(width);
-        let last_row = positions.last().unwrap().2;
-
-        if let Some(&(index, _, _)) = positions
-            .iter()
-            .filter(|p| p.2 == row.min(last_row))
-            .min_by_key(|p| p.1.abs_diff(column))
-        {
-            self.cursor = index;
-            self.preferred_column = None;
+    pub fn position_at(&self, column: usize, row: usize, width: usize) -> usize {
+        let (lines, positions) = self.layout(width);
+        let row = row.min(lines.len() - 1);
+        if column >= lines[row].width() {
+            let start = positions.iter().find(|p| p.2 == row).unwrap().0;
+            return start + lines[row].len();
         }
+        positions
+            .iter()
+            .filter(|p| p.2 == row)
+            .min_by_key(|p| p.1.abs_diff(column))
+            .map_or(self.cursor, |p| p.0)
+    }
+
+    pub fn begin_selection(&mut self, index: usize) {
+        self.set_cursor(index);
+        self.selection_anchor = Some(self.cursor);
+    }
+
+    pub fn extend_selection(&mut self, index: usize) {
+        self.selection_anchor.get_or_insert(self.cursor);
+        self.cursor = self.boundary_after(index);
+        self.preferred_column = None;
+    }
+
+    pub fn selection_cells(&self, width: usize) -> Vec<(usize, Range<usize>)> {
+        let Some(range) = self.selection() else {
+            return Vec::new();
+        };
+        let (_, positions) = self.layout(width);
+        positions
+            .windows(2)
+            .filter_map(|pair| {
+                let (index, column, row) = pair[0];
+                if !range.contains(&index) {
+                    return None;
+                }
+                let width = self.text[index..pair[1].0].width().max(1);
+                Some((row, column..column + width))
+            })
+            .collect()
     }
 
     pub fn visual_lines(&self, width: usize) -> (Vec<String>, (usize, usize)) {
@@ -219,6 +415,112 @@ mod tests {
     use super::*;
 
     #[test]
+    fn edits_that_join_graphemes_keep_layout_and_navigation_valid() {
+        let mut input = InputState::default();
+        input.set("👩💻".into());
+        input.home();
+        input.move_right();
+        input.insert("\u{200d}");
+        assert_eq!(input.text, "👩‍💻");
+        assert_eq!(input.cursor, input.text.len());
+        assert_eq!(input.visual_lines(10).1, (2, 0));
+        input.navigate(Motion::Up, 10, false);
+        input.backspace();
+        assert!(input.text.is_empty());
+
+        for delete in [false, true] {
+            input.set("👩‍ 💻".into());
+            input.home();
+            input.move_right();
+            if delete {
+                input.delete();
+            } else {
+                input.move_right();
+                input.backspace();
+            }
+            assert_eq!(input.text, "👩‍💻");
+            assert_eq!(input.visual_lines(10).1, (2, 0));
+        }
+        input.set("\u{301}".into());
+        input.home();
+        input.insert("e");
+        assert_eq!(input.cursor, input.text.len());
+        assert_eq!(input.visual_lines(10).1, (1, 0));
+    }
+
+    #[test]
+    fn replacement_deletion_and_navigation_use_editable_grapheme_selections() {
+        let mut input = InputState::default();
+        input.set("Orbit你好👩‍💻".into());
+        input.navigate(Motion::Left, 20, true);
+        input.navigate(Motion::Left, 20, true);
+        assert_eq!(input.selected_text(), Some("好👩‍💻"));
+        input.insert("e\u{301}");
+        assert_eq!(input.text, "Orbit你e\u{301}");
+        input.navigate(Motion::Left, 20, true);
+        input.delete();
+        assert_eq!(input.text, "Orbit你");
+        input.select_all();
+        input.navigate(Motion::Left, 20, false);
+        assert_eq!(input.cursor, 0);
+        assert!(input.selection().is_none());
+        input.select_all();
+        input.navigate(Motion::Right, 20, false);
+        assert_eq!(input.cursor, input.text.len());
+        input.select_all();
+        input.backspace();
+        assert!(input.text.is_empty());
+    }
+
+    #[test]
+    fn history_restores_the_draft_cursor_and_detaches_on_any_edit() {
+        let mut input = InputState::default();
+        input.history.push("Orbit history".into());
+        input.set("Orbit draft".into());
+        input.set_cursor(5);
+        input.history_up();
+        input.history_down();
+        assert_eq!((&*input.text, input.cursor), ("Orbit draft", 5));
+        for edit in 0..3 {
+            input.history_up();
+            match edit {
+                0 => input.set("Orbit completion".into()),
+                1 => input.backspace(),
+                _ => {
+                    input.home();
+                    input.delete();
+                }
+            }
+            let edited = input.text.clone();
+            input.history_down();
+            assert_eq!(input.text, edited);
+        }
+    }
+
+    #[test]
+    fn take_preserves_indentation_and_trailing_newlines_but_ignores_blank_input() {
+        let mut input = InputState::default();
+        input.insert("    Orbit\r\nnext\r\tline\n");
+        assert_eq!(input.take().as_deref(), Some("    Orbit\nnext\n    line\n"));
+        input.insert(" \n ");
+        assert!(input.take().is_none());
+    }
+
+    #[test]
+    fn selection_spans_wrapped_rows_and_full_row_newline_carets() {
+        let mut input = InputState::default();
+        input.set("Orbit\n你好".into());
+        input.set_cursor(5);
+        assert_eq!(input.visual_lines(5).1, (5, 0));
+        input.begin_selection(0);
+        input.extend_selection(input.text.len());
+        let cells = input.selection_cells(5);
+        assert!(cells.contains(&(0, 5..6)));
+        assert!(cells.contains(&(1, 0..2)));
+        assert!(cells.contains(&(1, 2..4)));
+    }
+
+    #[test]
     fn preserves_draft_and_edits_graphemes() {
         let mut input = InputState::default();
         input.insert("你好👩‍💻");
@@ -235,32 +537,33 @@ mod tests {
     }
 
     #[test]
-    fn vertical_navigation_preserves_columns_and_draft_at_history_boundaries() {
+    fn multiline_navigation_preserves_columns_and_stays_in_the_draft() {
         let mut input = InputState::default();
         input.history.push("old prompt".into());
         input.set("你好ab\nx\n世界cd".into());
-        input.move_vertical(false, 20);
+        input.navigate(Motion::Up, 20, false);
 
         assert_eq!(input.visual_lines(20).1, (1, 1));
 
-        input.move_vertical(false, 20);
+        input.navigate(Motion::Up, 20, false);
 
         assert_eq!(input.visual_lines(20).1, (6, 0));
 
-        input.move_vertical(true, 20);
-        input.move_vertical(true, 20);
+        input.navigate(Motion::Down, 20, false);
+        input.navigate(Motion::Down, 20, false);
 
         assert_eq!(input.visual_lines(20).1, (6, 2));
 
-        input.move_vertical(false, 20);
-        input.move_vertical(false, 20);
-        input.move_vertical(false, 20);
-
-        assert_eq!(input.text, "old prompt");
-
-        input.move_vertical(true, 20);
+        input.navigate(Motion::Up, 20, false);
+        input.navigate(Motion::Up, 20, false);
+        input.navigate(Motion::Up, 20, false);
 
         assert_eq!(input.text, "你好ab\nx\n世界cd");
+        input.history_up();
+        assert_eq!(input.text, "old prompt");
+        input.history_down();
+        assert_eq!(input.text, "你好ab\nx\n世界cd");
+        assert_eq!(input.visual_lines(20).1, (6, 0));
     }
 
     #[test]
@@ -270,21 +573,21 @@ mod tests {
 
         assert_eq!(input.visual_lines(4).1, (1, 2));
 
-        input.move_vertical(false, 4);
+        input.navigate(Motion::Up, 4, false);
 
         assert_eq!(input.visual_lines(4).1, (1, 1));
         assert_eq!(&input.text[input.cursor..], "👩‍💻xy");
 
-        input.move_vertical(false, 4);
+        input.navigate(Motion::Up, 4, false);
 
         assert_eq!(input.cursor, 0); // ties choose the preceding boundary
 
-        input.move_vertical(true, 4);
+        input.navigate(Motion::Down, 4, false);
 
         assert_eq!(input.visual_lines(4).1, (1, 1));
 
         input.move_right(); // reset the preferred column after horizontal movement
-        input.move_vertical(false, 4);
+        input.navigate(Motion::Up, 4, false);
 
         assert_eq!(input.visual_lines(4).1, (2, 0));
 
@@ -294,22 +597,32 @@ mod tests {
     }
 
     #[test]
+    fn clicking_the_padding_after_a_soft_wrap_selects_the_entire_row() {
+        let mut input = InputState::default();
+        input.set("Orbit你好".into());
+        input.begin_selection(0);
+        input.extend_selection(input.position_at(5, 0, 5));
+        assert_eq!(input.selected_text(), Some("Orbit"));
+        assert_eq!(input.visual_lines(5).1, (0, 1));
+    }
+
+    #[test]
     fn mouse_positions_use_grapheme_boundaries_and_wrapped_rows() {
         let mut input = InputState::default();
         input.set("你好e\u{301}👩‍💻xy\nlast".into());
-        input.move_to(1, 0, 4);
+        input.set_cursor(input.position_at(1, 0, 4));
 
         assert_eq!(input.cursor, 0);
 
-        input.move_to(2, 0, 4);
+        input.set_cursor(input.position_at(2, 0, 4));
 
         assert_eq!(input.cursor, "你".len());
 
-        input.move_to(1, 1, 4);
+        input.set_cursor(input.position_at(1, 1, 4));
 
         assert_eq!(&input.text[input.cursor..], "👩‍💻xy\nlast");
 
-        input.move_to(50, 50, 4);
+        input.set_cursor(input.position_at(50, 50, 4));
 
         assert_eq!(input.cursor, input.text.len());
     }

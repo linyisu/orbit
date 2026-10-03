@@ -10,7 +10,6 @@ use ratatui::{
     Frame,
     buffer::{Buffer, Cell},
     layout::Rect,
-    style::Style,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -19,10 +18,18 @@ use std::{
 };
 use unicode_width::UnicodeWidthStr;
 
+pub(super) fn copy_text(text: &str) -> io::Result<()> {
+    write!(
+        io::stdout(),
+        "\x1b]52;c;{}\x07",
+        STANDARD.encode(text.as_bytes())
+    )?;
+    io::stdout().flush()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Region {
     Transcript,
-    Input,
     Footer,
     Approval,
 }
@@ -30,7 +37,6 @@ enum Region {
 #[derive(Debug, Default)]
 pub struct Selection {
     pub viewport: Rect,
-    pub input: Rect,
     pub footer: Rect,
     pub approval: Rect,
     pub offset: usize,
@@ -47,7 +53,6 @@ pub struct Selection {
     filled: Option<(usize, usize)>,
     latest: Option<Buffer>,
     frozen: Option<Buffer>,
-    caret: Option<((u16, u16), Cell)>,
     last_auto: Option<Instant>,
 }
 
@@ -80,18 +85,9 @@ impl Selection {
         self.dragging
     }
 
-    pub fn reset_caret(&mut self) {
-        self.caret = None;
-    }
-
-    pub fn set_caret(&mut self, position: (u16, u16), cell: Cell) {
-        self.caret = Some((position, cell));
-    }
-
     fn area(&self) -> Rect {
         match self.region {
             Some(Region::Transcript) => self.viewport,
-            Some(Region::Input) => self.input,
             Some(Region::Footer) => self.footer,
             Some(Region::Approval) => self.approval,
             None => Rect::default(),
@@ -176,7 +172,6 @@ impl Selection {
                     let point = (mouse.column, mouse.row);
                     self.region = [
                         (Region::Transcript, self.viewport),
-                        (Region::Input, self.input),
                         (Region::Footer, self.footer),
                         (Region::Approval, self.approval),
                     ]
@@ -240,12 +235,7 @@ impl Selection {
                     let text = self.text();
 
                     if !text.is_empty() {
-                        write!(
-                            io::stdout(),
-                            "\x1b]52;c;{}\x07",
-                            STANDARD.encode(text.as_bytes())
-                        )?;
-                        io::stdout().flush()?;
+                        copy_text(&text)?;
                     }
 
                     return Ok(true);
@@ -395,13 +385,7 @@ impl Selection {
     }
 
     pub fn paint(&mut self, frame: &mut Frame<'_>) {
-        let mut snapshot = frame.buffer_mut().clone();
-
-        if let Some((position, cell)) = &self.caret
-            && snapshot.area.contains((*position).into())
-        {
-            snapshot[*position] = cell.clone();
-        }
+        let snapshot = frame.buffer_mut().clone();
 
         self.capture(&snapshot);
 
@@ -444,18 +428,6 @@ impl Selection {
 
                 x += width;
             }
-        }
-
-        // Frozen snapshots omit the caret so copying only captures text.
-        // Repaint it after selection, including when the selected range overlaps it.
-        if let Some((position, _)) = &self.caret
-            && frame.area().contains((*position).into())
-        {
-            frame.buffer_mut()[*position].set_style(
-                Style::default()
-                    .bg(crate::tui::theme::THEME.caret)
-                    .fg(crate::tui::theme::THEME.on_accent),
-            );
         }
     }
 }
@@ -737,7 +709,7 @@ mod tests {
         }
         assert_eq!(state.selection.text(), "ne00");
 
-        let input = state.selection.input;
+        let input = state.input_area;
         let point = (input.x + 3, input.y);
         state
             .selection
@@ -748,7 +720,7 @@ mod tests {
             ))
             .unwrap();
         let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0, point.1);
-        assert_eq!(state.selection.click(&release), Some(point));
+        assert!(state.selection.click(&release).is_none());
         state.selection.handle(&release).unwrap();
         assert!(!state.selection.active());
 
@@ -883,12 +855,11 @@ mod tests {
     fn selection_stays_in_starting_region_and_excludes_chrome() {
         let (mut state, mut terminal) = setup();
 
-        for region in [Region::Transcript, Region::Input, Region::Footer] {
+        for region in [Region::Transcript, Region::Footer] {
             state.selection.clear();
             draw(&mut state, &mut terminal);
             let area = match region {
                 Region::Transcript => state.selection.viewport,
-                Region::Input => state.selection.input,
                 _ => state.selection.footer,
             };
 
@@ -928,7 +899,6 @@ mod tests {
                     assert!(!text.contains("footer-model"));
                     assert!(!text.contains("Orbit"));
                 }
-                Region::Input => assert_eq!(text, "你好 draft"),
                 Region::Footer => {
                     assert!(text.contains("/96k"));
                     assert!(!text.contains("draft"));
@@ -936,32 +906,5 @@ mod tests {
                 _ => unreachable!(),
             }
         }
-    }
-    #[test]
-    fn reverse_drag_preserves_wide_text_and_click_only_positions_on_release() {
-        let (mut state, mut terminal) = setup();
-        let area = state.selection.input;
-        let down = mouse(MouseEventKind::Down(MouseButton::Left), area.x + 3, area.y);
-        let up = mouse(MouseEventKind::Up(MouseButton::Left), area.x + 3, area.y);
-        state.selection.handle(&down).unwrap();
-
-        assert_eq!(state.selection.click(&up), Some((area.x + 3, area.y)));
-
-        state
-            .selection
-            .handle(&mouse(
-                MouseEventKind::Drag(MouseButton::Left),
-                area.x,
-                area.y,
-            ))
-            .unwrap();
-
-        assert!(state.selection.click(&up).is_none());
-
-        terminal
-            .draw(|frame| assert!(state.selection.draw_frozen(frame)))
-            .unwrap();
-
-        assert_eq!(state.selection.text(), "你好");
     }
 }

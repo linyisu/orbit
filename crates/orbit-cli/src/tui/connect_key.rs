@@ -10,7 +10,8 @@ use ratatui::{
 };
 use tokio_util::task::AbortOnDropHandle;
 
-use super::{ModelOption, terminal};
+use super::connect_custom::form;
+use super::{ModelOption, input::InputState, terminal};
 
 type VerificationTask = AbortOnDropHandle<Result<(String, Vec<String>)>>;
 
@@ -20,7 +21,7 @@ pub(super) async fn run(
     options: &crate::TuiOptions,
     provider: orbit_auth::ApiKeyProvider,
 ) -> Result<Option<Vec<ModelOption>>> {
-    let mut key = String::new();
+    let mut key = InputState::default();
     let mut message = String::new();
     let mut task: Option<VerificationTask> = None;
 
@@ -42,14 +43,15 @@ pub(super) async fn run(
                 .border_style(Style::default().fg(crate::tui::theme::THEME.dialog_accent));
             let inner = block.inner(area);
             frame.render_widget(block, area);
-            let mask = "*".repeat(
-                key.chars()
-                    .count()
-                    .min(inner.width.saturating_sub(10) as usize),
+            let field = Rect::new(
+                inner.x + 10,
+                inner.y,
+                inner.width.saturating_sub(10),
+                u16::from(inner.height > 0),
             );
             frame.render_widget(
                 Paragraph::new(vec![
-                    Line::raw(format!(" API Key: {mask}")),
+                    Line::raw(" API Key:"),
                     Line::raw(""),
                     Line::raw(message.as_str()),
                     Line::raw(""),
@@ -58,6 +60,24 @@ pub(super) async fn run(
                 .wrap(Wrap { trim: false }),
                 inner,
             );
+            if field.width > 0 && field.height > 0 {
+                frame.render_widget(
+                    Paragraph::new(form::input_line(
+                        &key,
+                        field.width as usize,
+                        true,
+                        task.is_none(),
+                        "",
+                    )),
+                    field,
+                );
+                if task.is_none() {
+                    frame.set_cursor_position((
+                        field.x + form::cursor_column(&key, field.width as usize, true) as u16,
+                        field.y,
+                    ));
+                }
+            }
         })?;
 
         let event = if let Some(handle) = task.as_mut() {
@@ -88,37 +108,19 @@ pub(super) async fn run(
                 KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                     return Ok(None);
                 }
-                KeyCode::Enter if task.is_none() && !key.trim().is_empty() => {
-                    let secret = std::mem::take(&mut key).trim().to_owned();
+                KeyCode::Enter if task.is_none() && !key.text.trim().is_empty() => {
+                    let secret = key.text.trim().to_owned();
+                    key.clear();
                     message = "正在验证密钥并读取模型…".into();
                     task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
                         let ids = provider.verify(&secret).await?;
                         Ok((secret, ids))
                     })));
                 }
-                KeyCode::Backspace if task.is_none() => {
-                    key.pop();
-                }
-                KeyCode::Char(character)
-                    if task.is_none()
-                        && !event
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                        && !character.is_control()
-                        && key.len() + character.len_utf8() <= 16_384 =>
-                {
-                    key.push(character);
-                }
+                code if task.is_none() => form::edit(&mut key, code, event.modifiers),
                 _ => {}
             },
-            Event::Paste(text) if task.is_none() => {
-                for character in text.trim().chars().filter(|ch| !ch.is_control()) {
-                    if key.len() + character.len_utf8() > 16_384 {
-                        break;
-                    }
-                    key.push(character);
-                }
-            }
+            Event::Paste(text) if task.is_none() => form::paste(&mut key, text.trim()),
             _ => {}
         }
     }

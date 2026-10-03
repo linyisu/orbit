@@ -9,6 +9,7 @@ mod completion;
 mod connect;
 mod connect_custom;
 mod connect_key;
+mod cursor;
 mod dialogs;
 mod directory;
 mod editor;
@@ -140,6 +141,7 @@ pub async fn run(
         resources,
     } = setup;
     let crate::TuiResources {
+        cursor_trail,
         mut model,
         model_name,
         mut tools,
@@ -152,6 +154,7 @@ pub async fn run(
     let next_workspace: Option<crate::TuiResources> = None;
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut state = UiState::new(model_name);
+    state.cursor_motion.enabled = cursor_trail;
     let RequestBudget {
         context_tokens,
         input_context_tokens,
@@ -560,6 +563,12 @@ pub async fn run(
                         continue;
                     }
 
+                    if handle_input_mouse(&mut state, &event) {
+                        dirty = true;
+                        frames.request(time::Instant::now());
+                        continue;
+                    }
+
                     // Handle the overlay before any obscured transcript hit targets.
                     if state.picker.is_none() && state.model_picker.is_none()
                         && state.marketplace_dialog.is_none() && !state.show_help
@@ -724,14 +733,6 @@ pub async fn run(
                         continue;
                     }
 
-                    if let Some((x, y)) = state.selection.click(&event)
-                        && state.input_area.contains((x, y).into()) {
-                        state.attachment_cursor = None;
-                        state.input.move_to((x - state.input_area.x) as usize,
-                            (y - state.input_area.y) as usize + state.input_scroll,
-                            state.input_width);
-                    }
-
                     if pending.is_some() {
                         match approval::handle(&mut state, event.clone()) {
                             approval::Action::Approve => {
@@ -813,6 +814,7 @@ pub async fn run(
                     }
 
                     if state.selection.handle(&event)? {
+                        state.cursor_motion.clear();
                         if state.selection.transcript_drag() {
                             state.follow_bottom = false;
                         }
@@ -822,8 +824,8 @@ pub async fn run(
                                 render::draw(frame, &mut state);
                                 state.selection.paint(frame);
                             }
+                            if let Some(position) = state.ime_cursor { frame.set_cursor_position(position); }
                         })?;
-                        terminal::anchor_cursor(&mut terminal, state.ime_cursor)?;
                         dirty = false;
                         frames.drawn(time::Instant::now());
                         continue;
@@ -886,6 +888,7 @@ pub async fn run(
                                 state.transcript.push(TranscriptItem::Error(error.to_string()));
                             }
                         }
+                        Action::CopyInput(text) => selection::copy_text(&text)?,
                         Action::PasteClipboard => {
                             if let Err(error) = paste_clipboard(&mut state, &session).await {
                                 state.transcript.push(TranscriptItem::Error(error.to_string()));
@@ -915,7 +918,8 @@ pub async fn run(
                                 continue;
                             }
 
-                            let compacting = prompt.trim() == "/compact";
+                            let prompt = if prompt.trim_start().starts_with('/') { prompt.trim().to_owned() } else { prompt };
+                            let compacting = prompt == "/compact";
 
                             if prompt.starts_with('/') {
                                 let command = prompt
@@ -1327,9 +1331,14 @@ pub async fn run(
                     terminal::draw_synchronized(&mut terminal, |frame| {
                         render::draw(frame, &mut state);
                         state.selection.paint(frame);
+                        // Frozen copy selections must not retain transient cursor effects.
+                        state.cursor_motion.paint(frame.buffer_mut(), std::time::Instant::now());
                     })?;
-                    terminal::anchor_cursor(&mut terminal, state.ime_cursor)?;
-                    frames.drawn(time::Instant::now());
+                    let now = time::Instant::now();
+                    frames.drawn(now);
+                    if state.cursor_motion.active(std::time::Instant::now()) {
+                        frames.request(now + Duration::from_millis(16));
+                    }
                     dirty = false;
                 }
                 _ = ticks.tick() => {
@@ -3109,6 +3118,7 @@ async fn resume_session(
 
 fn resume_ui_shell(state: &UiState) -> UiState {
     let mut restored = UiState::new(state.model.clone());
+    restored.cursor_motion.enabled = state.cursor_motion.enabled;
     restored.context_tokens = state.context_tokens;
     restored.input_context_tokens = state.input_context_tokens;
     restored.auto_compact = state.auto_compact;
@@ -3192,6 +3202,7 @@ enum Action {
     Redraw,
     AttachPaths(Vec<PathBuf>),
     PasteClipboard,
+    CopyInput(String),
     Submit(String),
 }
 
@@ -3248,6 +3259,64 @@ fn toggle_transcript_item(state: &mut UiState, index: usize) {
     state.scroll = state.max_scroll.saturating_sub(target);
 }
 
+fn handle_input_mouse(state: &mut UiState, event: &Event) -> bool {
+    if matches!(event, Event::Resize(_, _) | Event::Key(_) | Event::Paste(_)) {
+        state.input_dragging = false;
+    }
+    if state.show_help
+        || state.picker.is_some()
+        || state.model_picker.is_some()
+        || state.marketplace_dialog.is_some()
+        || state.approval.is_some()
+    {
+        state.input_dragging = false;
+        return false;
+    }
+    let Event::Mouse(mouse) = event else {
+        return false;
+    };
+    let area = state.input_area;
+    let point = (mouse.column, mouse.row).into();
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) if area.contains(point) => {
+            state.selection.clear();
+            state.attachment_cursor = None;
+            let index = state.input.position_at(
+                (mouse.column - area.x) as usize,
+                (mouse.row - area.y) as usize + state.input_scroll,
+                state.input_width,
+            );
+            if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                state.input.extend_selection(index);
+            } else {
+                state.input.begin_selection(index);
+            }
+            state.input_dragging = true;
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+            if state.input_dragging && area.width > 0 && area.height > 0 =>
+        {
+            let column = mouse.column.clamp(area.x, area.right() - 1) - area.x;
+            let row = mouse.row.clamp(area.y, area.bottom() - 1) - area.y;
+            let index = state.input.position_at(
+                column as usize,
+                row as usize + state.input_scroll,
+                state.input_width,
+            );
+            state.input.extend_selection(index);
+            state.input_dragging = !matches!(mouse.kind, MouseEventKind::Up(_));
+            true
+        }
+        MouseEventKind::Down(_) => {
+            state.input_dragging = false;
+            state.input.clear_selection();
+            false
+        }
+        _ => false,
+    }
+}
+
 fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
     if let Event::Mouse(mouse) = event {
         match mouse.kind {
@@ -3279,7 +3348,35 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         return Action::None;
     }
 
+    let was_history = state.input.browsing_history();
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    let selecting = key.modifiers.contains(KeyModifiers::SHIFT);
+    if control
+        && key.code == KeyCode::Char('c')
+        && let Some(text) = state.input.selected_text()
+    {
+        return Action::CopyInput(text.to_owned());
+    }
+    let motion = match (control, key.code) {
+        (true, KeyCode::Left) => Some(input::Motion::WordLeft),
+        (true, KeyCode::Right) => Some(input::Motion::WordRight),
+        (true, KeyCode::Home) => Some(input::Motion::Start),
+        (true, KeyCode::End) => Some(input::Motion::Finish),
+        (false, KeyCode::Left) => Some(input::Motion::Left),
+        (false, KeyCode::Right) => Some(input::Motion::Right),
+        (false, KeyCode::Home) => Some(input::Motion::Home),
+        (false, KeyCode::End) => Some(input::Motion::End),
+        (false, KeyCode::Up) => Some(input::Motion::Up),
+        (false, KeyCode::Down) => Some(input::Motion::Down),
+        _ => None,
+    };
+    if (selecting || control)
+        && let Some(motion) = motion
+    {
+        state.attachment_cursor = None;
+        state.input.navigate(motion, state.input_width, selecting);
+        return Action::None;
+    }
 
     if control {
         match key.code {
@@ -3301,32 +3398,36 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
 
             KeyCode::Char('j') => {
                 if state.attachment_cursor.take().is_some() {
-                    state.input.cursor = 0;
+                    state.input.set_cursor(0);
                 }
 
                 state.input.insert("\n");
             }
 
-            KeyCode::Char('a') if !state.attachments.is_empty() => {
-                state.input.home();
-                state.attachment_cursor = Some(0);
+            KeyCode::Char('a') => {
+                state.attachment_cursor = None;
+                state.input.select_all();
             }
-            KeyCode::Char('a') => state.input.home(),
+            KeyCode::Up => {
+                state.attachment_cursor = None;
+                state.input.history_up();
+                state.menu_dismissed = true;
+                return Action::None;
+            }
+            KeyCode::Down => {
+                state.attachment_cursor = None;
+                state.input.history_down();
+                state.menu_dismissed = true;
+                return Action::None;
+            }
             KeyCode::Char('e') => {
                 state.attachment_cursor = None;
-                state.input.end();
+                state
+                    .input
+                    .navigate(input::Motion::End, state.input_width, false);
             }
-            KeyCode::Char('u') => {
-                let end = state.input.cursor;
-                state.input.home();
-                state.input.text.drain(state.input.cursor..end);
-            }
-            KeyCode::Char('k') => {
-                let start = state.input.cursor;
-                state.input.end();
-                state.input.text.drain(start..state.input.cursor);
-                state.input.cursor = start;
-            }
+            KeyCode::Char('u') => state.input.kill_to_home(),
+            KeyCode::Char('k') => state.input.kill_to_end(),
             KeyCode::Char('l') => return Action::Redraw,
             KeyCode::Char('v') => return Action::PasteClipboard,
 
@@ -3347,10 +3448,17 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
             _ => {}
         }
 
+        if was_history && !state.input.browsing_history() {
+            state.menu_dismissed = false;
+            state.menu_index = 0;
+            state.menu_offset = 0;
+            state.menu_manual_scroll = false;
+        }
         return Action::None;
     }
     if key.code == KeyCode::Esc {
         state.attachment_cursor = None;
+        state.input.clear_selection();
         state.show_help = false;
         state.menu_dismissed = true;
         return Action::None;
@@ -3360,6 +3468,12 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
     }
 
     state.menu_manual_scroll = false;
+    if key.code == KeyCode::Tab && state.menu_dismissed {
+        state.menu_dismissed = false;
+        state.menu_index = 0;
+        state.menu_offset = 0;
+        return Action::None;
+    }
     let menu = state.menu();
 
     if !menu.is_empty() {
@@ -3435,19 +3549,23 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
             state.input.insert("\n")
         }
 
+        KeyCode::Enter
+            if state.input.cursor == state.input.text.len()
+                && state.input.selection().is_none()
+                && state.input.text.ends_with('\\') =>
+        {
+            state.input.backspace();
+            state.input.insert("\n");
+        }
+
         KeyCode::Enter if busy => {
             if let Some(guidance) = state.input.take() {
-                return if guidance.starts_with('/') {
+                return if guidance.trim_start().starts_with('/') {
                     Action::Submit(guidance)
                 } else {
                     Action::Steer(guidance)
                 };
             }
-        }
-
-        KeyCode::Enter if state.input.text.ends_with('\\') => {
-            state.input.backspace();
-            state.input.insert("\n");
         }
 
         KeyCode::Enter => {
@@ -3471,7 +3589,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
 
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) => {
             if state.attachment_cursor.take().is_some() {
-                state.input.cursor = 0;
+                state.input.set_cursor(0);
             }
 
             state.input.insert(&c.to_string());
@@ -3481,7 +3599,10 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
 
         KeyCode::Backspace => {
             if !remove_focused_attachment(state, true) {
-                if state.input.cursor == 0 && !state.attachments.is_empty() {
+                if state.input.cursor == 0
+                    && state.input.selection().is_none()
+                    && !state.attachments.is_empty()
+                {
                     state.attachments.pop();
                 } else {
                     state.input.backspace();
@@ -3501,10 +3622,15 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         KeyCode::Left => {
             if let Some(index) = &mut state.attachment_cursor {
                 *index = index.saturating_sub(1);
-            } else if state.input.cursor == 0 && !state.attachments.is_empty() {
+            } else if state.input.cursor == 0
+                && state.input.selection().is_none()
+                && !state.attachments.is_empty()
+            {
                 state.attachment_cursor = Some(state.attachments.len() - 1);
             } else {
-                state.input.move_left();
+                state
+                    .input
+                    .navigate(input::Motion::Left, state.input_width, false);
             }
         }
 
@@ -3514,36 +3640,43 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                     state.attachment_cursor = Some(index + 1);
                 } else {
                     state.attachment_cursor = None;
-                    state.input.cursor = 0;
+                    state.input.set_cursor(0);
                 }
             } else {
-                state.input.move_right();
+                state
+                    .input
+                    .navigate(input::Motion::Right, state.input_width, false);
             }
         }
 
         KeyCode::Home => {
-            state.input.home();
-
-            if !state.attachments.is_empty() {
-                state.attachment_cursor = Some(0);
-            }
+            state.attachment_cursor = None;
+            state
+                .input
+                .navigate(input::Motion::Home, state.input_width, false);
         }
 
         KeyCode::End => {
             state.attachment_cursor = None;
-            state.input.end();
+            state
+                .input
+                .navigate(input::Motion::End, state.input_width, false);
         }
         KeyCode::Up => {
             if state.attachment_cursor.is_none() {
-                state.input.move_vertical(false, state.input_width);
+                state
+                    .input
+                    .navigate(input::Motion::Up, state.input_width, false);
             }
         }
 
         KeyCode::Down => {
             if state.attachment_cursor.take().is_some() {
-                state.input.cursor = 0;
+                state.input.set_cursor(0);
             } else {
-                state.input.move_vertical(true, state.input_width);
+                state
+                    .input
+                    .navigate(input::Motion::Down, state.input_width, false);
             }
         }
 
@@ -3552,6 +3685,14 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         _ => {}
     }
 
+    if matches!(key.code, KeyCode::Up | KeyCode::Down)
+        && (was_history || state.input.browsing_history())
+    {
+        state.menu_dismissed = true;
+    } else if was_history && !state.input.browsing_history() {
+        state.menu_dismissed = false;
+        state.menu_index = 0;
+    }
     Action::None
 }
 
@@ -4102,6 +4243,211 @@ id = "orbit-model"
         press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
 
         assert_eq!(state.input.text, "previous prompt");
+    }
+
+    #[test]
+    fn selections_replace_text_copy_before_cancel_and_leave_attachments_alone() {
+        let mut state = UiState::new("orbit-model");
+        state.input.set("Orbit你好👩‍💻".into());
+        press(&mut state, KeyCode::Left, KeyModifiers::SHIFT, false);
+        assert_eq!(
+            press(&mut state, KeyCode::Char('c'), KeyModifiers::CONTROL, true),
+            Action::CopyInput("👩‍💻".into())
+        );
+        keyboard_action(&mut state, Event::Paste("编辑".into()), false);
+        assert_eq!(state.input.text, "Orbit你好编辑");
+        state.attachments.push(image("orbit.png"));
+        press(&mut state, KeyCode::Char('a'), KeyModifiers::CONTROL, false);
+        press(&mut state, KeyCode::Backspace, KeyModifiers::NONE, false);
+        assert!(state.input.text.is_empty());
+        assert_eq!(state.attachments.len(), 1);
+        assert!(state.attachment_cursor.is_none());
+    }
+
+    #[test]
+    fn continuation_enter_only_removes_a_backslash_at_the_caret_including_when_busy() {
+        for busy in [false, true] {
+            let mut state = UiState::new("orbit-model");
+            state.input.set("Orbit\\".into());
+            assert_eq!(
+                press(&mut state, KeyCode::Enter, KeyModifiers::NONE, busy),
+                Action::None
+            );
+            assert_eq!(state.input.text, "Orbit\n");
+            state.input.set("Orbit\\".into());
+            state.input.set_cursor(2);
+            let expected = if busy {
+                Action::Steer("Orbit\\".into())
+            } else {
+                Action::Submit("Orbit\\".into())
+            };
+            assert_eq!(
+                press(&mut state, KeyCode::Enter, KeyModifiers::NONE, busy),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn history_commands_do_not_capture_up_down_in_the_completion_menu() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("orbit-workspace")).unwrap();
+        let mut state = UiState::new("orbit-model");
+        state.workspace = directory.path().to_string_lossy().into_owned();
+        state.input.history = vec!["Orbit earlier".into(), "/mode ask".into(), "/cd ".into()];
+        state.input.set("Orbit draft".into());
+        for (key, expected) in [
+            (KeyCode::Up, "/cd "),
+            (KeyCode::Up, "/mode ask"),
+            (KeyCode::Up, "Orbit earlier"),
+            (KeyCode::Down, "/mode ask"),
+            (KeyCode::Down, "/cd "),
+            (KeyCode::Down, "Orbit draft"),
+        ] {
+            assert_eq!(
+                press(&mut state, key, KeyModifiers::NONE, false),
+                Action::None
+            );
+            assert_eq!(state.input.text, expected);
+        }
+    }
+
+    #[test]
+    fn explicit_history_navigation_keeps_command_drafts_out_of_the_menu() {
+        let mut state = UiState::new("orbit-model");
+        state.input.history = vec!["Orbit older".into(), "/mode ask".into()];
+        state.input.set("/mode ".into());
+        state.input.set_cursor(3);
+        assert!(!state.menu().is_empty());
+        press(&mut state, KeyCode::Up, KeyModifiers::CONTROL, false);
+        assert_eq!(state.input.text, "/mode ask");
+        assert!(state.menu().is_empty());
+        press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
+        assert_eq!(state.input.text, "Orbit older");
+        press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
+        press(&mut state, KeyCode::Down, KeyModifiers::CONTROL, false);
+        assert_eq!(state.input.text, "/mode ");
+        assert_eq!(state.input.cursor, 3);
+        assert!(state.menu().is_empty());
+        press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
+        assert_eq!(state.input.text, "/mode ask");
+    }
+
+    #[test]
+    fn tab_opens_recalled_command_hints_before_completing_a_choice() {
+        let mut state = UiState::new("orbit-model");
+        state.input.history = vec!["/mode ".into()];
+        press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
+        assert!(state.menu().is_empty());
+        press(&mut state, KeyCode::Tab, KeyModifiers::NONE, false);
+        assert_eq!(state.input.text, "/mode ");
+        assert!(!state.menu().is_empty());
+        press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
+        let choice = state.menu()[state.menu_index].name.clone();
+        press(&mut state, KeyCode::Tab, KeyModifiers::NONE, false);
+        assert_eq!(state.input.text, choice);
+    }
+
+    #[test]
+    fn editing_a_recalled_command_reopens_hints_but_a_noop_delete_does_not() {
+        for (code, modifiers, cursor, expected) in [
+            (KeyCode::Backspace, KeyModifiers::NONE, 9, "/mode as"),
+            (KeyCode::Delete, KeyModifiers::NONE, 8, "/mode as"),
+            (KeyCode::Char('k'), KeyModifiers::CONTROL, 7, "/mode a"),
+        ] {
+            let mut state = UiState::new("orbit-model");
+            state.input.history = vec!["Orbit older".into(), "/mode ask".into()];
+            press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
+            press(&mut state, KeyCode::Delete, KeyModifiers::NONE, false);
+            assert!(state.menu().is_empty());
+            assert_eq!(state.input.text, "/mode ask");
+            state.input.set_cursor(cursor);
+            press(&mut state, code, modifiers, false);
+            assert_eq!(state.input.text, expected);
+            assert!(!state.menu().is_empty());
+        }
+    }
+
+    #[test]
+    fn recalled_directory_enter_uses_the_original_command_instead_of_a_hint() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("orbit-alpha")).unwrap();
+        std::fs::create_dir(directory.path().join("orbit-beta")).unwrap();
+        let mut state = UiState::new("orbit-model");
+        state.workspace = directory.path().to_string_lossy().into_owned();
+        let command = format!("/cd {}/", directory.path().display());
+        state.input.set(command.clone());
+        assert!(state.menu().len() >= 2);
+        state.input.history = vec![command.clone()];
+        state.input.set("Orbit draft".into());
+        state.menu_index = 1;
+        press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
+        assert_eq!(
+            press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
+            Action::Submit(command)
+        );
+    }
+
+    #[test]
+    fn multiline_home_stays_in_text_and_explicit_history_restores_the_draft_cursor() {
+        let mut state = UiState::new("orbit-model");
+        state.input.history.push("Orbit history".into());
+        state.input.set("first\nsecond".into());
+        state.attachments.push(image("orbit.png"));
+        press(&mut state, KeyCode::Home, KeyModifiers::NONE, false);
+        assert_eq!(state.input.cursor, 6);
+        assert!(state.attachment_cursor.is_none());
+        press(&mut state, KeyCode::Up, KeyModifiers::CONTROL, false);
+        assert_eq!(state.input.text, "Orbit history");
+        press(&mut state, KeyCode::Down, KeyModifiers::CONTROL, false);
+        assert_eq!(state.input.text, "first\nsecond");
+        assert_eq!(state.input.cursor, 6);
+    }
+
+    #[test]
+    fn input_mouse_drag_and_shift_click_edit_without_using_transcript_selection() {
+        let mut state = UiState::new("orbit-model");
+        state.input.set("你好Orbit\nnext".into());
+        state.input_area = ratatui::layout::Rect::new(4, 10, 11, 2);
+        state.input_width = 10;
+        for (kind, column, modifiers) in [
+            (
+                MouseEventKind::Down(MouseButton::Left),
+                4,
+                KeyModifiers::NONE,
+            ),
+            (
+                MouseEventKind::Drag(MouseButton::Left),
+                8,
+                KeyModifiers::NONE,
+            ),
+            (MouseEventKind::Up(MouseButton::Left), 8, KeyModifiers::NONE),
+        ] {
+            assert!(handle_input_mouse(
+                &mut state,
+                &Event::Mouse(crossterm::event::MouseEvent {
+                    kind,
+                    column,
+                    row: 10,
+                    modifiers
+                })
+            ));
+        }
+        assert_eq!(state.input.selected_text(), Some("你好"));
+        assert!(!state.selection.active());
+        assert!(!state.input_dragging);
+        press(&mut state, KeyCode::Char('x'), KeyModifiers::NONE, false);
+        assert_eq!(state.input.text, "xOrbit\nnext");
+        assert!(handle_input_mouse(
+            &mut state,
+            &Event::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 7,
+                row: 10,
+                modifiers: KeyModifiers::SHIFT,
+            })
+        ));
+        assert_eq!(state.input.selected_text(), Some("Or"));
     }
 
     #[test]

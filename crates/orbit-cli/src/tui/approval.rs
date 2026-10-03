@@ -791,9 +791,7 @@ pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.approval = sections[1];
     // The modal owns pointer interaction; no links or composer clicks below it.
     state.selection.viewport = Rect::default();
-    state.selection.input = Rect::default();
     state.selection.footer = Rect::default();
-    state.selection.reset_caret();
     state.input_area = Rect::default();
     state.attachment_areas.clear();
     state.context_indicator_area = Rect::default();

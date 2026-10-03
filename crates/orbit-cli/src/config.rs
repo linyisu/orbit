@@ -39,7 +39,21 @@ pub(crate) struct FileConfig {
     pub(crate) mcp: orbit_tools::mcp::McpConfig,
     #[serde(default)]
     pub(crate) permissions: orbit_runtime::policy::WorkspacePermissions,
+    #[serde(default)]
+    pub(crate) tui: TuiConfig,
     pub(crate) providers: BTreeMap<String, ProviderConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub(crate) struct TuiConfig {
+    pub(crate) cursor_trail: bool,
+}
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self { cursor_trail: true }
+    }
 }
 
 #[derive(Clone, Deserialize)]

@@ -176,6 +176,8 @@ impl Tabs {
             history: std::mem::replace(history, next_history),
         };
         self.parked.insert(current_id, parked);
+        state.cursor_motion.clear();
+        state.input_dragging = false;
         state.tab_hover = None;
         state.tab_hover_tick = 0;
 
@@ -209,6 +211,8 @@ impl Tabs {
         if !self.order.iter().any(|item| item == id) {
             self.order.push(id.to_owned());
         }
+        state.cursor_motion.clear();
+        state.input_dragging = false;
         state.tab_hover = None;
         state.tab_hover_tick = 0;
 

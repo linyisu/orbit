@@ -6,7 +6,7 @@ use crossterm::event::{
 use futures_util::StreamExt;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -79,68 +79,81 @@ fn start(input: &InputState, width: usize, secret: bool) -> usize {
     start
 }
 
-pub(super) fn input_line(
+pub(in crate::tui) fn input_line(
     input: &InputState,
     width: usize,
     secret: bool,
     focused: bool,
     hint: &str,
 ) -> Line<'static> {
-    if input.text.is_empty() && !focused {
+    if input.text.is_empty() {
         return Line::styled(hint.to_owned(), Style::default().fg(HINT_TEXT));
     }
-    if input.text.is_empty() && focused {
-        return Line::from(vec![
-            Span::styled(
-                " ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::REVERSED),
-            ),
-            Span::styled(hint.to_owned(), Style::default().fg(HINT_TEXT)),
-        ]);
-    }
     let offset = start(input, width, secret);
-    let mut spans = Vec::new();
-    for (index, grapheme) in input.text[offset..].grapheme_indices(true) {
-        let value = if secret { "•" } else { grapheme };
-        let style = if focused && offset + index == input.cursor {
-            Style::default().fg(ACCENT).add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(value.to_owned(), style));
-    }
-    if focused && input.cursor == input.text.len() {
-        spans.push(Span::styled(
-            " ",
-            Style::default().fg(ACCENT).add_modifier(Modifier::REVERSED),
-        ));
-    }
+    let selection = input.selection();
+    let spans = input.text[offset..]
+        .grapheme_indices(true)
+        .map(|(index, grapheme)| {
+            let style = if focused
+                && selection
+                    .as_ref()
+                    .is_some_and(|range| range.contains(&(offset + index)))
+            {
+                crate::tui::theme::selection_style(Style::default())
+            } else {
+                Style::default()
+            };
+            Span::styled(if secret { "•" } else { grapheme }.to_owned(), style)
+        })
+        .collect::<Vec<_>>();
     Line::from(spans)
 }
 
-pub(super) fn edit(input: &mut InputState, code: KeyCode, modifiers: KeyModifiers) {
+pub(in crate::tui) fn cursor_column(input: &InputState, width: usize, secret: bool) -> usize {
+    let offset = start(input, width, secret);
+    if secret {
+        input.text[offset..input.cursor].graphemes(true).count()
+    } else {
+        input.text[offset..input.cursor].width()
+    }
+}
+
+pub(in crate::tui) fn edit(input: &mut InputState, code: KeyCode, modifiers: KeyModifiers) {
+    let control = modifiers.contains(KeyModifiers::CONTROL);
+    let motion = match (control, code) {
+        (true, KeyCode::Left) => Some(crate::tui::input::Motion::WordLeft),
+        (true, KeyCode::Right) => Some(crate::tui::input::Motion::WordRight),
+        (_, KeyCode::Left) => Some(crate::tui::input::Motion::Left),
+        (_, KeyCode::Right) => Some(crate::tui::input::Motion::Right),
+        (_, KeyCode::Home) => Some(crate::tui::input::Motion::Start),
+        (_, KeyCode::End) => Some(crate::tui::input::Motion::Finish),
+        _ => None,
+    };
+    if let Some(motion) = motion {
+        input.navigate(motion, usize::MAX, modifiers.contains(KeyModifiers::SHIFT));
+        return;
+    }
     match code {
-        KeyCode::Left => input.move_left(),
-        KeyCode::Right => input.move_right(),
-        KeyCode::Home => input.home(),
-        KeyCode::End => input.end(),
         KeyCode::Backspace => input.backspace(),
         KeyCode::Delete => input.delete(),
-        KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => input.clear(),
+        KeyCode::Char('a') if control => input.select_all(),
+        KeyCode::Char('u') if control => input.kill_to_home(),
+        KeyCode::Char('k') if control => input.kill_to_end(),
         KeyCode::Char(c)
             if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
                 && !c.is_control()
-                && input.text.len() + c.len_utf8() <= 16_384 =>
+                && input.text.len() - input.selection().map_or(0, |r| r.len()) + c.len_utf8()
+                    <= 16_384 =>
         {
-            input.insert(&c.to_string())
+            input.insert(&c.to_string());
         }
         _ => {}
     }
 }
 
-pub(super) fn paste(input: &mut InputState, text: &str) {
+pub(in crate::tui) fn paste(input: &mut InputState, text: &str) {
     let text: String = text.chars().filter(|c| !c.is_control()).collect();
-    if input.text.len() + text.len() <= 16_384 {
+    if input.text.len() - input.selection().map_or(0, |r| r.len()) + text.len() <= 16_384 {
         input.insert(&text);
     }
 }

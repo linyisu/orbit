@@ -321,3 +321,39 @@ async fn changing_protocol_converts_reasoning_before_saving() {
     assert_eq!(reasoning.default, ReasoningEffort::High);
     assert!(reasoning.extra.is_empty());
 }
+
+#[test]
+fn caret_follows_the_focused_field_and_hides_on_buttons_or_during_loading() {
+    let (_directory, _draft, mut panel) = setup();
+    panel.service[0].input.set("Orbit你好".into());
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let mut field_area = None;
+    terminal
+        .draw(|frame| {
+            let (_, hits, _) = view::draw(&mut panel, frame, false);
+            field_area = hits
+                .into_iter()
+                .find(|(_, target)| *target == Target::Field(FieldId::Service(0)))
+                .map(|(area, _)| area);
+        })
+        .unwrap();
+    let area = field_area.unwrap();
+    assert!(terminal.backend().cursor_visible());
+    terminal
+        .backend_mut()
+        .assert_cursor_position((area.x + 9, area.y));
+    panel.focus = Target::Action(Action::Save);
+    terminal
+        .draw(|frame| {
+            view::draw(&mut panel, frame, false);
+        })
+        .unwrap();
+    assert!(!terminal.backend().cursor_visible());
+    panel.focus = Target::Field(FieldId::Service(0));
+    terminal
+        .draw(|frame| {
+            view::draw(&mut panel, frame, true);
+        })
+        .unwrap();
+    assert!(!terminal.backend().cursor_visible());
+}
