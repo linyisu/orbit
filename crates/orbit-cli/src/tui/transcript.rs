@@ -268,8 +268,7 @@ struct Entry {
     disclosures: Vec<usize>,
     height: usize,
     end: usize,
-    // Completed source lines never change during streaming. Only reformat the
-    // unfinished final line and newly appended lines, including split fences.
+    // Reuse completed lines for append-only deltas. Edits discard the entry.
     stable_rows: usize,
     parsed_bytes: usize,
     logical_index: usize,
@@ -322,12 +321,14 @@ impl Entry {
     }
 
     fn stream(&mut self, text: &str, thinking: bool, width: u16) {
-        if self.observed_bytes == Some(text.len()) {
-            return;
+        if self.observed_bytes.is_some_and(|len| text.len() < len)
+            || !text.is_char_boundary(self.parsed_bytes)
+        {
+            *self = Self::default();
         }
 
-        if self.observed_bytes.is_some_and(|len| text.len() < len) {
-            *self = Self::default();
+        if self.observed_bytes == Some(text.len()) {
+            return;
         }
 
         self.rows.truncate(self.stable_rows);
@@ -553,6 +554,12 @@ impl TranscriptLayout {
 
     pub fn invalidate_from(&mut self, index: usize) {
         self.dirty_from = self.dirty_from.min(index);
+    }
+
+    /// Discard cached source offsets when text is edited or entries are removed.
+    pub(super) fn reset_from(&mut self, index: usize) {
+        self.entries.truncate(index);
+        self.invalidate_from(index);
     }
 
     #[cfg(test)]
@@ -1294,6 +1301,108 @@ mod tests {
             layout.update(&[TranscriptItem::Assistant(text.clone())], None, width);
 
             assert!(layout.height() > 0);
+        }
+    }
+
+    #[test]
+    fn batched_assistant_completion_matches_fresh_layout_after_trimming() {
+        use super::super::app::UiState;
+        use orbit_agent::events::AgentEvent;
+        use orbit_model::types::{FunctionCall, StreamEvent, ToolCall};
+
+        for tool_started in [true, false] {
+            for (initial, delta) in [
+                ("\n\n", "好的，正在检查 Orbit。\n"),
+                ("  \n", "Orbit\n"),
+                ("  \n", "好\n"),
+                ("\n\nOrbit\n", "你好，Orbit。\n"),
+                ("好的，Orbit。\n \t\n", ""),
+            ] {
+                let mut state = UiState::new("orbit-test");
+                state.submit("检查 Orbit".into());
+                state.apply(AgentEvent::Model(StreamEvent::TextDelta(initial.into())));
+                state.transcript_layout.update(&state.transcript, None, 24);
+                if !delta.is_empty() {
+                    state.apply(AgentEvent::Model(StreamEvent::TextDelta(delta.into())));
+                }
+
+                state.apply(if tool_started {
+                    AgentEvent::ToolStarted {
+                        call: ToolCall {
+                            metadata: None,
+                            id: "orbit-check".into(),
+                            kind: "function".into(),
+                            function: FunctionCall {
+                                name: "run_command".into(),
+                                arguments: r#"{"command":"orbit --version"}"#.into(),
+                            },
+                        },
+                    }
+                } else {
+                    AgentEvent::Completed {
+                        turns: 1,
+                        tool_calls: 0,
+                    }
+                });
+
+                state.transcript_layout.update(&state.transcript, None, 24);
+                let mut fresh = TranscriptLayout::default();
+                fresh.update(&state.transcript, None, 24);
+
+                assert_eq!(state.transcript_layout.height(), fresh.height());
+
+                for offset in 0..fresh.height() {
+                    let mut actual = Terminal::new(TestBackend::new(24, 5)).unwrap();
+                    actual
+                        .draw(|frame| state.transcript_layout.draw(frame, frame.area(), offset))
+                        .unwrap();
+                    let mut expected = Terminal::new(TestBackend::new(24, 5)).unwrap();
+                    expected
+                        .draw(|frame| fresh.draw(frame, frame.area(), offset))
+                        .unwrap();
+
+                    assert_eq!(
+                        actual.backend().buffer(),
+                        expected.backend().buffer(),
+                        "tool_started {tool_started}, initial {initial:?}, delta {delta:?}, offset {offset}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn removed_empty_assistant_is_replaced_before_the_next_frame() {
+        use super::super::app::UiState;
+        use orbit_agent::events::AgentEvent;
+        use orbit_model::types::StreamEvent;
+
+        for event in [
+            StreamEvent::TextDelta("好的，检查 Orbit。\n".into()),
+            StreamEvent::ReasoningDelta("好的，分析 Orbit。\n".into()),
+        ] {
+            let mut state = UiState::new("orbit-test");
+            state.submit("检查 Orbit".into());
+            state.apply(AgentEvent::Model(StreamEvent::TextDelta("\n\n".into())));
+            state.transcript_layout.update(&state.transcript, None, 24);
+            state.apply(AgentEvent::Completed {
+                turns: 1,
+                tool_calls: 0,
+            });
+            state.apply(AgentEvent::Model(event));
+            state.transcript_layout.update(&state.transcript, None, 24);
+            let mut fresh = TranscriptLayout::default();
+            fresh.update(&state.transcript, None, 24);
+            let lines = |layout: &TranscriptLayout| {
+                layout
+                    .entries
+                    .iter()
+                    .flat_map(|entry| entry.rows.iter().map(|row| row.line.clone()))
+                    .collect::<Vec<_>>()
+            };
+
+            assert_eq!(state.transcript_layout.height(), fresh.height());
+            assert_eq!(lines(&state.transcript_layout), lines(&fresh));
         }
     }
 

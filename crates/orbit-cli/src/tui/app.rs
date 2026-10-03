@@ -452,13 +452,7 @@ impl UiState {
 
             AgentEvent::ToolStarted { call } => {
                 self.finish_thinking();
-                if let Some(TranscriptItem::Assistant(content)) = self.transcript.last_mut() {
-                    if content.trim().is_empty() {
-                        self.transcript.pop();
-                    } else {
-                        *content = content.trim().to_owned();
-                    }
-                }
+                self.finish_assistant();
                 self.tool_calls += 1;
                 self.transcript.push(TranscriptItem::Tool(ToolRow {
                     id: call.id,
@@ -478,13 +472,7 @@ impl UiState {
                 self.update_tool(&call, ToolStatus::Failed, error);
             }
             AgentEvent::Completed { .. } => {
-                if let Some(TranscriptItem::Assistant(content)) = self.transcript.last_mut() {
-                    if content.trim().is_empty() {
-                        self.transcript.pop();
-                    } else {
-                        *content = content.trim().to_owned();
-                    }
-                }
+                self.finish_assistant();
                 self.status = RunStatus::Completed;
                 self.finish_clock();
             }
@@ -738,6 +726,24 @@ impl UiState {
         row.finished = true;
         row.elapsed = row.started_at.take().map(|start| start.elapsed());
         self.transcript_layout.invalidate_from(index);
+    }
+
+    fn finish_assistant(&mut self) {
+        let index = self.transcript.len().saturating_sub(1);
+        let Some(TranscriptItem::Assistant(content)) = self.transcript.last_mut() else {
+            return;
+        };
+        let trimmed = content.trim();
+
+        if trimmed.is_empty() {
+            self.transcript.pop();
+        } else if trimmed.len() != content.len() {
+            *content = trimmed.to_owned();
+        } else {
+            return;
+        }
+
+        self.transcript_layout.reset_from(index);
     }
 
     fn ensure_assistant_item(&mut self) {
