@@ -1143,7 +1143,7 @@ async fn replay_archived_tool_pruning() {
     let started = std::time::Instant::now();
     let compacted = autocompact::execute_with_archive(
         &backend,
-        autocompact::plan_manual(&history, &[], 0, 224000).unwrap(),
+        autocompact::plan(&history, &[], 0, 224000).unwrap(),
         &[],
         0,
         224000,
