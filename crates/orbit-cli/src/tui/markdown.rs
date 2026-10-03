@@ -8,6 +8,7 @@ use ratatui::{
 
 use super::{
     code::Highlighter,
+    icons,
     languages::{is_markdown_label, label_key},
     theme::code_label_color,
 };
@@ -890,7 +891,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             )),
 
             Event::TaskListMarker(done) => {
-                let checkbox = if done { "☑ " } else { "☐ " };
+                let checkbox = format!("{} ", icons::checkbox(done));
 
                 if let Some(marker) = spans.iter_mut().rev().find(|span| {
                     span.content == "• "
@@ -1249,8 +1250,8 @@ mod tests {
 
     #[test]
     fn task_list_replaces_the_list_bullet_with_its_checkbox() {
-        assert_eq!(render("- [x] 已完成任务").to_string(), "  ☑ 已完成任务");
-        assert_eq!(render("- [ ] 未完成任务").to_string(), "  ☐ 未完成任务");
+        assert_eq!(render("- [x] 已完成任务").to_string(), "  󰄵 已完成任务");
+        assert_eq!(render("- [ ] 未完成任务").to_string(), "  󰄱 未完成任务");
     }
 
     #[test]
@@ -1282,7 +1283,7 @@ mod tests {
         assert_eq!(render("  - **项目**").to_string(), "    • 项目");
         assert_eq!(render("3. 第三项").to_string(), "  3. 第三项");
         assert_eq!(render("> 引用").to_string(), "  ▎ 引用");
-        assert!(render("- [x] 完成").to_string().contains("☑ 完成"));
+        assert!(render("- [x] 完成").to_string().contains("󰄵 完成"));
         assert!(render("#hashtag").to_string().contains("#hashtag"));
     }
 

@@ -33,10 +33,12 @@ struct Gutter {
 }
 
 fn list_marker(text: &str) -> bool {
-    matches!(text, "• " | "☑ " | "☐ ")
-        || text
-            .strip_suffix(". ")
-            .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+    matches!(
+        text.strip_suffix(' '),
+        Some("•" | super::icons::CHECKBOX_MARKED_OUTLINE | super::icons::CHECKBOX_BLANK_OUTLINE)
+    ) || text
+        .strip_suffix(". ")
+        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn is_rail_gutter(content: &str) -> bool {
@@ -413,7 +415,7 @@ impl Entry {
     }
 
     fn user(&mut self, text: &str, width: u16) {
-        self.framed_input(text, width, "❯");
+        self.framed_input(text, width, super::icons::CHEVRON_RIGHT);
     }
 
     fn framed_input(&mut self, text: &str, width: u16, icon: &str) {
@@ -988,7 +990,7 @@ mod tests {
         );
         let row = &layout.entries[0].rows[0];
 
-        assert_eq!(row.gutter.as_ref().unwrap().first.to_string(), "  ☐ ");
+        assert_eq!(row.gutter.as_ref().unwrap().first.to_string(), "  󰄱 ");
         assert_eq!(
             row.gutter.as_ref().unwrap().first.width(),
             row.gutter.as_ref().unwrap().continuation.width()
@@ -1134,7 +1136,7 @@ mod tests {
             layout.entries[0].rows[0]
                 .line
                 .to_string()
-                .starts_with("╭─❯─")
+                .starts_with(&format!("╭─{}─", super::super::icons::CHEVRON_RIGHT))
         );
     }
 

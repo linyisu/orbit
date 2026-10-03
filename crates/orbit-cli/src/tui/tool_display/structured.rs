@@ -436,7 +436,10 @@ pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Ve
 
     let count = results.len();
     view.push_spans(vec![
-        Span::styled("🔍 搜索结果 · ", Style::default().fg(theme.accent)),
+        Span::styled(
+            format!("{} 搜索结果 · ", icons::MAGNIFY),
+            Style::default().fg(theme.accent),
+        ),
         Span::styled(
             format!("来源: {provider} (共 {count} 条)"),
             Style::default().fg(theme.tool_detail),
@@ -583,7 +586,7 @@ pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
 
     if status == "granted" {
         view.push_spans(vec![Span::styled(
-            "✓ 外部目录访问授权已授予 (Granted)",
+            format!("{} 外部目录访问授权已授予 (Granted)", icons::CHECK),
             Style::default()
                 .fg(theme.success)
                 .add_modifier(Modifier::BOLD),
@@ -601,7 +604,7 @@ pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
         }
     } else {
         view.push_spans(vec![Span::styled(
-            "× 外部目录访问授权被拒绝 (Denied)",
+            format!("{} 外部目录访问授权被拒绝 (Denied)", icons::CLOSE),
             Style::default()
                 .fg(theme.error)
                 .add_modifier(Modifier::BOLD),
@@ -628,7 +631,7 @@ pub(super) fn export_artifact(
     let mut view = View::new(true, width);
 
     view.push_spans(vec![Span::styled(
-        "📦 工件已成功导出",
+        format!("{} 工件已成功导出", icons::PACKAGE_VARIANT_CLOSED),
         Style::default()
             .fg(theme.success)
             .add_modifier(Modifier::BOLD),
@@ -662,7 +665,7 @@ pub(super) fn git_export_patch(
     let mut view = View::new(true, width);
 
     view.push_spans(vec![Span::styled(
-        "📦 Git 补丁已导出",
+        format!("{} Git 补丁已导出", icons::PACKAGE_VARIANT_CLOSED),
         Style::default()
             .fg(theme.success)
             .add_modifier(Modifier::BOLD),
@@ -684,7 +687,7 @@ pub(super) fn read_image(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
 
     view.push_spans(vec![
         Span::styled(
-            "🖼️ 图像已载入上下文 · ",
+            format!("{} 图像已载入上下文 · ", icons::IMAGE_OUTLINE),
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
@@ -980,7 +983,7 @@ mod tests {
             }),
         );
         let rendered = text(&super::web_search(&row, false, 80).unwrap());
-        assert!(rendered.contains("🔍 搜索结果 · 来源: DuckDuckGo"));
+        assert!(rendered.contains(&format!("{} 搜索结果 · 来源: DuckDuckGo", icons::MAGNIFY)));
         assert!(rendered.contains("1. Rust Programming Language"));
         assert!(rendered.contains("https://www.rust-lang.org"));
         assert!(rendered.contains("Empowering everyone"));
@@ -1016,7 +1019,7 @@ mod tests {
             }),
         );
         let rendered = text(&super::capability(&granted_row, true, 80).unwrap());
-        assert!(rendered.contains("✓ 外部目录访问授权已授予"));
+        assert!(rendered.contains(&format!("{} 外部目录访问授权已授予", icons::CHECK)));
         assert!(rendered.contains("/opt/cargo"));
         assert!(rendered.contains("读写"));
 
@@ -1028,7 +1031,7 @@ mod tests {
             }),
         );
         let rendered = text(&super::capability(&denied_row, true, 80).unwrap());
-        assert!(rendered.contains("× 外部目录访问授权被拒绝"));
+        assert!(rendered.contains(&format!("{} 外部目录访问授权被拒绝", icons::CLOSE)));
         assert!(rendered.contains("User denied permission"));
     }
     #[test]
@@ -1043,7 +1046,7 @@ mod tests {
             }),
         );
         let rendered = text(&super::export_artifact(&artifact_row, true, 80).unwrap());
-        assert!(rendered.contains("📦 工件已成功导出"));
+        assert!(rendered.contains(&format!("{} 工件已成功导出", icons::PACKAGE_VARIANT_CLOSED)));
         assert!(rendered.contains("chart.png (2.0 KB)"));
         assert!(rendered.contains("sha256:abcdef1234567890…"));
 
@@ -1056,7 +1059,7 @@ mod tests {
             }),
         );
         let rendered = text(&super::git_export_patch(&patch_row, true, 80).unwrap());
-        assert!(rendered.contains("📦 Git 补丁已导出"));
+        assert!(rendered.contains(&format!("{} Git 补丁已导出", icons::PACKAGE_VARIANT_CLOSED)));
         assert!(rendered.contains("1.0 KB"));
 
         let image_row = tool(
@@ -1067,6 +1070,9 @@ mod tests {
             }),
         );
         let rendered = text(&super::read_image(&image_row, true, 80).unwrap());
-        assert!(rendered.contains("🖼️ 图像已载入上下文 · img.png"));
+        assert!(rendered.contains(&format!(
+            "{} 图像已载入上下文 · img.png",
+            icons::IMAGE_OUTLINE
+        )));
     }
 }

@@ -1,5 +1,5 @@
 //! Multi-select restore, drawn in the command completion area rather than a modal.
-use super::{app::UiState, theme::THEME};
+use super::{app::UiState, icons, theme::THEME};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
@@ -119,11 +119,7 @@ impl RestorePicker {
         for (row, &index) in ids.iter().skip(self.offset).take(slots).enumerate() {
             let entry = &self.entries[index];
             let text = super::render::fit_label(
-                &format!(
-                    "[{}] {}",
-                    if entry.selected { "x" } else { " " },
-                    entry.title
-                ),
+                &format!("{} {}", icons::checkbox(entry.selected), entry.title),
                 inner.width as usize,
                 false,
             );
@@ -136,11 +132,7 @@ impl RestorePicker {
             let entry = &self.entries[*index];
             let focused = ids.get(self.cursor) == Some(index);
             let text = super::render::fit_label(
-                &format!(
-                    "[{}] {}",
-                    if entry.selected { "x" } else { " " },
-                    entry.title
-                ),
+                &format!("{} {}", icons::checkbox(entry.selected), entry.title),
                 hit.width as usize,
                 false,
             );

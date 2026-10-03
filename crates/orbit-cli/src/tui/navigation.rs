@@ -1,6 +1,6 @@
 use super::{
     app::{TranscriptItem, UiState},
-    render,
+    icons, render,
     theme::THEME,
 };
 use std::time::Instant;
@@ -226,11 +226,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         let hovered = nav.hovered == Some(Target::Round(y));
         let is_active = index == active;
         let symbol = if is_active {
-            "●"
+            icons::CIRCLE
         } else if hovered {
-            "◆"
+            icons::RHOMBUS
         } else {
-            "·"
+            icons::CIRCLE_SMALL
         };
 
         let style = if is_active {
@@ -251,7 +251,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         );
         if is_active && rail_width > 1 {
             frame.render_widget(
-                Paragraph::new("◀").style(style),
+                Paragraph::new(icons::MENU_LEFT).style(style),
                 Rect::new(nav.area.x + 1, y, 1, 1),
             );
         }
@@ -287,7 +287,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
 
     if nav.show_latest || has_more_below {
         frame.render_widget(
-            Paragraph::new("↓").style(Style::default().fg(
+            Paragraph::new(icons::ARROW_DOWN).style(Style::default().fg(
                 if nav.hovered == Some(Target::Latest) {
                     crate::tui::theme::THEME.accent
                 } else {
@@ -455,7 +455,10 @@ mod tests {
 
         let bottom = state.navigation.area.bottom() - 1;
 
-        assert_eq!(terminal.backend().buffer()[(x, bottom)].symbol(), "↓");
+        assert_eq!(
+            terminal.backend().buffer()[(x, bottom)].symbol(),
+            icons::ARROW_DOWN
+        );
 
         handle(
             &mut state,
@@ -638,7 +641,7 @@ mod tests {
         assert_eq!(
             terminal.backend().buffer()[(state.navigation.area.x, state.navigation.area.y)]
                 .symbol(),
-            "·"
+            icons::CIRCLE_SMALL
         );
         let area = state.navigation.area;
         for _ in 0..25 {
@@ -671,7 +674,7 @@ mod tests {
             .navigation
             .targets
             .iter()
-            .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == "●");
+            .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == icons::CIRCLE);
         assert!(has_active, "Active dot must be visible at bottom");
 
         state.follow_bottom = false;
@@ -682,7 +685,7 @@ mod tests {
             .navigation
             .targets
             .iter()
-            .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == "●");
+            .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == icons::CIRCLE);
         assert!(
             has_active,
             "Active dot must be visible when scrolled to middle"
@@ -695,7 +698,7 @@ mod tests {
             .navigation
             .targets
             .iter()
-            .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == "●");
+            .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == icons::CIRCLE);
         assert!(
             has_active,
             "Active dot must be visible when scrolled to top"
@@ -786,8 +789,14 @@ mod tests {
         terminal
             .draw(|frame| render::draw(frame, &mut state))
             .unwrap();
-        assert_eq!(terminal.backend().buffer()[(rail.x, row)].symbol(), "●");
-        assert_eq!(terminal.backend().buffer()[(rail.x + 1, row)].symbol(), "◀");
+        assert_eq!(
+            terminal.backend().buffer()[(rail.x, row)].symbol(),
+            icons::CIRCLE
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(rail.x + 1, row)].symbol(),
+            icons::MENU_LEFT
+        );
         assert_eq!(terminal.backend().buffer()[(rail.x, row)].fg, THEME.accent);
         let chosen = state.navigation.first + 2;
         let chosen_row = state.navigation.targets[2].0;

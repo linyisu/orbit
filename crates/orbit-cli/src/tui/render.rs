@@ -11,6 +11,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use super::app::{RunStatus, ToolStatus, TranscriptItem, UiState};
+use super::icons;
 
 use super::theme::THEME;
 
@@ -855,10 +856,9 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 
         if hovered {
             frame.render_widget(
-                Paragraph::new(" 󰅖 ").style(style.patch(tab_control_style(
-                    state,
-                    &super::TabAction::Close(tab.id.clone()),
-                ))),
+                Paragraph::new(format!(" {} ", icons::CLOSE)).style(style.patch(
+                    tab_control_style(state, &super::TabAction::Close(tab.id.clone())),
+                )),
                 close,
             );
         }
@@ -872,7 +872,8 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let plus_x = x.min(area.right().saturating_sub(4));
         state.new_tab_area = Rect::new(plus_x, area.y, 3, 1);
         frame.render_widget(
-            Paragraph::new(" 󰐕 ").style(tab_control_style(state, &super::TabAction::New)),
+            Paragraph::new(format!(" {} ", icons::PLUS))
+                .style(tab_control_style(state, &super::TabAction::New)),
             state.new_tab_area,
         );
     }
@@ -957,7 +958,12 @@ fn welcome() -> Vec<Line<'static>> {
         stamp(&mut canvas, 0, y, row, front);
     }
 
-    for (x, y, star) in [(7, 1, "✦"), (50, 10, "✧"), (53, 1, "·"), (16, 11, "·")] {
+    for (x, y, star) in [
+        (7, 1, icons::STAR_FOUR_POINTS),
+        (50, 10, icons::STAR_FOUR_POINTS_OUTLINE),
+        (53, 1, icons::CIRCLE_SMALL),
+        (16, 11, icons::CIRCLE_SMALL),
+    ] {
         stamp(&mut canvas, x, y, star, front);
     }
 
@@ -1154,7 +1160,11 @@ pub(super) fn transcript_lines_at_width(
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(vec![
                         Span::styled(
-                            if index == 0 { "❯ " } else { "  " },
+                            if index == 0 {
+                                format!("{} ", icons::CHEVRON_RIGHT)
+                            } else {
+                                "  ".into()
+                            },
                             Style::default().fg(ACCENT),
                         ),
                         Span::styled(
@@ -1263,7 +1273,7 @@ pub(super) fn transcript_lines_at_width(
             TranscriptItem::CommandError(text) => {
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(Span::styled(
-                        format!("{}{}", if index == 0 { "● " } else { "  " }, line),
+                        format!("{} {line}", if index == 0 { icons::CIRCLE } else { " " }),
                         Style::default().fg(ACCENT),
                     )));
                 }
@@ -1290,7 +1300,14 @@ pub(super) fn transcript_lines_at_width(
 
                 for line in text.lines() {
                     lines.push(Line::from(Span::styled(
-                        format!("{} {line}", if error { "×" } else { "›" }),
+                        format!(
+                            "{} {line}",
+                            if error {
+                                icons::CLOSE
+                            } else {
+                                icons::CHEVRON_RIGHT
+                            }
+                        ),
                         Style::default().fg(if error {
                             crate::tui::theme::THEME.error
                         } else {
@@ -1464,9 +1481,9 @@ fn tool_details(
     use super::markdown::LinkedLine;
     let mut lines = Vec::new();
     let (marker, color) = match row.status {
-        ToolStatus::Running => ("◌", TOOL_RUNNING),
-        ToolStatus::Finished => ("✓", TOOL_FINISHED),
-        ToolStatus::Failed => ("×", TOOL_FAILED),
+        ToolStatus::Running => (icons::LOADING, TOOL_RUNNING),
+        ToolStatus::Finished => (icons::CHECK, TOOL_FINISHED),
+        ToolStatus::Failed => (icons::CLOSE, TOOL_FAILED),
     };
 
     let summary = super::tool_display::tool_summary(&row.name, &row.arguments, &row.output);
@@ -1959,8 +1976,8 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
             let bar = PROGRESS_FRAMES[(ms / 260) as usize % PROGRESS_FRAMES.len()];
             format!("  {}  ·  Ctrl+C 取消", bar)
         }
-        RunStatus::Cancelling => "  ◌ 正在取消…".into(),
-        RunStatus::Failed => "  × 操作未完成 · 请查看上方错误".into(),
+        RunStatus::Cancelling => format!("  {} 正在取消…", icons::LOADING),
+        RunStatus::Failed => format!("  {} 操作未完成 · 请查看上方错误", icons::CLOSE),
     };
 
     frame.render_widget(
@@ -2055,7 +2072,10 @@ fn draw_composer(
         ..inner
     };
     frame.render_widget(
-        Paragraph::new(Span::styled("❯", Style::default().fg(ACCENT))),
+        Paragraph::new(Span::styled(
+            icons::CHEVRON_RIGHT,
+            Style::default().fg(ACCENT),
+        )),
         Rect {
             width: 2,
             ..prompt_area
@@ -2471,18 +2491,18 @@ mod tests {
         assert_eq!(state.tab_areas.len(), 1);
         assert_eq!(state.new_tab_area.height, 1);
         assert!(state.new_tab_area.x >= state.tab_areas[0].0.right());
-        assert!(!render(&mut state, 140, 40).contains("󰅖"));
+        assert!(!render(&mut state, 140, 40).contains(icons::CLOSE));
 
         state.tab_hover = Some((
             super::super::TabAction::Select("first".into()),
             std::time::Instant::now(),
         ));
 
-        assert!(render(&mut state, 140, 40).contains("󰅖"));
+        assert!(render(&mut state, 140, 40).contains(icons::CLOSE));
 
         state.tab_hover = None;
 
-        assert!(!render(&mut state, 140, 40).contains("󰅖"));
+        assert!(!render(&mut state, 140, 40).contains(icons::CLOSE));
     }
 
     #[tokio::test]
@@ -2675,9 +2695,9 @@ mod tests {
                 .to_string()
                 .starts_with("  write_file hello.py")
         );
-        assert!(!collapsed[0].to_string().contains('✓'));
-        assert!(!collapsed[0].to_string().contains('⟳'));
-        assert!(!collapsed[0].to_string().contains('✗'));
+        assert!(!collapsed[0].to_string().contains(icons::CHECK));
+        assert!(!collapsed[0].to_string().contains(icons::LOADING));
+        assert!(!collapsed[0].to_string().contains(icons::CLOSE));
 
         // Expanded state: rounded box with breathing blank line and line-numbered code
         let expanded = tool_card(&row, true, 80);
@@ -3300,7 +3320,11 @@ mod tests {
 
         assert_eq!(lines[0].to_string(), "  状态");
         assert_eq!(lines[1].to_string(), "  细节");
-        assert!(lines[3].to_string().starts_with("● 未知命令"));
+        assert!(
+            lines[3]
+                .to_string()
+                .starts_with(&format!("{} 未知命令", icons::CIRCLE))
+        );
         assert!(
             lines
                 .iter()

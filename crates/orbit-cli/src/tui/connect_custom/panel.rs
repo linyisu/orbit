@@ -12,7 +12,7 @@ use orbit_model::client::ApiFormat;
 use ratatui::layout::Position;
 use tokio_util::task::AbortOnDropHandle;
 
-use super::super::{ModelOption, search, terminal};
+use super::super::{ModelOption, icons, search, terminal};
 use super::{
     form::{self, Field},
     model, models,
@@ -181,8 +181,8 @@ impl Panel {
             let model = &self.models[i];
             rows.push(Row {
                 label: format!(
-                    "[{}] {}{}",
-                    if model.entry.enabled { "x" } else { " " },
+                    "{} {}{}",
+                    icons::checkbox(model.entry.enabled),
                     if model.fields[0].value().is_empty() {
                         "新模型"
                     } else {

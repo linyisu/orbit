@@ -13,6 +13,7 @@ mod dialogs;
 mod directory;
 mod editor;
 mod frames;
+mod icons;
 pub mod input;
 mod languages;
 mod markdown;
@@ -2457,7 +2458,11 @@ fn render_mcp_status(statuses: &[orbit_tools::mcp::McpServerStatus]) -> String {
     let mut output = String::from("MCP servers\n");
 
     for status in statuses {
-        let marker = if status.connected { "✓" } else { "×" };
+        let marker = if status.connected {
+            icons::CHECK
+        } else {
+            icons::CLOSE
+        };
 
         output.push_str(&format!(
             "{marker} {}  {} · {} 个工具\n",
@@ -2607,14 +2612,15 @@ fn render_tasks(tasks: &[orbit_store::types::ProjectTask]) -> String {
     output
 }
 
-fn task_status_label(status: orbit_store::types::TaskStatus) -> &'static str {
-    match status {
-        orbit_store::types::TaskStatus::Pending => "○ 待办",
-        orbit_store::types::TaskStatus::InProgress => "▶ 进行中",
-        orbit_store::types::TaskStatus::Blocked => "◆ 已阻塞",
-        orbit_store::types::TaskStatus::Completed => "✓ 完成",
-        orbit_store::types::TaskStatus::Cancelled => "— 已取消",
-    }
+fn task_status_label(status: orbit_store::types::TaskStatus) -> String {
+    let (icon, label) = match status {
+        orbit_store::types::TaskStatus::Pending => (icons::CIRCLE_OUTLINE, "待办"),
+        orbit_store::types::TaskStatus::InProgress => (icons::PLAY, "进行中"),
+        orbit_store::types::TaskStatus::Blocked => (icons::BLOCK_HELPER, "已阻塞"),
+        orbit_store::types::TaskStatus::Completed => (icons::CHECK, "完成"),
+        orbit_store::types::TaskStatus::Cancelled => (icons::CANCEL, "已取消"),
+    };
+    format!("{icon} {label}")
 }
 
 fn render_memories(memories: &[orbit_store::types::SessionMemory]) -> String {
@@ -2627,7 +2633,11 @@ fn render_memories(memories: &[orbit_store::types::SessionMemory]) -> String {
     for memory in memories {
         use std::fmt::Write;
 
-        let marker = if memory.active { "●" } else { "○" };
+        let marker = if memory.active {
+            icons::CIRCLE
+        } else {
+            icons::CIRCLE_OUTLINE
+        };
 
         let _ = writeln!(
             output,

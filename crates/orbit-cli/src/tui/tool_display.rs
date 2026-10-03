@@ -15,6 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{
     app::{ToolRow, ToolStatus},
     code::Highlighter,
+    icons,
     markdown::LinkedLine,
     render::safe_output,
 };
@@ -400,7 +401,10 @@ fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
         let total = val["total_chars"].as_u64().unwrap_or(0);
         let theme = &crate::tui::theme::THEME;
         let mut spans = vec![
-            Span::styled("🌐 ", Style::default().fg(theme.accent)),
+            Span::styled(
+                format!("{} ", icons::WEB),
+                Style::default().fg(theme.accent),
+            ),
             Span::styled(url.to_owned(), Style::default().fg(theme.md_link)),
         ];
         if total > 0 {
@@ -597,7 +601,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             push_blank(&mut raw_lines);
             let path = manifest["path"].as_str().unwrap_or_default();
             let mut manifest_spans = vec![
-                Span::styled("📦 ", Style::default()),
+                Span::styled(
+                    format!("{} ", icons::PACKAGE_VARIANT_CLOSED),
+                    Style::default(),
+                ),
                 Span::styled(path.to_owned(), strong_style),
             ];
             if let Some(pkg) = manifest["package"].as_str().filter(|p| !p.is_empty()) {
@@ -756,7 +763,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         push_line(
             &mut raw_lines,
             0,
-            vec![Span::styled("📂 目录结构:", strong_style)],
+            vec![Span::styled(
+                format!("{} 目录结构:", icons::FOLDER_OPEN),
+                strong_style,
+            )],
         );
         let limit = 8;
         for dir in dirs.iter().take(limit) {
@@ -793,7 +803,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             &mut raw_lines,
             0,
             vec![Span::styled(
-                format!("🧪 测试文件 ({}):", tests.len()),
+                format!("{} 测试文件 ({}):", icons::TEST_TUBE, tests.len()),
                 strong_style,
             )],
         );
@@ -827,7 +837,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         push_line(
             &mut raw_lines,
             0,
-            vec![Span::styled("📋 项目规范:", strong_style)],
+            vec![Span::styled(
+                format!("{} 项目规范:", icons::CLIPBOARD_TEXT_OUTLINE),
+                strong_style,
+            )],
         );
         for file in instructions {
             let path = file.as_str().unwrap_or_default();
@@ -848,7 +861,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         push_line(
             &mut raw_lines,
             0,
-            vec![Span::styled("🎯 任务相关:", strong_style)],
+            vec![Span::styled(
+                format!("{} 任务相关:", icons::TARGET),
+                strong_style,
+            )],
         );
         for item in relevant.iter().take(6) {
             let path = item["path"].as_str().unwrap_or_default();
@@ -870,7 +886,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         push_line(
             &mut raw_lines,
             0,
-            vec![Span::styled("🔗 跨文件引用 (References):", strong_style)],
+            vec![Span::styled(
+                format!("{} 跨文件引用 (References):", icons::LINK_VARIANT),
+                strong_style,
+            )],
         );
         for item in refs.iter().take(6) {
             let path = item["path"].as_str().unwrap_or_default();
@@ -897,7 +916,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         push_line(
             &mut raw_lines,
             0,
-            vec![Span::styled("🔍 代码大纲 (AST):", strong_style)],
+            vec![Span::styled(
+                format!("{} 代码大纲 (AST):", icons::MAGNIFY),
+                strong_style,
+            )],
         );
         let limit = 8;
         for symbol in symbols.iter().take(limit) {
@@ -943,7 +965,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             &mut raw_lines,
             0,
             vec![Span::styled(
-                "⚠️ 部分内容未纳入概览，可指定具体子目录范围继续查看",
+                format!(
+                    "{} 部分内容未纳入概览，可指定具体子目录范围继续查看",
+                    icons::ALERT_OUTLINE
+                ),
                 warn_style,
             )],
         );

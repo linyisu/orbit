@@ -1,4 +1,4 @@
-use super::{ModelOption, app::UiState, commands::COMMANDS};
+use super::{ModelOption, app::UiState, commands::COMMANDS, icons};
 use crate::marketplaces::{Marketplace, PluginPackage};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use orbit_store::types::{ProjectPlugin, Session};
@@ -912,8 +912,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             };
 
             let title_text = if confirming {
-                let label = "⚠ 确认删除？再按 Del 或 Enter 确认，其他键取消";
-                super::render::scrolling_title(label, title_width, None)
+                let label = format!(
+                    "{} 确认删除？再按 Del 或 Enter 确认，其他键取消",
+                    icons::ALERT_OUTLINE
+                );
+                super::render::scrolling_title(&label, title_width, None)
             } else {
                 super::render::scrolling_title(
                     &clean(&session.title),
@@ -1268,9 +1271,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 let label = format!(
                     "{}{}",
                     if dialog.is_enabled(market, plugin) {
-                        "✓ "
+                        format!("{} ", icons::CHECK)
                     } else {
-                        ""
+                        String::new()
                     },
                     clean(&plugin.name)
                 );
