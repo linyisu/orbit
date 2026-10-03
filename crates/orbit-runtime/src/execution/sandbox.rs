@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt},
     process::Command,
 };
 use tokio_util::sync::CancellationToken;
@@ -21,8 +21,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     capability::NetworkPolicy,
     execution::process::{
-        CommandResult, MAX_OUTPUT, MAX_RETAINED_OUTPUT_PER_STREAM, MIB, MountAccess, MountSpec,
-        OutputLog, ProcessLimits, ProcessSpec, TMP_SIZE_BYTES,
+        CommandResult, MAX_OUTPUT, MIB, MountAccess, MountSpec, OutputLog, ProcessLimits,
+        ProcessSpec, TMP_SIZE_BYTES,
     },
     filesystem::inodes::{collect_dir_inodes, collect_opaque_inodes_for_dev},
     filesystem::workspace::{Workspace, WorkspaceError},
@@ -2293,7 +2293,7 @@ struct Captured {
 
 async fn capture(
     mut pipe: impl AsyncRead + Unpin,
-    mut retained: Option<tokio::fs::File>,
+    mut retained: Option<super::output::RetainedOutput>,
 ) -> std::io::Result<Captured> {
     let retaining = retained.is_some();
     let mut tail = VecDeque::with_capacity(MAX_OUTPUT);
@@ -2318,20 +2318,15 @@ async fn capture(
             return Ok(Captured {
                 bytes,
                 total,
-                retained_truncated: retaining && total > MAX_RETAINED_OUTPUT_PER_STREAM,
+                retained_truncated: retaining
+                    && retained.as_ref().is_some_and(|file| file.written() < total),
             });
         }
 
         total = total.saturating_add(count as u64);
 
         if let Some(file) = retained.as_mut() {
-            let prior = total.saturating_sub(count as u64);
-
-            if prior < MAX_RETAINED_OUTPUT_PER_STREAM {
-                let allowed = (MAX_RETAINED_OUTPUT_PER_STREAM - prior).min(count as u64) as usize;
-                file.write_all(&buffer[..allowed]).await?;
-                file.flush().await?;
-            }
+            file.append(&buffer[..count]).await?;
         }
 
         let overflow = (tail.len() + count).saturating_sub(MAX_OUTPUT);
