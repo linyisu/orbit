@@ -39,7 +39,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
@@ -239,6 +239,7 @@ pub async fn run(
     let mut pending_guidance = Vec::new();
     let mut retry_submit = false;
     let mut restore_queue = std::collections::VecDeque::new();
+    let mut restore_errors = Vec::new();
     let mut refresh_before_retry = false;
     let mut active_context: Option<ChatMessage> = None;
     let mut pending: Option<orbit_tools::approval::ApprovalRequest> = None;
@@ -330,6 +331,12 @@ pub async fn run(
                 model_options = run.model_options;
                 bound_session = session.id().to_owned();
                 session_sync.reset(session.id());
+            }
+            if state.resume_request.is_none() && resume_task.is_none() && history_replay.is_none() {
+                for error in restore_errors.drain(..) {
+                    state.transcript.push(TranscriptItem::CommandError(error));
+                    dirty = true;
+                }
             }
             // A peer can move this session while this window remains open.
             // Rebind the actual runtime before accepting the next input.
@@ -1256,52 +1263,45 @@ pub async fn run(
                     resume_task = None;
                     state.resume_loading = None;
 
-                    match result {
-                        Ok(Ok((prepared, loaded_history))) => {
+                    let result = match result {
+                        Ok(Ok(next)) => {
                             park_run!();
                             let empty_tab = tabs.empty_tab(&session, &state);
-                            let mut restored = resume_ui_shell(&state);
-                            restored.workspace = prepared.snapshot.session.workspace.clone();
-                            restored.resume_loading = Some("正在显示会话历史…".into());
-                            let next_model = ModelClient::new(model.config().clone())?;
-                            tabs.activate(&mut session, &mut state, &mut model, &mut history,
-                                (prepared, restored, next_model, loaded_history));
+                            activate_resume(options, &mut tabs, &mut session, &mut state, &mut model, &mut history, next)
+                                .await
+                                .inspect(|_| {
+                                    if let Some(id) = empty_tab { tabs.close_parked(&id); }
+                                })
+                        }
+                        Ok(Err(error)) => Err(error),
+                        Err(error) => Err(error.into()),
+                    };
 
-                            if let Some(id) = empty_tab { tabs.close_parked(&id); }
-
-                            let tab_workspace = std::path::Path::new(&session.snapshot.session.workspace);
-                            if session.audit_workspace.as_ref().is_none_or(|workspace| workspace.root() != tab_workspace) {
-                                let prep = crate::prepare_tui_resources(options, tab_workspace, &session).await?;
-                                workspace::bind(&prep, &mut session, &mut state, &mut model, &mut history).await?;
-                                bound_session = session.id().to_owned();
-                                tools = prep.tools;
-                                instructions = prep.budget.instructions;
-                                skills = prep.budget.skills;
-                                undo_writer = prep.undo_writer;
-                                approvals = prep.approvals;
-                                mcp_statuses = prep.budget.mcp_statuses;
-                                model_options = prep.budget.model_options;
-                                memory_scope = prep.budget.memory_scope;
-                                auto_compact = prep.budget.auto_compact;
-                                max_turns = prep.budget.max_turns;
-                                max_tool_calls = prep.budget.max_tool_calls;
-                                compaction = prep.budget.compaction;
-                            }
-
+                    match result {
+                        Ok(prep) => {
+                            bound_session = session.id().to_owned();
+                            tools = prep.tools;
+                            instructions = prep.budget.instructions;
+                            skills = prep.budget.skills;
+                            undo_writer = prep.undo_writer;
+                            approvals = prep.approvals;
+                            mcp_statuses = prep.budget.mcp_statuses;
+                            model_options = prep.budget.model_options;
+                            memory_scope = prep.budget.memory_scope;
+                            auto_compact = prep.budget.auto_compact;
+                            max_turns = prep.budget.max_turns;
+                            max_tool_calls = prep.budget.max_tool_calls;
+                            compaction = prep.budget.compaction;
                             restore_model_profile(&mut state, &mut model, &model_options, &session);
                             history_replay = Some(crate::session::HistoryReplay::default());
                         }
-                        result => {
-                            let message = match result {
-                                Ok(Err(error)) => error.to_string(),
-                                Err(error) => format!("恢复会话失败：{error}"),
-                                _ => unreachable!(),
-                            };
+                        Err(error) => {
+                            let message = format!("恢复会话失败：{error:#}");
 
                             if let Some(picker) = &mut state.picker {
                                 picker.error = Some(message);
                             } else {
-                                state.transcript.push(TranscriptItem::CommandError(message));
+                                restore_errors.push(message);
                             }
                         }
                     }
@@ -2991,6 +2991,47 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
     Ok(())
 }
 
+async fn activate_resume(
+    options: &crate::TuiOptions,
+    tabs: &mut tabs::Tabs,
+    session: &mut SessionState,
+    state: &mut UiState,
+    model: &mut ModelClient,
+    history: &mut Vec<ChatMessage>,
+    next: (crate::session::PreparedResume, Vec<ChatMessage>),
+) -> Result<crate::TuiResources> {
+    let (prepared, loaded_history) = next;
+    let previous_id = session.id().to_owned();
+    let restored_id = prepared.snapshot.session.id.clone();
+    let directory = PathBuf::from(&prepared.snapshot.session.workspace);
+    let mut restored = resume_ui_shell(state);
+    restored.workspace = prepared.snapshot.session.workspace.clone();
+    restored.resume_loading = Some("正在显示会话历史…".into());
+    let next_model = ModelClient::new(model.config().clone())?;
+    tabs.activate(
+        session,
+        state,
+        model,
+        history,
+        (prepared, restored, next_model, loaded_history),
+    );
+
+    let result: Result<_> = async {
+        let resources = crate::prepare_tui_resources(options, &directory, session).await?;
+        workspace::bind(&resources, session, state, model, history).await?;
+        Ok::<_, anyhow::Error>(resources)
+    }
+    .await
+    .with_context(|| format!("会话 {restored_id}，工作区 {}", directory.display()));
+
+    if result.is_err() {
+        tabs.restore(&previous_id, session, state, model, history);
+        tabs.close_parked(&restored_id);
+    }
+
+    result
+}
+
 async fn load_resume(
     store: orbit_store::store::Store,
     project: String,
@@ -3645,6 +3686,155 @@ mod tests {
         let restored = resume_ui_shell(&state);
 
         assert_eq!(restored.permission_mode, crate::tui::permissions::Mode::Ask);
+    }
+
+    #[tokio::test]
+    async fn failed_restore_preserves_a_running_tab_and_allows_the_next_restore() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("orbit-original");
+        let missing = directory.path().join("orbit-missing");
+        let available = directory.path().join("orbit-available");
+        for path in [&original, &missing, &available] {
+            std::fs::create_dir(path).unwrap();
+        }
+        std::fs::write(available.join("marker.txt"), "Orbit restored workspace").unwrap();
+        let config = directory.path().join("config.toml");
+        std::fs::write(
+            &config,
+            r#"default_provider = "test"
+[providers.test]
+base_url = "http://127.0.0.1:1/v1"
+api_key = "test-only"
+[[providers.test.models]]
+id = "orbit-model"
+"#,
+        )
+        .unwrap();
+        let options = crate::TuiOptions {
+            config,
+            database: directory.path().join("orbit.db"),
+            auth_directory: directory.path().join("auth"),
+            allow_mcp_start: false,
+            home: None,
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        let setup = crate::prepare_tui(&options, &original, None).await.unwrap();
+        let mut session = setup.session;
+        session.enable_shared();
+        let original_id = session.id().to_owned();
+        session
+            .begin("Orbit original request".into(), "test::orbit-model".into())
+            .await
+            .unwrap();
+        let original_run = session.active_run_id();
+        let scratch = session.scratch.clone();
+        let command_output = session.command_output.clone();
+        let mut model = setup.resources.model;
+        let mut state = UiState::new("test::orbit-model");
+        state.submit("Orbit original request".into());
+        state.input.set("Orbit draft".into());
+        let mut history = vec![ChatMessage::user("Orbit original request")];
+        let original_history = history.clone();
+        let mut tabs = tabs::Tabs::new(&session);
+        let mut saved_ids = Vec::new();
+        for path in [&missing, &available] {
+            let mut saved = SessionState::open_shared_in(
+                options.database.clone(),
+                None,
+                "test::orbit-model".into(),
+                path,
+            )
+            .await
+            .unwrap();
+            saved
+                .begin("Orbit saved request".into(), "test::orbit-model".into())
+                .await
+                .unwrap();
+            saved
+                .finish(
+                    "completed",
+                    Some(vec![ChatMessage::user("Orbit saved request")]),
+                )
+                .await
+                .unwrap();
+            saved_ids.push(saved.id().to_owned());
+        }
+        std::fs::remove_dir(&missing).unwrap();
+
+        let mut resources = None;
+        for (index, id) in saved_ids.iter().enumerate() {
+            let next = load_resume(
+                session.store.clone(),
+                session.snapshot.session.project_id.clone(),
+                id.clone(),
+                crate::instructions::Instructions::default(),
+                crate::skills::Skills::default(),
+            )
+            .await
+            .unwrap();
+            let result = activate_resume(
+                &options,
+                &mut tabs,
+                &mut session,
+                &mut state,
+                &mut model,
+                &mut history,
+                next,
+            )
+            .await;
+            if index == 0 {
+                let error = result.err().unwrap();
+                assert!(format!("{error:#}").contains(missing.to_str().unwrap()));
+                assert_eq!(session.id(), original_id);
+                assert_eq!(session.active_run_id(), original_run);
+                assert_eq!(session.audit_workspace.as_ref().unwrap().root(), original);
+                assert!(std::sync::Arc::ptr_eq(&scratch, &session.scratch));
+                assert!(std::sync::Arc::ptr_eq(
+                    &command_output,
+                    &session.command_output
+                ));
+                assert_eq!(state.input.text, "Orbit draft");
+                assert!(state.running());
+                assert_eq!(history, original_history);
+                assert_eq!(model.config().model, "orbit-model");
+                assert_eq!(
+                    tabs.prune_closed(&background::Runs::new()),
+                    vec![id.clone()]
+                );
+                assert!(!tabs.contains(id));
+            } else {
+                resources = Some(result.unwrap());
+            }
+        }
+
+        assert_eq!(session.id(), saved_ids[1]);
+        assert_eq!(session.audit_workspace.as_ref().unwrap().root(), available);
+        let output = resources
+            .unwrap()
+            .tools
+            .execute(
+                orbit_model::types::ToolCall::function(
+                    "orbit-read",
+                    "read_file",
+                    serde_json::json!({"path": "marker.txt"}),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(output.content.contains("Orbit restored workspace"));
+        assert!(tabs.restore(
+            &original_id,
+            &mut session,
+            &mut state,
+            &mut model,
+            &mut history
+        ));
+        assert_eq!(session.active_run_id(), original_run);
+        assert_eq!(state.input.text, "Orbit draft");
+        session.finish("completed", Some(history)).await.unwrap();
     }
 
     #[test]
