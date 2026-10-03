@@ -1380,6 +1380,9 @@ pub async fn run(
                     if let Some(picker) = &mut state.picker {
                         dirty |= picker.advance_title_scroll();
                     }
+                    if let Some(picker) = &mut state.restore_picker {
+                        dirty |= picker.advance_title_scroll();
+                    }
 
                     if let Some((action, since)) = &state.tab_hover {
                         let elapsed = since.elapsed().as_millis();
