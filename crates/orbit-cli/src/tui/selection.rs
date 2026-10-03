@@ -41,6 +41,7 @@ pub struct Selection {
     down: Option<(u16, u16)>,
     dragging: bool,
     moved: bool,
+    cleared_on_press: bool,
     extend: bool,
     rows: BTreeMap<usize, Vec<Cell>>,
     filled: Option<(usize, usize)>,
@@ -59,6 +60,7 @@ impl Selection {
         self.down = None;
         self.dragging = false;
         self.moved = false;
+        self.cleared_on_press = false;
         self.extend = false;
         self.rows.clear();
         self.filled = None;
@@ -117,6 +119,7 @@ impl Selection {
             && mouse.kind == MouseEventKind::Up(MouseButton::Left)
             && self.dragging
             && !self.moved
+            && !(self.cleared_on_press && self.region == Some(Region::Transcript))
             && self.down == Some((mouse.column, mouse.row))
         {
             self.down
@@ -167,7 +170,9 @@ impl Selection {
         match event {
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
+                    let cleared_on_press = self.active() && self.moved;
                     self.clear();
+                    self.cleared_on_press = cleared_on_press;
                     let point = (mouse.column, mouse.row);
                     self.region = [
                         (Region::Transcript, self.viewport),
@@ -548,6 +553,134 @@ mod tests {
         );
         assert!(!state.selection.text().is_empty());
         assert!(state.selection.click(&release).is_none());
+    }
+
+    #[test]
+    fn dismissing_a_selection_keeps_the_tool_open_and_the_next_click_folds_it() {
+        use crate::tui::app::{ToolRow, ToolStatus};
+
+        let mut state = UiState::new("orbit-model");
+        state.transcript.push(TranscriptItem::Tool(ToolRow {
+            id: "orbit-tool".into(),
+            name: "run_command".into(),
+            arguments: serde_json::json!({ "command": "orbit --version" }).to_string(),
+            status: ToolStatus::Finished,
+            output: "Orbit output\nsecond line".into(),
+        }));
+        state.expanded.insert(0);
+        state.follow_bottom = false;
+        let mut terminal = Terminal::new(TestBackend::new(70, 24)).unwrap();
+        draw(&mut state, &mut terminal);
+        let area = state.selection.viewport;
+        let output_y = (area.top()..area.bottom())
+            .find(|&y| {
+                (area.left()..area.right())
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("Orbit output")
+            })
+            .unwrap();
+        let point = (area.x + 4, output_y);
+
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                point.0,
+                point.1,
+            ))
+            .unwrap();
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                point.0 + 8,
+                point.1,
+            ))
+            .unwrap();
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0 + 8, point.1);
+        assert!(state.selection.click(&release).is_none());
+        state.selection.handle(&release).unwrap();
+        draw(&mut state, &mut terminal);
+        assert!(!state.selection.text().is_empty());
+
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0, point.1);
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                point.0,
+                point.1,
+            ))
+            .unwrap();
+        if let Some(point) = state.selection.click(&release) {
+            super::super::toggle_transcript_at(&mut state, point);
+        }
+        state.selection.handle(&release).unwrap();
+        draw(&mut state, &mut terminal);
+        assert!(
+            state.expanded.contains(&0),
+            "the dismissal click must not fold the tool"
+        );
+        assert!(!state.selection.active());
+
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                point.0,
+                point.1,
+            ))
+            .unwrap();
+        let point = state.selection.click(&release).unwrap();
+        assert!(super::super::toggle_transcript_at(&mut state, point));
+        assert!(!state.expanded.contains(&0));
+    }
+
+    #[test]
+    fn replacing_a_selection_by_drag_and_clicking_the_input_remain_immediate() {
+        let (mut state, mut terminal) = setup();
+        let area = state.selection.viewport;
+        for (start, end) in [(area.x + 2, area.x + 6), (area.x + 4, area.x + 8)] {
+            for event in [
+                mouse(MouseEventKind::Down(MouseButton::Left), start, area.y),
+                mouse(MouseEventKind::Drag(MouseButton::Left), end, area.y),
+                mouse(MouseEventKind::Up(MouseButton::Left), end, area.y),
+            ] {
+                assert!(state.selection.click(&event).is_none());
+                state.selection.handle(&event).unwrap();
+            }
+            draw(&mut state, &mut terminal);
+            assert!(state.selection.active());
+            assert!(!state.selection.text().is_empty());
+        }
+        assert_eq!(state.selection.text(), "ne00");
+
+        let input = state.selection.input;
+        let point = (input.x + 3, input.y);
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                point.0,
+                point.1,
+            ))
+            .unwrap();
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0, point.1);
+        assert_eq!(state.selection.click(&release), Some(point));
+        state.selection.handle(&release).unwrap();
+        assert!(!state.selection.active());
+
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), area.x + 2, area.y);
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.y,
+            ))
+            .unwrap();
+        assert_eq!(state.selection.click(&release), Some((area.x + 2, area.y)));
     }
 
     #[test]
