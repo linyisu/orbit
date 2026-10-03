@@ -138,10 +138,8 @@ pub struct PreparedResume {
     git_baseline: Option<serde_json::Value>,
 }
 
+#[cfg(test)]
 impl PreparedResume {
-    pub fn store(&self) -> Store {
-        self.store.clone()
-    }
     pub async fn poll_title(&mut self) -> Result<bool> {
         apply_title(
             &self.store,
@@ -735,6 +733,7 @@ impl SessionState {
 
     /// Park the previous session's snapshot and title task. Shared TUI tabs hold
     /// no idle writer lease; exclusive callers retain their original lease.
+    #[cfg(test)]
     pub fn swap_resume(&mut self, prepared: PreparedResume) -> PreparedResume {
         let previous = PreparedResume {
             store: self.store.clone(),
@@ -766,9 +765,40 @@ impl SessionState {
         previous
     }
 
-    pub async fn prepare_new(&self, model: String) -> Result<PreparedResume> {
-        ensure!(!self.active, "cannot switch sessions during a run");
+    /// Exchange complete session ownership without rebinding a running task's paths or grants.
+    pub fn replace_with(&mut self, prepared: PreparedResume) -> Self {
+        let scratch = std::sync::Arc::new(std::sync::RwLock::new(
+            prepared
+                .store
+                .path()
+                .with_extension("workspaces")
+                .join(&prepared.snapshot.session.id),
+        ));
+        let command_output = std::sync::Arc::new(std::sync::RwLock::new(
+            prepared
+                .store
+                .path()
+                .with_extension("command-output")
+                .join(&prepared.snapshot.session.id),
+        ));
+        let next = Self {
+            store: prepared.store,
+            writer: prepared.writer,
+            snapshot: prepared.snapshot,
+            git_baseline: prepared.git_baseline,
+            title_task: prepared.title_task,
+            scratch,
+            command_output,
+            audit_workspace: None,
+            audit_limits: Default::default(),
+            active: false,
+            shared: self.shared,
+            journal: None,
+        };
+        std::mem::replace(self, next)
+    }
 
+    pub async fn prepare_new(&self, model: String) -> Result<PreparedResume> {
         let writer = self
             .store
             .create(self.snapshot.session.workspace.clone(), model, false)

@@ -18,10 +18,7 @@ use serde_json::json;
 
 const PROJECT_STATE_PREFIX: &str = "ORBIT_PROJECT_STATE_V1\n";
 
-/// The memory tools are registered once for the TUI lifetime, while `/new`
-/// and `/resume` replace the active conversation. Keep that changing identity
-/// in a tiny shared scope so a tool call can never read another session's
-/// memories after a switch.
+/// Conversation identity captured by one tab's memory tools. Other tabs use independent scopes.
 #[derive(Clone, Debug)]
 pub(crate) struct MemoryScope(Arc<RwLock<String>>);
 
@@ -30,6 +27,7 @@ impl MemoryScope {
         Self(Arc::new(RwLock::new(session_id)))
     }
 
+    #[cfg(test)]
     pub(crate) fn set_session(&self, session_id: String) {
         *self.0.write().expect("memory scope lock poisoned") = session_id;
     }

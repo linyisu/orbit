@@ -6,11 +6,11 @@ use crate::session::{PreparedResume, SessionState};
 
 use super::app::{SessionTab, UiState};
 
-struct ParkedTab {
-    prepared: PreparedResume,
-    state: UiState,
-    model: ModelClient,
-    history: Vec<ChatMessage>,
+pub(super) struct ParkedTab {
+    pub session: SessionState,
+    pub state: UiState,
+    pub model: ModelClient,
+    pub history: Vec<ChatMessage>,
 }
 
 pub(super) struct Tabs {
@@ -32,13 +32,18 @@ impl Tabs {
                 let snapshot = if id.as_str() == session.id() {
                     &session.snapshot
                 } else if let Some(tab) = self.parked.get(*id) {
-                    &tab.prepared.snapshot
+                    &tab.session.snapshot
                 } else {
                     return false;
                 };
-                !snapshot.runs.is_empty()
-                    || !snapshot.session.title.is_empty()
-                    || (id.as_str() == session.id() && session.active_run_id().is_some())
+                let running = if id.as_str() == session.id() {
+                    session.active_run_id().is_some()
+                } else {
+                    self.parked
+                        .get(*id)
+                        .is_some_and(|tab| tab.session.active_run_id().is_some())
+                };
+                running || !snapshot.runs.is_empty() || !snapshot.session.title.is_empty()
             })
             .cloned()
             .collect();
@@ -47,6 +52,10 @@ impl Tabs {
             self.remembered = ids;
         }
         Ok(())
+    }
+
+    pub fn parked_mut(&mut self, id: &str) -> Option<&mut ParkedTab> {
+        self.parked.get_mut(id)
     }
 
     pub fn restore_snapshot(&self) -> &[String] {
@@ -64,26 +73,30 @@ impl Tabs {
     pub async fn synchronize_parked(
         &mut self,
         sync: &mut super::session_sync::SessionSync,
+        owned: &super::background::Runs,
     ) -> anyhow::Result<bool> {
         let mut changed = false;
         for tab in self.parked.values_mut() {
+            if owned.get(tab.session.id()).is_some_and(|run| run.busy()) {
+                continue;
+            }
             changed |= super::session_sync::sync_mode(
-                &tab.prepared.store(),
-                &tab.prepared.snapshot.session.id,
+                &tab.session.store,
+                &tab.session.snapshot.session.id,
                 &mut tab.state,
             )
             .await?;
             changed |= sync
                 .poll(
-                    &tab.prepared.store(),
-                    &mut tab.prepared.snapshot,
+                    &tab.session.store,
+                    &mut tab.session.snapshot,
                     &mut tab.state,
                     &mut tab.history,
                 )
                 .await?;
             changed |= super::session_sync::sync_runtime(
-                &tab.prepared.store(),
-                &tab.prepared.snapshot.session.id,
+                &tab.session.store,
+                &tab.session.snapshot.session.id,
                 &mut tab.state,
             )
             .await?;
@@ -94,7 +107,7 @@ impl Tabs {
     pub async fn poll_titles(&mut self) -> bool {
         let mut changed = false;
         for tab in self.parked.values_mut() {
-            changed |= tab.prepared.poll_title().await.unwrap_or(false);
+            changed |= tab.session.poll_title().await.unwrap_or(false);
         }
         changed
     }
@@ -115,7 +128,8 @@ impl Tabs {
     }
 
     pub fn empty_tab(&self, session: &SessionState, state: &UiState) -> Option<String> {
-        (session.snapshot.runs.is_empty()
+        (session.active_run_id().is_none()
+            && session.snapshot.runs.is_empty()
             && session
                 .snapshot
                 .history
@@ -142,7 +156,7 @@ impl Tabs {
     }
 
     pub fn contains(&self, id: &str) -> bool {
-        self.order.iter().any(|item| item == id)
+        self.order.iter().any(|item| item == id) || self.parked.contains_key(id)
     }
 
     pub fn activate(
@@ -156,7 +170,7 @@ impl Tabs {
         let current_id = session.id().to_owned();
         let (prepared, next_state, next_model, next_history) = next;
         let parked = ParkedTab {
-            prepared: session.swap_resume(prepared),
+            session: session.replace_with(prepared),
             state: std::mem::replace(state, next_state),
             model: std::mem::replace(model, next_model),
             history: std::mem::replace(history, next_history),
@@ -167,7 +181,7 @@ impl Tabs {
 
         let next_id = session.id().to_owned();
 
-        if !self.contains(&next_id) {
+        if !self.order.contains(&next_id) {
             self.order.push(next_id);
         }
     }
@@ -184,25 +198,44 @@ impl Tabs {
             return false;
         };
 
-        self.activate(
-            session,
-            state,
-            model,
-            history,
-            (parked.prepared, parked.state, parked.model, parked.history),
-        );
+        let current_id = session.id().to_owned();
+        let current = ParkedTab {
+            session: std::mem::replace(session, parked.session),
+            state: std::mem::replace(state, parked.state),
+            model: std::mem::replace(model, parked.model),
+            history: std::mem::replace(history, parked.history),
+        };
+        self.parked.insert(current_id, current);
+        if !self.order.iter().any(|item| item == id) {
+            self.order.push(id.to_owned());
+        }
+        state.tab_hover = None;
+        state.tab_hover_tick = 0;
 
         true
     }
 
     pub fn close_parked(&mut self, id: &str) -> bool {
-        if self.parked.remove(id).is_none() {
+        if !self.parked.contains_key(id) {
             return false;
         }
 
         self.order.retain(|item| item != id);
 
         true
+    }
+
+    pub fn prune_closed(&mut self, runs: &super::background::Runs) -> Vec<String> {
+        let closed: Vec<_> = self
+            .parked
+            .keys()
+            .filter(|id| !self.order.contains(id) && !runs.get(*id).is_some_and(|run| run.busy()))
+            .cloned()
+            .collect();
+        for id in &closed {
+            self.parked.remove(id);
+        }
+        closed
     }
 
     pub fn close_active(
@@ -221,8 +254,7 @@ impl Tabs {
         }
 
         self.restore(&next_id, session, state, model, history);
-        self.parked.remove(&current_id);
-        self.order.retain(|id| id != &current_id);
+        self.close_parked(&current_id);
 
         true
     }
@@ -241,13 +273,19 @@ impl Tabs {
                 } else {
                     let parked = self.parked.get(id)?;
                     (
-                        &parked.prepared.snapshot.session.title,
+                        &parked.session.snapshot.session.title,
                         parked.state.status.clone(),
                         parked.state.active_elapsed(),
                     )
                 };
 
+                let waiting_approval = if id == session.id() {
+                    state.approval.is_some()
+                } else {
+                    self.parked.get(id)?.state.approval.is_some()
+                };
                 Some(SessionTab {
+                    waiting_approval,
                     elapsed,
                     id: id.clone(),
                     title: title.clone(),
@@ -401,6 +439,11 @@ mod tests {
 
         assert!(tabs.close_active(&mut session, &mut state, &mut model, &mut history));
         assert_eq!(session.id(), first_id);
+        assert_eq!(
+            tabs.prune_closed(&super::super::background::Runs::new())
+                .as_slice(),
+            std::slice::from_ref(&second_id)
+        );
         assert!(session.store.acquire(&second_id).await.is_ok());
     }
 }

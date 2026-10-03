@@ -17,6 +17,7 @@ pub enum RunStatus {
 
 #[derive(Clone, Debug)]
 pub struct SessionTab {
+    pub waiting_approval: bool,
     pub elapsed: std::time::Duration,
     pub id: String,
     pub title: String,

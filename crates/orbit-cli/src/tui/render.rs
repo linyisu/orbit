@@ -763,7 +763,9 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let is_running =
             (tab.active && state.status == RunStatus::Running) || tab.status == RunStatus::Running;
         let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let spinner_prefix = if is_running {
+        let spinner_prefix = if tab.waiting_approval {
+            "待审批 ".into()
+        } else if is_running {
             let idx = (tab.elapsed.as_millis() / 80) as usize % spinner_frames.len();
             format!("{} ", spinner_frames[idx])
         } else {
@@ -2311,6 +2313,7 @@ mod tests {
         let editor = super::super::editor::Editor::new("/bin/true".into());
         let mut state = UiState::new("model");
         state.tabs.push(SessionTab {
+            waiting_approval: false,
             elapsed: std::time::Duration::ZERO,
             id: "new".into(),
             title: "新会话".into(),
@@ -2345,6 +2348,7 @@ mod tests {
     fn home_centers_composer_and_conversation_exposes_new_session_button() {
         let mut state = UiState::new("provider::model");
         state.tabs.push(SessionTab {
+            waiting_approval: false,
             elapsed: std::time::Duration::ZERO,
             id: "first".into(),
             title: "New session".into(),
@@ -2418,6 +2422,7 @@ mod tests {
         let mut state = UiState::new("model");
         state.tabs = (0..5)
             .map(|index| SessionTab {
+                waiting_approval: false,
                 elapsed: std::time::Duration::ZERO,
                 id: format!("session-{index}"),
                 title: format!("Conversation {index}"),
@@ -2644,6 +2649,7 @@ mod tests {
 
             if home {
                 state.tabs.push(SessionTab {
+                    waiting_approval: false,
                     elapsed: std::time::Duration::ZERO,
                     id: "test".into(),
                     title: "新会话".into(),

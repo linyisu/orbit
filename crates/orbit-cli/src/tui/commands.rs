@@ -129,9 +129,8 @@ pub fn matching(input: &str) -> Vec<&'static Command> {
 
 /// These commands only inspect or adjust local UI state. They may run while an
 /// agent request is streaming and never alter that in-flight request, its
-/// history, or tool execution. `/model` updates the selected model profile for
-/// the next request and persists that selection in the current session. All
-/// other commands require the current run to finish or be cancelled first.
+/// history, or tool execution. `/model` persists the profile for the next request;
+/// `/resume` and `/sessions` navigate without stopping the current task.
 pub fn available_while_running(name: &str) -> bool {
     matches!(
         name,
@@ -145,6 +144,8 @@ pub fn available_while_running(name: &str) -> bool {
             | "/plugins"
             | "/mode"
             | "/permissions"
+            | "/resume"
+            | "/sessions"
     )
 }
 

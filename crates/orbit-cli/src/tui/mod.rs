@@ -1,6 +1,7 @@
 pub mod app;
 mod approval;
 mod approval_diff;
+mod background;
 mod changes;
 pub mod commands;
 mod completion;
@@ -67,6 +68,10 @@ use self::{
 
 type RunTask = JoinHandle<Result<AgentResult, AgentError>>;
 
+type LocalTask = JoinHandle<Result<String, orbit_agent::tool::ToolError>>;
+
+type MarketplaceTask = JoinHandle<Result<crate::marketplaces::Marketplace>>;
+
 type ResumeTask = JoinHandle<Result<(crate::session::PreparedResume, Vec<ChatMessage>)>>;
 
 struct StartedRun {
@@ -81,11 +86,11 @@ struct CommandContext<'a> {
     skills: &'a crate::skills::Skills,
     mcp_statuses: &'a [orbit_tools::mcp::McpServerStatus],
     model_options: &'a [ModelOption],
-    memory_scope: &'a crate::project_state::MemoryScope,
 }
 
-type ModelRefreshTask =
-    tokio_util::task::AbortOnDropHandle<Result<(Vec<ModelOption>, Vec<String>)>>;
+type ModelRefreshOutput = (Vec<ModelOption>, Vec<String>);
+
+type ModelRefreshTask = tokio_util::task::AbortOnDropHandle<Result<ModelRefreshOutput>>;
 
 #[derive(Clone, Debug)]
 pub struct ModelOption {
@@ -225,12 +230,10 @@ pub async fn run(
     let mut receiver: Option<mpsc::Receiver<AgentEvent>> = None;
     let mut cancellation: Option<CancellationToken> = None;
     let mut task: Option<RunTask> = None;
-    let mut local_task: Option<
-        tokio::task::JoinHandle<Result<String, orbit_agent::tool::ToolError>>,
-    > = None;
+    let mut local_task: Option<LocalTask> = None;
     let mut local_cancellation: Option<CancellationToken> = None;
     let mut resume_task: Option<ResumeTask> = None;
-    let mut marketplace_task: Option<JoinHandle<Result<crate::marketplaces::Marketplace>>> = None;
+    let mut marketplace_task: Option<MarketplaceTask> = None;
     let mut model_refresh: Option<ModelRefreshTask> = None;
     let mut pending_guidance = Vec::new();
     let mut retry_submit = false;
@@ -243,6 +246,48 @@ pub async fn run(
     let mut branch_task: Option<JoinHandle<(String, Option<String>)>> = None;
     let mut branch_checked = std::time::Instant::now();
     let mut branch_workspace = String::new();
+    let mut background_runs = background::Runs::new();
+    let mut bound_session = session.id().to_owned();
+
+    macro_rules! park_run {
+        () => {
+            background_runs.insert(
+                session.id().to_owned(),
+                background::BackgroundRun {
+                    task: task.take(),
+                    local_task: local_task.take(),
+                    local_cancellation: local_cancellation.take(),
+                    history_replay: history_replay.take(),
+                    move_notice: move_notice.take(),
+                    marketplace_task: marketplace_task.take(),
+                    model_refresh: model_refresh.take(),
+                    retry_submit: std::mem::take(&mut retry_submit),
+                    refresh_before_retry: std::mem::take(&mut refresh_before_retry),
+                    receiver: receiver.take(),
+                    cancellation: cancellation.take(),
+                    pending: pending.take(),
+                    guidance: std::mem::take(&mut pending_guidance),
+                    active_context: active_context.take(),
+                    tools: tools.clone(),
+                    undo_writer: undo_writer.clone(),
+                    approvals: std::mem::replace(
+                        &mut approvals,
+                        orbit_tools::approval::channel().1,
+                    ),
+                    instructions: instructions.clone(),
+                    skills: skills.clone(),
+                    memory_scope: memory_scope.clone(),
+                    auto_compact,
+                    max_turns,
+                    max_tool_calls,
+                    compaction: compaction.clone(),
+                    last_publish: std::time::Instant::now(),
+                    mcp_statuses: mcp_statuses.clone(),
+                    model_options: model_options.clone(),
+                },
+            );
+        };
+    }
 
     let result: Result<()> = async {
         let mut dirty = true;
@@ -252,9 +297,38 @@ pub async fn run(
             if let Some(ids) = state.restore_selection.take() {
                 restore_queue.extend(ids);
             }
-            if state.resume_request.is_none() && resume_task.is_none() && history_replay.is_none()
-                && task.is_none() && local_task.is_none() {
+            if state.resume_request.is_none() && resume_task.is_none() {
                 state.resume_request = restore_queue.pop_front();
+            }
+            if let Some(run) = background_runs.remove(session.id()) {
+                task = run.task;
+                local_task = run.local_task;
+                local_cancellation = run.local_cancellation;
+                history_replay = run.history_replay;
+                move_notice = run.move_notice;
+                marketplace_task = run.marketplace_task;
+                model_refresh = run.model_refresh;
+                retry_submit = run.retry_submit;
+                refresh_before_retry = run.refresh_before_retry;
+                receiver = run.receiver;
+                cancellation = run.cancellation;
+                pending = run.pending;
+                pending_guidance = run.guidance;
+                active_context = run.active_context;
+                tools = run.tools;
+                undo_writer = run.undo_writer;
+                approvals = run.approvals;
+                instructions = run.instructions;
+                skills = run.skills;
+                memory_scope = run.memory_scope;
+                auto_compact = run.auto_compact;
+                max_turns = run.max_turns;
+                max_tool_calls = run.max_tool_calls;
+                compaction = run.compaction;
+                mcp_statuses = run.mcp_statuses;
+                model_options = run.model_options;
+                bound_session = session.id().to_owned();
+                session_sync.reset(session.id());
             }
             // A peer can move this session while this window remains open.
             // Rebind the actual runtime before accepting the next input.
@@ -265,9 +339,10 @@ pub async fn run(
                     restore_model_profile(&mut state, &mut model, &model_options, &session);
                 }
                 let tab_workspace = std::path::Path::new(&session.snapshot.session.workspace);
-                if session.audit_workspace.as_ref().is_none_or(|workspace| workspace.root() != tab_workspace) {
+                if bound_session != session.id() || session.audit_workspace.as_ref().is_none_or(|workspace| workspace.root() != tab_workspace) {
                     let prep = crate::prepare_tui_resources(options, tab_workspace, &session).await?;
                     workspace::bind(&prep, &mut session, &mut state, &mut model, &mut history).await?;
+                    bound_session = session.id().to_owned();
                     tools = prep.tools;
                     instructions = prep.budget.instructions;
                     skills = prep.budget.skills;
@@ -286,18 +361,7 @@ pub async fn run(
             }
             if model_refresh.as_ref().is_some_and(|task| task.is_finished()) {
                 let result = model_refresh.take().expect("model refresh task").await;
-                match result {
-                    Ok(Ok((models, diagnostics))) => {
-                        model_options = models;
-                        state.model_completions = model_options.iter().map(ModelOption::qualified_name).collect();
-                        for diagnostic in diagnostics {
-                            state.transcript.push(TranscriptItem::CommandError(diagnostic));
-                        }
-                        state.model_picker = Some(dialogs::ModelPicker::new(model_options.clone(), state.model.clone(), state.reasoning_effort));
-                    }
-                    Ok(Err(error)) => state.transcript.push(TranscriptItem::CommandError(format!("模型刷新失败：{error}"))),
-                    Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("模型刷新任务失败：{error}"))),
-                }
+                background::model_refresh_result(result, &mut state, &mut model_options);
                 dirty = true;
             }
             let key = (session.id().to_owned(), state.input.text.clone());
@@ -333,11 +397,10 @@ pub async fn run(
             }
 
             if std::mem::take(&mut state.new_tab_request) {
-                if task.is_some() || local_task.is_some() || resume_task.is_some() || history_replay.is_some() {
-                    state.transcript.push(TranscriptItem::CommandError(
-                        "当前响应结束后才能新建标签。".into(),
-                    ));
-                } else if let Err(error) = new_tab(
+                if let Some(task) = resume_task.take() { task.abort(); }
+                if history_replay.is_none() { state.resume_loading = None; }
+                park_run!();
+                if let Err(error) = new_tab(
                     &mut tabs, &mut session, &mut state, &mut model,
                     &mut history, CommandContext {
                         tools: &tools,
@@ -345,7 +408,6 @@ pub async fn run(
                         skills: &skills,
                         mcp_statuses: &mcp_statuses,
                         model_options: &model_options,
-                        memory_scope: &memory_scope,
                     },
                 ).await {
                     state.transcript.push(TranscriptItem::CommandError(error.to_string()));
@@ -353,48 +415,31 @@ pub async fn run(
 
                 dirty = true;
                 frames.request(time::Instant::now());
+                continue;
             }
 
             if let Some(id) = state.close_tab_request.take() {
                 if id != session.id() {
                     tabs.close_parked(&id);
-                } else if task.is_some() || local_task.is_some() || resume_task.is_some() || history_replay.is_some() {
-                    state.transcript.push(TranscriptItem::CommandError("当前操作结束后才能关闭标签。".into()));
-                } else if tabs.close_active(&mut session, &mut state, &mut model, &mut history) {
-                    let tab_workspace = std::path::Path::new(&session.snapshot.session.workspace);
-                    if session.audit_workspace.as_ref().is_none_or(|workspace| workspace.root() != tab_workspace) {
-                        let prep = crate::prepare_tui_resources(options, tab_workspace, &session).await?;
-                        workspace::bind(&prep, &mut session, &mut state, &mut model, &mut history).await?;
-                        tools = prep.tools;
-                        instructions = prep.budget.instructions;
-                        skills = prep.budget.skills;
-                        undo_writer = prep.undo_writer;
-                        approvals = prep.approvals;
-                        mcp_statuses = prep.budget.mcp_statuses;
-                        model_options = prep.budget.model_options;
-                        memory_scope = prep.budget.memory_scope;
-                        auto_compact = prep.budget.auto_compact;
-                        max_turns = prep.budget.max_turns;
-                        max_tool_calls = prep.budget.max_tool_calls;
-                        compaction = prep.budget.compaction;
-                    }
-                    restore_model_profile(&mut state, &mut model, &model_options, &session);
-                    memory_scope.set_session(session.id().into());
-                    refresh_context_usage(&mut state, &history, &tools);
-                    session_sync::sync_mode(&session.store, session.id(), &mut state).await?;
-                    session_sync::sync_runtime(&session.store, session.id(), &mut state).await?;
                 } else {
-                    match new_tab(&mut tabs, &mut session, &mut state, &mut model, &mut history,
-                        CommandContext { tools: &tools, instructions: &instructions, skills: &skills,
-                            mcp_statuses: &mcp_statuses, model_options: &model_options, memory_scope: &memory_scope }).await {
-                        Ok(()) => { tabs.close_parked(&id); }
-                        Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
+                    if let Some(task) = resume_task.take() { task.abort(); }
+                    if history_replay.is_none() { state.resume_loading = None; }
+                    park_run!();
+                    if !tabs.close_active(&mut session, &mut state, &mut model, &mut history) {
+                        match new_tab(&mut tabs, &mut session, &mut state, &mut model, &mut history,
+                            CommandContext { tools: &tools, instructions: &instructions, skills: &skills,
+                                mcp_statuses: &mcp_statuses, model_options: &model_options }).await {
+                            Ok(()) => { tabs.close_parked(&id); }
+                            Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
+                        }
                     }
                 }
+                for id in tabs.prune_closed(&background_runs) { background_runs.remove(&id); }
 
                 state.tab_hover = None;
                 dirty = true;
                 frames.request(time::Instant::now());
+                continue;
             }
 
             if let Some(id) = state.delete_request.take() {
@@ -424,37 +469,14 @@ pub async fn run(
             }
 
             if let Some(id) = state.resume_request.take() {
+                if let Some(task) = resume_task.take() { task.abort(); }
+                if history_replay.is_none() { state.resume_loading = None; }
+                if id != session.id() && tabs.contains(&id) { park_run!(); }
                 if id == session.id() {
                     state.picker = None;
-                } else if task.is_some() || local_task.is_some() || history_replay.is_some() {
-                    state.transcript.push(TranscriptItem::CommandError(
-                        "当前响应或历史加载结束后才能切换标签。".into(),
-                    ));
                 } else if tabs.restore(&id, &mut session, &mut state, &mut model, &mut history) {
-                    let tab_workspace = std::path::Path::new(&session.snapshot.session.workspace);
-                    if session.audit_workspace.as_ref().is_none_or(|workspace| workspace.root() != tab_workspace) {
-                        let prep = crate::prepare_tui_resources(options, tab_workspace, &session).await?;
-                        workspace::bind(&prep, &mut session, &mut state, &mut model, &mut history).await?;
-                        tools = prep.tools;
-                        instructions = prep.budget.instructions;
-                        skills = prep.budget.skills;
-                        undo_writer = prep.undo_writer;
-                        approvals = prep.approvals;
-                        mcp_statuses = prep.budget.mcp_statuses;
-                        model_options = prep.budget.model_options;
-                        memory_scope = prep.budget.memory_scope;
-                        auto_compact = prep.budget.auto_compact;
-                        max_turns = prep.budget.max_turns;
-                        max_tool_calls = prep.budget.max_tool_calls;
-                        compaction = prep.budget.compaction;
-                    }
-                    restore_model_profile(&mut state, &mut model, &model_options, &session);
-
-                    memory_scope.set_session(session.id().into());
                     state.picker = None;
-                    refresh_context_usage(&mut state, &history, &tools);
-                    session_sync::sync_mode(&session.store, session.id(), &mut state).await?;
-                    session_sync::sync_runtime(&session.store, session.id(), &mut state).await?;
+                    session_sync.reset(session.id());
                 } else {
                     state.resume_loading = Some("正在读取会话…  Esc 取消".into());
 
@@ -469,6 +491,7 @@ pub async fn run(
 
                 dirty = true;
                 frames.request(time::Instant::now());
+                continue;
             }
 
             select! {
@@ -495,9 +518,7 @@ pub async fn run(
                         frames.request(time::Instant::now());
                     }
 
-                    if resume_task.is_none()
-                        && history_replay.is_none()
-                        && let Some(action) = tab_target(&event, &state, &tabs)
+                    if let Some(action) = tab_target(&event, &state, &tabs)
                     {
                         match action {
                             TabAction::Select(id) => state.resume_request = Some(id),
@@ -863,15 +884,18 @@ pub async fn run(
                         }
 
                         Action::Submit(prompt) => {
+                            if prompt.trim() == "/new" {
+                                state.new_tab_request = true;
+                                continue;
+                            }
+                            if prompt.trim() == "/close" {
+                                state.close_tab_request = Some(session.id().to_owned());
+                                continue;
+                            }
                             if prompt.trim() == "/restore" {
-                                if task.is_some() || local_task.is_some() || resume_task.is_some() || history_replay.is_some() {
-                                    state.input.set(prompt);
-                                    state.transcript.push(TranscriptItem::Notice("当前操作结束后可以恢复标签。".into()));
-                                } else {
-                                    match restore::RestorePicker::load(&session.store, tabs.restore_snapshot()).await {
-                                        Ok(picker) => { state.restore_picker = Some(picker); state.input.set("/restore ".into()); }
-                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
-                                    }
+                                match restore::RestorePicker::load(&session.store, tabs.restore_snapshot()).await {
+                                    Ok(picker) => { state.restore_picker = Some(picker); state.input.set("/restore ".into()); }
+                                    Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
                                 }
                                 continue;
                             }
@@ -988,14 +1012,6 @@ pub async fn run(
                                     state.menu_dismissed = true;
                                     continue;
                                 }
-                                if command == "/new" && prompt.trim() == "/new" {
-                                    state.new_tab_request = true;
-                                    continue;
-                                }
-                                if command == "/close" && prompt.trim() == "/close" {
-                                    state.close_tab_request = Some(session.id().to_owned());
-                                    continue;
-                                }
                                 if command == "/undo" {
                                     if task.is_some() {
                                         state.transcript.push(TranscriptItem::CommandError(
@@ -1056,12 +1072,12 @@ pub async fn run(
                                         && !commands::available_while_running(command)
                                     {
                                         state.transcript.push(TranscriptItem::CommandError(
-                                            "运行中只能使用 /status、/diagnostics、/model、/reasoning、/context、/skills、/mcp、/plugins、/mode 或 /permissions；请先按 Ctrl+C 取消当前响应。".into(),
+                                            "此命令需要当前响应结束；可先切换标签，或按 Ctrl+C 取消响应。".into(),
                                         ));
                                         continue;
                                     }
 
-                                    match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, skills: &skills, mcp_statuses: &mcp_statuses, model_options: &model_options, memory_scope: &memory_scope }).await {
+                                    match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, skills: &skills, mcp_statuses: &mcp_statuses, model_options: &model_options }).await {
                                         Ok(true) => break,
                                         Ok(false) => refresh_context_usage(&mut state, &history, &tools),
                                         Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
@@ -1126,47 +1142,7 @@ pub async fn run(
                 Some(request) = approvals.recv() => {
                     if request.decision.is_closed() { continue; }
                     session_sync::sync_mode(&session.store, session.id(), &mut state).await?;
-                    let auto_allowed = match &request.preview {
-                        orbit_tools::approval::ApprovalPreview::Write(p) => {
-                            orbit_tools::approval::file_grant_key(&p.path, std::path::Path::new(&session.snapshot.session.workspace)).is_some_and(|key| state.session_allowed_files.contains(&key))
-                        }
-                        orbit_tools::approval::ApprovalPreview::Delete(p) => {
-                            orbit_tools::approval::file_grant_key(&p.path, std::path::Path::new(&session.snapshot.session.workspace)).is_some_and(|key| state.session_allowed_files.contains(&key))
-                        }
-                        orbit_tools::approval::ApprovalPreview::Command(cmd) => {
-                            if let Some(git) = &cmd.git {
-                                match git.kind {
-                                    orbit_runtime::git::GitOperationKind::LocalWrite { .. }
-                                    | orbit_runtime::git::GitOperationKind::RemoteWrite { .. }
-                                    | orbit_runtime::git::GitOperationKind::ReadOnlyQuery { .. } => {
-                                        cmd.git_grant_key(std::path::Path::new(&session.snapshot.session.workspace)).is_some_and(|key| state.session_git_commands.contains(&key))
-                                    }
-                                    _ => false,
-                                }
-                            } else {
-                                state.session_commands.contains(&cmd.request_grant_key(std::path::Path::new(&session.snapshot.session.workspace)))
-                            }
-                        }
-                        _ => false,
-                    };
-                    if auto_allowed {
-                        let _ = request.decision.send(true);
-                        continue;
-                    }
-                    if state.permission_mode.allows(&request.preview, std::path::Path::new(&session.snapshot.session.workspace)) {
-                        let _ = request.decision.send(true);
-                        continue;
-                    }
-
-                    state.selection = Default::default();
-                    state.approval = Some(request.preview.clone());
-                    state.approval_scroll = 0;
-                    state.approval_expanded = false;
-                    state.approval_shown = false;
-                    state.approval_choice = 0;
-                    state.approval_diff = None;
-                    pending = Some(request);
-                    state.pause_clock();
+                    queue_approval(request, &mut state, &session, &mut pending);
                     dirty = true;
                 }
                 event = async { receiver.as_mut().unwrap().recv().await }, if receiver.is_some() => {
@@ -1205,20 +1181,7 @@ pub async fn run(
                         while let Ok(event) = rx.try_recv() { apply_live_event(event, &mut state); }
                     }
 
-                    let (status, final_event, completed_history) = match result {
-                        Ok(Ok(result)) if matches!(&result.final_message, ChatMessage::Assistant { content, tool_calls } if content.as_deref().unwrap_or_default().trim().is_empty() && tool_calls.is_empty()) => {
-                            ("failed", AgentEvent::Failed { error: "模型已结束响应，但未返回回答或工具调用；请检查服务端返回内容。".into() }, None)
-                        }
-                        Ok(Ok(result)) => {
-                            ("completed", AgentEvent::Completed { turns: result.turns, tool_calls: result.tool_calls }, Some(result.history))
-                        }
-                        Ok(Err(_)) if cancellation.as_ref().is_some_and(CancellationToken::is_cancelled) => ("cancelled", AgentEvent::Cancelled, None),
-                        Ok(Err(AgentError::Cancelled)) => ("cancelled", AgentEvent::Cancelled, None),
-                        Ok(Err(AgentError::CompactionFailed { kind, .. })) => ("failed", AgentEvent::Failed { error: format!("上下文整理未完成：{}。原上下文已保留。", kind.label()) }, None),
-                        Ok(Err(AgentError::Compaction(_))) => ("failed", AgentEvent::Failed { error: "上下文整理未完成，原上下文已保留。".into() }, None),
-                        Ok(Err(error)) => ("failed", AgentEvent::Failed { error: error.to_string() }, None),
-                        Err(error) => ("failed", AgentEvent::Failed { error: format!("后台任务中断：{error}") }, None),
-                    };
+                    let (status, final_event, completed_history) = background::outcome(result, cancellation.as_ref());
 
                     let finished_run = session.active_run_id();
                     session.finish(status, completed_history.clone()).await?;
@@ -1294,6 +1257,7 @@ pub async fn run(
 
                     match result {
                         Ok(Ok((prepared, loaded_history))) => {
+                            park_run!();
                             let empty_tab = tabs.empty_tab(&session, &state);
                             let mut restored = resume_ui_shell(&state);
                             restored.workspace = prepared.snapshot.session.workspace.clone();
@@ -1308,6 +1272,7 @@ pub async fn run(
                             if session.audit_workspace.as_ref().is_none_or(|workspace| workspace.root() != tab_workspace) {
                                 let prep = crate::prepare_tui_resources(options, tab_workspace, &session).await?;
                                 workspace::bind(&prep, &mut session, &mut state, &mut model, &mut history).await?;
+                                bound_session = session.id().to_owned();
                                 tools = prep.tools;
                                 instructions = prep.budget.instructions;
                                 skills = prep.budget.skills;
@@ -1322,7 +1287,6 @@ pub async fn run(
                                 compaction = prep.budget.compaction;
                             }
 
-                            memory_scope.set_session(session.id().into());
                             restore_model_profile(&mut state, &mut model, &model_options, &session);
                             history_replay = Some(crate::session::HistoryReplay::default());
                         }
@@ -1349,26 +1313,13 @@ pub async fn run(
                     local_task = None;
                     local_cancellation = None;
 
-                    match result {
-                        Ok(Ok(result)) => state.transcript.push(TranscriptItem::CommandResult(format_undo_result(&result))),
-                        Ok(Err(error)) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
-                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("回退操作中断：{error}"))),
-                    }
+                    state.transcript.push(background::local_result(result));
                 }
                 result = async { marketplace_task.as_mut().unwrap().await }, if marketplace_task.is_some() => {
                     dirty = true;
                     marketplace_task = None;
 
-                    match result {
-                        Ok(Ok(market)) => state.transcript.push(TranscriptItem::CommandResult(format!(
-                            "已添加市场 {}，发现 {} 个插件。\n{}",
-                            market.name,
-                            market.plugins.len(),
-                            market.directory.display(),
-                        ))),
-                        Ok(Err(error)) => state.transcript.push(TranscriptItem::CommandError(format!("无法添加市场：{error}"))),
-                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("市场下载任务中断：{error}"))),
-                    }
+                    state.transcript.push(background::marketplace_result(result));
                 }
                 _ = time::sleep_until(frames.deadline()), if frames.pending() => {
                     tabs.sync_ui(&mut state, &session);
@@ -1381,6 +1332,7 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    dirty |= background::poll(&mut background_runs, &mut tabs, &mut session_sync).await?;
                     if state.thinking_hover_started.is_some_and(|started| started.elapsed() < Duration::from_millis(160)) { dirty = true; }
                     if branch_task.as_ref().is_some_and(|task| task.is_finished())
                         && let Ok((workspace, branch)) = branch_task.take().unwrap().await
@@ -1419,7 +1371,7 @@ pub async fn run(
                         if task.is_none() && local_task.is_none() && history_replay.is_none() {
                             dirty |= session_sync::sync_runtime(&session.store, session.id(), &mut state).await?;
                         }
-                        dirty |= tabs.synchronize_parked(&mut session_sync).await?;
+                        dirty |= tabs.synchronize_parked(&mut session_sync, &background_runs).await?;
                     }
                     dirty |= session.poll_title().await.unwrap_or(false);
                     dirty |= tabs.poll_titles().await;
@@ -1521,12 +1473,76 @@ pub async fn run(
         while rx.try_recv().is_ok() {}
     }
 
+    background::shutdown(&mut background_runs, &mut tabs).await?;
     tabs.close(&session).await?;
     let saved = session.close().await;
 
     result.and(saved)?;
 
     Ok(next_workspace.map(|resources| crate::PreparedTui { session, resources }))
+}
+
+fn queue_approval(
+    request: orbit_tools::approval::ApprovalRequest,
+    state: &mut UiState,
+    session: &SessionState,
+    pending: &mut Option<orbit_tools::approval::ApprovalRequest>,
+) {
+    if request.decision.is_closed() {
+        return;
+    }
+    let auto_allowed = match &request.preview {
+        orbit_tools::approval::ApprovalPreview::Write(p) => orbit_tools::approval::file_grant_key(
+            &p.path,
+            std::path::Path::new(&session.snapshot.session.workspace),
+        )
+        .is_some_and(|key| state.session_allowed_files.contains(&key)),
+        orbit_tools::approval::ApprovalPreview::Delete(p) => orbit_tools::approval::file_grant_key(
+            &p.path,
+            std::path::Path::new(&session.snapshot.session.workspace),
+        )
+        .is_some_and(|key| state.session_allowed_files.contains(&key)),
+        orbit_tools::approval::ApprovalPreview::Command(cmd) => {
+            if let Some(git) = &cmd.git {
+                match git.kind {
+                    orbit_runtime::git::GitOperationKind::LocalWrite { .. }
+                    | orbit_runtime::git::GitOperationKind::RemoteWrite { .. }
+                    | orbit_runtime::git::GitOperationKind::ReadOnlyQuery { .. } => cmd
+                        .git_grant_key(std::path::Path::new(&session.snapshot.session.workspace))
+                        .is_some_and(|key| state.session_git_commands.contains(&key)),
+                    _ => false,
+                }
+            } else {
+                state.session_commands.contains(
+                    &cmd.request_grant_key(std::path::Path::new(
+                        &session.snapshot.session.workspace,
+                    )),
+                )
+            }
+        }
+        _ => false,
+    };
+    if auto_allowed {
+        let _ = request.decision.send(true);
+        return;
+    }
+    if state.permission_mode.allows(
+        &request.preview,
+        std::path::Path::new(&session.snapshot.session.workspace),
+    ) {
+        let _ = request.decision.send(true);
+        return;
+    }
+
+    state.selection = Default::default();
+    state.approval = Some(request.preview.clone());
+    state.approval_scroll = 0;
+    state.approval_expanded = false;
+    state.approval_shown = false;
+    state.approval_choice = 0;
+    state.approval_diff = None;
+    *pending = Some(request);
+    state.pause_clock();
 }
 
 fn apply_live_event(event: AgentEvent, state: &mut UiState) {
@@ -1839,8 +1855,7 @@ enum TabAction {
 }
 
 fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAction> {
-    if state.approval.is_some()
-        || state.show_help
+    if state.show_help
         || state.picker.is_some()
         || state.model_picker.is_some()
         || state.marketplace_dialog.is_some()
@@ -1999,17 +2014,10 @@ async fn new_tab(
         history,
         (prepared, next_state, next_model, next_history),
     );
-    context.memory_scope.set_session(session.id().into());
     refresh_context_usage(state, history, context.tools);
     session
         .set_model_profile(state.model.clone(), state.reasoning_effort)
         .await?;
-
-    if let Some(workspace) = session.audit_workspace.clone() {
-        session
-            .initialize_audit(workspace, session.audit_limits.clone())
-            .await?;
-    }
 
     Ok(())
 }
@@ -2028,7 +2036,6 @@ async fn run_command(
         skills,
         mcp_statuses,
         model_options,
-        memory_scope: _,
     } = context;
     let (command, argument) = prompt
         .split_once(char::is_whitespace)
