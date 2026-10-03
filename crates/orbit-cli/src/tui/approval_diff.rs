@@ -1,12 +1,12 @@
 //! Aligned, cached physical rows for side-by-side file approval.
 use ratatui::{
     style::{Color, Style},
-    text::{Line, Span},
+    text::Line,
 };
 use similar::{DiffTag, TextDiff};
 use std::time::Duration;
 
-use super::{render::fit_label, transcript::wrap_line};
+use super::{code, render::fit_label};
 
 const FOLDED_COLOR: Color = crate::tui::theme::THEME.secondary;
 
@@ -111,61 +111,23 @@ fn side(
         return vec![Line::default()];
     };
 
-    let style = Style::default().fg(match marker {
-        '-' => crate::tui::theme::THEME.diff_removed,
-        '+' => crate::tui::theme::THEME.diff_added,
-        _ => Color::Reset,
-    });
-    let prefix = format!("{marker}{number:>digits$} │ ");
-    let prefix_width = digits + 4;
-
-    if usize::from(width) <= prefix_width {
-        return vec![Line::styled(
-            fit_label(&format!("{prefix}{text}"), width as usize, false),
-            style,
-        )];
-    }
-
-    let mut text = text.clone();
-    let background = match marker {
-        '-' => Some(crate::tui::theme::THEME.diff_removed_bg),
-        '+' => Some(crate::tui::theme::THEME.diff_added_bg),
-        _ => None,
-    };
-    if let Some(background) = background {
-        for span in &mut text.spans {
-            span.style = span.style.bg(background);
-        }
-    }
-    let (wrapped, _) = wrap_line(&text, width - prefix_width as u16);
-
-    wrapped
-        .into_iter()
-        .enumerate()
-        .map(|(index, mut line)| {
-            // A single wide glyph may exceed a one-cell pane; never cross its border.
-            if line.width() > usize::from(width) - prefix_width {
-                line = Line::styled(
-                    fit_label(&line.to_string(), usize::from(width) - prefix_width, false),
-                    style,
-                );
-            }
-
-            line.spans.insert(
-                0,
-                Span::styled(
-                    if index == 0 {
-                        prefix.clone()
-                    } else {
-                        format!(" {} │ ", " ".repeat(digits))
-                    },
-                    style,
-                ),
-            );
-
-            line
-        })
-        .collect()
+    code::render_line(
+        text,
+        code::Options {
+            gutter: code::Gutter::Diff {
+                number: number as u64,
+                digits,
+                indent: 0,
+            },
+            width: Some(width),
+            change: match marker {
+                '-' => Some(code::Change::Removed),
+                '+' => Some(code::Change::Added),
+                _ => None,
+            },
+            ..Default::default()
+        },
+    )
 }
 
 #[cfg(test)]

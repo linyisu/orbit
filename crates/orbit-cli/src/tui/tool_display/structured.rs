@@ -90,6 +90,23 @@ impl View {
         }
     }
 
+    fn source(&mut self, renderer: &mut Renderer, text: &str) {
+        self.hidden |= safe_output(text).width() > usize::from(self.width.saturating_sub(4));
+        self.lines.extend(renderer.render(
+            text,
+            super::super::code::Options {
+                gutter: super::super::code::Gutter::Indent(4),
+                width: Some(self.width),
+                overflow: if self.expanded {
+                    super::super::code::Overflow::Wrap
+                } else {
+                    super::super::code::Overflow::Clip
+                },
+                ..Default::default()
+            },
+        ));
+    }
+
     fn note(&mut self, text: &str) {
         self.push(text, SECONDARY);
     }
@@ -303,25 +320,10 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
         }
 
         let limit = if expanded { lines.len() } else { 8 };
-
+        let mut renderer = Renderer::new("diff");
         for line in lines.iter().take(limit) {
             let text = line.as_str()?;
-            let color = if text.starts_with("+++")
-                || text.starts_with("---")
-                || text.starts_with("diff ")
-            {
-                ACCENT
-            } else if text.starts_with('+') {
-                ADDED
-            } else if text.starts_with('-') {
-                REMOVED
-            } else if text.starts_with("@@") {
-                crate::tui::theme::THEME.patch_location
-            } else {
-                Color::Reset
-            };
-
-            view.push(text, color);
+            view.source(&mut renderer, text);
         }
 
         view.omitted(lines.len().saturating_sub(limit), "行差异");
@@ -719,9 +721,9 @@ pub(super) fn fallback(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<
 
     let mut view = View::new(expanded, width);
 
-    let mut highlighter = Highlighter::new("json");
+    let mut renderer = Renderer::new("json");
     for line in lines.iter().take(limit) {
-        view.push_spans(highlighter.line(line).spans);
+        view.source(&mut renderer, line);
     }
 
     view.omitted(lines.len().saturating_sub(limit), "行");

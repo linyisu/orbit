@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use super::{
-    code::Highlighter,
+    code::Renderer,
     icons,
     languages::{is_markdown_label, label_key},
     theme::code_label_color,
@@ -22,7 +22,7 @@ pub(super) struct CodeFence {
     length: usize,
     markdown_source: bool,
     nested_fences: Vec<(char, usize)>,
-    highlighter: Highlighter,
+    renderer: Renderer,
     color: Color,
 }
 
@@ -38,6 +38,12 @@ pub(super) struct LinkTarget {
 pub(super) struct LinkedLine {
     pub line: Line<'static>,
     pub links: Vec<LinkTarget>,
+}
+
+impl From<LinkedLine> for Line<'static> {
+    fn from(linked: LinkedLine) -> Self {
+        linked.line
+    }
 }
 
 impl LinkTarget {
@@ -57,6 +63,14 @@ impl LinkedLine {
         super::render::sanitize_line(&mut line);
         let links = plain_links(&line.to_string());
         Self { line, links }
+    }
+
+    pub fn shift_offsets(&mut self, amount: isize) {
+        self.links.retain_mut(|link| {
+            link.start = link.start.saturating_add_signed(amount);
+            link.end = link.end.saturating_add_signed(amount);
+            link.start < link.end
+        });
     }
 
     pub fn wrap(self, width: u16) -> Vec<Self> {
@@ -735,14 +749,20 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
         }
 
         let indent = " ".repeat(code.indent);
-        let mut spans = vec![Span::styled(
-            format!("  {indent}│ "),
-            Style::default().fg(code.color),
-        )];
-
         let code_line = source.strip_prefix(&indent).unwrap_or(source);
-        spans.extend(code.highlighter.line(code_line).spans);
-        return Line::from(spans);
+        return code
+            .renderer
+            .render(
+                code_line,
+                super::code::Options {
+                    gutter: super::code::Gutter::Rail {
+                        indent: 2 + code.indent,
+                        color: code.color,
+                    },
+                    ..Default::default()
+                },
+            )
+            .remove(0);
     }
     if matches!(marker, '`' | '~')
         && count >= 3
@@ -757,7 +777,7 @@ pub(super) fn line(source: &str, _index: usize, fence: &mut Fence) -> Line<'stat
             length: count,
             markdown_source: is_markdown_label(label),
             nested_fences: Vec::new(),
-            highlighter: Highlighter::new(label),
+            renderer: Renderer::new(label),
             color,
         });
         let indent_str = " ".repeat(indent);

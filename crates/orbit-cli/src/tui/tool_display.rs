@@ -1,7 +1,7 @@
 //! Presentation-only views. Never rewrite tool results used by the model or store.
 mod structured;
 
-use std::{collections::BTreeMap, ops::Range};
+use std::collections::BTreeMap;
 
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     app::{ToolRow, ToolStatus},
-    code::Highlighter,
+    code::Renderer,
     icons,
     markdown::LinkedLine,
     render::safe_output,
@@ -176,19 +176,23 @@ pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String 
 }
 
 pub(super) fn write_file_preview(arguments: &str, width: u16) -> Option<Vec<Line<'static>>> {
+    write_file_linked(arguments, width).map(|lines| lines.into_iter().map(Line::from).collect())
+}
+
+fn write_file_linked(arguments: &str, width: u16) -> Option<Vec<LinkedLine>> {
     let value: Value = serde_json::from_str(arguments).ok()?;
     let content = value["content"].as_str()?;
     let path = value["path"].as_str().unwrap_or_default();
     let lines: Vec<_> = content.lines().collect();
     let total_lines = lines.len();
     if total_lines == 0 {
-        return Some(vec![Line::from(Span::styled(
+        return Some(vec![LinkedLine::plain(Line::from(Span::styled(
             "(empty file)",
             Style::default().fg(SECONDARY),
-        ))]);
+        )))]);
     }
     let digits = total_lines.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
-    let mut highlighter = Highlighter::for_path(path);
+    let mut renderer = Renderer::for_path(path);
     let mut out = Vec::new();
     for (index, line) in lines.into_iter().enumerate() {
         let num = (index + 1) as u64;
@@ -198,7 +202,7 @@ pub(super) fn write_file_preview(arguments: &str, width: u16) -> Option<Vec<Line
             digits,
             line,
             None,
-            &mut highlighter,
+            &mut renderer,
             true,
             width,
         );
@@ -206,68 +210,40 @@ pub(super) fn write_file_preview(arguments: &str, width: u16) -> Option<Vec<Line
     Some(out)
 }
 
-pub(super) fn edit_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line<'static>>> {
+pub(super) fn edit_file_preview(arguments: &str, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(arguments).ok()?;
     let old_text = value["old_text"].as_str()?;
     let new_text = value["new_text"].as_str()?;
     let path = value["path"].as_str().unwrap_or_default();
-
+    let digits = old_text
+        .lines()
+        .count()
+        .max(new_text.lines().count())
+        .to_string()
+        .len()
+        .max(MIN_LINE_NUMBER_WIDTH);
     let mut out = Vec::new();
-    let diff_rem_bg = crate::tui::theme::THEME.diff_removed_bg;
-    let diff_add_bg = crate::tui::theme::THEME.diff_added_bg;
-    let diff_rem_fg = crate::tui::theme::THEME.diff_removed;
-    let diff_add_fg = crate::tui::theme::THEME.diff_added;
-
-    let mut highlighter_old = Highlighter::for_path(path);
-    for line in old_text.lines() {
-        let text = safe_output(line);
-        let mut spans = vec![Span::styled(
-            "- ",
-            Style::default()
-                .fg(diff_rem_fg)
-                .bg(diff_rem_bg)
-                .add_modifier(Modifier::BOLD),
-        )];
-
-        spans.extend(
-            highlighter_old
-                .line(&text)
-                .spans
-                .into_iter()
-                .map(|mut span| {
-                    span.style = span.style.bg(diff_rem_bg);
-                    span
-                }),
-        );
-
-        out.push(Line::from(spans));
+    for (content, change) in [
+        (old_text, super::code::Change::Removed),
+        (new_text, super::code::Change::Added),
+    ] {
+        let mut renderer = Renderer::for_path(path);
+        for (index, source) in content.lines().enumerate() {
+            out.extend(renderer.render(
+                source,
+                super::code::Options {
+                    gutter: super::code::Gutter::Diff {
+                        number: index as u64 + 1,
+                        digits,
+                        indent: 4,
+                    },
+                    width: Some(width),
+                    change: Some(change),
+                    ..Default::default()
+                },
+            ));
+        }
     }
-
-    let mut highlighter_new = Highlighter::for_path(path);
-    for line in new_text.lines() {
-        let text = safe_output(line);
-        let mut spans = vec![Span::styled(
-            "+ ",
-            Style::default()
-                .fg(diff_add_fg)
-                .bg(diff_add_bg)
-                .add_modifier(Modifier::BOLD),
-        )];
-
-        spans.extend(
-            highlighter_new
-                .line(&text)
-                .spans
-                .into_iter()
-                .map(|mut span| {
-                    span.style = span.style.bg(diff_add_bg);
-                    span
-                }),
-        );
-
-        out.push(Line::from(spans));
-    }
-
     Some(out)
 }
 
@@ -291,100 +267,12 @@ fn matcher(value: &Value) -> Option<Regex> {
         .ok()
 }
 
-// Compute matches before escaping terminal controls. Map their offsets to the
-// displayed text so tabs, clipping and wrapped regex matches keep their styles.
-fn marked_source(text: &str, matcher: Option<&Regex>) -> (String, Vec<Range<usize>>) {
-    let Some(matcher) = matcher else {
-        return (safe_output(text), vec![]);
-    };
-
-    let mut rendered = String::new();
-    let mut ranges = Vec::new();
-    let mut offset = 0;
-
-    for hit in matcher.find_iter(text).filter(|hit| !hit.is_empty()) {
-        rendered.push_str(&safe_output(&text[offset..hit.start()]));
-        let start = rendered.len();
-        rendered.push_str(&safe_output(hit.as_str()));
-        ranges.push(start..rendered.len());
-        offset = hit.end();
-    }
-
-    rendered.push_str(&safe_output(&text[offset..]));
-
-    (rendered, ranges)
-}
-
-fn push_unmarked_spans(
-    spans: &mut Vec<Span<'static>>,
-    text: &str,
-    range: Range<usize>,
-    tokens: &[(Range<usize>, Style)],
-) {
-    if range.start >= range.end {
-        return;
-    }
-    let mut cur = range.start;
-    for (token_range, style) in tokens {
-        if token_range.end <= cur || token_range.start >= range.end {
-            continue;
-        }
-        let seg_start = cur.max(token_range.start);
-        let seg_end = range.end.min(token_range.end);
-        if seg_start < seg_end {
-            spans.push(Span::styled(text[seg_start..seg_end].to_owned(), *style));
-            cur = seg_end;
-        }
-    }
-    if cur < range.end {
-        spans.push(Span::raw(text[cur..range.end].to_owned()));
-    }
-}
-
-fn source_spans(
-    text: &str,
-    marks: &[Range<usize>],
-    range: Range<usize>,
-    tokens: &[(Range<usize>, Style)],
-) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut offset = range.start;
-
-    for mark in marks {
-        let start = mark.start.max(range.start);
-        let end = mark.end.min(range.end);
-
-        if start >= end {
-            continue;
-        }
-
-        if offset < start {
-            push_unmarked_spans(&mut spans, text, offset..start, tokens);
-        }
-
-        spans.push(Span::styled(
-            text[start..end].to_owned(),
-            super::markdown::mark_style(Style::default()),
-        ));
-        offset = end;
-    }
-
-    if offset < range.end {
-        push_unmarked_spans(&mut spans, text, offset..range.end, tokens);
-    }
-
-    spans
-}
-
 fn markdown_preview(content: &str, width: u16) -> Vec<LinkedLine> {
     super::markdown::document(content, width.saturating_add(2))
         .into_iter()
         .map(|mut linked| {
             linked.line.spans.insert(0, Span::raw("  "));
-            for link in &mut linked.links {
-                link.start += 2;
-                link.end += 2;
-            }
+            linked.shift_offsets(2);
             linked
         })
         .collect()
@@ -420,16 +308,16 @@ fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
     };
 
     let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Some(vec![LinkedLine::plain(Line::from(Span::styled(
-            "(empty response)",
-            Style::default().fg(SECONDARY),
-        )))]);
-    }
-
     let mut out = Vec::new();
     if let Some(header) = header_spans {
         out.push(LinkedLine::plain(Line::from(header)));
+    }
+    if trimmed.is_empty() {
+        out.push(LinkedLine::plain(Line::from(Span::styled(
+            "(empty response)",
+            Style::default().fg(SECONDARY),
+        ))));
+        return Some(out);
     }
     out.extend(markdown_preview(trimmed, width));
     Some(out)
@@ -442,33 +330,20 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
     match row.name.as_str() {
         "web_fetch" => return web_fetch_preview(&row.output, width),
         "read_document" => return structured::document_with_links(row, expanded, width),
-        "read_file" | "write_file" => {
-            let value: Value = serde_json::from_str(if row.name == "read_file" {
-                &row.output
-            } else {
-                &row.arguments
-            })
-            .ok()?;
-            if super::languages::is_markdown_path(value["path"].as_str().unwrap_or_default()) {
-                let content = value["content"].as_str()?;
-                let text = if row.name == "read_file" {
-                    read_rows(content)?
-                        .into_iter()
-                        .map(|(_, text)| text)
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                } else {
-                    content.to_owned()
-                };
-                let mut out = markdown_preview(&text, width);
-                if out.is_empty() {
-                    out.push(LinkedLine::plain(Line::styled(
-                        "文件为空",
-                        Style::default().fg(SECONDARY),
-                    )));
-                }
-                return Some(out);
-            }
+        "read_file" => {
+            return read_linked(
+                &serde_json::from_str::<Value>(&row.output).ok()?,
+                expanded,
+                width,
+            );
+        }
+        "write_file" => return write_file_linked(&row.arguments, width),
+        "search_text" => {
+            return search_linked(
+                &serde_json::from_str::<Value>(&row.output).ok()?,
+                expanded,
+                width,
+            );
         }
         _ => {}
     }
@@ -1094,141 +969,62 @@ pub(super) fn clipped(text: &str, width: usize) -> String {
     out
 }
 
-fn note(out: &mut Vec<Line<'static>>, text: &str, width: u16) {
-    out.push(Line::from(Span::styled(
+fn note<T: From<LinkedLine>>(out: &mut Vec<T>, text: &str, width: u16) {
+    out.push(T::from(LinkedLine::plain(Line::from(Span::styled(
         clipped(&format!("    {}", safe_output(text)), usize::from(width)),
         Style::default().fg(SECONDARY),
-    )));
+    )))));
 }
 
 #[allow(clippy::too_many_arguments)]
-fn source(
-    out: &mut Vec<Line<'static>>,
+fn source<T: From<LinkedLine>>(
+    out: &mut Vec<T>,
     number: u64,
     digits: usize,
     text: &str,
     matcher: Option<&Regex>,
-    highlighter: &mut Highlighter,
+    renderer: &mut Renderer,
     expanded: bool,
     width: u16,
 ) {
-    let prefix = format!("    {number:>digits$} │ ");
-    let available = usize::from(width).saturating_sub(prefix.width());
-    let (text, marks) = marked_source(text, matcher);
-
-    if available == 0 {
-        note(out, &format!("{number}: {text}"), width);
-        return;
-    }
-
-    let mut offset = 0;
-    let tokens: Vec<_> = highlighter
-        .line(&text)
-        .spans
-        .into_iter()
-        .map(|span| {
-            let end = offset + span.content.len();
-            let range = offset..end;
-            offset = end;
-            (range, span.style)
-        })
-        .collect();
-
-    let style = Style::default().fg(if matcher.is_some() { ACCENT } else { SECONDARY });
-    let mut push = |range: Range<usize>, continuation: bool, leading: bool, trailing: bool| {
-        let mut spans = vec![Span::styled(
-            if continuation {
-                format!("    {} │ ", " ".repeat(digits))
-            } else {
-                prefix.clone()
-            },
-            style,
-        )];
-
-        if leading {
-            spans.push(Span::raw("…"));
-        }
-
-        spans.extend(source_spans(&text, &marks, range, &tokens));
-
-        if trailing {
-            spans.push(Span::raw("…"));
-        }
-
-        out.push(Line::from(spans));
-    };
-
-    if !expanded {
-        // A search preview should show the hit, even deep inside a long line.
-        let mut start = 0;
-
-        if let Some(first) = marks.first()
-            && text[..first.end].width() >= available
-        {
-            let before: Vec<_> = text
-                .grapheme_indices(true)
-                .take_while(|(offset, _)| *offset <= first.start)
-                .collect();
-            let mut context_width = 0;
-
-            for (offset, glyph) in before.into_iter().rev() {
-                if offset < first.start {
-                    context_width += glyph.width();
-                }
-
-                if context_width > available / 4 {
-                    break;
-                }
-
-                start = offset;
-            }
-        }
-
-        let budget = available.saturating_sub(usize::from(start > 0));
-        let truncated = text[start..].width() > budget;
-        let preview = clipped(&text[start..], budget);
-        let end = start + preview.len()
-            - if truncated && budget > 0 {
-                '…'.len_utf8()
-            } else {
-                0
-            };
-        push(start..end, false, start > 0, truncated && budget > 0);
-        return;
-    }
-
-    // Wrap by display cells, preserving indentation and keeping wide/combining
-    // graphemes intact. Continuations have a blank line-number gutter.
-    let mut start = 0;
-    let mut used = 0;
-    let mut continuation = false;
-
-    for (offset, glyph) in text.grapheme_indices(true) {
-        let size = glyph.width();
-
-        if used + size > available && offset > start {
-            push(start..offset, continuation, false, false);
-            start = offset;
-            continuation = true;
-            used = 0;
-        }
-
-        if size > available {
-            push(offset..offset, continuation, false, true);
-            start = offset + glyph.len();
-            continuation = true;
-            used = 0;
-        } else {
-            used += size;
-        }
-    }
-
-    if start < text.len() || !continuation {
-        push(start..text.len(), continuation, false, false);
-    }
+    out.extend(
+        renderer
+            .render_linked(
+                text,
+                super::code::Options {
+                    gutter: super::code::Gutter::Number {
+                        number,
+                        digits,
+                        indent: 4,
+                    },
+                    width: Some(width),
+                    overflow: if expanded {
+                        super::code::Overflow::Wrap
+                    } else {
+                        super::code::Overflow::Clip
+                    },
+                    highlights: matcher
+                        .map(|matcher| {
+                            matcher
+                                .find_iter(text)
+                                .filter(|hit| !hit.is_empty())
+                                .map(|hit| hit.range())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .map(T::from),
+    );
 }
 
 fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    search_linked(value, expanded, width).map(|lines| lines.into_iter().map(Line::from).collect())
+}
+
+fn search_linked(value: &Value, expanded: bool, width: u16) -> Option<Vec<LinkedLine>> {
     let matches = value["matches"].as_array()?;
     let matcher = matcher(value);
     // Merge overlapping context and multiple matches on the same source line.
@@ -1281,11 +1077,11 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
         }
 
         if shown > 0 {
-            out.push(Line::default());
+            out.push(LinkedLine::plain(Line::default()));
         }
 
         note(&mut out, path, width);
-        let mut highlighter = Highlighter::for_path(path);
+        let mut renderer = Renderer::for_path(path);
         let mut previous = None;
 
         for (line, (text, matched)) in rows {
@@ -1294,8 +1090,8 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
             }
 
             if previous.is_some_and(|last| line > last + 1) {
-                out.push(Line::default());
-                highlighter = Highlighter::for_path(path);
+                out.push(LinkedLine::plain(Line::default()));
+                renderer = Renderer::for_path(path);
             }
 
             source(
@@ -1304,7 +1100,7 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
                 digits,
                 text,
                 if matched { matcher.as_ref() } else { None },
-                &mut highlighter,
+                &mut renderer,
                 expanded,
                 width,
             );
@@ -1330,13 +1126,17 @@ fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>
     }
 
     if expanded || shown < total_rows || clipped_source || has_context {
-        out.push(toggle_line(expanded, width));
+        out.push(LinkedLine::plain(toggle_line(expanded, width)));
     }
 
     Some(out)
 }
 
 fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+    read_linked(value, expanded, width).map(|lines| lines.into_iter().map(Line::from).collect())
+}
+
+fn read_linked(value: &Value, expanded: bool, width: u16) -> Option<Vec<LinkedLine>> {
     let content = value["content"].as_str()?;
     let path = value["path"].as_str().unwrap_or_default();
     let end = value["end_line"].as_u64().unwrap_or(1);
@@ -1349,7 +1149,7 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     }
 
     let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
-    let mut highlighter = Highlighter::for_path(path);
+    let mut renderer = Renderer::for_path(path);
 
     for (number, text) in rows.iter().take(if expanded { usize::MAX } else { 4 }) {
         source(
@@ -1358,7 +1158,7 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
             digits,
             text,
             None,
-            &mut highlighter,
+            &mut renderer,
             expanded,
             width,
         );
@@ -1374,7 +1174,7 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
             safe_output(text).width() > usize::from(width).saturating_sub(digits + 7)
         })
     {
-        out.push(toggle_line(expanded, width));
+        out.push(LinkedLine::plain(toggle_line(expanded, width)));
     }
 
     Some(out)
@@ -1557,14 +1357,14 @@ mod tests {
             ),
         ] {
             let pattern = matcher(&config).unwrap();
-            let mut view = vec![];
+            let mut view: Vec<Line<'static>> = vec![];
             source(
                 &mut view,
                 1,
                 4,
                 text,
                 Some(&pattern),
-                &mut Highlighter::new(""),
+                &mut Renderer::new(""),
                 true,
                 80,
             );
@@ -1578,14 +1378,14 @@ mod tests {
     #[test]
     fn highlight_survives_wrapping_and_focuses_long_line_previews() {
         let pattern = matcher(&json!({ "query": "^ABCDEFGH$", "regex": true })).unwrap();
-        let mut view = vec![];
+        let mut view: Vec<Line<'static>> = vec![];
         source(
             &mut view,
             123,
             4,
             "ABCDEFGH",
             Some(&pattern),
-            &mut Highlighter::new(""),
+            &mut Renderer::new(""),
             true,
             15,
         );
@@ -1598,14 +1398,14 @@ mod tests {
         let text = format!("{} TARGET {}", "中文".repeat(50), "suffix".repeat(10));
 
         for width in [11, 12, 32, 80] {
-            let mut view = vec![];
+            let mut view: Vec<Line<'static>> = vec![];
             source(
                 &mut view,
                 1,
                 4,
                 &text,
                 Some(&pattern),
-                &mut Highlighter::new(""),
+                &mut Renderer::new(""),
                 false,
                 width,
             );
@@ -1803,8 +1603,8 @@ mod tests {
         .to_string();
         let preview = edit_file_preview(&args, 80).expect("preview should succeed");
         assert_eq!(preview.len(), 2);
-        assert_eq!(preview[0].to_string(), "- old line");
-        assert_eq!(preview[1].to_string(), "+ new line");
+        assert_eq!(preview[0].to_string(), "    -   1 │ old line");
+        assert_eq!(preview[1].to_string(), "    +   1 │ new line");
         assert_eq!(
             preview[0].spans[0].style.bg,
             Some(crate::tui::theme::THEME.diff_removed_bg)
@@ -1822,9 +1622,9 @@ mod tests {
         .to_string();
         let py_preview = edit_file_preview(&py_args, 80).expect("py preview should succeed");
         assert_eq!(py_preview.len(), 3);
-        assert_eq!(py_preview[0].to_string(), "- x = 1");
-        assert_eq!(py_preview[1].to_string(), "+ def foo():");
-        assert_eq!(py_preview[2].to_string(), "+     return 42");
+        assert_eq!(py_preview[0].to_string(), "    -   1 │ x = 1");
+        assert_eq!(py_preview[1].to_string(), "    +   1 │ def foo():");
+        assert_eq!(py_preview[2].to_string(), "    +   2 │     return 42");
         for span in &py_preview[0].spans {
             assert_eq!(
                 span.style.bg,

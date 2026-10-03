@@ -150,13 +150,6 @@ pub(super) fn is_markdown_label(info: &str) -> bool {
         .is_some_and(|language| language.markdown)
 }
 
-pub(super) fn is_markdown_path(path: &str) -> bool {
-    std::path::Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(is_markdown_label)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,11 +228,15 @@ mod tests {
 
     #[test]
     fn file_types_resolve_paths_with_spaces_and_preserve_extension_meanings() {
-        for path in ["docs/Orbit Guide.MD", "README.markdown", "docs/notes.mdx"] {
-            assert!(is_markdown_path(path), "{path}");
+        for path in ["docs/Orbit Guide.MD", "README.markdown"] {
+            assert_eq!(syntax_for_path(path).unwrap().name, "Markdown", "{path}");
         }
-        assert!(!is_markdown_path("src/markdown.rs"));
-        assert!(!is_markdown_path("docs.md/notes.txt"));
+        assert_eq!(syntax_for_path("src/markdown.rs").unwrap().name, "Rust");
+        assert!(syntax_for_path("docs/notes.mdx").is_none());
+        assert_eq!(
+            syntax_for_path("docs.md/notes.txt").unwrap().name,
+            "Plain Text"
+        );
         for path in ["src/Orbit Code.RS", r"C:\Orbit Code\main.rs"] {
             assert_eq!(syntax_for_path(path).unwrap().name, "Rust", "{path}");
         }

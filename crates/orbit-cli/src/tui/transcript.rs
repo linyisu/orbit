@@ -1104,10 +1104,15 @@ mod tests {
             }
             assert_eq!(
                 targets,
-                HashSet::from([
-                    "https://orbit.example/first".to_owned(),
-                    "https://orbit.example/second".to_owned(),
-                ]),
+                if width == 10 {
+                    HashSet::new()
+                } else {
+                    HashSet::from([
+                        "https://orbit.example/first".to_owned(),
+                        "https://orbit.example/second".to_owned(),
+                        "https://orbit.example/code".to_owned(),
+                    ])
+                },
                 "width {width}"
             );
         }

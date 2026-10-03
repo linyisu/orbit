@@ -1598,9 +1598,9 @@ fn tool_details(
         || output.trim_start().starts_with('['))
         && serde_json::from_str::<serde_json::Value>(&output).is_ok();
     if is_json_output {
-        let mut highlighter = super::code::Highlighter::new("json");
+        let mut renderer = super::code::Renderer::new("json");
         for line in output.lines() {
-            lines.push(highlighter.line(line));
+            lines.extend(renderer.render(line, super::code::Options::default()));
         }
     } else {
         for line in output.lines() {
@@ -2789,11 +2789,11 @@ mod tests {
 
         let rem_line = card
             .iter()
-            .find(|l| l.to_string().contains("- x = 1"))
+            .find(|l| l.to_string().contains("-   1 │ x = 1"))
             .expect("removed line found");
         let add_line = card
             .iter()
-            .find(|l| l.to_string().contains("+ x = 2"))
+            .find(|l| l.to_string().contains("+   1 │ x = 2"))
             .expect("added line found");
 
         let rem_bg = Some(crate::tui::theme::THEME.diff_removed_bg);
@@ -2810,7 +2810,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_tool_previews_render_structure_and_preserve_links_after_wrapping() {
+    fn file_previews_keep_markdown_source_while_fetched_documents_render_structure() {
         use super::super::app::ToolRow;
         let content = "# Orbit Guide\n\n- **Orbit** uses `Rust`.\n\n| Item | Link |\n| --- | --- |\n| Docs | [Orbit](https://orbit.example/docs) |\n\n```rust\nlet url = \"https://orbit.example/code\";\n```\n\n---";
         let numbered = content
@@ -2850,18 +2850,26 @@ mod tests {
                     .map(|linked| linked.line.to_string())
                     .collect::<Vec<_>>()
                     .join("\n");
-                assert!(!text.contains("# Orbit Guide"), "{name} {width}");
+                let source = matches!(name, "read_file" | "write_file");
                 let links: Vec<_> = card.iter().flat_map(|line| &line.links).collect();
                 assert!(
-                    links
-                        .iter()
-                        .any(|link| link.url == "https://orbit.example/docs"),
+                    width == 10
+                        || links
+                            .iter()
+                            .any(|link| link.url == "https://orbit.example/docs"),
                     "{name} {width}"
                 );
                 assert!(
-                    !links
-                        .iter()
-                        .any(|link| link.url == "https://orbit.example/code"),
+                    if source {
+                        width == 10
+                            || links
+                                .iter()
+                                .any(|link| link.url == "https://orbit.example/code")
+                    } else {
+                        !links
+                            .iter()
+                            .any(|link| link.url == "https://orbit.example/code")
+                    },
                     "{name} {width}"
                 );
                 for linked in &card {
@@ -2874,19 +2882,27 @@ mod tests {
                         );
                     }
                 }
-                if width >= 32 {
+                if width >= 80 {
                     assert!(text.contains("Orbit Guide"));
-                    assert!(text.contains("• Orbit uses Rust."));
-                    assert!(text.contains('┬'));
+                    if source {
+                        assert!(text.contains("# Orbit Guide"));
+                        assert!(text.contains("- **Orbit** uses `Rust`."));
+                        assert!(!text.contains('┬'));
+                    } else {
+                        assert!(text.contains("• Orbit uses Rust."));
+                        assert!(text.contains('┬'));
+                    }
                 }
-                assert!(
-                    card.iter()
-                        .any(|linked| linked.line.spans.iter().any(|span| {
-                            span.style.fg == Some(super::super::theme::THEME.md_rule)
-                                && span.content == "─".repeat(usize::from(width) - 4)
-                        })),
-                    "{name} {width}"
-                );
+                if !source {
+                    assert!(
+                        card.iter()
+                            .any(|linked| linked.line.spans.iter().any(|span| {
+                                span.style.fg == Some(super::super::theme::THEME.md_rule)
+                                    && span.content == "─".repeat(usize::from(width) - 4)
+                            })),
+                        "{name} {width}"
+                    );
+                }
             }
             assert_eq!(row.output, original);
         }

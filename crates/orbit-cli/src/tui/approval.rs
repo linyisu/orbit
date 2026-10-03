@@ -252,66 +252,44 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 
             let mut diff_lines = Vec::new();
 
+            let digits = before
+                .lines()
+                .count()
+                .max(after.lines().count())
+                .to_string()
+                .len()
+                .max(4);
             for change in diff.iter_all_changes() {
-                let (line_no, sign, tag) = match change.tag() {
+                let (index, source, change_style) = match change.tag() {
                     similar::ChangeTag::Delete => (
-                        format!("{:>4}", change.old_index().unwrap_or(0) + 1),
-                        "-",
-                        similar::ChangeTag::Delete,
+                        change.old_index(),
+                        &old_lines,
+                        Some(super::code::Change::Removed),
                     ),
                     similar::ChangeTag::Insert => (
-                        format!("{:>4}", change.new_index().unwrap_or(0) + 1),
-                        "+",
-                        similar::ChangeTag::Insert,
+                        change.new_index(),
+                        &new_lines,
+                        Some(super::code::Change::Added),
                     ),
-                    similar::ChangeTag::Equal => (
-                        format!("{:>4}", change.new_index().unwrap_or(0) + 1),
-                        " ",
-                        similar::ChangeTag::Equal,
-                    ),
+                    similar::ChangeTag::Equal => (change.new_index(), &new_lines, None),
                 };
-
-                let sign_style = match tag {
-                    similar::ChangeTag::Delete => {
-                        Style::default().fg(crate::tui::theme::THEME.error)
-                    }
-                    similar::ChangeTag::Insert => {
-                        Style::default().fg(crate::tui::theme::THEME.success)
-                    }
-                    similar::ChangeTag::Equal => {
-                        Style::default().fg(crate::tui::theme::THEME.diff_context)
-                    }
-                };
-
-                let mut spans = vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        format!("{line_no} "),
-                        Style::default().fg(crate::tui::theme::THEME.line_number),
-                    ),
-                    Span::styled(format!("{sign} "), sign_style),
-                ];
-
-                let source = if tag == similar::ChangeTag::Delete {
-                    change.old_index().and_then(|index| old_lines.get(index))
-                } else {
-                    change.new_index().and_then(|index| new_lines.get(index))
-                };
-                let background = match tag {
-                    similar::ChangeTag::Delete => Some(super::theme::THEME.diff_removed_bg),
-                    similar::ChangeTag::Insert => Some(super::theme::THEME.diff_added_bg),
-                    similar::ChangeTag::Equal => None,
-                };
-                if let Some(source) = source {
-                    spans.extend(source.spans.iter().cloned().map(|mut span| {
-                        if let Some(background) = background {
-                            span.style = span.style.bg(background);
-                        }
-                        span
-                    }));
+                if let Some(index) = index
+                    && let Some(source) = source.get(index)
+                {
+                    diff_lines.extend(super::code::render_line(
+                        source,
+                        super::code::Options {
+                            gutter: super::code::Gutter::Diff {
+                                number: index as u64 + 1,
+                                digits,
+                                indent: 2,
+                            },
+                            width: Some(area.width.saturating_sub(2)),
+                            change: change_style,
+                            ..Default::default()
+                        },
+                    ));
                 }
-
-                diff_lines.push(Line::from(spans));
             }
 
             if diff_lines.is_empty() {
@@ -344,21 +322,24 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 ),
                 Span::raw(" "),
             ]);
+            let digits = preview.before.lines().count().to_string().len().max(4);
             let diff_lines = super::code::file_lines(&preview.path, &preview.before)
-                .into_iter()
+                .iter()
                 .enumerate()
-                .map(|(index, mut line)| {
-                    for span in &mut line.spans {
-                        span.style = span.style.bg(crate::tui::theme::THEME.diff_removed_bg);
-                    }
-                    line.spans.insert(
-                        0,
-                        Span::styled(
-                            format!("  {:>4} - ", index + 1),
-                            Style::default().fg(crate::tui::theme::THEME.error),
-                        ),
-                    );
-                    line
+                .flat_map(|(index, line)| {
+                    super::code::render_line(
+                        line,
+                        super::code::Options {
+                            gutter: super::code::Gutter::Diff {
+                                number: index as u64 + 1,
+                                digits,
+                                indent: 2,
+                            },
+                            width: Some(area.width.saturating_sub(2)),
+                            change: Some(super::code::Change::Removed),
+                            ..Default::default()
+                        },
+                    )
                 })
                 .collect::<Vec<_>>();
 
