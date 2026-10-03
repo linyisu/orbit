@@ -14,6 +14,7 @@ pub struct ToolOutput {
     /// intentionally excluded from the model-facing tool result.
     pub changes: Vec<FileChange>,
     pub verification: Option<orbit_runtime::verification::VerificationEvidence>,
+    pub background_job: Option<String>,
 }
 
 /// A reversible text-file mutation reported only after the filesystem commit
@@ -32,6 +33,7 @@ impl ToolOutput {
             attachments: Vec::new(),
             changes: Vec::new(),
             verification: None,
+            background_job: None,
         }
     }
 
@@ -41,6 +43,7 @@ impl ToolOutput {
             attachments,
             changes: Vec::new(),
             verification: None,
+            background_job: None,
         }
     }
 
@@ -50,6 +53,7 @@ impl ToolOutput {
             attachments: Vec::new(),
             changes,
             verification: None,
+            background_job: None,
         }
     }
 }
@@ -100,11 +104,16 @@ pub trait Tool: Send + Sync {
 #[derive(Clone, Default)]
 pub struct ToolRegistry {
     tools: Arc<HashMap<String, Arc<dyn Tool>>>,
+    background: crate::background::BackgroundJobs,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn background_jobs(&self) -> &crate::background::BackgroundJobs {
+        &self.background
     }
 
     pub fn register<T>(&mut self, tool: T)

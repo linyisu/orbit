@@ -25,6 +25,14 @@ pub enum AgentEvent {
     ToolStarted {
         call: ToolCall,
     },
+    ToolBackgrounded {
+        call: ToolCall,
+        job_id: String,
+        content: String,
+    },
+    WaitingForCommands {
+        job_ids: Vec<String>,
+    },
     ToolFinished {
         call: ToolCall,
         content: String,

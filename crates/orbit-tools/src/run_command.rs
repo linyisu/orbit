@@ -8,7 +8,10 @@ pub type ScratchDirectory = Arc<RwLock<PathBuf>>;
 
 pub type CommandOutputDirectory = crate::read_command_output::CommandOutputDirectory;
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
+use orbit_agent::{
+    background::BackgroundJobs,
+    tool::{Tool, ToolError, ToolFuture, ToolOutput},
+};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -34,12 +37,15 @@ pub struct RunCommand {
     limits: CommandLimits,
     scratch: Option<ScratchDirectory>,
     output_directory: Option<CommandOutputDirectory>,
+    jobs: Option<BackgroundJobs>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Arguments {
     command: String,
+    #[serde(default)]
+    background: bool,
     #[serde(default = "offline_network")]
     network: orbit_runtime::capability::NetworkPolicy,
     #[serde(default)]
@@ -207,7 +213,13 @@ impl RunCommand {
             limits,
             scratch: None,
             output_directory: None,
+            jobs: None,
         }
+    }
+
+    pub fn with_background_jobs(mut self, jobs: BackgroundJobs) -> Self {
+        self.jobs = Some(jobs);
+        self
     }
 
     pub fn with_scratch(mut self, scratch: ScratchDirectory) -> Self {
@@ -226,7 +238,7 @@ impl Tool for RunCommand {
         ToolDefinition::function(
             "run_command",
             format!(
-                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (requires approval in Auto mode). Native Git commands are available within the requested sandbox permissions. Offline read-only queries may run automatically; writes and network requests follow approval policy. Use git_push for an ordinary HTTPS push requiring host credentials. Protected paths (.env*, orbit config/db) are isolated and masked; Existing repository configuration and hooks are read-only unless an explicitly approved configuration operation requests read_write. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is denied by default; request network=allow explicitly, subject to the configured policy and approval. Enforces execution timeout, private script execution, and resource limits. /tmp is a disposable command temporary directory. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
+                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (requires approval in Auto mode). Native Git commands are available within the requested sandbox permissions. Offline read-only queries may run automatically; writes and network requests follow approval policy. Use git_push for an ordinary HTTPS push requiring host credentials. Protected paths (.env*, orbit config/db) are isolated and masked; Existing repository configuration and hooks are read-only unless an explicitly approved configuration operation requests read_write. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is denied by default; request network=allow explicitly, subject to the configured policy and approval. Enforces execution timeout, private script execution, and resource limits. When background=true, starts a managed command and returns a job_id after approval; the same timeout and permissions apply. Independent background commands may overlap. Completion is delivered automatically to this session between model requests. Continue useful independent work; when nothing remains, call wait_commands once rather than polling get_command_status. Use cancel_commands to stop jobs. Background jobs do not survive an Orbit restart and are cancelled when the Agent run is stopped. /tmp is a disposable command temporary directory. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
                 serde_json::to_string(
                     &self
                         .limits
@@ -242,6 +254,7 @@ impl Tool for RunCommand {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "The shell command to execute" },
+                    "background": { "type": "boolean", "default": false, "description": "Run independently and immediately return a job_id; wait_commands sleeps without model requests and completions are delivered automatically" },
                     "network": { "type": "string", "enum": ["deny", "allow"], "default": "deny", "description": "Request network access explicitly; cannot exceed the configured policy" },
                     "cwd": {
                         "type": "string",
@@ -272,6 +285,11 @@ impl Tool for RunCommand {
             let args: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|e| invalid(e.to_string()))?;
             self.limits.validate().map_err(invalid)?;
+            if args.background && self.jobs.is_none() {
+                return Err(invalid(
+                    "background commands are unavailable for this adapter",
+                ));
+            }
             let timeout_seconds = args
                 .timeout_seconds
                 .unwrap_or(self.limits.default_timeout_seconds);
@@ -406,6 +424,11 @@ impl Tool for RunCommand {
                 }
                 None => None,
             };
+            if let Some(jobs) = &self.jobs
+                && let Some(log) = &output_log
+            {
+                jobs.track_output(&call.id, log.id());
+            }
 
             let pre_scan = match orbit_runtime::execution::scan_workspace_summary(
                 self.workspace.clone(),
@@ -497,53 +520,94 @@ impl Tool for RunCommand {
                 }
             }
 
-            let mut result = backend
-                .execute(
-                    &request,
-                    &execution_policy,
-                    &execution_env,
-                    output_log,
-                    cancellation.clone(),
-                )
-                .await?;
+            let workspace = self.workspace.clone();
+            let scan_limits = self.limits.clone().into();
+            let output_id = output_log.as_ref().map(|log| log.id().to_owned());
+            let command = request.command.clone();
+            let background = args.background;
+            let execute = move |token: CancellationToken| async move {
+                let mut result = backend
+                    .execute(
+                        &request,
+                        &execution_policy,
+                        &execution_env,
+                        output_log,
+                        token.clone(),
+                    )
+                    .await?;
 
-            let post_scan = orbit_runtime::execution::scan_workspace_summary(
-                self.workspace.clone(),
-                cancellation,
-                self.limits.clone().into(),
-            )
-            .await;
+                let post_scan =
+                    orbit_runtime::execution::scan_workspace_summary(workspace, token, scan_limits)
+                        .await;
 
-            let post_fingerprint = match post_scan {
-                Ok((fingerprint, _, _)) => Some(fingerprint),
-                Err(error) => {
-                    let warning = format!("output workspace fingerprint unavailable: {error}");
+                let post_fingerprint = match post_scan {
+                    Ok((fingerprint, _, _)) => Some(fingerprint),
+                    Err(error) => {
+                        let warning = format!("output workspace fingerprint unavailable: {error}");
 
-                    if let Some(existing) = &mut verification_error {
-                        existing.push_str("; ");
-                        existing.push_str(&warning);
-                    } else {
-                        verification_error = Some(warning);
+                        if let Some(existing) = &mut verification_error {
+                            existing.push_str("; ");
+                            existing.push_str(&warning);
+                        } else {
+                            verification_error = Some(warning);
+                        }
+
+                        None
                     }
+                };
 
-                    None
+                if let Some(evidence) = result.verification.as_mut() {
+                    if background
+                        && post_fingerprint
+                            .as_ref()
+                            .is_some_and(|output| output.digest != evidence.input.digest)
+                    {
+                        let warning = "workspace changed while the background command was running; this result does not verify the current workspace";
+                        if let Some(existing) = &mut verification_error {
+                            existing.push_str("; ");
+                            existing.push_str(warning);
+                        } else {
+                            verification_error = Some(warning.into());
+                        }
+                        evidence.output = None;
+                    } else {
+                        evidence.output = post_fingerprint;
+                    }
                 }
+
+                result.verification_error = verification_error;
+                let evidence = result.verification.take();
+
+                serde_json::to_string(&result)
+                    .map(|content| {
+                        let mut output = ToolOutput::text(content);
+                        output.verification = evidence;
+                        output
+                    })
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
             };
 
-            if let Some(evidence) = result.verification.as_mut() {
-                evidence.output = post_fingerprint;
+            if args.background {
+                let job = self.jobs.as_ref().unwrap().start(
+                    call,
+                    command,
+                    output_id,
+                    cancellation,
+                    execute,
+                )?;
+                let mut output = ToolOutput::text(json!({
+                    "job_id": job.job_id,
+                    "output_id": job.output_id,
+                    "background": true,
+                    "running": true,
+                    "status": job.status,
+                    "message": "Command started in the background. Completion will be delivered automatically; use wait_commands when there is no independent work."
+                }).to_string());
+                output.background_job = Some(job.job_id);
+                Ok(output)
+            } else {
+                execute(cancellation).await
             }
-
-            result.verification_error = verification_error;
-            let evidence = result.verification.take();
-
-            serde_json::to_string(&result)
-                .map(|content| {
-                    let mut output = ToolOutput::text(content);
-                    output.verification = evidence;
-                    output
-                })
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
         })
     }
 }

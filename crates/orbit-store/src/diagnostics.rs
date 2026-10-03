@@ -210,6 +210,8 @@ fn summarize(
             }
 
             AgentEvent::ReasoningFinished { .. }
+            | AgentEvent::ToolBackgrounded { .. }
+            | AgentEvent::WaitingForCommands { .. }
             | AgentEvent::VerificationRecorded { .. }
             | AgentEvent::ContextUsage { .. }
             | AgentEvent::Completed { .. }

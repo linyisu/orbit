@@ -94,6 +94,7 @@ impl ExecutionJournal for Journal {
         if !matches!(
             event,
             AgentEvent::ToolStarted { .. }
+                | AgentEvent::ToolBackgrounded { .. }
                 | AgentEvent::ToolFinished { .. }
                 | AgentEvent::ToolFailed { .. }
         ) {

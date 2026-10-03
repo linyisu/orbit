@@ -1173,19 +1173,23 @@ pub async fn run(
                     }
                 }
                 _ = command_ticks.tick(), if state.status == app::RunStatus::Running => {
-                    if let Some(TranscriptItem::Tool(row)) = state.transcript.last_mut()
-                        && row.name == "run_command"
-                        && row.status == app::ToolStatus::Running
-                        && let Ok(dir) = session.command_output.read()
-                        && let Some(stdout) = read_active_command_stdout(&dir)
-                        && !stdout.is_empty()
-                    {
-                        row.output = serde_json::json!({
-                            "stdout": stdout,
-                            "running": true,
-                        }).to_string();
-                        dirty = true;
-                        frames.request(time::Instant::now());
+                    if let Ok(dir) = session.command_output.read() {
+                        for (index, item) in state.transcript.iter_mut().enumerate() {
+                            let TranscriptItem::Tool(row) = item else { continue; };
+                            if row.name != "run_command" || row.status != app::ToolStatus::Running { continue; }
+                            let mut value = serde_json::from_str::<serde_json::Value>(&row.output)
+                                .ok().filter(serde_json::Value::is_object).unwrap_or_else(|| serde_json::json!({}));
+                            let Some(output_id) = tools.background_jobs().output_id_for_call(&row.id) else { continue; };
+                            if let Some(stdout) = read_command_stdout(&dir, &output_id)
+                                && !stdout.is_empty() && value["stdout"].as_str() != Some(&stdout) {
+                                value["stdout"] = stdout.into();
+                                value["running"] = true.into();
+                                row.output = value.to_string();
+                                state.transcript_layout.invalidate_from(index);
+                                dirty = true;
+                                frames.request(time::Instant::now());
+                            }
+                        }
                     }
                 }
                 result = async { task.as_mut().unwrap().await }, if task.is_some() => {
@@ -3156,31 +3160,35 @@ fn resume_ui_shell(state: &UiState) -> UiState {
     restored
 }
 
-fn read_active_command_stdout(dir: &std::path::Path) -> Option<String> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut latest = None;
-    let mut latest_time = std::time::SystemTime::UNIX_EPOCH;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "stdout")
-            && let Ok(metadata) = entry.metadata()
-            && let Ok(modified) = metadata.modified()
-            && modified >= latest_time
-        {
-            latest_time = modified;
-            latest = Some(path);
-        }
+fn read_command_stdout(dir: &std::path::Path, output_id: &str) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    if !output_id.starts_with("cmd-")
+        || output_id.len() > 160
+        || !output_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return None;
     }
-
-    let path = latest?;
-    let content = std::fs::read(&path).ok()?;
-    let slice = if content.len() > 16 * 1024 {
-        &content[content.len() - 16 * 1024..]
+    let path = dir.join(format!("{output_id}.stdout"));
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let start = metadata.len().saturating_sub(16 * 1024);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut content = Vec::new();
+    file.take(16 * 1024).read_to_end(&mut content).ok()?;
+    let skip = if start > 0 {
+        content
+            .iter()
+            .take_while(|byte| **byte & 0xc0 == 0x80)
+            .count()
     } else {
-        &content[..]
+        0
     };
-    Some(String::from_utf8_lossy(slice).to_string())
+    Some(String::from_utf8_lossy(&content[skip..]).into_owned())
 }
 
 fn restore_model_profile(
@@ -3731,6 +3739,36 @@ pub(crate) async fn setup_connection(options: &crate::TuiOptions) -> Result<bool
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn command_output_preview_reads_the_requested_log_and_bounds_unicode_tail() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("cmd-orbit-first.stdout"),
+            "Orbit first",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("cmd-orbit-second.stdout"),
+            "Orbit second",
+        )
+        .unwrap();
+        assert_eq!(
+            read_command_stdout(directory.path(), "cmd-orbit-first").unwrap(),
+            "Orbit first"
+        );
+        assert_eq!(
+            read_command_stdout(directory.path(), "cmd-orbit-second").unwrap(),
+            "Orbit second"
+        );
+        assert!(read_command_stdout(directory.path(), "../cmd-orbit-first").is_none());
+        let content = format!("{}Orbit end", "轨道".repeat(6000));
+        std::fs::write(directory.path().join("cmd-orbit-unicode.stdout"), &content).unwrap();
+        let tail = read_command_stdout(directory.path(), "cmd-orbit-unicode").unwrap();
+        assert!(tail.len() <= 16 * 1024);
+        assert!(content.ends_with(&tail));
+        assert!(!tail.contains('\u{fffd}'));
+    }
+
     #[test]
     fn running_context_is_not_overwritten_by_completed_history() {
         let mut state = UiState::new("mock");

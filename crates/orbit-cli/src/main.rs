@@ -950,6 +950,9 @@ fn disable_chat_capabilities(
     if capability_is_disabled(disabled, ChatCapability::Command) {
         tools.remove("run_command");
         tools.remove("read_command_output");
+        tools.remove("get_command_status");
+        tools.remove("wait_commands");
+        tools.remove("cancel_commands");
         tools.remove("export_artifact");
         tools.remove("verification_status");
     }
@@ -981,6 +984,9 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
             }
             AgentEvent::ToolFailed { call, error } => {
                 eprintln!("tool failed: {}: {error}", call.function.name)
+            }
+            AgentEvent::ToolBackgrounded { job_id, .. } => {
+                eprintln!("command backgrounded: {job_id}")
             }
             _ => {}
         }

@@ -118,6 +118,7 @@ pub struct UiState {
     pub transcript_pointer: Option<(u16, u16)>,
     active_thinking: Option<usize>,
     model_started_at: Option<Instant>,
+    background_waiting: bool,
     /// Last drawn link hint; it must be cleared before the transcript redraws.
     pub link_tooltip_area: ratatui::layout::Rect,
     pub auto_compact: bool,
@@ -247,6 +248,7 @@ impl UiState {
             transcript_pointer: None,
             active_thinking: None,
             model_started_at: None,
+            background_waiting: false,
             link_tooltip_area: ratatui::layout::Rect::default(),
             auto_compact: true,
             pending_compaction_archive: None,
@@ -349,6 +351,15 @@ impl UiState {
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::TurnStarted { turn } => {
+                if self.background_waiting {
+                    self.background_waiting = false;
+                    if matches!(self.transcript.last(), Some(TranscriptItem::Assistant(_))) {
+                        self.transcript
+                            .push(TranscriptItem::Assistant(String::new()));
+                        self.transcript_layout
+                            .invalidate_from(self.transcript.len().saturating_sub(1));
+                    }
+                }
                 if self.status != RunStatus::Cancelling {
                     self.status = RunStatus::Running;
                 }
@@ -472,6 +483,15 @@ impl UiState {
             AgentEvent::ToolFinished { call, content, .. } => {
                 self.update_tool(&call, ToolStatus::Finished, content);
             }
+            AgentEvent::ToolBackgrounded { call, content, .. } => {
+                self.update_tool(&call, ToolStatus::Running, content);
+            }
+            AgentEvent::WaitingForCommands { .. } => {
+                self.background_waiting = true;
+                self.finish_thinking();
+                self.model_started_at = None;
+                self.finish_assistant();
+            }
             AgentEvent::ToolFailed { call, error } => {
                 self.update_tool(&call, ToolStatus::Failed, error);
             }
@@ -481,11 +501,13 @@ impl UiState {
                 self.finish_clock();
             }
             AgentEvent::Failed { error } => {
+                self.finish_pending_tools("运行已中断；已请求取消未完成命令。");
                 self.status = RunStatus::Failed;
                 self.finish_clock();
                 self.transcript.push(TranscriptItem::Error(error));
             }
             AgentEvent::Cancelled => {
+                self.finish_pending_tools("运行已取消；已请求取消未完成命令。");
                 self.status = RunStatus::Cancelled;
                 self.finish_clock();
             }
@@ -770,10 +792,84 @@ impl UiState {
             row.output = output;
         }
     }
+
+    fn finish_pending_tools(&mut self, message: &str) {
+        for (index, item) in self.transcript.iter_mut().enumerate() {
+            if let TranscriptItem::Tool(row) = item
+                && row.status == ToolStatus::Running
+            {
+                row.status = ToolStatus::Failed;
+                row.output = message.into();
+                self.transcript_layout.invalidate_from(index);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn background_tools_finish_the_original_row_and_cancel_pending_rows() {
+        let mut state = UiState::new("orbit-test");
+        let first = call("orbit-first");
+        let second = call("orbit-second");
+        state.apply(AgentEvent::ToolStarted {
+            call: first.clone(),
+        });
+        state.apply(AgentEvent::ToolBackgrounded {
+            call: first.clone(),
+            job_id: "job-orbit-first".into(),
+            content: "{\"running\":true}".into(),
+        });
+        state.apply(AgentEvent::ToolStarted { call: second });
+        state.apply(AgentEvent::Model(StreamEvent::TextDelta(
+            "Other Orbit work".into(),
+        )));
+        state.apply(AgentEvent::ToolFinished {
+            call: first,
+            content: "Orbit finished".into(),
+            changes: vec![],
+        });
+        assert_eq!(state.tool_calls, 2);
+        let TranscriptItem::Tool(first) = &state.transcript[0] else {
+            panic!("missing first command");
+        };
+        assert_eq!(first.status, ToolStatus::Finished);
+        assert_eq!(first.output, "Orbit finished");
+        let TranscriptItem::Tool(second) = &state.transcript[1] else {
+            panic!("missing second command");
+        };
+        assert_eq!(second.status, ToolStatus::Running);
+        state.apply(AgentEvent::Cancelled);
+        let TranscriptItem::Tool(second) = &state.transcript[1] else {
+            panic!("missing second command");
+        };
+        assert_eq!(second.status, ToolStatus::Failed);
+        assert!(second.output.contains("取消"));
+    }
+
+    #[test]
+    fn resuming_after_command_wait_starts_a_separate_assistant_message() {
+        let mut state = UiState::new("orbit-test");
+        state.apply(AgentEvent::TurnStarted { turn: 1 });
+        state.apply(AgentEvent::Model(StreamEvent::TextDelta(
+            "Orbit is building.".into(),
+        )));
+        state.apply(AgentEvent::WaitingForCommands {
+            job_ids: vec!["job-orbit".into()],
+        });
+        state.apply(AgentEvent::TurnStarted { turn: 2 });
+        state.apply(AgentEvent::Model(StreamEvent::TextDelta(
+            "Orbit build passed.".into(),
+        )));
+        assert!(
+            matches!(&state.transcript[0], TranscriptItem::Assistant(text) if text == "Orbit is building.")
+        );
+        assert!(
+            matches!(&state.transcript[1], TranscriptItem::Assistant(text) if text == "Orbit build passed.")
+        );
+    }
+
     #[test]
     fn reasoning_completion_only_offers_current_model_capabilities() {
         use orbit_model::types::ReasoningEffort;

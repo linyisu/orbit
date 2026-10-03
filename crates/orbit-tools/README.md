@@ -89,7 +89,7 @@
 
 #### `run_command`
 - **功能**：在由 `orbit-runtime` 托管的 Linux Bubblewrap 沙箱容器中安全执行 Shell 脚本与命令。
-- **参数**：`command`（脚本正文）、`cwd`（工作目录）、`timeout_seconds`（超时时限）、`workspace_access`（`read` 或 `read_write`，默认 `read`）、`network`（`deny` 或 `allow`，默认 `deny`）。
+- **参数**：`command`（脚本正文）、`cwd`（工作目录）、`timeout_seconds`（超时时限）、`background`（默认 false，后台执行）、`workspace_access`（`read` 或 `read_write`，默认 `read`）、`network`（`deny` 或 `allow`，默认 `deny`）。
 - **约束与安全**：
   - 默认工作区挂载为只读；显式申请 `read_write` 并在通过审批后方可在工作区直接持久化修改。
   - `.env`、数据库和凭据等注册的受保护文件被遮蔽。原生 Git 元数据可见，读写随工作区模式变化；已有 Git 配置和 hooks 默认只读；经批准的 Git 配置操作在 `read_write` 下可写。
@@ -97,8 +97,16 @@
   - 单次请求默认离线；`network="allow"` 显式申请联网，不能超过全局 `command.network` 上限（默认允许申请）。
   - stdout / stderr 持续排空并在工具结果中各保留末尾 32 KiB，附带总字节数与截断标记。
 
+#### 后台命令
+- `run_command(background=true)` 在审批及执行准备完成后返回 `job_id` 和可用的 `output_id`。同会话最多同时运行 8 个后台命令，沿用普通命令的权限、沙箱、执行超时和核验流程；普通工具调用仍按模型给出的顺序执行，后台命令的进程可以重叠运行。
+- `wait_commands(job_ids?, mode="any"|"all")` 通过完成事件等待任意一个或全部任务，不轮询、不调用模型。省略 ID 时等待当前运行尚未交付的任务。
+- `get_command_status(job_ids?)` 查询状态；省略 ID 时列出当前运行的任务，指定 ID 时附带有限输出预览。`cancel_commands(job_ids)` 请求取消指定任务，`cancelling` 表示进程仍在清理，最终为 `cancelled`。
+- 未经显式等待获取的结果在下一次模型请求前合并投递，stdout/stderr 各最多 2 KiB 预览，完整保留日志通过 `read_command_output` 回读。显式等待已返回的结果不重复通知模型。
+- AI 没有继续调用工具但仍有任务未完成时，Agent 自动暂停等待完成事件，再继续规划。切换或关闭仍在运行的标签不停止任务；取消当前运行或发生执行错误会取消其后台任务。任务 ID 仅对所属会话有效，进程不跨 Orbit 重启恢复，历史记录不触发自动重跑。
+
 #### `read_command_output`
 - **功能**：命令输出按会话流式存储在用户数据目录中（单流上限 16 MiB，会话滚动上限 128 MiB），模型可通过此工具按偏移分页回读保留的历史输出日志，超过配额的输出可能截断或被回收，避免超大输出塞满上下文。
+- **并行日志**：运行中的日志不会被其他命令回收；所有并行流共享会话字节预算，预算不足时继续排空进程输出并标记保留日志截断。
 
 ### 6. 权限扩展与产物交付
 

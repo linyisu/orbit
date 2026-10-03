@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod archive;
 pub mod autocompact;
+pub mod background;
 pub mod calibration;
 pub mod checkpoint;
 pub mod compaction;

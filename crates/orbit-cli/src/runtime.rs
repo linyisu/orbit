@@ -72,6 +72,17 @@ pub async fn workspace_tools(
     let mcp_approvals = approvals.clone();
 
     if let Some(approvals) = approvals {
+        let jobs = tools.background_jobs().clone();
+        for action in [
+            orbit_tools::command_jobs::CommandJobAction::Status,
+            orbit_tools::command_jobs::CommandJobAction::Wait,
+            orbit_tools::command_jobs::CommandJobAction::Cancel,
+        ] {
+            tools.register(orbit_tools::command_jobs::CommandJobs::new(
+                jobs.clone(),
+                action,
+            ));
+        }
         tools.register(
             orbit_tools::git_push::GitPush::new(workspace.clone(), approvals.clone())
                 .with_limits(&command_limits),
@@ -79,7 +90,8 @@ pub async fn workspace_tools(
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
         tools.register(RequestCapability::new(workspace.clone(), approvals.clone()));
-        let command = RunCommand::with_limits(workspace.clone(), approvals, command_limits.clone());
+        let command = RunCommand::with_limits(workspace.clone(), approvals, command_limits.clone())
+            .with_background_jobs(jobs);
         let command = if let Some(scratch) = scratch {
             if let Some(database) = database {
                 tools.register(
