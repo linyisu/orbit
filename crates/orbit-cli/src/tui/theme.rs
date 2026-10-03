@@ -1,7 +1,7 @@
 //! All TUI palette values, syntax themes and color transformations live here.
 //! Widgets use semantic roles; syntax palettes and contrast adjustments may use RGB.
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 
 /// Semantic colors shared by TUI widgets.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +45,8 @@ pub struct Theme {
     pub placeholder: Color,
     pub repaint_sentinel: Color,
     pub selection: Color,
+    pub selection_foreground: Color,
+    pub selection_light_foreground: Color,
     pub strong: Color,
     pub success: Color,
     pub tab_background: Color,
@@ -143,7 +145,9 @@ impl Theme {
             patch_location: Color::Rgb(139, 185, 195),
             placeholder: Color::Rgb(178, 184, 194),
             repaint_sentinel: Color::Rgb(1, 2, 3),
-            selection: Color::Blue,
+            selection: Color::Rgb(220, 222, 226),
+            selection_foreground: Color::Rgb(0, 0, 0),
+            selection_light_foreground: Color::Rgb(255, 255, 255),
             strong: Color::Rgb(230, 230, 230),
             success: Color::Rgb(114, 205, 142),
             tab_background: Color::Rgb(40, 38, 40),
@@ -191,6 +195,115 @@ impl Theme {
 }
 
 pub const THEME: Theme = Theme::dark();
+
+/// Preserve each token's color through inversion, with readable text on transparent backgrounds.
+pub(super) fn selection_style(style: Style) -> Style {
+    let (source_foreground, source_background) = if style.add_modifier.contains(Modifier::REVERSED)
+    {
+        (style.bg, style.fg)
+    } else {
+        (style.fg, style.bg)
+    };
+    let background = color_rgb(source_foreground.unwrap_or(Color::Reset))
+        .or_else(|| color_rgb(THEME.selection))
+        .unwrap();
+    let mut foreground = color_rgb(source_background.unwrap_or(Color::Reset));
+
+    if foreground.is_none_or(|color| contrast(color, background) < 4.5) {
+        let dark = color_rgb(THEME.selection_foreground).unwrap();
+        let light = color_rgb(THEME.selection_light_foreground).unwrap();
+        foreground = Some(
+            if contrast(dark, background) >= contrast(light, background) {
+                dark
+            } else {
+                light
+            },
+        );
+    }
+
+    let (red, green, blue) = foreground.unwrap();
+    let (bg_red, bg_green, bg_blue) = background;
+    style
+        .fg(Color::Rgb(red, green, blue))
+        .bg(Color::Rgb(bg_red, bg_green, bg_blue))
+        .remove_modifier(Modifier::REVERSED | Modifier::DIM)
+}
+
+fn color_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    let index = match color {
+        Color::Reset => return None,
+        Color::Rgb(red, green, blue) => return Some((red, green, blue)),
+        Color::Indexed(index) => index,
+        Color::Black => 0,
+        Color::Red => 1,
+        Color::Green => 2,
+        Color::Yellow => 3,
+        Color::Blue => 4,
+        Color::Magenta => 5,
+        Color::Cyan => 6,
+        Color::Gray => 7,
+        Color::DarkGray => 8,
+        Color::LightRed => 9,
+        Color::LightGreen => 10,
+        Color::LightYellow => 11,
+        Color::LightBlue => 12,
+        Color::LightMagenta => 13,
+        Color::LightCyan => 14,
+        Color::White => 15,
+    };
+    let rgb = match index {
+        0..=15 => [
+            (0, 0, 0),
+            (128, 0, 0),
+            (0, 128, 0),
+            (128, 128, 0),
+            (0, 0, 128),
+            (128, 0, 128),
+            (0, 128, 128),
+            (192, 192, 192),
+            (128, 128, 128),
+            (255, 0, 0),
+            (0, 255, 0),
+            (255, 255, 0),
+            (0, 0, 255),
+            (255, 0, 255),
+            (0, 255, 255),
+            (255, 255, 255),
+        ][usize::from(index)],
+        16..=231 => {
+            let value = index - 16;
+            let channel = |level| if level == 0 { 0 } else { 55 + level * 40 };
+            (
+                channel(value / 36),
+                channel(value / 6 % 6),
+                channel(value % 6),
+            )
+        }
+        _ => {
+            let shade = 8 + (index - 232) * 10;
+            (shade, shade, shade)
+        }
+    };
+    Some(rgb)
+}
+
+fn luminance((red, green, blue): (u8, u8, u8)) -> f64 {
+    let linear = |channel| {
+        let channel = f64::from(channel) / 255.0;
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+}
+
+fn contrast(foreground: (u8, u8, u8), background: (u8, u8, u8)) -> f64 {
+    let foreground = luminance(foreground);
+    let background = luminance(background);
+    (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05)
+}
 
 /// Stable language hues with a bounded brightness, including unknown languages.
 pub(super) fn code_label_color(key: &str) -> Color {
@@ -339,5 +452,111 @@ pub(super) fn ansi_color(code: u16) -> Option<Color> {
         96 => Some(Color::LightCyan),
         97 => Some(Color::White),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_keeps_token_colors_badges_and_text_modifiers() {
+        let modifiers = Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED;
+        let token = Color::Rgb(97, 175, 239);
+        let selected = selection_style(
+            Style::default()
+                .fg(token)
+                .add_modifier(modifiers | Modifier::DIM),
+        );
+        assert_eq!(selected.bg, Some(token));
+        assert_eq!(selected.fg, Some(THEME.selection_foreground));
+        assert!(selected.add_modifier.contains(modifiers));
+        assert!(!selected.add_modifier.contains(Modifier::DIM));
+
+        for language in ["python", "rust", "orbit-script"] {
+            let badge = code_label_color(language);
+            let selected = selection_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(badge)
+                    .add_modifier(Modifier::BOLD),
+            );
+            assert_eq!(selected.bg, Some(Color::Rgb(0, 0, 0)));
+            assert_eq!(selected.fg, Some(badge));
+            assert!(selected.add_modifier.contains(Modifier::BOLD));
+        }
+    }
+
+    #[test]
+    fn selection_handles_default_dark_light_and_already_reversed_styles() {
+        for (source, foreground, background) in [
+            (
+                Style::default(),
+                THEME.selection_foreground,
+                THEME.selection,
+            ),
+            (
+                Style::default().fg(Color::Rgb(16, 16, 16)),
+                THEME.selection_light_foreground,
+                Color::Rgb(16, 16, 16),
+            ),
+            (
+                Style::default()
+                    .fg(Color::Rgb(255, 255, 255))
+                    .bg(Color::Rgb(240, 240, 240)),
+                THEME.selection_foreground,
+                Color::Rgb(255, 255, 255),
+            ),
+            (
+                Style::default()
+                    .fg(Color::Rgb(222, 222, 222))
+                    .bg(Color::Rgb(30, 30, 30)),
+                Color::Rgb(30, 30, 30),
+                Color::Rgb(222, 222, 222),
+            ),
+            (
+                Style::default()
+                    .fg(Color::Rgb(80, 80, 80))
+                    .bg(Color::Rgb(240, 240, 240))
+                    .add_modifier(Modifier::REVERSED),
+                Color::Rgb(80, 80, 80),
+                Color::Rgb(240, 240, 240),
+            ),
+        ] {
+            let selected = selection_style(source);
+            assert_eq!(selected.fg, Some(foreground));
+            assert_eq!(selected.bg, Some(background));
+            assert!(!selected.add_modifier.contains(Modifier::REVERSED));
+        }
+    }
+
+    #[test]
+    fn selection_contrast_remains_readable_across_indexed_colors_and_rgb_hues() {
+        assert_eq!(contrast((0, 0, 0), (255, 255, 255)), 21.0);
+        let check = |color| {
+            for background in [
+                Color::Reset,
+                Color::Rgb(24, 24, 24),
+                Color::Rgb(240, 240, 240),
+            ] {
+                let selected = selection_style(Style::default().fg(color).bg(background));
+                let foreground = color_rgb(selected.fg.unwrap()).unwrap();
+                let background = color_rgb(selected.bg.unwrap()).unwrap();
+                assert!(
+                    contrast(foreground, background) >= 4.5,
+                    "unreadable selection for {color:?}: {selected:?}"
+                );
+            }
+        };
+        for index in 0..=255 {
+            check(Color::Indexed(index));
+        }
+        for red in [0, 24, 85, 120, 200, 255] {
+            for green in [0, 24, 85, 120, 200, 255] {
+                for blue in [0, 24, 85, 120, 200, 255] {
+                    check(Color::Rgb(red, green, blue));
+                }
+            }
+        }
     }
 }

@@ -13,7 +13,7 @@ use ratatui::{
     style::Style,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     io::{self, Write},
     time::{Duration, Instant},
 };
@@ -411,6 +411,7 @@ impl Selection {
 
         self.latest = Some(snapshot);
         let area = self.area().intersection(frame.area());
+        let mut styles = HashMap::new();
 
         for y in area.y..area.bottom() {
             let row = (y - area.y) as usize + self.base();
@@ -427,6 +428,9 @@ impl Selection {
                 let width = cells[x].symbol().width().max(1);
 
                 if x <= right as usize && x + width > left as usize {
+                    let style = *styles
+                        .entry(cells[x].style())
+                        .or_insert_with_key(|style| super::theme::selection_style(*style));
                     for (column, cell) in cells
                         .iter()
                         .enumerate()
@@ -434,11 +438,7 @@ impl Selection {
                         .skip(x)
                     {
                         frame.buffer_mut()[(area.x + column as u16, y)] = cell.clone();
-                        frame.buffer_mut()[(area.x + column as u16, y)].set_style(
-                            Style::default()
-                                .bg(crate::tui::theme::THEME.selection)
-                                .fg(crate::tui::theme::THEME.white),
-                        );
+                        frame.buffer_mut()[(area.x + column as u16, y)].set_style(style);
                     }
                 }
 
@@ -500,6 +500,87 @@ mod tests {
 
         (state, terminal)
     }
+    #[test]
+    fn selected_markdown_and_code_keep_colors_and_wide_glyphs_through_redraws() {
+        use ratatui::style::{Color, Modifier};
+
+        let mut state = UiState::new("orbit-model");
+        state.transcript.push(TranscriptItem::Assistant(
+            "Orbit **加粗** _斜体_ [文档](https://orbit.example/docs) 👩‍💻\n\n```python\n# Orbit\nprint('Orbit')\n```".into(),
+        ));
+        state.follow_bottom = false;
+        let mut terminal = Terminal::new(TestBackend::new(70, 24)).unwrap();
+        draw(&mut state, &mut terminal);
+        let before = terminal.backend().buffer().clone();
+        let area = state.selection.viewport;
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x,
+                area.y,
+            ))
+            .unwrap();
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                area.right() - 1,
+                area.bottom() - 1,
+            ))
+            .unwrap();
+        let copied = state.selection.text();
+        assert!(copied.contains("加粗"));
+        assert!(copied.contains("👩‍💻"));
+        assert!(copied.contains("print('Orbit')"));
+
+        for _ in 0..3 {
+            let mut painted = None;
+            terminal
+                .draw(|frame| {
+                    assert!(state.selection.draw_frozen(frame));
+                    painted = Some(frame.buffer_mut().clone());
+                })
+                .unwrap();
+            let selected = painted.unwrap();
+            let mut colored = 0;
+            let mut wide = 0;
+
+            for y in area.y..area.bottom() {
+                let mut x = area.x;
+                while x < area.right() {
+                    let original = &before[(x, y)];
+                    let cell = &selected[(x, y)];
+                    let width = original.symbol().width().max(1) as u16;
+                    assert_eq!(cell.symbol(), original.symbol());
+                    assert_eq!(terminal.backend().buffer()[(x, y)].bg, cell.bg);
+                    assert_eq!(
+                        cell.modifier,
+                        original.modifier - (Modifier::REVERSED | Modifier::DIM)
+                    );
+                    if let Color::Rgb(..) = original.fg {
+                        assert_eq!(cell.bg, original.fg);
+                        colored += 1;
+                    }
+                    for column in x + 1..(x + width).min(area.right()) {
+                        assert_eq!(selected[(column, y)].bg, cell.bg);
+                        assert_eq!(selected[(column, y)].fg, cell.fg);
+                        assert_eq!(selected[(column, y)].symbol(), before[(column, y)].symbol());
+                        wide += 1;
+                    }
+                    x += width;
+                }
+            }
+            assert!(colored > 10);
+            assert!(wide >= 7);
+            assert_eq!(state.selection.text(), copied);
+        }
+
+        state.selection.clear();
+        draw(&mut state, &mut terminal);
+        assert_eq!(terminal.backend().buffer(), &before);
+    }
+
     #[test]
     fn press_does_not_select_until_pointer_moves() {
         let (mut state, mut terminal) = setup();
