@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-/// Metadata names Orbit never exposes or grants from a workspace. Keep the
+/// Reserved metadata names; exact configured templates are handled separately. Keep the
 /// file API, capability policy, inode guard, and sandbox masks in sync.
 pub(crate) fn is_protected_workspace_name(name: &str) -> bool {
     matches!(name, ".git" | ".env")

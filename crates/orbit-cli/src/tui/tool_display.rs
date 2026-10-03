@@ -118,7 +118,11 @@ pub(super) fn capability_summary(arguments: &str) -> String {
     let args: Value = serde_json::from_str(arguments).unwrap_or_default();
     let path = args["path"].as_str().unwrap_or_default();
     let access = args["access"].as_str().unwrap_or("read");
-    let access_label = if access == "read_write" || access == "write" { "读写" } else { "只读" };
+    let access_label = if access == "read_write" || access == "write" {
+        "读写"
+    } else {
+        "只读"
+    };
     format!("{access_label} · {path}")
 }
 
@@ -169,8 +173,6 @@ pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String 
         _ => super::render::default_tool_summary(arguments),
     }
 }
-
-
 
 pub(super) fn write_file_preview(arguments: &str, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(arguments).ok()?;
@@ -273,7 +275,6 @@ pub(super) fn edit_file_preview(arguments: &str, _width: u16) -> Option<Vec<Line
 
     Some(out)
 }
-
 
 // Use the search tool's literal/regex and Unicode case-folding semantics.
 fn matcher(value: &Value) -> Option<Regex> {
@@ -392,7 +393,10 @@ fn source_spans(
 pub(super) fn web_fetch_preview(output: &str, _width: u16) -> Option<Vec<Line<'static>>> {
     let (text, header_spans) = if let Ok(val) = serde_json::from_str::<Value>(output) {
         let content = val["content"].as_str().unwrap_or(output).to_owned();
-        let url = val["url"].as_str().or_else(|| val["requested_url"].as_str()).unwrap_or_default();
+        let url = val["url"]
+            .as_str()
+            .or_else(|| val["requested_url"].as_str())
+            .unwrap_or_default();
         let start = val["start_char"].as_u64().unwrap_or(0);
         let total = val["total_chars"].as_u64().unwrap_or(0);
         let theme = &crate::tui::theme::THEME;
@@ -482,7 +486,6 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
     let files_count = inventory.get("files").and_then(|v| v.as_u64()).unwrap_or(0);
     let languages = inventory.get("languages").and_then(|v| v.as_object());
 
-    // Build language summary string
     let lang_summary = if let Some(langs) = languages {
         let mut sorted: Vec<_> = langs.iter().collect();
         sorted.sort_by_key(|(_, c)| std::cmp::Reverse(c.as_u64().unwrap_or(0)));
@@ -497,7 +500,11 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
 
     if !expanded {
         let mut out = Vec::new();
-        note(&mut out, &format!("{files_count} 个文件  {lang_summary}"), width);
+        note(
+            &mut out,
+            &format!("{files_count} 个文件  {lang_summary}"),
+            width,
+        );
         if let Some(manifests) = value["manifests"].as_array() {
             for manifest in manifests.iter().take(3) {
                 let path = manifest["path"].as_str().unwrap_or_default();
@@ -514,7 +521,9 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
 
     let theme = &crate::tui::theme::THEME;
     let accent_style = Style::default().fg(theme.accent);
-    let strong_style = Style::default().fg(theme.strong).add_modifier(Modifier::BOLD);
+    let strong_style = Style::default()
+        .fg(theme.strong)
+        .add_modifier(Modifier::BOLD);
     let detail_style = Style::default().fg(theme.detail);
     let muted_style = Style::default().fg(theme.output_muted);
     let success_style = Style::default().fg(theme.success);
@@ -522,20 +531,18 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
 
     let mut raw_lines: Vec<Line<'static>> = Vec::new();
 
-    let push_line = |lines: &mut Vec<Line<'static>>, indent: usize, mut spans: Vec<Span<'static>>| {
-        let prefix = " ".repeat(4 + indent * 2);
-        spans.insert(0, Span::raw(prefix));
-        lines.push(Line::from(spans));
-    };
+    let push_line =
+        |lines: &mut Vec<Line<'static>>, indent: usize, mut spans: Vec<Span<'static>>| {
+            let prefix = " ".repeat(4 + indent * 2);
+            spans.insert(0, Span::raw(prefix));
+            lines.push(Line::from(spans));
+        };
 
     let push_blank = |lines: &mut Vec<Line<'static>>| {
         lines.push(Line::from(""));
     };
 
-    // 1. Overview header
-    let mut header_spans = vec![
-        Span::styled(format!("{files_count} 个文件"), strong_style),
-    ];
+    let mut header_spans = vec![Span::styled(format!("{files_count} 个文件"), strong_style)];
     if let Some(langs) = languages {
         let mut sorted: Vec<_> = langs.iter().collect();
         sorted.sort_by_key(|(_, c)| std::cmp::Reverse(c.as_u64().unwrap_or(0)));
@@ -552,7 +559,6 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
     }
     push_line(&mut raw_lines, 0, header_spans);
 
-    // 2. Manifests
     if let Some(manifests) = value["manifests"].as_array().filter(|m| !m.is_empty()) {
         for manifest in manifests {
             push_blank(&mut raw_lines);
@@ -564,55 +570,84 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             if let Some(pkg) = manifest["package"].as_str().filter(|p| !p.is_empty()) {
                 manifest_spans.push(Span::styled(format!("  {pkg}"), accent_style));
             }
-            if let Some(system) = manifest["build_system"].as_str().or_else(|| manifest["package_manager"].as_str()) {
+            if let Some(system) = manifest["build_system"]
+                .as_str()
+                .or_else(|| manifest["package_manager"].as_str())
+            {
                 manifest_spans.push(Span::styled(format!(" [{system}]"), detail_style));
             }
             push_line(&mut raw_lines, 0, manifest_spans);
 
-            // Workspaces / Members
-            if let Some(members) = manifest.get("workspace_members").or_else(|| manifest.get("workspaces")) {
+            if let Some(members) = manifest
+                .get("workspace_members")
+                .or_else(|| manifest.get("workspaces"))
+            {
                 let member_strs = if let Some(arr) = members.as_array() {
-                    arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", ")
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 } else if let Some(s) = members.as_str() {
                     s.to_string()
                 } else {
                     members.to_string()
                 };
                 if !member_strs.is_empty() {
-                    push_line(&mut raw_lines, 1, vec![
-                        Span::styled("工作区成员: ", detail_style),
-                        Span::styled(member_strs, detail_style),
-                    ]);
+                    push_line(
+                        &mut raw_lines,
+                        1,
+                        vec![
+                            Span::styled("工作区成员: ", detail_style),
+                            Span::styled(member_strs, detail_style),
+                        ],
+                    );
                 }
             }
 
-            // Declared scripts
             if let Some(scripts) = manifest.get("declared_scripts").and_then(|v| v.as_object())
                 && !scripts.is_empty()
             {
-                push_line(&mut raw_lines, 1, vec![
-                    Span::styled("声明的脚本:", detail_style),
-                ]);
+                push_line(
+                    &mut raw_lines,
+                    1,
+                    vec![Span::styled("声明的脚本:", detail_style)],
+                );
                 for (name, cmd) in scripts {
-                    let cmd_str = cmd.as_str().map(|s| s.to_string()).unwrap_or_else(|| cmd.to_string());
-                    push_line(&mut raw_lines, 2, vec![
-                        Span::styled(format!("{name:<12}"), accent_style),
-                        Span::styled("→ ", muted_style),
-                        Span::styled(cmd_str, detail_style),
-                    ]);
+                    let cmd_str = cmd
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| cmd.to_string());
+                    push_line(
+                        &mut raw_lines,
+                        2,
+                        vec![
+                            Span::styled(format!("{name:<12}"), accent_style),
+                            Span::styled("→ ", muted_style),
+                            Span::styled(cmd_str, detail_style),
+                        ],
+                    );
                 }
-            } else if let Some(scripts) = manifest.get("declared_scripts").filter(|v| !v.is_null()) {
-                push_line(&mut raw_lines, 1, vec![
-                    Span::styled(format!("声明的脚本：{scripts}"), detail_style),
-                ]);
+            } else if let Some(scripts) = manifest.get("declared_scripts").filter(|v| !v.is_null())
+            {
+                push_line(
+                    &mut raw_lines,
+                    1,
+                    vec![Span::styled(format!("声明的脚本：{scripts}"), detail_style)],
+                );
             }
 
-            // Verification candidates
-            if let Some(candidates) = manifest.get("verification_candidates").and_then(|v| v.as_array()) {
+            if let Some(candidates) = manifest
+                .get("verification_candidates")
+                .and_then(|v| v.as_array())
+            {
                 let mut candidate_cmds = Vec::new();
                 for cand in candidates {
                     if let Some(argv) = cand.get("argv").and_then(|v| v.as_array()) {
-                        let cmd = argv.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+                        let cmd = argv
+                            .iter()
+                            .filter_map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         if !cmd.is_empty() {
                             candidate_cmds.push(cmd);
                         }
@@ -621,106 +656,167 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                     }
                 }
                 if !candidate_cmds.is_empty() {
-                    push_line(&mut raw_lines, 1, vec![
-                        Span::styled("待验证入口: ", detail_style),
-                        Span::styled(candidate_cmds.join(" · "), success_style),
-                    ]);
+                    push_line(
+                        &mut raw_lines,
+                        1,
+                        vec![
+                            Span::styled("待验证入口: ", detail_style),
+                            Span::styled(candidate_cmds.join(" · "), success_style),
+                        ],
+                    );
                 }
-            } else if let Some(cand) = manifest.get("verification_candidates").filter(|v| !v.is_null()) {
-                push_line(&mut raw_lines, 1, vec![
-                    Span::styled(format!("待验证入口：{cand}"), detail_style),
-                ]);
+            } else if let Some(cand) = manifest
+                .get("verification_candidates")
+                .filter(|v| !v.is_null())
+            {
+                push_line(
+                    &mut raw_lines,
+                    1,
+                    vec![Span::styled(format!("待验证入口：{cand}"), detail_style)],
+                );
             }
 
-            // Dependencies
             if let Some(deps) = manifest.get("dependencies").and_then(|v| v.as_object())
                 && !deps.is_empty()
             {
                 let total = deps.len();
                 let dep_names: Vec<_> = deps.keys().take(12).map(|s| s.as_str()).collect();
-                let extra = if total > 12 { format!(" (+{} 个)", total - 12) } else { String::new() };
-                push_line(&mut raw_lines, 1, vec![
-                    Span::styled(format!("核心依赖 ({total}): "), detail_style),
-                    Span::styled(format!("{}{extra}", dep_names.join(", ")), detail_style),
-                ]);
+                let extra = if total > 12 {
+                    format!(" (+{} 个)", total - 12)
+                } else {
+                    String::new()
+                };
+                push_line(
+                    &mut raw_lines,
+                    1,
+                    vec![
+                        Span::styled(format!("核心依赖 ({total}): "), detail_style),
+                        Span::styled(format!("{}{extra}", dep_names.join(", ")), detail_style),
+                    ],
+                );
             }
 
             if manifest.get("parsed") == Some(&Value::Bool(false)) {
-                push_line(&mut raw_lines, 1, vec![
-                    Span::styled("未解析构建配置，请读取原文件确认", warn_style),
-                ]);
+                push_line(
+                    &mut raw_lines,
+                    1,
+                    vec![Span::styled("未解析构建配置，请读取原文件确认", warn_style)],
+                );
             }
 
             if manifest.get("truncated") == Some(&Value::Bool(true)) {
-                push_line(&mut raw_lines, 1, vec![
-                    Span::styled("部分配置已省略，请读取原文件", muted_style),
-                ]);
+                push_line(
+                    &mut raw_lines,
+                    1,
+                    vec![Span::styled("部分配置已省略，请读取原文件", muted_style)],
+                );
             }
         }
     }
 
-    // 3. Directories
-    if let Some(dirs) = inventory.get("directories").and_then(|v| v.as_array()).filter(|d| !d.is_empty()) {
+    if let Some(dirs) = inventory
+        .get("directories")
+        .and_then(|v| v.as_array())
+        .filter(|d| !d.is_empty())
+    {
         push_blank(&mut raw_lines);
-        push_line(&mut raw_lines, 0, vec![
-            Span::styled("📂 目录结构:", strong_style),
-        ]);
+        push_line(
+            &mut raw_lines,
+            0,
+            vec![Span::styled("📂 目录结构:", strong_style)],
+        );
         let limit = 8;
         for dir in dirs.iter().take(limit) {
             let path = dir["path"].as_str().unwrap_or_default();
             let count = dir["files"].as_u64().unwrap_or(0);
-            push_line(&mut raw_lines, 1, vec![
-                Span::styled(format!("{path:<28}"), accent_style),
-                Span::styled(format!("{count} 个文件"), detail_style),
-            ]);
+            push_line(
+                &mut raw_lines,
+                1,
+                vec![
+                    Span::styled(format!("{path:<28}"), accent_style),
+                    Span::styled(format!("{count} 个文件"), detail_style),
+                ],
+            );
         }
         if dirs.len() > limit {
-            push_line(&mut raw_lines, 1, vec![
-                Span::styled(format!("... 另有 {} 个目录", dirs.len() - limit), muted_style),
-            ]);
+            push_line(
+                &mut raw_lines,
+                1,
+                vec![Span::styled(
+                    format!("... 另有 {} 个目录", dirs.len() - limit),
+                    muted_style,
+                )],
+            );
         }
     }
 
-    // 4. Tests
-    if let Some(tests) = value.get("test_files").and_then(|v| v.as_array()).filter(|t| !t.is_empty()) {
+    if let Some(tests) = value
+        .get("test_files")
+        .and_then(|v| v.as_array())
+        .filter(|t| !t.is_empty())
+    {
         push_blank(&mut raw_lines);
-        push_line(&mut raw_lines, 0, vec![
-            Span::styled(format!("🧪 测试文件 ({}):", tests.len()), strong_style),
-        ]);
+        push_line(
+            &mut raw_lines,
+            0,
+            vec![Span::styled(
+                format!("🧪 测试文件 ({}):", tests.len()),
+                strong_style,
+            )],
+        );
         let limit = 8;
         for file in tests.iter().take(limit) {
             let path = file.as_str().unwrap_or_default();
-            push_line(&mut raw_lines, 1, vec![
-                Span::styled(path.to_owned(), detail_style),
-            ]);
+            push_line(
+                &mut raw_lines,
+                1,
+                vec![Span::styled(path.to_owned(), detail_style)],
+            );
         }
         if tests.len() > limit {
-            push_line(&mut raw_lines, 1, vec![
-                Span::styled(format!("... 另有 {} 个测试文件", tests.len() - limit), muted_style),
-            ]);
+            push_line(
+                &mut raw_lines,
+                1,
+                vec![Span::styled(
+                    format!("... 另有 {} 个测试文件", tests.len() - limit),
+                    muted_style,
+                )],
+            );
         }
     }
 
-    // 5. Instruction files
-    if let Some(instructions) = value.get("instruction_files").and_then(|v| v.as_array()).filter(|i| !i.is_empty()) {
+    if let Some(instructions) = value
+        .get("instruction_files")
+        .and_then(|v| v.as_array())
+        .filter(|i| !i.is_empty())
+    {
         push_blank(&mut raw_lines);
-        push_line(&mut raw_lines, 0, vec![
-            Span::styled("📋 项目规范:", strong_style),
-        ]);
+        push_line(
+            &mut raw_lines,
+            0,
+            vec![Span::styled("📋 项目规范:", strong_style)],
+        );
         for file in instructions {
             let path = file.as_str().unwrap_or_default();
-            push_line(&mut raw_lines, 1, vec![
-                Span::styled(path.to_owned(), success_style),
-            ]);
+            push_line(
+                &mut raw_lines,
+                1,
+                vec![Span::styled(path.to_owned(), success_style)],
+            );
         }
     }
 
-    // 6. Relevant files & references
-    if let Some(relevant) = value.get("relevant_files").and_then(|v| v.as_array()).filter(|r| !r.is_empty()) {
+    if let Some(relevant) = value
+        .get("relevant_files")
+        .and_then(|v| v.as_array())
+        .filter(|r| !r.is_empty())
+    {
         push_blank(&mut raw_lines);
-        push_line(&mut raw_lines, 0, vec![
-            Span::styled("🎯 任务相关:", strong_style),
-        ]);
+        push_line(
+            &mut raw_lines,
+            0,
+            vec![Span::styled("🎯 任务相关:", strong_style)],
+        );
         for item in relevant.iter().take(6) {
             let path = item["path"].as_str().unwrap_or_default();
             let score = item.get("score").and_then(|s| s.as_u64());
@@ -732,29 +828,44 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         }
     }
 
-    if let Some(refs) = value.get("references").and_then(|v| v.as_array()).filter(|r| !r.is_empty()) {
+    if let Some(refs) = value
+        .get("references")
+        .and_then(|v| v.as_array())
+        .filter(|r| !r.is_empty())
+    {
         push_blank(&mut raw_lines);
-        push_line(&mut raw_lines, 0, vec![
-            Span::styled("🔗 跨文件引用 (References):", strong_style),
-        ]);
+        push_line(
+            &mut raw_lines,
+            0,
+            vec![Span::styled("🔗 跨文件引用 (References):", strong_style)],
+        );
         for item in refs.iter().take(6) {
             let path = item["path"].as_str().unwrap_or_default();
             let line = item.get("line").and_then(|l| l.as_u64());
             let name = item["name"].as_str().unwrap_or_default();
             let loc = line.map(|l| format!(":{l}")).unwrap_or_default();
-            push_line(&mut raw_lines, 1, vec![
-                Span::styled(format!("{path}{loc}  "), detail_style),
-                Span::styled(name.to_owned(), accent_style),
-            ]);
+            push_line(
+                &mut raw_lines,
+                1,
+                vec![
+                    Span::styled(format!("{path}{loc}  "), detail_style),
+                    Span::styled(name.to_owned(), accent_style),
+                ],
+            );
         }
     }
 
-    // 7. Symbols -> Code Outline (AST)
-    if let Some(symbols) = value.get("symbols").and_then(|v| v.as_array()).filter(|s| !s.is_empty()) {
+    if let Some(symbols) = value
+        .get("symbols")
+        .and_then(|v| v.as_array())
+        .filter(|s| !s.is_empty())
+    {
         push_blank(&mut raw_lines);
-        push_line(&mut raw_lines, 0, vec![
-            Span::styled("🔍 代码大纲 (AST):", strong_style),
-        ]);
+        push_line(
+            &mut raw_lines,
+            0,
+            vec![Span::styled("🔍 代码大纲 (AST):", strong_style)],
+        );
         let limit = 8;
         for symbol in symbols.iter().take(limit) {
             let path = symbol["path"].as_str().unwrap_or_default();
@@ -779,18 +890,30 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             push_line(&mut raw_lines, 1, spans);
         }
         if symbols.len() > limit {
-            push_line(&mut raw_lines, 1, vec![
-                Span::styled(format!("... 另有 {} 个定义", symbols.len() - limit), muted_style),
-            ]);
+            push_line(
+                &mut raw_lines,
+                1,
+                vec![Span::styled(
+                    format!("... 另有 {} 个定义", symbols.len() - limit),
+                    muted_style,
+                )],
+            );
         }
     }
 
-    // 8. Truncation notice
-    if value["truncated"].as_object().is_some_and(|obj| obj.values().any(|v| v == true)) {
+    if value["truncated"]
+        .as_object()
+        .is_some_and(|obj| obj.values().any(|v| v == true))
+    {
         push_blank(&mut raw_lines);
-        push_line(&mut raw_lines, 0, vec![
-            Span::styled("⚠️ 部分内容未纳入概览，可指定具体子目录范围继续查看", warn_style),
-        ]);
+        push_line(
+            &mut raw_lines,
+            0,
+            vec![Span::styled(
+                "⚠️ 部分内容未纳入概览，可指定具体子目录范围继续查看",
+                warn_style,
+            )],
+        );
     }
 
     let mut out = Vec::new();
@@ -800,7 +923,8 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         }
     } else {
         for line in raw_lines {
-            if line.spans.is_empty() || (line.spans.len() == 1 && line.spans[0].content.is_empty()) {
+            if line.spans.is_empty() || (line.spans.len() == 1 && line.spans[0].content.is_empty())
+            {
                 out.push(Line::from(""));
             } else {
                 let (wrapped, _) = super::transcript::wrap_line(&line, width);
@@ -939,18 +1063,21 @@ fn source(
         return;
     }
 
-    let tokens: Option<Vec<(Range<usize>, syntect::highlighting::Style)>> = syntax.and_then(|syn| {
-        let mut highlighter = HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
-        let line_tokens = highlighter.highlight_line(&text, &super::languages::SYNTAXES).ok()?;
-        let mut ranges = Vec::new();
-        let mut offset = 0;
-        for (style, slice) in line_tokens {
-            let end = offset + slice.len();
-            ranges.push((offset..end, style));
-            offset = end;
-        }
-        Some(ranges)
-    });
+    let tokens: Option<Vec<(Range<usize>, syntect::highlighting::Style)>> =
+        syntax.and_then(|syn| {
+            let mut highlighter = HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
+            let line_tokens = highlighter
+                .highlight_line(&text, &super::languages::SYNTAXES)
+                .ok()?;
+            let mut ranges = Vec::new();
+            let mut offset = 0;
+            for (style, slice) in line_tokens {
+                let end = offset + slice.len();
+                ranges.push((offset..end, style));
+                offset = end;
+            }
+            Some(ranges)
+        });
 
     let style = Style::default().fg(if matcher.is_some() { ACCENT } else { SECONDARY });
     let mut push = |range: Range<usize>, continuation: bool, leading: bool, trailing: bool| {
@@ -1175,7 +1302,9 @@ fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>>
     let syntax = super::languages::syntax_for_label(path);
 
     for (number, text) in rows.iter().take(if expanded { usize::MAX } else { 4 }) {
-        source(&mut out, *number, digits, text, None, syntax, expanded, width);
+        source(
+            &mut out, *number, digits, text, None, syntax, expanded, width,
+        );
     }
 
     if !expanded && rows.len() > 4 {
@@ -1374,7 +1503,16 @@ mod tests {
     fn highlight_survives_wrapping_and_focuses_long_line_previews() {
         let pattern = matcher(&json!({ "query": "^ABCDEFGH$", "regex": true })).unwrap();
         let mut view = vec![];
-        source(&mut view, 123, 4, "ABCDEFGH", Some(&pattern), None, true, 15);
+        source(
+            &mut view,
+            123,
+            4,
+            "ABCDEFGH",
+            Some(&pattern),
+            None,
+            true,
+            15,
+        );
 
         assert_eq!(view.len(), 2);
         assert_eq!(highlighted(&view), "ABCDEFGH");
@@ -1532,7 +1670,10 @@ mod tests {
         .to_string();
         let preview = write_file_preview(&args, 80).expect("preview should succeed");
         assert_eq!(preview.len(), 2);
-        assert_eq!(preview[0].to_string(), "       1 │ print(\"Hello, world!\")");
+        assert_eq!(
+            preview[0].to_string(),
+            "       1 │ print(\"Hello, world!\")"
+        );
         assert_eq!(preview[1].to_string(), "       2 │ print(42)");
     }
 
@@ -1557,7 +1698,6 @@ mod tests {
             Some(crate::tui::theme::THEME.diff_added_bg)
         );
 
-        // Test with Python code to ensure syntax highlighting and background are applied
         let py_args = json!({
             "path": "demo.py",
             "old_text": "x = 1",
@@ -1570,7 +1710,10 @@ mod tests {
         assert_eq!(py_preview[1].to_string(), "+ def foo():");
         assert_eq!(py_preview[2].to_string(), "+     return 42");
         for span in &py_preview[0].spans {
-            assert_eq!(span.style.bg, Some(crate::tui::theme::THEME.diff_removed_bg));
+            assert_eq!(
+                span.style.bg,
+                Some(crate::tui::theme::THEME.diff_removed_bg)
+            );
         }
         for span in &py_preview[1].spans {
             assert_eq!(span.style.bg, Some(crate::tui::theme::THEME.diff_added_bg));
@@ -1606,9 +1749,6 @@ mod tests {
             "output_id": "cmd-custom"
         })
         .to_string();
-        assert_eq!(
-            command_output_summary(&args3),
-            "终端 cmd-custom"
-        );
+        assert_eq!(command_output_summary(&args3), "终端 cmd-custom");
     }
 }

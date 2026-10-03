@@ -547,7 +547,6 @@ impl SessionState {
 
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
         self.ensure_writer().await?;
-        // Check under the lease: a peer may have completed a turn since the UI's last refresh.
         let latest = match self.store.load(self.id()).await {
             Ok(latest) => latest,
             Err(error) => {
@@ -1302,7 +1301,6 @@ mod tests {
                 .unwrap();
         session.audit_workspace = Some(workspace.clone());
 
-        // 1. Add ephemeral grant
         let outside = tempfile::tempdir().unwrap();
         let file = outside.path().join("file.txt");
         std::fs::write(&file, "data").unwrap();
@@ -1325,7 +1323,6 @@ mod tests {
             1
         );
 
-        // 2. Switching to a new session clears ephemeral grants
         session.new_session("a::model".into()).await.unwrap();
 
         assert_eq!(
@@ -1339,7 +1336,6 @@ mod tests {
             0
         );
 
-        // 3. Add grant again and verify resume clears it
         workspace
             .policy()
             .record_grant(orbit_runtime::policy::FilesystemGrant::read_only(
@@ -1534,7 +1530,6 @@ mod tests {
             .unwrap();
         drop(session_text);
 
-        // Verify that in the database, the original image attachment was NOT lost!
         let session_vision = SessionState::open(
             db_path.clone(),
             Some(id.clone()),
@@ -1616,10 +1611,8 @@ mod tests {
                 .await
                 .unwrap();
 
-        // Check history loaded without error
         assert!(!prepared.snapshot.history.is_empty());
 
-        // 1. Project messages for text-only model: no image attachments
         let projected_text = orbit_agent::model_messages(&prepared.snapshot.history, false);
 
         for msg in &projected_text {
@@ -1631,7 +1624,6 @@ mod tests {
             }
         }
 
-        // 2. Project messages for vision model: history remains valid
         let projected_vision = orbit_agent::model_messages(&prepared.snapshot.history, true);
 
         assert_eq!(projected_vision.len(), prepared.snapshot.history.len());

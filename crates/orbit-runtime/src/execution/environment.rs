@@ -135,7 +135,6 @@ pub fn remap_path_environment(
     external_grants: &[PathBuf],
     container_home: &Path,
 ) {
-    // 1. Remap CARGO_HOME
     if let Some(cargo_val) = env.get("CARGO_HOME").cloned() {
         let cargo_path = PathBuf::from(&cargo_val);
         if let Some(remapped) = remap_single_path(
@@ -162,7 +161,6 @@ pub fn remap_path_environment(
         );
     }
 
-    // 2. Remap RUSTUP_HOME
     if let Some(rustup_val) = env.get("RUSTUP_HOME").cloned() {
         let rustup_path = PathBuf::from(&rustup_val);
         if let Some(remapped) = remap_single_path(
@@ -184,7 +182,6 @@ pub fn remap_path_environment(
         }
     }
 
-    // 3. Remap HOME
     if let Some(home_val) = env.get("HOME").cloned() {
         let home_path = PathBuf::from(&home_val);
         if let Some(remapped) = remap_single_path(
@@ -222,7 +219,6 @@ pub fn remap_single_path(
         candidates.push(c);
     }
 
-    // 1. Check actual mounts first (host path mapped to container target)
     for mount in mounts {
         let Ok(target) = mount.normalized_target() else {
             continue;
@@ -252,7 +248,6 @@ pub fn remap_single_path(
         }
     }
 
-    // 2. Check workspace mapping (host workspace path mapped to /workspace)
     let ws_canon = workspace_root.canonicalize().ok();
     for candidate in &candidates {
         if let Ok(rel) = candidate.strip_prefix(workspace_root) {
@@ -274,7 +269,6 @@ pub fn remap_single_path(
         }
     }
 
-    // 3. Check external capability grants (mirrored directly in container at canonical path)
     for grant in external_grants {
         let grant_canon = grant.canonicalize().unwrap_or_else(|_| grant.clone());
         if let Some(ref c) = canon {
@@ -309,7 +303,6 @@ pub fn remap_single_path(
         }
     }
 
-    // 4. Check already-valid container paths
     if path.starts_with("/workspace")
         || path.starts_with("/scratch")
         || path.starts_with("/opt/orbit-rust")

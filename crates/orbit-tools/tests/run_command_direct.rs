@@ -134,7 +134,6 @@ async fn run_command_respects_session_grants_for_outside_paths() {
     let (sender, mut receiver) = approval::channel();
     let tool = RunCommand::new(workspace.clone(), sender);
 
-    // 1. Without grant: writing to outside file fails
     let script_fail = format!("echo 'should fail' > {}", outside_file.display());
     let task_fail = tokio::spawn({
         let tool = tool.clone();
@@ -156,7 +155,6 @@ async fn run_command_respects_session_grants_for_outside_paths() {
 
     assert_ne!(value["exit_code"], 0);
 
-    // 2. With grant: writing to outside file succeeds
     let resolved = ResolvedPath::resolve(&outside_file, None).unwrap();
     workspace.policy().record_grant(FilesystemGrant {
         environment: EnvironmentId::Local,
@@ -322,13 +320,11 @@ async fn run_command_masks_sensitive_files_and_protects_git_config_even_with_rea
     let output = task.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
 
-    // Verify secrets were not leaked into stdout
     let stdout = value["stdout"].as_str().unwrap_or("");
 
     assert!(!stdout.contains("SECRET_ENV_KEY"));
     assert!(!stdout.contains("SECRET_CONFIG_DATA"));
 
-    // Verify host files are unchanged (rm -rf .git and config overwrite failed)
     assert_eq!(
         fs::read_to_string(&env_file).unwrap(),
         "SECRET_ENV_KEY=12345\n"
@@ -372,7 +368,6 @@ async fn run_command_allows_native_git_status_and_commit_in_sandbox() {
     let (sender, mut receiver) = approval::channel();
     let tool = RunCommand::new(workspace, sender);
 
-    // 1. Run git status in read-only mode (Auto mode should auto-allow)
     let call = ToolCall::function(
         "test",
         "run_command",
@@ -384,7 +379,6 @@ async fn run_command_allows_native_git_status_and_commit_in_sandbox() {
     let t1 = tool.clone();
     let task = tokio::spawn(async move { t1.execute(call, CancellationToken::new()).await });
     let req = receiver.recv().await.unwrap();
-    // Verify git analysis was attached
     assert!(matches!(
         req.preview,
         approval::ApprovalPreview::Command(ref cmd) if cmd.git.is_some()
@@ -396,7 +390,6 @@ async fn run_command_allows_native_git_status_and_commit_in_sandbox() {
     let stdout = val["stdout"].as_str().unwrap_or("");
     assert!(stdout.contains("initial.txt"));
 
-    // 2. Run git add & commit in read-write mode
     let call_commit = ToolCall::function(
         "test",
         "run_command",
@@ -415,7 +408,6 @@ async fn run_command_allows_native_git_status_and_commit_in_sandbox() {
     let val2: serde_json::Value = serde_json::from_str(&out2.content).unwrap();
     assert_eq!(val2["exit_code"], 0);
 
-    // Verify git commit succeeded by checking log on host
     let log = std::process::Command::new("git")
         .args(["log", "--oneline"])
         .current_dir(ws_temp.path())

@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use crate::execution::process::MountSpec;
 use super::discovery::GitRepositoryInfo;
 use super::policy::GitOperationKind;
+use crate::execution::process::MountSpec;
 
 #[derive(Clone, Debug, Default)]
 pub struct GitMountPlan {
@@ -48,7 +48,10 @@ impl GitMountPlan {
                 if !allow_config_mutation {
                     let config = repo.config_path();
                     if config.exists() {
-                        mounts.push(MountSpec::read_only(&config, container_dot_git.join("config")));
+                        mounts.push(MountSpec::read_only(
+                            &config,
+                            container_dot_git.join("config"),
+                        ));
                     }
                     let wt_config = repo.worktree_config_path();
                     if wt_config.exists() {
@@ -59,7 +62,10 @@ impl GitMountPlan {
                     }
                     let hooks = repo.hooks_path();
                     if hooks.exists() {
-                        mounts.push(MountSpec::read_only(&hooks, container_dot_git.join("hooks")));
+                        mounts.push(MountSpec::read_only(
+                            &hooks,
+                            container_dot_git.join("hooks"),
+                        ));
                     }
                 }
             }
@@ -106,9 +112,9 @@ impl GitMountPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::discovery::GitRepositoryInfo;
     use std::fs;
     use tempfile::tempdir;
-    use crate::git::discovery::GitRepositoryInfo;
 
     #[test]
     fn read_only_mount_sets_optional_locks_zero() {
@@ -129,7 +135,11 @@ mod tests {
         );
 
         assert!(plan.unmask_git);
-        assert!(plan.env_vars.iter().any(|(k, v)| k == "GIT_OPTIONAL_LOCKS" && v == "0"));
+        assert!(
+            plan.env_vars
+                .iter()
+                .any(|(k, v)| k == "GIT_OPTIONAL_LOCKS" && v == "0")
+        );
         assert_eq!(plan.mounts.len(), 1);
         assert!(plan.mounts[0].access.is_read_only());
         assert_eq!(plan.mounts[0].target, Path::new("/workspace/.git"));
@@ -158,11 +168,16 @@ mod tests {
         // Does not force GIT_OPTIONAL_LOCKS=0 in RW mode
         assert!(!plan.env_vars.iter().any(|(k, _)| k == "GIT_OPTIONAL_LOCKS"));
 
-        // Has RW mount for .git
-        assert!(plan.mounts.iter().any(|m| m.target == Path::new("/workspace/.git") && m.access.is_read_write()));
-        // Has RO mount for config
+        assert!(
+            plan.mounts
+                .iter()
+                .any(|m| m.target == Path::new("/workspace/.git") && m.access.is_read_write())
+        );
         assert!(plan.mounts.iter().any(|m| m.target == Path::new("/workspace/.git/config") && m.access.is_read_only()));
-        // Has RO mount for hooks
-        assert!(plan.mounts.iter().any(|m| m.target == Path::new("/workspace/.git/hooks") && m.access.is_read_only()));
+        assert!(
+            plan.mounts
+                .iter()
+                .any(|m| m.target == Path::new("/workspace/.git/hooks") && m.access.is_read_only())
+        );
     }
 }

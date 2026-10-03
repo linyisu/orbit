@@ -485,16 +485,7 @@ impl BwrapSandboxBackend {
         )?;
 
         if spec.unmask_git {
-            apply_git_mounts(
-                &mut command,
-                ws_target,
-                spec.read_only_workspace,
-                &mut protected_inodes,
-                policy,
-                spec.allow_git_config_write,
-                &spec.protected_paths,
-                &spec.opaque_runtime_roots,
-            )?;
+            apply_git_mounts(&mut command, ws_target, spec, &mut protected_inodes, policy)?;
         }
 
         let container_cwd = resolve_container_cwd(ws_target, mounts, spec.cwd.as_deref());
@@ -1012,15 +1003,17 @@ fn mount_capabilities(
 fn apply_git_mounts(
     command: &mut Command,
     ws_target: &Path,
-    read_only_workspace: bool,
+    spec: &ProcessSpec,
     protected_inodes: &mut HashSet<(u64, u64)>,
     policy: &EffectivePolicy,
-    allow_config_write: bool,
-    protected_paths: &[PathBuf],
-    opaque_roots: &[PathBuf],
 ) -> Result<(), RuntimeError> {
     use crate::git::discovery::GitRepositoryInfo;
     use std::os::unix::fs::MetadataExt;
+
+    let read_only_workspace = spec.read_only_workspace;
+    let allow_config_write = spec.allow_git_config_write;
+    let protected_paths = &spec.protected_paths;
+    let opaque_roots = &spec.opaque_runtime_roots;
 
     command.args(["--setenv", "GIT_TERMINAL_PROMPT", "0"]);
     command.args(["--setenv", "GIT_PAGER", "cat"]);
@@ -1175,7 +1168,6 @@ fn apply_git_mounts(
             }
         }
     } else {
-        // Worktree or Submodule
         let is_outside_ws = !repo.git_dir.starts_with(ws_target);
         if is_outside_ws {
             if read_only_workspace {
@@ -1292,7 +1284,6 @@ fn collect_masked_paths_with_templates(
         }
     }
 
-    // 1. Process all_protected
     for protected in &all_protected {
         if unmask_git && protected.file_name().is_some_and(|n| n == ".git") {
             continue;
@@ -1447,7 +1438,6 @@ fn collect_masked_paths_with_templates(
         }
     }
 
-    // 2. Scan ws_target for .git, .env*, .orbit-write-* and identify hardlinks
     const MAX_SCAN_DIRS: usize = 50_000;
     const MAX_DEPTH: usize = 32;
 
@@ -2722,12 +2712,10 @@ mod tests {
 
     #[test]
     fn test_is_reserved_mount_target() {
-        // Exact reserved
         assert!(is_reserved_mount_target(Path::new("/")));
         assert!(is_reserved_mount_target(Path::new("/opt")));
         assert!(is_reserved_mount_target(Path::new("/opt/orbit-cache")));
 
-        // Prefix reserved
         assert!(is_reserved_mount_target(Path::new("/workspace")));
         assert!(is_reserved_mount_target(Path::new("/workspace/src")));
         assert!(is_reserved_mount_target(Path::new("/tmp")));
@@ -2750,7 +2738,6 @@ mod tests {
         assert!(is_reserved_mount_target(Path::new("/orbit-command.sh")));
         assert!(is_reserved_mount_target(Path::new("/orbit-source")));
 
-        // Allowed targets
         assert!(!is_reserved_mount_target(Path::new(
             "/opt/orbit-cache/cargo"
         )));
@@ -2772,7 +2759,6 @@ mod tests {
 
         assert!(valid_mount.validate().is_ok());
 
-        // Non-existent source
         let bad_source = MountSpec::read_only(
             dir.path().join("does_not_exist"),
             "/opt/orbit-cache/packages",
@@ -2780,12 +2766,10 @@ mod tests {
 
         assert!(bad_source.validate().is_err());
 
-        // Reserved target
         let reserved_mount = MountSpec::read_only(dir.path(), "/workspace");
 
         assert!(reserved_mount.validate().is_err());
 
-        // Relative target
         let relative_mount = MountSpec::read_only(dir.path(), "opt/orbit-cache/packages");
 
         assert!(relative_mount.validate().is_err());
@@ -2799,7 +2783,6 @@ mod tests {
             crate::filesystem::ResolvedPath::from_canonical(dir1.path()),
         ));
 
-        // Duplicate targets
         let duplicates = vec![
             MountSpec::read_only(dir1.path(), "/mnt/data"),
             MountSpec::read_write(dir2.path(), "/mnt/data"),
@@ -2808,7 +2791,6 @@ mod tests {
 
         assert!(err.to_string().contains("duplicate mount target"));
 
-        // Overlapping targets
         let overlapping = vec![
             MountSpec::read_only(dir1.path(), "/mnt/data"),
             MountSpec::read_write(dir2.path(), "/mnt/data/subdir"),
@@ -2820,7 +2802,6 @@ mod tests {
                 .contains("conflicting or overlapping mount targets")
         );
 
-        // Non-overlapping targets
         let non_overlapping = vec![
             MountSpec::read_only(dir1.path(), "/mnt/data1"),
             MountSpec::read_write(dir2.path(), "/mnt/data2"),
@@ -2863,7 +2844,6 @@ mod tests {
         let hardlink = cache.path().join("alias_secret.key");
         std::fs::hard_link(&secret, &hardlink).unwrap();
 
-        // 1. Mounting directory containing hardlink to protected file must be rejected
         let cache_mount = MountSpec::read_only(cache.path(), "/opt/orbit-cache/cache");
         let err = validate_mounts(&[cache_mount], &policy).unwrap_err();
         assert!(
@@ -2872,7 +2852,6 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        // 2. Mounting hardlink file directly must be rejected
         let direct_mount = MountSpec::read_only(&hardlink, "/opt/orbit-cache/alias");
         let err = validate_mounts(&[direct_mount], &policy).unwrap_err();
         assert!(
@@ -2984,19 +2963,16 @@ mod tests {
         let ws_dir = tempfile::tempdir().unwrap();
         let ws = ws_dir.path();
 
-        // 1. Create a .env file and hardlink to it
         let env_file = ws.join(".env");
         std::fs::write(&env_file, "SECRET=123").unwrap();
         let env_alias = ws.join("alias.env");
         std::fs::hard_link(&env_file, &env_alias).unwrap();
 
-        // 2. Real config.toml and hardlink to it
         let config_file = ws.join("config.toml");
         std::fs::write(&config_file, "key=456").unwrap();
         let config_alias = ws.join("alias.toml");
         std::fs::hard_link(&config_file, &config_alias).unwrap();
 
-        // 3. Non-existent protected paths: one file, one directory
         let nonexistent_file = ws.join("secret.key");
         let nonexistent_dir = ws.join("orbit.db.workspaces");
 
@@ -3337,7 +3313,6 @@ mod tests {
         let ws_dir = tempfile::tempdir().unwrap();
         let ws = ws_dir.path();
 
-        // 1. Create an external opaque runtime storage directory (e.g. orbit.workspaces) that exceeds MAX_PROTECTED_DIR_DEPTH (32)
         let storage_parent = tempfile::tempdir().unwrap();
         let external_storage = storage_parent.path().join("orbit.workspaces");
         let mut curr = external_storage.clone();
@@ -3349,7 +3324,6 @@ mod tests {
         std::fs::create_dir_all(&curr).unwrap();
         std::fs::write(curr.join("deep.txt"), "content").unwrap();
 
-        // Verify that direct collect_dir_inodes on external_storage WOULD fail closed
         let mut test_inodes = HashSet::new();
 
         assert!(collect_dir_inodes(&external_storage, &mut test_inodes).is_err());
@@ -3405,18 +3379,15 @@ mod tests {
         let ws_dir = tempfile::tempdir().unwrap();
         let ws = ws_dir.path();
 
-        // 1. Create a regular external protected directory (e.g. user credentials folder)
         let external_secrets = tempfile::tempdir().unwrap();
         let secret_file = external_secrets.path().join("api_key.txt");
         std::fs::write(&secret_file, "secret_content_12345").unwrap();
 
-        // 2. Create a nested secret file in a subdirectory of external protected directory
         let nested_secrets_dir = external_secrets.path().join("nested_folder");
         std::fs::create_dir_all(&nested_secrets_dir).unwrap();
         let nested_secret_file = nested_secrets_dir.join("token.json");
         std::fs::write(&nested_secret_file, r#"{"token": "xyz"}"#).unwrap();
 
-        // 3. Hardlink to secret_file and nested_secret_file from inside the workspace
         let ws_leak1 = ws.join("leaked_key.txt");
         std::fs::hard_link(&secret_file, &ws_leak1).unwrap();
         let ws_leak2 = ws.join("leaked_token.json");
@@ -3508,7 +3479,6 @@ mod tests {
         let tmp_task = tempfile::tempdir().unwrap();
         let mut cmd = Command::new("/usr/bin/bwrap");
 
-        // Verify task_tmp mounts disk directory instead of 64MiB tmpfs
         mount_scratch_and_tmp(&mut cmd, None, Some(tmp_task.path())).unwrap();
         let args = cmd
             .as_std()
@@ -3521,7 +3491,6 @@ mod tests {
         assert!(args.contains(&"/tmp".to_string()));
         assert!(!args.contains(&"--tmpfs".to_string()));
 
-        // Verify unlimited limits omit --as and --fsize
         let mut cmd_limits = Command::new("/usr/bin/bwrap");
         let unlimited_limits = ProcessLimits::default(); // 0 for memory and file size
         configure_limits_and_entrypoint(
@@ -3547,7 +3516,6 @@ mod tests {
         assert!(limit_args.iter().any(|a| a.starts_with("--nofile=")));
         assert!(limit_args.iter().any(|a| a.starts_with("--nproc=")));
 
-        // Verify explicitly configured limits DO pass --as and --fsize
         let mut cmd_explicit = Command::new("/usr/bin/bwrap");
         let explicit_limits = ProcessLimits {
             max_memory_bytes: 64 * 1024 * 1024,
@@ -3587,7 +3555,6 @@ mod tests {
         let ws = Path::new("/home/user/project");
         let mounts = vec![MountSpec::read_only("/host/cache", "/opt/cache")];
 
-        // Default workspace
         assert_eq!(
             resolve_container_cwd(ws, &mounts, None),
             PathBuf::from("/workspace")
@@ -3601,13 +3568,11 @@ mod tests {
             PathBuf::from("/workspace")
         );
 
-        // Container path directly
         assert_eq!(
             resolve_container_cwd(ws, &mounts, Some(Path::new("/workspace/src"))),
             PathBuf::from("/workspace/src")
         );
 
-        // Subpath of workspace
         assert_eq!(
             resolve_container_cwd(
                 ws,
@@ -3617,13 +3582,11 @@ mod tests {
             PathBuf::from("/workspace/crates/sub")
         );
 
-        // Relative path
         assert_eq!(
             resolve_container_cwd(ws, &mounts, Some(Path::new("crates/sub"))),
             PathBuf::from("/workspace/crates/sub")
         );
 
-        // Mount mapping
         assert_eq!(
             resolve_container_cwd(ws, &mounts, Some(Path::new("/host/cache/packages"))),
             PathBuf::from("/opt/cache/packages")
@@ -3699,11 +3662,9 @@ mod tests {
         // Mount configured using symlink source
         let mounts = vec![MountSpec::read_only(&symlink_cache, "/opt/cache")];
 
-        // 1. CWD is the canonical real path inside the cache
         let resolved = resolve_container_cwd(&ws, &mounts, Some(&real_cache_canon.join("sub")));
         assert_eq!(resolved, PathBuf::from("/opt/cache/sub"));
 
-        // 2. CWD is the symlink path inside the cache
         let resolved_sym = resolve_container_cwd(&ws, &mounts, Some(&symlink_cache.join("sub")));
         assert_eq!(resolved_sym, PathBuf::from("/opt/cache/sub"));
     }

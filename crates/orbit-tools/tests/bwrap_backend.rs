@@ -96,7 +96,6 @@ async fn backend_mounts_granted_external_path_with_read_or_write() {
     let ws_resolved = ResolvedPath::resolve(ws_temp.path(), None).unwrap();
     let outside_resolved = ResolvedPath::resolve(&outside_file, None).unwrap();
 
-    // 1. Read-only grant: reading works, writing fails
     let base = BasePolicy {
         workspace: ws_resolved.clone(),
         network: NetworkPolicy::Allow,
@@ -130,7 +129,6 @@ async fn backend_mounts_granted_external_path_with_read_or_write() {
 
     assert_ne!(fail_result.exit_code, Some(0));
 
-    // 2. Read-write grant: writing succeeds
     let base_rw = BasePolicy {
         workspace: ws_resolved,
         network: NetworkPolicy::Allow,
@@ -170,7 +168,6 @@ async fn backend_respects_network_deny_policy() {
 
     let ws_resolved = ResolvedPath::resolve(ws_temp.path(), None).unwrap();
 
-    // 1. NetworkPolicy::Deny should not mount /etc/resolv.conf
     let base_deny = BasePolicy {
         workspace: ws_resolved.clone(),
         network: NetworkPolicy::Deny,
@@ -189,7 +186,6 @@ async fn backend_respects_network_deny_policy() {
     assert_eq!(result_deny.exit_code, Some(0));
     assert_eq!(result_deny.stdout.trim(), "NO_RESOLV");
 
-    // 2. NetworkPolicy::Allow mounts /etc/resolv.conf if present on host
     if Path::new("/etc/resolv.conf").exists() {
         let base_allow = BasePolicy {
             workspace: ws_resolved,

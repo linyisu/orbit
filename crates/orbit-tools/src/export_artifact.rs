@@ -455,7 +455,6 @@ mod tests {
 
         let parent = root.path().join("artifacts");
 
-        // 1. Export from /scratch using absolute path with /scratch/ prefix
         let res1: serde_json::Value = serde_json::from_str(
             &export(
                 &scratch,
@@ -477,7 +476,6 @@ mod tests {
             b"scratch content"
         );
 
-        // 2. Export from /scratch using relative scratch/ prefix
         let res2: serde_json::Value = serde_json::from_str(
             &export(
                 &scratch,
@@ -498,7 +496,6 @@ mod tests {
             b"scratch content"
         );
 
-        // 3. Export workspace file using workspace-relative path
         let res3: serde_json::Value = serde_json::from_str(
             &export(
                 &scratch,
@@ -520,7 +517,6 @@ mod tests {
             b"workspace content"
         );
 
-        // 4. Export workspace file using /workspace/ prefix
         let res4: serde_json::Value = serde_json::from_str(
             &export(
                 &scratch,

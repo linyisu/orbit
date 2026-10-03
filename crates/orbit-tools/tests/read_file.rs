@@ -334,7 +334,6 @@ async fn read_file_can_read_granted_outside_path() {
 
     let workspace = Workspace::new(&root.0).unwrap();
 
-    // 1. Without grant: should fail with permission denied
     let tool = ReadFile::new(workspace.clone());
     let err = tool
         .execute(
@@ -346,7 +345,6 @@ async fn read_file_can_read_granted_outside_path() {
 
     assert!(err.to_string().contains("permission denied"));
 
-    // 2. With grant: should succeed
     let resolved = orbit_runtime::filesystem::ResolvedPath::resolve(&outside_file, None).unwrap();
     workspace
         .policy()

@@ -233,10 +233,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::styled(
-                    op_tag,
-                    Style::default().fg(crate::tui::theme::THEME.accent),
-                ),
+                Span::styled(op_tag, Style::default().fg(crate::tui::theme::THEME.accent)),
                 Span::raw(" "),
                 Span::styled(
                     preview.path.clone(),
@@ -431,9 +428,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                         target,
                         risk_notice,
                     } => {
-                        let desc = risk_notice
-                            .as_deref()
-                            .unwrap_or("可能影响未提交工作区修改");
+                        let desc = risk_notice.as_deref().unwrap_or("可能影响未提交工作区修改");
                         header_lines.push(Line::from(vec![
                             Span::raw("  "),
                             Span::styled(
@@ -562,7 +557,10 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             if !preview.reason.is_empty() {
                 header_lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled("理由: ", Style::default().fg(crate::tui::theme::THEME.muted)),
+                    Span::styled(
+                        "理由: ",
+                        Style::default().fg(crate::tui::theme::THEME.muted),
+                    ),
                     Span::styled(
                         &preview.reason,
                         Style::default().fg(crate::tui::theme::THEME.description),
@@ -1085,7 +1083,6 @@ mod render_tests {
         assert!(state.approval_shown);
         assert_eq!(state.approval_options.len(), 3);
 
-        // Test clicking each option on the actual rendered button Rects
         let (opt0_rect, _) = state.approval_options[0];
         let (opt1_rect, _) = state.approval_options[1];
         let (opt2_rect, _) = state.approval_options[2];

@@ -347,9 +347,7 @@ impl SessionPicker {
     }
 }
 
-/// Format a Unix-second timestamp as `YYYY-MM-DD HH:MM` in local wall-clock
-/// time using only `std` and a safe POSIX `localtime_r` call. Returns `"—"`
-/// when the timestamp is zero or negative.
+/// Format a Unix timestamp using the current local UTC offset; nonpositive values show `—`.
 fn format_session_time(updated_at: i64) -> String {
     if updated_at <= 0 {
         return "—".into();
@@ -364,9 +362,7 @@ fn format_session_time(updated_at: i64) -> String {
     format!("{year:04}-{month:02}-{day:02} {hh:02}:{mm:02}")
 }
 
-/// Return the local UTC offset in signed seconds using only `std` and a
-/// single safe `unsafe` block to read the POSIX `timezone` global on Linux.
-/// On all other targets the display falls back to UTC (offset = 0).
+/// Return the standard local UTC offset on Linux, or zero on other targets.
 fn local_utc_offset_secs() -> i64 {
     #[cfg(target_os = "linux")]
     {

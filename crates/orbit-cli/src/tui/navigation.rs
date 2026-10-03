@@ -586,7 +586,6 @@ mod tests {
             .collect();
         let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
 
-        // 1. At bottom
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
         let buffer = terminal.backend().buffer();
         let has_active = state
@@ -596,7 +595,6 @@ mod tests {
             .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == "●");
         assert!(has_active, "Active dot must be visible at bottom");
 
-        // 2. Scrolled to middle
         state.follow_bottom = false;
         state.scroll = 100;
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
@@ -611,7 +609,6 @@ mod tests {
             "Active dot must be visible when scrolled to middle"
         );
 
-        // 3. Scrolled to top
         state.scroll = state.max_scroll;
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
         let buffer = terminal.backend().buffer();

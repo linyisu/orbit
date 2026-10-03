@@ -1,11 +1,9 @@
 //! All TUI palette values, syntax themes and color transformations live here.
-//! Widgets use semantic theme roles; they must not define their own RGB literals.
+//! Widgets use semantic roles; syntax palettes and contrast adjustments may use RGB.
 
 use ratatui::style::Color;
 
-/// Centralized TUI Theme palette for Orbit CLI.
-/// Designed for high readability, distinct rich visual hierarchy,
-/// and future theme customization / theme switching support.
+/// Semantic colors shared by TUI widgets.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
     pub approval_detail: Color,
@@ -55,27 +53,19 @@ pub struct Theme {
     pub text_warm: Color,
     pub tool_detail: Color,
     pub white: Color,
-
-    // Brand / Base Accent Colors
     pub accent: Color,
     pub secondary: Color,
     pub border: Color,
-
-    // Markdown Heading Hierarchy
     pub md_h1: Color,
     pub md_h2: Color,
     pub md_h3: Color,
     pub md_h4_plus: Color,
-
-    // Markdown Inline Typography
     pub md_bold: Color,
     pub md_italic: Color,
     pub md_bold_italic: Color,
     pub md_strikethrough: Color,
     pub md_mark: Color,
     pub md_inline_code: Color,
-
-    // Markdown Blocks, Lists, Links, Rules & Tables
     pub md_quote_rail: Color,
     pub md_quote_text: Color,
     pub md_unordered_bullet: Color,
@@ -86,13 +76,9 @@ pub struct Theme {
     pub md_table_header: Color,
     pub md_table_border: Color,
     pub md_table_separator: Color,
-
-    // Thinking States
     pub thinking_header_default: Color,
     pub thinking_header_hover: Color,
     pub thinking_rail: Color,
-
-    // Tool Call States
     pub tool_finished: Color,
     pub tool_running: Color,
     pub tool_failed: Color,
@@ -109,7 +95,6 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Default dark theme with vibrant, high-contrast, non-overlapping color palette.
     pub const fn dark() -> Self {
         Self {
             approval_detail: Color::Rgb(200, 205, 215),
@@ -159,54 +144,43 @@ impl Theme {
             text_warm: Color::Rgb(230, 225, 218),
             tool_detail: Color::Rgb(160, 160, 160),
             white: Color::White,
-            accent: Color::Rgb(218, 139, 109), // Warm Amber / Terracotta
-            secondary: Color::Rgb(170, 170, 170), // Muted Gray
-            border: Color::Rgb(85, 85, 85),    // Border Gray
-
-            // Markdown Headings - Distinct Warm-to-Cool Palette
-            md_h1: Color::Rgb(235, 140, 115), // H1: Coral / Warm Crimson
-            md_h2: Color::Rgb(230, 175, 110), // H2: Golden Amber
-            md_h3: Color::Rgb(145, 205, 175), // H3: Jade Green
-            md_h4_plus: Color::Rgb(140, 190, 230), // H4+: Sky Cyan
-
-            // Markdown Inline Typography - Rich Vibrant Accents
-            md_bold: Color::Rgb(255, 215, 140), // Bold: Bright Golden Yellow
-            md_italic: Color::Rgb(185, 175, 225), // Italic: Soft Violet
-            md_bold_italic: Color::Rgb(255, 185, 205), // Bold+Italic: Peach Pink
-            md_strikethrough: Color::Rgb(160, 165, 175), // Strikethrough: Cool Gray
-            md_mark: Color::Rgb(255, 195, 110), // Mark/Highlight: Gold Underline
-            md_inline_code: Color::Rgb(145, 220, 225), // Inline Code: Ice Cyan
-
-            // Markdown Blocks, Lists, Links, Rules & Tables
-            md_quote_rail: Color::Rgb(120, 175, 235), // Quote Rail: Celestial Blue
-            md_quote_text: Color::Rgb(190, 195, 205), // Quote Text: Soft Mist Gray
-            md_unordered_bullet: Color::Rgb(125, 210, 190), // Unordered List • : Mint Cyan
-            md_ordered_bullet: Color::Rgb(135, 195, 235), // Ordered List 1. : Ice Blue
-            md_task_done: Color::Rgb(120, 215, 150),  // Task Done ☑ : Emerald Green
-            md_link: Color::Rgb(110, 190, 255),       // Hyperlink: Electric Sky Blue
-            md_rule: Color::Rgb(110, 125, 145), // Horizontal Rule / Divider: Metallic Blue-Gray
-            md_table_header: Color::Rgb(240, 190, 120), // Table Header: Golden Amber
-            md_table_border: Color::Rgb(110, 125, 145), // Table Border: Metallic Blue-Gray
-            md_table_separator: Color::Rgb(100, 110, 125), // Table Separator
-
-            // Thinking States
-            thinking_header_default: Color::Rgb(185, 165, 225), // Soft Amethyst Violet
-            thinking_header_hover: Color::Rgb(245, 190, 255),   // Neon Electric Purple-Pink
-            thinking_rail: Color::Rgb(145, 145, 145),           // Thinking Vertical Rail
-
-            // Tool Call States
-            tool_finished: Color::Rgb(105, 175, 135), // Soft Mint Green
-            tool_running: Color::Rgb(220, 160, 90),   // Warm Amber Yellow
-            tool_failed: Color::Rgb(225, 110, 105),   // Soft Coral Red
-            tool_summary: Color::Rgb(160, 165, 175),  // Muted Slate Gray
-            tool_hover: Color::Rgb(140, 225, 170),    // Bright Emerald Mint (Hover)
-            tool_divider: Color::Rgb(110, 125, 145),  // Tool Card Divider
-            tool_border: Color::Rgb(135, 145, 160),   // Tool Card Enclosure Border
+            accent: Color::Rgb(218, 139, 109),
+            secondary: Color::Rgb(170, 170, 170),
+            border: Color::Rgb(85, 85, 85),
+            md_h1: Color::Rgb(235, 140, 115),
+            md_h2: Color::Rgb(230, 175, 110),
+            md_h3: Color::Rgb(145, 205, 175),
+            md_h4_plus: Color::Rgb(140, 190, 230),
+            md_bold: Color::Rgb(255, 215, 140),
+            md_italic: Color::Rgb(185, 175, 225),
+            md_bold_italic: Color::Rgb(255, 185, 205),
+            md_strikethrough: Color::Rgb(160, 165, 175),
+            md_mark: Color::Rgb(255, 195, 110),
+            md_inline_code: Color::Rgb(145, 220, 225),
+            md_quote_rail: Color::Rgb(120, 175, 235),
+            md_quote_text: Color::Rgb(190, 195, 205),
+            md_unordered_bullet: Color::Rgb(125, 210, 190),
+            md_ordered_bullet: Color::Rgb(135, 195, 235),
+            md_task_done: Color::Rgb(120, 215, 150),
+            md_link: Color::Rgb(110, 190, 255),
+            md_rule: Color::Rgb(110, 125, 145),
+            md_table_header: Color::Rgb(240, 190, 120),
+            md_table_border: Color::Rgb(110, 125, 145),
+            md_table_separator: Color::Rgb(100, 110, 125),
+            thinking_header_default: Color::Rgb(185, 165, 225),
+            thinking_header_hover: Color::Rgb(245, 190, 255),
+            thinking_rail: Color::Rgb(145, 145, 145),
+            tool_finished: Color::Rgb(105, 175, 135),
+            tool_running: Color::Rgb(220, 160, 90),
+            tool_failed: Color::Rgb(225, 110, 105),
+            tool_summary: Color::Rgb(160, 165, 175),
+            tool_hover: Color::Rgb(140, 225, 170),
+            tool_divider: Color::Rgb(110, 125, 145),
+            tool_border: Color::Rgb(135, 145, 160),
         }
     }
 }
 
-/// Global active theme instance.
 pub const THEME: Theme = Theme::dark();
 
 pub(super) fn desaturate_ansi_color(color: Color) -> Color {

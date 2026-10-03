@@ -49,8 +49,7 @@ impl FilesystemGrant {
     }
 }
 
-/// In-memory storage for interactive capability grants valid only for the current Runtime Session.
-/// When the runtime session ends, dropping this store invalidates all temporary grants.
+/// Temporary capability grants scoped to one runtime session.
 #[derive(Clone, Debug, Default)]
 pub struct SessionGrantStore {
     filesystem: Vec<FilesystemGrant>,
@@ -68,7 +67,6 @@ impl SessionGrantStore {
     /// Add a grant to the session store, merging permissions for the same path
     /// and normalizing redundant child grants.
     pub fn grant(&mut self, new_grant: FilesystemGrant) {
-        // 1. Check if an exact grant for the same environment and path already exists
         let grant_to_check = if let Some(existing) = self.filesystem.iter_mut().find(|g| {
             g.environment == new_grant.environment
                 && g.path.canonical() == new_grant.path.canonical()
@@ -76,7 +74,6 @@ impl SessionGrantStore {
             existing.merge(&new_grant);
             existing.clone()
         } else {
-            // 2. If an existing grant already covers this path with equal or greater permissions, skip redundant
             let is_redundant = self.filesystem.iter().any(|existing| {
                 existing.environment == new_grant.environment
                     && new_grant.path.is_subpath_of(&existing.path)
@@ -93,7 +90,6 @@ impl SessionGrantStore {
             new_grant
         };
 
-        // 3. Remove existing subpath grants that are made redundant by the new broader grant
         self.filesystem.retain(|existing| {
             if existing.environment != grant_to_check.environment
                 || existing.path.canonical() == grant_to_check.path.canonical()
@@ -154,7 +150,7 @@ impl BasePolicy {
     }
 }
 
-/// Persistent workspace permissions loaded from project or user configuration (e.g. orbit.toml).
+/// Persistent workspace permissions loaded from project or user configuration.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorkspacePermissions {
     /// Exact environment template paths explicitly trusted by the user.
@@ -168,7 +164,7 @@ pub struct WorkspacePermissions {
     pub read_write: Vec<PathBuf>,
 }
 
-/// Combined effective policy calculated from BasePolicy + Persistent Workspace Permissions + Session Grants + Protected Paths.
+/// Baseline permissions, persistent permissions, session grants, and protected paths.
 #[derive(Clone, Debug)]
 pub struct EffectivePolicy {
     pub base: BasePolicy,
@@ -301,13 +297,10 @@ impl PolicyEngine {
             persistent_read_write.push(resolved);
         }
 
-        // Normalize persistent_read_write (deduplicate and keep broader ancestor)
         normalize_resolved_paths(&mut persistent_read_write);
 
-        // Normalize persistent_read (deduplicate and keep broader ancestor)
         normalize_resolved_paths(&mut persistent_read);
 
-        // Check overlap between read_write and read
         for rw in &persistent_read_write {
             for ro in &persistent_read {
                 let rw_c = rw.canonical();
@@ -425,7 +418,6 @@ impl PolicyEngine {
                 ));
             }
 
-            // Reject reserved runtime/system paths
             if crate::execution::process::is_reserved_system_path(canon) {
                 return PolicyDecision::Denied(format!(
                     "path '{}' is a reserved runtime path and cannot be granted as external capability",
@@ -433,7 +425,6 @@ impl PolicyEngine {
                 ));
             }
 
-            // Check against protected paths
             let protected_guard = self
                 .policy
                 .protected_paths
@@ -457,7 +448,6 @@ impl PolicyEngine {
                 }
             }
 
-            // Inside workspace check
             if resolved.is_subpath_of(&self.policy.base.workspace) {
                 if let Ok(rel) = canon.strip_prefix(ws_canon) {
                     for component in rel.components() {
@@ -488,7 +478,6 @@ impl PolicyEngine {
                 return PolicyDecision::Granted;
             }
 
-            // Persistent workspace permissions
             let is_persistent_rw = self
                 .policy
                 .persistent_read_write
@@ -512,7 +501,6 @@ impl PolicyEngine {
             }
         }
 
-        // Runtime session grants
         let session_allowed = self
             .policy
             .session_grants
@@ -524,7 +512,6 @@ impl PolicyEngine {
             return PolicyDecision::Granted;
         }
 
-        // Otherwise, requires interactive user approval
         PolicyDecision::NeedsApproval(vec![capability.clone()])
     }
 }
@@ -584,7 +571,6 @@ mod tests {
         let engine = PolicyEngine::new(workspace);
         let cap_read = FilesystemCapability::local_read(&external_file);
 
-        // Before grant: NeedsApproval
         assert!(matches!(
             engine.check_filesystem(&cap_read),
             PolicyDecision::NeedsApproval(_)
@@ -597,7 +583,6 @@ mod tests {
             resolved_external,
         ));
 
-        // After grant: Granted
         assert_eq!(engine.check_filesystem(&cap_read), PolicyDecision::Granted);
 
         // Writing to the same file still requires approval
@@ -661,7 +646,6 @@ mod tests {
 
         let mut store = SessionGrantStore::new();
 
-        // 1. Add child grant R
         store.grant(FilesystemGrant::read_only(
             EnvironmentId::Local,
             child.clone(),
@@ -669,12 +653,10 @@ mod tests {
 
         assert_eq!(store.grants().len(), 1);
 
-        // 2. Add broader parent grant R -> replaces redundant child
         store.grant(FilesystemGrant::read_only(EnvironmentId::Local, parent));
 
         assert_eq!(store.grants().len(), 1);
 
-        // 3. Adding child R again is ignored as redundant
         store.grant(FilesystemGrant::read_only(EnvironmentId::Local, child));
 
         assert_eq!(store.grants().len(), 1);
@@ -712,7 +694,6 @@ mod tests {
         let engine = PolicyEngine::new(workspace);
         engine.add_protected_path(secret.clone());
 
-        // 1. Requesting the protected file directly is denied
         let cap_direct = FilesystemCapability::local_read(&secret);
 
         match engine.check_filesystem(&cap_direct) {
@@ -722,7 +703,6 @@ mod tests {
             other => panic!("expected Denied, got {other:?}"),
         }
 
-        // 2. Requesting the parent directory containing the protected file is denied
         let cap_parent = FilesystemCapability::local_read(tmp_ext.path());
 
         match engine.check_filesystem(&cap_parent) {
@@ -768,7 +748,6 @@ mod tests {
 
         let ws = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
 
-        // 1. Non-existent path rejected
         let perms_nonexistent = WorkspacePermissions {
             read_templates: Vec::new(),
             write_templates: Vec::new(),
@@ -781,7 +760,6 @@ mod tests {
                 .is_err()
         );
 
-        // 2. Workspace ancestor rejected
         let perms_ancestor = WorkspacePermissions {
             read_templates: Vec::new(),
             write_templates: Vec::new(),
@@ -794,7 +772,6 @@ mod tests {
                 .is_err()
         );
 
-        // 3. Inside workspace rejected
         let perms_inside = WorkspacePermissions {
             read_templates: Vec::new(),
             write_templates: Vec::new(),
@@ -807,7 +784,6 @@ mod tests {
                 .is_err()
         );
 
-        // 4. Overlapping read and read_write rejected
         let sub_dir = ext_dir.join("secret");
         std::fs::create_dir_all(&sub_dir).unwrap();
         let perms_overlap = WorkspacePermissions {
@@ -823,7 +799,6 @@ mod tests {
 
         assert!(err.contains("overlaps with read path"));
 
-        // 5. Redundant paths normalized
         let sub_rw = ext_dir.join("sub_rw");
         std::fs::create_dir_all(&sub_rw).unwrap();
         let perms_redundant = WorkspacePermissions {

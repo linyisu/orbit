@@ -18,7 +18,6 @@ fn session_grants_are_isolated_and_ephemeral() {
     let resolved_external = ResolvedPath::resolve(&external_file, None).unwrap();
     let cap = FilesystemCapability::local_read(&external_file);
 
-    // 1. First runtime session
     let engine1 = PolicyEngine::new(workspace.clone());
 
     assert_eq!(
@@ -53,15 +52,14 @@ fn persistent_workspace_policy_grants_configured_external_paths() {
     let workspace = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
 
     let permissions = WorkspacePermissions {
-            read_templates: Vec::new(),
-            write_templates: Vec::new(),
+        read_templates: Vec::new(),
+        write_templates: Vec::new(),
         read: vec![tmp_cache.path().to_path_buf()],
         read_write: vec![tmp_logs.path().to_path_buf()],
     };
 
     let engine = PolicyEngine::with_permissions(workspace, permissions, NetworkPolicy::Allow);
 
-    // 1. Cache directory is persistent read-only
     let cache_file = tmp_cache.path().join("pkg.tar.gz");
     fs::write(&cache_file, "bytes").unwrap();
 
@@ -79,7 +77,6 @@ fn persistent_workspace_policy_grants_configured_external_paths() {
         PolicyDecision::NeedsApproval(_)
     ));
 
-    // 2. Logs directory is persistent read-write
     let log_file = tmp_logs.path().join("app.log");
     let log_read = FilesystemCapability::local_read(&log_file);
     let log_write = FilesystemCapability::local_write(&log_file);

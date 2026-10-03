@@ -1435,7 +1435,6 @@ mod tests {
         tools.register(ImageTool);
         let agent = Agent::new(backend.clone(), tools, AgentConfig::default());
 
-        // Verify tool definition does not expose read_image
         assert!(!agent.tools.contains("read_image"));
         assert!(
             !agent
@@ -1492,7 +1491,6 @@ mod tests {
 
         assert!(result.is_err());
 
-        // Check the last saved checkpoint in journal: canonical history preserves image attachments losslessly
         let checkpoints = journal.checkpoints.lock().unwrap();
         let last_checkpoint = checkpoints.last().expect("saved checkpoint");
         let has_raw_attachments = last_checkpoint.history.iter().any(|m| match m {
@@ -1534,7 +1532,6 @@ mod tests {
             checkpoints.last().unwrap().history.clone()
         };
 
-        // Verify restored_history still has image attachment losslessly
         assert!(restored_history.iter().any(|m| match m {
             ChatMessage::User { attachments, .. } => !attachments.is_empty(),
             _ => false,
@@ -1599,7 +1596,6 @@ mod tests {
 
         assert_eq!(requests.len(), 1);
 
-        // Verify that the request sent to the text-only model has 0 image attachments
         for msg in &requests[0].messages {
             if let ChatMessage::User { attachments, .. } = msg {
                 assert!(
@@ -1624,7 +1620,6 @@ mod tests {
     #[tokio::test]
     async fn scenario_5_switching_conversation_with_historical_images_to_text_only_and_back_to_vision()
      {
-        // Step 1: Run with multimodal model where read_image completes and assistant answers
         let vision_backend = MockModel::new(vec![
             assistant_tool_call("image-call", "read_image", "{}"),
             assistant_text("I see a blue square in scene.png."),
@@ -1639,7 +1634,6 @@ mod tests {
             .unwrap();
         let history_after_vision = result.history;
 
-        // Step 2: Switch to text-only model and ask a question about the image
         let mut switched_history = history_after_vision;
         switched_history.push(ChatMessage::user("What color was the square?"));
         let text_only_backend =
@@ -1674,13 +1668,11 @@ mod tests {
                 ),
             _ => false,
         }));
-        // Verify canonical history still retains the image attachment losslessly!
         assert!(result2.history.iter().any(|m| match m {
             ChatMessage::User { attachments, .. } => !attachments.is_empty(),
             _ => false,
         }));
 
-        // Step 3: Switch back to vision model; original image attachment is still preserved and sent
         let mut back_to_vision_history = result2.history;
         back_to_vision_history.push(ChatMessage::user(
             "Look at the image again, what is in the corner?",

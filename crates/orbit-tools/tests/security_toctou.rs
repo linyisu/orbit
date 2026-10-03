@@ -86,7 +86,7 @@ async fn ungranted_symlink_pointing_outside_is_blocked() {
         .await
         .unwrap_err();
 
-    // Symlinks are not followed or require outside capability which is ungranted
+    // This link resolves outside the workspace without a capability grant.
     assert!(err.to_string().contains("symlink") || err.to_string().contains("permission denied"));
 
     // Writing to symlink inside workspace is rejected

@@ -31,7 +31,6 @@ id = "gpt-5.6-sol"
 supports_vision = true
 reasoning = { adapter = "openai_responses", efforts = ["none", "low", "medium", "high"], default = "high" }
 
-
 # --- 命令与交付预算 ---
 [command]
 network = "allow" # 允许显式申请联网；run_command 单次请求默认 network="deny"

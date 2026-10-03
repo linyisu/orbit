@@ -347,7 +347,11 @@ pub(super) fn format_bytes(bytes: u64) -> String {
     }
 }
 
-pub(super) fn command_output(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+pub(super) fn command_output(
+    row: &ToolRow,
+    expanded: bool,
+    width: u16,
+) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
     let content = value["content"].as_str()?;
     let stream = value["stream"].as_str().unwrap_or("stdout");
@@ -359,17 +363,42 @@ pub(super) fn command_output(row: &ToolRow, expanded: bool, width: u16) -> Optio
     let theme = &crate::tui::theme::THEME;
     let mut view = View::new(expanded, width);
 
-    let stream_color = if stream == "stderr" { theme.error } else { theme.accent };
-    let stream_badge = if stream == "stderr" { "[STDERR]" } else { "[STDOUT]" };
-    let range_str = if total > 0 {
-        let pct = format!(" · {:.0}%", (next_offset as f64 / total as f64 * 100.0).min(100.0));
-        format!("字节 {}..{} (共 {}{pct})", format_bytes(offset), format_bytes(next_offset), format_bytes(total))
+    let stream_color = if stream == "stderr" {
+        theme.error
     } else {
-        format!("字节 {}..{}", format_bytes(offset), format_bytes(next_offset))
+        theme.accent
+    };
+    let stream_badge = if stream == "stderr" {
+        "[STDERR]"
+    } else {
+        "[STDOUT]"
+    };
+    let range_str = if total > 0 {
+        let pct = format!(
+            " · {:.0}%",
+            (next_offset as f64 / total as f64 * 100.0).min(100.0)
+        );
+        format!(
+            "字节 {}..{} (共 {}{pct})",
+            format_bytes(offset),
+            format_bytes(next_offset),
+            format_bytes(total)
+        )
+    } else {
+        format!(
+            "字节 {}..{}",
+            format_bytes(offset),
+            format_bytes(next_offset)
+        )
     };
 
     view.push_spans(vec![
-        Span::styled(format!("{stream_badge} "), Style::default().fg(stream_color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("{stream_badge} "),
+            Style::default()
+                .fg(stream_color)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(range_str, Style::default().fg(theme.tool_detail)),
     ]);
 
@@ -388,12 +417,12 @@ pub(super) fn command_output(row: &ToolRow, expanded: bool, width: u16) -> Optio
     }
 
     if truncated || (total > 0 && next_offset < total) {
-        view.push_spans(vec![
-            Span::styled(
-                format!("… 尚有后续输出 (next_offset = {next_offset}, 可使用 read_command_output 继续查询)"),
-                Style::default().fg(theme.tool_running),
+        view.push_spans(vec![Span::styled(
+            format!(
+                "… 尚有后续输出 (next_offset = {next_offset}, 可使用 read_command_output 继续查询)"
             ),
-        ]);
+            Style::default().fg(theme.tool_running),
+        )]);
     }
 
     Some(view.finish())
@@ -409,7 +438,10 @@ pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Ve
     let count = results.len();
     view.push_spans(vec![
         Span::styled("🔍 搜索结果 · ", Style::default().fg(theme.accent)),
-        Span::styled(format!("来源: {provider} (共 {count} 条)"), Style::default().fg(theme.tool_detail)),
+        Span::styled(
+            format!("来源: {provider} (共 {count} 条)"),
+            Style::default().fg(theme.tool_detail),
+        ),
     ]);
 
     if results.is_empty() {
@@ -422,20 +454,32 @@ pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Ve
             let snippet = item["snippet"].as_str().unwrap_or("");
 
             view.push_spans(vec![
-                Span::styled(format!("{}. ", i + 1), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-                Span::styled(title.to_owned(), Style::default().fg(theme.output_foreground).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{}. ", i + 1),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    title.to_owned(),
+                    Style::default()
+                        .fg(theme.output_foreground)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]);
 
             if !url.is_empty() {
-                view.push_spans(vec![
-                    Span::styled(format!("   {url}"), Style::default().fg(theme.md_link)),
-                ]);
+                view.push_spans(vec![Span::styled(
+                    format!("   {url}"),
+                    Style::default().fg(theme.md_link),
+                )]);
             }
 
             if !snippet.is_empty() {
-                view.push_spans(vec![
-                    Span::styled(format!("   {snippet}"), Style::default().fg(theme.output_muted)),
-                ]);
+                view.push_spans(vec![Span::styled(
+                    format!("   {snippet}"),
+                    Style::default().fg(theme.output_muted),
+                )]);
             }
         }
 
@@ -445,9 +489,10 @@ pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Ve
     }
 
     if let Some(reason) = value["fallback_reason"].as_str() {
-        view.push_spans(vec![
-            Span::styled(format!("注意: {reason}"), Style::default().fg(theme.tool_running)),
-        ]);
+        view.push_spans(vec![Span::styled(
+            format!("注意: {reason}"),
+            Style::default().fg(theme.tool_running),
+        )]);
     }
 
     Some(view.finish())
@@ -469,9 +514,20 @@ pub(super) fn document(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<
     let format_badge = format.to_ascii_uppercase();
     let end_char = start_char + content.chars().count() as u64;
     view.push_spans(vec![
-        Span::styled(format!("[{format_badge}] "), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-        Span::styled(path.to_owned(), Style::default().fg(theme.output_foreground)),
-        Span::styled(format!(" · 字符 {start_char}..{end_char} (共 {total_chars})"), Style::default().fg(theme.tool_detail)),
+        Span::styled(
+            format!("[{format_badge}] "),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            path.to_owned(),
+            Style::default().fg(theme.output_foreground),
+        ),
+        Span::styled(
+            format!(" · 字符 {start_char}..{end_char} (共 {total_chars})"),
+            Style::default().fg(theme.tool_detail),
+        ),
     ]);
 
     let lines: Vec<&str> = content.lines().collect();
@@ -488,12 +544,10 @@ pub(super) fn document(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<
     }
 
     if truncated && let Some(next) = next_start {
-        view.push_spans(vec![
-            Span::styled(
-                format!("… 尚有后续字符 (next_start_char = {next}, 可使用 read_document 继续查看)"),
-                Style::default().fg(theme.tool_running),
-            ),
-        ]);
+        view.push_spans(vec![Span::styled(
+            format!("… 尚有后续字符 (next_start_char = {next}, 可使用 read_document 继续查看)"),
+            Style::default().fg(theme.tool_running),
+        )]);
     }
 
     Some(view.finish())
@@ -506,9 +560,12 @@ pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
     let mut view = View::new(true, width);
 
     if status == "granted" {
-        view.push_spans(vec![
-            Span::styled("✓ 外部目录访问授权已授予 (Granted)", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
-        ]);
+        view.push_spans(vec![Span::styled(
+            "✓ 外部目录访问授权已授予 (Granted)",
+            Style::default()
+                .fg(theme.success)
+                .add_modifier(Modifier::BOLD),
+        )]);
         if let Some(cap) = value.get("capability") {
             let path = cap["path"].as_str().unwrap_or("");
             let access = cap["access"].as_str().unwrap_or("");
@@ -521,9 +578,12 @@ pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
             view.push(&format!("  模式: {access_label}"), theme.tool_detail);
         }
     } else {
-        view.push_spans(vec![
-            Span::styled("× 外部目录访问授权被拒绝 (Denied)", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
-        ]);
+        view.push_spans(vec![Span::styled(
+            "× 外部目录访问授权被拒绝 (Denied)",
+            Style::default()
+                .fg(theme.error)
+                .add_modifier(Modifier::BOLD),
+        )]);
         if let Some(msg) = value["message"].as_str() {
             view.push(&format!("  原因: {msg}"), theme.output_muted);
         }
@@ -532,7 +592,11 @@ pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
     Some(view.finish())
 }
 
-pub(super) fn export_artifact(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+pub(super) fn export_artifact(
+    row: &ToolRow,
+    _expanded: bool,
+    width: u16,
+) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
     let path = value["path"].as_str().unwrap_or_default();
     let name = value["name"].as_str().unwrap_or_default();
@@ -541,30 +605,50 @@ pub(super) fn export_artifact(row: &ToolRow, _expanded: bool, width: u16) -> Opt
     let theme = &crate::tui::theme::THEME;
     let mut view = View::new(true, width);
 
-    view.push_spans(vec![
-        Span::styled("📦 工件已成功导出", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
-    ]);
-    view.push(&format!("  文件: {name} ({})", format_bytes(bytes)), theme.output_foreground);
+    view.push_spans(vec![Span::styled(
+        "📦 工件已成功导出",
+        Style::default()
+            .fg(theme.success)
+            .add_modifier(Modifier::BOLD),
+    )]);
+    view.push(
+        &format!("  文件: {name} ({})", format_bytes(bytes)),
+        theme.output_foreground,
+    );
     view.push(&format!("  路径: {path}"), theme.tool_detail);
     if !sha256.is_empty() {
-        let short_sha = if sha256.len() > 16 { &sha256[..16] } else { sha256 };
+        let short_sha = if sha256.len() > 16 {
+            &sha256[..16]
+        } else {
+            sha256
+        };
         view.push(&format!("  哈希: sha256:{short_sha}…"), theme.output_muted);
     }
 
     Some(view.finish())
 }
 
-pub(super) fn git_export_patch(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
+pub(super) fn git_export_patch(
+    row: &ToolRow,
+    _expanded: bool,
+    width: u16,
+) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
     let path = value["path"].as_str().unwrap_or_default();
     let bytes = value["bytes"].as_u64().unwrap_or(0);
     let theme = &crate::tui::theme::THEME;
     let mut view = View::new(true, width);
 
-    view.push_spans(vec![
-        Span::styled("📦 Git 补丁已导出", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
-    ]);
-    view.push(&format!("  大小: {} ({bytes} 字节)", format_bytes(bytes)), theme.output_foreground);
+    view.push_spans(vec![Span::styled(
+        "📦 Git 补丁已导出",
+        Style::default()
+            .fg(theme.success)
+            .add_modifier(Modifier::BOLD),
+    )]);
+    view.push(
+        &format!("  大小: {} ({bytes} 字节)", format_bytes(bytes)),
+        theme.output_foreground,
+    );
     view.push(&format!("  路径: {path}"), theme.tool_detail);
 
     Some(view.finish())
@@ -577,8 +661,16 @@ pub(super) fn read_image(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
     let mut view = View::new(true, width);
 
     view.push_spans(vec![
-        Span::styled("🖼️ 图像已载入上下文 · ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-        Span::styled(path.to_owned(), Style::default().fg(theme.output_foreground)),
+        Span::styled(
+            "🖼️ 图像已载入上下文 · ",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            path.to_owned(),
+            Style::default().fg(theme.output_foreground),
+        ),
     ]);
 
     Some(view.finish())
@@ -606,11 +698,16 @@ pub(super) fn fallback(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<
     if let Some(syn) = syntax {
         let mut highlighter = HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
         for line in lines.iter().take(limit) {
-            if let Ok(line_tokens) = highlighter.highlight_line(line, &super::super::languages::SYNTAXES) {
+            if let Ok(line_tokens) =
+                highlighter.highlight_line(line, &super::super::languages::SYNTAXES)
+            {
                 let mut spans = Vec::new();
                 for (style, slice) in line_tokens {
                     let c = style.foreground;
-                    spans.push(Span::styled(slice.to_owned(), Style::default().fg(Color::Rgb(c.r, c.g, c.b))));
+                    spans.push(Span::styled(
+                        slice.to_owned(),
+                        Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
+                    ));
                 }
                 view.push_spans(spans);
             } else {
@@ -800,10 +897,7 @@ mod tests {
                 "git_export_patch",
                 json!({ "path": long, "bytes": 64, "sha256": "def" }),
             ),
-            tool(
-                "read_image",
-                json!({ "path": long, "loaded": true }),
-            ),
+            tool("read_image", json!({ "path": long, "loaded": true })),
             tool(
                 "extension_tool",
                 json!({

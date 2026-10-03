@@ -46,7 +46,10 @@ impl GitRepositoryInfo {
             let common_dir = resolve_commondir(&git_dir).unwrap_or_else(|| git_dir.clone());
             let kind = if common_dir != git_dir {
                 GitRepoKind::Worktree {
-                    main_repo_dir: common_dir.parent().map(Path::to_path_buf).unwrap_or_else(|| common_dir.clone()),
+                    main_repo_dir: common_dir
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| common_dir.clone()),
                 }
             } else {
                 GitRepoKind::Standard
@@ -188,7 +191,10 @@ mod tests {
         assert_eq!(info.kind, GitRepoKind::Standard);
         assert_eq!(info.git_dir, dot_git.canonicalize().unwrap());
         assert_eq!(info.common_dir, dot_git.canonicalize().unwrap());
-        assert_eq!(info.config_path(), dot_git.canonicalize().unwrap().join("config"));
+        assert_eq!(
+            info.config_path(),
+            dot_git.canonicalize().unwrap().join("config")
+        );
     }
 
     #[test]
@@ -234,7 +240,9 @@ mod tests {
         )
         .unwrap();
 
-        let info = GitRepositoryInfo::discover(&submodule_dir).unwrap().unwrap();
+        let info = GitRepositoryInfo::discover(&submodule_dir)
+            .unwrap()
+            .unwrap();
         assert!(info.is_gitfile);
         assert!(info.is_submodule());
         assert_eq!(info.git_dir, module_git_dir.canonicalize().unwrap());

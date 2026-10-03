@@ -295,7 +295,7 @@ async fn convert_worker(
     std::fs::read_to_string(scratch.path().join("document.md")).map_err(failed)
 }
 
-/// Private CLI worker entry point, invoked only inside the conversion sandbox.
+/// Worker entry point for the host to invoke inside the conversion sandbox.
 pub fn document_worker(input: &Path, output: &Path) -> Result<(), String> {
     let bytes = std::fs::read(input).map_err(|e| e.to_string())?;
     if bytes.len() as u64 > MAX_FILE_BYTES {

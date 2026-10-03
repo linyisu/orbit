@@ -16,8 +16,8 @@ async fn session_grants_are_ephemeral_and_clearable() {
 
     // Configure persistent permissions (e.g. from orbit.toml)
     let permissions = WorkspacePermissions {
-            read_templates: Vec::new(),
-            write_templates: Vec::new(),
+        read_templates: Vec::new(),
+        write_templates: Vec::new(),
         read: vec![persistent_temp.path().to_path_buf()],
         read_write: vec![],
     };
@@ -29,35 +29,29 @@ async fn session_grants_are_ephemeral_and_clearable() {
     fs::write(&external_file, "1,2,3\n").unwrap();
     let cap = FilesystemCapability::local_read(&external_file);
 
-    // 1. Initially requires approval
     assert!(matches!(
         workspace.policy().check_filesystem(&cap),
         PolicyDecision::NeedsApproval(_)
     ));
 
-    // 2. Grant session capability
     let resolved_ext = ResolvedPath::resolve(&external_file, None).unwrap();
     workspace.policy().record_grant(FilesystemGrant::read_only(
         EnvironmentId::Local,
         resolved_ext,
     ));
 
-    // 3. Granted within current session
     assert_eq!(
         workspace.policy().check_filesystem(&cap),
         PolicyDecision::Granted
     );
 
-    // 4. End session / clear session grants
     workspace.policy().clear_session_grants();
 
-    // 5. Session grant is revoked immediately
     assert!(matches!(
         workspace.policy().check_filesystem(&cap),
         PolicyDecision::NeedsApproval(_)
     ));
 
-    // 6. Persistent permission is NOT revoked by clear_session_grants
     let persistent_file = persistent_temp.path().join("model.bin");
     fs::write(&persistent_file, "weights").unwrap();
     let persistent_cap = FilesystemCapability::local_read(&persistent_file);
@@ -67,7 +61,6 @@ async fn session_grants_are_ephemeral_and_clearable() {
         PolicyDecision::Granted
     );
 
-    // 7. Workspace paths remain always granted
     let ws_cap = FilesystemCapability::local_read_write(ws_temp.path().join("src/lib.rs"));
 
     assert_eq!(
@@ -75,7 +68,6 @@ async fn session_grants_are_ephemeral_and_clearable() {
         PolicyDecision::Granted
     );
 
-    // 8. A fresh workspace starts with an empty session grant store
     let fresh_workspace = Workspace::new(ws_temp.path()).unwrap();
 
     assert!(matches!(

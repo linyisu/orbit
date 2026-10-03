@@ -38,7 +38,6 @@ async fn external_path_integration_across_all_tools() {
     let ext_file_str = ext_file.display().to_string();
     let ext_dir_str = ext_dir.display().to_string();
 
-    // 1. Without capability grants, all tools must reject external paths with permission denied
     let read_err = read_tool
         .execute(
             ToolCall::function("r1", "read_file", json!({ "path": &ext_file_str })),
@@ -106,14 +105,12 @@ async fn external_path_integration_across_all_tools() {
     assert!(search_err.to_string().contains("permission denied"));
     assert!(search_err.to_string().contains("request_capability"));
 
-    // 2. Grant ReadWrite capability on ext_dir for this session
     let resolved_ext_dir = ResolvedPath::resolve(&ext_dir, None).unwrap();
     workspace.policy().record_grant(FilesystemGrant::read_write(
         EnvironmentId::Local,
         resolved_ext_dir,
     ));
 
-    // 3. Now read_file succeeds on the granted outside path
     let read_out = read_tool
         .execute(
             ToolCall::function("r2", "read_file", json!({ "path": &ext_file_str })),
@@ -124,7 +121,6 @@ async fn external_path_integration_across_all_tools() {
 
     assert!(read_out.content.contains("initial line"));
 
-    // 4. write_file to the granted outside path prompts for write approval and succeeds
     let write_fut = write_tool.execute(
         ToolCall::function(
             "w2",
@@ -166,7 +162,6 @@ async fn external_path_integration_across_all_tools() {
         "replaced external content\nsecond line\n"
     );
 
-    // 5. edit_file succeeds on the granted outside path
     let edit_result = edit_tool
         .execute(
             ToolCall::function(
@@ -187,7 +182,6 @@ async fn external_path_integration_across_all_tools() {
 
     approve_task.await.unwrap();
 
-    // 6. list_files lists the granted outside directory
     let list_out = list_tool
         .execute(
             ToolCall::function("l2", "list_files", json!({ "path": &ext_dir_str })),
@@ -199,7 +193,6 @@ async fn external_path_integration_across_all_tools() {
     assert!(list_out.content.contains("config.txt"));
     assert!(list_out.content.contains("\"kind\":\"file\""));
 
-    // 7. search_text searches the granted outside directory
     let search_out = search_tool
         .execute(
             ToolCall::function(
@@ -252,7 +245,6 @@ async fn external_special_readers_integration() {
     let ext_rtf_str = ext_rtf.display().to_string();
     let ext_img_str = ext_img.display().to_string();
 
-    // 1. Without capability grants, both read_document and read_image must reject external paths with permission denied
     let doc_err = doc_tool
         .execute(
             ToolCall::function("d1", "read_document", json!({ "path": &ext_doc_str })),
@@ -286,14 +278,12 @@ async fn external_special_readers_integration() {
     assert!(img_err.to_string().contains("permission denied"));
     assert!(img_err.to_string().contains("request_capability"));
 
-    // 2. Grant Read capability on ext_dir
     let resolved_ext_dir = ResolvedPath::resolve(&ext_dir, None).unwrap();
     workspace.policy().record_grant(FilesystemGrant::read_only(
         EnvironmentId::Local,
         resolved_ext_dir,
     ));
 
-    // 3. Now read_document succeeds on the granted outside document and RTF
     let doc_out = doc_tool
         .execute(
             ToolCall::function("d2", "read_document", json!({ "path": &ext_doc_str })),
@@ -316,7 +306,6 @@ async fn external_special_readers_integration() {
     assert!(rtf_out.content.contains("local_document_markdown"));
     assert!(rtf_out.content.contains("Rust for Rustaceans"));
 
-    // 4. Now read_image succeeds on the granted outside image
     let img_out = img_tool
         .execute(
             ToolCall::function("i2", "read_image", json!({ "path": &ext_img_str })),
@@ -328,7 +317,6 @@ async fn external_special_readers_integration() {
     assert!(img_out.content.contains("local_image"));
     assert_eq!(img_out.attachments.len(), 1);
 
-    // 5. Relative path traversal to granted outside document also succeeds
     let rel_doc = format!(
         "../{}/external_docs/data.csv",
         ext_temp.path().file_name().unwrap().to_str().unwrap()

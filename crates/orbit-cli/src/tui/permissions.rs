@@ -164,7 +164,6 @@ mod tests {
 
         assert!(!Mode::Auto.allows(&external_command, root));
 
-        // Test Git permissions in Auto mode
         let git_status = ApprovalPreview::Command(CommandPreview {
             command: "git status".into(),
             cwd: None,

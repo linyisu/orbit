@@ -58,8 +58,7 @@ pub async fn workspace_tools(
     tools.register(orbit_tools::project_overview::ProjectOverview::new(
         workspace.clone(),
     ));
-    // Native Git commands via run_command now replace synthetic git_inspect for the agent.
-    // GitInspect internal logic remains preserved in orbit-tools for baselines, diff exports, and benchmarks.
+    // Model-facing Git commands use run_command; GitInspect supplies internal snapshots.
 
     if let Some(database) = database {
         tools.register(orbit_tools::git_export_patch::GitExportPatch::new(

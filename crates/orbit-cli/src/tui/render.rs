@@ -1366,13 +1366,18 @@ pub(super) fn parse_ansi_to_spans(text: &str) -> Vec<Span<'static>> {
 
 pub(super) fn read_file_summary(arguments: &str, output: &str) -> String {
     let args = serde_json::from_str::<serde_json::Value>(arguments).ok();
-    let path = args.as_ref().and_then(|v| v["path"].as_str()).unwrap_or_default();
+    let path = args
+        .as_ref()
+        .and_then(|v| v["path"].as_str())
+        .unwrap_or_default();
     let out = serde_json::from_str::<serde_json::Value>(output).ok();
 
-    let start = out.as_ref()
+    let start = out
+        .as_ref()
         .and_then(|v| v["start_line"].as_u64())
         .or_else(|| args.as_ref().and_then(|v| v["start_line"].as_u64()));
-    let end = out.as_ref()
+    let end = out
+        .as_ref()
         .and_then(|v| v["end_line"].as_u64())
         .or_else(|| {
             let max = args.as_ref().and_then(|v| v["max_lines"].as_u64())?;
@@ -1460,7 +1465,9 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
                         if !text.is_empty() && !text.ends_with('\n') {
                             text.push('\n');
                         }
-                        text.push_str(&format!("[完整输出已留存: {output_id} · 可使用 read_command_output 查询]"));
+                        text.push_str(&format!(
+                            "[完整输出已留存: {output_id} · 可使用 read_command_output 查询]"
+                        ));
                     }
                     if text.is_empty()
                         && let Some(code) = value["exit_code"].as_i64().filter(|c| *c != 0)
@@ -1485,16 +1492,21 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
         .unwrap_or_else(|| row.output.clone());
 
     let syntax = super::languages::syntax_for_label("json");
-    let is_json_output = (output.trim_start().starts_with('{') || output.trim_start().starts_with('['))
+    let is_json_output = (output.trim_start().starts_with('{')
+        || output.trim_start().starts_with('['))
         && serde_json::from_str::<serde_json::Value>(&output).is_ok();
     if is_json_output && let Some(syn) = syntax {
-        let mut highlighter = syntect::easy::HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
+        let mut highlighter =
+            syntect::easy::HighlightLines::new(syn, &crate::tui::theme::CODE_THEME);
         for line in output.lines() {
             if let Ok(line_tokens) = highlighter.highlight_line(line, &super::languages::SYNTAXES) {
                 let mut spans = Vec::new();
                 for (style, slice) in line_tokens {
                     let c = style.foreground;
-                    spans.push(Span::styled(slice.to_owned(), Style::default().fg(Color::Rgb(c.r, c.g, c.b))));
+                    spans.push(Span::styled(
+                        slice.to_owned(),
+                        Style::default().fg(Color::Rgb(c.r, c.g, c.b)),
+                    ));
                 }
                 lines.push(Line::from(spans));
             } else {
@@ -1513,7 +1525,11 @@ fn tool_details(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Li
     lines
 }
 
-pub(super) fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
+pub(super) fn tool_card(
+    row: &super::app::ToolRow,
+    expanded: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
     let width = if width == u16::MAX { 120 } else { width };
     let color = match row.status {
         ToolStatus::Running => TOOL_RUNNING,
@@ -1582,13 +1598,11 @@ pub(super) fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -
 
     let mut card_lines = Vec::new();
 
-    // 1. Top border: "╭─────────╮"
     card_lines.push(Line::from(Span::styled(
         format!("╭{}╮", "─".repeat(inner_width + 2)),
         border_style,
     )));
 
-    // 2. Header line inside box: "│ tool_name command... │"
     let header_line = Line::from(title_spans);
     let (wrapped_header, _) = super::transcript::wrap_line(&header_line, inner_width as u16);
     for h_line in wrapped_header {
@@ -1600,14 +1614,12 @@ pub(super) fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -
         card_lines.push(Line::from(framed_header));
     }
 
-    // 3. Breathing blank line: "│               │"
     card_lines.push(Line::from(vec![
         Span::styled("│ ", border_style),
         Span::raw(" ".repeat(inner_width)),
         Span::styled(" │", border_style),
     ]));
 
-    // 4. Content / Body lines
     let mut details = tool_details(row, true, inner_width as u16);
     if !details.is_empty() {
         details.remove(0);
@@ -1676,7 +1688,6 @@ pub(super) fn tool_card(row: &super::app::ToolRow, expanded: bool, width: u16) -
         }
     }
 
-    // 5. Bottom border: "╰─────────╯"
     card_lines.push(Line::from(Span::styled(
         format!("╰{}╯", "─".repeat(inner_width + 2)),
         border_style,
@@ -2478,7 +2489,11 @@ mod tests {
         // Collapsed state: strictly single line command
         let collapsed = tool_card(&row, false, 80);
         assert_eq!(collapsed.len(), 1);
-        assert!(collapsed[0].to_string().starts_with("  write_file hello.py"));
+        assert!(
+            collapsed[0]
+                .to_string()
+                .starts_with("  write_file hello.py")
+        );
         assert!(!collapsed[0].to_string().contains('✓'));
         assert!(!collapsed[0].to_string().contains('⟳'));
         assert!(!collapsed[0].to_string().contains('✗'));
@@ -2488,8 +2503,14 @@ mod tests {
         assert!(expanded.len() >= 4);
         assert!(expanded[0].to_string().starts_with('╭') && expanded[0].to_string().ends_with('╮'));
         assert!(expanded[1].to_string().contains("write_file hello.py"));
-        assert!(expanded[2].to_string().starts_with("│ ") && expanded[2].to_string().ends_with(" │"));
-        assert!(expanded[3].to_string().contains("1 │ print(\"Hello, world!\")"));
+        assert!(
+            expanded[2].to_string().starts_with("│ ") && expanded[2].to_string().ends_with(" │")
+        );
+        assert!(
+            expanded[3]
+                .to_string()
+                .contains("1 │ print(\"Hello, world!\")")
+        );
         let bottom = &expanded[expanded.len() - 1];
         assert!(bottom.to_string().starts_with('╰') && bottom.to_string().ends_with('╯'));
 
@@ -2505,11 +2526,26 @@ mod tests {
         layout.update(&items, Some(0), 80);
         let card_height = layout.height() - 1;
         for y in 0..card_height {
-            assert_eq!(layout.disclosure_at(&items, area, 0, (0, y as u16)), Some(0));
-            assert_eq!(layout.disclosure_at(&items, area, 0, (2, y as u16)), Some(0));
-            assert_eq!(layout.disclosure_at(&items, area, 0, (30, y as u16)), Some(0));
-            assert_eq!(layout.disclosure_at(&items, area, 0, (70, y as u16)), Some(0));
-            assert_eq!(layout.disclosure_at(&items, area, 0, (79, y as u16)), Some(0));
+            assert_eq!(
+                layout.disclosure_at(&items, area, 0, (0, y as u16)),
+                Some(0)
+            );
+            assert_eq!(
+                layout.disclosure_at(&items, area, 0, (2, y as u16)),
+                Some(0)
+            );
+            assert_eq!(
+                layout.disclosure_at(&items, area, 0, (30, y as u16)),
+                Some(0)
+            );
+            assert_eq!(
+                layout.disclosure_at(&items, area, 0, (70, y as u16)),
+                Some(0)
+            );
+            assert_eq!(
+                layout.disclosure_at(&items, area, 0, (79, y as u16)),
+                Some(0)
+            );
             assert_eq!(layout.disclosure_at(&items, area, 0, (80, y as u16)), None);
         }
     }

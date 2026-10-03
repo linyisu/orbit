@@ -249,7 +249,10 @@ impl Entry {
         mut links: Vec<super::markdown::LinkTarget>,
     ) {
         // Markdown rules occupy the entire transcript row, including the usual gutter.
-        let mut visible = line.spans.iter().filter(|span| !span.content.trim().is_empty());
+        let mut visible = line
+            .spans
+            .iter()
+            .filter(|span| !span.content.trim().is_empty());
         if let Some(rule) = visible.next()
             && visible.next().is_none()
             && rule.style.fg == Some(super::theme::THEME.md_rule)
@@ -589,8 +592,7 @@ impl TranscriptLayout {
                         expanded.contains(&(first + relative)),
                         width,
                     ) {
-                        if (collapsible && entry.rows.is_empty())
-                            || toggle.as_ref() == Some(&line)
+                        if (collapsible && entry.rows.is_empty()) || toggle.as_ref() == Some(&line)
                         {
                             entry.disclosures.push(entry.rows.len());
                         }
@@ -666,7 +668,10 @@ impl TranscriptLayout {
             .filter_map(|i| entry.rows.get(*i))
             .find(|row| row.start <= relative && relative < row.start + row.height)?;
         let column = usize::from(point.0 - area.x);
-        let gutter_width = row.gutter.as_ref().map_or(0, |gutter| gutter.width as usize);
+        let gutter_width = row
+            .gutter
+            .as_ref()
+            .map_or(0, |gutter| gutter.width as usize);
 
         (column < gutter_width + row.line.width()).then_some(index)
     }
@@ -771,7 +776,9 @@ impl TranscriptLayout {
 mod tests {
     #[test]
     fn markdown_rule_occupies_one_full_row_after_resize() {
-        let items = vec![super::TranscriptItem::Assistant("before\n---\nafter\n".into())];
+        let items = vec![super::TranscriptItem::Assistant(
+            "before\n---\nafter\n".into(),
+        )];
         let mut layout = super::TranscriptLayout::default();
         for width in [80, 180, 40] {
             layout.update(&items, None, width);

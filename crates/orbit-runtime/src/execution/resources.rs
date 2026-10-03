@@ -8,9 +8,7 @@ pub const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = UNLIMITED;
 pub const DEFAULT_MAX_PROCESSES: u64 = 1024;
 pub const DEFAULT_MAX_OPEN_FILES: u64 = 1024;
 
-/// ProcessLimits provides resource limits enforced via OS prlimit/rlimit.
-/// When max_memory_bytes or max_file_size_bytes is 0 (UNLIMITED), no hard ceiling
-/// is imposed, ensuring large debug builds and compilation artifacts succeed.
+/// OS process limits. Zero disables the corresponding limit.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProcessLimits {
@@ -65,9 +63,7 @@ impl Default for ProcessLimits {
     }
 }
 
-/// ResourceLimits provides compilation-friendly optional resource boundaries.
-/// Unlike legacy ProcessLimits, unset limits impose no artificial hard ceiling on
-/// builds or large binary artifacts.
+/// Optional overrides of the default process limits.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ResourceLimits {

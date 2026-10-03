@@ -3,40 +3,33 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "details")]
 pub enum GitOperationKind {
-    /// Read-only inspection (status, diff, log, branch --list, etc.)
-    /// Allowed automatically without interactive confirmation.
+    /// Read-only inspection; approval still depends on the execution boundaries.
     ReadOnlyQuery { subcommand: String },
-    /// Normal local modification (add, normal commit, create branch, stash, etc.)
-    /// Requires local Git write authorization; not prompted repeatedly in the same session.
+    /// Local modification requiring approval for the exact command and repository.
     LocalWrite {
         subcommand: String,
         description: String,
     },
-    /// Branch switching, merge, or rebase.
-    /// Shows impact scope and alerts if there is risk of uncommitted changes being affected.
+    /// Branch switching, merge, or rebase, with the target and any detected risk.
     BranchSwitchOrRebase {
         subcommand: String,
         target: String,
         risk_notice: Option<String>,
     },
-    /// Push to remote repository.
-    /// Requires explicit remote write authorization (network permission does NOT imply push).
+    /// Remote push requiring write approval in addition to network permission.
     RemoteWrite {
         remote: String,
         source_branch: Option<String>,
         target_branch: Option<String>,
     },
-    /// High-risk or destructive operation (force push, reset --hard, clean -fd, delete branch).
-    /// Always requires explicit confirmation, never bypassed by ordinary write permissions.
+    /// Destructive operation excluded from Auto mode and reusable Git approvals.
     Dangerous { subcommand: String, reason: String },
-    /// Modification to repository configuration (.git/config), worktree config, or hooks.
-    /// Requires independent dedicated authorization.
+    /// Configuration or hook mutation requiring a separate approval.
     ConfigMutation {
         key: Option<String>,
         value: Option<String>,
     },
-    /// Compound commands (&&, ||, ;, pipes, subshells) or unrecognized git commands/scripts.
-    /// Must fall back to regular Shell approval and not claim to be a safe Git operation.
+    /// Compound or unrecognized command handled through ordinary shell approval.
     CompoundOrShell { reason: String },
 }
 
@@ -60,7 +53,6 @@ impl GitCommandAnalysis {
             return None;
         }
 
-        // Check for compound shell operators, subshells, pipelines, or redirects.
         if contains_compound_shell_syntax(trimmed) {
             return Some(Self {
                 raw_command: trimmed.to_string(),
@@ -150,13 +142,11 @@ impl GitCommandAnalysis {
                     idx += 1;
                 }
                 _ => {
-                    // Unknown global flag
                     idx += 1;
                 }
             }
         }
 
-        // Check if inline config attempts to mutate hooks or execution config
         for key_val in inline_config_keys {
             let key = key_val
                 .split('=')
@@ -178,7 +168,6 @@ impl GitCommandAnalysis {
         }
 
         if idx >= words.len() {
-            // Just `git` or `git --version`
             return Some(Self {
                 raw_command: trimmed.to_string(),
                 subcommand: "version".into(),
@@ -447,7 +436,6 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
         }
 
         "push" => {
-            // Check for force flags or delete flags
             let is_force = args.iter().any(|a| {
                 a == "--force"
                     || a == "-f"

@@ -842,7 +842,6 @@ mod tests {
         let mut ws = Workspace::new(ws_dir.path()).unwrap();
         ws.protect(&db_file).unwrap();
 
-        // 1. configure_policy with permissions covering db_file fails upfront
         let perms = WorkspacePermissions {
             read_templates: Vec::new(),
             write_templates: Vec::new(),
@@ -856,7 +855,6 @@ mod tests {
 
         assert!(err.contains("conflicts with protected path"));
 
-        // 2. protect() fails if persistent permission is already configured
         let other_outside = tempdir().unwrap();
         let mut ws2 = Workspace::new(ws_dir.path()).unwrap();
         let perms2 = WorkspacePermissions {
@@ -884,7 +882,6 @@ mod tests {
         let mut ws = Workspace::new(ws_dir.path()).unwrap();
         ws.protect(&secret_file).unwrap();
 
-        // 1. Configure valid initial policy
         let initial_perms = WorkspacePermissions {
             read_templates: Vec::new(),
             write_templates: Vec::new(),
@@ -900,7 +897,6 @@ mod tests {
             valid_canonical
         );
 
-        // 2. Attempt to configure conflicting policy (covering secret_file)
         let bad_perms = WorkspacePermissions {
             read_templates: Vec::new(),
             write_templates: Vec::new(),
@@ -913,7 +909,6 @@ mod tests {
 
         assert!(err.to_string().contains("conflicts with protected path"));
 
-        // 3. Verify that self.policy was NOT mutated
         let current_policy = ws.policy().effective_policy();
 
         assert_eq!(current_policy.persistent_read.len(), 1);

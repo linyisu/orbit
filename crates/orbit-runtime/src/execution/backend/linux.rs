@@ -257,17 +257,14 @@ mod tests {
         let env = ExecutionEnvironment::new(&ws, &ws).unwrap();
         let policy = ExecutionPolicy::dev_default();
 
-        // 1. Empty cwd defaults to env.cwd
         let req_empty = ExecutionRequest::new("ls", "", Duration::from_secs(5));
         let (spec1, _) = prepare_execution_spec_and_policy(&req_empty, &policy, &env).unwrap();
         assert_eq!(spec1.cwd, Some(ws.clone()));
 
-        // 2. Relative cwd is joined with env.cwd
         let req_rel = ExecutionRequest::new("ls", "crates/sub", Duration::from_secs(5));
         let (spec2, _) = prepare_execution_spec_and_policy(&req_rel, &policy, &env).unwrap();
         assert_eq!(spec2.cwd, Some(ws.join("crates/sub")));
 
-        // 3. Absolute cwd is preserved
         let req_abs = ExecutionRequest::new("ls", "/var/custom", Duration::from_secs(5));
         let (spec3, _) = prepare_execution_spec_and_policy(&req_abs, &policy, &env).unwrap();
         assert_eq!(spec3.cwd, Some(PathBuf::from("/var/custom")));
@@ -369,34 +366,29 @@ mod tests {
         let req = ExecutionRequest::new("cat", &ws, Duration::from_secs(5));
         let (spec, effective) = prepare_execution_spec_and_policy(&req, &policy, &env).unwrap();
 
-        // 1. Both protected_paths and opaque_runtime_roots are registered in effective.protected_paths
         let protected = effective.protected_paths.read().unwrap();
         assert!(protected.contains(&secret_file_canon));
         assert!(protected.contains(&opaque_dir_canon));
         drop(protected);
 
-        // 2. Mounting the parent directory of a protected file is rejected
         let parent_mount = MountSpec::read_only(external_temp.path(), "/opt/leak");
         assert!(
             crate::execution::sandbox::validate_mounts(&[parent_mount], &effective).is_err(),
             "mounting parent directory of a protected path must be rejected"
         );
 
-        // 3. Mounting the protected file directly is rejected
         let exact_mount = MountSpec::read_only(&secret_file, "/opt/leak_exact");
         assert!(
             crate::execution::sandbox::validate_mounts(&[exact_mount], &effective).is_err(),
             "mounting a protected file directly must be rejected"
         );
 
-        // 4. Mounting an opaque runtime root or its subpath is rejected
         let opaque_mount = MountSpec::read_only(&opaque_dir, "/opt/leak_opaque");
         assert!(
             crate::execution::sandbox::validate_mounts(&[opaque_mount], &effective).is_err(),
             "mounting an opaque runtime root must be rejected"
         );
 
-        // 5. Spec retains protected paths and opaque roots for container masking
         assert_eq!(spec.protected_paths, vec![secret_file_canon]);
         assert_eq!(spec.opaque_runtime_roots, vec![opaque_dir_canon]);
     }

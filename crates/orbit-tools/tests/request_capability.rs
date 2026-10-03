@@ -19,7 +19,6 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
     let (sender, mut receiver) = approval::channel();
     let tool = RequestCapability::new(workspace.clone(), sender);
 
-    // 1. Initially, read_file fails with permission denied
     let read_tool = ReadFile::new(workspace.clone());
     let initial_err = read_tool
         .execute(
@@ -35,7 +34,6 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
 
     assert!(initial_err.to_string().contains("permission denied"));
 
-    // 2. Request capability
     let req_file = outside_file.display().to_string();
     let task = tokio::spawn(async move {
         tool.execute(
@@ -73,7 +71,6 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
     assert_eq!(result_json["status"], "granted");
     assert_eq!(result_json["access"], "read");
 
-    // 3. Subsequent read_file now succeeds!
     let read_output = read_tool
         .execute(
             ToolCall::function(
@@ -103,7 +100,6 @@ async fn request_capability_handles_user_denial_and_cancellation() {
     let (sender, mut receiver) = approval::channel();
     let tool = RequestCapability::new(workspace.clone(), sender);
 
-    // 1. User denies
     let req_file = outside_file.display().to_string();
     let task = tokio::spawn({
         let tool = tool.clone();
@@ -128,7 +124,6 @@ async fn request_capability_handles_user_denial_and_cancellation() {
 
     assert!(err.to_string().contains("permission denied"));
 
-    // 2. Cancellation
     let (sender2, _receiver2) = approval::channel();
     let tool2 = RequestCapability::new(workspace, sender2);
     let token = CancellationToken::new();
@@ -159,7 +154,6 @@ async fn request_capability_validates_arguments() {
     let (sender, _receiver) = approval::channel();
     let tool = RequestCapability::new(workspace, sender);
 
-    // Missing path
     let err = tool
         .execute(
             ToolCall::function(
@@ -174,7 +168,6 @@ async fn request_capability_validates_arguments() {
 
     assert!(err.to_string().contains("path must not be empty"));
 
-    // Invalid access
     let err2 = tool
         .execute(
             ToolCall::function(
@@ -192,7 +185,6 @@ async fn request_capability_validates_arguments() {
             .contains("access must be 'read' or 'read_write'")
     );
 
-    // Empty reason
     let err3 = tool
         .execute(
             ToolCall::function(
