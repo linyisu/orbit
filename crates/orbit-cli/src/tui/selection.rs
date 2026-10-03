@@ -50,6 +50,7 @@ pub struct Selection {
     cleared_on_press: bool,
     extend: bool,
     rows: BTreeMap<usize, Vec<Cell>>,
+    decorations: BTreeMap<usize, Vec<std::ops::Range<usize>>>,
     filled: Option<(usize, usize)>,
     latest: Option<Buffer>,
     frozen: Option<Buffer>,
@@ -311,6 +312,18 @@ impl Selection {
         layout: &super::transcript::TranscriptLayout,
     ) {
         self.offset = offset;
+        if !self.active() {
+            self.decorations.clear();
+        }
+        for row in offset
+            ..offset
+                .saturating_add(usize::from(self.viewport.height))
+                .min(layout.height())
+        {
+            self.decorations
+                .entry(row)
+                .or_insert_with(|| layout.decorations(row).to_vec());
+        }
 
         if self.region != Some(Region::Transcript) {
             return;
@@ -332,6 +345,9 @@ impl Selection {
         }
 
         for row in start.1..=end.1 {
+            self.decorations
+                .entry(row)
+                .or_insert_with(|| layout.decorations(row).to_vec());
             self.rows.entry(row).or_insert_with(|| {
                 let area = Rect::new(0, 0, self.viewport.width, 1);
                 let mut buffer = Buffer::empty(area);
@@ -406,12 +422,36 @@ impl Selection {
                 continue;
             };
 
+            let decorations = if self.region == Some(Region::Transcript) {
+                self.decorations.get(&row).map_or(&[][..], Vec::as_slice)
+            } else {
+                &[][..]
+            };
+            let is_content = |index: usize| {
+                !cells[index].symbol().trim().is_empty()
+                    && !decorations.iter().any(|range| range.contains(&index))
+            };
+            let Some(start) = (0..cells.len()).find(|&index| is_content(index)) else {
+                continue;
+            };
+            let last = (start..cells.len())
+                .rfind(|&index| is_content(index))
+                .unwrap();
+            let end = last + cells[last].symbol().width().max(1);
+
             let mut x = 0;
 
             while x < cells.len().min(area.width as usize) {
                 let width = cells[x].symbol().width().max(1);
 
-                if x <= right as usize && x + width > left as usize {
+                if x >= start
+                    && x < end
+                    && x <= right as usize
+                    && x + width > left as usize
+                    && !decorations
+                        .iter()
+                        .any(|range| range.start < x + width && range.end > x)
+                {
                     let style = *styles
                         .entry(cells[x].style())
                         .or_insert_with_key(|style| super::theme::selection_style(*style));
@@ -526,19 +566,31 @@ mod tests {
                     let width = original.symbol().width().max(1) as u16;
                     assert_eq!(cell.symbol(), original.symbol());
                     assert_eq!(terminal.backend().buffer()[(x, y)].bg, cell.bg);
-                    assert_eq!(
-                        cell.modifier,
-                        original.modifier - (Modifier::REVERSED | Modifier::DIM)
-                    );
-                    if let Color::Rgb(..) = original.fg {
-                        assert_eq!(cell.bg, original.fg);
-                        colored += 1;
-                    }
-                    for column in x + 1..(x + width).min(area.right()) {
-                        assert_eq!(selected[(column, y)].bg, cell.bg);
-                        assert_eq!(selected[(column, y)].fg, cell.fg);
-                        assert_eq!(selected[(column, y)].symbol(), before[(column, y)].symbol());
-                        wide += 1;
+                    if cell.bg == super::super::theme::THEME.selection {
+                        assert_eq!(
+                            cell.modifier,
+                            original.modifier - (Modifier::REVERSED | Modifier::DIM)
+                        );
+                        if let Color::Rgb(red, green, blue) = original.fg
+                            && let Color::Rgb(selected_red, selected_green, selected_blue) = cell.fg
+                            && red.max(green).max(blue) - red.min(green).min(blue) > 8
+                        {
+                            assert_eq!(red.cmp(&green), selected_red.cmp(&selected_green));
+                            assert_eq!(red.cmp(&blue), selected_red.cmp(&selected_blue));
+                            assert_eq!(green.cmp(&blue), selected_green.cmp(&selected_blue));
+                            colored += 1;
+                        }
+                        for column in x + 1..(x + width).min(area.right()) {
+                            assert_eq!(selected[(column, y)].bg, cell.bg);
+                            assert_eq!(selected[(column, y)].fg, cell.fg);
+                            assert_eq!(
+                                selected[(column, y)].symbol(),
+                                before[(column, y)].symbol()
+                            );
+                            wide += 1;
+                        }
+                    } else {
+                        assert_eq!(cell, original);
                     }
                     x += width;
                 }
@@ -551,6 +603,149 @@ mod tests {
         state.selection.clear();
         draw(&mut state, &mut terminal);
         assert_eq!(terminal.backend().buffer(), &before);
+    }
+
+    #[test]
+    fn selection_leaves_frames_table_grid_and_padding_unchanged() {
+        use super::super::app::{ThinkingRow, ToolRow, ToolStatus};
+        use super::super::theme::THEME;
+        use serde_json::json;
+
+        let source = "| 项 | 值 |\n|---|---|\n| Orbit | **重点** 与 `code` |\n\n```rust\nlet rail = \"│─\";\n```";
+        for width in [28, 72, 100] {
+            let mut state = UiState::new("orbit-model");
+            state
+                .transcript
+                .push(TranscriptItem::User("Orbit 框选 👩‍💻".into()));
+            state
+                .transcript
+                .push(TranscriptItem::Assistant(format!("{source}\n\n---\n")));
+            state.transcript.push(TranscriptItem::Tool(ToolRow {
+                id: "orbit-read".into(), name: "read_file".into(),
+                arguments: json!({"path": "ORBIT.md"}).to_string(), status: ToolStatus::Finished,
+                output: json!({"path":"ORBIT.md", "content":source.lines().enumerate().map(|(index, line)| format!("{}: {line}\n", index + 1)).collect::<String>()}).to_string(),
+            }));
+            let mut thinking = ThinkingRow::from("```rust\nlet rail = \"│─\";\n```".to_owned());
+            thinking.finished = true;
+            state.transcript.push(TranscriptItem::Thinking(thinking));
+            state.expanded.extend([2, 3]);
+            state.follow_bottom = false;
+            let mut terminal = Terminal::new(TestBackend::new(width, 70)).unwrap();
+            draw(&mut state, &mut terminal);
+            state.scroll = state.max_scroll;
+            draw(&mut state, &mut terminal);
+            let before = terminal.backend().buffer().clone();
+            let area = state.selection.viewport;
+            state
+                .selection
+                .handle(&mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    area.x,
+                    area.y,
+                ))
+                .unwrap();
+            state
+                .selection
+                .handle(&mouse(
+                    MouseEventKind::Drag(MouseButton::Left),
+                    area.right() - 1,
+                    area.bottom() - 1,
+                ))
+                .unwrap();
+            terminal
+                .draw(|frame| {
+                    assert!(state.selection.draw_frozen(frame));
+                })
+                .unwrap();
+            let after = terminal.backend().buffer();
+            let mut borders = 0;
+            let mut literal_rails = 0;
+            let mut selected = 0;
+            let mut padding = 0;
+            let mut badges = 0;
+            for y in area.y..area.bottom() {
+                let mut has_text = false;
+                for x in area.x..area.right() {
+                    let cell = &before[(x, y)];
+                    let painted = &after[(x, y)];
+                    let literal =
+                        cell.symbol() == "│" && x > area.x && before[(x - 1, y)].symbol() == "\""
+                            || cell.symbol() == "─"
+                                && x + 1 < area.right()
+                                && before[(x + 1, y)].symbol() == "\"";
+                    if literal {
+                        assert_eq!(painted.bg, THEME.selection);
+                        literal_rails += 1;
+                    } else if cell
+                        .symbol()
+                        .chars()
+                        .any(|ch| "│─╭╮╰╯┌┐└┘├┤┼┬┴┊▎".contains(ch))
+                    {
+                        assert_eq!(
+                            painted, cell,
+                            "border changed at {x},{y} with width {width}"
+                        );
+                        borders += 1;
+                    }
+                    if !cell.symbol().trim().is_empty() {
+                        has_text = true;
+                    }
+                    if painted.bg != cell.bg {
+                        assert_eq!(painted.bg, THEME.selection);
+                        selected += 1;
+                    }
+                }
+                for x in area.x + 1..area.right().saturating_sub(4) {
+                    if ["r", "u", "s", "t"]
+                        .iter()
+                        .enumerate()
+                        .all(|(i, text)| before[(x + i as u16, y)].symbol() == *text)
+                        && before[(x, y)].bg != ratatui::style::Color::Reset
+                    {
+                        for column in x - 1..x + 5 {
+                            assert_eq!(after[(column, y)], before[(column, y)]);
+                        }
+                        badges += 1;
+                    }
+                }
+                for x in area.x..area.right().saturating_sub(5) {
+                    if ["O", "r", "b", "i", "t"]
+                        .iter()
+                        .enumerate()
+                        .all(|(i, text)| before[(x + i as u16, y)].symbol() == *text)
+                        && let Some(border) = (x + 5..area.right())
+                            .find(|&column| before[(column, y)].symbol() == "│")
+                        && (x + 5..border)
+                            .all(|column| before[(column, y)].symbol().trim().is_empty())
+                    {
+                        for column in x + 5..border {
+                            assert_eq!(after[(column, y)], before[(column, y)]);
+                            padding += 1;
+                        }
+                    }
+                }
+                if !has_text {
+                    for x in area.x..area.right() {
+                        assert_eq!(after[(x, y)], before[(x, y)]);
+                    }
+                }
+                let tail = area.right() - 1;
+                if before[(tail, y)].symbol().trim().is_empty()
+                    && before[(tail - 1, y)].symbol().width() <= 1
+                {
+                    assert_eq!(after[(tail, y)], before[(tail, y)]);
+                }
+            }
+            assert!(borders > 50);
+            assert!(literal_rails >= 2);
+            assert!(selected > 20);
+            assert!(padding > 0);
+            assert!(badges >= 2);
+            assert!(state.selection.text().contains("│─"));
+            state.selection.clear();
+            draw(&mut state, &mut terminal);
+            assert_eq!(terminal.backend().buffer(), &before);
+        }
     }
 
     #[test]

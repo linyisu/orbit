@@ -20,6 +20,8 @@ struct Row {
     wrapped: Vec<Line<'static>>,
     ranges: Vec<Range<usize>>,
     links: Vec<super::markdown::LinkTarget>,
+    // Terminal column ranges, grouped by wrapped physical line.
+    decorations: Vec<Vec<Range<usize>>>,
     gutter: Option<Gutter>,
     start: usize,
     height: usize,
@@ -244,10 +246,21 @@ pub(super) fn wrap_linked_line(
                     link.slice(&(range.start + removed..range.end + removed), offset)
                 })
                 .collect();
+            let mut decorations =
+                super::markdown::slice_decorations(&linked.decorations, 0..removed, 0);
+            decorations.extend(super::markdown::slice_decorations(
+                &linked.decorations,
+                range.start + removed..range.end + removed,
+                offset,
+            ));
             if let Some(prefix) = prefix {
                 line.spans.splice(0..0, prefix.spans.iter().cloned());
             }
-            super::markdown::LinkedLine { line, links }
+            super::markdown::LinkedLine {
+                line,
+                links,
+                decorations,
+            }
         })
         .collect()
 }
@@ -296,13 +309,22 @@ impl Entry {
         width: u16,
         links: Vec<super::markdown::LinkTarget>,
     ) {
-        self.push_linked(super::markdown::LinkedLine { line, links }, width);
+        self.push_linked(
+            super::markdown::LinkedLine {
+                line,
+                links,
+                decorations: Vec::new(),
+            },
+            width,
+        );
     }
 
     fn push_linked(&mut self, mut linked: super::markdown::LinkedLine, width: u16) {
         let line = &mut linked.line;
         // Markdown rules occupy the entire transcript row, including the usual gutter.
-        super::markdown::expand_rule(line, width);
+        if super::markdown::expand_rule(line, width) {
+            linked.decorations = std::iter::once(0..line.to_string().len()).collect();
+        }
         render::sanitize_line(line);
         let original = line.to_string();
         let gutter = take_gutter(line);
@@ -319,6 +341,37 @@ impl Entry {
         });
         let content_width = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
         let (wrapped, ranges) = wrap_line(line, content_width);
+        let decorations = ranges
+            .iter()
+            .map(|range| {
+                let mut excluded = Vec::new();
+                let prefix = &original[..removed];
+                for slice in super::markdown::slice_decorations(&linked.decorations, 0..removed, 0)
+                {
+                    if let (Some(start), Some(end)) =
+                        (prefix.get(..slice.start), prefix.get(..slice.end))
+                    {
+                        excluded.push(start.width()..end.width());
+                    }
+                }
+                let prefix_width = gutter
+                    .as_ref()
+                    .map_or(0, |gutter| usize::from(gutter.width));
+                let text = &original[removed + range.start..removed + range.end];
+                for slice in super::markdown::slice_decorations(
+                    &linked.decorations,
+                    removed + range.start..removed + range.end,
+                    0,
+                ) {
+                    if let (Some(start), Some(end)) =
+                        (text.get(..slice.start), text.get(..slice.end))
+                    {
+                        excluded.push(prefix_width + start.width()..prefix_width + end.width());
+                    }
+                }
+                excluded
+            })
+            .collect();
         let height = wrapped.len();
         self.rows.push(Row {
             gutter,
@@ -326,6 +379,7 @@ impl Entry {
             wrapped,
             ranges,
             links: linked.links,
+            decorations,
             start: self.height,
             height,
         });
@@ -745,6 +799,26 @@ impl TranscriptLayout {
 
     pub fn height(&self) -> usize {
         self.entries.last().map_or(0, |entry| entry.end)
+    }
+
+    pub(super) fn decorations(&self, absolute_row: usize) -> &[Range<usize>] {
+        let Some(entry) = self.entries.get(
+            self.entries
+                .partition_point(|entry| entry.end <= absolute_row),
+        ) else {
+            return &[];
+        };
+        let relative = absolute_row - (entry.end - entry.height);
+        let Some(row) = entry.rows.get(
+            entry
+                .rows
+                .partition_point(|row| row.start + row.height <= relative),
+        ) else {
+            return &[];
+        };
+        row.decorations
+            .get(relative - row.start)
+            .map_or(&[], Vec::as_slice)
     }
 
     pub(super) fn link_at(&self, area: Rect, offset: usize, point: (u16, u16)) -> Option<&str> {

@@ -38,6 +38,8 @@ pub(super) struct LinkTarget {
 pub(super) struct LinkedLine {
     pub line: Line<'static>,
     pub links: Vec<LinkTarget>,
+    // UTF-8 byte ranges of generated borders, labels and padding.
+    pub decorations: Vec<std::ops::Range<usize>>,
 }
 
 impl From<LinkedLine> for Line<'static> {
@@ -62,13 +64,31 @@ impl LinkedLine {
     pub fn plain(mut line: Line<'static>) -> Self {
         super::render::sanitize_line(&mut line);
         let links = plain_links(&line.to_string());
-        Self { line, links }
+        Self {
+            line,
+            links,
+            decorations: Vec::new(),
+        }
+    }
+
+    pub fn decorate(mut self, spans: &[usize]) -> Self {
+        let mut offset = 0;
+        for (index, span) in self.line.spans.iter().enumerate() {
+            let end = offset + span.content.len();
+            if spans.contains(&index) {
+                self.decorations.push(offset..end);
+            }
+            offset = end;
+        }
+        self
     }
 
     pub fn chrome(line: Line<'static>) -> Self {
+        let end = line.to_string().len();
         Self {
             line,
             links: Vec::new(),
+            decorations: std::iter::once(0..end).collect(),
         }
     }
 
@@ -78,19 +98,44 @@ impl LinkedLine {
             link.end = link.end.saturating_add_signed(amount);
             link.start < link.end
         });
+        self.decorations.retain_mut(|range| {
+            range.start = range.start.saturating_add_signed(amount);
+            range.end = range.end.saturating_add_signed(amount);
+            range.start < range.end
+        });
     }
 
     pub fn framed(mut self, leading: Vec<Span<'static>>, trailing: Vec<Span<'static>>) -> Self {
+        let start = leading.len();
+        let end = start + self.line.spans.len();
         self.shift_offsets(leading.iter().map(|span| span.content.len()).sum::<usize>() as isize);
         self.line.spans.splice(0..0, leading);
         self.line.spans.extend(trailing);
         self.line.style = Style::default();
-        self
+        let decorations = (0..start)
+            .chain(end..self.line.spans.len())
+            .collect::<Vec<_>>();
+        self.decorate(&decorations)
     }
 
     pub fn wrap(self, width: u16) -> Vec<Self> {
         super::transcript::wrap_linked_line(self, width)
     }
+}
+
+pub(super) fn slice_decorations(
+    ranges: &[std::ops::Range<usize>],
+    slice: std::ops::Range<usize>,
+    offset: usize,
+) -> Vec<std::ops::Range<usize>> {
+    ranges
+        .iter()
+        .filter_map(|range| {
+            let start = range.start.max(slice.start);
+            let end = range.end.min(slice.end);
+            (start < end).then(|| start - slice.start + offset..end - slice.start + offset)
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -165,12 +210,32 @@ impl Context<'_> {
         let mut line = self.line(source, index, fence);
         super::render::sanitize_line(&mut line);
         let code = was_code || fence.is_some();
+        let code_header = !was_code && fence.is_some();
+        let decorations = line
+            .spans
+            .iter()
+            .enumerate()
+            .filter_map(|(index, span)| {
+                (code_header
+                    || (code && index == 0)
+                    || (!code
+                        && (span.style.fg == Some(THEME.md_rule)
+                            || (span.content == "▎ "
+                                && span.style.fg == Some(THEME.md_quote_rail)))))
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
         let links = if code {
             plain_links(&line.to_string())
         } else {
             self.links(source, &line)
         };
-        LinkedLine { line, links }
+        LinkedLine {
+            line,
+            links,
+            decorations: Vec::new(),
+        }
+        .decorate(&decorations)
     }
 }
 
@@ -583,7 +648,11 @@ impl Context<'_> {
                     cell.spans.remove(0);
                     super::render::sanitize_line(&mut cell);
                     let links = self.links(&cell_source, &cell);
-                    rows.last_mut()?.push(LinkedLine { line: cell, links });
+                    rows.last_mut()?.push(LinkedLine {
+                        line: cell,
+                        links,
+                        decorations: Vec::new(),
+                    });
                 }
                 Event::End(pulldown_cmark::TagEnd::Table) => {
                     end = range.end;
@@ -652,6 +721,7 @@ impl Context<'_> {
                     Style::default().fg(THEME.md_table_border),
                 )];
                 let mut links = Vec::new();
+                let mut decorations = vec![0];
                 let mut byte_offset = spans[0].content.len();
 
                 for i in 0..cols {
@@ -664,6 +734,7 @@ impl Context<'_> {
                         _ => 0,
                     };
 
+                    decorations.push(spans.len());
                     spans.push(Span::raw(" ".repeat(left + 1)));
                     byte_offset += left + 1;
                     if let Some(cell) = cell {
@@ -684,6 +755,7 @@ impl Context<'_> {
                             span
                         }));
                     }
+                    decorations.extend([spans.len(), spans.len() + 1]);
                     spans.push(Span::raw(" ".repeat(padding - left + 1)));
                     spans.push(Span::styled(
                         "│",
@@ -692,10 +764,14 @@ impl Context<'_> {
                     byte_offset += padding - left + 1 + "│".len();
                 }
 
-                lines.push(LinkedLine {
-                    line: Line::from(spans),
-                    links,
-                });
+                lines.push(
+                    LinkedLine {
+                        line: Line::from(spans),
+                        links,
+                        decorations: Vec::new(),
+                    }
+                    .decorate(&decorations),
+                );
             }
 
             if r + 1 < rows.len() {
@@ -750,12 +826,14 @@ fn labelled_table_rows(rows: &[Vec<LinkedLine>]) -> Vec<LinkedLine> {
             lines.push(LinkedLine {
                 line: Line::from(spans),
                 links,
+                decorations: Vec::new(),
             });
         }
 
         lines.push(LinkedLine {
             line: Line::from(""),
             links: Vec::new(),
+            decorations: Vec::new(),
         });
     }
 
@@ -763,6 +841,7 @@ fn labelled_table_rows(rows: &[Vec<LinkedLine>]) -> Vec<LinkedLine> {
         lines.extend(rows[0].iter().map(|cell| LinkedLine {
             line: cell.line.clone(),
             links: cell.links.clone(),
+            decorations: cell.decorations.clone(),
         }));
     }
 
@@ -801,8 +880,13 @@ fn wrap_cell(cell: &LinkedLine, width: usize) -> Vec<LinkedLine> {
                 .iter()
                 .filter_map(|link| link.slice(&(offset..end), 0))
                 .collect();
+            let decorations = slice_decorations(&cell.decorations, offset..end, 0);
             offset = end;
-            LinkedLine { line, links }
+            LinkedLine {
+                line,
+                links,
+                decorations,
+            }
         })
         .collect()
 }
@@ -1207,6 +1291,7 @@ mod tests {
         let cell = |text: &'static str| LinkedLine {
             line: Line::from(text),
             links: Vec::new(),
+            decorations: Vec::new(),
         };
         let rows = vec![vec![cell("名称")], vec![cell("一"), cell("二")]];
 

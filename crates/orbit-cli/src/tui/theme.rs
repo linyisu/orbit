@@ -145,8 +145,8 @@ impl Theme {
             patch_location: Color::Rgb(139, 185, 195),
             placeholder: Color::Rgb(178, 184, 194),
             repaint_sentinel: Color::Rgb(1, 2, 3),
-            selection: Color::Rgb(220, 222, 226),
-            selection_foreground: Color::Rgb(0, 0, 0),
+            selection: Color::Rgb(78, 72, 103),
+            selection_foreground: Color::Rgb(222, 222, 222),
             selection_light_foreground: Color::Rgb(255, 255, 255),
             strong: Color::Rgb(230, 230, 230),
             success: Color::Rgb(114, 205, 142),
@@ -196,7 +196,7 @@ impl Theme {
 
 pub const THEME: Theme = Theme::dark();
 
-/// Preserve each token's color through inversion, with readable text on transparent backgrounds.
+/// Use one subdued background while retaining token colors and readable contrast.
 pub(super) fn selection_style(style: Style) -> Style {
     let (source_foreground, source_background) = if style.add_modifier.contains(Modifier::REVERSED)
     {
@@ -204,24 +204,32 @@ pub(super) fn selection_style(style: Style) -> Style {
     } else {
         (style.fg, style.bg)
     };
-    let background = color_rgb(source_foreground.unwrap_or(Color::Reset))
-        .or_else(|| color_rgb(THEME.selection))
-        .unwrap();
-    let mut foreground = color_rgb(source_background.unwrap_or(Color::Reset));
-
-    if foreground.is_none_or(|color| contrast(color, background) < 4.5) {
-        let dark = color_rgb(THEME.selection_foreground).unwrap();
-        let light = color_rgb(THEME.selection_light_foreground).unwrap();
-        foreground = Some(
-            if contrast(dark, background) >= contrast(light, background) {
-                dark
-            } else {
-                light
-            },
+    let background = color_rgb(THEME.selection).unwrap();
+    let mut foreground = color_rgb(source_foreground.unwrap_or(Color::Reset))
+        .unwrap_or_else(|| color_rgb(THEME.selection_foreground).unwrap());
+    if contrast(foreground, background) < 4.5
+        && let Some(badge) = source_background
+            .and_then(color_rgb)
+            .filter(|color| contrast(*color, background) > contrast(foreground, background))
+    {
+        foreground = badge;
+    }
+    let original = foreground;
+    let light = color_rgb(THEME.selection_light_foreground).unwrap();
+    for step in 1..=16 {
+        if contrast(foreground, background) >= 4.5 {
+            break;
+        }
+        let blend =
+            |from: u8, to: u8| ((u16::from(from) * (16 - step) + u16::from(to) * step) / 16) as u8;
+        foreground = (
+            blend(original.0, light.0),
+            blend(original.1, light.1),
+            blend(original.2, light.2),
         );
     }
 
-    let (red, green, blue) = foreground.unwrap();
+    let (red, green, blue) = foreground;
     let (bg_red, bg_green, bg_blue) = background;
     style
         .fg(Color::Rgb(red, green, blue))
@@ -491,8 +499,10 @@ mod tests {
                 .fg(token)
                 .add_modifier(modifiers | Modifier::DIM),
         );
-        assert_eq!(selected.bg, Some(token));
-        assert_eq!(selected.fg, Some(THEME.selection_foreground));
+        assert_eq!(selected.bg, Some(THEME.selection));
+        let foreground = color_rgb(selected.fg.unwrap()).unwrap();
+        assert!(foreground.2 > foreground.1 && foreground.1 > foreground.0);
+        assert!(contrast(foreground, color_rgb(THEME.selection).unwrap()) >= 4.5);
         assert!(selected.add_modifier.contains(modifiers));
         assert!(!selected.add_modifier.contains(Modifier::DIM));
 
@@ -504,37 +514,31 @@ mod tests {
                     .bg(badge)
                     .add_modifier(Modifier::BOLD),
             );
-            assert_eq!(selected.bg, Some(Color::Rgb(0, 0, 0)));
-            assert_eq!(selected.fg, Some(badge));
+            assert_eq!(selected.bg, Some(THEME.selection));
+            let (red, green, blue) = color_rgb(badge).unwrap();
+            let (selected_red, selected_green, selected_blue) =
+                color_rgb(selected.fg.unwrap()).unwrap();
+            assert_eq!(red.cmp(&green), selected_red.cmp(&selected_green));
+            assert_eq!(red.cmp(&blue), selected_red.cmp(&selected_blue));
+            assert_eq!(green.cmp(&blue), selected_green.cmp(&selected_blue));
             assert!(selected.add_modifier.contains(Modifier::BOLD));
         }
     }
 
     #[test]
     fn selection_handles_default_dark_light_and_already_reversed_styles() {
-        for (source, foreground, background) in [
-            (
-                Style::default(),
-                THEME.selection_foreground,
-                THEME.selection,
-            ),
-            (
-                Style::default().fg(Color::Rgb(16, 16, 16)),
-                THEME.selection_light_foreground,
-                Color::Rgb(16, 16, 16),
-            ),
+        for (source, foreground) in [
+            (Style::default(), THEME.selection_foreground),
             (
                 Style::default()
-                    .fg(Color::Rgb(255, 255, 255))
+                    .fg(Color::White)
                     .bg(Color::Rgb(240, 240, 240)),
-                THEME.selection_foreground,
                 Color::Rgb(255, 255, 255),
             ),
             (
                 Style::default()
                     .fg(Color::Rgb(222, 222, 222))
                     .bg(Color::Rgb(30, 30, 30)),
-                Color::Rgb(30, 30, 30),
                 Color::Rgb(222, 222, 222),
             ),
             (
@@ -542,15 +546,24 @@ mod tests {
                     .fg(Color::Rgb(80, 80, 80))
                     .bg(Color::Rgb(240, 240, 240))
                     .add_modifier(Modifier::REVERSED),
-                Color::Rgb(80, 80, 80),
                 Color::Rgb(240, 240, 240),
             ),
         ] {
             let selected = selection_style(source);
             assert_eq!(selected.fg, Some(foreground));
-            assert_eq!(selected.bg, Some(background));
+            assert_eq!(selected.bg, Some(THEME.selection));
             assert!(!selected.add_modifier.contains(Modifier::REVERSED));
         }
+        let source = Color::Rgb(16, 16, 16);
+        let selected = selection_style(Style::default().fg(source));
+        assert_ne!(selected.fg, Some(source));
+        assert_eq!(selected.bg, Some(THEME.selection));
+        assert!(
+            contrast(
+                color_rgb(selected.fg.unwrap()).unwrap(),
+                color_rgb(THEME.selection).unwrap()
+            ) >= 4.5
+        );
     }
 
     #[test]

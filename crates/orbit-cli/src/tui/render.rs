@@ -1743,7 +1743,9 @@ pub(super) fn tool_card_with_links(
             }
         }
         line.spans.retain(|span| !span.content.is_empty());
-        super::markdown::expand_rule(line, inner_width as u16);
+        if super::markdown::expand_rule(line, inner_width as u16) {
+            linked.decorations = std::iter::once(0..line.to_string().len()).collect();
+        }
 
         for sub in linked.wrap(inner_width as u16) {
             let pad = inner_width.saturating_sub(sub.line.width());
@@ -1936,7 +1938,7 @@ pub(super) fn thinking_linked(
         Span::styled("  ┊ ", Style::default().fg(THEME.thinking_rail)),
     );
     linked.shift_offsets("  ┊ ".len() as isize);
-    linked
+    linked.decorate(&[0])
 }
 
 pub(super) fn sanitize_line(line: &mut Line<'_>) {

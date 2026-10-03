@@ -217,10 +217,10 @@ fn render_line_linked(line: &Line<'static>, options: Options) -> Vec<super::mark
     if available == 0 {
         let mut spans = vec![prefix];
         spans.extend(line.spans.iter().cloned());
-        return vec![super::markdown::LinkedLine {
-            line: clip_spans(&Line::from(spans), width),
-            links: Vec::new(),
-        }];
+        return vec![super::markdown::LinkedLine::chrome(clip_spans(
+            &Line::from(spans),
+            width,
+        ))];
     }
 
     if matches!(options.overflow, Overflow::Clip) {
@@ -370,6 +370,11 @@ fn styled_row(
     super::markdown::LinkedLine {
         line: Line::from(spans),
         links,
+        decorations: if prefix_length == 0 {
+            Vec::new()
+        } else {
+            std::iter::once(0..prefix_length).collect()
+        },
     }
 }
 
