@@ -1006,6 +1006,14 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         width: area.width.saturating_sub(6),
         ..area
     };
+    if area.height > 1
+        && state
+            .transcript
+            .iter()
+            .any(|item| matches!(item, TranscriptItem::User(_)))
+    {
+        state.selection.viewport.height -= 1;
+    }
 
     if state.transcript.is_empty() {
         state.navigation.reset_area();
@@ -1032,7 +1040,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     state.max_scroll = state
         .transcript_layout
         .height()
-        .saturating_sub(area.height as usize);
+        .saturating_sub(state.selection.viewport.height as usize);
 
     if !state.follow_bottom {
         if let Some(offset) =
