@@ -2933,7 +2933,7 @@ mod tests {
         assert!(
             comment_colors
                 .iter()
-                .all(|color| *color == Some(Color::Rgb(120, 130, 145)))
+                .all(|color| *color == Some(Color::Rgb(163, 173, 190)))
         );
         assert_eq!(
             colors(&message[4].line, samples[3])[0],

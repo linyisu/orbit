@@ -971,7 +971,7 @@ mod render_tests {
             "src/Orbit Code.rs",
         );
         for (side, expected) in [
-            (&cache.left, ratatui::style::Color::Rgb(120, 130, 145)),
+            (&cache.left, ratatui::style::Color::Rgb(163, 173, 190)),
             (&cache.right, ratatui::style::Color::Rgb(198, 120, 221)),
         ] {
             let line = side

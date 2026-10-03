@@ -1680,7 +1680,7 @@ mod tests {
         );
         let view = lines(&row, true, 80).unwrap();
         for (number, expected) in [
-            (2, Color::Rgb(120, 130, 145)),
+            (2, Color::Rgb(163, 173, 190)),
             (20, Color::Rgb(198, 120, 221)),
         ] {
             let line = view

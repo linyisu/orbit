@@ -379,6 +379,10 @@ use std::sync::LazyLock;
 use syntect::highlighting::{Color as SyntaxColor, StyleModifier, ThemeItem, ThemeSettings};
 pub(super) static CODE_THEME: LazyLock<syntect::highlighting::Theme> = LazyLock::new(|| {
     let color = |r, g, b| SyntaxColor { r, g, b, a: 255 };
+    let semantic = |value| {
+        let (red, green, blue) = color_rgb(value).expect("explicit syntax palette color");
+        color(red, green, blue)
+    };
     syntect::highlighting::Theme {
         name: Some("Orbit Vibrant".into()),
         settings: ThemeSettings {
@@ -409,11 +413,30 @@ pub(super) static CODE_THEME: LazyLock<syntect::highlighting::Theme> = LazyLock:
             ),
             (
                 "comment, punctuation.definition.comment",
-                color(120, 130, 145),
+                color(163, 173, 190),
             ),
             (
                 "keyword.operator, punctuation.separator, punctuation.terminator",
                 color(171, 178, 191),
+            ),
+            ("markup.heading, entity.name.section", color(229, 192, 123)),
+            ("markup.bold", color(229, 192, 123)),
+            ("markup.italic", color(198, 120, 221)),
+            ("markup.raw.inline", color(126, 205, 208)),
+            ("markup.underline.link", color(97, 175, 239)),
+            ("markup.math", color(126, 205, 208)),
+            ("markup.inserted", semantic(THEME.patch_added)),
+            ("markup.deleted", semantic(THEME.diff_removed)),
+            ("meta.diff.header", semantic(THEME.accent)),
+            ("meta.diff.range", semantic(THEME.patch_location)),
+            (
+                "punctuation.definition.heading, punctuation.definition.thematic-break, \
+                 punctuation.definition.list_item, punctuation.definition.blockquote, \
+                 punctuation.definition.raw, punctuation.definition.bold, \
+                 punctuation.definition.italic, punctuation.definition.strikethrough, \
+                 punctuation.definition.math, punctuation.definition.link, \
+                 punctuation.definition.image, constant.other.language-name",
+                color(198, 120, 221),
             ),
         ]
         .into_iter()
