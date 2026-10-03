@@ -751,7 +751,7 @@ pub(super) fn scrolling_title(
 }
 
 fn tab_control_style(state: &UiState, target: &super::TabAction) -> Style {
-    let base = Style::default().fg(ACCENT);
+    let base = Style::default().fg(ACCENT).remove_modifier(Modifier::BOLD);
     let Some((_, since)) = state
         .tab_hover
         .as_ref()
@@ -761,7 +761,6 @@ fn tab_control_style(state: &UiState, target: &super::TabAction) -> Style {
     };
 
     base.bg(super::theme::tab_hover_background(since.elapsed()))
-        .add_modifier(Modifier::BOLD)
 }
 
 fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
@@ -856,7 +855,7 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 
         if hovered {
             frame.render_widget(
-                Paragraph::new(format!(" {} ", icons::CLOSE)).style(style.patch(
+                Paragraph::new(format!(" {} ", icons::CLOSE_THICK)).style(style.patch(
                     tab_control_style(state, &super::TabAction::Close(tab.id.clone())),
                 )),
                 close,
@@ -872,7 +871,7 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let plus_x = x.min(area.right().saturating_sub(4));
         state.new_tab_area = Rect::new(plus_x, area.y, 3, 1);
         frame.render_widget(
-            Paragraph::new(format!(" {} ", icons::PLUS))
+            Paragraph::new(format!(" {} ", icons::PLUS_THICK))
                 .style(tab_control_style(state, &super::TabAction::New)),
             state.new_tab_area,
         );
@@ -2491,18 +2490,18 @@ mod tests {
         assert_eq!(state.tab_areas.len(), 1);
         assert_eq!(state.new_tab_area.height, 1);
         assert!(state.new_tab_area.x >= state.tab_areas[0].0.right());
-        assert!(!render(&mut state, 140, 40).contains(icons::CLOSE));
+        assert!(!render(&mut state, 140, 40).contains(icons::CLOSE_THICK));
 
         state.tab_hover = Some((
             super::super::TabAction::Select("first".into()),
             std::time::Instant::now(),
         ));
 
-        assert!(render(&mut state, 140, 40).contains(icons::CLOSE));
+        assert!(render(&mut state, 140, 40).contains(icons::CLOSE_THICK));
 
         state.tab_hover = None;
 
-        assert!(!render(&mut state, 140, 40).contains(icons::CLOSE));
+        assert!(!render(&mut state, 140, 40).contains(icons::CLOSE_THICK));
     }
 
     #[tokio::test]

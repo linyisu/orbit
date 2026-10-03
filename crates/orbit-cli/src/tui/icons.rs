@@ -2,6 +2,7 @@
 
 pub(super) const CHECK: &str = "󰄬";
 pub(super) const CLOSE: &str = "󰅖";
+pub(super) const CLOSE_THICK: &str = "󱎘";
 pub(super) const ALERT_OUTLINE: &str = "󰀪";
 pub(super) const CIRCLE: &str = "󰝥";
 pub(super) const CIRCLE_OUTLINE: &str = "󰝦";
@@ -27,7 +28,7 @@ pub(super) const MAGNIFY: &str = "󰍉";
 pub(super) const IMAGE_OUTLINE: &str = "󰥶";
 pub(super) const CHECKBOX_MARKED_OUTLINE: &str = "󰄵";
 pub(super) const CHECKBOX_BLANK_OUTLINE: &str = "󰄱";
-pub(super) const PLUS: &str = "󰐕";
+pub(super) const PLUS_THICK: &str = "󱇬";
 
 pub(super) fn checkbox(selected: bool) -> &'static str {
     if selected {
