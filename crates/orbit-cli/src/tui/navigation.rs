@@ -70,13 +70,10 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
 
     let nav = &mut state.navigation;
     let inside = nav.area.contains((mouse.column, mouse.row).into());
-    let top = nav.area.y;
     let bottom = nav.area.bottom().saturating_sub(1);
-    let hit_top = nav.first > 0 && mouse.row == top;
-    let slots = nav.area.height.saturating_sub(2) as usize;
+    let slots = nav.area.height.saturating_sub(1) as usize;
     let hit_bottom = (nav.show_latest || (nav.first + slots) < nav.count) && mouse.row == bottom;
-    let hit = inside
-        && (hit_top || hit_bottom || nav.targets.iter().any(|(row, _, _)| *row == mouse.row));
+    let hit = inside && (hit_bottom || nav.targets.iter().any(|(row, _, _)| *row == mouse.row));
 
     if mouse.kind == MouseEventKind::Moved {
         let hovered = hit.then_some(mouse.row);
@@ -96,14 +93,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
         MouseEventKind::Down(MouseButton::Left) if hit => {
             state.selection.clear();
 
-            if hit_top {
-                nav.manual_scroll = true;
-                nav.first = nav.first.saturating_sub(5);
-                if let Some((_, offset, _)) = nav.targets.first() {
-                    state.follow_bottom = false;
-                    state.scroll = state.max_scroll.saturating_sub(*offset);
-                }
-            } else if hit_bottom {
+            if hit_bottom {
                 if nav.show_latest {
                     state.follow_bottom = true;
                     state.scroll = 0;
@@ -127,7 +117,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
         }
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             nav.manual_scroll = true;
-            let slots = nav.area.height.saturating_sub(2) as usize;
+            let slots = nav.area.height.saturating_sub(1) as usize;
             let old = nav.first;
             nav.first = if mouse.kind == MouseEventKind::ScrollUp {
                 nav.first.saturating_sub(3)
@@ -160,7 +150,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     nav.targets.clear();
     nav.count = anchors.len();
     nav.show_latest = offset < state.max_scroll;
-    let slots = area.height.saturating_sub(2) as usize;
+    let slots = area.height.saturating_sub(1) as usize;
 
     if slots == 0 || anchors.is_empty() {
         nav.area = Rect::default();
@@ -176,8 +166,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
             .saturating_sub(1)
     };
 
-    if state.follow_bottom {
-        nav.manual_scroll = false;
+    if state.follow_bottom && !nav.manual_scroll {
         nav.first = anchors.len().saturating_sub(slots);
     } else if !nav.manual_scroll {
         nav.first = active
@@ -225,23 +214,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         ));
     }
 
-    let top = area.y;
     let bottom = nav.area.bottom() - 1;
-    let has_more_above = nav.first > 0;
     let has_more_below = (nav.first + slots) < anchors.len();
-
-    if has_more_above {
-        frame.render_widget(
-            Paragraph::new("↑").style(Style::default().fg(if nav.hovered == Some(top) {
-                crate::tui::theme::THEME.accent
-            } else {
-                crate::tui::theme::THEME.muted
-            })),
-            Rect::new(nav.area.x, top, 1, 1),
-        );
-    } else if nav.hovered == Some(top) {
-        nav.hovered = None;
-    }
 
     if nav.show_latest || has_more_below {
         frame.render_widget(
@@ -266,8 +240,6 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
                 anchors.len().saturating_sub(nav.first + slots)
             ),
         ))
-    } else if has_more_above && nav.hovered == Some(top) {
-        Some((top, format!("上方还有 {} 轮对话 · 点击向上滚动", nav.first)))
     } else {
         nav.targets
             .iter()
@@ -574,7 +546,27 @@ mod tests {
         assert_eq!(state.navigation.first, 50 - state.navigation.targets.len());
         assert_eq!(
             state.navigation.targets.len(),
-            usize::from(state.navigation.area.height - 2)
+            usize::from(state.navigation.area.height - 1)
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(state.navigation.area.x, state.navigation.area.y)]
+                .symbol(),
+            "·"
+        );
+        let area = state.navigation.area;
+        for _ in 0..25 {
+            handle(&mut state, &mouse(MouseEventKind::ScrollUp, area.x, area.y));
+            terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        }
+        assert_eq!(state.navigation.first, 0);
+        assert!(
+            state
+                .navigation
+                .targets
+                .first()
+                .unwrap()
+                .2
+                .contains("round 0")
         );
     }
 

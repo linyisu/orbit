@@ -30,6 +30,47 @@ pub(super) struct LinkTarget {
     pub url: String,
 }
 
+pub(super) struct LinkedLine {
+    pub line: Line<'static>,
+    pub links: Vec<LinkTarget>,
+}
+
+impl LinkTarget {
+    pub fn slice(&self, range: &std::ops::Range<usize>, offset: usize) -> Option<Self> {
+        let start = self.start.max(range.start);
+        let end = self.end.min(range.end);
+        (start < end).then(|| Self {
+            start: start - range.start + offset,
+            end: end - range.start + offset,
+            url: self.url.clone(),
+        })
+    }
+}
+
+impl LinkedLine {
+    pub fn plain(mut line: Line<'static>) -> Self {
+        super::render::sanitize_line(&mut line);
+        let links = plain_links(&line.to_string());
+        Self { line, links }
+    }
+
+    pub fn wrap(self, width: u16) -> Vec<Self> {
+        let (lines, ranges) = super::transcript::wrap_line(&self.line, width);
+        lines
+            .into_iter()
+            .zip(ranges)
+            .map(|(line, range)| Self {
+                line,
+                links: self
+                    .links
+                    .iter()
+                    .filter_map(|link| link.slice(&range, 0))
+                    .collect(),
+            })
+            .collect()
+    }
+}
+
 use super::theme::{CODE_THEME, THEME};
 
 const SECONDARY: Color = THEME.secondary;
@@ -112,6 +153,17 @@ fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
     found.dedup_by(|left, right| left.0 == right.0);
 
     found
+}
+
+pub(super) fn plain_links(text: &str) -> Vec<LinkTarget> {
+    bare_urls(text)
+        .into_iter()
+        .map(|(range, url)| LinkTarget {
+            start: range.start,
+            end: range.end,
+            url,
+        })
+        .collect()
 }
 
 fn push_marked_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style, recover: bool) {
@@ -281,9 +333,7 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
     }
 }
 
-/// Return the visible byte ranges of Markdown link labels. The renderer keeps
-/// link destinations beside their labels for terminals, while this sidecar lets
-/// Ctrl-click open the label itself without treating ordinary text as a URL.
+/// Map visible Markdown labels and destinations to byte ranges before wrapping.
 pub(super) fn links(source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
     let mut active: Option<(String, String)> = None;
     let mut parsed = Vec::new();
@@ -320,20 +370,45 @@ pub(super) fn links(source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
     let text = rendered.to_string();
     let mut cursor = 0;
 
-    parsed
+    let mut styled_ranges = Vec::new();
+    let mut offset = 0;
+    for span in &rendered.spans {
+        let end = offset + span.content.len();
+        if span.style.add_modifier.contains(Modifier::UNDERLINED) {
+            styled_ranges.push(offset..end);
+        }
+        offset = end;
+    }
+    let mut targets: Vec<_> = parsed
         .into_iter()
         .filter_map(|(label, url)| {
-            let start = text[cursor..].find(&label)? + cursor;
+            let start = text[cursor..]
+                .match_indices(&label)
+                .map(|(start, _)| start + cursor)
+                .find(|start| styled_ranges.iter().any(|range| range.contains(start)))?;
             let end = start + label.len();
             cursor = end;
             Some(LinkTarget { start, end, url })
         })
-        .collect()
+        .collect();
+    // Destinations printed beside Markdown labels are actionable too.
+    offset = 0;
+    for span in &rendered.spans {
+        if span.style.fg == Some(SECONDARY) && span.content.starts_with(" (") {
+            targets.extend(plain_links(&span.content).into_iter().map(|mut target| {
+                target.start += offset;
+                target.end += offset;
+                target
+            }));
+        }
+        offset += span.content.len();
+    }
+    targets
 }
 
 /// Parse only a possible table at the current source position. The caller keeps
 /// an open table provisional so new rows can adjust column widths during streaming.
-pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static>>)> {
+pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<LinkedLine>)> {
     if !source.lines().next()?.contains('|') {
         return None;
     }
@@ -343,7 +418,7 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
         return None;
     };
 
-    let mut rows: Vec<Vec<Line<'static>>> = Vec::new();
+    let mut rows: Vec<Vec<LinkedLine>> = Vec::new();
     let mut end = 0;
 
     for (event, range) in events {
@@ -354,7 +429,8 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
                 let mut cell = line(&cell_source, 1, &mut None);
                 cell.spans.remove(0);
                 super::render::sanitize_line(&mut cell);
-                rows.last_mut()?.push(cell);
+                let links = links(&cell_source, &cell);
+                rows.last_mut()?.push(LinkedLine { line: cell, links });
             }
             Event::End(pulldown_cmark::TagEnd::Table) => {
                 end = range.end;
@@ -380,7 +456,7 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
         .map(|i| {
             rows.iter()
                 .filter_map(|r| r.get(i))
-                .map(Line::width)
+                .map(|cell| cell.line.width())
                 .max()
                 .unwrap_or(1)
                 .max(3)
@@ -395,8 +471,8 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
         widths[i] -= 1;
     }
 
-    let border = |left: &str, join: &str, right: &str| {
-        Line::styled(
+    let border = |left: &str, join: &str, right: &str| LinkedLine {
+        line: Line::styled(
             format!(
                 "  {left}{}{right}",
                 widths
@@ -406,7 +482,8 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
                     .join(join)
             ),
             Style::default().fg(THEME.md_table_border),
-        )
+        ),
+        links: Vec::new(),
     };
     let mut lines = vec![border("┌", "┬", "┐")];
 
@@ -422,14 +499,12 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
                 "  │",
                 Style::default().fg(THEME.md_table_border),
             )];
+            let mut links = Vec::new();
+            let mut byte_offset = spans[0].content.len();
 
             for i in 0..cols {
-                let cell = cells
-                    .get(i)
-                    .and_then(|c| c.get(n))
-                    .cloned()
-                    .unwrap_or_default();
-                let padding = widths[i].saturating_sub(cell.width());
+                let cell = cells.get(i).and_then(|c| c.get(n));
+                let padding = widths[i].saturating_sub(cell.map_or(0, |cell| cell.line.width()));
                 let left = match alignments[i] {
                     pulldown_cmark::Alignment::Right => padding,
                     pulldown_cmark::Alignment::Center => padding / 2,
@@ -437,31 +512,44 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
                 };
 
                 spans.push(Span::raw(" ".repeat(left + 1)));
-                spans.extend(cell.spans.into_iter().map(|mut span| {
-                    if r == 0 {
-                        span.style = span
-                            .style
-                            .add_modifier(Modifier::BOLD)
-                            .fg(THEME.md_table_header);
-                    }
+                byte_offset += left + 1;
+                if let Some(cell) = cell {
+                    links.extend(cell.links.iter().cloned().map(|mut link| {
+                        link.start += byte_offset;
+                        link.end += byte_offset;
+                        link
+                    }));
+                    byte_offset += cell.line.to_string().len();
+                    spans.extend(cell.line.spans.iter().cloned().map(|mut span| {
+                        if r == 0 {
+                            span.style = span
+                                .style
+                                .add_modifier(Modifier::BOLD)
+                                .fg(THEME.md_table_header);
+                        }
 
-                    span
-                }));
+                        span
+                    }));
+                }
                 spans.push(Span::raw(" ".repeat(padding - left + 1)));
                 spans.push(Span::styled(
                     "│",
                     Style::default().fg(THEME.md_table_border),
                 ));
+                byte_offset += padding - left + 1 + "│".len();
             }
 
-            lines.push(Line::from(spans));
+            lines.push(LinkedLine {
+                line: Line::from(spans),
+                links,
+            });
         }
 
         if r + 1 < rows.len() {
             let mut separator = border("├", "┼", "┤");
 
             if r > 0 {
-                separator.style = Style::default().fg(THEME.md_table_separator);
+                separator.line.style = Style::default().fg(THEME.md_table_separator);
             }
 
             lines.push(separator);
@@ -473,38 +561,65 @@ pub(super) fn table(source: &str, width: u16) -> Option<(usize, Vec<Line<'static
     Some((end, lines))
 }
 
-fn labelled_table_rows(rows: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
+fn labelled_table_rows(rows: &[Vec<LinkedLine>]) -> Vec<LinkedLine> {
     let mut lines = Vec::new();
 
     for row in rows.iter().skip(1) {
         for (i, cell) in row.iter().enumerate() {
             let heading = rows[0]
                 .get(i)
-                .map(ToString::to_string)
+                .map(|cell| cell.line.to_string())
                 .unwrap_or_else(|| format!("第 {} 列", i + 1));
             let mut spans = vec![Span::styled(
                 format!("  {heading}: "),
                 Style::default().fg(THEME.md_table_header),
             )];
-            spans.extend(cell.spans.clone());
-            lines.push(Line::from(spans));
+            let offset = spans[0].content.len();
+            let mut links: Vec<_> = cell
+                .links
+                .iter()
+                .cloned()
+                .map(|mut link| {
+                    link.start += offset;
+                    link.end += offset;
+                    link
+                })
+                .collect();
+            if let Some(header) = rows[0].get(i) {
+                links.extend(header.links.iter().cloned().map(|mut link| {
+                    link.start += 2;
+                    link.end += 2;
+                    link
+                }));
+            }
+            spans.extend(cell.line.spans.clone());
+            lines.push(LinkedLine {
+                line: Line::from(spans),
+                links,
+            });
         }
 
-        lines.push(Line::from(""));
+        lines.push(LinkedLine {
+            line: Line::from(""),
+            links: Vec::new(),
+        });
     }
 
     if lines.is_empty() {
-        lines.extend(rows[0].iter().cloned());
+        lines.extend(rows[0].iter().map(|cell| LinkedLine {
+            line: cell.line.clone(),
+            links: cell.links.clone(),
+        }));
     }
 
     lines
 }
 
-fn wrap_cell(cell: &Line<'static>, width: usize) -> Vec<Line<'static>> {
+fn wrap_cell(cell: &LinkedLine, width: usize) -> Vec<LinkedLine> {
     let mut lines = vec![Line::default()];
     let mut used = 0;
 
-    for span in &cell.spans {
+    for span in &cell.line.spans {
         for grapheme in span.content.graphemes(true) {
             let size = grapheme.width();
 
@@ -522,7 +637,20 @@ fn wrap_cell(cell: &Line<'static>, width: usize) -> Vec<Line<'static>> {
         }
     }
 
+    let mut offset = 0;
     lines
+        .into_iter()
+        .map(|line| {
+            let end = offset + line.to_string().len();
+            let links = cell
+                .links
+                .iter()
+                .filter_map(|link| link.slice(&(offset..end), 0))
+                .collect();
+            offset = end;
+            LinkedLine { line, links }
+        })
+        .collect()
 }
 
 fn is_fence_opening(marker: char, count: usize, trimmed: &str) -> bool {
@@ -869,7 +997,7 @@ mod tests {
         let (end, lines) = table(source, 28).unwrap();
         let rendered = lines
             .iter()
-            .map(Line::to_string)
+            .map(|line| line.line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -877,27 +1005,28 @@ mod tests {
         assert!(rendered.contains("a|b"), "{rendered}");
         assert!(!rendered.contains("**") && !rendered.contains('`'));
         assert!(source[end..].contains("后文"));
-        assert!(lines.iter().all(|line| line.width() <= 28));
+        assert!(lines.iter().all(|line| line.line.width() <= 28));
 
         let (_, narrow) = table(source, 10).unwrap();
 
-        assert!(narrow.iter().any(|l| l.to_string().contains("名称:")));
+        assert!(narrow.iter().any(|l| l.line.to_string().contains("名称:")));
         assert!(table("normal | text\nnot a separator", 80).is_none());
     }
 
     #[test]
     fn narrow_table_tolerates_a_body_wider_than_its_header() {
-        let rows = vec![
-            vec![Line::from("名称")],
-            vec![Line::from("一"), Line::from("二")],
-        ];
+        let cell = |text: &'static str| LinkedLine {
+            line: Line::from(text),
+            links: Vec::new(),
+        };
+        let rows = vec![vec![cell("名称")], vec![cell("一"), cell("二")]];
 
         let lines = labelled_table_rows(&rows);
 
         assert!(
             lines
                 .iter()
-                .any(|line| line.to_string().contains("第 2 列: 二"))
+                .any(|line| line.line.to_string().contains("第 2 列: 二"))
         );
     }
 
@@ -1004,6 +1133,42 @@ mod tests {
                 "https://example.com/docs?from=orbit".to_owned(),
                 "https://www.rust-lang.org/learn".to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn repeated_prose_does_not_steal_link_label_hits_and_destinations_are_actionable() {
+        let source = "文档之前的文档 [文档](https://example.com/first) 与 [**文档**](https://example.com/second)";
+        let rendered = render(source);
+        let text = rendered.to_string();
+        let targets = links(source, &rendered);
+        assert_eq!(targets.len(), 4);
+        for (label, target) in [
+            (
+                "文档 (https://example.com/first)",
+                "https://example.com/first",
+            ),
+            (
+                "文档 (https://example.com/second)",
+                "https://example.com/second",
+            ),
+        ] {
+            let start = text.find(label).unwrap();
+            assert!(
+                targets
+                    .iter()
+                    .any(|link| link.start == start && link.url == target)
+            );
+            assert!(
+                targets
+                    .iter()
+                    .any(|link| &text[link.start..link.end] == target && link.url == target)
+            );
+        }
+        assert!(
+            targets
+                .iter()
+                .all(|link| link.start >= "  文档之前的文档 ".len())
         );
     }
 

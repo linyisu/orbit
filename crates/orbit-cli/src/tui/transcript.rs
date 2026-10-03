@@ -238,8 +238,10 @@ struct Entry {
 }
 
 impl Entry {
-    fn push(&mut self, line: Line<'static>, width: u16) {
-        self.push_with_links(line, width, Vec::new());
+    fn push(&mut self, mut line: Line<'static>, width: u16) {
+        render::sanitize_line(&mut line);
+        let links = super::markdown::plain_links(&line.to_string());
+        self.push_with_links(line, width, links);
     }
 
     fn push_with_links(
@@ -310,7 +312,7 @@ impl Entry {
                 && let Some((bytes, lines)) = super::markdown::table(&text[consumed..], width)
             {
                 for line in lines {
-                    self.push(line, width);
+                    self.push_with_links(line.line, width, line.links);
                 }
 
                 index += text[consumed..consumed + bytes].lines().count();
@@ -343,11 +345,12 @@ impl Entry {
             };
 
             let was_code = code.is_some();
-            let rendered = if thinking {
+            let mut rendered = if thinking {
                 render::thinking_line(line, index, &mut code)
             } else {
                 render::assistant_line(line, index, &mut code)
             };
+            render::sanitize_line(&mut rendered);
 
             let links = if !was_code {
                 super::markdown::links(line, &rendered)
@@ -429,19 +432,28 @@ impl Entry {
         let inner_width = width - 4;
 
         for source in text.split('\n') {
-            let content = Line::from(Span::styled(
+            let content = super::markdown::LinkedLine::plain(Line::from(Span::styled(
                 source.to_owned(),
                 ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
-            ));
-            let (wrapped, _) = wrap_line(&content, inner_width);
+            )));
 
-            for line in wrapped {
-                let padding = usize::from(inner_width).saturating_sub(line.width());
+            for line in content.wrap(inner_width) {
+                let padding = usize::from(inner_width).saturating_sub(line.line.width());
                 let mut spans = vec![Span::styled("│ ", border)];
-                spans.extend(line.spans);
+                let offset = spans[0].content.len();
+                let links = line
+                    .links
+                    .into_iter()
+                    .map(|mut link| {
+                        link.start += offset;
+                        link.end += offset;
+                        link
+                    })
+                    .collect();
+                spans.extend(line.line.spans);
                 spans.push(Span::raw(" ".repeat(padding)));
                 spans.push(Span::styled(" │", border));
-                self.push(Line::from(spans), width);
+                self.push_with_links(Line::from(spans), width, links);
             }
         }
 
@@ -566,11 +578,11 @@ impl TranscriptLayout {
                     let next_is_tool =
                         matches!(items.get(item_index + 1), Some(TranscriptItem::Tool(_)));
 
-                    for line in render::tool_card(row, is_expanded, width) {
-                        if !line.to_string().is_empty() {
+                    for line in render::tool_card_with_links(row, is_expanded, width) {
+                        if !line.line.to_string().is_empty() {
                             entry.disclosures.push(entry.rows.len());
                         }
-                        entry.push(line, width);
+                        entry.push_with_links(line.line, width, line.links);
                     }
 
                     if !next_is_tool {
@@ -982,6 +994,46 @@ mod tests {
         assert!((area.y..area.bottom()).all(|y| {
             (area.x..area.right()).all(|x| code_layout.link_at(area, 0, (x, y)).is_none())
         }));
+    }
+
+    #[test]
+    fn plain_output_and_wrapped_table_cells_keep_their_own_link_targets() {
+        use super::super::app::{ToolRow, ToolStatus};
+        let items = [
+            TranscriptItem::User("中文 https://example.com/user".into()),
+            TranscriptItem::CommandResult("结果 https://example.com/command".into()),
+            TranscriptItem::Tool(ToolRow {
+                id: "tool".into(), name: "run_command".into(), arguments: "{}".into(),
+                status: ToolStatus::Finished, output: "地址 https://example.com/tool".into(),
+            }),
+            TranscriptItem::Assistant("| 名称 | 地址 |\n| --- | --- |\n| [中文链接](https://example.com/one) | [中文链接](https://example.com/two) |\n".into()),
+        ];
+        for width in [10, 26, 80] {
+            let mut layout = TranscriptLayout::default();
+            layout.update(&items, Some(2), width);
+            let area = Rect::new(3, 2, width, layout.height() as u16);
+            let mut targets = HashSet::new();
+            for y in area.y..area.bottom() {
+                for x in area.x..area.right() {
+                    if let Some(url) = layout.link_at(area, 0, (x, y)) {
+                        targets.insert(url);
+                    }
+                }
+            }
+            for suffix in ["user", "command", "tool", "one", "two"] {
+                assert!(
+                    targets.contains(format!("https://example.com/{suffix}").as_str()),
+                    "width {width}, missing {suffix}: {targets:?}"
+                );
+            }
+            for row in &layout.entries.last().unwrap().rows {
+                for link in &row.links {
+                    let text = row.line.to_string();
+                    assert!(text.get(link.start..link.end).is_some());
+                    assert!(link.url.ends_with("/one") || link.url.ends_with("/two"));
+                }
+            }
+        }
     }
 
     #[test]

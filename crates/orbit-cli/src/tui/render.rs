@@ -638,6 +638,15 @@ fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     let Some((anchor_x, anchor_y)) = state.link_hovered else {
         return;
     };
+    let offset = state.max_scroll.saturating_sub(state.scroll);
+    if state
+        .transcript_layout
+        .link_at(state.selection.viewport, offset, (anchor_x, anchor_y))
+        .is_none()
+    {
+        state.link_hovered = None;
+        return;
+    }
 
     let text = "Ctrl + Click 跳转";
     let width = (text.width() as u16 + 2).min(state.selection.viewport.width);
@@ -1532,6 +1541,18 @@ pub(super) fn tool_card(
     expanded: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
+    tool_card_with_links(row, expanded, width)
+        .into_iter()
+        .map(|line| line.line)
+        .collect()
+}
+
+pub(super) fn tool_card_with_links(
+    row: &super::app::ToolRow,
+    expanded: bool,
+    width: u16,
+) -> Vec<super::markdown::LinkedLine> {
+    use super::markdown::LinkedLine;
     let width = if width == u16::MAX { 120 } else { width };
     let color = match row.status {
         ToolStatus::Running => TOOL_RUNNING,
@@ -1539,10 +1560,10 @@ pub(super) fn tool_card(
         ToolStatus::Failed => TOOL_FAILED,
     };
     if width < 10 {
-        return vec![Line::styled(
+        return vec![LinkedLine::plain(Line::styled(
             super::tool_display::clipped(&row.name, width as usize),
             Style::default().fg(color),
-        )];
+        ))];
     }
 
     let arguments = serde_json::from_str::<serde_json::Value>(&row.arguments).ok();
@@ -1582,17 +1603,17 @@ pub(super) fn tool_card(
         full_title_spans.extend(title_spans);
         let title_line = Line::from(full_title_spans);
         let title_width = width.saturating_sub(2);
-        let first_line = super::transcript::wrap_line(&title_line, title_width)
-            .0
+        let first_line = LinkedLine::plain(title_line)
+            .wrap(title_width)
             .into_iter()
             .next()
-            .unwrap_or(title_line);
+            .unwrap();
         return vec![first_line];
     }
 
     // Expanded state: rounded enclosed card flush with user input frame
     if width < 4 {
-        return vec![Line::from(title_spans)];
+        return vec![LinkedLine::plain(Line::from(title_spans))];
     }
 
     let border_style = Style::default().fg(crate::tui::theme::THEME.tool_border);
@@ -1600,27 +1621,39 @@ pub(super) fn tool_card(
 
     let mut card_lines = Vec::new();
 
-    card_lines.push(Line::from(Span::styled(
+    card_lines.push(LinkedLine::plain(Line::from(Span::styled(
         format!("╭{}╮", "─".repeat(inner_width + 2)),
         border_style,
-    )));
+    ))));
 
     let header_line = Line::from(title_spans);
-    let (wrapped_header, _) = super::transcript::wrap_line(&header_line, inner_width as u16);
-    for h_line in wrapped_header {
-        let h_pad = inner_width.saturating_sub(h_line.width());
+    for h_line in LinkedLine::plain(header_line).wrap(inner_width as u16) {
+        let h_pad = inner_width.saturating_sub(h_line.line.width());
         let mut framed_header = vec![Span::styled("│ ", border_style)];
-        framed_header.extend(h_line.spans);
+        let offset = framed_header[0].content.len();
+        let links = h_line
+            .links
+            .into_iter()
+            .map(|mut link| {
+                link.start += offset;
+                link.end += offset;
+                link
+            })
+            .collect();
+        framed_header.extend(h_line.line.spans);
         framed_header.push(Span::raw(" ".repeat(h_pad)));
         framed_header.push(Span::styled(" │", border_style));
-        card_lines.push(Line::from(framed_header));
+        card_lines.push(LinkedLine {
+            line: Line::from(framed_header),
+            links,
+        });
     }
 
-    card_lines.push(Line::from(vec![
+    card_lines.push(LinkedLine::plain(Line::from(vec![
         Span::styled("│ ", border_style),
         Span::raw(" ".repeat(inner_width)),
         Span::styled(" │", border_style),
-    ]));
+    ])));
 
     let mut details = tool_details(row, true, inner_width as u16);
     if !details.is_empty() {
@@ -1660,14 +1693,14 @@ pub(super) fn tool_card(
             }
         }
 
-        let (wrapped, _) = super::transcript::wrap_line(&line, inner_width as u16);
-        for sub in wrapped {
-            let pad = inner_width.saturating_sub(sub.width());
+        for sub in LinkedLine::plain(line).wrap(inner_width as u16) {
+            let pad = inner_width.saturating_sub(sub.line.width());
             let line_bg = sub
+                .line
                 .spans
                 .first()
                 .and_then(|s| s.style.bg)
-                .filter(|bg| sub.spans.iter().all(|s| s.style.bg == Some(*bg)));
+                .filter(|bg| sub.line.spans.iter().all(|s| s.style.bg == Some(*bg)));
 
             let mut spans = if let Some(bg) = line_bg {
                 vec![
@@ -1677,7 +1710,17 @@ pub(super) fn tool_card(
             } else {
                 vec![Span::styled("│ ", border_style)]
             };
-            spans.extend(sub.spans);
+            let offset = spans.iter().map(|span| span.content.len()).sum::<usize>();
+            let links = sub
+                .links
+                .into_iter()
+                .map(|mut link| {
+                    link.start += offset;
+                    link.end += offset;
+                    link
+                })
+                .collect();
+            spans.extend(sub.line.spans);
             if let Some(bg) = line_bg {
                 spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
                 spans.push(Span::styled(" ", Style::default().bg(bg)));
@@ -1686,14 +1729,17 @@ pub(super) fn tool_card(
                 spans.push(Span::raw(" ".repeat(pad)));
                 spans.push(Span::styled(" │", border_style));
             }
-            card_lines.push(Line::from(spans));
+            card_lines.push(LinkedLine {
+                line: Line::from(spans),
+                links,
+            });
         }
     }
 
-    card_lines.push(Line::from(Span::styled(
+    card_lines.push(LinkedLine::plain(Line::from(Span::styled(
         format!("╰{}╯", "─".repeat(inner_width + 2)),
         border_style,
-    )));
+    ))));
 
     card_lines
 }
@@ -3490,6 +3536,56 @@ mod tests {
             !hidden.replace(' ', "").contains("Ctrl+Click跳转"),
             "{hidden}"
         );
+    }
+
+    #[test]
+    fn repository_url_in_a_table_has_hover_feedback_after_wrapping_and_resize() {
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        use ratatui::buffer::CellWidth;
+        let url = "https://github.com/linyisu/orbit";
+        let mut state = UiState::new("model");
+        state.transcript.push(TranscriptItem::Assistant(format!(
+            "Orbit 示例项目\n\n| 项 | 值 |\n| --- | --- |\n| 项目 | Orbit |\n| 仓库 | {url} |\n| 提交署名 | Orbit 测试身份（虚构） |\n| Windows 用户名 | orbit（示例路径 C:\\Users\\orbit\\） |\n| 会话 ID | orbit-test-session |\n| 用途 | TUI 链接测试 |\n"
+        )));
+        for width in [100, 64, 30] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 80)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let area = state.selection.viewport;
+            let mut points = Vec::new();
+            for y in area.y..area.bottom() {
+                for x in area.x..area.right() {
+                    if state
+                        .transcript_layout
+                        .link_at(area, state.max_scroll, (x, y))
+                        == Some(url)
+                    {
+                        points.push((x, y));
+                    }
+                }
+            }
+            assert_eq!(points.len(), url.len(), "width {width}: {points:?}");
+            for &(x, y) in [points.first().unwrap(), points.last().unwrap()] {
+                let hover = Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    column: x,
+                    row: y,
+                    modifiers: KeyModifiers::NONE,
+                });
+                handle_link_hover(&mut state, &hover);
+                terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                let hint = state.link_tooltip_area;
+                assert!(hint.width > 0, "width {width}, point ({x}, {y})");
+                let mut text = String::new();
+                let mut column = hint.x;
+                while column < hint.right() {
+                    let cell = &terminal.backend().buffer()[(column, hint.y)];
+                    text.push_str(cell.symbol());
+                    column += cell.cell_width().max(1);
+                }
+                assert!(text.replace(' ', "").contains("Ctrl+Click跳转"), "{text}");
+            }
+            state.link_hovered = None;
+        }
     }
 
     #[test]
