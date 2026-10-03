@@ -798,11 +798,9 @@ impl SessionState {
         std::mem::replace(self, next)
     }
 
-    pub async fn prepare_new(&self, model: String) -> Result<PreparedResume> {
-        let writer = self
-            .store
-            .create(self.snapshot.session.workspace.clone(), model, false)
-            .await?;
+    pub async fn prepare_new_in(&self, model: String, directory: &Path) -> Result<PreparedResume> {
+        let workspace = directory.canonicalize()?.to_string_lossy().into_owned();
+        let writer = self.store.create(workspace, model, false).await?;
         let snapshot = self.store.load(writer.id()).await?;
         let git_baseline =
             orbit_tools::git_inspect::capture_baseline(Path::new(&snapshot.session.workspace));
@@ -818,6 +816,12 @@ impl SessionState {
             snapshot,
             git_baseline,
         })
+    }
+
+    #[cfg(test)]
+    pub async fn prepare_new(&self, model: String) -> Result<PreparedResume> {
+        self.prepare_new_in(model, Path::new(&self.snapshot.session.workspace))
+            .await
     }
 
     #[cfg(test)]

@@ -415,6 +415,7 @@ models = [{ id = "mock" }]
         )
         .unwrap();
         crate::TuiOptions {
+            initial_directory: dir.to_path_buf(),
             auth_directory: dir.join("auth"),
             config,
             database: dir.join("sessions.db"),

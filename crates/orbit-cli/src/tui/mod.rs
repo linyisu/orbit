@@ -410,7 +410,7 @@ pub async fn run(
                 park_run!();
                 if let Err(error) = new_tab(
                     &mut tabs, &mut session, &mut state, &mut model,
-                    &mut history, CommandContext {
+                    &mut history, &options.initial_directory, CommandContext {
                         tools: &tools,
                         instructions: &instructions,
                         skills: &skills,
@@ -434,7 +434,7 @@ pub async fn run(
                     if history_replay.is_none() { state.resume_loading = None; }
                     park_run!();
                     if !tabs.close_active(&mut session, &mut state, &mut model, &mut history) {
-                        match new_tab(&mut tabs, &mut session, &mut state, &mut model, &mut history,
+                        match new_tab(&mut tabs, &mut session, &mut state, &mut model, &mut history, &options.initial_directory,
                             CommandContext { tools: &tools, instructions: &instructions, skills: &skills,
                                 mcp_statuses: &mcp_statuses, model_options: &model_options }).await {
                             Ok(()) => { tabs.close_parked(&id); }
@@ -1988,9 +1988,12 @@ async fn new_tab(
     state: &mut UiState,
     model: &mut ModelClient,
     history: &mut Vec<ChatMessage>,
+    directory: &std::path::Path,
     context: CommandContext<'_>,
 ) -> Result<()> {
-    let prepared = session.prepare_new(state.model.clone()).await?;
+    let prepared = session
+        .prepare_new_in(state.model.clone(), directory)
+        .await?;
     let mut next_history = prepared.snapshot.history.clone();
     crate::instructions::inject(&mut next_history, context.instructions);
     context.skills.inject(&mut next_history);
@@ -3711,6 +3714,7 @@ id = "orbit-model"
         )
         .unwrap();
         let options = crate::TuiOptions {
+            initial_directory: original.clone(),
             config,
             database: directory.path().join("orbit.db"),
             auth_directory: directory.path().join("auth"),

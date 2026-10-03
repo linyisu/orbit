@@ -353,6 +353,7 @@ async fn run_cli() -> Result<()> {
 }
 
 pub(crate) struct TuiOptions {
+    initial_directory: PathBuf,
     auth_directory: PathBuf,
     config: PathBuf,
     database: PathBuf,
@@ -388,6 +389,7 @@ async fn run_tui(
 ) -> Result<()> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let options = TuiOptions {
+        initial_directory: std::env::current_dir()?,
         auth_directory,
         config: std::path::absolute(config_path)?,
         database: session::database_path(database)?,
@@ -412,7 +414,7 @@ async fn run_tui(
         return Ok(());
     }
 
-    let mut prepared = prepare_tui(&options, &std::env::current_dir()?, args.resume).await?;
+    let mut prepared = prepare_tui(&options, &options.initial_directory, args.resume).await?;
 
     while let Some(next) = tui::run(prepared, &options).await? {
         prepared = next;
@@ -1042,6 +1044,7 @@ id = "test"
         )
         .unwrap();
         let options = TuiOptions {
+            initial_directory: old.clone(),
             auth_directory: directory.path().join("home/.config/orbit/auth"),
             config,
             database: directory.path().join("test.db"),
@@ -1116,6 +1119,7 @@ models = [{ id = "test" }]
         )
         .unwrap();
         let options = TuiOptions {
+            initial_directory: second.clone(),
             auth_directory: directory.path().join("auth"),
             config,
             database: directory.path().join("sessions.db"),

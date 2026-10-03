@@ -43,7 +43,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn moving_workspace_preserves_model_and_replaces_tools_and_instructions() {
+    async fn moving_workspace_preserves_model_and_new_tabs_use_the_launch_directory() {
         let directory = tempfile::tempdir().unwrap();
         let old = directory.path().join("old");
         let new = directory.path().join("new");
@@ -67,6 +67,7 @@ id = "selected-model"
         )
         .unwrap();
         let options = crate::TuiOptions {
+            initial_directory: old.clone(),
             auth_directory: directory.path().join("auth"),
             config,
             database: directory.path().join("sessions.db"),
@@ -184,5 +185,55 @@ id = "selected-model"
             .await
             .unwrap();
         session.finish("completed", Some(history)).await.unwrap();
+
+        let moved_id = session.id().to_owned();
+        let mut tabs = super::super::tabs::Tabs::new(&session);
+        let mut history = session.snapshot.history.clone();
+        super::super::new_tab(
+            &mut tabs,
+            &mut session,
+            &mut state,
+            &mut model,
+            &mut history,
+            &options.initial_directory,
+            super::super::CommandContext {
+                tools: &resources.tools,
+                instructions: &resources.budget.instructions,
+                skills: &resources.budget.skills,
+                mcp_statuses: &resources.budget.mcp_statuses,
+                model_options: &resources.budget.model_options,
+            },
+        )
+        .await
+        .unwrap();
+        assert_ne!(session.id(), moved_id);
+        assert_eq!(state.workspace, old.to_str().unwrap());
+        assert_eq!(session.snapshot.session.workspace, old.to_str().unwrap());
+        assert!(state.transcript.is_empty());
+        let fresh_resources = crate::prepare_tui_resources(&options, &old, &session)
+            .await
+            .unwrap();
+        bind(
+            &fresh_resources,
+            &mut session,
+            &mut state,
+            &mut model,
+            &mut history,
+        )
+        .await
+        .unwrap();
+        assert_eq!(model.config().model, "selected-model");
+        assert_eq!(session.audit_workspace.as_ref().unwrap().root(), old);
+        assert!(format!("{history:?}").contains("old-workspace-rule"));
+        assert!(!format!("{history:?}").contains("new-workspace-rule"));
+        assert!(tabs.restore(
+            &moved_id,
+            &mut session,
+            &mut state,
+            &mut model,
+            &mut history
+        ));
+        assert_eq!(session.snapshot.session.workspace, new.to_str().unwrap());
+        assert_eq!(session.audit_workspace.as_ref().unwrap().root(), new);
     }
 }
