@@ -249,12 +249,6 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
             Paragraph::new(symbol).style(style),
             Rect::new(nav.area.x, y, 1, 1),
         );
-        if is_active && rail_width > 1 {
-            frame.render_widget(
-                Paragraph::new(icons::MENU_LEFT).style(style),
-                Rect::new(nav.area.x + 1, y, 1, 1),
-            );
-        }
         nav.targets.push((
             y,
             *start,
@@ -793,10 +787,10 @@ mod tests {
             terminal.backend().buffer()[(rail.x, row)].symbol(),
             icons::CIRCLE
         );
-        assert_eq!(
+        assert!(matches!(
             terminal.backend().buffer()[(rail.x + 1, row)].symbol(),
-            icons::MENU_LEFT
-        );
+            "│" | "┃"
+        ));
         assert_eq!(terminal.backend().buffer()[(rail.x, row)].fg, THEME.accent);
         let chosen = state.navigation.first + 2;
         let chosen_row = state.navigation.targets[2].0;
