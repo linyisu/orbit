@@ -186,6 +186,18 @@ pub struct UiState {
 }
 
 impl UiState {
+    pub(super) fn has_conversation(&self) -> bool {
+        self.transcript.iter().any(|item| {
+            matches!(
+                item,
+                TranscriptItem::User(_)
+                    | TranscriptItem::Assistant(_)
+                    | TranscriptItem::Thinking(_)
+                    | TranscriptItem::Tool(_)
+            )
+        })
+    }
+
     pub fn invalidate_transcript(&mut self, first: usize) {
         self.transcript_layout.invalidate_from(first);
     }

@@ -64,7 +64,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     state.tab_areas.clear();
     state.tab_close_areas.clear();
     state.new_tab_area = Rect::default();
-    let home = state.transcript.is_empty()
+    let home = !state.has_conversation()
         && !state.tabs.is_empty()
         && state.resume_loading.is_none()
         && state.approval.is_none()
@@ -142,19 +142,40 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     .split(area)
     .to_vec();
 
+    let mut home_logo = Rect::default();
     if home {
         let composer_height = input_height + attachment_height + details_height + 3;
-        let group_height = 8 + composer_height + 2;
+        let header_height = u16::from(state.tabs.len() > 1);
+        let available_height = area.height.saturating_sub(header_height);
+        state
+            .transcript_layout
+            .update_expanded(&state.transcript, &state.expanded, width as u16);
+        let output_height = state
+            .transcript_layout
+            .height()
+            .min(8)
+            .min(available_height.saturating_sub(composer_height + 5) as usize)
+            as u16;
+        let output_gap = u16::from(output_height > 0);
+        let logo_height = 7
+            .min(available_height.saturating_sub(composer_height + output_height + output_gap + 3));
+        let group_height = logo_height + 1 + output_height + output_gap + composer_height + 2;
         let x = area.x + area.width.saturating_sub(content_width) / 2;
-        let y = area.y + area.height.saturating_sub(group_height) / 2;
+        let y = area.y + header_height + available_height.saturating_sub(group_height) / 2;
         areas[0] = if state.tabs.len() > 1 {
             Rect::new(area.x, area.y, area.width, 1)
         } else {
             Rect::default()
         };
-        areas[1] = Rect::new(x, y, content_width, 7);
+        home_logo = Rect::new(x, y, content_width, logo_height);
+        areas[1] = Rect::new(x, y + logo_height + 1, content_width, output_height);
         areas[2] = Rect::default();
-        areas[4] = Rect::new(x, y + 8, content_width, composer_height);
+        areas[4] = Rect::new(
+            x,
+            areas[1].bottom() + output_gap,
+            content_width,
+            composer_height,
+        );
         areas[5] = Rect::default();
         areas[6] = Rect::new(x, areas[4].bottom(), content_width, 1);
     }
@@ -174,7 +195,16 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     );
 
     draw_header(frame, state, areas[0]);
-    draw_transcript(frame, state, areas[1]);
+    if home {
+        draw_welcome(frame, home_logo);
+    }
+    if home && areas[1].height == 0 {
+        super::navigation::clear_previous_tooltip(frame, state);
+        clear_previous_link_tooltip(frame, state);
+        state.navigation.reset_area();
+    } else {
+        draw_transcript(frame, state, areas[1]);
+    }
 
     if state.approval.is_some() && !file_modal {
         super::approval::draw_in(frame, state, areas[2]);
@@ -935,6 +965,37 @@ fn welcome() -> Vec<Line<'static>> {
         .collect()
 }
 
+fn draw_welcome(frame: &mut Frame<'_>, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let mut logo = welcome();
+    let mut width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
+
+    if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
+        logo = wordmark();
+        width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
+    }
+
+    if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
+        logo = vec![Line::from(Span::styled(
+            "Orbit",
+            Style::default().fg(ACCENT),
+        ))];
+        width = 5;
+    }
+
+    let height = logo.len() as u16;
+    let centered = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + u16::from(area.height > height),
+        width,
+        height,
+    );
+    frame.render_widget(Paragraph::new(logo), centered);
+}
+
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     super::navigation::clear_previous_tooltip(frame, state);
     clear_previous_link_tooltip(frame, state);
@@ -953,30 +1014,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             return;
         }
 
-        let mut logo = welcome();
-        let mut width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
-
-        if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
-            logo = wordmark();
-            width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
-        }
-
-        if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
-            logo = vec![Line::from(Span::styled(
-                "Orbit",
-                Style::default().fg(ACCENT),
-            ))];
-            width = 5;
-        }
-
-        let height = logo.len() as u16;
-        let centered = Rect::new(
-            area.x + area.width.saturating_sub(width) / 2,
-            area.y + u16::from(area.height > height),
-            width,
-            height,
-        );
-        frame.render_widget(Paragraph::new(logo), centered);
+        draw_welcome(frame, area);
         return;
     }
 
@@ -2434,6 +2472,83 @@ mod tests {
         state.tab_hover = None;
 
         assert!(!render(&mut state, 140, 40).contains("󰅖"));
+    }
+
+    #[tokio::test]
+    async fn commands_keep_home_and_their_output_scrollable_until_a_message_is_sent() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut session = crate::session::SessionState::open_in(
+            directory.path().join("orbit.db"),
+            None,
+            "orbit-model".into(),
+            directory.path(),
+        )
+        .await
+        .unwrap();
+        let mut state = UiState::new("orbit-model");
+        state.tabs.push(SessionTab {
+            waiting_approval: false,
+            elapsed: std::time::Duration::ZERO,
+            id: session.id().into(),
+            title: "Orbit session".into(),
+            status: RunStatus::Idle,
+            active: true,
+        });
+        state.transcript.push(TranscriptItem::CommandResult(
+            "已切换至工作区 /orbit".into(),
+        ));
+        let screen = render(&mut state, 140, 40);
+        assert!(screen.replace(' ', "").contains("已切换至工作区/orbit"));
+        assert!(state.input_area.x > 20);
+        let mut model = orbit_model::client::ModelClient::new(Default::default()).unwrap();
+        let mut history = Vec::new();
+        let tools = orbit_agent::tool::ToolRegistry::new();
+        let instructions = crate::instructions::Instructions::default();
+        let skills = crate::skills::Skills::default();
+        for command in [
+            "/mode ask",
+            "/status",
+            "/context",
+            "/skills",
+            "/orbit-unknown",
+        ] {
+            super::super::run_command(
+                command,
+                &mut state,
+                &mut model,
+                &mut history,
+                &mut session,
+                super::super::CommandContext {
+                    tools: &tools,
+                    instructions: &instructions,
+                    skills: &skills,
+                    mcp_statuses: &[],
+                    model_options: &[],
+                },
+            )
+            .await
+            .unwrap();
+            render(&mut state, 140, 40);
+            assert!(!state.has_conversation(), "{command}");
+            assert!(state.input_area.x > 20, "{command}");
+            assert_eq!(state.status, RunStatus::Idle);
+            assert!(state.selection.viewport.height <= 8);
+        }
+        assert!(state.max_scroll > 0);
+        state.scroll_up(state.max_scroll);
+        let screen = render(&mut state, 140, 40);
+        assert!(screen.replace(' ', "").contains("已切换至工作区/orbit"));
+        state.scroll_down(state.max_scroll);
+        let screen = render(&mut state, 140, 40);
+        assert!(screen.replace(' ', "").contains("未知命令"));
+        render(&mut state, 28, 18);
+        assert!(state.selection.viewport.height > 0);
+        assert!(state.input_area.bottom() < 18);
+        state.submit("Orbit message".into());
+        render(&mut state, 140, 40);
+        assert!(state.has_conversation());
+        assert!(state.input_area.x < 20);
+        assert_eq!(state.new_tab_area.height, 1);
     }
 
     #[test]
