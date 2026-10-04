@@ -4,14 +4,18 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
-use syntect::{easy::HighlightLines, highlighting::HighlightState, parsing::ParseState};
+use syntect::{
+    easy::{HighlightLines, ScopeRegionIterator},
+    highlighting::{HighlightIterator, HighlightState, Highlighter},
+    parsing::ParseState,
+};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use super::{
     languages,
     render::safe_output,
-    theme::{CODE_THEME, THEME},
+    theme::{CODE_THEME, THEME, syntax_modifiers},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -159,25 +163,37 @@ impl Renderer {
     }
 
     fn line(&mut self, text: &str) -> Line<'static> {
-        let mut renderer =
-            HighlightLines::from_state(&CODE_THEME, self.state.0.clone(), self.state.1.clone());
-        let line = match renderer.highlight_line(text, &languages::SYNTAXES) {
-            Ok(tokens) => Line::from(
-                tokens
-                    .into_iter()
-                    .map(|(style, token)| {
-                        let color = style.foreground;
-                        Span::styled(
-                            token.to_owned(),
-                            Style::default().fg(Color::Rgb(color.r, color.g, color.b)),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-            Err(_) => Line::from(text.to_owned()),
+        let ops = match self.state.1.parse_line(text, &languages::SYNTAXES) {
+            Ok(ops) => ops,
+            Err(_) => return Line::from(text.to_owned()),
         };
-        self.state = renderer.state();
-        line
+        // Reuse the parser's scope operations for terminal effects. Syntect's
+        // font flags lack strikethrough; scope effects compose nested emphasis.
+        let mut scopes = self.state.0.path.clone();
+        let mut modifiers = Vec::new();
+        for (token, op) in ScopeRegionIterator::new(&ops, text) {
+            if scopes.apply(op).is_err() {
+                return Line::from(text.to_owned());
+            }
+            if !token.is_empty() {
+                modifiers.push(syntax_modifiers(scopes.as_slice()));
+            }
+        }
+        let highlighter = Highlighter::new(&CODE_THEME);
+        Line::from(
+            HighlightIterator::new(&mut self.state.0, &ops, text, &highlighter)
+                .zip(modifiers)
+                .map(|((style, token), modifiers)| {
+                    let color = style.foreground;
+                    Span::styled(
+                        token.to_owned(),
+                        Style::default()
+                            .fg(Color::Rgb(color.r, color.g, color.b))
+                            .add_modifier(modifiers),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
@@ -413,6 +429,8 @@ fn clip_spans(line: &Line<'static>, width: usize) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Modifier;
+
     use super::*;
 
     #[test]
@@ -623,6 +641,144 @@ mod tests {
                 assert_eq!(style_at(&line, token).fg, Some(foreground), "{source}");
             }
         }
+    }
+
+    #[test]
+    fn markdown_source_keeps_symbols_and_composes_nested_effects_in_all_views() {
+        let cases = [
+            ("## Orbit 标题", "标题", Modifier::BOLD),
+            ("**粗体**", "粗体", Modifier::BOLD),
+            ("*斜体*", "斜体", Modifier::ITALIC),
+            ("***粗斜体***", "粗斜体", Modifier::BOLD | Modifier::ITALIC),
+            ("___粗斜体___", "粗斜体", Modifier::BOLD | Modifier::ITALIC),
+            ("~~删除线~~", "删除线", Modifier::CROSSED_OUT),
+            ("==高亮==", "高亮", Modifier::UNDERLINED),
+            (
+                "**粗体包含*斜体*部分**",
+                "斜体",
+                Modifier::BOLD | Modifier::ITALIC,
+            ),
+            (
+                "~~**加粗的删除线**~~",
+                "加粗的删除线",
+                Modifier::BOLD | Modifier::CROSSED_OUT,
+            ),
+        ];
+        for label in ["md", "markdown", "gfm", "commonmark", "language-MD"] {
+            for (source, token, effects) in cases {
+                let line = highlight(&mut Renderer::new(label), source);
+                assert_eq!(style_at(&line, token).add_modifier, effects, "{source}");
+                assert_eq!(file_lines("README.md", source), vec![line.clone()]);
+
+                let mut fence = None;
+                super::super::markdown::line("````markdown", 0, &mut fence);
+                let fenced = super::super::markdown::line(source, 1, &mut fence);
+                assert_eq!(fenced.to_string(), format!("  │ {source}"));
+                assert_eq!(&fenced.spans[1..], line.spans.as_slice());
+                assert!(fenced.spans[0].style.add_modifier.is_empty());
+            }
+        }
+        let nested = highlight(&mut Renderer::new("md"), "**外部*内部*恢复** 结束");
+        assert_eq!(style_at(&nested, "内部").fg, Some(THEME.md_bold_italic));
+        assert_eq!(style_at(&nested, "恢复").add_modifier, Modifier::BOLD);
+        assert!(style_at(&nested, "结束").add_modifier.is_empty());
+        let strike = highlight(&mut Renderer::new("md"), "~~删除线~~");
+        assert_eq!(style_at(&strike, "删除线").fg, Some(THEME.md_strikethrough));
+    }
+
+    #[test]
+    fn source_effects_keep_literals_and_embedded_code_literal() {
+        for source in [
+            "`**字面量** *星号* ~~波浪线~~`",
+            "`==字面量==`",
+            r"\*字面量\* \~\~波浪线\~\~",
+            r"\==字面量==",
+            "== 未闭合",
+            "== 两边有空格 ==",
+            "===字面量===",
+            "    **缩进代码**",
+        ] {
+            let line = highlight(&mut Renderer::new("md"), source);
+            assert!(
+                line.spans
+                    .iter()
+                    .all(|span| span.style.add_modifier.is_empty())
+            );
+        }
+        let mut renderer = Renderer::new("md");
+        highlight(&mut renderer, "```rust");
+        for source in ["// **注释** ~~原样~~", "let text = \"***原样***\";"] {
+            let line = highlight(&mut renderer, source);
+            assert_eq!(line, highlight(&mut Renderer::new("rust"), source));
+        }
+        highlight(&mut renderer, "```");
+        let emphasis = highlight(&mut renderer, "***恢复***");
+        assert_eq!(
+            style_at(&emphasis, "恢复").add_modifier,
+            Modifier::BOLD | Modifier::ITALIC
+        );
+    }
+
+    #[test]
+    fn source_highlight_extension_reuses_inline_scopes_and_ends_at_its_delimiter() {
+        let source = "==**重点** 与 `*代码*`== 普通";
+        let line = highlight(&mut Renderer::new("md"), source);
+        assert_eq!(
+            style_at(&line, "重点").add_modifier,
+            Modifier::BOLD | Modifier::UNDERLINED
+        );
+        assert_eq!(style_at(&line, "*代码*").add_modifier, Modifier::UNDERLINED);
+        assert_eq!(style_at(&line, " 与 ").fg, Some(THEME.md_mark));
+        assert!(style_at(&line, "普通").add_modifier.is_empty());
+        let line = highlight(&mut Renderer::new("md"), "==表达式 a = b==");
+        assert_eq!(style_at(&line, "a = b").add_modifier, Modifier::UNDERLINED);
+    }
+
+    #[test]
+    fn source_effects_survive_wrapping_search_and_diff_overlays() {
+        let source = "***中文强调片段*** 和 ~~删除片段~~";
+        let start = source.find("强调").unwrap();
+        let rows = Renderer::new("md").render(
+            source,
+            Options {
+                gutter: Gutter::Number {
+                    number: 7,
+                    digits: 1,
+                    indent: 0,
+                },
+                width: Some(18),
+                change: Some(Change::Added),
+                highlights: std::iter::once(start..start + "强调".len()).collect(),
+                ..Default::default()
+            },
+        );
+        let text: String = rows
+            .iter()
+            .flat_map(|row| &row.spans[1..])
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(text, source);
+        assert!(rows.len() > 1);
+        let emphasis = rows
+            .iter()
+            .flat_map(|row| &row.spans)
+            .find(|span| span.content.contains("强调"))
+            .unwrap();
+        assert!(
+            emphasis
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::ITALIC)
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.spans[0].style.add_modifier.is_empty())
+        );
+        assert!(
+            rows.iter()
+                .flat_map(|row| &row.spans[1..])
+                .any(|span| span.style.add_modifier.contains(Modifier::CROSSED_OUT))
+        );
     }
 
     #[test]

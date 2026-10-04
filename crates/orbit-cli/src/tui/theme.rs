@@ -385,6 +385,32 @@ pub(super) fn desaturate_for_thinking(color: Option<Color>) -> Color {
 
 use std::sync::LazyLock;
 use syntect::highlighting::{Color as SyntaxColor, StyleModifier, ThemeItem, ThemeSettings};
+use syntect::parsing::Scope;
+
+/// Terminal effects follow syntax scopes in every source view, including
+/// nested scopes and embedded languages; no source text is removed or parsed again.
+pub(super) fn syntax_modifiers(scopes: &[Scope]) -> Modifier {
+    static RULES: LazyLock<[(Scope, Modifier); 5]> = LazyLock::new(|| {
+        [
+            ("markup.heading", Modifier::BOLD),
+            ("markup.bold", Modifier::BOLD),
+            ("markup.italic", Modifier::ITALIC),
+            ("markup.strikethrough", Modifier::CROSSED_OUT),
+            ("markup.highlight", Modifier::UNDERLINED),
+        ]
+        .map(|(scope, modifier)| (scope.parse().expect("valid syntax effect scope"), modifier))
+    });
+    RULES
+        .iter()
+        .fold(Modifier::empty(), |effects, (scope, modifier)| {
+            if scopes.iter().any(|token| scope.is_prefix_of(*token)) {
+                effects | *modifier
+            } else {
+                effects
+            }
+        })
+}
+
 pub(super) static CODE_THEME: LazyLock<syntect::highlighting::Theme> = LazyLock::new(|| {
     let color = |r, g, b| SyntaxColor { r, g, b, a: 255 };
     let semantic = |value| {
@@ -430,6 +456,12 @@ pub(super) static CODE_THEME: LazyLock<syntect::highlighting::Theme> = LazyLock:
             ("markup.heading, entity.name.section", color(229, 192, 123)),
             ("markup.bold", color(229, 192, 123)),
             ("markup.italic", color(198, 120, 221)),
+            (
+                "markup.bold markup.italic, markup.italic markup.bold",
+                semantic(THEME.md_bold_italic),
+            ),
+            ("markup.strikethrough", semantic(THEME.md_strikethrough)),
+            ("markup.highlight", semantic(THEME.md_mark)),
             ("markup.raw.inline", color(126, 205, 208)),
             ("markup.underline.link", color(97, 175, 239)),
             ("markup.math", color(126, 205, 208)),
@@ -442,6 +474,7 @@ pub(super) static CODE_THEME: LazyLock<syntect::highlighting::Theme> = LazyLock:
                  punctuation.definition.list_item, punctuation.definition.blockquote, \
                  punctuation.definition.raw, punctuation.definition.bold, \
                  punctuation.definition.italic, punctuation.definition.strikethrough, \
+                 punctuation.definition.highlight, \
                  punctuation.definition.math, punctuation.definition.link, \
                  punctuation.definition.image, constant.other.language-name",
                 color(198, 120, 221),

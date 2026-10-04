@@ -2,14 +2,14 @@ use syntect::parsing::{SyntaxDefinition, SyntaxSetBuilder};
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/VisualBasic.sublime-syntax");
-    println!("cargo:rerun-if-changed=assets/MarkdownMath.sublime-syntax");
+    println!("cargo:rerun-if-changed=assets/MarkdownInline.sublime-syntax");
     let bundled = two_face::syntax::extra_no_newlines().into_builder();
-    let math = SyntaxDefinition::load_from_str(
-        include_str!("assets/MarkdownMath.sublime-syntax"),
+    let inline = SyntaxDefinition::load_from_str(
+        include_str!("assets/MarkdownInline.sublime-syntax"),
         false,
         None,
     )
-    .expect("valid bundled Markdown math syntax");
+    .expect("valid bundled Markdown inline syntax");
     let mut definitions = bundled.syntaxes().to_vec();
     definitions
         .iter_mut()
@@ -19,7 +19,7 @@ fn main() {
         .get_mut("inline")
         .expect("Markdown inline context")
         .patterns
-        .splice(0..0, math.contexts["inject"].patterns.clone());
+        .splice(0..0, inline.contexts["inject"].patterns.clone());
 
     // Keep compiled context indices intact: extend patterns without adding or
     // renaming contexts in the existing grammars, and append new grammars last.
@@ -27,7 +27,7 @@ fn main() {
     for syntax in definitions {
         builder.add(syntax);
     }
-    builder.add(math);
+    builder.add(inline);
     builder.add(
         SyntaxDefinition::load_from_str(
             include_str!("assets/VisualBasic.sublime-syntax"),

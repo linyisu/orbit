@@ -1,15 +1,31 @@
 %YAML 1.2
 ---
-# Markdown dollar delimiters reuse the bundled LaTeX math grammar.
+# Markdown inline extensions reuse the bundled Markdown and LaTeX grammars.
 # Inject only into Markdown's inline context so code and HTML stay literal.
-name: Markdown Math
-scope: text.tex.markdown-math
+name: Markdown Inline Extensions
+scope: text.html.markdown-inline
 hidden: true
 contexts:
   main:
-    - include: math
+    - include: inject
   inject:
-    - include: scope:text.tex.markdown-math#math
+    - include: scope:text.html.markdown-inline#math
+    - include: scope:text.html.markdown-inline#mark
+  mark:
+    - match: '(?x)(?<![=\\])(?:\\\\)*(==)(?!=)(?=\S)(?=(?:\\.|[^\\\n])*?(?<=\S)==(?!=))'
+      captures:
+        1: punctuation.definition.highlight.begin.markdown
+      push: marked
+  marked:
+    - meta_scope: markup.highlight.markdown
+    - match: '(?<!\\)(?:\\\\)*(==)(?!=)'
+      captures:
+        1: punctuation.definition.highlight.end.markdown
+      pop: true
+    - match: '$'
+      pop: true
+    - include: scope:text.html.markdown#inline
+    - include: scope:text.html.markdown#inline-bold-italic
   math:
     - match: '(?<!\\)(?:\\\\)*(\$\$)'
       captures:
