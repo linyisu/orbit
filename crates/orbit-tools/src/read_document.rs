@@ -274,6 +274,7 @@ async fn convert_worker(
         max_file_size_bytes: Some(64 * 1024 * 1024),
         max_processes: Some(64),
         max_open_files: Some(128),
+        ..Default::default()
     };
     let result = BwrapBackend::new()
         .map_err(failed)?

@@ -50,6 +50,9 @@ reasoning = { adapter = "openai_responses", efforts = ["none", "low", "medium", 
 network = "allow" # 允许显式申请联网；run_command 单次请求默认 network="deny"
 read_file_scan_bytes = 67108864 # 每次文件读取最多扫描 64 MiB；0 表示不限扫描量
 
+[command.process_limits]
+max_tmp_bytes = 2147483648 # 每次命令 /tmp 的总配额 2 GiB；0 使用不限额的磁盘临时目录
+
 [command.artifacts]
 max_file_bytes = 1073741824 # 1 GiB；0 表示不限
 max_session_bytes = 4294967296 # 4 GiB；0 表示不限

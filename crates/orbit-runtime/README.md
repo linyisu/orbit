@@ -59,7 +59,7 @@ orbit-runtime/
 ### 命名空间与隔离边界
 - 独立 PID、IPC、UTS 与 User 命名空间；清空 Linux capabilities，禁用嵌套命名空间。
 - 网络控制：当网络策略为 `Deny` 时，强制创建独立 Network 命名空间（仅回环接口，无网络链路）。
-- 基础根系统：`/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 及动态链接库缓存以只读模式绑定挂载。正常执行时 `/tmp` 绑定本次命令的磁盘临时目录；未提供临时目录的组装路径使用 64 MiB tmpfs；`/dev` 仅挂载最小化基础设备节点（`null`, `zero`, `urandom` 等）。
+- 基础根系统：`/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 及动态链接库缓存以只读模式绑定挂载。正常执行时 `/tmp` 使用总容量受限的 tmpfs，默认 2 GiB，可由 `command.process_limits.max_tmp_bytes` 调整；设为 `0` 时使用本次命令的磁盘临时目录，不设总配额；`/dev` 仅挂载最小化基础设备节点（`null`, `zero`, `urandom` 等）。
 - 宿主凭据隔离：不暴露宿主 `$HOME`、SSH Agent、Git 凭据助手或系统密钥环。
 
 ### Seccomp 系统调用过滤

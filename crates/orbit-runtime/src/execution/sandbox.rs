@@ -473,7 +473,12 @@ impl BwrapSandboxBackend {
                     .arg(Path::new("/workspace").join(rel));
             }
         }
-        mount_scratch_and_tmp(&mut command, spec.scratch.as_deref(), task_tmp)?;
+        mount_scratch_and_tmp(
+            &mut command,
+            spec.scratch.as_deref(),
+            task_tmp,
+            spec.limits.max_tmp_bytes,
+        )?;
         mount_toolchain_and_mounts(&mut command, rust_toolchain, mounts, policy)?;
         mount_capabilities(
             &mut command,
@@ -2022,6 +2027,7 @@ fn mount_scratch_and_tmp(
     command: &mut Command,
     scratch: Option<&Path>,
     task_tmp: Option<&Path>,
+    max_tmp_bytes: u64,
 ) -> Result<(), RuntimeError> {
     if let Some(path) = scratch {
         use std::os::unix::fs::DirBuilderExt;
@@ -2061,7 +2067,9 @@ fn mount_scratch_and_tmp(
 
     command.args(["--proc", "/proc", "--dev", "/dev"]);
 
-    if let Some(tmp_dir) = task_tmp {
+    if max_tmp_bytes == 0
+        && let Some(tmp_dir) = task_tmp
+    {
         if scratch.is_none() {
             use std::os::unix::fs::DirBuilderExt;
 
@@ -2071,7 +2079,12 @@ fn mount_scratch_and_tmp(
 
         command.arg("--bind").arg(tmp_dir).arg("/tmp");
     } else {
-        command.args(["--size", &TMP_SIZE_BYTES.to_string(), "--tmpfs", "/tmp"]);
+        let size = if max_tmp_bytes == 0 {
+            TMP_SIZE_BYTES
+        } else {
+            max_tmp_bytes
+        };
+        command.args(["--size", &size.to_string(), "--tmpfs", "/tmp"]);
 
         if scratch.is_none() {
             command.args(["--dir", "/tmp/home"]);
@@ -2714,6 +2727,25 @@ mod tests {
             );
         }
         assert!(dir.path().join(".git/HEAD").exists());
+    }
+
+    #[tokio::test]
+    async fn temporary_volume_enforces_an_aggregate_quota() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy =
+            EffectivePolicy::new(BasePolicy::new(ResolvedPath::from_canonical(dir.path())));
+        let mut spec = ProcessSpec::new(
+            "set -eu; dd if=/dev/zero of=/tmp/first bs=1024 count=768 2>/dev/null; if dd if=/dev/zero of=/tmp/second bs=1024 count=768 2>/dev/null; then exit 42; fi; printf bounded",
+            Duration::from_secs(10),
+        );
+        spec.limits.max_tmp_bytes = 1024 * 1024;
+        let result = BwrapSandboxBackend::new()
+            .unwrap()
+            .run(spec, &policy, None, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0), "{}", result.stderr);
+        assert_eq!(result.stdout, "bounded");
     }
 
     #[test]
@@ -3598,7 +3630,7 @@ mod tests {
         let tmp_task = tempfile::tempdir().unwrap();
         let mut cmd = Command::new("/usr/bin/bwrap");
 
-        mount_scratch_and_tmp(&mut cmd, None, Some(tmp_task.path())).unwrap();
+        mount_scratch_and_tmp(&mut cmd, None, Some(tmp_task.path()), 0).unwrap();
         let args = cmd
             .as_std()
             .get_args()
@@ -3609,6 +3641,18 @@ mod tests {
         assert!(args.contains(&tmp_task.path().to_string_lossy().to_string()));
         assert!(args.contains(&"/tmp".to_string()));
         assert!(!args.contains(&"--tmpfs".to_string()));
+        let mut bounded = Command::new("/usr/bin/bwrap");
+        mount_scratch_and_tmp(&mut bounded, None, Some(tmp_task.path()), 1024 * 1024).unwrap();
+        let args = bounded
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            args.windows(4)
+                .any(|args| args == ["--size", "1048576", "--tmpfs", "/tmp"])
+        );
+        assert!(!args.contains(&tmp_task.path().to_string_lossy().to_string()));
 
         let mut cmd_limits = Command::new("/usr/bin/bwrap");
         let unlimited_limits = ProcessLimits::default(); // 0 for memory and file size
@@ -3641,6 +3685,7 @@ mod tests {
             max_file_size_bytes: 10 * 1024 * 1024,
             max_processes: 100,
             max_open_files: 200,
+            ..Default::default()
         };
 
         configure_limits_and_entrypoint(
