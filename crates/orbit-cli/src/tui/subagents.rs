@@ -16,7 +16,6 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     app::{ToolRow, ToolStatus, TranscriptItem, UiState},
-    icons,
     markdown::{LinkTarget, LinkedLine},
     render::{fit_label, safe_output},
     theme::THEME,
@@ -26,8 +25,57 @@ pub(super) fn is_task(name: &str) -> bool {
     matches!(name, "spawn_agent" | "send_agent_message")
 }
 
-pub(super) fn card(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<LinkedLine>> {
-    if !is_task(&row.name) || width < 10 {
+fn status(row: &ToolRow, value: &Value) -> &'static str {
+    match value["status"].as_str() {
+        Some("queued") => "已排队",
+        Some("cancelled") => "已取消",
+        Some("interrupted") => "已中断",
+        Some("failed") => "失败",
+        Some("completed") => "完成",
+        _ if row.status == ToolStatus::Failed => "失败",
+        _ => "运行中",
+    }
+}
+
+fn task(args: &Value) -> &str {
+    args["task"]
+        .as_str()
+        .or(args["message"].as_str())
+        .unwrap_or("委派任务")
+}
+
+fn statistics(value: &Value) -> Vec<String> {
+    let seconds = value["elapsed_seconds"]
+        .as_u64()
+        .or_else(|| value["elapsed_ms"].as_u64().map(|ms| ms / 1000));
+    let calls = value["tool_calls"]
+        .as_u64()
+        .or(value["_activity"]["tool_calls"].as_u64());
+    let mut parts = Vec::new();
+    if let Some(calls) = calls {
+        parts.push(format!("{calls} 次调用"));
+    }
+    if let Some(seconds) = seconds {
+        parts.push(format!("{seconds}s"));
+    }
+    parts
+}
+
+fn activity(row: &ToolRow, value: &Value) -> String {
+    let current = value["_activity"]["current"]
+        .as_str()
+        .filter(|text| !text.is_empty() && row.status == ToolStatus::Running);
+    let mut parts = vec![safe_output(current.unwrap_or(status(row, value)))];
+    parts.extend(statistics(value));
+    parts.join(" · ")
+}
+
+pub(super) fn header(
+    row: &ToolRow,
+    color: ratatui::style::Color,
+    width: u16,
+) -> Option<LinkedLine> {
+    if !is_task(&row.name) {
         return None;
     }
     let args: Value = serde_json::from_str(&row.arguments).unwrap_or_default();
@@ -36,127 +84,95 @@ pub(super) fn card(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Link
         Some("review") => "审查",
         _ => "探索",
     };
-    let (status, icon, color) = match value["status"].as_str() {
-        Some("queued") => ("已排队", icons::LOADING, THEME.tool_running),
-        Some("cancelled") => ("已取消", icons::CANCEL, THEME.tool_detail),
-        Some("interrupted") => ("已中断", icons::ALERT_OUTLINE, THEME.tool_failed),
-        Some("failed") => ("失败", icons::CLOSE, THEME.tool_failed),
-        Some("completed") => ("完成", icons::CHECK, THEME.tool_finished),
-        _ if row.status == ToolStatus::Failed => ("失败", icons::CLOSE, THEME.tool_failed),
-        _ => ("运行中", icons::LOADING, THEME.tool_running),
+    let id = super::tool_display::agent_session_id(&row.output).filter(|_| width >= 6);
+    let padding = if width >= 8 { "  " } else { " " };
+    let button_width = if id.is_some() {
+        "查看".width() + padding.width() * 2
+    } else {
+        0
     };
-    let task = args["task"]
-        .as_str()
-        .or(args["message"].as_str())
-        .unwrap_or("委派任务");
-    let title = safe_output(&format!("{role} · {task}"));
-    let id = super::tool_display::agent_session_id(&row.output);
-    let label = if id.is_some() { " 查看" } else { "" };
-    let prefix = format!("  {icon} ");
-    let available = usize::from(width).saturating_sub(prefix.width() + label.width());
-    let mut header = LinkedLine::plain(Line::from(vec![
-        Span::styled(prefix, Style::default().fg(color)),
-        Span::styled(
-            fit_label(&title, available, false),
+    let available = usize::from(width).saturating_sub(button_width);
+    let name = fit_label(&row.name, available, false);
+    let remaining = available.saturating_sub(name.width() + 1);
+    let mut spans = vec![Span::styled(name, Style::default().fg(color))];
+    let mut decoration = Vec::new();
+    if remaining > 0 {
+        let mut statistics = vec![status(row, &value).into()];
+        statistics.extend(self::statistics(&value));
+        let statistics = fit_label(
+            &format!(" · {}", statistics.join(" · ")),
+            remaining.saturating_sub(8),
+            false,
+        );
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            fit_label(
+                &safe_output(&format!("{role} · {}", task(&args))),
+                remaining.saturating_sub(statistics.width()),
+                false,
+            ),
             Style::default().fg(THEME.tool_summary),
-        ),
-    ]))
-    .decorate(&[0]);
+        ));
+        decoration.push(spans.len());
+        spans.push(Span::styled(
+            statistics,
+            Style::default().fg(THEME.tool_detail),
+        ));
+    }
+    let mut header = LinkedLine::plain(Line::from(spans));
     header.links.clear();
     if let Some(id) = id {
+        header.line.spans.push(Span::raw(padding));
         let start = header.line.to_string().len();
+        decoration.push(header.line.spans.len());
         header.line.spans.push(Span::styled(
-            label,
+            "查看",
             Style::default()
                 .fg(THEME.accent)
                 .add_modifier(Modifier::UNDERLINED),
         ));
+        header.line.spans.push(Span::raw(padding));
         header.links.push(LinkTarget {
             start,
-            end: start + label.len(),
+            end: start + "查看".len(),
             url: format!("orbit://session/{id}"),
         });
     }
-    let seconds = value["elapsed_seconds"]
-        .as_u64()
-        .or_else(|| value["elapsed_ms"].as_u64().map(|ms| ms / 1000));
-    let calls = value["tool_calls"]
-        .as_u64()
-        .or(value["_activity"]["tool_calls"].as_u64());
-    let current = value["_activity"]["current"]
-        .as_str()
-        .filter(|text| !text.is_empty() && row.status == ToolStatus::Running);
-    let mut statistics = Vec::new();
-    if let Some(calls) = calls {
-        statistics.push(format!("{calls} 次调用"));
+    Some(header.decorate(&decoration))
+}
+
+pub(super) fn details(row: &ToolRow, width: u16) -> Option<Vec<LinkedLine>> {
+    if !is_task(&row.name) {
+        return None;
     }
-    if let Some(seconds) = seconds {
-        statistics.push(format!("{seconds}s"));
-    }
-    let suffix = if statistics.is_empty() {
-        String::new()
-    } else {
-        format!(" · {}", statistics.join(" · "))
-    };
-    let available = usize::from(width).saturating_sub(4);
-    let detail = if suffix.width() < available {
-        format!(
-            "{}{}",
-            fit_label(
-                &safe_output(current.unwrap_or(status)),
-                available - suffix.width(),
-                false
-            ),
-            suffix
-        )
-    } else {
-        fit_label(&format!("{status}{suffix}"), available, false)
-    };
-    let mut lines = vec![
-        header,
-        LinkedLine::chrome(Line::styled(
-            format!("    {detail}"),
+    let args: Value = serde_json::from_str(&row.arguments).unwrap_or_default();
+    let value: Value = serde_json::from_str(&row.output).unwrap_or_default();
+    let mut lines = vec![LinkedLine::chrome(Line::styled(
+        activity(row, &value),
+        Style::default().fg(THEME.tool_detail),
+    ))];
+    if let Some(model) = value["model"].as_str() {
+        lines.push(LinkedLine::chrome(Line::styled(
+            safe_output(model),
             Style::default().fg(THEME.tool_detail),
-        )),
-    ];
-    // Generated metadata stays out of copied task text; result bodies use the shared renderer.
-    if expanded {
-        if let Some(model) = value["model"].as_str() {
-            lines.push(LinkedLine::chrome(Line::styled(
-                format!(
-                    "    {}",
-                    fit_label(
-                        &safe_output(model),
-                        usize::from(width).saturating_sub(4),
-                        false
-                    )
-                ),
-                Style::default().fg(THEME.tool_detail),
-            )));
-        }
-        lines.extend(
-            task.lines()
-                .flat_map(|line| {
-                    LinkedLine::plain(Line::from(safe_output(line))).wrap(width.saturating_sub(4))
-                })
-                .map(|line| line.framed(vec![Span::raw("    ")], vec![])),
-        );
-        for content in [
-            value["summary"].as_str(),
-            value["error"].as_str(),
-            (row.status == ToolStatus::Failed && value.is_null()).then_some(row.output.as_str()),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|text| !text.is_empty())
-        {
-            lines.extend(
-                super::markdown::document(content, width.saturating_sub(2))
-                    .into_iter()
-                    .flat_map(|line| line.wrap(width.saturating_sub(2)))
-                    .map(|line| line.framed(vec![Span::raw("  ")], vec![])),
-            );
-        }
+        )));
+    }
+    lines.extend(
+        task(&args)
+            .lines()
+            .map(|line| LinkedLine::plain(Line::from(safe_output(line)))),
+    );
+    for content in [
+        value["summary"].as_str(),
+        value["error"].as_str(),
+        (row.status == ToolStatus::Failed && value.is_null()).then_some(row.output.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|text| !text.is_empty())
+    {
+        lines.push(LinkedLine::plain(Line::default()));
+        lines.extend(super::markdown::document(content, width));
     }
     Some(lines)
 }

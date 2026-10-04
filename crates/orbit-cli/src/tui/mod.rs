@@ -33,6 +33,7 @@ mod tabs;
 pub mod terminal;
 pub mod theme;
 mod tool_display;
+mod tool_groups;
 mod transcript;
 mod wheel;
 mod workspace;
@@ -3288,6 +3289,13 @@ enum Action {
 
 fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
     let offset = state.max_scroll.saturating_sub(state.scroll);
+    if let Some(index) = state
+        .transcript_layout
+        .group_at(state.selection.viewport, offset, point)
+    {
+        toggle_transcript_group(state, index);
+        return true;
+    }
     let Some(index) = state.transcript_layout.disclosure_at(
         &state.transcript,
         state.selection.viewport,
@@ -3303,25 +3311,52 @@ fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
 }
 
 fn toggle_transcript_item(state: &mut UiState, index: usize) {
+    toggle_transcript(state, index, false);
+}
+
+fn toggle_transcript_group(state: &mut UiState, index: usize) {
+    toggle_transcript(state, index, true);
+}
+
+fn toggle_transcript(state: &mut UiState, index: usize, group: bool) {
     let offset = state.max_scroll.saturating_sub(state.scroll);
     let anchor = state.transcript_layout.anchor_at(offset);
-    let collapsing = state.expanded.contains(&index);
+    let expanded = if group {
+        &mut state.expanded_tool_groups
+    } else {
+        &mut state.expanded
+    };
+    let collapsing = expanded.contains(&index);
     let start = state.transcript_layout.item_offset(index).unwrap_or(offset);
     let end = state
         .transcript_layout
-        .item_offset(index + 1)
+        .item_offset(if group {
+            state
+                .transcript_layout
+                .group_range(index)
+                .map_or(index + 1, |range| range.end)
+        } else {
+            index + 1
+        })
         .unwrap_or_else(|| state.transcript_layout.height());
     let viewport_in_collapsing_item = collapsing && (start..end).contains(&offset);
     if collapsing {
-        state.expanded.remove(&index);
+        expanded.remove(&index);
     } else {
-        state.expanded.insert(index);
+        expanded.insert(index);
+    }
+    if group
+        && collapsing
+        && let Some(range) = state.transcript_layout.group_range(index)
+    {
+        state.expanded.retain(|index| !range.contains(index));
     }
     state.follow_bottom = false;
     state.selection.clear();
     state.transcript_layout.update_expanded(
         &state.transcript,
         &state.expanded,
+        &state.expanded_tool_groups,
         state.selection.viewport.width,
     );
     state.max_scroll = state
@@ -3509,14 +3544,44 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
             KeyCode::Char('o') => {
                 let offset = state.max_scroll.saturating_sub(state.scroll);
 
-                if let Some(index) = state.expanded.iter().next_back().copied().or_else(|| {
-                    state.transcript_layout.visible_collapsible(
+                if let Some(index) = state
+                    .expanded
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|index| state.transcript_layout.tool_offset(*index).is_some())
+                {
+                    toggle_transcript_item(state, index);
+                } else if let Some(index) =
+                    state
+                        .expanded_tool_groups
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|index| {
+                            state
+                                .transcript_layout
+                                .group_range(*index)
+                                .is_some_and(|range| range.start == *index)
+                        })
+                {
+                    toggle_transcript_group(state, index);
+                } else {
+                    let group = state
+                        .transcript_layout
+                        .visible_group(offset, state.selection.viewport.height as usize);
+                    let item = state.transcript_layout.visible_collapsible(
                         &state.transcript,
                         offset,
                         state.selection.viewport.height as usize,
-                    )
-                }) {
-                    toggle_transcript_item(state, index);
+                    );
+                    match (group, item) {
+                        (Some(group), item) if item.is_none_or(|item| group >= item) => {
+                            toggle_transcript_group(state, group)
+                        }
+                        (_, Some(item)) => toggle_transcript_item(state, item),
+                        _ => {}
+                    }
                 }
             }
 

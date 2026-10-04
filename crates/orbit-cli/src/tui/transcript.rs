@@ -285,6 +285,8 @@ fn byte_at_column(text: &str, range: &Range<usize>, column: u16) -> Option<usize
 struct Entry {
     rows: Vec<Row>,
     disclosures: Vec<usize>,
+    tool_group: Option<Range<usize>>,
+    group_header: bool,
     height: usize,
     end: usize,
     // Reuse completed lines for append-only deltas. Edits discard the entry.
@@ -566,6 +568,7 @@ pub(super) struct TranscriptLayout {
     entries: Vec<Entry>,
     width: u16,
     expanded: std::collections::BTreeSet<usize>,
+    expanded_groups: std::collections::BTreeSet<usize>,
     dirty_from: usize,
 }
 
@@ -577,10 +580,6 @@ pub(super) struct TranscriptAnchor {
 }
 
 impl TranscriptLayout {
-    pub(super) fn width(&self) -> u16 {
-        self.width
-    }
-
     pub(super) fn anchor_at(&self, offset: usize) -> Option<TranscriptAnchor> {
         let entry_index = self.entries.partition_point(|entry| entry.end <= offset);
         let entry = self.entries.get(entry_index)?;
@@ -604,6 +603,11 @@ impl TranscriptLayout {
 
     pub(super) fn offset_for_anchor(&self, anchor: TranscriptAnchor) -> Option<usize> {
         let entry = self.entries.get(anchor.entry)?;
+        if entry.height == 0
+            && let Some(group) = &entry.tool_group
+        {
+            return self.item_offset(group.start);
+        }
         let row = entry.rows.get(anchor.row)?;
         let wrapped = row
             .ranges
@@ -620,19 +624,30 @@ impl TranscriptLayout {
 
     /// Discard cached source offsets when text is edited or entries are removed.
     pub(super) fn reset_from(&mut self, index: usize) {
+        let index = self
+            .entries
+            .get(index)
+            .and_then(|entry| entry.tool_group.as_ref())
+            .map_or(index, |group| group.start);
         self.entries.truncate(index);
         self.invalidate_from(index);
     }
 
     #[cfg(test)]
     pub fn update(&mut self, items: &[TranscriptItem], expanded: Option<usize>, width: u16) {
-        self.update_expanded(items, &expanded.into_iter().collect(), width);
+        self.update_expanded(
+            items,
+            &expanded.into_iter().collect(),
+            &Default::default(),
+            width,
+        );
     }
 
     pub fn update_expanded(
         &mut self,
         items: &[TranscriptItem],
         expanded: &std::collections::BTreeSet<usize>,
+        expanded_groups: &std::collections::BTreeSet<usize>,
         width: u16,
     ) {
         if self.width != width || items.len() < self.entries.len() {
@@ -648,19 +663,48 @@ impl TranscriptLayout {
             self.expanded = expanded.clone();
         }
 
+        if &self.expanded_groups != expanded_groups {
+            if let Some(index) = self
+                .expanded_groups
+                .symmetric_difference(expanded_groups)
+                .next()
+                .copied()
+            {
+                self.invalidate_from(index);
+            }
+            self.expanded_groups = expanded_groups.clone();
+        }
+
         if width == 0 {
             return;
         }
 
         let first = self.dirty_from.min(self.entries.len());
+        // Appends can change the previous entry's group or trailing spacing.
+        let first = if first == self.entries.len() && first < items.len() {
+            first.saturating_sub(1)
+        } else {
+            first
+        };
+        let first = self
+            .entries
+            .get(first)
+            .and_then(|entry| entry.tool_group.as_ref())
+            .map_or(first, |group| group.start);
+        let first = super::tool_groups::start(items, first);
         self.entries.resize_with(items.len(), Entry::default);
         let mut end = first.checked_sub(1).map_or(0, |i| self.entries[i].end);
+        let mut group = first..first;
 
         for (relative, (entry, item)) in self.entries[first..]
             .iter_mut()
             .zip(&items[first..])
             .enumerate()
         {
+            let item_index = first + relative;
+            if item_index >= group.end {
+                group = super::tool_groups::range(items, item_index);
+            }
             match item {
                 TranscriptItem::Assistant(text) => entry.stream(text, false, width),
                 TranscriptItem::Thinking(row) if !row.finished => {
@@ -682,19 +726,56 @@ impl TranscriptLayout {
                 }
                 TranscriptItem::Tool(row) => {
                     *entry = Entry::default();
-                    let item_index = first + relative;
                     let is_expanded = expanded.contains(&item_index);
-                    let next_is_tool =
-                        matches!(items.get(item_index + 1), Some(TranscriptItem::Tool(_)));
-
-                    for line in render::tool_card_with_links(row, is_expanded, width) {
-                        if !line.line.to_string().is_empty() {
-                            entry.disclosures.push(entry.rows.len());
+                    let grouped = group.len() > 1;
+                    let group_open = expanded_groups.contains(&group.start);
+                    let next = if grouped && !group_open {
+                        group.end
+                    } else {
+                        item_index + 1
+                    };
+                    let next_is_tool = matches!(items.get(next), Some(TranscriptItem::Tool(_)));
+                    if grouped {
+                        entry.tool_group = Some(group.clone());
+                        if item_index == group.start {
+                            entry.group_header = true;
+                            entry.push_linked(
+                                super::tool_groups::header(&items[group.clone()], width),
+                                width,
+                            );
                         }
-                        entry.push_linked(line, width);
                     }
-
-                    if !next_is_tool {
+                    if !grouped || group_open {
+                        let inset = if grouped { 2.min(width / 4) } else { 0 };
+                        let (lines, header) = if grouped {
+                            let section = super::tool_groups::section(
+                                row,
+                                is_expanded,
+                                width - inset * 2,
+                                item_index == group.start,
+                                item_index + 1 == group.end,
+                            );
+                            (section.lines, Some(section.header))
+                        } else {
+                            (render::tool_card_with_links(row, is_expanded, width), None)
+                        };
+                        for (index, line) in lines.into_iter().enumerate() {
+                            if header.map_or_else(
+                                || !line.line.to_string().is_empty(),
+                                |header| header == index,
+                            ) {
+                                entry.disclosures.push(entry.rows.len());
+                            }
+                            entry.push_linked(
+                                line.framed(
+                                    vec![Span::raw(" ".repeat(inset as usize))],
+                                    vec![Span::raw(" ".repeat(inset as usize))],
+                                ),
+                                width,
+                            );
+                        }
+                    }
+                    if !next_is_tool && (!grouped || item_index == group.start || group_open) {
                         entry.push(Line::from(""), width);
                     }
                 }
@@ -743,6 +824,7 @@ impl TranscriptLayout {
             .find_map(|(index, entry)| {
                 (entry.end > offset
                     && entry.end - entry.height < offset + height
+                    && !entry.disclosures.is_empty()
                     && (matches!(items.get(index), Some(TranscriptItem::Tool(_)))
                         || matches!(items.get(index), Some(TranscriptItem::Thinking(row)) if row.finished)))
                 .then_some(index)
@@ -753,6 +835,44 @@ impl TranscriptLayout {
         self.entries
             .get(index)
             .map(|entry| entry.end - entry.height)
+    }
+
+    pub(super) fn tool_offset(&self, index: usize) -> Option<usize> {
+        let entry = self.entries.get(index)?;
+        let row = entry.rows.get(*entry.disclosures.first()?)?;
+        Some(entry.end - entry.height + row.start)
+    }
+
+    pub(super) fn group_range(&self, index: usize) -> Option<Range<usize>> {
+        self.entries.get(index)?.tool_group.clone()
+    }
+
+    pub(super) fn visible_group(&self, offset: usize, height: usize) -> Option<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, entry)| {
+                (entry.group_header
+                    && entry.end > offset
+                    && entry.end - entry.height < offset + height)
+                    .then_some(index)
+            })
+    }
+
+    pub(super) fn group_at(&self, area: Rect, offset: usize, point: (u16, u16)) -> Option<usize> {
+        if !area.contains(point.into()) {
+            return None;
+        }
+        let absolute = offset + usize::from(point.1 - area.y);
+        let index = self.entries.partition_point(|entry| entry.end <= absolute);
+        let entry = self.entries.get(index)?;
+        if !entry.group_header {
+            return None;
+        }
+        let row = entry.rows.first()?;
+        let relative = absolute - (entry.end - entry.height);
+        (relative < row.height && usize::from(point.0 - area.x) < row.line.width()).then_some(index)
     }
 
     pub(super) fn disclosure_at(

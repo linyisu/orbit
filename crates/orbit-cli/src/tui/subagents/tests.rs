@@ -28,9 +28,9 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
             status:if status=="running" {ToolStatus::Running} else {ToolStatus::Finished},
             output:json!({"agent_id":"00000000000000000000000000000001","status":status,"model":"orbit::model","tool_calls":3,"elapsed_ms":12900,"_activity":{"current":"read_file crates/orbit-cli/src/tui/很长很长很长的文件名.rs"},"summary":"**检查完成**\n\n[证据](https://orbit.example/evidence)"}).to_string(),
         };
-        for width in [12, 30, 80] {
+        for width in [10, 11, 12, 30, 80] {
             for expanded in [false, true] {
-                let lines = card(&row, expanded, width).unwrap();
+                let lines = super::super::render::tool_card_with_links(&row, expanded, width);
                 assert!(
                     lines
                         .iter()
@@ -42,14 +42,49 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
                         .collect::<Vec<_>>()
                 );
                 assert!(
-                    lines[0]
+                    lines[usize::from(expanded)]
                         .links
                         .iter()
                         .any(|link| link.url.starts_with("orbit://session/"))
                 );
-                if width == 80 {
-                    assert!(lines[1].line.to_string().contains(expected));
-                    assert!(lines[1].line.to_string().contains("3 次调用 · 12s"));
+                let header = &lines[usize::from(expanded)];
+                let link = &header.links[0];
+                let text = header.line.to_string();
+                assert_eq!(&text[link.start..link.end], "查看");
+                assert!(text[..link.start].ends_with(' '));
+                assert!(text[link.end..].starts_with(' '));
+                assert!(
+                    header
+                        .line
+                        .spans
+                        .iter()
+                        .filter(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
+                        .all(|span| span.content == "查看")
+                );
+                if width == 80 && expanded {
+                    assert!(
+                        lines
+                            .iter()
+                            .any(|line| line.line.to_string().contains(expected))
+                    );
+                    assert!(
+                        lines
+                            .iter()
+                            .any(|line| line.line.to_string().contains("3 次调用 · 12s"))
+                    );
+                }
+                if expanded {
+                    assert!(lines.first().unwrap().line.to_string().starts_with('╭'));
+                    assert!(lines.last().unwrap().line.to_string().starts_with('╰'));
+                    assert!(lines[1..lines.len() - 1].iter().all(|line| {
+                        let text = line.line.to_string();
+                        text.starts_with('│') && text.ends_with('│')
+                    }));
+                } else {
+                    assert_eq!(lines.len(), 1);
+                    if width == 80 {
+                        assert!(text.contains("3 次调用 · 12s"));
+                    }
                 }
                 if expanded {
                     assert!(lines.iter().any(|line| {
@@ -57,16 +92,51 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
                             .iter()
                             .any(|link| link.url == "https://orbit.example/evidence")
                     }));
-                    assert!(
-                        lines
-                            .iter()
-                            .flat_map(|line| &line.line.spans)
-                            .any(|span| span.content.contains("检查完成")
-                                && span.style.add_modifier.contains(Modifier::BOLD))
-                    );
+                    let bold = lines
+                        .iter()
+                        .flat_map(|line| &line.line.spans)
+                        .filter(|span| span.style.add_modifier.contains(Modifier::BOLD))
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>();
+                    assert!(bold.contains("检查完成"));
                 }
             }
         }
+    }
+}
+
+#[test]
+fn subagent_results_and_rules_stay_inside_the_shared_tool_frame() {
+    for width in [12, 40, 160] {
+        let mut state = UiState::new("orbit::model");
+        state.transcript.push(TranscriptItem::Tool(ToolRow {
+            id: "orbit-report".into(),
+            name: "spawn_agent".into(),
+            arguments: json!({"task":"检查 Orbit 报告"}).to_string(),
+            status: ToolStatus::Finished,
+            output: json!({"agent_id":"00000000000000000000000000000001","status":"completed","summary":"# Orbit\n\n---\n\n```rust\n// Orbit 注释\nfn orbit() {}\n```"}).to_string(),
+        }));
+        state.expanded.insert(0);
+        let mut terminal = Terminal::new(TestBackend::new(width + 6, 50)).unwrap();
+        terminal
+            .draw(|frame| super::super::render::draw(frame, &mut state))
+            .unwrap();
+        let viewport = state.selection.viewport;
+        let buffer = terminal.backend().buffer();
+        let mut found = false;
+        for y in viewport.y..viewport.bottom() {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.fg == THEME.md_rule && cell.symbol() == "─" {
+                    found = true;
+                    assert!(x >= viewport.x + 2 && x < viewport.right() - 2);
+                    assert_eq!(buffer[(viewport.x, y)].symbol(), "│");
+                    assert_eq!(buffer[(viewport.right() - 1, y)].symbol(), "│");
+                    assert_eq!(buffer[(viewport.x, y)].fg, THEME.tool_border);
+                }
+            }
+        }
+        assert!(found, "width {width}");
     }
 }
 

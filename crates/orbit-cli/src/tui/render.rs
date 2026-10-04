@@ -556,12 +556,17 @@ pub(super) fn handle_transcript_hover(
 
     let offset = state.max_scroll.saturating_sub(state.scroll);
     let hit = |point| {
-        state.transcript_layout.disclosure_at(
-            &state.transcript,
-            state.selection.viewport,
-            offset,
-            point,
-        )
+        state
+            .transcript_layout
+            .group_at(state.selection.viewport, offset, point)
+            .or_else(|| {
+                state.transcript_layout.disclosure_at(
+                    &state.transcript,
+                    state.selection.viewport,
+                    offset,
+                    point,
+                )
+            })
     };
     let before = state
         .transcript_pointer
@@ -1040,14 +1045,15 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     let width = state.selection.viewport.width;
     let previous_max = state.max_scroll;
     let previous_offset = previous_max.saturating_sub(state.scroll);
-    let resize_anchor = (!state.follow_bottom
-        && state.transcript_layout.width() != 0
-        && state.transcript_layout.width() != width)
+    let scroll_anchor = (!state.follow_bottom)
         .then(|| state.transcript_layout.anchor_at(previous_offset))
         .flatten();
-    state
-        .transcript_layout
-        .update_expanded(&state.transcript, &state.expanded, width);
+    state.transcript_layout.update_expanded(
+        &state.transcript,
+        &state.expanded,
+        &state.expanded_tool_groups,
+        width,
+    );
     state.max_scroll = state
         .transcript_layout
         .height()
@@ -1055,7 +1061,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 
     if !state.follow_bottom {
         if let Some(offset) =
-            resize_anchor.and_then(|anchor| state.transcript_layout.offset_for_anchor(anchor))
+            scroll_anchor.and_then(|anchor| state.transcript_layout.offset_for_anchor(anchor))
         {
             state.scroll = state
                 .max_scroll
@@ -1082,12 +1088,17 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .draw(frame, state.selection.viewport, offset);
     if !state.selection.dragging()
         && let Some(point) = state.transcript_pointer
-        && let Some(index) = state.transcript_layout.disclosure_at(
-            &state.transcript,
-            state.selection.viewport,
-            offset,
-            point,
-        )
+        && let Some(index) = state
+            .transcript_layout
+            .group_at(state.selection.viewport, offset, point)
+            .or_else(|| {
+                state.transcript_layout.disclosure_at(
+                    &state.transcript,
+                    state.selection.viewport,
+                    offset,
+                    point,
+                )
+            })
     {
         match state.transcript.get(index) {
             Some(TranscriptItem::Thinking(_)) => {
@@ -1100,13 +1111,26 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 }
             }
             Some(TranscriptItem::Tool(row)) => {
-                let start = state.transcript_layout.item_offset(index).unwrap_or(0);
+                let group_header = state
+                    .transcript_layout
+                    .group_at(state.selection.viewport, offset, point)
+                    .is_some();
+                let start = if group_header {
+                    state.transcript_layout.item_offset(index)
+                } else {
+                    state.transcript_layout.tool_offset(index)
+                }
+                .unwrap_or(0);
                 let absolute =
                     offset + usize::from(point.1.saturating_sub(state.selection.viewport.y));
                 let relative = absolute.saturating_sub(start);
                 let expanded = state.expanded.contains(&index);
                 let header_lines =
-                    tool_header_line_count(row, expanded, state.selection.viewport.width);
+                    if group_header || state.transcript_layout.group_range(index).is_some() {
+                        1
+                    } else {
+                        tool_header_line_count(row, expanded, state.selection.viewport.width)
+                    };
 
                 if relative < header_lines {
                     for rel in 0..header_lines {
@@ -1587,15 +1611,69 @@ pub(super) fn tool_card_with_links(
 ) -> Vec<super::markdown::LinkedLine> {
     use super::markdown::LinkedLine;
     let width = if width == u16::MAX { 120 } else { width };
-    if let Some(lines) = super::subagents::card(row, expanded, width) {
-        return lines;
+
+    if !expanded || width < 10 {
+        let header = tool_title_with_links(row, false, width.saturating_sub(4));
+        return if width < 10 {
+            tool_title_with_links(row, false, width)
+        } else {
+            header
+                .into_iter()
+                .map(|line| line.framed(vec![Span::raw("  ")], vec![]))
+                .collect()
+        };
     }
+
+    let inner_width = width - 4;
+    let mut lines = vec![tool_border_line(width, ('╭', '╮'))];
+    lines.extend(
+        tool_title_with_links(row, true, inner_width)
+            .into_iter()
+            .map(|line| tool_frame_line(line, width)),
+    );
+    lines.push(tool_frame_line(LinkedLine::chrome(Line::default()), width));
+    lines.extend(
+        tool_body_with_links(row, inner_width)
+            .into_iter()
+            .map(|line| tool_frame_line(line, width)),
+    );
+    lines.push(tool_border_line(width, ('╰', '╯')));
+    lines
+}
+
+pub(super) fn tool_title_with_links(
+    row: &super::app::ToolRow,
+    expanded: bool,
+    width: u16,
+) -> Vec<super::markdown::LinkedLine> {
+    tool_title_with_summary(row, expanded, width, None)
+}
+
+pub(super) fn tool_group_title_with_links(
+    row: &super::app::ToolRow,
+    width: u16,
+) -> Vec<super::markdown::LinkedLine> {
+    tool_title_with_summary(
+        row,
+        false,
+        width,
+        Some(super::tool_display::group_call_summary(row)),
+    )
+}
+
+fn tool_title_with_summary(
+    row: &super::app::ToolRow,
+    expanded: bool,
+    width: u16,
+    summary: Option<String>,
+) -> Vec<super::markdown::LinkedLine> {
+    use super::markdown::LinkedLine;
     let color = match row.status {
         ToolStatus::Running => TOOL_RUNNING,
         ToolStatus::Finished => TOOL_FINISHED,
         ToolStatus::Failed => TOOL_FAILED,
     };
-    if width < 10 {
+    if width < 6 {
         return vec![LinkedLine::plain(Line::styled(
             super::tool_display::clipped(&row.name, width as usize),
             Style::default().fg(color),
@@ -1611,7 +1689,9 @@ pub(super) fn tool_card_with_links(
                 .find_map(|key| value[*key].as_str())
         })
         .unwrap_or("");
-    let command = if !expanded {
+    let command = if let Some(summary) = summary {
+        summary
+    } else if !expanded {
         super::tool_display::tool_summary(&row.name, &row.arguments, &row.output)
     } else {
         command.to_owned()
@@ -1640,59 +1720,28 @@ pub(super) fn tool_card_with_links(
         linked
     };
 
-    // Collapsed state: strictly 1 command line with colored command name and dimmed action summary
+    let mut header = super::subagents::header(row, color, width)
+        .map(|line| vec![line])
+        .unwrap_or_else(|| title(Line::from(title_spans)).wrap(width));
     if !expanded {
-        let mut full_title_spans = vec![Span::raw("  ")];
-        full_title_spans.extend(title_spans);
-        let title_width = width.saturating_sub(2);
-        let title_line = Line::from(full_title_spans);
-        let first_line = title(title_line)
-            .wrap(title_width)
-            .into_iter()
-            .next()
-            .unwrap();
-        return vec![first_line];
+        header.truncate(1);
     }
+    header
+}
 
-    // Expanded state: rounded enclosed card flush with user input frame
-    if width < 4 {
-        return vec![title(Line::from(title_spans))];
-    }
-
-    let border_style = Style::default().fg(crate::tui::theme::THEME.tool_border);
-    let inner_width = usize::from(width).saturating_sub(4);
-
-    let mut card_lines = Vec::new();
-
-    card_lines.push(LinkedLine::chrome(Line::from(Span::styled(
-        format!("╭{}╮", "─".repeat(inner_width + 2)),
-        border_style,
-    ))));
-
-    let header_line = Line::from(title_spans);
-    for h_line in title(header_line).wrap(inner_width as u16) {
-        let h_pad = inner_width.saturating_sub(h_line.line.width());
-        card_lines.push(h_line.framed(
-            vec![Span::styled("│ ", border_style)],
-            vec![
-                Span::raw(" ".repeat(h_pad)),
-                Span::styled(" │", border_style),
-            ],
-        ));
-    }
-
-    card_lines.push(LinkedLine::chrome(Line::from(vec![
-        Span::styled("│ ", border_style),
-        Span::raw(" ".repeat(inner_width)),
-        Span::styled(" │", border_style),
-    ])));
-
-    let mut details = tool_details(row, true, inner_width as u16);
-    if !details.is_empty() {
-        details.remove(0);
-    }
-    let toggle = super::tool_display::toggle_line(true, inner_width as u16);
-    let collapse = super::tool_display::toggle_line(false, inner_width as u16);
+pub(super) fn tool_body_with_links(
+    row: &super::app::ToolRow,
+    width: u16,
+) -> Vec<super::markdown::LinkedLine> {
+    let mut details = super::subagents::details(row, width).unwrap_or_else(|| {
+        let mut details = tool_details(row, true, width);
+        if !details.is_empty() {
+            details.remove(0);
+        }
+        details
+    });
+    let toggle = super::tool_display::toggle_line(true, width);
+    let collapse = super::tool_display::toggle_line(false, width);
     details.retain(|linked| linked.line != toggle && linked.line != collapse);
     while details
         .last()
@@ -1701,6 +1750,7 @@ pub(super) fn tool_card_with_links(
         details.pop();
     }
 
+    let mut lines = Vec::new();
     for mut linked in details {
         if linked.line.to_string().starts_with("    ") {
             let mut remaining = 4;
@@ -1728,46 +1778,57 @@ pub(super) fn tool_card_with_links(
             }
         }
         line.spans.retain(|span| !span.content.is_empty());
-        if super::markdown::expand_rule(line, inner_width as u16) {
+        if super::markdown::expand_rule(line, width) {
             linked.decorations = std::iter::once(0..line.to_string().len()).collect();
         }
 
-        for sub in linked.wrap(inner_width as u16) {
-            let pad = inner_width.saturating_sub(sub.line.width());
-            let line_bg = sub
-                .line
-                .spans
-                .first()
-                .and_then(|s| s.style.bg)
-                .filter(|bg| sub.line.spans.iter().all(|s| s.style.bg == Some(*bg)));
-
-            let (leading, trailing) = if let Some(bg) = line_bg {
-                (
-                    vec![
-                        Span::styled("│", border_style),
-                        Span::styled(" ", Style::default().bg(bg)),
-                    ],
-                    vec![
-                        Span::styled(" ".repeat(pad + 1), Style::default().bg(bg)),
-                        Span::styled("│", border_style),
-                    ],
-                )
-            } else {
-                (
-                    vec![Span::styled("│ ", border_style)],
-                    vec![Span::raw(" ".repeat(pad)), Span::styled(" │", border_style)],
-                )
-            };
-            card_lines.push(sub.framed(leading, trailing));
-        }
+        lines.extend(linked.wrap(width));
     }
+    lines
+}
 
-    card_lines.push(LinkedLine::chrome(Line::from(Span::styled(
-        format!("╰{}╯", "─".repeat(inner_width + 2)),
-        border_style,
-    ))));
+pub(super) fn tool_border_line(width: u16, ends: (char, char)) -> super::markdown::LinkedLine {
+    super::markdown::LinkedLine::chrome(Line::from(Span::styled(
+        format!(
+            "{}{}{}",
+            ends.0,
+            "─".repeat(width.saturating_sub(2) as usize),
+            ends.1
+        ),
+        Style::default().fg(THEME.tool_border),
+    )))
+}
 
-    card_lines
+pub(super) fn tool_frame_line(
+    linked: super::markdown::LinkedLine,
+    width: u16,
+) -> super::markdown::LinkedLine {
+    let border_style = Style::default().fg(THEME.tool_border);
+    let pad = usize::from(width.saturating_sub(4)).saturating_sub(linked.line.width());
+    let line_bg = linked
+        .line
+        .spans
+        .first()
+        .and_then(|s| s.style.bg)
+        .filter(|bg| linked.line.spans.iter().all(|s| s.style.bg == Some(*bg)));
+    let (leading, trailing) = if let Some(bg) = line_bg {
+        (
+            vec![
+                Span::styled("│", border_style),
+                Span::styled(" ", Style::default().bg(bg)),
+            ],
+            vec![
+                Span::styled(" ".repeat(pad + 1), Style::default().bg(bg)),
+                Span::styled("│", border_style),
+            ],
+        )
+    } else {
+        (
+            vec![Span::styled("│ ", border_style)],
+            vec![Span::raw(" ".repeat(pad)), Span::styled(" │", border_style)],
+        )
+    };
+    linked.framed(leading, trailing)
 }
 
 #[cfg(test)]
@@ -3192,10 +3253,10 @@ mod tests {
 
         assert!(render(&mut state, 100, 30).contains("reasoning visible now"));
 
-        for id in ["older", "latest"] {
+        for (id, name) in [("older", "read_file"), ("latest", "search_text")] {
             state.transcript.push(TranscriptItem::Tool(ToolRow {
                 id: id.into(),
-                name: "read_file".into(),
+                name: name.into(),
                 arguments: "{}".into(),
                 status: ToolStatus::Finished,
                 output: format!("first\nsecond\nthird\n{id}-detail"),

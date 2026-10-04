@@ -158,6 +158,131 @@ pub(super) fn read_image_summary(arguments: &str) -> String {
     super::render::compact_preview(path, 60)
 }
 
+fn summary_line(text: &str, limit: usize) -> String {
+    let line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default();
+    super::render::compact_preview(
+        &line.split_whitespace().collect::<Vec<_>>().join(" "),
+        limit,
+    )
+}
+
+fn agent_read_target(output: &Value) -> String {
+    output["agent"]["task"]
+        .as_str()
+        .filter(|task| !task.trim().is_empty())
+        .map(|task| summary_line(task, 36))
+        .unwrap_or_else(|| "子代理".into())
+}
+
+fn agent_read_detail(args: &Value, out: &Value) -> String {
+    if args["agent_id"].as_str().is_none() {
+        return out["total"]
+            .as_u64()
+            .map(|total| format!("{total} 个子任务"))
+            .unwrap_or_else(|| "子任务列表".into());
+    }
+    let view = out["view"].as_str().or(args["view"].as_str());
+    if out["result_available"] == false {
+        return match out["status"].as_str() {
+            Some("failed" | "cancelled" | "interrupted") => "任务未完成，没有最终结果",
+            _ => "结果尚未生成",
+        }
+        .into();
+    }
+    let content = out["content"].as_str().unwrap_or_default();
+    if content.is_empty() {
+        return if out.is_null() {
+            "读取中"
+        } else {
+            "没有后续记录"
+        }
+        .into();
+    }
+    if view == Some("result") {
+        return format!("最终结果 · {}", summary_line(content, 100));
+    }
+    if let Ok(record) = serde_json::from_str::<Value>(content) {
+        if let Some(calls) = record["tool_calls"]
+            .as_array()
+            .filter(|calls| !calls.is_empty())
+        {
+            let tools = calls
+                .iter()
+                .take(2)
+                .filter_map(|call| {
+                    let function = &call["function"];
+                    let name = function["name"].as_str()?;
+                    let summary =
+                        tool_summary(name, function["arguments"].as_str().unwrap_or("{}"), "");
+                    Some(format!("{name} {summary}").trim_end().to_owned())
+                })
+                .collect::<Vec<_>>()
+                .join("；");
+            if !tools.is_empty() {
+                return format!("工具调用 · {}", summary_line(&tools, 100));
+            }
+        }
+        if let Some(text) = record["content"].as_str() {
+            let label = match record["role"].as_str() {
+                Some("user") => "任务说明",
+                Some("tool") => "工具结果",
+                _ => "回答",
+            };
+            let result: Value = serde_json::from_str(text).unwrap_or_default();
+            let text = result["content"].as_str().unwrap_or(text);
+            return format!("{label} · {}", summary_line(text, 100));
+        }
+    }
+    if content.trim_start().starts_with('{') {
+        format!("执行记录片段 · 读取了 {} 字", content.chars().count())
+    } else {
+        format!("回答片段 · {}", summary_line(content, 100))
+    }
+}
+
+fn agent_read_summary(arguments: &str, output: &str) -> String {
+    let args: Value = serde_json::from_str(arguments).unwrap_or_default();
+    let out: Value = serde_json::from_str(output).unwrap_or_default();
+    let detail = agent_read_detail(&args, &out);
+    if args["agent_id"].as_str().is_some() {
+        format!("{} · {detail}", agent_read_target(&out))
+    } else {
+        detail
+    }
+}
+
+pub(super) fn group_target_summary(row: &ToolRow) -> String {
+    let args: Value = serde_json::from_str(&row.arguments).unwrap_or_default();
+    match row.name.as_str() {
+        "read_agent" if args["agent_id"].as_str().is_some() => {
+            agent_read_target(&serde_json::from_str(&row.output).unwrap_or_default())
+        }
+        "read_agent" => "子任务列表".into(),
+        "read_file" | "write_file" | "edit_file" | "read_image" | "read_document"
+        | "export_artifact" | "request_capability" => {
+            safe_output(args["path"].as_str().unwrap_or_default())
+        }
+        "list_files" | "project_overview" => {
+            safe_output(args["path"].as_str().unwrap_or("当前目录"))
+        }
+        _ => tool_summary(&row.name, &row.arguments, &row.output),
+    }
+}
+
+pub(super) fn group_call_summary(row: &ToolRow) -> String {
+    if row.name == "read_agent" {
+        agent_read_detail(
+            &serde_json::from_str(&row.arguments).unwrap_or_default(),
+            &serde_json::from_str(&row.output).unwrap_or_default(),
+        )
+    } else {
+        tool_summary(&row.name, &row.arguments, &row.output)
+    }
+}
+
 pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String {
     match name {
         "search_text" => search_summary(arguments),
@@ -171,6 +296,7 @@ pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String 
         "export_artifact" => export_artifact_summary(arguments, Some(output)),
         "git_export_patch" => git_export_patch_summary(Some(output)),
         "read_image" => read_image_summary(arguments),
+        "read_agent" => agent_read_summary(arguments, output),
         _ => super::render::default_tool_summary(arguments),
     }
 }
@@ -1259,6 +1385,57 @@ mod tests {
     }
 
     #[test]
+    fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
+        let args = json!({"agent_id":"orbit-agent","message_id":5601,"offset":4000}).to_string();
+        let mut tool = row(
+            "read_agent",
+            json!({
+                "agent":{"id":"orbit-agent","task":"审查 Orbit 渲染逻辑"},
+                "view":"result", "message_id":5601, "offset":4000, "next_offset":8000,
+                "content":"\n## 修复中文字符边界\n第二行不放进摘要",
+                "result_available":true
+            }),
+        );
+        tool.arguments = args.clone();
+        let original = tool.output.clone();
+        assert_eq!(group_target_summary(&tool), "审查 Orbit 渲染逻辑");
+        assert_eq!(group_call_summary(&tool), "最终结果 · ## 修复中文字符边界");
+        let summary = tool_summary(&tool.name, &tool.arguments, &tool.output);
+        assert_eq!(
+            summary,
+            "审查 Orbit 渲染逻辑 · 最终结果 · ## 修复中文字符边界"
+        );
+        assert!(!summary.contains("orbit-agent"));
+        assert!(!summary.contains("5601"));
+        assert!(!summary.contains("4000"));
+        assert!(!summary.contains("第二行"));
+        assert_eq!(tool.output, original);
+
+        for (content, expected) in [
+            (json!({"role":"user","content":"检查 Orbit 工具显示"}).to_string(), "任务说明 · 检查 Orbit 工具显示"),
+            (json!({"role":"assistant","content":null,"tool_calls":[{"metadata":{"signature":"orbit-signature"},"function":{"name":"read_file","arguments":json!({"path":"src/orbit.rs"}).to_string()}}]}).to_string(), "工具调用 · read_file src/orbit.rs"),
+            (json!({"role":"tool","content":json!({"content":"1: fn orbit() {}\n2: // Orbit"}).to_string()}).to_string(), "工具结果 · 1: fn orbit() {}"),
+            (json!({"role":"assistant","content":"Orbit 审查报告\n后续内容"}).to_string(), "回答 · Orbit 审查报告"),
+            (String::new(), "没有后续记录"),
+        ] {
+            tool.output = json!({"agent":{"task":"审查 Orbit 渲染逻辑"},"content":content,"total_characters":content.chars().count()}).to_string();
+            assert_eq!(group_call_summary(&tool), expected);
+        }
+
+        tool.output =
+            json!({"content":"{\"role\":\"assistant\",\"tool_calls\":[", "message_id":5601})
+                .to_string();
+        let summary = group_call_summary(&tool);
+        assert!(summary.starts_with("执行记录片段 · 读取了"));
+        assert!(!summary.contains("tool_calls"));
+        tool.output =
+            json!({"view":"result","result_available":false,"status":"running"}).to_string();
+        assert_eq!(group_call_summary(&tool), "结果尚未生成");
+        tool.output.clear();
+        assert_eq!(group_call_summary(&tool), "读取中");
+    }
+
+    #[test]
     fn memory_save_shows_title_and_scoped_preview_without_changing_the_result() {
         let content = format!(
             "审查结果：{}\n第二行\n第三行\n第四行",
@@ -1687,15 +1864,12 @@ mod subagent_tests {
             let row=ToolRow{id:"orbit-child-call".into(),name:"spawn_agent".into(),arguments:json!({"task":"审查 Orbit 中文标题与很长的补充上下文"}).to_string(),output:json!({"agent_id":id,"role":"review","model":"orbit::model","status":if status==ToolStatus::Running {"running"} else {"completed"},"summary":"**检查完成**"}).to_string(),status};
             for width in [12, 30, 80] {
                 let collapsed = super::super::render::tool_card_with_links(&row, false, width);
-                assert_eq!(collapsed.len(), 2);
+                assert_eq!(collapsed.len(), 1);
                 assert!(collapsed[0].line.to_string().contains("查看"));
                 assert!(collapsed[0].line.width() <= usize::from(width));
                 let link = &collapsed[0].links[0];
                 assert_eq!(link.url, format!("orbit://session/{id}"));
-                assert_eq!(
-                    &collapsed[0].line.to_string()[link.start..link.end],
-                    " 查看"
-                );
+                assert_eq!(&collapsed[0].line.to_string()[link.start..link.end], "查看");
                 let expanded = super::super::render::tool_card_with_links(&row, true, width);
                 assert!(
                     expanded
