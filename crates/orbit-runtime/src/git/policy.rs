@@ -142,7 +142,13 @@ impl GitCommandAnalysis {
                     idx += 1;
                 }
                 _ => {
-                    idx += 1;
+                    return Some(Self {
+                        raw_command: trimmed.into(),
+                        subcommand: String::new(),
+                        kind: GitOperationKind::CompoundOrShell {
+                            reason: format!("未审核的 Git 全局参数 {arg}，按通用 Shell 请求审批"),
+                        },
+                    });
                 }
             }
         }
@@ -154,8 +160,10 @@ impl GitCommandAnalysis {
                 .unwrap_or("")
                 .trim()
                 .to_lowercase();
-            if key == "core.hookspath" || key == "core.sshcommand" || key.starts_with("credential.")
-            {
+            if !matches!(
+                key.as_str(),
+                "color.ui" | "color.diff" | "color.status" | "core.quotepath" | "core.abbrev"
+            ) {
                 return Some(Self {
                     raw_command: trimmed.to_string(),
                     subcommand: "config".into(),
@@ -592,6 +600,34 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_changing_global_options_never_auto_approve_as_read_only() {
+        for command in [
+            "git --exec-path=/tmp status",
+            "git --exec-path /tmp status",
+            "git --config-env=core.fsmonitor=ORBIT_MONITOR status",
+            "git -c core.fsmonitor=/tmp/orbit-monitor status",
+            "git -ccore.fsmonitor=/tmp/orbit-monitor status",
+            "git -c diff.external=/tmp/orbit-diff diff",
+            "git -c core.pager=/tmp/orbit-pager log",
+            "git -c include.path=/tmp/orbit-config status",
+        ] {
+            assert!(
+                !matches!(
+                    GitCommandAnalysis::parse(command).unwrap().kind,
+                    GitOperationKind::ReadOnlyQuery { .. }
+                ),
+                "{command}"
+            );
+        }
+        assert!(matches!(
+            GitCommandAnalysis::parse("git -c color.ui=false status")
+                .unwrap()
+                .kind,
+            GitOperationKind::ReadOnlyQuery { .. }
+        ));
+    }
 
     #[test]
     fn parses_read_only_queries() {
