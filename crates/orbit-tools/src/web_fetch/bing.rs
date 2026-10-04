@@ -1,6 +1,8 @@
 use super::{SearchResult, checked_url};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use html2text::{Element, Handle};
+use html2text::Handle;
+
+use super::dom::{attribute as attr, find, find_class, text};
 
 pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
     let Ok(dom) = html2text::config::plain().parse_html(body.as_bytes()) else {
@@ -39,17 +41,6 @@ pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
     results
 }
 
-fn attr(node: &Handle, key: &str) -> Option<String> {
-    let Element { attrs, .. } = &node.data else {
-        return None;
-    };
-    attrs
-        .borrow()
-        .iter()
-        .find(|a| a.name.local.as_ref() == key)
-        .map(|a| a.value.to_string())
-}
-
 fn collect(node: &Handle, cards: &mut Vec<Handle>) {
     // Restrict extraction to organic results, excluding navigation and ads.
     if attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == "b_algo")) {
@@ -59,41 +50,6 @@ fn collect(node: &Handle, cards: &mut Vec<Handle>) {
     for child in node.children.borrow().iter() {
         collect(child, cards);
     }
-}
-
-fn find_class(node: &Handle, class: &str) -> Option<Handle> {
-    if attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == class)) {
-        return Some(node.clone());
-    }
-    node.children
-        .borrow()
-        .iter()
-        .find_map(|child| find_class(child, class))
-}
-
-fn find(node: &Handle, tag: &str) -> Option<Handle> {
-    if node.element_name().as_deref() == Some(tag) {
-        return Some(node.clone());
-    }
-    node.children
-        .borrow()
-        .iter()
-        .find_map(|child| find(child, tag))
-}
-
-fn text(node: &Handle) -> String {
-    let mut html = Vec::new();
-    for child in node.children.borrow().iter() {
-        if child.serialize(&mut html).is_err() {
-            return String::new();
-        }
-    }
-    html2text::config::plain_no_decorate()
-        .string_from_read(html.as_slice(), 4096)
-        .unwrap_or_default()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn target(href: &str) -> Option<String> {

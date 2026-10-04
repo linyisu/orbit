@@ -1,7 +1,10 @@
 //! Result URL identity and diversity; no relevance ranking or domain blacklist.
 use super::{SearchResult, checked_url};
-use html2text::{Element, Handle};
+use html2text::Handle;
+
+use super::dom::{attribute as attr, text};
 use std::collections::{HashMap, HashSet};
+
 const MAX_PER_HOST: usize = 3;
 
 fn canonical_url(value: &str) -> Option<String> {
@@ -20,6 +23,7 @@ fn canonical_url(value: &str) -> Option<String> {
     }
     Some(url.into())
 }
+
 pub(super) fn select(results: Vec<SearchResult>, limit: usize) -> Vec<SearchResult> {
     let mut seen = HashSet::new();
     let mut hosts = HashMap::new();
@@ -56,30 +60,6 @@ pub(super) fn duckduckgo(body: &str, limit: usize) -> Vec<SearchResult> {
     let Ok(dom) = html2text::config::plain().parse_html(body.as_bytes()) else {
         return Vec::new();
     };
-    fn attr(node: &Handle, key: &str) -> Option<String> {
-        let Element { attrs, .. } = &node.data else {
-            return None;
-        };
-        attrs
-            .borrow()
-            .iter()
-            .find(|a| a.name.local.as_ref() == key)
-            .map(|a| a.value.to_string())
-    }
-    fn text(node: &Handle) -> String {
-        let mut bytes = Vec::new();
-        for child in node.children.borrow().iter() {
-            if child.serialize(&mut bytes).is_err() {
-                return String::new();
-            }
-        }
-        html2text::config::plain_no_decorate()
-            .string_from_read(&bytes[..], 4096)
-            .unwrap_or_default()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
     fn collect(node: &Handle, results: &mut Vec<SearchResult>) {
         if attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == "result__a"))
             && let Some(href) = attr(node, "href")

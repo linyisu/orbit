@@ -1,5 +1,7 @@
 use super::{SearchResult, checked_url};
-use html2text::{Element, Handle};
+use html2text::Handle;
+
+use super::dom::{attribute, text};
 
 pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
     let Ok(dom) = html2text::config::plain().parse_html(body.as_bytes()) else {
@@ -45,18 +47,6 @@ pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
     results
 }
 
-fn attribute(node: &Handle, key: &str) -> Option<String> {
-    if let Element { attrs, .. } = &node.data {
-        attrs
-            .borrow()
-            .iter()
-            .find(|attr| attr.name.local.as_ref() == key)
-            .map(|attr| attr.value.to_string())
-    } else {
-        None
-    }
-}
-
 fn collect_headings(node: &Handle, headings: &mut Vec<Handle>) {
     if matches!(node.element_name().as_deref(), Some("h2" | "h3")) {
         headings.push(node.clone());
@@ -90,21 +80,6 @@ fn target_url(href: &str) -> Option<String> {
     redirect
         .query_pairs()
         .find_map(|(key, value)| matches!(key.as_ref(), "q" | "url").then(|| value.into_owned()))
-}
-
-fn text(node: &Handle) -> String {
-    let mut html = Vec::new();
-    for child in node.children.borrow().iter() {
-        if child.serialize(&mut html).is_err() {
-            return String::new();
-        }
-    }
-    html2text::config::plain_no_decorate()
-        .string_from_read(html.as_slice(), 4096)
-        .unwrap_or_default()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn result_snippet(heading: &Handle) -> String {

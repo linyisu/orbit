@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 mod bing;
 mod browser;
+mod dom;
 mod encoding;
 mod image;
 pub use image::fetch_image;
