@@ -14,14 +14,20 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{app::TranscriptItem, render};
 
+#[derive(Debug, Clone, Default)]
+pub(super) struct Decorations {
+    // Terminal column ranges, after wrapping and adding repeated gutters.
+    pub ranges: Vec<Range<usize>>,
+    pub chrome: bool,
+}
+
 #[derive(Debug)]
 struct Row {
     line: Line<'static>,
     wrapped: Vec<Line<'static>>,
     ranges: Vec<Range<usize>>,
     links: Vec<super::markdown::LinkTarget>,
-    // Terminal column ranges, grouped by wrapped physical line.
-    decorations: Vec<Vec<Range<usize>>>,
+    decorations: Vec<Decorations>,
     gutter: Option<Gutter>,
     start: usize,
     height: usize,
@@ -260,6 +266,7 @@ pub(super) fn wrap_linked_line(
                 line,
                 links,
                 decorations,
+                chrome: linked.chrome,
             }
         })
         .collect()
@@ -326,6 +333,7 @@ impl Entry {
                 line,
                 links,
                 decorations: Vec::new(),
+                chrome: false,
             },
             width,
         );
@@ -336,6 +344,7 @@ impl Entry {
         // Markdown rules occupy the entire transcript row, including the usual gutter.
         if super::markdown::expand_rule(line, width) {
             linked.decorations = std::iter::once(0..line.to_string().len()).collect();
+            linked.chrome = true;
         }
         render::sanitize_line(line);
         let original = line.to_string();
@@ -381,7 +390,10 @@ impl Entry {
                         excluded.push(prefix_width + start.width()..prefix_width + end.width());
                     }
                 }
-                excluded
+                Decorations {
+                    ranges: excluded,
+                    chrome: linked.chrome,
+                }
             })
             .collect();
         let height = wrapped.len();
@@ -916,6 +928,7 @@ impl TranscriptLayout {
             && relative < row.start + row.height
             && column < gutter + row.line.width()
             && !row.decorations[relative - row.start]
+                .ranges
                 .iter()
                 .any(|range| range.contains(&column)))
         .then_some(index)
@@ -968,23 +981,22 @@ impl TranscriptLayout {
     }
 
     pub(super) fn decorations(&self, absolute_row: usize) -> &[Range<usize>] {
-        let Some(entry) = self.entries.get(
+        self.selection_metadata(absolute_row)
+            .map_or(&[], |metadata| metadata.ranges.as_slice())
+    }
+
+    pub(super) fn selection_metadata(&self, absolute_row: usize) -> Option<&Decorations> {
+        let entry = self.entries.get(
             self.entries
                 .partition_point(|entry| entry.end <= absolute_row),
-        ) else {
-            return &[];
-        };
+        )?;
         let relative = absolute_row - (entry.end - entry.height);
-        let Some(row) = entry.rows.get(
+        let row = entry.rows.get(
             entry
                 .rows
                 .partition_point(|row| row.start + row.height <= relative),
-        ) else {
-            return &[];
-        };
-        row.decorations
-            .get(relative - row.start)
-            .map_or(&[], Vec::as_slice)
+        )?;
+        row.decorations.get(relative - row.start)
     }
 
     pub(super) fn link_at(&self, area: Rect, offset: usize, point: (u16, u16)) -> Option<&str> {

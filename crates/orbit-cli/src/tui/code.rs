@@ -370,6 +370,7 @@ fn styled_row(
     super::markdown::LinkedLine {
         line: Line::from(spans),
         links,
+        chrome: false,
         decorations: if prefix_length == 0 {
             Vec::new()
         } else {

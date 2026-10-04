@@ -50,7 +50,7 @@ pub struct Selection {
     cleared_on_press: bool,
     extend: bool,
     rows: BTreeMap<usize, Vec<Cell>>,
-    decorations: BTreeMap<usize, Vec<std::ops::Range<usize>>>,
+    decorations: BTreeMap<usize, super::transcript::Decorations>,
     filled: Option<(usize, usize)>,
     latest: Option<Buffer>,
     frozen: Option<Buffer>,
@@ -322,7 +322,7 @@ impl Selection {
         {
             self.decorations
                 .entry(row)
-                .or_insert_with(|| layout.decorations(row).to_vec());
+                .or_insert_with(|| layout.selection_metadata(row).cloned().unwrap_or_default());
         }
 
         if self.region != Some(Region::Transcript) {
@@ -347,7 +347,7 @@ impl Selection {
         for row in start.1..=end.1 {
             self.decorations
                 .entry(row)
-                .or_insert_with(|| layout.decorations(row).to_vec());
+                .or_insert_with(|| layout.selection_metadata(row).cloned().unwrap_or_default());
             self.rows.entry(row).or_insert_with(|| {
                 let area = Rect::new(0, 0, self.viewport.width, 1);
                 let mut buffer = Buffer::empty(area);
@@ -366,6 +366,11 @@ impl Selection {
             let Some((left, right)) = self.selected_columns(row) else {
                 continue;
             };
+            let metadata = self.row_decorations(row);
+            if metadata.is_some_and(|metadata| metadata.chrome) {
+                continue;
+            }
+            let decorations = metadata.map_or(&[][..], |metadata| metadata.ranges.as_slice());
 
             let mut text = String::new();
             let mut x = 0;
@@ -374,7 +379,18 @@ impl Selection {
                 let width = cells[x].symbol().width().max(1);
 
                 if x <= right as usize && x + width > left as usize {
-                    text.push_str(cells[x].symbol());
+                    if decorations
+                        .iter()
+                        .any(|range| range.start < x + width && range.end > x)
+                    {
+                        // Remove gutters, but keep interior columns separated (e.g. tables).
+                        // Trailing padding is trimmed with the rest of the terminal row.
+                        if !text.is_empty() {
+                            text.extend(std::iter::repeat_n(' ', width));
+                        }
+                    } else {
+                        text.push_str(cells[x].symbol());
+                    }
                 }
 
                 x += width;
@@ -384,6 +400,12 @@ impl Selection {
         }
 
         lines.join("\n")
+    }
+
+    fn row_decorations(&self, row: usize) -> Option<&super::transcript::Decorations> {
+        (self.region == Some(Region::Transcript))
+            .then(|| self.decorations.get(&row))
+            .flatten()
     }
 
     pub fn draw_frozen(&mut self, frame: &mut Frame<'_>) -> bool {
@@ -422,11 +444,9 @@ impl Selection {
                 continue;
             };
 
-            let decorations = if self.region == Some(Region::Transcript) {
-                self.decorations.get(&row).map_or(&[][..], Vec::as_slice)
-            } else {
-                &[][..]
-            };
+            let decorations = self
+                .row_decorations(row)
+                .map_or(&[][..], |metadata| metadata.ranges.as_slice());
             let is_content = |index: usize| {
                 !cells[index].symbol().trim().is_empty()
                     && !decorations.iter().any(|range| range.contains(&index))
@@ -512,6 +532,133 @@ mod tests {
 
         (state, terminal)
     }
+
+    fn select_transcript(items: &[TranscriptItem], width: u16, expanded: &[usize]) -> Selection {
+        let mut layout = super::super::transcript::TranscriptLayout::default();
+        layout.update_expanded(
+            items,
+            &expanded.iter().copied().collect(),
+            &Default::default(),
+            width,
+        );
+        let mut selection = Selection {
+            viewport: Rect::new(3, 2, width, layout.height() as u16),
+            region: Some(Region::Transcript),
+            anchor: Some((0, 0)),
+            end: Some((width - 1, layout.height() - 1)),
+            moved: true,
+            ..Default::default()
+        };
+        selection.transcript_view(0, &layout);
+        selection
+    }
+
+    #[test]
+    fn copying_code_omits_generated_frame_but_keeps_source_indentation_and_blank_lines() {
+        let source = "fn main() {\n    let glyphs = \"│─╭╮┊\";\n\n    println!(\"你好 👩‍💻\");\n}";
+        let mut selection = select_transcript(
+            &[TranscriptItem::Assistant(format!("```rust\n{source}\n```"))],
+            80,
+            &[],
+        );
+        assert_eq!(selection.text().trim_end_matches('\n'), source);
+
+        // Selecting just the language badge and top border copies nothing.
+        selection.end = Some((79, 0));
+        assert_eq!(selection.text(), "");
+    }
+
+    #[test]
+    fn copying_thinking_and_nested_code_omits_both_rails_even_after_wrapping() {
+        let source = "先检查你好 👩‍💻\n\n```text\n    保留缩进与正文 │─\n\n最后一行\n```\n检查完成";
+        for width in [16, 80] {
+            let selection = select_transcript(
+                &[TranscriptItem::Thinking(source.to_owned().into())],
+                width,
+                &[],
+            );
+            let copied = selection.text();
+            assert_eq!(
+                copied.replace(['\n', ' '], ""),
+                "先检查你好👩‍💻保留缩进与正文│─最后一行检查完成"
+            );
+            if width == 80 {
+                assert_eq!(
+                    copied.trim_end_matches('\n'),
+                    "先检查你好 👩‍💻\n\n    保留缩进与正文 │─\n\n最后一行\n检查完成"
+                );
+            }
+            assert!(copied.contains("    保留"));
+            assert!(!copied.contains(['┊', '╭', '╰']));
+            assert!(copied.contains("👩‍💻\n\n"));
+            assert!(copied.contains("\n\n最后一行"));
+        }
+    }
+
+    #[test]
+    fn partial_and_reversed_copy_include_whole_wide_glyphs_without_the_code_rail() {
+        let mut selection = select_transcript(
+            &[TranscriptItem::Assistant("```text\n你好 👩‍💻 │─\n```".into())],
+            40,
+            &[],
+        );
+        // Both endpoints touch a half of a wide Chinese glyph.
+        for (anchor, end) in [((5, 1), (7, 1)), ((7, 1), (5, 1))] {
+            selection.anchor = Some(anchor);
+            selection.end = Some(end);
+            assert_eq!(selection.text(), "你好");
+        }
+        selection.anchor = Some((0, 1));
+        selection.end = Some((7, 1));
+        assert_eq!(selection.text(), "你好");
+    }
+
+    #[test]
+    fn copying_message_and_tool_frames_keeps_literal_borders_and_body_blank_lines() {
+        use super::super::app::{ToolRow, ToolStatus};
+        use serde_json::json;
+
+        let source = "    first │─╭╮\n\n    second 你好";
+        let user = select_transcript(&[TranscriptItem::User(source.into())], 60, &[]);
+        assert_eq!(user.text().trim_end_matches('\n'), source);
+
+        let tool = select_transcript(
+            &[TranscriptItem::Tool(ToolRow {
+                id: "read".into(),
+                name: "read_file".into(),
+                arguments: json!({"path": "example.txt"}).to_string(),
+                status: ToolStatus::Finished,
+                output: json!({"path": "example.txt", "content": "1:     first │─╭╮\n2: \n3:     second 你好\n"}).to_string(),
+            })],
+            60,
+            &[0],
+        );
+        let copied = tool.text();
+        assert!(copied.starts_with("read_file example.txt"), "{copied:?}");
+        assert!(copied.contains(source), "{copied:?}");
+        assert!(!copied.contains('╰'));
+    }
+
+    #[test]
+    fn copying_tables_omits_grid_rows_and_keeps_columns_separate() {
+        let selection = select_transcript(
+            &[TranscriptItem::Assistant(
+                "| 名称 | 值 |\n|---|---|\n| Orbit | 你好 |".into(),
+            )],
+            60,
+            &[],
+        );
+        assert_eq!(
+            selection
+                .text()
+                .trim_end_matches('\n')
+                .lines()
+                .map(|line| line.split_whitespace().collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            [vec!["名称", "值"], vec!["Orbit", "你好"]]
+        );
+    }
+
     #[test]
     fn selected_markdown_and_code_keep_colors_and_wide_glyphs_through_redraws() {
         use ratatui::style::{Color, Modifier};
@@ -741,7 +888,9 @@ mod tests {
             assert!(selected > 20);
             assert!(padding > 0);
             assert!(badges >= 2);
-            assert!(state.selection.text().contains("│─"));
+            let copied = state.selection.text();
+            assert!(copied.contains("│─"));
+            assert!(!copied.contains(['╭', '╮', '╰', '╯', '┌', '┐', '└', '┘', '┊']));
             state.selection.clear();
             draw(&mut state, &mut terminal);
             assert_eq!(terminal.backend().buffer(), &before);

@@ -40,6 +40,8 @@ pub(super) struct LinkedLine {
     pub links: Vec<LinkTarget>,
     // UTF-8 byte ranges of generated borders, labels and padding.
     pub decorations: Vec<std::ops::Range<usize>>,
+    // A whole row of UI chrome; unlike an empty body row it adds no copied newline.
+    pub chrome: bool,
 }
 
 impl From<LinkedLine> for Line<'static> {
@@ -68,6 +70,7 @@ impl LinkedLine {
             line,
             links,
             decorations: Vec::new(),
+            chrome: false,
         }
     }
 
@@ -89,6 +92,7 @@ impl LinkedLine {
             line,
             links: Vec::new(),
             decorations: std::iter::once(0..end).collect(),
+            chrome: true,
         }
     }
 
@@ -211,6 +215,13 @@ impl Context<'_> {
         super::render::sanitize_line(&mut line);
         let code = was_code || fence.is_some();
         let code_header = !was_code && fence.is_some();
+        let chrome = code_header
+            || (was_code && fence.is_none())
+            || (!code
+                && line
+                    .spans
+                    .iter()
+                    .any(|span| span.style.fg == Some(THEME.md_rule)));
         let decorations = line
             .spans
             .iter()
@@ -234,6 +245,7 @@ impl Context<'_> {
             line,
             links,
             decorations: Vec::new(),
+            chrome,
         }
         .decorate(&decorations)
     }
@@ -652,6 +664,7 @@ impl Context<'_> {
                         line: cell,
                         links,
                         decorations: Vec::new(),
+                        chrome: false,
                     });
                 }
                 Event::End(pulldown_cmark::TagEnd::Table) => {
@@ -769,6 +782,7 @@ impl Context<'_> {
                         line: Line::from(spans),
                         links,
                         decorations: Vec::new(),
+                        chrome: false,
                     }
                     .decorate(&decorations),
                 );
@@ -827,6 +841,7 @@ fn labelled_table_rows(rows: &[Vec<LinkedLine>]) -> Vec<LinkedLine> {
                 line: Line::from(spans),
                 links,
                 decorations: Vec::new(),
+                chrome: false,
             });
         }
 
@@ -834,6 +849,7 @@ fn labelled_table_rows(rows: &[Vec<LinkedLine>]) -> Vec<LinkedLine> {
             line: Line::from(""),
             links: Vec::new(),
             decorations: Vec::new(),
+            chrome: false,
         });
     }
 
@@ -842,6 +858,7 @@ fn labelled_table_rows(rows: &[Vec<LinkedLine>]) -> Vec<LinkedLine> {
             line: cell.line.clone(),
             links: cell.links.clone(),
             decorations: cell.decorations.clone(),
+            chrome: cell.chrome,
         }));
     }
 
@@ -886,6 +903,7 @@ fn wrap_cell(cell: &LinkedLine, width: usize) -> Vec<LinkedLine> {
                 line,
                 links,
                 decorations,
+                chrome: cell.chrome,
             }
         })
         .collect()
@@ -1292,6 +1310,7 @@ mod tests {
             line: Line::from(text),
             links: Vec::new(),
             decorations: Vec::new(),
+            chrome: false,
         };
         let rows = vec![vec![cell("名称")], vec![cell("一"), cell("二")]];
 

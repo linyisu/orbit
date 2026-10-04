@@ -1811,6 +1811,7 @@ pub(super) fn tool_body_with_links(
         line.spans.retain(|span| !span.content.is_empty());
         if super::markdown::expand_rule(line, width) {
             linked.decorations = std::iter::once(0..line.to_string().len()).collect();
+            linked.chrome = true;
         }
 
         lines.extend(linked.wrap(width));
