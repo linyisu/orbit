@@ -58,7 +58,7 @@ impl Store {
         let progress = progress.clone();
 
         self.access(move |conn| {
-            let transaction = conn.transaction()?;
+            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let old: Option<String> = transaction
                 .query_row(
                     "SELECT payload FROM compaction_progress WHERE session_id=?1 AND source_fingerprint=?2",

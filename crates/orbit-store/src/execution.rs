@@ -44,7 +44,7 @@ impl Journal {
         let mut events = events;
         events.extend(event);
         self.store.access(move |conn| {
-            let transaction=conn.transaction()?;
+            let transaction=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let active:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND session_id=?2 AND status='running')",params![run,session],|r|r.get(0))?;
             ensure!(active,"checkpoint writer no longer owns an active run");
 

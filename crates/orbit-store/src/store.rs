@@ -606,7 +606,7 @@ impl Store {
         let delete_ids = session_ids.clone();
         let deleted = self
             .access(move |conn| {
-                let transaction = conn.transaction()?;
+                let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                 let exists: bool = transaction.query_row(
                     "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)",
                     [&session_id],
@@ -970,7 +970,7 @@ impl Store {
         let project_id = project_id.to_owned();
 
         self.access(move |conn| {
-            let transaction = conn.transaction()?;
+            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let project_exists: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
                 [&project_id],
@@ -1035,7 +1035,7 @@ impl Store {
         let project_id = project_id.to_owned();
 
         self.access(move |conn| {
-            let transaction = conn.transaction()?;
+            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let changed = transaction.execute(
                 "UPDATE project_tasks
                  SET title=COALESCE(?3,title), details=COALESCE(?4,details),
@@ -1083,7 +1083,7 @@ impl Store {
         validate_project_plugin(&plugin)?;
 
         self.access(move |conn| {
-            let transaction = conn.transaction()?;
+            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let project_exists: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
                 [&plugin.project_id],
@@ -1243,7 +1243,7 @@ impl Store {
         let session_id = session_id.to_owned();
 
         self.access(move |conn| {
-            let transaction = conn.transaction()?;
+            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let session_exists: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)",
                 [&session_id],
@@ -1276,7 +1276,7 @@ impl Store {
         let session_id = session_id.to_owned();
 
         self.access(move |conn| {
-            let transaction = conn.transaction()?;
+            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let changed = transaction.execute(
                 "UPDATE session_memories SET active=?3,updated_at=unixepoch() WHERE id=?1 AND session_id=?2",
                 params![id, session_id, active],
@@ -1439,7 +1439,8 @@ impl SessionWriter {
 
         self.store
             .access(move |conn| {
-                let tx = conn.transaction()?;
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                 let running: bool = tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM runs WHERE session_id=?1 AND status='running')",
                     [&id],
@@ -1531,7 +1532,7 @@ impl SessionWriter {
 
         let id = self.id.clone();
         let run = self.store.access(move |conn| {
-            let transaction = conn.transaction()?;
+            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             transaction.execute("INSERT INTO runs(session_id,prompt) VALUES(?1,?2)", params![id,prompt])?;
             let run = transaction.last_insert_rowid();
             let title: String = prompt.chars().take(80).collect();
@@ -1551,7 +1552,8 @@ impl SessionWriter {
 
         self.store
             .access(move |conn| {
-                let transaction = conn.transaction()?;
+                let transaction =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
                 for event in events {
                     transaction.execute(
@@ -1630,7 +1632,7 @@ impl SessionWriter {
         let id = self.id.clone();
         self.store
             .access(move |conn| {
-                let transaction = conn.transaction()?;
+                let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
                 for event in events {
                     transaction.execute(

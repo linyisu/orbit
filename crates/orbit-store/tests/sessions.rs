@@ -1229,3 +1229,37 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
         );
     }
 }
+
+#[tokio::test]
+async fn write_transactions_serialize_across_independent_store_connections() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("orbit.db");
+    let store = Store::open(&path).await.unwrap();
+    let project = store.resolve_project(dir.path()).await.unwrap();
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+    let mut writers = tokio::task::JoinSet::new();
+    for worker in 0..8 {
+        let connection = Store::open(&path).await.unwrap();
+        let project = project.id.clone();
+        let barrier = barrier.clone();
+        writers.spawn(async move {
+            barrier.wait().await;
+            for item in 0..20 {
+                connection
+                    .create_task(
+                        &project,
+                        None,
+                        format!("task {worker}/{item}"),
+                        String::new(),
+                        0,
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+    }
+    while let Some(result) = writers.join_next().await {
+        result.unwrap();
+    }
+    assert_eq!(store.tasks(&project.id, true).await.unwrap().len(), 160);
+}

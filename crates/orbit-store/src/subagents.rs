@@ -87,7 +87,7 @@ impl Store {
         );
         let parent = parent.to_owned();
         let id = self.access(move |conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             ensure!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE session_id=?1)", [&parent], |r| r.get::<_,bool>(0))?, "subagents cannot create nested agents");
             let (workspace, project, demo): (String,String,bool) = tx.query_row("SELECT workspace,project_id,demo FROM sessions WHERE id=?1", [&parent], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
             let id: String = tx.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
@@ -125,7 +125,7 @@ impl Store {
         let parent = parent.to_owned();
         let id = id.to_owned();
         self.access(move |conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let run: i64 = tx.query_row("SELECT id FROM runs WHERE session_id=?1 AND status='running' ORDER BY id DESC LIMIT 1", [&parent], |r|r.get(0)).context("parent agent has no active run")?;
             tx.execute("INSERT INTO agent_invocations(parent_session_id,parent_run_id,child_session_id,call) VALUES(?1,?2,?3,?4)",params![parent,run,id,serde_json::to_string(&call)?])?;
             let invocation = tx.last_insert_rowid();
@@ -169,7 +169,7 @@ impl Store {
         self.owned_subagent(parent, id).await?;
         let id = id.to_owned();
         self.access(move |conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let count: i64 = tx.query_row(
                 "SELECT count(*) FROM agent_messages WHERE session_id=?1 AND received=0",
                 [&id],

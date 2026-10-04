@@ -55,7 +55,7 @@ impl Store {
             .collect::<String>();
 
         self.access(move |conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute(
                 "INSERT OR IGNORE INTO context_archives(session_id,content_sha256) VALUES (?1,?2)",
                 params![session_id, fingerprint],
