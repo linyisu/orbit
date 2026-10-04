@@ -202,11 +202,11 @@ pub async fn run(
     if history_replay.is_none()
         && let Some(notice) = move_notice.take()
     {
-        state.transcript.push(TranscriptItem::CommandResult(notice));
+        state.report_local(TranscriptItem::CommandResult(notice));
     }
 
     for diagnostic in plugin_skill_diagnostics {
-        state.transcript.push(TranscriptItem::Notice(format!(
+        state.report_local(TranscriptItem::Notice(format!(
             "插件 Skill 未载入：{diagnostic}"
         )));
     }
@@ -344,7 +344,7 @@ pub async fn run(
             }
             if state.resume_request.is_none() && resume_task.is_none() && history_replay.is_none() {
                 for error in restore_errors.drain(..) {
-                    state.transcript.push(TranscriptItem::CommandError(error));
+                    state.report_local(TranscriptItem::CommandError(error));
                     dirty = true;
                 }
             }
@@ -417,7 +417,7 @@ pub async fn run(
                             state.compact_after_model_switch = true;
                             continue;
                         }
-                        Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
+                        Err(error) => state.report_local(TranscriptItem::CommandError(error.to_string())),
                     }
 
                     dirty = true;
@@ -439,7 +439,7 @@ pub async fn run(
                         model_options: &model_options,
                     },
                 ).await {
-                    state.transcript.push(TranscriptItem::CommandError(error.to_string()));
+                    state.report_local(TranscriptItem::CommandError(error.to_string()));
                 }
 
                 dirty = true;
@@ -459,7 +459,7 @@ pub async fn run(
                             CommandContext { tools: &tools, instructions: &instructions, skills: &skills,
                                 mcp_statuses: &mcp_statuses, model_options: &model_options }).await {
                             Ok(()) => { tabs.close_parked(&id); }
-                            Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
+                            Err(error) => state.report_local(TranscriptItem::CommandError(error.to_string())),
                         }
                     }
                 }
@@ -542,6 +542,13 @@ pub async fn run(
                         continue;
                     }
 
+                    if state.info_dialog.is_some() {
+                        dialogs::handle(&mut state, event);
+                        dirty = true;
+                        frames.request(time::Instant::now());
+                        continue;
+                    }
+
                     if update_tab_hover(&event, &mut state, &tabs) {
                         dirty = true;
                         frames.request(time::Instant::now());
@@ -592,8 +599,7 @@ pub async fn run(
                     }
 
                     // Handle the overlay before any obscured transcript hit targets.
-                    if state.picker.is_none() && state.model_picker.is_none()
-                        && state.marketplace_dialog.is_none() && !state.show_help
+                    if !state.dialog_open()
                         && state.approval.is_none()
                         && let Event::Mouse(mouse) = &event
                         && state.menu_area.contains((mouse.column, mouse.row).into())
@@ -625,20 +631,14 @@ pub async fn run(
                         && matches!(render::handle_context_hover(&mut state, &event), Some(true));
                     let link_hover_changed = !state.selection.dragging()
                         && !approval::file_modal(&state)
-                        && !state.show_help
-                        && state.picker.is_none()
-                        && state.model_picker.is_none()
-                        && state.marketplace_dialog.is_none()
+                        && !state.dialog_open()
                         && matches!(render::handle_link_hover(&mut state, &event), Some(true));
                     let transcript_hover_changed = !state.selection.dragging()
                         && !approval::file_modal(&state)
-                        && !state.show_help
-                        && state.picker.is_none()
-                        && state.model_picker.is_none()
-                        && state.marketplace_dialog.is_none()
+                        && !state.dialog_open()
                         && matches!(render::handle_transcript_hover(&mut state, &event), Some(true));
 
-                    if !state.selection.dragging() && !approval::file_modal(&state) && !state.show_help && state.picker.is_none() && state.model_picker.is_none() && state.marketplace_dialog.is_none()
+                    if !state.selection.dragging() && !approval::file_modal(&state) && !state.dialog_open()
                         && let Some(changed) = navigation::handle(&mut state, &event) {
                         if changed || context_hover_changed || link_hover_changed || transcript_hover_changed { dirty = true; frames.request(time::Instant::now()); }
 
@@ -651,7 +651,7 @@ pub async fn run(
                     dirty = true;
                     frames.request(time::Instant::now());
 
-                    if state.show_help || state.picker.is_some() || state.model_picker.is_some() || state.marketplace_dialog.is_some() {
+                    if state.dialog_open() {
                         if let Some(id) = dialogs::handle(&mut state, event) {
                             state.resume_request = Some(id);
                         }
@@ -666,11 +666,11 @@ pub async fn run(
                                 &mut session,
                             ).await
                         {
-                            state.transcript.push(TranscriptItem::Error(error.to_string()));
+                            state.report_local(TranscriptItem::Error(error.to_string()));
                         }
 
                         if let Some(source) = state.pending_marketplace_source.take() {
-                            state.transcript.push(TranscriptItem::Notice("正在下载并检查插件市场…".into()));
+                            state.report_local(TranscriptItem::Notice("正在下载并检查插件市场…".into()));
                             marketplace_task = Some(tokio::spawn(crate::marketplaces::add_current(source)));
                         }
 
@@ -680,10 +680,10 @@ pub async fn run(
                                     let name = plugin.plugin_name.clone();
 
                                     match session.store.enable_project_plugin(plugin).await {
-                                        Ok(_) => state.transcript.push(TranscriptItem::CommandResult(format!(
+                                        Ok(_) => state.report_local(TranscriptItem::CommandResult(format!(
                                             "已为当前项目启用 {name}。插件包保存在 Orbit 数据目录；通过校验的 Skill 会在下次启动时按需可用，命令、Hook 与 MCP 不会自动执行。"
                                         ))),
-                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!(
+                                        Err(error) => state.report_local(TranscriptItem::CommandError(format!(
                                             "无法启用插件：{error}"
                                         ))),
                                     }
@@ -701,13 +701,13 @@ pub async fn run(
                                     )
                                     .await
                                 {
-                                    Ok(true) => state.transcript.push(TranscriptItem::CommandResult(format!(
+                                    Ok(true) => state.report_local(TranscriptItem::CommandResult(format!(
                                         "已在当前项目停用 {plugin_name}。市场缓存仍保留在 Orbit 数据目录。"
                                     ))),
-                                    Ok(false) => state.transcript.push(TranscriptItem::CommandError(format!(
+                                    Ok(false) => state.report_local(TranscriptItem::CommandError(format!(
                                         "插件 {plugin_name} 未处于启用状态。"
                                     ))),
-                                    Err(error) => state.transcript.push(TranscriptItem::CommandError(format!(
+                                    Err(error) => state.report_local(TranscriptItem::CommandError(format!(
                                         "无法停用插件：{error}"
                                     ))),
                                 },
@@ -737,7 +737,7 @@ pub async fn run(
                             if let Some(id) = subagent_link_id(&url) {
                                 state.resume_request = Some(id.to_owned());
                             } else if let Err(error) = open_link_in_browser(&url) {
-                                state.transcript.push(TranscriptItem::Error(format!(
+                                state.report_local(TranscriptItem::Error(format!(
                                     "无法打开链接：{error}"
                                 )));
                             }
@@ -895,7 +895,7 @@ pub async fn run(
 
                         Action::Steer(guidance) => {
                             if local_task.is_some() {
-                                state.transcript.push(TranscriptItem::CommandError(
+                                state.report_local(TranscriptItem::CommandError(
                                     "正在等待回退操作完成或取消。".into(),
                                 ));
                                 continue;
@@ -909,13 +909,13 @@ pub async fn run(
 
                         Action::AttachPaths(paths) => {
                             if let Err(error) = attach_paths(&mut state, &session, paths) {
-                                state.transcript.push(TranscriptItem::Error(error.to_string()));
+                                state.report_local(TranscriptItem::Error(error.to_string()));
                             }
                         }
                         Action::CopyInput(text) => selection::copy_text(&text)?,
                         Action::PasteClipboard => {
                             if let Err(error) = paste_clipboard(&mut state, &session).await {
-                                state.transcript.push(TranscriptItem::Error(error.to_string()));
+                                state.report_local(TranscriptItem::Error(error.to_string()));
                             }
                         }
 
@@ -931,12 +931,12 @@ pub async fn run(
                             if prompt.trim() == "/restore" {
                                 match restore::RestorePicker::load(&session.store, tabs.restore_snapshot()).await {
                                     Ok(picker) => { state.restore_picker = Some(picker); state.input.set("/restore ".into()); }
-                                    Err(error) => state.transcript.push(TranscriptItem::CommandError(error.to_string())),
+                                    Err(error) => state.report_local(TranscriptItem::CommandError(error.to_string())),
                                 }
                                 continue;
                             }
                             if local_task.is_some() {
-                                state.transcript.push(TranscriptItem::CommandError(
+                                state.report_local(TranscriptItem::CommandError(
                                     "正在等待回退操作完成或取消。".into(),
                                 ));
                                 continue;
@@ -944,6 +944,9 @@ pub async fn run(
 
                             let prompt = if prompt.trim_start().starts_with('/') { prompt.trim().to_owned() } else { prompt };
                             let compacting = prompt == "/compact";
+                            if compacting && state.is_home() {
+                                continue;
+                            }
 
                             if prompt.starts_with('/') {
                                 let command = prompt
@@ -952,7 +955,7 @@ pub async fn run(
 
                                 if command == "/cd" {
                                     if task.is_some() || marketplace_task.is_some() || tabs.has_drafts() || !state.attachments.is_empty() {
-                                        state.transcript.push(TranscriptItem::CommandError("请先结束运行，并处理各标签中未发送的草稿和附件。".into()));
+                                        state.report_local(TranscriptItem::CommandError("请先结束运行，并处理各标签中未发送的草稿和附件。".into()));
                                         continue;
                                     }
 
@@ -981,12 +984,12 @@ pub async fn run(
                                                         dirty = true;
                                                         frames.request(time::Instant::now());
                                                     }
-                                                    Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("无法移动会话：{error:#}"))),
+                                                    Err(error) => state.report_local(TranscriptItem::CommandError(format!("无法移动会话：{error:#}"))),
                                                 }
                                             }
-                                            Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("无法切换目录：{error:#}"))),
+                                            Err(error) => state.report_local(TranscriptItem::CommandError(format!("无法切换目录：{error:#}"))),
                                         },
-                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("{error:#}"))),
+                                        Err(error) => state.report_local(TranscriptItem::CommandError(format!("{error:#}"))),
                                     }
                                     continue;
                                 }
@@ -998,7 +1001,7 @@ pub async fn run(
                                 }
                                 if command == "/connect" {
                                     if task.is_some() || marketplace_task.is_some() {
-                                        state.transcript.push(TranscriptItem::CommandError("请等待当前操作结束后再连接账号。".into()));
+                                        state.report_local(TranscriptItem::CommandError("请等待当前操作结束后再连接账号。".into()));
                                         continue;
                                     }
 
@@ -1013,7 +1016,7 @@ pub async fn run(
                                             state.model_picker = Some(dialogs::ModelPicker::new(model_options.clone(), state.model.clone(), state.reasoning_effort));
                                         }
                                         Ok(None) => {}
-                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("连接账号失败：{error:#}"))),
+                                        Err(error) => state.report_local(TranscriptItem::CommandError(format!("连接账号失败：{error:#}"))),
                                     }
                                     state.menu_dismissed = true;
                                     state.selection.clear();
@@ -1021,7 +1024,7 @@ pub async fn run(
                                 }
                                 if command == "/editor" {
                                     if task.is_some() {
-                                        state.transcript.push(TranscriptItem::CommandError("请等待当前响应结束后再打开编辑器。".into()));
+                                        state.report_local(TranscriptItem::CommandError("请等待当前响应结束后再打开编辑器。".into()));
                                         continue;
                                     }
 
@@ -1035,7 +1038,7 @@ pub async fn run(
 
                                     match edited {
                                         Ok(text) => state.restore_editor_draft(text),
-                                        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("{error:#}"))),
+                                        Err(error) => state.report_local(TranscriptItem::CommandError(format!("{error:#}"))),
                                     }
                                     state.selection.clear();
                                     state.menu_dismissed = true;
@@ -1043,7 +1046,7 @@ pub async fn run(
                                 }
                                 if command == "/undo" {
                                     if task.is_some() {
-                                        state.transcript.push(TranscriptItem::CommandError(
+                                        state.report_local(TranscriptItem::CommandError(
                                             "Agent 运行中不能回退文件；请等待当前响应结束。".into(),
                                         ));
                                         continue;
@@ -1063,7 +1066,7 @@ pub async fn run(
                                         })
                                         .cloned();
                                     let Some(change) = change else {
-                                        state.transcript.push(TranscriptItem::CommandError(if argument.is_empty() {
+                                        state.report_local(TranscriptItem::CommandError(if argument.is_empty() {
                                             "当前会话没有可回退的 Orbit 文件写入。".into()
                                         } else {
                                             format!("当前会话没有 {argument} 的 Orbit 写入检查点。")
@@ -1091,7 +1094,7 @@ pub async fn run(
                                     continue;
                                 }
                                 if compacting && task.is_some() {
-                                    state.transcript.push(TranscriptItem::CommandError(
+                                    state.report_local(TranscriptItem::CommandError(
                                         "运行中不能压缩上下文；请先按 Ctrl+C 取消当前响应。".into(),
                                     ));
                                     continue;
@@ -1100,7 +1103,7 @@ pub async fn run(
                                     if task.is_some()
                                         && !commands::available_while_running(command)
                                     {
-                                        state.transcript.push(TranscriptItem::CommandError(
+                                        state.report_local(TranscriptItem::CommandError(
                                             "此命令需要当前响应结束；可先切换标签，或按 Ctrl+C 取消响应。".into(),
                                         ));
                                         continue;
@@ -1109,7 +1112,7 @@ pub async fn run(
                                     match run_command(&prompt, &mut state, &mut model, &mut history, &mut session, CommandContext { tools: &tools, instructions: &instructions, skills: &skills, mcp_statuses: &mcp_statuses, model_options: &model_options }).await {
                                         Ok(true) => break,
                                         Ok(false) => refresh_context_usage(&mut state, &history, &tools),
-                                        Err(error) => state.transcript.push(TranscriptItem::Error(error.to_string())),
+                                        Err(error) => state.report_local(TranscriptItem::Error(error.to_string())),
                                     }
 
                                     continue;
@@ -1155,7 +1158,7 @@ pub async fn run(
                                     if error.is::<crate::session::SessionRefreshRequired>() {
                                         retry_submit = true;
                                     } else {
-                                        state.transcript.push(TranscriptItem::CommandError(error.to_string()));
+                                        state.report_local(TranscriptItem::CommandError(error.to_string()));
                                     }
                                     continue;
                                 }
@@ -1286,7 +1289,7 @@ pub async fn run(
                                 if error.is::<crate::session::SessionRefreshRequired>() {
                                     retry_submit = true;
                                 } else {
-                                    state.transcript.push(TranscriptItem::CommandError(error.to_string()));
+                                    state.report_local(TranscriptItem::CommandError(error.to_string()));
                                 }
                                 continue;
                             }
@@ -1353,13 +1356,13 @@ pub async fn run(
                     local_task = None;
                     local_cancellation = None;
 
-                    state.transcript.push(background::local_result(result));
+                    state.report_local(background::local_result(result));
                 }
                 result = async { marketplace_task.as_mut().unwrap().await }, if marketplace_task.is_some() => {
                     dirty = true;
                     marketplace_task = None;
 
-                    state.transcript.push(background::marketplace_result(result));
+                    state.report_local(background::marketplace_result(result));
                 }
                 _ = time::sleep_until(frames.deadline()), if frames.pending() => {
                     tabs.sync_ui(&mut state, &session);
@@ -1381,9 +1384,9 @@ pub async fn run(
                         match result {
                             Ok((models, diagnostics)) => {
                                 model_catalog::publish(models, &mut state, &mut model_options, &mut background_runs, &mut tabs);
-                                state.transcript.extend(diagnostics.into_iter().map(TranscriptItem::Notice));
+                                for diagnostic in diagnostics { state.report_local(TranscriptItem::Notice(diagnostic)); }
                             }
-                            Err(error) => state.transcript.push(TranscriptItem::CommandError(format!("模型配置更新失败，保留现有配置：{error}"))),
+                            Err(error) => state.report_local(TranscriptItem::CommandError(format!("模型配置更新失败，保留现有配置：{error}"))),
                         }
                         dirty = true;
                     }
@@ -1469,7 +1472,7 @@ pub async fn run(
                             state.resume_loading = None;
                             session_sync::sync_mode(&session.store, session.id(), &mut state).await?;
                             if let Some(notice) = move_notice.take() {
-                                state.transcript.push(TranscriptItem::CommandResult(notice));
+                                state.report_local(TranscriptItem::CommandResult(notice));
                             }
                             refresh_context_usage(&mut state, &history, &tools);
                             session_sync::sync_runtime(&session.store, session.id(), &mut state).await?;
@@ -1923,11 +1926,7 @@ enum TabAction {
 }
 
 fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAction> {
-    if state.show_help
-        || state.picker.is_some()
-        || state.model_picker.is_some()
-        || state.marketplace_dialog.is_some()
-    {
+    if state.dialog_open() {
         return None;
     }
 
@@ -2118,16 +2117,16 @@ async fn run_command(
 
         "/rename" => {
             if argument.is_empty() {
-                state.transcript.push(TranscriptItem::CommandError(
+                state.report_local(TranscriptItem::CommandError(
                     "用法：/rename <会话标题>".into(),
                 ));
             } else if argument.chars().count() > 120 {
-                state.transcript.push(TranscriptItem::CommandError(
+                state.report_local(TranscriptItem::CommandError(
                     "会话标题不能超过 120 个字符。".into(),
                 ));
             } else {
                 session.rename(argument.into()).await?;
-                state.transcript.push(TranscriptItem::CommandResult(format!(
+                state.report_local(TranscriptItem::CommandResult(format!(
                     "会话标题已改为：{argument}"
                 )));
             }
@@ -2136,7 +2135,7 @@ async fn run_command(
         "/mode" | "/permissions" => {
             if !argument.is_empty() {
                 let Some(mode) = permissions::Mode::parse(argument) else {
-                    state.transcript.push(TranscriptItem::CommandResult(
+                    state.report_local(TranscriptItem::CommandError(
                         "用法：/mode ask | auto | YOLO".into(),
                     ));
                     return Ok(false);
@@ -2149,10 +2148,15 @@ async fn run_command(
                 state.permission_mode = mode;
             }
 
-            state.transcript.push(TranscriptItem::CommandResult(format!(
+            let description = format!(
                 "{}\nShift+Tab 切换 · /mode ask|auto|YOLO\n本会话各窗口同步；新会话默认为 auto。",
                 state.permission_mode.description()
-            )));
+            );
+            if argument.is_empty() {
+                state.show_output("权限设置", description);
+            } else {
+                state.report_local(TranscriptItem::CommandResult(description));
+            }
         }
 
         "/context" if argument.is_empty() => {
@@ -2206,26 +2210,34 @@ async fn run_command(
                     _ => None,
                 })
                 .sum::<usize>();
-            state.transcript.push(TranscriptItem::CommandResult(format!("原始上下文估算：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n代码概览工具结果：约 {overview_tokens} tokens\n任务与会话记忆：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动整理：{}（按校准后的输入窗口触发，目标按近期工作预算确定）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n工具原文先归档再精简；需要摘要时调用模型，摘要失败保留原上下文。\n/compact 按预算整理旧对话，保留完整工具配对和近期工作；归档内容可通过 read_history 回读。", instructions.source_summary(), state.input_context_tokens, state.max_output_tokens,state.context_tokens,if state.auto_compact { "开启" } else { "关闭" })));
+            let details = format!(
+                "原始上下文估算：约 {estimated} tokens（含协议开销）\n系统提示：约 {system_tokens} tokens\n项目指令：{sources} · 约 {project_instruction_tokens} tokens {truncation}\n{}\n历史消息：约 {conversation_tokens} tokens\n工具定义：约 {tool_tokens} tokens\n代码概览工具结果：约 {overview_tokens} tokens\n任务与会话记忆：约 {project_state_tokens} tokens\n输入窗口：{} tokens · 输出上限：{} tokens · 请求预算：{} tokens\n自动整理：{}（按校准后的输入窗口触发，目标按近期工作预算确定）\n这是通用估算，不等于服务端实际用量；分类值含各自协议开销，不能相加为总计。\n工具原文先归档再精简；需要摘要时调用模型，摘要失败保留原上下文。\n/compact 按预算整理旧对话，保留完整工具配对和近期工作；归档内容可通过 read_history 回读。",
+                instructions.source_summary(),
+                state.input_context_tokens,
+                state.max_output_tokens,
+                state.context_tokens,
+                if state.auto_compact {
+                    "开启"
+                } else {
+                    "关闭"
+                }
+            );
             let calibration = state.calibration();
-            state.transcript.push(TranscriptItem::CommandResult(format!(
-                "校准后总计：约 {} tokens · {} 个服务端样本 · 系数 {:.3}",
-                calibration.estimate(estimated),
-                calibration.samples(),
-                calibration.factor()
-            )));
+            state.show_output(
+                "上下文预算",
+                format!(
+                    "{details}\n校准后总计：约 {} tokens · {} 个服务端样本 · 系数 {:.3}",
+                    calibration.estimate(estimated),
+                    calibration.samples(),
+                    calibration.factor()
+                ),
+            );
         }
 
-        "/skills" if argument.is_empty() => state
-            .transcript
-            .push(TranscriptItem::CommandResult(skills.render())),
+        "/skills" if argument.is_empty() => state.show_output("Skills", skills.render()),
 
         "/mcp" if argument.is_empty() => {
-            state
-                .transcript
-                .push(TranscriptItem::CommandResult(render_mcp_status(
-                    mcp_statuses,
-                )))
+            state.show_output("MCP 状态", render_mcp_status(mcp_statuses))
         }
 
         "/plugins" if argument.is_empty() => {
@@ -2240,7 +2252,7 @@ async fn run_command(
 
         "/skill" => {
             if argument.is_empty() {
-                state.transcript.push(TranscriptItem::CommandError(
+                state.report_local(TranscriptItem::CommandError(
                     "用法：/skill <名称>。输入 /skills 查看已发现的 Skills。".into(),
                 ));
             } else if let Some(skill) = skills.get(argument) {
@@ -2250,18 +2262,18 @@ async fn run_command(
                             "请在后续工作中使用已载入的 Skill /{}：\n{}",
                             skill.command, content
                         )));
-                        state.transcript.push(TranscriptItem::CommandResult(format!(
+                        state.report_local(TranscriptItem::CommandResult(format!(
                             "已载入 /{}。",
                             skill.command
                         )));
                     }
-                    Err(error) => state.transcript.push(TranscriptItem::CommandError(format!(
+                    Err(error) => state.report_local(TranscriptItem::CommandError(format!(
                         "无法读取 Skill /{}：{error}",
                         skill.command
                     ))),
                 }
             } else {
-                state.transcript.push(TranscriptItem::CommandError(format!(
+                state.report_local(TranscriptItem::CommandError(format!(
                     "未找到 Skill {argument:?}。输入 /skills 查看已发现的 Skills。"
                 )));
             }
@@ -2273,30 +2285,25 @@ async fn run_command(
         "/changes" if argument.is_empty() => {
             let listing = changes::list(&session.store.workspace_changes(session.id()).await?);
             let comparison = crate::verification::changes_text(session).await;
-            state.transcript.push(TranscriptItem::CommandResult(format!(
-                "{listing}{comparison}"
-            )));
+            state.show_output("文件改动", format!("{listing}{comparison}"));
         }
 
-        "/diff" if argument.trim().is_empty() => {
-            state
-                .transcript
-                .push(TranscriptItem::CommandResult(changes::list(
-                    &session.store.workspace_changes(session.id()).await?,
-                )))
-        }
+        "/diff" if argument.trim().is_empty() => state.show_output(
+            "文件改动",
+            changes::list(&session.store.workspace_changes(session.id()).await?),
+        ),
 
-        "/diff" => state
-            .transcript
-            .push(TranscriptItem::CommandResult(changes::diff(
+        "/diff" => state.show_output(
+            "文件差异",
+            changes::diff(
                 &session.store.workspace_changes(session.id()).await?,
                 argument.trim(),
-            ))),
-        "/diagnostics" if argument.is_empty() => {
-            state.transcript.push(TranscriptItem::CommandResult(
-                orbit_store::diagnostics::text(&session.store.diagnostics(session.id()).await?),
-            ))
-        }
+            ),
+        ),
+        "/diagnostics" if argument.is_empty() => state.show_output(
+            "诊断记录",
+            orbit_store::diagnostics::text(&session.store.diagnostics(session.id()).await?),
+        ),
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
             state.selection = Default::default();
@@ -2355,25 +2362,23 @@ async fn run_command(
                 .map(|definition| definition.function.name.as_str())
                 .collect::<Vec<_>>()
                 .join(" / ");
-            state.transcript.push(TranscriptItem::CommandResult(format!(
+            state.show_output("会话状态", format!(
                 "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n{}\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\nSkills  {} 个\nMCP  {} 个 server，输入 /mcp 查看状态\n超时  {}s（流空闲）\n工具  {} · 审批：{}",
                 session.id(), session.store.path().display(), session.scratch.read().expect("scratch lock poisoned").display(), session.command_output.read().expect("command output lock poisoned").display(), baseline, verification, state.model, history.len(), instructions.sources.len(), skills.len(), mcp_statuses.len(), model.config().timeout.as_secs(), tool_names, state.permission_mode.label()
-            )));
+            ));
         }
 
         "/reasoning" => {
             let efforts = state.reasoning_efforts.clone();
             if efforts.is_empty() {
-                state.transcript.push(TranscriptItem::CommandResult(
-                    "当前模型未配置可调整的思考强度。".into(),
-                ));
+                state.show_output("思考强度", "当前模型未配置可调整的思考强度。".into());
             } else if argument.is_empty() {
                 state.input.set("/reasoning ".into());
             } else if let Some(effort) = efforts.iter().find(|effort| effort.as_str() == argument) {
                 let name = state.model.clone();
                 select_model(&name, Some(*effort), state, model, model_options, session).await?;
             } else {
-                state.transcript.push(TranscriptItem::CommandError(format!(
+                state.report_local(TranscriptItem::CommandError(format!(
                     "当前模型支持的思考强度：{}",
                     efforts
                         .iter()
@@ -2418,7 +2423,7 @@ async fn run_command(
                     )
                     .await?;
                 } else {
-                    state.transcript.push(TranscriptItem::CommandResult(format!(
+                    state.report_local(TranscriptItem::CommandError(format!(
                         "模型 {argument:?} 未找到。"
                     )));
                 }
@@ -2432,7 +2437,7 @@ async fn run_command(
                 format!("未知命令：{command}。输入 / 查看可用命令。")
             };
 
-            state.transcript.push(TranscriptItem::CommandError(result));
+            state.report_local(TranscriptItem::CommandError(result));
         }
     }
 
@@ -2456,14 +2461,12 @@ async fn run_tasks_command(
     match action {
         "" | "list" | "all" => {
             let tasks = session.store.tasks(project_id, action == "all").await?;
-            state
-                .transcript
-                .push(TranscriptItem::CommandResult(render_tasks(&tasks)));
+            state.show_output("项目任务", render_tasks(&tasks));
         }
 
         "add" => {
             if rest.trim().is_empty() {
-                state.transcript.push(TranscriptItem::CommandError(
+                state.report_local(TranscriptItem::CommandError(
                     "用法：/tasks add <任务标题>".into(),
                 ));
             } else {
@@ -2473,7 +2476,7 @@ async fn run_tasks_command(
                     .await?;
                 crate::project_state::inject(history, &session.store, project_id, session.id())
                     .await?;
-                state.transcript.push(TranscriptItem::CommandResult(format!(
+                state.report_local(TranscriptItem::CommandResult(format!(
                     "已添加任务 #{}：{}",
                     task.id, task.title
                 )));
@@ -2482,7 +2485,7 @@ async fn run_tasks_command(
 
         "start" | "done" | "block" | "cancel" => {
             let Ok(id) = rest.trim().parse::<i64>() else {
-                state.transcript.push(TranscriptItem::CommandError(
+                state.report_local(TranscriptItem::CommandError(
                     "用法：/tasks start|done|block|cancel <任务编号>".into(),
                 ));
                 return Ok(());
@@ -2501,14 +2504,14 @@ async fn run_tasks_command(
                 .update_task(project_id, id, None, None, Some(status), None)
                 .await?;
             crate::project_state::inject(history, &session.store, project_id, session.id()).await?;
-            state.transcript.push(TranscriptItem::CommandResult(format!(
+            state.report_local(TranscriptItem::CommandResult(format!(
                 "任务 #{} 已标记为{}。",
                 task.id,
                 task_status_label(task.status)
             )));
         }
 
-        _ => state.transcript.push(TranscriptItem::CommandError(
+        _ => state.report_local(TranscriptItem::CommandError(
             "用法：/tasks [list|all] · /tasks add <标题> · /tasks start|done|block|cancel <编号>"
                 .into(),
         )),
@@ -2557,23 +2560,19 @@ async fn run_memory_command(
                 .store
                 .session_memories(session_id, action == "all")
                 .await?;
-            state
-                .transcript
-                .push(TranscriptItem::CommandResult(render_memories(&memories)));
+            state.show_output("会话记忆", render_memories(&memories));
         }
 
         "add" => {
             let (category, content) = rest.split_once(char::is_whitespace).unwrap_or(("", ""));
             let Some(category) = orbit_store::types::MemoryCategory::parse(category) else {
-                state.transcript.push(TranscriptItem::CommandError(
+                state.report_local(TranscriptItem::CommandError(
                     "用法：/memory add constraint|decision|fact|preference <内容>".into(),
                 ));
                 return Ok(());
             };
             if content.trim().is_empty() {
-                state
-                    .transcript
-                    .push(TranscriptItem::CommandError("记忆内容不能为空。".into()));
+                state.report_local(TranscriptItem::CommandError("记忆内容不能为空。".into()));
                 return Ok(());
             }
 
@@ -2594,7 +2593,7 @@ async fn run_memory_command(
                 session_id,
             )
             .await?;
-            state.transcript.push(TranscriptItem::CommandResult(format!(
+            state.report_local(TranscriptItem::CommandResult(format!(
                 "已保存会话记忆 #{}。",
                 memory.id
             )));
@@ -2602,7 +2601,7 @@ async fn run_memory_command(
 
         "search" => {
             if rest.trim().is_empty() {
-                state.transcript.push(TranscriptItem::CommandError(
+                state.report_local(TranscriptItem::CommandError(
                     "用法：/memory search <关键词>".into(),
                 ));
                 return Ok(());
@@ -2612,16 +2611,16 @@ async fn run_memory_command(
                 .store
                 .search_session_memories(session_id, rest.trim(), 8)
                 .await?;
-            state.transcript.push(TranscriptItem::CommandResult(format!(
+            state.show_output("记忆搜索", format!(
                 "记忆搜索：{}\n{}",
                 rest.trim(),
                 render_memories(&memories)
-            )));
+            ));
         }
 
         "forget" => {
             let Ok(id) = rest.trim().parse::<i64>() else {
-                state.transcript.push(TranscriptItem::CommandError(
+                state.report_local(TranscriptItem::CommandError(
                     "用法：/memory forget <记忆编号>".into(),
                 ));
                 return Ok(());
@@ -2638,13 +2637,13 @@ async fn run_memory_command(
                 session_id,
             )
             .await?;
-            state.transcript.push(TranscriptItem::CommandResult(format!(
+            state.report_local(TranscriptItem::CommandResult(format!(
                 "会话记忆 #{} 已停用。",
                 memory.id
             )));
         }
 
-        _ => state.transcript.push(TranscriptItem::CommandError(
+        _ => state.report_local(TranscriptItem::CommandError(
             "用法：/memory [list|all] · /memory search <关键词> · /memory add <类型> <内容> · /memory forget <编号>".into(),
         )),
     }
@@ -2733,6 +2732,7 @@ fn concise_title(content: &str) -> String {
 
 fn needs_model_switch_compaction(state: &UiState) -> bool {
     state.auto_compact
+        && !state.is_home()
         && state.context_used_tokens >= state.input_context_tokens.saturating_mul(85) / 100
 }
 
@@ -2748,9 +2748,7 @@ async fn select_model(
         .iter()
         .find(|choice| choice.qualified_name() == qualified_name)
     else {
-        state
-            .transcript
-            .push(TranscriptItem::Error("所选模型已不在当前配置中。".into()));
+        state.report_local(TranscriptItem::Error("所选模型已不在当前配置中。".into()));
         return Ok(());
     };
 
@@ -2780,7 +2778,7 @@ async fn select_model(
             state.supports_vision = choice.supports_vision;
 
             if previous_model != state.model {
-                state.transcript.push(TranscriptItem::CommandResult(format!(
+                state.report_local(TranscriptItem::CommandResult(format!(
                     "{previous_model} → {}",
                     state.model
                 )));
@@ -2788,14 +2786,12 @@ async fn select_model(
 
             if !choice.supports_vision && !state.attachments.is_empty() {
                 state.attachments.clear();
-                state.transcript.push(TranscriptItem::Notice(
+                state.report_local(TranscriptItem::Notice(
                     "所选模型不支持图片输入，已清除待发送的图片附件。".into(),
                 ));
             }
         }
-        Err(error) => state
-            .transcript
-            .push(TranscriptItem::Error(error.to_string())),
+        Err(error) => state.report_local(TranscriptItem::Error(error.to_string())),
     }
 
     Ok(())
@@ -2992,7 +2988,7 @@ fn remove_focused_attachment(state: &mut UiState, backwards: bool) -> bool {
 
 fn attach_paths(state: &mut UiState, session: &SessionState, paths: Vec<PathBuf>) -> Result<()> {
     if !state.supports_vision {
-        state.transcript.push(TranscriptItem::Notice(
+        state.report_local(TranscriptItem::CommandError(
             "当前模型未启用图片输入，未添加图片附件。可切换支持图片的模型，或在 /connect 中调整自定义模型的图片输入设置。".into(),
         ));
         return Ok(());
@@ -3048,7 +3044,7 @@ async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<
             bytes,
         } => {
             if !state.supports_vision {
-                state.transcript.push(TranscriptItem::Notice(
+                state.report_local(TranscriptItem::CommandError(
                     "当前模型未启用图片输入，未添加图片附件。可切换支持图片的模型，或在 /connect 中调整自定义模型的图片输入设置。".into(),
                 ));
                 state.menu_dismissed = false;
@@ -3347,12 +3343,7 @@ fn handle_input_mouse(state: &mut UiState, event: &Event) -> bool {
     if matches!(event, Event::Resize(_, _) | Event::Key(_) | Event::Paste(_)) {
         state.input_dragging = false;
     }
-    if state.show_help
-        || state.picker.is_some()
-        || state.model_picker.is_some()
-        || state.marketplace_dialog.is_some()
-        || state.approval.is_some()
-    {
+    if state.dialog_open() || state.approval.is_some() {
         state.input_dragging = false;
         return false;
     }
@@ -4692,10 +4683,15 @@ id = "orbit-model"
         attach_paths(&mut state, &session, vec![PathBuf::from("test.png")]).unwrap();
 
         assert!(state.attachments.is_empty());
-        assert!(state.transcript.iter().any(|item| matches!(
-            item,
-            TranscriptItem::Notice(msg) if msg.contains("当前模型未启用图片输入，未添加图片附件")
-        )));
+        assert!(state.transcript.is_empty());
+        assert!(
+            state
+                .info_dialog
+                .as_ref()
+                .unwrap()
+                .content
+                .contains("当前模型未启用图片输入，未添加图片附件")
+        );
 
         // With vision enabled, queue_attachment works
         state.supports_vision = true;

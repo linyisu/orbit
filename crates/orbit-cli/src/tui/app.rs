@@ -157,6 +157,7 @@ pub struct UiState {
     pub show_help: bool,
     pub help_keys: bool,
     pub help_scroll: usize,
+    pub info_dialog: Option<super::dialogs::InfoDialog>,
     pub picker: Option<super::dialogs::SessionPicker>,
     pub resume_request: Option<String>,
     pub(super) subagent_parent: Option<String>,
@@ -193,6 +194,50 @@ pub struct UiState {
 }
 
 impl UiState {
+    pub(super) fn is_home(&self) -> bool {
+        !self.has_conversation() && self.subagent_parent.is_none() && self.resume_loading.is_none()
+    }
+
+    pub(super) fn dialog_open(&self) -> bool {
+        self.info_dialog.is_some()
+            || self.show_help
+            || self.picker.is_some()
+            || self.model_picker.is_some()
+            || self.marketplace_dialog.is_some()
+    }
+
+    /// Local feedback must not become conversation history on the home screen.
+    pub(super) fn report_local(&mut self, item: TranscriptItem) {
+        if self.is_home() {
+            match item {
+                TranscriptItem::Error(text) | TranscriptItem::CommandError(text) => {
+                    if let Some(dialog) = &mut self.info_dialog
+                        && dialog.title == "操作失败"
+                    {
+                        dialog.content.push('\n');
+                        dialog.content.push_str(&text);
+                    } else {
+                        self.info_dialog = Some(super::dialogs::InfoDialog::new("操作失败", text));
+                    }
+                }
+                TranscriptItem::Notice(_)
+                | TranscriptItem::Maintenance(_)
+                | TranscriptItem::CommandResult(_) => {}
+                _ => self.transcript.push(item),
+            }
+        } else {
+            self.transcript.push(item);
+        }
+    }
+
+    pub(super) fn show_output(&mut self, title: &str, content: String) {
+        if self.is_home() {
+            self.info_dialog = Some(super::dialogs::InfoDialog::new(title, content));
+        } else {
+            self.transcript.push(TranscriptItem::CommandResult(content));
+        }
+    }
+
     pub(super) fn has_conversation(&self) -> bool {
         self.transcript.iter().any(|item| {
             matches!(
@@ -289,6 +334,7 @@ impl UiState {
             show_help: false,
             help_keys: false,
             help_scroll: 0,
+            info_dialog: None,
             picker: None,
             resume_request: None,
             subagent_parent: None,
@@ -340,6 +386,7 @@ impl UiState {
     pub fn begin_run(&mut self) {
         self.status = RunStatus::Running;
         self.show_help = false;
+        self.info_dialog = None;
         self.elapsed = std::time::Duration::ZERO;
         self.scroll = 0;
         self.turn = 0;
@@ -547,7 +594,11 @@ impl UiState {
     }
 
     pub fn menu(&self) -> Vec<super::completion::Candidate> {
-        if self.restore_picker.is_some() || self.menu_dismissed || self.resume_loading.is_some() {
+        if self.dialog_open()
+            || self.restore_picker.is_some()
+            || self.menu_dismissed
+            || self.resume_loading.is_some()
+        {
             return Vec::new();
         }
 

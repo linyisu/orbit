@@ -281,10 +281,7 @@ pub(super) fn draw_parent(frame: &mut Frame<'_>, state: &mut UiState, area: Rect
 
 pub(super) fn handle_parent(state: &mut UiState, event: &Event) -> Option<bool> {
     let parent = state.subagent_parent.as_ref()?;
-    if state.show_help
-        || state.picker.is_some()
-        || state.model_picker.is_some()
-        || state.marketplace_dialog.is_some()
+    if state.dialog_open()
         || state.approval.is_some()
         || state.restore_picker.is_some()
         || state.selection.dragging()

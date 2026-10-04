@@ -96,9 +96,7 @@ pub(super) fn model_refresh_result(
                 .map(ModelOption::qualified_name)
                 .collect();
             for diagnostic in diagnostics {
-                state
-                    .transcript
-                    .push(TranscriptItem::CommandError(diagnostic));
+                state.report_local(TranscriptItem::CommandError(diagnostic));
             }
             state.model_picker = Some(super::dialogs::ModelPicker::new(
                 model_options.clone(),
@@ -106,10 +104,10 @@ pub(super) fn model_refresh_result(
                 state.reasoning_effort,
             ));
         }
-        Ok(Err(error)) => state.transcript.push(TranscriptItem::CommandError(format!(
+        Ok(Err(error)) => state.report_local(TranscriptItem::CommandError(format!(
             "模型刷新失败：{error}"
         ))),
-        Err(error) => state.transcript.push(TranscriptItem::CommandError(format!(
+        Err(error) => state.report_local(TranscriptItem::CommandError(format!(
             "模型刷新任务失败：{error}"
         ))),
     }
@@ -190,7 +188,7 @@ pub(super) async fn poll(
             .is_some_and(|task| task.is_finished())
         {
             let result = run.marketplace_task.take().unwrap().await;
-            tab.state.transcript.push(marketplace_result(result));
+            tab.state.report_local(marketplace_result(result));
             changed = true;
         }
         if run
@@ -213,7 +211,7 @@ pub(super) async fn poll(
         {
             let result = run.local_task.take().unwrap().await;
             run.local_cancellation = None;
-            tab.state.transcript.push(local_result(result));
+            tab.state.report_local(local_result(result));
             changed = true;
         }
         if let Some(replay) = &mut run.history_replay {
@@ -228,8 +226,7 @@ pub(super) async fn poll(
                 session_sync::sync_mode(&tab.session.store, id, &mut tab.state).await?;
                 if let Some(notice) = run.move_notice.take() {
                     tab.state
-                        .transcript
-                        .push(TranscriptItem::CommandResult(notice));
+                        .report_local(TranscriptItem::CommandResult(notice));
                 }
                 refresh_context_usage(&mut tab.state, &tab.history, &run.tools);
                 session_sync::sync_runtime(&tab.session.store, id, &mut tab.state).await?;
@@ -351,8 +348,7 @@ pub(super) async fn poll(
                 Err(error) => {
                     tab.state.input.set(guidance);
                     tab.state
-                        .transcript
-                        .push(TranscriptItem::CommandError(error.to_string()));
+                        .report_local(TranscriptItem::CommandError(error.to_string()));
                     run.active_context = None;
                 }
             }

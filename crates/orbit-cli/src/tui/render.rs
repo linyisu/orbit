@@ -46,12 +46,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         draw_contents(frame, state);
     }
     let now = std::time::Instant::now();
-    let editing = state.picker.is_none()
-        && state.model_picker.is_none()
-        && state.marketplace_dialog.is_none()
+    let editing = !state.dialog_open()
         && state.restore_picker.is_none()
         && state.approval.is_none()
-        && !state.show_help
         && state.input.selection().is_none()
         && !state.selection.active();
     state.cursor_motion.update(
@@ -82,12 +79,8 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     state.tab_close_areas.clear();
     state.new_tab_area = Rect::default();
     state.subagent_parent_area = Rect::default();
-    let home = !state.has_conversation()
-        && state.subagent_parent.is_none()
-        && !state.tabs.is_empty()
-        && state.resume_loading.is_none()
-        && state.approval.is_none()
-        && area.height >= 18;
+    let home =
+        state.is_home() && !state.tabs.is_empty() && state.approval.is_none() && area.height >= 18;
     let content_width = if home { area.width.min(86) } else { area.width };
 
     let width = content_width.saturating_sub(6) as usize;
@@ -115,10 +108,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     // tooltip from a dot the pointer hovered earlier.
     if state.restore_picker.is_some()
         || !menu.is_empty()
-        || state.show_help
-        || state.picker.is_some()
-        || state.model_picker.is_some()
-        || state.marketplace_dialog.is_some()
+        || state.dialog_open()
         || state.approval.is_some()
         || state.resume_loading.is_some()
     {
@@ -166,19 +156,8 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         let composer_height = input_height + attachment_height + details_height + 3;
         let header_height = u16::from(state.tabs.len() > 1);
         let available_height = area.height.saturating_sub(header_height);
-        state
-            .transcript_layout
-            .update_expanded(&state.transcript, &state.expanded, width as u16);
-        let output_height = state
-            .transcript_layout
-            .height()
-            .min(8)
-            .min(available_height.saturating_sub(composer_height + 5) as usize)
-            as u16;
-        let output_gap = u16::from(output_height > 0);
-        let logo_height = 7
-            .min(available_height.saturating_sub(composer_height + output_height + output_gap + 3));
-        let group_height = logo_height + 1 + output_height + output_gap + composer_height + 2;
+        let logo_height = 7.min(available_height.saturating_sub(composer_height + 3));
+        let group_height = logo_height + 1 + composer_height + 2;
         let x = area.x + area.width.saturating_sub(content_width) / 2;
         let y = area.y + header_height + available_height.saturating_sub(group_height) / 2;
         areas[0] = if state.tabs.len() > 1 {
@@ -187,14 +166,9 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
             Rect::default()
         };
         home_logo = Rect::new(x, y, content_width, logo_height);
-        areas[1] = Rect::new(x, y + logo_height + 1, content_width, output_height);
+        areas[1] = Rect::new(x, y + logo_height + 1, content_width, 0);
         areas[2] = Rect::default();
-        areas[4] = Rect::new(
-            x,
-            areas[1].bottom() + output_gap,
-            content_width,
-            composer_height,
-        );
+        areas[4] = Rect::new(x, areas[1].bottom(), content_width, composer_height);
         areas[5] = Rect::default();
         areas[6] = Rect::new(x, areas[4].bottom(), content_width, 1);
     }
@@ -218,10 +192,12 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     if home {
         draw_welcome(frame, home_logo);
     }
-    if home && areas[1].height == 0 {
+    if state.is_home() && !state.tabs.is_empty() {
         super::navigation::clear_previous_tooltip(frame, state);
         clear_previous_link_tooltip(frame, state);
         state.navigation.reset_area();
+        state.scroll = 0;
+        state.max_scroll = 0;
     } else {
         draw_transcript(frame, state, areas[1]);
     }
@@ -250,7 +226,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_context_tooltip(frame, state);
     super::dialogs::draw(frame, state);
 
-    if file_modal {
+    if file_modal && !state.dialog_open() {
         super::approval::draw_file_modal(frame, state);
     }
 }
@@ -2134,11 +2110,8 @@ fn draw_composer(
     }
     if text_area.width > 0
         && text_area.height > 0
-        && state.picker.is_none()
-        && state.model_picker.is_none()
-        && state.marketplace_dialog.is_none()
+        && !state.dialog_open()
         && state.approval.is_none()
-        && !state.show_help
         && state.attachment_cursor.is_none()
     {
         let x = text_area.x + (cursor.0 as u16).min(state.input_area.width - 1);
@@ -2520,7 +2493,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commands_keep_home_and_their_output_scrollable_until_a_message_is_sent() {
+    async fn home_changes_are_silent_and_queries_do_not_enter_the_conversation() {
+        use super::super::{CommandContext, ModelOption, dialogs, run_command};
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        use orbit_model::types::ReasoningEffort;
+
         let directory = tempfile::tempdir().unwrap();
         let mut session = crate::session::SessionState::open_in(
             directory.path().join("orbit.db"),
@@ -2539,61 +2516,149 @@ mod tests {
             status: RunStatus::Idle,
             active: true,
         });
-        state
-            .transcript
-            .push(TranscriptItem::CommandResult("Orbit 命令输出".into()));
-        let screen = render(&mut state, 140, 40);
-        assert!(screen.replace(' ', "").contains("Orbit命令输出"));
-        assert!(state.input_area.x > 20);
+        render(&mut state, 140, 40);
+        let input_area = state.input_area;
         let mut model = orbit_model::client::ModelClient::new(Default::default()).unwrap();
         let mut history = Vec::new();
         let tools = orbit_agent::tool::ToolRegistry::new();
         let instructions = crate::instructions::Instructions::default();
         let skills = crate::skills::Skills::default();
+        let options = [ModelOption {
+            provider: "orbit".into(),
+            model: "fast".into(),
+            max_output_tokens: 8_000,
+            context_tokens: 72_000,
+            input_context_tokens: 64_000,
+            default_for_provider: true,
+            reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+            supports_vision: true,
+            config: Default::default(),
+        }];
+        let context = || CommandContext {
+            tools: &tools,
+            instructions: &instructions,
+            skills: &skills,
+            mcp_statuses: &[],
+            model_options: &options,
+        };
         for command in [
             "/mode ask",
-            "/status",
-            "/context",
-            "/skills",
-            "/orbit-unknown",
+            "/rename Orbit home",
+            "/model orbit::fast",
+            "/reasoning high",
+            "/tasks add Orbit task",
+            "/memory add fact Orbit memory",
         ] {
-            super::super::run_command(
+            run_command(
                 command,
                 &mut state,
                 &mut model,
                 &mut history,
                 &mut session,
-                super::super::CommandContext {
-                    tools: &tools,
-                    instructions: &instructions,
-                    skills: &skills,
-                    mcp_statuses: &[],
-                    model_options: &[],
-                },
+                context(),
+            )
+            .await
+            .unwrap();
+            let screen = render(&mut state, 140, 40);
+            assert!(state.transcript.is_empty(), "{command}");
+            assert!(state.info_dialog.is_none(), "{command}");
+            assert_eq!(state.input_area, input_area, "{command}");
+            assert!(!screen.contains('→'), "{command}");
+        }
+        assert_eq!(session.store.tui_mode(session.id()).await.unwrap(), "ask");
+        let saved = session.store.load(session.id()).await.unwrap();
+        assert_eq!(saved.session.title, "Orbit home");
+        assert_eq!(saved.session.model, "orbit::fast");
+        assert_eq!(saved.session.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(state.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(state.input_context_tokens, 64_000);
+        let tasks = session
+            .store
+            .tasks(&session.snapshot.session.project_id, false)
+            .await
+            .unwrap();
+        assert_eq!(tasks[0].title, "Orbit task");
+        let memories = session
+            .store
+            .session_memories(session.id(), false)
+            .await
+            .unwrap();
+        assert_eq!(memories[0].content, "Orbit memory");
+        for command in [
+            "/mode",
+            "/status",
+            "/context",
+            "/skills",
+            "/mcp",
+            "/tasks",
+            "/memory",
+            "/memory search Orbit",
+            "/changes",
+            "/diff",
+            "/diff orbit.rs",
+            "/diagnostics",
+            "/orbit-unknown",
+            "/model orbit::missing",
+            "/reasoning missing",
+            "/rename",
+        ] {
+            run_command(
+                command,
+                &mut state,
+                &mut model,
+                &mut history,
+                &mut session,
+                context(),
             )
             .await
             .unwrap();
             render(&mut state, 140, 40);
-            assert!(!state.has_conversation(), "{command}");
-            assert!(state.input_area.x > 20, "{command}");
+            assert!(
+                !state.info_dialog.as_ref().unwrap().content.is_empty(),
+                "{command}"
+            );
+            if command == "/context" {
+                let content = &state.info_dialog.as_ref().unwrap().content;
+                assert!(content.contains("原始上下文估算"));
+                assert!(content.contains("校准后总计"));
+            }
+            assert!(state.transcript.is_empty(), "{command}");
             assert_eq!(state.status, RunStatus::Idle);
-            assert!(state.selection.viewport.height <= 8);
+            assert_eq!(state.selection.viewport.height, 0);
+            dialogs::handle(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            );
+            render(&mut state, 140, 40);
+            assert_eq!(state.input_area, input_area);
+            assert!(state.is_home());
         }
-        assert!(state.max_scroll > 0);
-        state.scroll_up(state.max_scroll);
-        let screen = render(&mut state, 140, 40);
-        assert!(screen.replace(' ', "").contains("Orbit命令输出"));
-        state.scroll_down(state.max_scroll);
-        let screen = render(&mut state, 140, 40);
-        assert!(screen.replace(' ', "").contains("未知命令"));
-        render(&mut state, 28, 18);
-        assert!(state.selection.viewport.height > 0);
-        assert!(state.input_area.bottom() < 18);
+        for (width, height) in [(28, 18), (20, 10)] {
+            render(&mut state, width, height);
+            assert_eq!(state.selection.viewport.height, 0);
+            assert_eq!(state.max_scroll, 0);
+        }
         state.submit("Orbit message".into());
-        render(&mut state, 140, 40);
+        let screen = render(&mut state, 140, 40);
         assert!(state.has_conversation());
         assert!(state.input_area.x < 20);
         assert_eq!(state.new_tab_area.height, 1);
+        assert!(!screen.contains("未知命令"));
+        run_command(
+            "/mode auto",
+            &mut state,
+            &mut model,
+            &mut history,
+            &mut session,
+            context(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            state.transcript.last(),
+            Some(TranscriptItem::CommandResult(_))
+        ));
+        assert!(state.info_dialog.is_none());
     }
 
     #[test]

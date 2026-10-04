@@ -413,7 +413,62 @@ fn fit_hit_rows(rows: &mut [(Rect, usize)], lines: &[Line<'_>], body: Rect) {
     }
 }
 
+#[derive(Debug)]
+pub struct InfoDialog {
+    pub title: String,
+    pub content: String,
+    scroll: usize,
+    max_scroll: usize,
+    page_rows: usize,
+}
+
+impl InfoDialog {
+    pub fn new(title: &str, content: String) -> Self {
+        Self {
+            title: title.into(),
+            content,
+            scroll: 0,
+            max_scroll: 0,
+            page_rows: 1,
+        }
+    }
+
+    fn handle(&mut self, event: &Event) -> bool {
+        match event {
+            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
+                KeyCode::Esc | KeyCode::Enter => return true,
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
+                KeyCode::Up => self.scroll = self.scroll.saturating_sub(1),
+                KeyCode::Down => self.scroll = self.scroll.saturating_add(1),
+                KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(self.page_rows),
+                KeyCode::PageDown => self.scroll = self.scroll.saturating_add(self.page_rows),
+                KeyCode::Home => self.scroll = 0,
+                KeyCode::End => self.scroll = self.max_scroll,
+                _ => {}
+            },
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.scroll = self.scroll.saturating_sub(super::wheel::LINES)
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scroll = self.scroll.saturating_add(super::wheel::LINES)
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        self.scroll = self.scroll.min(self.max_scroll);
+        false
+    }
+}
+
 pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
+    if let Some(dialog) = &mut state.info_dialog {
+        if dialog.handle(&event) {
+            state.info_dialog = None;
+        }
+        return None;
+    }
     if matches!(&event, Event::Key(_) | Event::Paste(_)) {
         state.dialog_manual_scroll = false;
     }
@@ -764,11 +819,7 @@ fn clean(text: &str) -> String {
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.dialog_rows.clear();
-    if !state.show_help
-        && state.picker.is_none()
-        && state.model_picker.is_none()
-        && state.marketplace_dialog.is_none()
-    {
+    if !state.dialog_open() {
         return;
     }
 
@@ -798,6 +849,44 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         .border_style(Style::default().fg(crate::tui::theme::THEME.accent));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if let Some(dialog) = &mut state.info_dialog {
+        state.ime_cursor = None;
+        let title = Rect::new(
+            inner.x + 1,
+            inner.y,
+            inner.width.saturating_sub(2),
+            1.min(inner.height),
+        );
+        let body = Rect::new(
+            title.x,
+            title.bottom().saturating_add(1).min(inner.bottom()),
+            title.width,
+            inner.height.saturating_sub(2),
+        );
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                super::render::fit_label(&clean(&dialog.title), title.width as usize, false),
+                Style::default()
+                    .fg(crate::tui::theme::THEME.accent)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            title,
+        );
+        let lines = dialog
+            .content
+            .lines()
+            .map(|line| Line::from(super::render::safe_output(line)))
+            .collect::<Vec<_>>();
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+        dialog.page_rows = usize::from(body.height).max(1);
+        dialog.max_scroll = paragraph
+            .line_count(body.width)
+            .saturating_sub(body.height as usize)
+            .min(u16::MAX as usize);
+        dialog.scroll = dialog.scroll.min(dialog.max_scroll);
+        frame.render_widget(paragraph.scroll((dialog.scroll as u16, 0)), body);
+        return;
+    }
     let header = Rect::new(
         inner.x + 1,
         inner.y,
@@ -1463,6 +1552,89 @@ mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
+        let mut state = UiState::new("orbit::model");
+        state.input.set("Orbit 草稿".into());
+        state.show_output(
+            "Orbit 状态",
+            format!("首行 Orbit\n{}\n末行 Orbit", "中文 👩‍💻 状态\n".repeat(80)),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(70, 30)).unwrap();
+        terminal
+            .draw(|frame| super::super::render::draw(frame, &mut state))
+            .unwrap();
+        assert!(state.ime_cursor.is_none());
+        assert!(state.info_dialog.as_ref().unwrap().max_scroll > 0);
+        let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        handle(&mut state, key(KeyCode::PageDown));
+        let dialog = state.info_dialog.as_ref().unwrap();
+        assert_eq!(dialog.scroll, dialog.page_rows);
+        handle(&mut state, key(KeyCode::End));
+        terminal
+            .draw(|frame| super::super::render::draw(frame, &mut state))
+            .unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        let text = screen.replace(' ', "");
+        assert!(text.contains("末行Orbit"));
+        assert!(!text.contains("首行Orbit"));
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        );
+        assert!(state.info_dialog.is_none());
+        assert_eq!(state.input.text, "Orbit 草稿");
+        assert!(state.transcript.is_empty());
+        terminal
+            .draw(|frame| super::super::render::draw(frame, &mut state))
+            .unwrap();
+        assert!(state.ime_cursor.is_some());
+    }
+
+    #[test]
+    fn home_errors_leave_no_transcript_and_keep_dialogs_safe_at_small_sizes() {
+        let mut state = UiState::new("orbit::model");
+        for (width, height) in [(141, 41), (28, 18), (10, 3), (1, 1)] {
+            state.report_local(super::super::app::TranscriptItem::CommandError(
+                "Orbit 操作失败：\u{1b}[31m".into(),
+            ));
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| super::super::render::draw(frame, &mut state))
+                .unwrap();
+            assert!(state.transcript.is_empty());
+            assert!(state.ime_cursor.is_none());
+            let buffer = terminal.backend().buffer();
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .all(|cell| !cell.symbol().contains('\u{1b}'))
+            );
+            if width > 20 {
+                let border = buffer
+                    .content
+                    .iter()
+                    .position(|cell| cell.symbol() == "┌")
+                    .unwrap();
+                let x = border as u16 % width;
+                let panel_width = width.saturating_sub(4).min(96);
+                assert!(width - x - panel_width - x <= 1);
+            }
+            handle(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            );
+            assert!(state.info_dialog.is_none());
+        }
+    }
 
     #[test]
     fn delete_requires_two_presses_to_confirm_and_any_other_key_cancels() {

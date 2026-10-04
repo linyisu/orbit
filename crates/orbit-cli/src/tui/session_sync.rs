@@ -72,7 +72,7 @@ impl SessionSync {
         }
         let Some(mut revision) = store.session_revision(&id).await? else {
             self.deleted.insert(id.clone());
-            state.transcript.push(super::app::TranscriptItem::Notice(
+            state.report_local(super::app::TranscriptItem::Notice(
                 "会话已在其他窗口删除，请新建会话继续。".into(),
             ));
             state.invalidate_transcript(0);
