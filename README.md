@@ -1,0 +1,59 @@
+# Orbit
+
+Orbit 是用 Rust 编写的终端编码 Agent。它提供交互式 TUI 和单次命令行任务，支持多供应商模型、文件工具、受限命令执行、持久化会话、后台命令与只读子代理。
+
+## 启动
+
+使用 stable Rust 工具链构建；依赖版本由 `Cargo.lock` 固定。目前命令执行后端需要 Linux、Bubblewrap（`bwrap`）、`prlimit` 和可用的用户命名空间。文件工具使用 Unix 文件描述符接口；其他系统尚未提供完整的等价执行后端。
+
+```sh
+cargo build --release -p orbit-cli
+./target/release/orbit --help
+./target/release/orbit tui
+```
+
+用 TUI 的 `/connect` 配置连接，或参考 [config.example.toml](config.example.toml) 编写 `config.toml`。可用 `--config <路径>` 指定配置文件，API Key 也可通过 `orbit auth set-key` 保存，再用配置中的 `credential` 引用。示例中的模型 ID 和能力需要与实际服务一致。
+
+```sh
+orbit chat "审查当前项目的代码并说明发现的问题"
+orbit tui --resume <SESSION_ID>
+orbit sessions list
+orbit sessions diagnostics <SESSION_ID>
+```
+
+TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel 或 iTerm2 协议；不支持像素图形时图片使用字符预览，公式保留 TeX。Markdown、HTML、代码、图片和 RaTeX 数学公式的支持范围见 [CLI 文档](crates/orbit-cli/README.md)。
+
+## 工作区结构
+
+| Crate | 职责 | 文档 |
+| --- | --- | --- |
+| `orbit-cli` | 配置、工具组装、会话协调、子代理调度与 TUI | [README](crates/orbit-cli/README.md) |
+| `orbit-agent` | 模型/工具执行循环、消息边界、后台等待、上下文整理 | [README](crates/orbit-agent/README.md) |
+| `orbit-model` | 通用消息类型、供应商协议、模型目录与思考参数适配 | [README](crates/orbit-model/README.md) |
+| `orbit-auth` | 凭据存储、OAuth 回调、令牌刷新与服务地址绑定 | [README](crates/orbit-auth/README.md) |
+| `orbit-runtime` | 工作区文件访问、执行策略、进程资源与 Linux 隔离 | [README](crates/orbit-runtime/README.md) |
+| `orbit-tools` | 文件、命令、网页、文档、交付与 MCP 工具 | [README](crates/orbit-tools/README.md) |
+| `orbit-store` | SQLite 会话、规范日志、执行检查点和子任务持久化 | [README](crates/orbit-store/README.md) |
+
+CLI 负责把这些库组装成一次运行。Agent 依赖模型与工具接口；工具通过 runtime 授权和执行，store 实现持久化接口。TUI 的合并、折叠与渲染只影响展示，模型历史仍保留各次原始调用。
+
+## 任务与会话
+
+- 后台命令立即返回任务 ID，完成后自动回传结果；Agent 可以继续其他工作，空闲时通过事件等待。命令进程不跨程序重启恢复。
+- 子代理目前提供独立的只读探索、审查角色，默认并行上限 8，支持补充消息和原会话续跑。默认不限轮数；超时配置用于提醒父代理查看进度，不直接终止子代理。
+- `/btw` 在弹窗中独立回答旁路问题，不调用工具、不改变主会话上下文。
+- SQLite 保存会话、消息、任务结果与检查点；单写入者锁避免多个窗口同时修改同一会话。数据库、附件和 scratch 位于用户数据目录，具体路径见 [存储文档](crates/orbit-store/README.md)。
+
+权限模式、命令网络策略、受保护文件、外部授权和 MCP 宿主进程的边界见 [工具文档](crates/orbit-tools/README.md) 与 [运行时文档](crates/orbit-runtime/README.md)。
+
+## 开发与验证
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+依赖已缓存时可为 Clippy 和测试增加 `--offline`。部分测试启动本地回环 HTTP 服务，需要允许本地监听。标记为 ignored 的真实沙箱与工具链测试不会被普通测试命令执行，应按其环境要求单独运行。
+
+代码组织、常量归属、复用边界和本轮全仓审查结果见 [开发与整理说明](docs/development.md)。CI 配置见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。

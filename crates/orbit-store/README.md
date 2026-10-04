@@ -1,6 +1,17 @@
 # orbit-store
 
+[项目总览](../../README.md) · [开发与整理说明](../../docs/development.md)
+
 `orbit-store` 是 Orbit 的持久化存储系统，基于 SQLite 提供高效、事务安全且高并发的数据存储引擎。它负责持久化会话历史、模型上下文快照、规范消息日志、多窗口生命周期元数据以及跨目录改名的项目身份跟踪。
+
+## 源码组织与迁移
+
+- [schema.rs](src/schema.rs)：有序 schema 迁移与支持的最高版本；历史版本号是持久化标识，不能当作普通重复数字消除。
+- [store.rs](src/store.rs)：连接、WAL 读取、会话和项目数据操作；读写连接共用锁等待常量。
+- [store/writer.rs](src/store/writer.rs)：运行开始、journal 创建、消息与子任务结果的事务性终态提交。`SessionWriter` 的公共接口和租约所有权保持不变。
+- [session_log.rs](src/session_log.rs)、[execution.rs](src/execution.rs)：规范消息、检查点和持久化接口；[subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs) 分别存储子代理与旁路对话。
+
+迁移和历史恢复回归在 [tests/sessions.rs](tests/sessions.rs)，包括旧版本升级及拒绝未来 schema。流式 journal 的 250 ms / 256 条提交触发策略由 `orbit-agent` 维护，store 负责执行相应事务。
 
 ## 架构与核心组件
 

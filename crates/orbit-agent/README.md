@@ -1,6 +1,16 @@
 # orbit-agent
 
+[项目总览](../../README.md) · [开发与整理说明](../../docs/development.md)
+
 `orbit-agent` 是 Orbit 的核心智能体规划与上下文生命周期管理库。它负责维护多轮对话状态、协调工具调用、估算模型输入预算，并通过分层压缩与归档回读机制，保障长周期工程任务在有限模型上下文窗口内稳定运行。
+
+## 实现入口与代码组织
+
+- [agent.rs](src/agent.rs)：运行循环、取消边界、工具配对、后台完成通知与 journal 刷盘；大段运行回归位于 [agent/tests.rs](src/agent/tests.rs)。
+- [context.rs](src/context.rs)、[autocompact.rs](src/autocompact.rs)、[compaction.rs](src/compaction.rs)：输入估算、结构化摘要和整理生命周期。
+- [background.rs](src/background.rs)、[inbox.rs](src/inbox.rs)、[checkpoint.rs](src/checkpoint.rs)：任务组、补充消息与持久化接口。子代理宿主及模型选择在 `orbit-cli/src/subagents.rs`，库不直接管理 UI 或数据库连接。
+
+Journal 批量和间隔由 `agent.rs` 的具名常量维护；UI 帧间隔属于 CLI，不与数据库刷盘间隔混用。
 
 ## 架构与核心组件
 

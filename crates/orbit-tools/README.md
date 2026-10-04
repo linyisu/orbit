@@ -1,6 +1,16 @@
 # orbit-tools
 
+[项目总览](../../README.md) · [开发与整理说明](../../docs/development.md)
+
 `orbit-tools` 是 Orbit 的工具集与执行适配库，为 AI Agent 提供一组完备、安全且受限的操作工具。`run_command` 在容器内执行；内置文件工具在宿主进程中使用受保护文件描述符访问。文档转换在独立离线沙箱进程中执行；图片处理和网页请求在宿主侧执行，MCP 服务是独立宿主进程；网页回退 Firefox 使用独立 Bubblewrap 命名空间、Seccomp 和临时 profile，不挂载工作区或宿主 HOME。
+
+## 共用预算和内部模块
+
+[limits.rs](src/limits.rs) 统一文本工具的页预算（32 KiB）、JSON 元数据预留及目录扫描条目预算；各工具的行数、深度、匹配数等上限由各自模块拥有，参数 schema 与实际验证引用同一常量。文本/条目预算之外仍有 JSON 分页元数据，不应将其等同于整个序列化响应的精确字节数。
+
+[web_fetch/dom.rs](src/web_fetch/dom.rs) 为 Google、Bing 和 DuckDuckGo 共用 DOM 属性、节点查找与文本投影；各引擎的结果定位、跳转及过滤规则保留在对应模块。
+
+[image_assets.rs](src/image_assets.rs) 复用 `Attachment::MAX_IMAGE_BYTES` 与有界图片文件读取，导入前不再无界读取整个文件。[web_fetch/image.rs](src/web_fetch/image.rs) 的 `fetch_image` 是 TUI 使用的内部网络图片接口，复用 URL、DNS 与重定向检查；它没有注册成额外的模型工具。
 
 ## 架构与核心设计
 

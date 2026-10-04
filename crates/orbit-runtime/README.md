@@ -1,8 +1,16 @@
 # orbit-runtime
 
+[项目总览](../../README.md) · [开发与整理说明](../../docs/development.md)
+
 `orbit-runtime` 是 Orbit 的底层执行与安全子系统，负责工作区安全抽象、细粒度权限控制、文件系统边界隔离、沙箱容器化执行以及工作区状态验证。
 
 它为命令执行提供操作系统级隔离，为文件工具提供路径与文件描述符校验。具体可访问资源取决于执行策略、挂载与授权；这些机制不等于对任意命令或外部程序的行为保证。
+
+## 隔离实现与测试组织
+
+[sandbox.rs](src/execution/sandbox.rs) 负责真实挂载授权、保护路径和 inode 校验；[sandbox/isolation.rs](src/execution/sandbox/isolation.rs) 共用命名空间、系统只读挂载及 Seccomp 构造，普通命令与浏览器读取都调用这些隔离部件。公共执行入口保持一致。
+
+大量沙箱单元回归位于 [sandbox/tests.rs](src/execution/sandbox/tests.rs)。标记为 ignored 的真实 Bubblewrap 测试需要在允许用户命名空间的 Linux 环境单独执行；普通 `cargo test` 不代表已经运行这些测试。
 
 ## 架构与核心子系统
 
@@ -15,6 +23,7 @@ orbit-runtime/
 │   ├── resources.rs     # ProcessLimits & ResourceLimits (内存、文件、进程限制)
 │   ├── manager.rs       # ExecutionManager (执行流程生命周期管理)
 │   ├── sandbox.rs       # 挂载组装、inode 收集与受保护路径遮蔽
+│   ├── sandbox/         # 共用隔离构造与沙箱回归测试
 │   └── backend/         # Linux Bubblewrap 隔离后端实现
 ├── filesystem/      # 工作区安全抽象、路径解析与 Inode 审计
 │   ├── workspace.rs     # Workspace 结构体与保护路径注册

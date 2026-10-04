@@ -1,6 +1,14 @@
 # orbit-model
 
+[项目总览](../../README.md) · [开发与整理说明](../../docs/development.md)
+
 `orbit-model` 是 Orbit 的多供应商模型接入与流式协议抽象库。它为上层 Agent 和 CLI 提供统一的消息格式、流式事件管道、思考推理控制以及工具调用协议适配，隔离各服务商底层 API 的格式差异。
+
+## 共用策略与调用边界
+
+图片字节上限由 [types.rs](src/types.rs) 的 `Attachment::MAX_IMAGE_BYTES` 统一维护。`Attachment::read_image_bytes` 校验普通文件，并限制实际读取字节数；模型编码、附件导入和 TUI 解码共用这一入口。格式解码和缩放由调用方负责，SVG 的终端预览不代表模型协议接受 SVG 附件。
+
+[discovery.rs](src/discovery.rs) 拥有模型目录请求和分页的超时策略；[account_catalog.rs](src/account_catalog.rs) 合并账号目录能力。CLI 负责配置覆盖、缓存和刷新调度，模型库负责协议能力解析，不仅为某一个供应商同步模型。
 
 ## 核心设计与模块职责
 
