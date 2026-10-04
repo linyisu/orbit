@@ -73,7 +73,7 @@ Orbit 原生支持在多个终端窗口或终端会话中同时打开和协同�
 - `spawn_agent`：传入 `task`、可选 `context` 和 `role = "explore" / "review"`，立即返回稳定的 `agent_id`。默认继承父模型及有效思考档位，也可传入 `model = "连接::模型"`、`reasoning_effort`；配置的 `explore_model` / `review_model` 为对应角色提供默认模型。每次启动或续跑都重新读取模型配置，失效的模型或档位会明确报错。
 - `send_agent_message`：运行中在下一次模型请求前接收补充消息；结束或中断后，在原子会话内续跑。正在最终提交或取消时需等结果返回后重试。
 - `wait_agents`：等待任一子任务完成，或用 `all = true` 等待全部。等待期间不请求模型；完成结果也会在父模型请求之间自动送入。`cancel_agents` 可单独取消选定子任务，父运行取消则取消本轮全部子任务。
-- `read_agent`：不传 ID 时列出本会话的子任务；传入 ID 后按规范消息日志分页读取，使用 `message_id`、`after_message_id` 和 Unicode 字符 `offset` / `length` 获取完整证据。自动回传的答案最多 6000 个字符。
+- `read_agent`：不传 ID 时列出本会话的子任务；传入 ID 后默认直接读取最近一轮已完成的最终回答，每页最多 16000 个 Unicode 字符。自动回传的答案最多 6000 个字符，`truncated = false` 表示完整；长报告附带 `read_more`，后续页面返回 `next_read`，固定消息 ID 以防续跑期间串页。`view = "transcript"` 从规范消息日志开头读取；显式 `message_id` / `after_message_id` 默认沿用日志分页语义，`view = "result"` 则按最终回答正文分页。运行中的子任务明确返回结果尚未就绪，不把旧报告当成本轮结果。
 
 子 Agent 使用独立会话、上下文和工具实例，只收到任务与显式补充的上下文；项目指令继续适用。当前提供只读文件与网页工具，并与父工具集取交集；不提供命令、文件写入、MCP、跨会话记忆或嵌套代理。每次运行默认最多 60 轮、400 次工具调用、30 分钟，可通过 `[subagents]` 调整。可写角色与 Git worktree 隔离尚未实现。
 

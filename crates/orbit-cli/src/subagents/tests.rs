@@ -22,6 +22,7 @@ struct GatedModel {
     requests: Arc<std::sync::Mutex<Vec<ChatRequest>>>,
     gate: Arc<Semaphore>,
     changed: Arc<Notify>,
+    answer: Arc<str>,
 }
 impl GatedModel {
     fn new() -> Self {
@@ -29,6 +30,7 @@ impl GatedModel {
             requests: Default::default(),
             gate: Arc::new(Semaphore::new(0)),
             changed: Arc::new(Notify::new()),
+            answer: "Orbit findings".into(),
         }
     }
     async fn received(&self, count: usize) {
@@ -54,7 +56,7 @@ impl ModelBackend for GatedModel {
         token: CancellationToken,
     ) -> CompletionFuture<'a> {
         Box::pin(async move {
-            MockModel::new([response(ChatMessage::assistant("Orbit findings"))])
+            MockModel::new([response(ChatMessage::assistant(self.answer.to_string()))])
                 .complete(request, token)
                 .await
         })
@@ -67,7 +69,7 @@ impl ModelBackend for GatedModel {
                 _=token.cancelled()=>return Err(ModelError::Cancelled),
                 permit=self.gate.acquire()=>permit.unwrap().forget(),
             }
-            MockModel::new([response(ChatMessage::assistant("Orbit findings"))])
+            MockModel::new([response(ChatMessage::assistant(self.answer.to_string()))])
                 .stream(request, token)
                 .await
         })
@@ -167,6 +169,126 @@ async fn spawn(service: &Arc<Service>, name: &str, token: CancellationToken) -> 
             .content,
     )
     .unwrap()
+}
+
+async fn read(service: &Arc<Service>, args: Value) -> Result<Value> {
+    let output = service
+        .clone()
+        .execute(
+            Action::Read,
+            ToolCall::function("orbit-read", "read_agent", args.clone()),
+            args,
+            CancellationToken::new(),
+        )
+        .await?;
+    Ok(serde_json::from_str(&output.content)?)
+}
+
+#[tokio::test]
+async fn final_results_are_direct_unicode_pages_with_stable_completion_cursors() {
+    let dir = tempfile::tempdir().unwrap();
+    let answer = "Orbit 中文报告🙂\n".repeat(2000);
+    let mut model = GatedModel::new();
+    model.answer = answer.clone().into();
+    let (service, parent) = fixture(dir.path(), model.clone(), Default::default()).await;
+    let receipt = spawn(&service, "orbit-report", CancellationToken::new()).await;
+    let id = receipt["agent_id"].as_str().unwrap();
+    let pending = read(&service, json!({"agent_id":id})).await.unwrap();
+    assert_eq!(pending["result_available"], false);
+    assert_eq!(pending["content"], "");
+    model.gate.add_permits(1);
+    let finished = service
+        .jobs
+        .wait(
+            &[receipt["job_id"].as_str().unwrap().into()],
+            true,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let completion = finished[0].result.as_ref().unwrap();
+    assert_eq!(completion["truncated"], true);
+    assert!(completion["result_message_id"].as_i64().is_some());
+    assert_eq!(completion["total_characters"], answer.chars().count());
+    let page = read(&service, json!({"agent_id":id})).await.unwrap();
+    assert_eq!(page["view"], "result");
+    assert_eq!(page["message_id"], completion["result_message_id"]);
+    assert_eq!(
+        page["content"].as_str().unwrap(),
+        answer.chars().take(16000).collect::<String>()
+    );
+
+    let mut reconstructed = completion["summary"].as_str().unwrap().to_owned();
+    let mut cursor = completion["read_more"].clone();
+    while !cursor.is_null() {
+        let page = read(&service, cursor).await.unwrap();
+        assert_eq!(page["message_id"], completion["result_message_id"]);
+        reconstructed.push_str(page["content"].as_str().unwrap());
+        cursor = page["next_read"].clone();
+    }
+    assert_eq!(reconstructed, answer);
+    let transcript = read(&service, json!({"agent_id":id,"view":"transcript"}))
+        .await
+        .unwrap();
+    assert_eq!(transcript["view"], "transcript");
+    assert!(
+        transcript["content"]
+            .as_str()
+            .unwrap()
+            .contains("inspect orbit-report")
+    );
+    let next = read(
+        &service,
+        json!({"agent_id":id,"after_message_id":transcript["message_id"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next["view"], "transcript");
+    assert_eq!(next["message_id"], completion["result_message_id"]);
+    assert!(
+        read(
+            &service,
+            json!({"agent_id":id,"view":"result","message_id":transcript["message_id"]})
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        read(
+            &service,
+            json!({"agent_id":id,"offset":answer.chars().count()+1})
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        read(&service, json!({"agent_id":parent.id()}))
+            .await
+            .is_err()
+    );
+
+    let continued = json!({"agent_id":id,"message":"再次核对 Orbit"});
+    service
+        .clone()
+        .execute(
+            Action::Send,
+            ToolCall::function("orbit-continue", "send_agent_message", continued.clone()),
+            continued,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        read(&service, json!({"agent_id":id})).await.unwrap()["result_available"],
+        false
+    );
+    assert_eq!(read(&service,json!({"agent_id":id,"view":"result","message_id":completion["result_message_id"],"offset":6000})).await.unwrap()["message_id"],completion["result_message_id"]);
+    service.jobs.cancel(&[]).unwrap();
+    service
+        .jobs
+        .wait(&[], true, CancellationToken::new())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

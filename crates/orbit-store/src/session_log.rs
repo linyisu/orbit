@@ -1,6 +1,7 @@
 //! Append-only conversation messages, separate from the mutable model projection.
 use anyhow::{Result, ensure};
 use orbit_model::types::ChatMessage;
+use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
 use crate::store::Store;
@@ -10,6 +11,22 @@ pub struct CanonicalMessage {
     pub id: i64,
     pub run_id: i64,
     pub message: ChatMessage,
+}
+
+fn decode(id: i64, run_id: i64, payload: String, expected: String) -> Result<CanonicalMessage> {
+    let actual = Sha256::digest(payload.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    ensure!(
+        actual == expected,
+        "canonical message {id} failed integrity check"
+    );
+    Ok(CanonicalMessage {
+        id,
+        run_id,
+        message: serde_json::from_str(&payload)?,
+    })
 }
 
 impl Store {
@@ -56,23 +73,44 @@ impl Store {
 
             for row in rows {
                 let (id, run_id, payload, expected) = row?;
-                let actual = Sha256::digest(payload.as_bytes())
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>();
-                ensure!(
-                    actual == expected,
-                    "canonical message {id} failed integrity check"
-                );
-
-                messages.push(CanonicalMessage {
-                    id,
-                    run_id,
-                    message: serde_json::from_str(&payload)?,
-                });
+                messages.push(decode(id, run_id, payload, expected)?);
             }
 
             Ok((legacy_gap, messages))
+        })
+        .await
+    }
+
+    /// Read the last committed message of one run without traversing its tool log.
+    pub async fn canonical_tail(
+        &self,
+        session_id: &str,
+        run_id: Option<i64>,
+    ) -> Result<(bool, Option<CanonicalMessage>)> {
+        let session_id = session_id.to_owned();
+        self.read_access(move |conn| {
+            conn.query_row("SELECT id FROM sessions WHERE id=?1", [&session_id], |_| {
+                Ok(())
+            })?;
+            let legacy_gap = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_log_gaps WHERE session_id=?1)",
+                [&session_id],
+                |row| row.get(0),
+            )?;
+            let record = conn
+                .query_row(
+                    "SELECT id,run_id,payload,sha256 FROM session_messages
+                 WHERE session_id=?1 AND run_id=COALESCE(?2,
+                   (SELECT id FROM runs WHERE session_id=?1 ORDER BY id DESC LIMIT 1))
+                 ORDER BY ordinal DESC LIMIT 1",
+                    params![session_id, run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()?;
+            let message = record
+                .map(|(id, run_id, payload, hash)| decode(id, run_id, payload, hash))
+                .transpose()?;
+            Ok((legacy_gap, message))
         })
         .await
     }
@@ -152,6 +190,9 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].message, user);
         assert_eq!(messages[1].message, reply);
+        let (gap, tail) = reopened.canonical_tail(&id, None).await.unwrap();
+        assert!(!gap);
+        assert_eq!(tail.unwrap().message, reply);
         assert_eq!(
             reopened.load(&id).await.unwrap().history,
             vec![ChatMessage::user("compacted task state")]
@@ -211,6 +252,69 @@ mod tests {
             .unwrap();
 
         assert!(store.canonical_messages("missing", None, 10).await.is_err());
+        assert!(store.canonical_tail("missing", None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn tail_is_scoped_to_the_run_and_checks_integrity() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().join("orbit.db"))
+            .await
+            .unwrap();
+        let mut writer = store
+            .create(
+                directory.path().display().to_string(),
+                "orbit-model".into(),
+                false,
+            )
+            .await
+            .unwrap();
+        let id = writer.id().to_owned();
+        writer
+            .begin("Orbit 第一轮".into(), "orbit-model".into())
+            .await
+            .unwrap();
+        let first = writer.active_run_id().unwrap();
+        let journal = writer.execution_journal().unwrap();
+        journal.record_message(ChatMessage::assistant("Orbit 第一轮结果"));
+        journal.flush().await.unwrap();
+        writer
+            .finish("completed", vec![], Some(vec![]))
+            .await
+            .unwrap();
+        writer
+            .begin("Orbit 第二轮".into(), "orbit-model".into())
+            .await
+            .unwrap();
+        assert!(store.canonical_tail(&id, None).await.unwrap().1.is_none());
+        assert_eq!(
+            store
+                .canonical_tail(&id, Some(first))
+                .await
+                .unwrap()
+                .1
+                .unwrap()
+                .message,
+            ChatMessage::assistant("Orbit 第一轮结果")
+        );
+        store
+            .access(move |conn| {
+                conn.execute(
+                    "UPDATE session_messages SET payload='{}' WHERE run_id=?1",
+                    [first],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(
+            store
+                .canonical_tail(&id, Some(first))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("integrity check")
+        );
     }
 
     #[tokio::test]
