@@ -1,4 +1,6 @@
-//! Nerd Fonts Material Design glyphs shared by terminal views.
+//! Glyphs shared by terminal views; interface icons use Nerd Fonts Material Design.
+
+pub(super) const PROMPT: &str = "❯";
 
 pub(super) const CHECK: &str = "󰄬";
 pub(super) const CLOSE: &str = "󰅖";

@@ -1210,7 +1210,7 @@ pub(super) fn transcript_lines_at_width(
                     lines.push(Line::from(vec![
                         Span::styled(
                             if index == 0 {
-                                format!("{} ", icons::CHEVRON_RIGHT)
+                                format!("{} ", icons::PROMPT)
                             } else {
                                 "  ".into()
                             },
@@ -2166,7 +2166,7 @@ pub(super) fn draw_prompt(
     cursor: (usize, usize),
 ) {
     frame.render_widget(
-        Paragraph::new(Span::styled(icons::CHEVRON_RIGHT, Style::default().fg(ACCENT))),
+        Paragraph::new(Span::styled(icons::PROMPT, Style::default().fg(ACCENT))),
         Rect {
             width: 2,
             ..prompt_area

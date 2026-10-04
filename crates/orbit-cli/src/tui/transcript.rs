@@ -499,7 +499,7 @@ impl Entry {
     }
 
     fn user(&mut self, text: &str, width: u16) {
-        self.framed_input(text, width, super::icons::CHEVRON_RIGHT);
+        self.framed_input(text, width, super::icons::PROMPT);
     }
 
     fn framed_input(&mut self, text: &str, width: u16, icon: &str) {
@@ -1447,7 +1447,7 @@ mod tests {
             layout.entries[0].rows[0]
                 .line
                 .to_string()
-                .starts_with(&format!("╭─{}─", super::super::icons::CHEVRON_RIGHT))
+                .starts_with(&format!("╭─{}─", super::super::icons::PROMPT))
         );
     }
 
