@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 pub(super) fn clear(frame: &mut Frame<'_>, area: Rect) {
+    super::media::occlude(area);
     let buffer = frame.buffer_mut();
     let bounds = *buffer.area();
     let area = area.intersection(bounds);

@@ -19,6 +19,7 @@ pub(super) struct Decorations {
     // Terminal column ranges, after wrapping and adding repeated gutters.
     pub ranges: Vec<Range<usize>>,
     pub chrome: bool,
+    pub copy: Vec<super::media::CopyText>,
 }
 
 #[derive(Debug)]
@@ -27,10 +28,14 @@ struct Row {
     wrapped: Vec<Line<'static>>,
     ranges: Vec<Range<usize>>,
     links: Vec<super::markdown::LinkTarget>,
+    html_disclosure: Option<String>,
     decorations: Vec<Decorations>,
     gutter: Option<Gutter>,
     start: usize,
     height: usize,
+    graphics: Vec<super::media::Fragment>,
+    media: Vec<super::media::Target>,
+    media_requests: Vec<super::media::Request>,
 }
 
 #[derive(Debug)]
@@ -132,6 +137,22 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
     })
 }
 
+fn take_gutter_before(line: &mut Line<'static>, column: u16) -> Option<Gutter> {
+    let mut width = 0;
+    let end = line
+        .spans
+        .iter()
+        .take_while(|span| {
+            width += span.width();
+            width <= usize::from(column)
+        })
+        .count();
+    let mut body = line.spans.split_off(end);
+    let gutter = take_gutter(line);
+    line.spans.append(&mut body);
+    gutter
+}
+
 fn slice_line(line: &Line<'static>, range: Range<usize>) -> Line<'static> {
     let mut spans = Vec::new();
     let mut offset = 0;
@@ -159,6 +180,11 @@ fn slice_line(line: &Line<'static>, range: Range<usize>) -> Line<'static> {
 }
 
 fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
+    wrap_ranges_from(text, width, width)
+}
+
+/// The same Unicode breaker also lays out prose following an inline picture.
+pub(super) fn wrap_ranges_from(text: &str, width: u16, first_width: u16) -> Vec<Range<usize>> {
     if text.is_empty() || width == 0 {
         return std::iter::once_with(|| 0..0).collect();
     }
@@ -170,6 +196,11 @@ fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
     let mut start = 0;
 
     while start < text.len() {
+        let capacity = if ranges.is_empty() {
+            first_width
+        } else {
+            width
+        };
         let mut used = 0;
         let mut hard_end = start;
         let mut allowed = None;
@@ -179,7 +210,7 @@ fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
             let end = start + relative + grapheme.len();
             let size = grapheme.width();
 
-            if used + size > usize::from(width) && hard_end > start {
+            if used + size > usize::from(capacity) && hard_end > start {
                 overflowed = true;
                 break;
             }
@@ -224,6 +255,11 @@ pub(super) fn wrap_linked_line(
     mut linked: super::markdown::LinkedLine,
     width: u16,
 ) -> Vec<super::markdown::LinkedLine> {
+    // Mixed media must be wrapped once, after images have their cell sizes.
+    // Wrapping here would split formulas and lose their complete target range.
+    if !linked.media.is_empty() {
+        return vec![linked];
+    }
     let original = linked.line.clone();
     let gutter = take_gutter(&mut linked.line).filter(|gutter| gutter.width < width);
     if gutter.is_none() {
@@ -267,6 +303,23 @@ pub(super) fn wrap_linked_line(
                 links,
                 decorations,
                 chrome: linked.chrome,
+                folds: linked.folds.clone(),
+                disclosure: linked.disclosure.clone(),
+                media: linked
+                    .media
+                    .iter()
+                    .filter_map(|target| {
+                        let slice = range.start + removed..range.end + removed;
+                        (target.range.start >= slice.start && target.range.end <= slice.end).then(
+                            || super::media::Target {
+                                range: target.range.start - slice.start + offset
+                                    ..target.range.end - slice.start + offset,
+                                source: target.source.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+                ..Default::default()
             }
         })
         .collect()
@@ -290,6 +343,7 @@ fn byte_at_column(text: &str, range: &Range<usize>, column: u16) -> Option<usize
 
 #[derive(Debug, Default)]
 struct Entry {
+    media: super::media::Context,
     rows: Vec<Row>,
     disclosures: Vec<usize>,
     tool_group: Option<Range<usize>>,
@@ -302,11 +356,20 @@ struct Entry {
     parsed_bytes: usize,
     logical_index: usize,
     code: super::markdown::Fence,
+    inline: super::markdown::InlineState,
     observed_bytes: Option<usize>,
     references: Vec<(String, String, Option<String>)>,
+    html_toggles: std::collections::BTreeSet<String>,
 }
 
 impl Entry {
+    fn clear(&mut self) {
+        let toggles = std::mem::take(&mut self.html_toggles);
+        let media = self.media.clone();
+        *self = Self::default();
+        self.html_toggles = toggles;
+        self.media = media;
+    }
     fn remove_spacing(&mut self) {
         if self.spacing {
             if let Some(row) = self.rows.pop() {
@@ -334,21 +397,63 @@ impl Entry {
                 links,
                 decorations: Vec::new(),
                 chrome: false,
+                ..Default::default()
             },
             width,
         );
     }
 
     fn push_linked(&mut self, mut linked: super::markdown::LinkedLine, width: u16) {
+        render::sanitize_linked_line(&mut linked);
+        let requests = super::media::requests(&linked, width);
+        for line in super::media::layout(linked, &self.media, width) {
+            self.push_physical(line, width, requests.clone());
+        }
+    }
+
+    fn push_physical(
+        &mut self,
+        mut linked: super::markdown::LinkedLine,
+        width: u16,
+        requests: Vec<super::media::Request>,
+    ) {
+        if linked
+            .folds
+            .iter()
+            .any(|fold| !(fold.open ^ self.html_toggles.contains(&fold.id)))
+        {
+            return;
+        }
+        if let Some(fold) = &linked.disclosure {
+            let open = fold.open ^ self.html_toggles.contains(&fold.id);
+            for span in &mut linked.line.spans {
+                if span.content == format!("{} ", super::icons::CHEVRON_RIGHT) {
+                    span.content = format!(
+                        "{} ",
+                        if open {
+                            super::icons::ARROW_DOWN
+                        } else {
+                            super::icons::CHEVRON_RIGHT
+                        }
+                    )
+                    .into();
+                    break;
+                }
+            }
+        }
         let line = &mut linked.line;
-        // Markdown rules occupy the entire transcript row, including the usual gutter.
+        // Markdown and HTML rules share the body's symmetric margins.
         if super::markdown::expand_rule(line, width) {
             linked.decorations = std::iter::once(0..line.to_string().len()).collect();
             linked.chrome = true;
         }
         render::sanitize_line(line);
         let original = line.to_string();
-        let gutter = take_gutter(line);
+        let gutter = if let Some(column) = linked.graphics.iter().map(|g| g.x).min() {
+            take_gutter_before(line, column)
+        } else {
+            take_gutter(line)
+        };
         let removed = original.len().saturating_sub(line.to_string().len());
         linked.links.retain_mut(|link| {
             if link.end <= removed {
@@ -360,6 +465,10 @@ impl Entry {
 
             true
         });
+        for target in &mut linked.media {
+            target.range.start = target.range.start.saturating_sub(removed);
+            target.range.end = target.range.end.saturating_sub(removed);
+        }
         let content_width = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
         let (wrapped, ranges) = wrap_line(line, content_width);
         let decorations = ranges
@@ -393,19 +502,29 @@ impl Entry {
                 Decorations {
                     ranges: excluded,
                     chrome: linked.chrome,
+                    copy: linked.copy.clone(),
                 }
             })
             .collect();
         let height = wrapped.len();
+        for graphic in &mut linked.graphics {
+            graphic.x = graphic
+                .x
+                .saturating_sub(gutter.as_ref().map_or(0, |g| g.width));
+        }
         self.rows.push(Row {
             gutter,
             line: linked.line,
             wrapped,
             ranges,
             links: linked.links,
+            html_disclosure: linked.disclosure.map(|fold| fold.id),
             decorations,
             start: self.height,
             height,
+            graphics: linked.graphics,
+            media: linked.media,
+            media_requests: requests,
         });
         self.height += height;
     }
@@ -414,7 +533,7 @@ impl Entry {
         if self.observed_bytes.is_some_and(|len| text.len() < len)
             || !text.is_char_boundary(self.parsed_bytes)
         {
-            *self = Self::default();
+            self.clear();
         }
 
         if self.observed_bytes == Some(text.len()) {
@@ -425,7 +544,7 @@ impl Entry {
             let context = super::markdown::Context::new(text);
             let definitions = context.definitions();
             if definitions != self.references {
-                *self = Self::default();
+                self.clear();
                 self.references = definitions;
             }
             context
@@ -436,10 +555,76 @@ impl Entry {
         self.rows.truncate(self.stable_rows);
         self.height = self.rows.last().map_or(0, |row| row.start + row.height);
         let mut code = self.code.clone();
+        let mut inline = self.inline.clone();
         let mut index = self.logical_index;
         let mut consumed = self.parsed_bytes;
+        let mut can_commit = true;
 
         while consumed < text.len() {
+            if code.is_none()
+                && let Some((bytes, lines)) = context.math_block(&text[consumed..])
+            {
+                for line in lines {
+                    self.push_linked(
+                        if thinking {
+                            render::thinking_linked(line)
+                        } else {
+                            line
+                        },
+                        width,
+                    );
+                }
+                index += text[consumed..consumed + bytes].lines().count();
+                consumed += bytes;
+                // Display math is provisional until its terminating newline is
+                // received, just like tables and HTML fragments.
+                if can_commit && text[..consumed].ends_with('\n') {
+                    self.stable_rows = self.rows.len();
+                    self.parsed_bytes = consumed;
+                    self.logical_index = index;
+                    self.code = code.clone();
+                    self.inline = inline.clone();
+                }
+                continue;
+            }
+            if code.is_none() && super::markdown::Context::math_candidate(&text[consumed..]) {
+                // An opening delimiter can become display math when later
+                // chunks arrive. Keep its paragraph provisional meanwhile.
+                can_commit = false;
+            }
+            if code.is_none()
+                && let Some(block) = super::markdown::blocks::render(
+                    &text[consumed..],
+                    if thinking {
+                        width.saturating_sub(2)
+                    } else {
+                        width
+                    },
+                    &format!("body/{consumed}"),
+                    0,
+                )
+            {
+                for line in block.lines {
+                    self.push_linked(
+                        if thinking {
+                            render::thinking_linked(line)
+                        } else {
+                            line
+                        },
+                        width,
+                    );
+                }
+                index += text[consumed..consumed + block.bytes].lines().count();
+                consumed += block.bytes;
+                if can_commit && block.complete && text[..consumed].ends_with('\n') {
+                    self.stable_rows = self.rows.len();
+                    self.parsed_bytes = consumed;
+                    self.logical_index = index;
+                    self.code = code.clone();
+                    self.inline = inline.clone();
+                }
+                continue;
+            }
             if !thinking
                 && code.is_none()
                 && let Some((bytes, lines)) = context.table(&text[consumed..], width)
@@ -453,15 +638,19 @@ impl Entry {
 
                 // A partial next row (even just "| ") can temporarily end the parser's
                 // table. Do not freeze it until a complete terminating line arrives.
-                if text[consumed..]
-                    .split_inclusive('\n')
-                    .next()
-                    .is_some_and(|line| line.ends_with('\n') && !line.trim_start().starts_with('|'))
+                if can_commit
+                    && text[consumed..]
+                        .split_inclusive('\n')
+                        .next()
+                        .is_some_and(|line| {
+                            line.ends_with('\n') && !line.trim_start().starts_with('|')
+                        })
                 {
                     self.stable_rows = self.rows.len();
                     self.parsed_bytes = consumed;
                     self.logical_index = index;
                     self.code = code.clone();
+                    self.inline = inline.clone();
                 }
 
                 continue;
@@ -477,21 +666,23 @@ impl Entry {
                 part
             };
 
-            let rendered = context.linked_line(line, index, &mut code);
-            let rendered = if thinking {
-                render::thinking_linked(rendered)
-            } else {
-                rendered
-            };
-            self.push_linked(rendered, width);
+            for rendered in context.linked_lines(line, index, &mut code, &mut inline) {
+                let rendered = if thinking {
+                    render::thinking_linked(rendered)
+                } else {
+                    rendered
+                };
+                self.push_linked(rendered, width);
+            }
             index += 1;
             consumed += part.len();
 
-            if complete && (thinking || code.is_some() || !line.contains('|')) {
+            if can_commit && complete && (thinking || code.is_some() || !line.contains('|')) {
                 self.stable_rows = self.rows.len();
                 self.parsed_bytes = consumed;
                 self.logical_index = index;
                 self.code = code.clone();
+                self.inline = inline.clone();
             }
         }
 
@@ -577,11 +768,14 @@ impl Entry {
 
 #[derive(Debug, Default)]
 pub(super) struct TranscriptLayout {
+    media: super::media::Context,
+    media_revision: u64,
     entries: Vec<Entry>,
     width: u16,
     expanded: std::collections::BTreeSet<usize>,
     expanded_groups: std::collections::BTreeSet<usize>,
     dirty_from: usize,
+    html_toggles: std::collections::BTreeMap<usize, std::collections::BTreeSet<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -592,6 +786,89 @@ pub(super) struct TranscriptAnchor {
 }
 
 impl TranscriptLayout {
+    pub(super) fn set_media(&mut self, media: super::media::Context) {
+        let revision = media.revision();
+        if !self.media.same_cache(&media) || self.media_revision != revision {
+            self.entries.clear();
+            self.dirty_from = 0;
+        }
+        self.media = media;
+        self.media_revision = revision;
+    }
+
+    pub(super) fn media_at(
+        &self,
+        area: Rect,
+        offset: usize,
+        point: (u16, u16),
+    ) -> Option<super::media::Source> {
+        if !self.media.enabled() {
+            return None;
+        }
+        if !area.contains(point.into()) {
+            return None;
+        }
+        let absolute = offset + usize::from(point.1 - area.y);
+        let entry = self
+            .entries
+            .get(self.entries.partition_point(|e| e.end <= absolute))?;
+        let relative = absolute - (entry.end - entry.height);
+        let row = entry
+            .rows
+            .iter()
+            .find(|r| r.start <= relative && relative < r.start + r.height)?;
+        let column = point
+            .0
+            .saturating_sub(area.x + row.gutter.as_ref().map_or(0, |g| g.width));
+        row.graphics
+            .iter()
+            .find(|f| column >= f.x && column < f.x + f.picture.size.width)
+            .map(|f| f.picture.source.clone())
+            .or_else(|| {
+                let byte = byte_at_column(
+                    &row.line.to_string(),
+                    row.ranges.get(relative - row.start)?,
+                    column,
+                )?;
+                row.media
+                    .iter()
+                    .find(|t| t.range.contains(&byte))
+                    .map(|t| t.source.clone())
+            })
+    }
+    pub(super) fn html_disclosure_at(
+        &self,
+        area: Rect,
+        offset: usize,
+        point: (u16, u16),
+    ) -> Option<(usize, String)> {
+        if !area.contains(point.into()) {
+            return None;
+        }
+        let absolute = offset + usize::from(point.1 - area.y);
+        let index = self.entries.partition_point(|entry| entry.end <= absolute);
+        let entry = self.entries.get(index)?;
+        let relative = absolute - (entry.end - entry.height);
+        let row = entry
+            .rows
+            .iter()
+            .find(|row| row.start <= relative && relative < row.start + row.height)?;
+        let id = row.html_disclosure.as_ref()?;
+        let width = row.wrapped.get(relative - row.start)?.width()
+            + row
+                .gutter
+                .as_ref()
+                .map_or(0, |gutter| gutter.width as usize);
+        (usize::from(point.0 - area.x) < width).then(|| (index, id.clone()))
+    }
+
+    pub(super) fn toggle_html(&mut self, index: usize, id: String) {
+        let toggles = self.html_toggles.entry(index).or_default();
+        if !toggles.remove(&id) {
+            toggles.insert(id);
+        }
+        self.reset_rows_from(index);
+    }
     pub(super) fn anchor_at(&self, offset: usize) -> Option<TranscriptAnchor> {
         let entry_index = self.entries.partition_point(|entry| entry.end <= offset);
         let entry = self.entries.get(entry_index)?;
@@ -636,6 +913,11 @@ impl TranscriptLayout {
 
     /// Discard cached source offsets when text is edited or entries are removed.
     pub(super) fn reset_from(&mut self, index: usize) {
+        self.html_toggles.retain(|item, _| *item < index);
+        self.reset_rows_from(index);
+    }
+
+    fn reset_rows_from(&mut self, index: usize) {
         let index = self
             .entries
             .get(index)
@@ -714,6 +996,12 @@ impl TranscriptLayout {
             .enumerate()
         {
             let item_index = first + relative;
+            entry.media = self.media.clone();
+            entry.html_toggles = self
+                .html_toggles
+                .get(&item_index)
+                .cloned()
+                .unwrap_or_default();
             if item_index >= group.end {
                 group = super::tool_groups::range(items, item_index);
             }
@@ -727,9 +1015,9 @@ impl TranscriptLayout {
                     entry.stream(row.content.trim_end(), true, width)
                 }
                 TranscriptItem::Thinking(row) => {
-                    *entry = Entry::default();
+                    entry.clear();
                     let is_expanded = expanded.contains(&(first + relative));
-                    let mut lines = render::thinking_card_with_links(row, is_expanded);
+                    let mut lines = render::thinking_card_at_width(row, is_expanded, width);
                     if lines
                         .last()
                         .is_some_and(|line| line.line.to_string().is_empty())
@@ -744,11 +1032,11 @@ impl TranscriptLayout {
                     }
                 }
                 TranscriptItem::User(text) => {
-                    *entry = Entry::default();
+                    entry.clear();
                     entry.user(text, width);
                 }
                 TranscriptItem::Tool(row) => {
-                    *entry = Entry::default();
+                    entry.clear();
                     let is_expanded = expanded.contains(&item_index);
                     let grouped = group.len() > 1;
                     let group_open = expanded_groups.contains(&group.start);
@@ -806,7 +1094,7 @@ impl TranscriptLayout {
                     }
                 }
                 _ => {
-                    *entry = Entry::default();
+                    entry.clear();
                     let collapsible = matches!(item, TranscriptItem::Thinking(_));
                     let toggle = collapsible.then(|| {
                         super::tool_display::toggle_line(
@@ -1025,6 +1313,42 @@ impl TranscriptLayout {
 
     pub fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize) {
         self.draw_buffer(frame.buffer_mut(), area, offset);
+        let first = self.entries.partition_point(|entry| entry.end <= offset);
+        for entry in self.entries[first..]
+            .iter()
+            .take_while(|entry| entry.end - entry.height < offset + usize::from(area.height))
+        {
+            let start = entry.end - entry.height;
+            for row in &entry.rows {
+                let absolute = start + row.start;
+                if absolute + row.height <= offset || absolute >= offset + usize::from(area.height)
+                {
+                    continue;
+                }
+                for request in &row.media_requests {
+                    self.media
+                        .picture(&request.source, request.width, request.height, false);
+                }
+                if absolute < offset {
+                    continue;
+                }
+                let gutter = row.gutter.as_ref().map_or(0, |g| g.width);
+                for fragment in &row.graphics {
+                    let x = area.x + gutter + fragment.x;
+                    let image_area = Rect::new(
+                        x,
+                        area.y + (absolute - offset) as u16,
+                        fragment
+                            .picture
+                            .size
+                            .width
+                            .min(area.right().saturating_sub(x)),
+                        1,
+                    );
+                    super::media::schedule(fragment, image_area);
+                }
+            }
+        }
     }
 
     pub(super) fn draw_buffer(
@@ -1094,7 +1418,66 @@ impl TranscriptLayout {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn markdown_rule_occupies_one_full_row_after_resize() {
+    fn html_details_toggle_independently_and_survive_streaming_and_resize() {
+        let source = "<details>\n<summary>折叠内容</summary>\n\n**正文** [链接](https://orbit.example)\n<details open><summary>子块</summary>嵌套内容</details>\n</details>\n后文";
+        let mut layout = TranscriptLayout::default();
+        let items = [TranscriptItem::Assistant(source.to_owned())];
+        layout.update(&items, None, 80);
+        let visible = |layout: &TranscriptLayout| {
+            layout.entries[0]
+                .rows
+                .iter()
+                .map(|row| row.line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(!visible(&layout).contains("正文"));
+        let area = Rect::new(0, 0, 80, 40);
+        let (index, outer) = layout.html_disclosure_at(area, 0, (3, 0)).unwrap();
+        layout.toggle_html(index, outer.clone());
+        layout.update(&items, None, 80);
+        assert!(visible(&layout).contains("正文"));
+        assert!(visible(&layout).contains("嵌套内容"));
+        let inner = layout.entries[0]
+            .rows
+            .iter()
+            .find_map(|row| row.html_disclosure.as_ref().filter(|id| **id != outer))
+            .unwrap()
+            .clone();
+        layout.toggle_html(index, inner);
+        layout.update(&items, None, 14);
+        assert!(!visible(&layout).contains("嵌套内容"));
+        assert!(visible(&layout).contains("正文"));
+        // Streaming must not freeze provisional open blocks or change their IDs.
+        let mut streamed = TranscriptLayout::default();
+        for (end, ch) in source.char_indices() {
+            streamed.invalidate_from(0);
+            streamed.update(
+                &[TranscriptItem::Assistant(
+                    source[..end + ch.len_utf8()].to_owned(),
+                )],
+                None,
+                80,
+            );
+        }
+        let streamed_outer = streamed.entries[0]
+            .rows
+            .iter()
+            .find_map(|row| row.html_disclosure.as_ref())
+            .unwrap()
+            .clone();
+        assert_eq!(streamed_outer, outer);
+        assert_eq!(
+            visible(&streamed),
+            visible(&{
+                let mut fresh = TranscriptLayout::default();
+                fresh.update(&items, None, 80);
+                fresh
+            })
+        );
+    }
+    #[test]
+    fn markdown_rule_keeps_symmetric_body_margins_after_resize() {
         let items = vec![super::TranscriptItem::Assistant(
             "before\n---\nafter\n".into(),
         )];
@@ -1103,10 +1486,13 @@ mod tests {
             layout.update(&items, None, width);
             let entry = &layout.entries[0];
             let rule = &entry.rows[1];
-            assert_eq!(rule.line.to_string(), "─".repeat(usize::from(width)));
+            assert_eq!(
+                rule.line.to_string(),
+                format!("{}  ", "─".repeat(usize::from(width) - 4))
+            );
             assert_eq!(rule.height, 1);
-            assert!(rule.gutter.is_none());
-            assert_eq!(rule.wrapped[0].width(), usize::from(width));
+            assert_eq!(rule.gutter.as_ref().unwrap().width, 2);
+            assert_eq!(rule.wrapped[0].width(), usize::from(width) - 2);
         }
     }
 
@@ -1720,6 +2106,51 @@ mod tests {
     }
 
     #[test]
+    fn streamed_math_matches_fresh_parser_at_every_character_boundary() {
+        let source = "先看 $x^2$\n\n$$\n\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}\n$$\n后文 $\\frac{a}{b}$\n```latex\n$x$\n```\n";
+        let mut incremental = TranscriptLayout::default();
+        let mut items = vec![TranscriptItem::Assistant(String::new())];
+        for ch in source.chars() {
+            let TranscriptItem::Assistant(text) = &mut items[0] else {
+                unreachable!()
+            };
+            text.push(ch);
+            let observed = text.clone();
+            incremental.invalidate_from(0);
+            incremental.update(&items, None, 36);
+            let mut fresh = TranscriptLayout::default();
+            fresh.update(&items, None, 36);
+            assert_eq!(
+                incremental.height(),
+                fresh.height(),
+                "{observed:?}; stable={} actual={:?}; fresh={:?}",
+                incremental.entries[0].parsed_bytes,
+                incremental.entries[0]
+                    .rows
+                    .iter()
+                    .map(|r| r.line.to_string())
+                    .collect::<Vec<_>>(),
+                fresh.entries[0]
+                    .rows
+                    .iter()
+                    .map(|r| r.line.to_string())
+                    .collect::<Vec<_>>()
+            );
+            let actual = incremental.entries[0]
+                .rows
+                .iter()
+                .map(|r| (&r.line, &r.media))
+                .collect::<Vec<_>>();
+            let expected = fresh.entries[0]
+                .rows
+                .iter()
+                .map(|r| (&r.line, &r.media))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{observed:?}");
+        }
+    }
+
+    #[test]
     fn incremental_layout_matches_fresh_layout_for_unicode_wrapping_and_split_fences() {
         let mut layout = TranscriptLayout::default();
         let mut items = vec![TranscriptItem::Assistant(String::new())];
@@ -1760,6 +2191,43 @@ mod tests {
                         actual.backend().buffer(),
                         expected.backend().buffer(),
                         "width {width} offset {offset}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn streamed_html_preserves_open_frames_breaks_and_click_targets_after_resize() {
+        let source = "<a href='https://orbit.example'><b>\n中文 H<sub>2</sub>O<br/>x<sup>2</sup>\n最后一行</b></a> 正常\n";
+        let mut entry = Entry::default();
+        for end in source
+            .char_indices()
+            .map(|(index, ch)| index + ch.len_utf8())
+        {
+            entry.stream(&source[..end], false, 18);
+            let mut fresh = Entry::default();
+            fresh.stream(&source[..end], false, 18);
+            assert_eq!(entry.height, fresh.height, "{end}");
+            assert_eq!(entry.inline, fresh.inline, "{end}");
+            for (actual, expected) in entry.rows.iter().zip(&fresh.rows) {
+                assert_eq!(actual.line, expected.line, "{end}");
+                assert_eq!(actual.links, expected.links, "{end}");
+                assert_eq!(actual.wrapped, expected.wrapped, "{end}");
+            }
+        }
+        let items = [TranscriptItem::Assistant(source.to_owned())];
+        let mut layout = TranscriptLayout::default();
+        for width in [18, 80, 14] {
+            layout.update(&items, None, width);
+            let mut fresh = TranscriptLayout::default();
+            fresh.update(&items, None, width);
+            let area = Rect::new(0, 0, width, layout.height() as u16);
+            for y in 0..area.height {
+                for x in 0..width {
+                    assert_eq!(
+                        layout.link_at(area, 0, (x, y)),
+                        fresh.link_at(area, 0, (x, y))
                     );
                 }
             }

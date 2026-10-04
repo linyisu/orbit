@@ -37,12 +37,20 @@ futures-util = "0.3.31"
 getrandom = "0.4.3"
 globset = "0.4.18"
 html2text = "0.17.1"
+html5ever = "0.39.0"
+cssparser = { version = "0.37.0", default-features = false }
 httpdate = "1.0.3"
 ignore = "0.4.33"
 image = { version = "0.25.9", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+ratex-parser = "0.1.14"
+ratex-layout = "0.1.14"
+ratex-svg = { version = "0.1.14", features = ["standalone", "embed-fonts"] }
+ratex-types = "0.1.14"
 libc = "0.2.189"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
+resvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "stream"] }
 rusqlite = { version = "0.39.0", features = ["bundled"] }

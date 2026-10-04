@@ -821,7 +821,7 @@ pub(super) fn centered_area(full: Rect) -> Rect {
     centered_size(full, 96, 24)
 }
 
-fn transcript_area(full: Rect) -> Rect {
+pub(super) fn transcript_area(full: Rect) -> Rect {
     let width = full.width.saturating_sub(full.width / 5).max(96);
     // Keep the half-screen proportions, then grow with the width for long records.
     let height = (width / 4)
@@ -871,13 +871,17 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     frame.render_widget(block, area);
     if state.btw.visible() {
         state.ime_cursor = None;
-        state.btw.draw(frame, area, inner);
+        let mut media = state.media.clone();
+        media.workspace = state.workspace.clone().into();
+        state.btw.draw(frame, area, inner, media);
         state.ime_cursor = state.btw.cursor();
         return;
     }
     if let Some(viewer) = &mut state.subagent_dialog {
         state.ime_cursor = None;
-        viewer.draw(frame, area, inner);
+        let mut media = state.media.clone();
+        media.workspace = state.workspace.clone().into();
+        viewer.draw(frame, area, inner, media);
         state.ime_cursor = viewer.cursor();
         return;
     }

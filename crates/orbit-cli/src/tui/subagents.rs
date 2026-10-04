@@ -109,7 +109,14 @@ impl Viewer {
         self.view.tick()
     }
 
-    pub fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, inner: Rect) {
+    pub fn draw(
+        &mut self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        inner: Rect,
+        media: super::media::Context,
+    ) {
+        self.view.ui.media = media;
         let status = if self.view.ui.resume_loading.is_some() {
             "加载中"
         } else {

@@ -400,12 +400,19 @@ impl Questions {
         Ok(action)
     }
 
-    pub fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, inner: Rect) {
+    pub fn draw(
+        &mut self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        inner: Rect,
+        media: super::media::Context,
+    ) {
         self.refresh();
         let heads = self.thread_heads();
         let Some(dialog) = &mut self.dialog else {
             return;
         };
+        dialog.view.ui.media = media;
         let record = &self.records[dialog.index];
         let status = match record.status.as_str() {
             "running" => "生成中",

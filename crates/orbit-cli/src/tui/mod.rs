@@ -19,6 +19,7 @@ mod icons;
 pub mod input;
 mod languages;
 mod markdown;
+mod media;
 mod model_catalog;
 mod navigation;
 mod overlay;
@@ -159,6 +160,7 @@ pub async fn run(
     let next_workspace: Option<crate::TuiResources> = None;
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut state = UiState::new(model_name);
+    state.media = media::Context::detect();
     state.cursor_motion.enabled = cursor_trail;
     let RequestBudget {
         context_tokens,
@@ -538,6 +540,11 @@ pub async fn run(
                     let Some(event) = event else { break };
                     let mut event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+                    if let Some(preview)=&mut state.media_preview {
+                        let (consumed,close)=preview.handle(&event);
+                        if close {state.media_preview=None;}
+                        if consumed {dirty=true;frames.request(time::Instant::now());continue;}
+                    }
 
                     if state.restore_picker.is_some() && restore::handle(&mut state, &event) {
                         dirty = true;
@@ -1082,6 +1089,7 @@ pub async fn run(
                                     drop(events);
                                     terminal::suspend();
                                     let edited = editor.edit(&draft, std::path::Path::new(&state.workspace)).await;
+                                    state.media.invalidate();
                                     terminal::resume(&mut terminal)?;
                                     events = EventStream::new();
 
@@ -1429,6 +1437,7 @@ pub async fn run(
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    dirty |= state.media.changed();
                     if let Some(result) = catalog_watcher.poll().await {
                         match result {
                             Ok((models, diagnostics)) => {
@@ -3248,6 +3257,8 @@ async fn resume_session(
 
 fn resume_ui_shell(state: &UiState) -> UiState {
     let mut restored = UiState::new(state.model.clone());
+    // Capabilities and media workers belong to the terminal, not the session.
+    restored.media = state.media.clone();
     restored.cursor_motion.enabled = state.cursor_motion.enabled;
     restored.context_tokens = state.context_tokens;
     restored.input_context_tokens = state.input_context_tokens;
@@ -3341,7 +3352,46 @@ enum Action {
 }
 
 fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
+    let offset = if state.follow_bottom {
+        state.max_scroll
+    } else {
+        state.max_scroll.saturating_sub(state.scroll)
+    };
+    if let Some(source) = state
+        .transcript_layout
+        .media_at(state.selection.viewport, offset, point)
+    {
+        let mut context = state.media.clone();
+        if !state.workspace.is_empty() {
+            context.workspace = state.workspace.clone().into();
+        }
+        state.selection.clear();
+        state.media_preview = Some(media::Preview::new(context, source));
+        return true;
+    }
     let offset = state.max_scroll.saturating_sub(state.scroll);
+    if let Some((index, id)) =
+        state
+            .transcript_layout
+            .html_disclosure_at(state.selection.viewport, offset, point)
+    {
+        state.selection.clear();
+        state.follow_bottom = false;
+        state.transcript_layout.toggle_html(index, id);
+        state.transcript_layout.update_expanded(
+            &state.transcript,
+            &state.expanded,
+            &state.expanded_tool_groups,
+            state.selection.viewport.width,
+        );
+        state.max_scroll = state
+            .transcript_layout
+            .height()
+            .saturating_sub(usize::from(state.selection.viewport.height));
+        let target = offset.min(state.max_scroll);
+        state.scroll = state.max_scroll.saturating_sub(target);
+        return true;
+    }
     if let Some(index) = state
         .transcript_layout
         .group_at(state.selection.viewport, offset, point)
@@ -4822,6 +4872,69 @@ id = "orbit-model"
 #[cfg(test)]
 mod subagent_tests {
     use super::*;
+
+    #[test]
+    fn nested_html_clicks_do_not_collapse_the_enclosing_tool_or_thinking_item() {
+        let source = "<details><summary>内容</summary>\n[正文](https://orbit.example)\n</details>";
+        let mut thought = app::ThinkingRow::from(source.to_owned());
+        thought.finished = true;
+        let tool = app::ToolRow {
+            id: "html".into(),
+            name: "web_fetch".into(),
+            arguments: "{}".into(),
+            status: app::ToolStatus::Finished,
+            output: serde_json::json!({"url":"https://orbit.example/page", "content":source})
+                .to_string(),
+        };
+        for item in [
+            TranscriptItem::Assistant(source.into()),
+            TranscriptItem::Thinking(thought),
+            TranscriptItem::Tool(tool),
+        ] {
+            let mut state = UiState::new("orbit::model");
+            state.transcript.push(item);
+            state.expanded.insert(0);
+            state.selection.viewport = ratatui::layout::Rect::new(0, 0, 80, 80);
+            state.transcript_layout.update_expanded(
+                &state.transcript,
+                &state.expanded,
+                &state.expanded_tool_groups,
+                80,
+            );
+            let point = (0..80)
+                .find_map(|y| {
+                    (0..80).find_map(|x| {
+                        state
+                            .transcript_layout
+                            .html_disclosure_at(state.selection.viewport, 0, (x, y))
+                            .map(|_| (x, y))
+                    })
+                })
+                .unwrap();
+            assert!(toggle_transcript_at(&mut state, point));
+            assert!(state.expanded.contains(&0));
+            let body_link = (0..80).any(|y| {
+                (0..80).any(|x| {
+                    state
+                        .transcript_layout
+                        .link_at(state.selection.viewport, 0, (x, y))
+                        == Some("https://orbit.example")
+                })
+            });
+            assert!(body_link);
+            assert!(toggle_transcript_at(&mut state, point));
+            assert!(state.expanded.contains(&0));
+            let body_link = (0..80).any(|y| {
+                (0..80).any(|x| {
+                    state
+                        .transcript_layout
+                        .link_at(state.selection.viewport, 0, (x, y))
+                        == Some("https://orbit.example")
+                })
+            });
+            assert!(!body_link);
+        }
+    }
 
     #[test]
     fn child_session_links_open_a_dialog_without_switching_tabs() {

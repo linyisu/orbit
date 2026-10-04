@@ -13,6 +13,8 @@ use tokio_util::sync::CancellationToken;
 mod bing;
 mod browser;
 mod encoding;
+mod image;
+pub use image::fetch_image;
 mod google;
 mod quality;
 mod search;
@@ -617,12 +619,20 @@ fn redirect_target(current: &Url, location: &str) -> Result<Url, ToolError> {
     checked_url(next.as_str())
 }
 
-async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, ToolError> {
+async fn read_body(response: reqwest::Response) -> Result<Vec<u8>, ToolError> {
+    read_body_limit(response, MAX_BODY, "web response exceeds 2 MiB").await
+}
+
+async fn read_body_limit(
+    mut response: reqwest::Response,
+    limit: usize,
+    message: &str,
+) -> Result<Vec<u8>, ToolError> {
     if response
         .content_length()
-        .is_some_and(|len| len > MAX_BODY as u64)
+        .is_some_and(|len| len > limit as u64)
     {
-        return Err(failed("web response exceeds 2 MiB"));
+        return Err(failed(message));
     }
 
     let mut body = Vec::new();
@@ -632,8 +642,8 @@ async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, ToolError
         .await
         .map_err(|e| failed(e.without_url()))?
     {
-        if body.len() + chunk.len() > MAX_BODY {
-            return Err(failed("web response exceeds 2 MiB"));
+        if body.len() + chunk.len() > limit {
+            return Err(failed(message));
         }
 
         body.extend_from_slice(&chunk);

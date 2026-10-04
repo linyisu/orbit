@@ -15,6 +15,14 @@ base64.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
+html5ever.workspace = true
+html2text.workspace = true
+cssparser.workspace = true
+image.workspace = true
+ratex-parser.workspace = true
+ratex-layout.workspace = true
+ratex-svg.workspace = true
+ratex-types.workspace = true
 orbit-agent.workspace = true
 orbit-model.workspace = true
 orbit-runtime.workspace = true
@@ -22,6 +30,8 @@ orbit-store.workspace = true
 orbit-tools.workspace = true
 pulldown-cmark.workspace = true
 ratatui.workspace = true
+ratatui-image.workspace = true
+resvg.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -38,9 +48,6 @@ unicode-linebreak.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 url.workspace = true
-
-[dev-dependencies]
-image.workspace = true
 
 [build-dependencies]
 syntect.workspace = true

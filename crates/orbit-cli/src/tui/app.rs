@@ -78,6 +78,8 @@ pub enum TranscriptItem {
 
 #[derive(Debug)]
 pub struct UiState {
+    pub(super) media: super::media::Context,
+    pub(super) media_preview: Option<super::media::Preview>,
     pub tabs: Vec<SessionTab>,
     pub new_tab_area: ratatui::layout::Rect,
     pub new_tab_request: bool,
@@ -202,7 +204,8 @@ impl UiState {
     }
 
     pub(super) fn dialog_open(&self) -> bool {
-        self.btw.visible()
+        self.media_preview.is_some()
+            || self.btw.visible()
             || self.info_dialog.is_some()
             || self.subagent_dialog.is_some()
             || self.show_help
@@ -268,6 +271,8 @@ impl UiState {
 
     pub fn new(model: impl Into<String>) -> Self {
         Self {
+            media: Default::default(),
+            media_preview: None,
             tabs: Vec::new(),
             new_tab_area: Default::default(),
             new_tab_request: false,

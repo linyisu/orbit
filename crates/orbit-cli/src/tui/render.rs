@@ -60,6 +60,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     if let Some(position) = state.ime_cursor.filter(|p| frame.area().contains(*p)) {
         frame.set_cursor_position(position);
     }
+    if let Some(preview) = &mut state.media_preview {
+        preview.draw(frame);
+    }
 }
 
 fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
@@ -90,7 +93,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         .len()
         .clamp(1, 6)
         .min(area.height.saturating_sub(8) as usize) as u16;
-    let attachment_height = u16::from(!state.attachments.is_empty());
+    let attachment_height = attachment_height(state);
     let details_height = composer_details(state, width).len() as u16;
     let input_height = if home {
         input_height.min(
@@ -558,7 +561,13 @@ pub(super) fn handle_transcript_hover(
     let hit = |point| {
         state
             .transcript_layout
-            .group_at(state.selection.viewport, offset, point)
+            .html_disclosure_at(state.selection.viewport, offset, point)
+            .map(|(index, _)| index)
+            .or_else(|| {
+                state
+                    .transcript_layout
+                    .group_at(state.selection.viewport, offset, point)
+            })
             .or_else(|| {
                 state.transcript_layout.disclosure_at(
                     &state.transcript,
@@ -691,9 +700,19 @@ fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     };
 
     let text = if super::subagent_link_id(url).is_some() {
-        "单击查看子代理"
+        "单击查看子代理".to_owned()
+    } else if state
+        .transcript_layout
+        .media_at(state.selection.viewport, offset, (anchor_x, anchor_y))
+        .is_some()
+    {
+        if super::browser_url(url).is_ok() {
+            format!("单击预览 · Ctrl + Click 跳转 · {}", safe_output(url))
+        } else {
+            "单击预览".to_owned()
+        }
     } else {
-        "Ctrl + Click 跳转"
+        "Ctrl + Click 跳转".to_owned()
     };
     let width = (text.width() as u16 + 2).min(state.selection.viewport.width);
 
@@ -711,7 +730,7 @@ fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
     let area = Rect::new(x, y, width, 1);
     super::overlay::clear(frame, area);
     frame.render_widget(
-        Paragraph::new(fit_label(text, width as usize, false)).style(
+        Paragraph::new(fit_label(&text, width as usize, false)).style(
             Style::default()
                 .fg(crate::tui::theme::THEME.overlay_foreground)
                 .bg(crate::tui::theme::THEME.overlay_background),
@@ -1035,6 +1054,7 @@ pub(super) fn draw_transcript_in(
     } else {
         area
     };
+    super::media::occlude(state.selection.viewport);
     if navigation
         && area.height > 1
         && state
@@ -1059,6 +1079,11 @@ pub(super) fn draw_transcript_in(
     }
 
     let width = state.selection.viewport.width;
+    let mut media = state.media.clone();
+    if !state.workspace.is_empty() {
+        media.workspace = state.workspace.clone().into();
+    }
+    state.transcript_layout.set_media(media);
     let previous_max = state.max_scroll;
     let previous_offset = previous_max.saturating_sub(state.scroll);
     let scroll_anchor = (!state.follow_bottom)
@@ -1102,6 +1127,38 @@ pub(super) fn draw_transcript_in(
     state
         .transcript_layout
         .draw(frame, state.selection.viewport, offset);
+    if !state.selection.dragging()
+        && let Some(point) = state.transcript_pointer
+        && state
+            .transcript_layout
+            .html_disclosure_at(state.selection.viewport, offset, point)
+            .is_some()
+    {
+        let absolute = offset + usize::from(point.1 - state.selection.viewport.y);
+        let decorations = state.transcript_layout.decorations(absolute);
+        let columns = state.selection.viewport.x..state.selection.viewport.right();
+        let first = columns.clone().find(|&x| {
+            matches!(
+                frame.buffer_mut()[(x, point.1)].symbol(),
+                icons::CHEVRON_RIGHT | icons::ARROW_DOWN
+            )
+        });
+        let last = columns.rev().find(|&x| {
+            !decorations
+                .iter()
+                .any(|range| range.contains(&usize::from(x - state.selection.viewport.x)))
+                && frame.buffer_mut()[(x, point.1)].symbol() != " "
+        });
+        if let (Some(first), Some(last)) = (first, last) {
+            let end = last
+                .saturating_add(frame.buffer_mut()[(last, point.1)].symbol().width().max(1) as u16)
+                .min(state.selection.viewport.right());
+            for x in first..end {
+                let cell = &mut frame.buffer_mut()[(x, point.1)];
+                cell.set_bg(THEME.tab_hover_background);
+            }
+        }
+    }
     if !state.selection.dragging()
         && let Some(point) = state.transcript_pointer
         && let Some(index) = state
@@ -1239,24 +1296,18 @@ pub(super) fn transcript_lines_at_width(
                     lines.push(Line::from(""));
                 }
 
-                let mut code = None;
-                let mut prev_empty = false;
-
-                for (index, line) in text.lines().enumerate() {
-                    let is_empty = line.trim().is_empty();
-                    if is_empty && prev_empty {
-                        continue;
-                    }
-                    prev_empty = is_empty;
-                    lines.push(assistant_line(line, index, &mut code));
-                }
+                lines.extend(
+                    super::markdown::document(text, width)
+                        .into_iter()
+                        .map(|linked| linked.line),
+                );
 
                 lines.push(Line::from(""));
             }
 
             TranscriptItem::Thinking(row) => {
                 lines.extend(
-                    thinking_card_with_links(row, expanded)
+                    thinking_card_at_width(row, expanded, width)
                         .into_iter()
                         .map(|linked| linked.line),
                 );
@@ -1800,9 +1851,9 @@ pub(super) fn tool_body_with_links(
             }
             linked.shift_offsets(-4);
         }
+        sanitize_linked_line(&mut linked);
         let line = &mut linked.line;
         for span in &mut line.spans {
-            span.content = safe_output(&span.content).into();
             span.style = line.style.patch(span.style);
             if span.style.fg == Some(Color::Reset) || span.style.fg.is_none() {
                 span.style = span.style.fg(crate::tui::theme::THEME.output_muted);
@@ -1922,6 +1973,7 @@ pub(super) fn is_shell_preamble(line: &str) -> bool {
             .all(|ch| ch.is_ascii_alphabetic() || ch == 'o')
 }
 
+#[cfg(test)]
 pub(super) fn assistant_line(
     line: &str,
     index: usize,
@@ -1930,9 +1982,10 @@ pub(super) fn assistant_line(
     super::markdown::line(line, index, code)
 }
 
-pub(super) fn thinking_card_with_links(
+pub(super) fn thinking_card_at_width(
     row: &super::app::ThinkingRow,
     expanded: bool,
+    width: u16,
 ) -> Vec<super::markdown::LinkedLine> {
     use super::markdown::LinkedLine;
     let mut lines = Vec::new();
@@ -1957,11 +2010,11 @@ pub(super) fn thinking_card_with_links(
         }
     }
     let text = row.content.trim_end();
-    let context = super::markdown::Context::new(text);
-    let mut code = None;
-    for (index, line) in text.lines().enumerate() {
-        lines.push(thinking_linked(context.linked_line(line, index, &mut code)));
-    }
+    lines.extend(
+        super::markdown::document(text, width.saturating_sub(2))
+            .into_iter()
+            .map(thinking_linked),
+    );
     if !text.is_empty() {
         lines.push(LinkedLine::plain(Line::from("")));
     }
@@ -2023,6 +2076,38 @@ pub(super) fn sanitize_line(line: &mut Line<'_>) {
     for span in &mut line.spans {
         span.content = safe_output(&span.content).into();
     }
+}
+
+pub(super) fn sanitize_linked_line(linked: &mut super::markdown::LinkedLine) {
+    let original = linked.text();
+    if !original.chars().any(|c| c.is_control() && c != '\n') {
+        return;
+    }
+    // Semantic display math can span several lines. Layout splits these into
+    // physical rows; retain breaks while escaping other terminal controls.
+    let offset = |byte: usize| safe_multiline_output(&original[..byte]).len();
+    for link in &mut linked.links {
+        link.start = offset(link.start);
+        link.end = offset(link.end);
+    }
+    for range in linked
+        .decorations
+        .iter_mut()
+        .chain(linked.media.iter_mut().map(|t| &mut t.range))
+    {
+        range.start = offset(range.start);
+        range.end = offset(range.end);
+    }
+    for span in &mut linked.line.spans {
+        span.content = safe_multiline_output(&span.content).into();
+    }
+}
+
+pub(super) fn safe_multiline_output(text: &str) -> String {
+    text.split('\n')
+        .map(safe_output)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(super) fn safe_output(text: &str) -> String {
@@ -2108,7 +2193,7 @@ fn draw_composer(
         height: inner.height.saturating_sub(1 + details_height),
         ..inner
     };
-    let attachment_height = u16::from(!state.attachments.is_empty());
+    let attachment_height = attachment_height(state).min(inner.height.saturating_sub(1));
 
     if attachment_height > 0 {
         if state
@@ -2126,15 +2211,15 @@ fn draw_composer(
                 break;
             }
 
-            let label = format!("[图片 {} · {}]", index + 1, safe_output(attachment.name()));
-            let label = fit_label(&label, (right - x) as usize, false);
-            let width = label.width().min((right - x) as usize) as u16;
+            let label = format!("图片 {}", index + 1);
+            let label = fit_label(&label, usize::from(right - x).saturating_sub(5), false);
+            let width = (label.width() as u16 + 5).min(right - x);
 
             if width == 0 {
                 break;
             }
 
-            let chip = Rect::new(x, inner.y, width, 1);
+            let chip = Rect::new(x, inner.y, width, attachment_height);
             let style = if state.attachment_cursor == Some(index) {
                 Style::default()
                     .fg(crate::tui::theme::THEME.on_accent)
@@ -2144,7 +2229,53 @@ fn draw_composer(
                 Style::default().fg(ACCENT)
             };
 
-            frame.render_widget(Paragraph::new(Span::styled(label, style)), chip);
+            frame.render_widget(Block::default().style(style), chip);
+            let label_width = label.width() as u16;
+            frame.render_widget(
+                Paragraph::new(Span::styled(label, style)),
+                Rect {
+                    width: label_width,
+                    height: 1,
+                    ..chip
+                },
+            );
+            let thumbnail = Rect::new(
+                x + label_width + 1,
+                inner.y,
+                4.min(width.saturating_sub(label_width + 1)),
+                attachment_height,
+            );
+            let orbit_model::types::Attachment::Image { path, .. } = attachment;
+            let source = super::media::Source::Image(path.to_string_lossy().into_owned());
+            if let Some(picture) =
+                state
+                    .media
+                    .picture(&source, thumbnail.width, thumbnail.height, false)
+            {
+                let image_x = thumbnail.x + thumbnail.width.saturating_sub(picture.size.width) / 2;
+                for row in 0..picture.size.height.min(thumbnail.height) {
+                    super::media::schedule(
+                        &super::media::Fragment {
+                            picture: picture.clone(),
+                            x: 0,
+                            row,
+                        },
+                        Rect::new(
+                            image_x,
+                            thumbnail.y + row,
+                            picture.size.width.min(thumbnail.width),
+                            1,
+                        ),
+                    );
+                }
+            } else {
+                frame.render_widget(
+                    Paragraph::new(icons::IMAGE_OUTLINE)
+                        .style(style)
+                        .alignment(Alignment::Center),
+                    thumbnail,
+                );
+            }
             state.attachment_areas.push(chip);
             x = x.saturating_add(width + 2);
         }
@@ -2156,6 +2287,10 @@ fn draw_composer(
         ..inner
     };
     draw_prompt(frame, state, prompt_area, lines, cursor);
+}
+
+fn attachment_height(state: &UiState) -> u16 {
+    if state.attachments.is_empty() { 0 } else { 2 }
 }
 
 pub(super) fn draw_prompt(
@@ -3054,12 +3189,12 @@ mod tests {
                         assert!(!text.contains("https://orbit.example/docs"));
                     }
                 }
-                if !source {
+                if !source && width >= 12 {
                     assert!(
                         card.iter()
                             .any(|linked| linked.line.spans.iter().any(|span| {
                                 span.style.fg == Some(super::super::theme::THEME.md_rule)
-                                    && span.content == "─".repeat(usize::from(width) - 4)
+                                    && span.content == "─".repeat(usize::from(width) - 8)
                             })),
                         "{name} {width}"
                     );
@@ -3644,7 +3779,7 @@ mod tests {
         state.input.insert("describe this image");
         let screen = render(&mut state, 80, 24);
 
-        assert!(screen.contains("1 · capture.png]"));
+        assert!(!screen.contains("capture.png"));
         assert!(screen.contains("describe this image"));
         assert!(state.input_area.y > 0);
         assert_eq!(state.attachment_areas.len(), 1);
@@ -3657,7 +3792,63 @@ mod tests {
 
         let chip = state.attachment_areas[0];
 
+        assert_eq!(terminal.backend().buffer()[(chip.x, chip.y)].symbol(), "图");
+        assert_eq!(
+            terminal.backend().buffer()[(chip.x + 2, chip.y)].symbol(),
+            "片"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(chip.x + 5, chip.y)].symbol(),
+            "1"
+        );
+
         assert_eq!(terminal.backend().buffer()[(chip.x, chip.y)].bg, ACCENT);
+    }
+
+    #[test]
+    fn details_hover_fills_spaces_and_wide_glyphs_without_underlining_the_caption() {
+        let mut state = UiState::new("mock");
+        state.transcript.push(TranscriptItem::Assistant(
+            "<details><summary>点击展开 / 折叠</summary>正文</details>".into(),
+        ));
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|f| draw(f, &mut state)).unwrap();
+        let area = state.selection.viewport;
+        let point = (area.y..area.bottom())
+            .find_map(|y| {
+                (area.x..area.right()).find_map(|x| {
+                    state
+                        .transcript_layout
+                        .html_disclosure_at(area, 0, (x, y))
+                        .map(|_| (x, y))
+                })
+            })
+            .unwrap();
+        state.transcript_pointer = Some(point);
+        let mut first = 0;
+        terminal
+            .draw(|f| {
+                draw(f, &mut state);
+                // Inspect the frame: terminal diffs omit the continuation cells
+                // of wide glyphs, whose style is carried by the leading cell.
+                let buffer = f.buffer_mut();
+                first = (area.x..area.right())
+                    .find(|&x| buffer[(x, point.1)].symbol() == icons::CHEVRON_RIGHT)
+                    .unwrap();
+                let end = first + 2 + "点击展开 / 折叠".width() as u16;
+                for x in first..end {
+                    assert_eq!(buffer[(x, point.1)].bg, THEME.tab_hover_background);
+                    assert!(!buffer[(x, point.1)].modifier.contains(Modifier::UNDERLINED));
+                }
+                assert_eq!(buffer[(first - 1, point.1)].bg, Color::Reset);
+            })
+            .unwrap();
+        state.transcript_pointer = None;
+        terminal.draw(|f| draw(f, &mut state)).unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(first, point.1)].bg,
+            Color::Reset
+        );
     }
 
     #[test]

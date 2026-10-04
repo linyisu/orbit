@@ -361,7 +361,6 @@ impl Selection {
 
     pub fn text(&self) -> String {
         let mut lines = Vec::new();
-
         for (&row, cells) in &self.rows {
             let Some((left, right)) = self.selected_columns(row) else {
                 continue;
@@ -371,20 +370,24 @@ impl Selection {
                 continue;
             }
             let decorations = metadata.map_or(&[][..], |metadata| metadata.ranges.as_slice());
-
             let mut text = String::new();
             let mut x = 0;
-
             while x < cells.len() {
+                if let Some(copy) =
+                    metadata.and_then(|m| m.copy.iter().find(|c| c.columns.start == x))
+                {
+                    if copy.columns.start <= right as usize && copy.columns.end > left as usize {
+                        text.push_str(&copy.text);
+                    }
+                    x = copy.columns.end;
+                    continue;
+                }
                 let width = cells[x].symbol().width().max(1);
-
                 if x <= right as usize && x + width > left as usize {
                     if decorations
                         .iter()
                         .any(|range| range.start < x + width && range.end > x)
                     {
-                        // Remove gutters, but keep interior columns separated (e.g. tables).
-                        // Trailing padding is trimmed with the rest of the terminal row.
                         if !text.is_empty() {
                             text.extend(std::iter::repeat_n(' ', width));
                         }
@@ -392,13 +395,10 @@ impl Selection {
                         text.push_str(cells[x].symbol());
                     }
                 }
-
                 x += width;
             }
-
             lines.push(text.trim_end().to_owned());
         }
-
         lines.join("\n")
     }
 
@@ -417,6 +417,7 @@ impl Selection {
         }
 
         *frame.buffer_mut() = buffer.clone();
+        super::media::frozen_frame();
         self.paint(frame);
 
         true
@@ -593,6 +594,35 @@ mod tests {
             assert!(copied.contains("👩‍💻\n\n"));
             assert!(copied.contains("\n\n最后一行"));
         }
+    }
+
+    #[test]
+    fn copying_rendered_html_uses_visible_text_and_breaks_without_tags_or_thinking_rails() {
+        let source = "<b>中文 H<sub>2</sub>O<br>x<sup>2</sup></b>";
+        for (item, expected) in [
+            (TranscriptItem::Assistant(source.into()), "  中文 H₂O\n  x²"),
+            (
+                TranscriptItem::Thinking(source.to_owned().into()),
+                "中文 H₂O\nx²",
+            ),
+        ] {
+            let selection = select_transcript(&[item], 80, &[]);
+            assert_eq!(selection.text().trim_end_matches('\n'), expected);
+        }
+    }
+
+    #[test]
+    fn copying_html_blocks_omits_generated_spacing_and_rails_and_keeps_literal_glyphs() {
+        let source = "<details open><summary>摘要</summary>\n<blockquote>引用 │原文</blockquote>\n<div style='border-left:4px solid #3498db; padding:12px;'>提示</div>\n</details>\n<p style='text-align:center;'>结束</p>";
+        let selection = select_transcript(&[TranscriptItem::Assistant(source.into())], 80, &[]);
+        let copied = selection.text();
+        assert!(copied.contains("摘要"));
+        assert!(copied.contains("引用 │原文"));
+        assert!(copied.contains("提示"));
+        assert!(copied.contains("结束"));
+        assert!(!copied.contains('▎'));
+        assert!(!copied.contains(super::super::icons::ARROW_DOWN));
+        assert!(!copied.contains(&" ".repeat(20)));
     }
 
     #[test]

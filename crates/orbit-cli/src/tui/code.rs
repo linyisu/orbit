@@ -392,6 +392,7 @@ fn styled_row(
         } else {
             std::iter::once(0..prefix_length).collect()
         },
+        ..Default::default()
     }
 }
 

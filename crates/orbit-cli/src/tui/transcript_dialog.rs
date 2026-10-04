@@ -234,9 +234,20 @@ impl TranscriptDialog {
                 self.ui.ime_cursor = None;
             }
         }
+        if let Some(preview) = &mut self.ui.media_preview {
+            preview.draw(frame);
+            self.ui.ime_cursor = None;
+        }
     }
 
     pub fn handle(&mut self, event: &Event) -> std::io::Result<Action> {
+        if let Some(preview) = &mut self.ui.media_preview {
+            let (_, close) = preview.handle(event);
+            if close {
+                self.ui.media_preview = None;
+            }
+            return Ok(Action::Redraw);
+        }
         if self.input_enabled {
             if let Event::Key(key) = event
                 && key.kind != KeyEventKind::Release

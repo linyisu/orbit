@@ -220,7 +220,7 @@ async fn questions_stream_after_hiding_keep_main_session_running_and_can_be_reop
             .draw(|frame| {
                 let area = super::super::dialogs::centered_area(frame.area());
                 let inner = ratatui::widgets::Block::bordered().inner(area);
-                reopened.draw(frame, area, inner);
+                reopened.draw(frame, area, inner, Default::default());
             })
             .unwrap();
     }

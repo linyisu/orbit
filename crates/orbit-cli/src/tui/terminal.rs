@@ -66,7 +66,9 @@ fn draw_buffer<B: Backend>(
 ) -> Result<(), B::Error> {
     terminal
         .draw(|frame| {
+            super::media::begin_frame();
             render(frame);
+            super::media::paint(frame.buffer_mut());
             mark_background_edges(frame.buffer_mut());
         })
         .map(|_| ())
@@ -75,6 +77,8 @@ fn draw_buffer<B: Backend>(
 pub struct TerminalGuard;
 
 fn restore() {
+    super::media::clear_layers();
+    let _ = super::media::delete_stale(&mut io::stdout());
     let _ = disable_raw_mode();
     let _ = execute!(
         io::stdout(),
@@ -159,6 +163,7 @@ pub fn draw_synchronized(
     render: impl FnOnce(&mut Frame<'_>),
 ) -> io::Result<()> {
     terminal.backend_mut().queue(BeginSynchronizedUpdate)?;
+    super::media::delete_stale(&mut io::stdout())?;
     let draw = (|| {
         let actual: Rect = terminal.size()?.into();
         let previous = terminal.get_frame().area();

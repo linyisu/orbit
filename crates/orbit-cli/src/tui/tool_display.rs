@@ -460,6 +460,17 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
         return None;
     }
     match row.name.as_str() {
+        "read_image" => {
+            let value: Value = serde_json::from_str(&row.output).ok()?;
+            let path = value["path"].as_str()?;
+            let label = super::render::safe_output(path);
+            let mut line = LinkedLine::plain(Line::from(label.clone()));
+            line.media.push(super::media::Target {
+                range: 0..label.len(),
+                source: super::media::Source::Image(path.into()),
+            });
+            return Some(vec![line]);
+        }
         "web_fetch" => return web_fetch_preview(&row.output, width),
         "read_document" => return structured::document_with_links(row, expanded, width),
         "read_file" => {

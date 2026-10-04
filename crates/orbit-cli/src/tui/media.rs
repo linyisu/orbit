@@ -1,0 +1,467 @@
+//! Shared, asynchronous picture/TeX pipeline. Layout and copy retain source text;
+//! protocol bytes are painted only after text selection has captured the frame.
+mod decode;
+mod flow;
+mod preview;
+#[cfg(test)]
+mod tests;
+
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    ops::Range,
+    path::PathBuf,
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU32, AtomicU64, Ordering},
+        mpsc,
+    },
+};
+
+use ratatui::{
+    buffer::Buffer,
+    layout::{Rect, Size},
+    widgets::Widget,
+};
+use ratatui_image::{
+    picker::{Picker, ProtocolType},
+    sliced::{SlicedImage, SlicedProtocol},
+};
+
+pub(super) use flow::layout;
+pub(super) use flow::requests;
+pub(super) use preview::Preview;
+
+const MAX_ENTRIES: usize = 48;
+const MAX_CACHE_BYTES: usize = 96 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum Source {
+    Image(String),
+    Math { tex: String, display: bool },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Target {
+    pub range: Range<usize>,
+    pub source: Source,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct Request {
+    pub source: Source,
+    pub width: u16,
+    pub height: u16,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CopyText {
+    pub columns: Range<usize>,
+    pub text: String,
+}
+
+pub(super) struct Prepared {
+    protocol: SlicedProtocol,
+    pub source: Source,
+    pub size: Size,
+    pub baseline: u16,
+    kitty_id: Option<u32>,
+}
+
+static DELETIONS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+impl Drop for Prepared {
+    fn drop(&mut self) {
+        if let Some(id) = self.kitty_id
+            && let Ok(mut deletions) = DELETIONS.lock()
+        {
+            deletions.push(id);
+        }
+    }
+}
+
+fn image_id() -> u32 {
+    use std::hash::BuildHasher;
+    static IDS: OnceLock<AtomicU32> = OnceLock::new();
+    IDS.get_or_init(|| {
+        AtomicU32::new(
+            std::collections::hash_map::RandomState::new().hash_one("orbit-media") as u32,
+        )
+    })
+    .fetch_add(1, Ordering::Relaxed)
+    .max(1)
+}
+
+pub(super) fn delete_stale(writer: &mut impl std::io::Write) -> std::io::Result<()> {
+    if let Ok(mut deletions) = DELETIONS.lock() {
+        for id in deletions.drain(..) {
+            write!(writer, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\")?;
+        }
+    }
+    Ok(())
+}
+
+impl std::fmt::Debug for Prepared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Prepared")
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct Fragment {
+    pub picture: Arc<Prepared>,
+    pub x: u16,
+    pub row: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Key {
+    source: Source,
+    workspace: PathBuf,
+    width: u16,
+    height: u16,
+    large: bool,
+}
+
+enum Value {
+    Pending,
+    Ready(Arc<Prepared>),
+    Failed(String),
+}
+
+impl Value {
+    fn bytes(&self, picker: &Picker) -> usize {
+        match self {
+            Self::Ready(p) => {
+                usize::from(p.size.width)
+                    * usize::from(p.size.height)
+                    * usize::from(picker.font_size().width)
+                    * usize::from(picker.font_size().height)
+                    * 8
+            }
+            _ => 0,
+        }
+    }
+}
+
+struct Cached {
+    value: Value,
+    touched: u64,
+}
+
+struct Shared {
+    picker: Picker,
+    cache: Mutex<HashMap<Key, Cached>>,
+    requests: [mpsc::SyncSender<Key>; 2],
+    revision: AtomicU64,
+    clock: AtomicU64,
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaCache")
+            .field("picker", &self.picker)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct Context {
+    shared: Option<Arc<Shared>>,
+    pub workspace: PathBuf,
+    seen: u64,
+}
+
+impl Context {
+    /// Called before EventStream exists; capability replies must have one reader.
+    pub fn detect() -> Self {
+        Self::new(
+            Picker::from_query_stdio_with_options(
+                ratatui_image::picker::cap_parser::QueryStdioOptions {
+                    terminal_background_color_osc: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|_| Picker::halfblocks()),
+        )
+    }
+
+    fn new(picker: Picker) -> Self {
+        let (local_send, local_receive) = mpsc::sync_channel::<Key>(32);
+        let (remote_send, remote_receive) = mpsc::sync_channel::<Key>(32);
+        let shared = Arc::new(Shared {
+            picker,
+            cache: Mutex::new(HashMap::new()),
+            requests: [local_send, remote_send],
+            revision: AtomicU64::new(0),
+            clock: AtomicU64::new(0),
+        });
+        // Keep downloads off the local/formula queue. A slow image host must
+        // not delay attachment thumbnails or TeX; both queues remain bounded.
+        for (name, receive) in [
+            ("orbit-media", local_receive),
+            ("orbit-media-remote", remote_receive),
+        ] {
+            let weak = Arc::downgrade(&shared);
+            // Weak ownership lets the channels close when the last UI/viewer leaves.
+            let worker = std::thread::Builder::new()
+                .name(name.into())
+                .spawn(move || {
+                    let mut decoder = decode::Decoder::default();
+                    while let Ok(key) = receive.recv() {
+                        let Some(shared) = weak.upgrade() else { break };
+                        let result = decoder.prepare(&key, &shared.picker);
+                        if let Ok(mut cache) = shared.cache.lock() {
+                            let value = match result {
+                                Ok(picture) => Value::Ready(Arc::new(picture)),
+                                Err(error) => Value::Failed(error.to_string()),
+                            };
+                            while cache
+                                .values()
+                                .map(|c| c.value.bytes(&shared.picker))
+                                .sum::<usize>()
+                                + value.bytes(&shared.picker)
+                                > MAX_CACHE_BYTES
+                            {
+                                let oldest = cache
+                                    .iter()
+                                    .filter(|(k, v)| {
+                                        **k != key && matches!(v.value, Value::Ready(_))
+                                    })
+                                    .min_by_key(|(_, v)| v.touched)
+                                    .map(|(k, _)| k.clone());
+                                if let Some(oldest) = oldest {
+                                    cache.remove(&oldest);
+                                } else {
+                                    break;
+                                }
+                            }
+                            if let Some(entry) = cache.get_mut(&key) {
+                                entry.value = value;
+                            }
+                            shared.revision.fetch_add(1, Ordering::Release);
+                        }
+                    }
+                });
+            if worker.is_err() {
+                return Self::default();
+            }
+        }
+        Self {
+            shared: Some(shared),
+            ..Self::default()
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.shared.is_some()
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.shared
+            .as_ref()
+            .map_or(0, |s| s.revision.load(Ordering::Acquire))
+    }
+
+    pub fn changed(&mut self) -> bool {
+        let next = self.revision();
+        let changed = self.seen != next;
+        self.seen = next;
+        changed
+    }
+
+    pub fn invalidate(&self) {
+        if let Some(shared) = &self.shared
+            && let Ok(mut cache) = shared.cache.lock()
+        {
+            cache.clear();
+            shared.revision.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    pub fn same_cache(&self, other: &Self) -> bool {
+        (match (&self.shared, &other.shared) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }) && self.workspace == other.workspace
+    }
+
+    pub fn picture(
+        &self,
+        source: &Source,
+        width: u16,
+        height: u16,
+        large: bool,
+    ) -> Option<Arc<Prepared>> {
+        self.lookup(source, width, height, large, true)
+    }
+
+    pub fn cached_picture(
+        &self,
+        source: &Source,
+        width: u16,
+        height: u16,
+    ) -> Option<Arc<Prepared>> {
+        self.lookup(source, width, height, false, false)
+    }
+
+    fn lookup(
+        &self,
+        source: &Source,
+        width: u16,
+        height: u16,
+        large: bool,
+        request: bool,
+    ) -> Option<Arc<Prepared>> {
+        let shared = self.shared.as_ref()?;
+        // Pixel math is illegible in halfblocks. Keep selectable TeX in that case.
+        if matches!(source, Source::Math { .. })
+            && shared.picker.protocol_type() == ProtocolType::Halfblocks
+        {
+            return None;
+        }
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let key = Key {
+            source: source.clone(),
+            workspace: self.workspace.clone(),
+            width,
+            height,
+            large,
+        };
+        let mut cache = shared.cache.lock().ok()?;
+        let touched = shared.clock.fetch_add(1, Ordering::Relaxed);
+        if let Some(entry) = cache.get_mut(&key) {
+            entry.touched = touched;
+            return match &entry.value {
+                Value::Ready(value) => Some(value.clone()),
+                _ => None,
+            };
+        }
+        if !request {
+            return None;
+        }
+        if cache.len() >= MAX_ENTRIES {
+            let oldest = cache
+                .iter()
+                .filter(|(_, v)| !matches!(v.value, Value::Pending))
+                .min_by_key(|(_, v)| v.touched)
+                .map(|(k, _)| k.clone());
+            cache.remove(&oldest?);
+        }
+        let remote = matches!(source, Source::Image(url) if is_remote(url));
+        if shared.requests[usize::from(remote)]
+            .try_send(key.clone())
+            .is_ok()
+        {
+            cache.insert(
+                key,
+                Cached {
+                    value: Value::Pending,
+                    touched,
+                },
+            );
+        }
+        None
+    }
+
+    pub fn error(&self, source: &Source, width: u16, height: u16, large: bool) -> Option<String> {
+        let shared = self.shared.as_ref()?;
+        if matches!(source, Source::Math { .. })
+            && shared.picker.protocol_type() == ProtocolType::Halfblocks
+        {
+            return Some("当前终端未提供像素图形，正文保留公式源码".into());
+        }
+        let cache = shared.cache.lock().ok()?;
+        match &cache
+            .get(&Key {
+                source: source.clone(),
+                workspace: self.workspace.clone(),
+                width,
+                height,
+                large,
+            })?
+            .value
+        {
+            Value::Failed(error) => Some(error.clone()),
+            _ => None,
+        }
+    }
+}
+
+pub(super) fn is_remote(source: &str) -> bool {
+    url::Url::parse(source).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+}
+
+#[derive(Clone)]
+struct Placement {
+    fragment: Fragment,
+    area: Rect,
+}
+
+#[derive(Default)]
+struct Layer {
+    current: Vec<Placement>,
+    previous: Vec<Placement>,
+}
+
+thread_local! { static LAYER: RefCell<Layer> = RefCell::new(Layer::default()); }
+
+pub(super) fn begin_frame() {
+    LAYER.with(|l| l.borrow_mut().current.clear());
+}
+
+pub(super) fn schedule(fragment: &Fragment, area: Rect) {
+    if !area.is_empty() {
+        LAYER.with(|l| {
+            let mut layer = l.borrow_mut();
+            // A hover refresh can redraw the same surface within one frame.
+            // Painting a Kitty slice twice would overwrite its first upload.
+            layer.current.retain(|p| p.area != area);
+            layer.current.push(Placement {
+                fragment: fragment.clone(),
+                area,
+            })
+        });
+    }
+}
+
+pub(super) fn occlude(area: Rect) {
+    LAYER.with(|l| {
+        l.borrow_mut()
+            .current
+            .retain(|p| p.area.intersection(area).is_empty())
+    });
+}
+
+pub(super) fn frozen_frame() {
+    LAYER.with(|l| {
+        let mut l = l.borrow_mut();
+        l.current = l.previous.clone();
+    });
+}
+
+pub(super) fn paint(buffer: &mut Buffer) {
+    LAYER.with(|l| {
+        let mut layer = l.borrow_mut();
+        for p in &layer.current {
+            let area = p.area.intersection(buffer.area);
+            if !area.is_empty() {
+                SlicedImage::new(
+                    &p.fragment.picture.protocol,
+                    (0, -(p.fragment.row as i16)).into(),
+                )
+                .render(area, buffer);
+            }
+        }
+        layer.previous = layer.current.clone();
+    });
+}
+
+pub(super) fn clear_layers() {
+    LAYER.with(|l| *l.borrow_mut() = Layer::default());
+}
