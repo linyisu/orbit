@@ -225,12 +225,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         let y = first_row + j as u16;
         let hovered = nav.hovered == Some(Target::Round(y));
         let is_active = index == active;
+        // Use the matching filled/outline circles: the small-circle glyph has
+        // a different ink center in several Nerd Font faces.
         let symbol = if is_active {
             icons::CIRCLE
         } else if hovered {
             icons::RHOMBUS
         } else {
-            icons::CIRCLE_SMALL
+            icons::CIRCLE_OUTLINE
         };
 
         let style = if is_active {
@@ -635,7 +637,7 @@ mod tests {
         assert_eq!(
             terminal.backend().buffer()[(state.navigation.area.x, state.navigation.area.y)]
                 .symbol(),
-            icons::CIRCLE_SMALL
+            icons::CIRCLE_OUTLINE
         );
         let area = state.navigation.area;
         for _ in 0..25 {
