@@ -358,8 +358,8 @@ fn file_groups_keep_each_file_separate_and_name_their_targets() {
         })
         .collect();
     let screen = text(&render(&mut state, 100, 30));
-    assert!(screen.contains("read_file · 2 次调用 · Orbit.md"));
-    assert!(screen.contains("read_file · 2 次调用 · Orbit.rs"));
+    assert!(screen.contains("read_file · Orbit.md · 2 次调用"));
+    assert!(screen.contains("read_file · Orbit.rs · 2 次调用"));
     assert_eq!(state.transcript_layout.group_range(1), Some(0..2));
     assert_eq!(state.transcript_layout.group_range(2), Some(2..4));
     let first = point(&state, 0, true);
@@ -382,9 +382,39 @@ fn file_groups_keep_each_file_separate_and_name_their_targets() {
         header
             .line
             .to_string()
-            .ends_with("Orbit  文档.md")
+            .ends_with("Orbit  文档.md · 2 次调用")
     );
     assert!(header.line.width() <= 50);
+}
+
+#[test]
+fn long_group_targets_leave_room_for_running_status_and_trailing_count() {
+    let path = format!("{}/中文文档.rs", "orbit/workspace/".repeat(12));
+    let items = [ToolStatus::Finished, ToolStatus::Running].map(|status| {
+        TranscriptItem::Tool(ToolRow {
+            id: "orbit-read".into(),
+            name: "read_file".into(),
+            status,
+            arguments: json!({"path":path}).to_string(),
+            output: String::new(),
+        })
+    });
+    for width in [40, 60, 100] {
+        for framed in [false, true] {
+            let header = header(&items, width, framed);
+            let text = header.line.to_string();
+            assert!(header.line.width() <= usize::from(width), "{text}");
+            assert!(
+                text.trim_end_matches([' ', '│']).ends_with(" · 2 次调用"),
+                "{text}"
+            );
+            assert!(text.contains(" · 1 进行中 · 2 次调用"), "{text}");
+            assert!(text.contains('…'), "{text}");
+            if width >= 60 {
+                assert!(text.contains("中文文档.rs"), "{text}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -447,7 +477,7 @@ fn grouped_calls_expand_inline_without_rewriting_history() {
         })
         .collect();
     let collapsed = text(&render(&mut state, 120, 45));
-    assert!(collapsed.contains("read_agent · 8 次调用"));
+    assert!(collapsed.contains("read_agent · 子代理 · 8 次调用"));
     assert_eq!(collapsed.matches("read_agent").count(), 1);
     let header = point(&state, 1, true);
     assert!(super::super::toggle_transcript_at(&mut state, header));
@@ -522,7 +552,7 @@ fn grouped_calls_share_one_frame_with_connected_separators() {
                         .lines()
                         .nth(1)
                         .unwrap()
-                        .contains("read_agent · 3 次调用")
+                        .contains("read_agent · 子代理 · 3 次调用")
                 );
             }
             for i in 0..3 {
@@ -633,7 +663,7 @@ fn framed_group_heading_keeps_its_borders_on_hover_and_closes_the_whole_group() 
     }));
     assert!(super::super::toggle_transcript_at(&mut state, heading));
     let collapsed = text(&render(&mut state, 100, 60));
-    assert!(collapsed.contains("read_agent · 2 次调用"));
+    assert!(collapsed.contains("read_agent · 子代理 · 2 次调用"));
     assert_eq!(collapsed.matches("read_agent").count(), 1);
     assert!(!collapsed.contains('╭'));
     assert!(state.expanded_tool_groups.is_empty());
@@ -738,7 +768,7 @@ fn errors_messages_and_subagent_view_links_keep_calls_separate() {
     let mut state = UiState::new("orbit-model");
     state.transcript = items;
     let screen = text(&render(&mut state, 120, 45));
-    assert!(screen.contains("read_file · 2 次调用 · 1 进行中"));
+    assert!(screen.contains("read_file · orbit.rs · 1 进行中 · 2 次调用"));
     assert_eq!(screen.matches("read_file").count(), 4);
     assert_eq!(screen.matches("spawn_agent").count(), 2);
     assert!(state.transcript_layout.group_range(2).is_none());
@@ -811,6 +841,6 @@ fn ctrl_o_and_collapse_from_scrolled_details_return_to_the_group_header() {
     state.scroll = state.max_scroll.saturating_sub(child + 15);
     render(&mut state, 90, 24);
     super::super::toggle_transcript_group(&mut state, 0);
-    assert!(text(&render(&mut state, 90, 24)).contains("read_file · 4 次调用"));
+    assert!(text(&render(&mut state, 90, 24)).contains("read_file · orbit.rs · 4 次调用"));
     assert_eq!(state.max_scroll.saturating_sub(state.scroll), 0);
 }

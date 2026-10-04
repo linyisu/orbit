@@ -168,20 +168,21 @@ pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> Link
                 THEME.tool_running
             }),
         ),
-        Span::styled(
-            format!(" · {} 次调用", items.len()),
-            Style::default().fg(THEME.tool_summary),
-        ),
     ];
+    let mut suffix = Vec::new();
     if running > 0 {
-        spans.push(Span::styled(
+        suffix.push(Span::styled(
             format!(" · {running} 进行中"),
             Style::default().fg(THEME.tool_running),
         ));
     }
+    suffix.push(Span::styled(
+        format!(" · {} 次调用", items.len()),
+        Style::default().fg(THEME.tool_summary),
+    ));
     let target = super::tool_display::group_target_summary(first);
-    let available =
-        usize::from(content_width).saturating_sub(spans.iter().map(Span::width).sum::<usize>() + 3);
+    let available = usize::from(content_width)
+        .saturating_sub(spans.iter().chain(&suffix).map(Span::width).sum::<usize>() + 3);
     if !target.is_empty() && available > 0 {
         let tail = matches!(
             first.name.as_str(),
@@ -201,6 +202,7 @@ pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> Link
             Style::default().fg(THEME.tool_summary),
         ));
     }
+    spans.extend(suffix);
     let header = LinkedLine::plain(Line::from(spans))
         .wrap(content_width)
         .into_iter()
