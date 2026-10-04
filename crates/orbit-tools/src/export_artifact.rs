@@ -269,7 +269,11 @@ fn export_with_limits(
         }
     }
 
-    let destination = parent.join(scratch.file_name().unwrap());
+    let destination = parent.join(
+        scratch
+            .file_name()
+            .ok_or_else(|| failed("artifact scratch directory must have a name"))?,
+    );
     // A filesystem lock serializes quota checks and publication across processes.
     let lock = std::fs::OpenOptions::new()
         .create(true)
@@ -278,18 +282,7 @@ fn export_with_limits(
         .write(true)
         .open(destination.join(".quota-lock"))
         .map_err(failed)?;
-    loop {
-        if token.is_cancelled() {
-            return Err(ToolError::Cancelled);
-        }
-        match lock.try_lock() {
-            Ok(()) => break,
-            Err(std::fs::TryLockError::WouldBlock) => {
-                std::thread::sleep(std::time::Duration::from_millis(10))
-            }
-            Err(error) => return Err(failed(error)),
-        }
-    }
+    acquire_quota_lock(&lock, &token, std::time::Duration::from_secs(10))?;
     let (count, total) = std::fs::read_dir(&destination)
         .map_err(failed)?
         .try_fold((0usize, 0u64), |(count, total), entry| {
@@ -309,7 +302,6 @@ fn export_with_limits(
             "session artifact quota reached; existing artifacts were preserved",
         ));
     }
-
     let mut output = tempfile::Builder::new()
         .prefix("artifact-")
         .suffix(&format!("-{name}"))
@@ -371,6 +363,31 @@ fn export_with_limits(
         json!({ "path": path, "name": name, "bytes": copied, "sha256": hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>() })
         .to_string(),
     ))
+}
+
+fn acquire_quota_lock(
+    lock: &std::fs::File,
+    token: &CancellationToken,
+    timeout: std::time::Duration,
+) -> Result<(), ToolError> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if token.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        match lock.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(failed(
+                        "artifact quota lock timed out; retry when the other export finishes",
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(failed(error)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -537,6 +554,31 @@ mod tests {
             b"workspace content"
         );
     }
+    #[test]
+    fn quota_lock_wait_has_a_deadline_and_remains_cancellable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".quota-lock");
+        let holder = std::fs::File::create(&path).unwrap();
+        holder.lock().unwrap();
+        let contender = std::fs::File::open(&path).unwrap();
+        let token = CancellationToken::new();
+        let error = acquire_quota_lock(&contender, &token, std::time::Duration::from_millis(20))
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        token.cancel();
+        assert_eq!(
+            acquire_quota_lock(&contender, &token, std::time::Duration::from_secs(10)),
+            Err(ToolError::Cancelled)
+        );
+        drop(holder);
+        acquire_quota_lock(
+            &contender,
+            &CancellationToken::new(),
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn streams_large_artifacts_and_cleans_up_quota_failures() {
         let root = tempfile::tempdir().unwrap();
