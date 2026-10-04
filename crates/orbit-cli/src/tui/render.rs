@@ -1118,11 +1118,15 @@ pub(super) fn draw_transcript_in(
     {
         match state.transcript.get(index) {
             Some(TranscriptItem::Thinking(_)) => {
-                for x in state.selection.viewport.x..state.selection.viewport.right() {
-                    let cell = &mut frame.buffer_mut()[(x, point.1)];
-                    if cell.symbol() != " " {
-                        cell.set_fg(THINKING_BRIGHT);
-                        cell.set_style(cell.style().add_modifier(Modifier::BOLD));
+                if state.transcript_layout.item_offset(index)
+                    == Some(offset + usize::from(point.1 - state.selection.viewport.y))
+                {
+                    for x in state.selection.viewport.x..state.selection.viewport.right() {
+                        let cell = &mut frame.buffer_mut()[(x, point.1)];
+                        if cell.symbol() != " " {
+                            cell.set_fg(THINKING_BRIGHT);
+                            cell.set_style(cell.style().add_modifier(Modifier::BOLD));
+                        }
                     }
                 }
             }
@@ -1132,7 +1136,7 @@ pub(super) fn draw_transcript_in(
                     .group_at(state.selection.viewport, offset, point)
                     .is_some();
                 let start = if group_header {
-                    state.transcript_layout.item_offset(index)
+                    state.transcript_layout.group_offset(index)
                 } else {
                     state.transcript_layout.tool_offset(index)
                 }
@@ -1154,9 +1158,15 @@ pub(super) fn draw_transcript_in(
                         if row_abs >= offset {
                             let y = state.selection.viewport.y + (row_abs - offset) as u16;
                             if y < state.selection.viewport.bottom() {
+                                let decorations = state.transcript_layout.decorations(row_abs);
                                 for x in
                                     state.selection.viewport.x..state.selection.viewport.right()
                                 {
+                                    if decorations.iter().any(|range| {
+                                        range.contains(&usize::from(x - state.selection.viewport.x))
+                                    }) {
+                                        continue;
+                                    }
                                     let cell = &mut frame.buffer_mut()[(x, y)];
                                     if cell.symbol() != " " {
                                         cell.set_style(cell.style().add_modifier(Modifier::BOLD));
@@ -1253,20 +1263,23 @@ pub(super) fn transcript_lines_at_width(
             }
 
             TranscriptItem::Tool(row) => {
-                let prev_is_tool =
-                    index > 0 && matches!(items.get(index - 1), Some(TranscriptItem::Tool(_)));
-                if !prev_is_tool
+                let framed = expanded && width >= 10;
+                if framed {
+                    if lines.last().is_some_and(|line| line.to_string().is_empty()) {
+                        lines.pop();
+                    }
+                } else if index > 0
                     && lines
                         .last()
                         .is_some_and(|line| !line.to_string().trim().is_empty())
+                    && !matches!(items.get(index - 1), Some(TranscriptItem::Tool(_)))
                 {
                     lines.push(Line::from(""));
                 }
 
                 lines.extend(tool_card(row, expanded, width));
 
-                let next_is_tool = matches!(items.get(index + 1), Some(TranscriptItem::Tool(_)));
-                if !next_is_tool {
+                if !framed {
                     lines.push(Line::from(""));
                 }
             }
@@ -3139,7 +3152,7 @@ mod tests {
     }
 
     #[test]
-    fn consecutive_tools_do_not_have_blank_line_between_them() {
+    fn collapsed_tools_keep_one_blank_line_between_them() {
         use super::super::app::ToolRow;
 
         let row1 = ToolRow {
@@ -3158,16 +3171,52 @@ mod tests {
         };
         let items = vec![TranscriptItem::Tool(row1), TranscriptItem::Tool(row2)];
         let lines = transcript_lines(&items, false);
-        // lines[0] = row1, lines[1] = row2, lines[2] = trailing empty line after tool block
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 4);
         assert!(lines[0].to_string().contains("run_command"));
-        assert!(lines[1].to_string().contains("read_file"));
-        assert!(lines[2].to_string().is_empty());
+        assert!(lines[1].to_string().is_empty());
+        assert!(lines[2].to_string().contains("read_file"));
+        assert!(lines[3].to_string().is_empty());
 
         let mut layout = super::super::transcript::TranscriptLayout::default();
         layout.update(&items, None, 80);
-        // In layout: entry 0 = row1 (height 1), entry 1 = row2 + trailing empty line (height 2) -> total 3
-        assert_eq!(layout.height(), 3);
+        assert_eq!(layout.height(), 4);
+    }
+
+    #[test]
+    fn hovering_expanded_thinking_content_preserves_its_syntax_style() {
+        let mut thinking =
+            super::super::app::ThinkingRow::from("```rust\nlet orbit = 1;\n```".to_owned());
+        thinking.finished = true;
+        let mut state = UiState::new("orbit-model");
+        state.transcript.push(TranscriptItem::Thinking(thinking));
+        state.expanded.insert(0);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let before = terminal.backend().buffer().clone();
+        let area = state.selection.viewport;
+        let y = (area.y..area.bottom())
+            .find(|y| {
+                (area.x..area.right())
+                    .map(|x| before[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("let orbit")
+            })
+            .unwrap();
+        let point = (area.x + 8, y);
+        assert_eq!(
+            state.transcript_layout.disclosure_at(
+                &state.transcript,
+                area,
+                state.max_scroll.saturating_sub(state.scroll),
+                point,
+            ),
+            Some(0)
+        );
+        state.transcript_pointer = Some(point);
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        for x in area.x..area.right() {
+            assert_eq!(terminal.backend().buffer()[(x, y)], before[(x, y)]);
+        }
     }
 
     #[test]

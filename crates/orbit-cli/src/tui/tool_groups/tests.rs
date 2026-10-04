@@ -377,8 +377,13 @@ fn file_groups_keep_each_file_separate_and_name_their_targets() {
         };
         row.arguments = json!({"path":path}).to_string();
     }
-    let header = header(&state.transcript[..2], 50);
-    assert!(header.line.to_string().ends_with("Orbit  文档.md"));
+    let header = header(&state.transcript[..2], 50, false);
+    assert!(
+        header
+            .line
+            .to_string()
+            .ends_with("Orbit  文档.md")
+    );
     assert!(header.line.width() <= 50);
 }
 
@@ -483,53 +488,86 @@ fn grouped_calls_expand_inline_without_rewriting_history() {
 #[test]
 fn grouped_calls_share_one_frame_with_connected_separators() {
     for width in [120, 50, 20] {
-        let items = (0..3)
-            .map(|i| tool(i, "read_agent", ToolStatus::Finished))
-            .collect::<Vec<_>>();
-        let mut layout = TranscriptLayout::default();
-        layout.update_expanded(
-            &items,
-            &std::collections::BTreeSet::from([0, 2]),
-            &std::collections::BTreeSet::from([0]),
-            width,
-        );
-        let area = ratatui::layout::Rect::new(0, 0, width, layout.height() as u16);
-        let mut buffer = Buffer::empty(area);
-        layout.draw_buffer(&mut buffer, area, 0);
-        let screen = text(&buffer);
-        assert_eq!(screen.matches('╭').count(), 1);
-        assert_eq!(screen.matches('╰').count(), 1);
-        assert_eq!(screen.matches('├').count(), 2);
-        assert!(screen.contains("Orbit 结果 0"));
-        assert!(screen.contains("Orbit 结果 2"));
-        assert!(!screen.contains("Orbit 结果 1"));
-
-        for y in 1..area.bottom() - 1 {
-            assert!(matches!(buffer[(2, y)].symbol(), "╭" | "│" | "├" | "╰"));
-            assert!(matches!(
-                buffer[(width - 3, y)].symbol(),
-                "╮" | "│" | "┤" | "╯"
-            ));
-            for x in [2, width - 3] {
+        for expanded in [vec![], vec![0], vec![1], vec![2], vec![0, 2], vec![0, 1, 2]] {
+            let expanded = expanded
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>();
+            let items = (0..3)
+                .map(|i| tool(i, "read_agent", ToolStatus::Finished))
+                .collect::<Vec<_>>();
+            let mut layout = TranscriptLayout::default();
+            layout.update_expanded(
+                &items,
+                &expanded,
+                &std::collections::BTreeSet::from([0]),
+                width,
+            );
+            let area = ratatui::layout::Rect::new(0, 0, width, layout.height() as u16);
+            let mut buffer = Buffer::empty(area);
+            layout.draw_buffer(&mut buffer, area, 0);
+            let screen = text(&buffer);
+            assert_eq!(screen.matches('╭').count(), 1);
+            assert_eq!(screen.matches('╰').count(), 1);
+            assert_eq!(
+                screen.matches('├').count(),
+                expanded.len() * 2 - usize::from(expanded.contains(&2))
+            );
+            assert!(screen.lines().next().unwrap().starts_with('╭'));
+            assert!((1..width - 1).all(|x| buffer[(x, 2)].symbol().trim().is_empty()));
+            assert!(layout.group_at(area, 0, (2, 2)).is_none());
+            assert!(layout.disclosure_at(&items, area, 0, (2, 2)).is_none());
+            if width >= 50 {
                 assert!(
-                    layout
-                        .decorations(y as usize)
-                        .iter()
-                        .any(|range| range.contains(&(x as usize)))
+                    screen
+                        .lines()
+                        .nth(1)
+                        .unwrap()
+                        .contains("read_agent · 3 次调用")
                 );
-                assert!(layout.group_at(area, 0, (x, y)).is_none());
-                if matches!(buffer[(x, y)].symbol(), "╭" | "├" | "╰" | "╮" | "┤" | "╯")
-                {
-                    assert!(layout.disclosure_at(&items, area, 0, (x, y)).is_none());
+            }
+            for i in 0..3 {
+                assert_eq!(
+                    screen.contains(&format!("Orbit 结果 {i}")),
+                    expanded.contains(&i)
+                );
+            }
+            if expanded.is_empty() {
+                let titles = (0..area.bottom())
+                    .filter(|&y| layout.disclosure_at(&items, area, 0, (2, y)).is_some())
+                    .collect::<Vec<_>>();
+                assert_eq!(titles, vec![3, 4, 5]);
+            }
+
+            for y in 0..area.bottom() {
+                if matches!(buffer[(0, y)].symbol(), "╭" | "├" | "╰") {
+                    assert!(layout.disclosure_at(&items, area, 0, (2, y)).is_none());
+                }
+                assert!(matches!(buffer[(0, y)].symbol(), "╭" | "│" | "├" | "╰"));
+                assert!(matches!(
+                    buffer[(width - 1, y)].symbol(),
+                    "╮" | "│" | "┤" | "╯"
+                ));
+                for x in [0, width - 1] {
+                    assert!(
+                        layout
+                            .decorations(y as usize)
+                            .iter()
+                            .any(|range| range.contains(&(x as usize)))
+                    );
+                    assert!(layout.group_at(area, 0, (x, y)).is_none());
+                    if matches!(buffer[(x, y)].symbol(), "╭" | "├" | "╰" | "╮" | "┤" | "╯")
+                    {
+                        assert!(layout.disclosure_at(&items, area, 0, (x, y)).is_none());
+                    }
                 }
             }
-        }
-        for i in [0, 2] {
-            let target = format!("https://orbit.test/result/{i}");
-            assert!((area.y..area.bottom()).any(|y| {
-                (area.x..area.right())
-                    .any(|x| layout.link_at(area, 0, (x, y)) == Some(target.as_str()))
-            }));
+            for i in expanded {
+                let target = format!("https://orbit.test/result/{i}");
+                assert!((area.y..area.bottom()).any(|y| {
+                    (area.x..area.right())
+                        .any(|x| layout.link_at(area, 0, (x, y)) == Some(target.as_str()))
+                }));
+            }
         }
     }
 }
@@ -553,7 +591,7 @@ fn individual_call_headers_toggle_independently_inside_the_group() {
     let expanded = text(&render(&mut state, 100, 60));
     assert_eq!(expanded.matches('╭').count(), 1);
     assert_eq!(expanded.matches('╰').count(), 1);
-    assert_eq!(expanded.matches('├').count(), 2);
+    assert_eq!(expanded.matches('├').count(), 3);
     assert!(expanded.contains("Orbit 结果 0"));
     assert!(expanded.contains("Orbit 结果 2"));
     let call = point(&state, 0, false);
@@ -563,6 +601,125 @@ fn individual_call_headers_toggle_independently_inside_the_group() {
     assert!(collapsed.contains("Orbit 结果 2"));
     assert!(state.expanded_tool_groups.contains(&0));
     assert_eq!(state.expanded, std::collections::BTreeSet::from([2]));
+}
+
+#[test]
+fn framed_group_heading_keeps_its_borders_on_hover_and_closes_the_whole_group() {
+    use ratatui::style::Modifier;
+
+    let mut state = UiState::new("orbit-model");
+    state.transcript = (0..2)
+        .map(|i| tool(i, "read_agent", ToolStatus::Finished))
+        .collect();
+    state.expanded_tool_groups.insert(0);
+    state.expanded.insert(1);
+    let before = render(&mut state, 100, 60);
+    let heading = point(&state, 0, true);
+    let area = state.selection.viewport;
+    let offset = state.max_scroll.saturating_sub(state.scroll);
+    assert_eq!(
+        state.transcript_layout.group_offset(0),
+        Some(offset + usize::from(heading.1 - area.y))
+    );
+    state.transcript_pointer = Some(heading);
+    let hovered = render(&mut state, 100, 60);
+    for x in [area.x, area.right() - 1] {
+        assert_eq!(before[(x, heading.1)], hovered[(x, heading.1)]);
+    }
+    assert!((area.x..area.right()).any(|x| {
+        before[(x, heading.1)].fg == THEME.tool_finished
+            && hovered[(x, heading.1)].fg == THEME.tool_hover
+            && hovered[(x, heading.1)].modifier.contains(Modifier::BOLD)
+    }));
+    assert!(super::super::toggle_transcript_at(&mut state, heading));
+    let collapsed = text(&render(&mut state, 100, 60));
+    assert!(collapsed.contains("read_agent · 2 次调用"));
+    assert_eq!(collapsed.matches("read_agent").count(), 1);
+    assert!(!collapsed.contains('╭'));
+    assert!(state.expanded_tool_groups.is_empty());
+    assert!(state.expanded.is_empty());
+}
+
+#[test]
+fn tool_frames_replace_adjacent_spacing_and_cached_toggles_match_fresh_layouts() {
+    let mut search = tool(1, "search_text", ToolStatus::Finished);
+    if let TranscriptItem::Tool(row) = &mut search {
+        row.arguments = json!({"path":".","query":"Orbit"}).to_string();
+    }
+    let items = vec![
+        TranscriptItem::Assistant("Orbit before".into()),
+        tool(0, "read_file", ToolStatus::Finished),
+        search,
+        TranscriptItem::Assistant("Orbit after".into()),
+    ];
+    let mut layout = TranscriptLayout::default();
+    for width in [80, 28, 80] {
+        for expanded in [
+            vec![],
+            vec![1],
+            vec![2],
+            vec![1, 2],
+            vec![],
+            vec![2],
+            vec![],
+        ] {
+            let expanded = expanded.into_iter().collect();
+            layout.update_expanded(&items, &expanded, &Default::default(), width);
+            let mut fresh = TranscriptLayout::default();
+            fresh.update_expanded(&items, &expanded, &Default::default(), width);
+            let area = ratatui::layout::Rect::new(0, 0, width, layout.height() as u16);
+            let mut actual = Buffer::empty(area);
+            let mut expected = Buffer::empty(area);
+            layout.draw_buffer(&mut actual, area, 0);
+            fresh.draw_buffer(&mut expected, area, 0);
+            assert_eq!(layout.height(), fresh.height());
+            assert_eq!(actual, expected);
+
+            let screen = text(&actual);
+            let lines = screen.lines().map(str::trim).collect::<Vec<_>>();
+            let row = |label| lines.iter().position(|line| line.contains(label)).unwrap();
+            let first_open = expanded.contains(&1);
+            let second_open = expanded.contains(&2);
+            let first_start = row("read_file") - usize::from(first_open);
+            let second_start = row("search_text") - usize::from(second_open);
+            let first_end = if first_open {
+                lines[..second_start]
+                    .iter()
+                    .rposition(|line| line.starts_with('╰'))
+                    .unwrap()
+            } else {
+                first_start
+            };
+            let second_end = if second_open {
+                lines
+                    .iter()
+                    .rposition(|line| line.starts_with('╰'))
+                    .unwrap()
+            } else {
+                second_start
+            };
+            for (start, end, gap) in [
+                (
+                    row("Orbit before") + 1,
+                    first_start,
+                    usize::from(!first_open),
+                ),
+                (
+                    first_end + 1,
+                    second_start,
+                    usize::from(!first_open && !second_open),
+                ),
+                (
+                    second_end + 1,
+                    row("Orbit after"),
+                    usize::from(!second_open),
+                ),
+            ] {
+                assert_eq!(end - start, gap, "{width}: {expanded:?}\n{screen}");
+                assert!(lines[start..end].iter().all(|line| line.is_empty()));
+            }
+        }
+    }
 }
 
 #[test]

@@ -143,7 +143,7 @@ pub(super) fn range(items: &[TranscriptItem], index: usize) -> Range<usize> {
     index..end
 }
 
-pub(super) fn header(items: &[TranscriptItem], width: u16) -> LinkedLine {
+pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> LinkedLine {
     let TranscriptItem::Tool(first) = &items[0] else {
         unreachable!()
     };
@@ -153,8 +153,13 @@ pub(super) fn header(items: &[TranscriptItem], width: u16) -> LinkedLine {
             |item| matches!(item,TranscriptItem::Tool(row) if row.status == ToolStatus::Running),
         )
         .count();
+    let content_width = if framed {
+        width.saturating_sub(4)
+    } else {
+        width
+    };
     let mut spans = vec![
-        Span::raw("  "),
+        Span::raw(if framed { "" } else { "  " }),
         Span::styled(
             super::render::safe_output(&first.name),
             Style::default().fg(if running == 0 {
@@ -176,7 +181,7 @@ pub(super) fn header(items: &[TranscriptItem], width: u16) -> LinkedLine {
     }
     let target = super::tool_display::group_target_summary(first);
     let available =
-        usize::from(width).saturating_sub(spans.iter().map(Span::width).sum::<usize>() + 3);
+        usize::from(content_width).saturating_sub(spans.iter().map(Span::width).sum::<usize>() + 3);
     if !target.is_empty() && available > 0 {
         let tail = matches!(
             first.name.as_str(),
@@ -196,16 +201,22 @@ pub(super) fn header(items: &[TranscriptItem], width: u16) -> LinkedLine {
             Style::default().fg(THEME.tool_summary),
         ));
     }
-    LinkedLine::plain(Line::from(spans))
-        .wrap(width)
+    let header = LinkedLine::plain(Line::from(spans))
+        .wrap(content_width)
         .into_iter()
         .next()
-        .unwrap_or_else(|| LinkedLine::plain(Line::default()))
+        .unwrap_or_else(|| LinkedLine::plain(Line::default()));
+    if framed {
+        super::render::tool_frame_line(header, width)
+    } else {
+        header
+    }
 }
 
 pub(super) struct Section {
     pub lines: Vec<LinkedLine>,
     pub header: usize,
+    pub body: Range<usize>,
 }
 
 pub(super) fn section(
@@ -219,36 +230,46 @@ pub(super) fn section(
         return Section {
             lines: super::render::tool_card_with_links(row, expanded, width),
             header: 0,
+            body: 0..0,
         };
     }
 
     let inner_width = width - 4;
-    let mut lines = vec![super::render::tool_border_line(
-        width,
-        if first {
-            ('╭', '╮')
-        } else {
-            ('├', '┤')
-        },
-    )];
+    let mut lines = Vec::new();
+    if first {
+        lines.push(super::render::tool_frame_line(
+            LinkedLine::chrome(Line::default()),
+            width,
+        ));
+    }
+    let header = lines.len();
     lines.extend(
         super::render::tool_group_title_with_links(row, inner_width)
             .into_iter()
             .map(|line| super::render::tool_frame_line(line, width)),
     );
-    if expanded {
-        lines.push(super::render::tool_frame_line(
-            LinkedLine::chrome(Line::default()),
-            width,
-        ));
+    let body = if expanded {
+        lines.push(super::render::tool_border_line(width, ('├', '┤')));
+        let start = lines.len();
         lines.extend(
             super::render::tool_body_with_links(row, inner_width)
                 .into_iter()
                 .map(|line| super::render::tool_frame_line(line, width)),
         );
-    }
+        let end = lines.len();
+        if !last {
+            lines.push(super::render::tool_border_line(width, ('├', '┤')));
+        }
+        start..end
+    } else {
+        0..0
+    };
     if last {
         lines.push(super::render::tool_border_line(width, ('╰', '╯')));
     }
-    Section { lines, header: 1 }
+    Section {
+        lines,
+        header,
+        body,
+    }
 }

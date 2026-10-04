@@ -286,9 +286,10 @@ struct Entry {
     rows: Vec<Row>,
     disclosures: Vec<usize>,
     tool_group: Option<Range<usize>>,
-    group_header: bool,
+    group_header: Option<usize>,
     height: usize,
     end: usize,
+    spacing: bool,
     // Reuse completed lines for append-only deltas. Edits discard the entry.
     stable_rows: usize,
     parsed_bytes: usize,
@@ -299,6 +300,15 @@ struct Entry {
 }
 
 impl Entry {
+    fn remove_spacing(&mut self) {
+        if self.spacing {
+            if let Some(row) = self.rows.pop() {
+                self.height -= row.height;
+            }
+            self.spacing = false;
+        }
+    }
+
     fn push(&mut self, mut line: Line<'static>, width: u16) {
         render::sanitize_line(&mut line);
         let links = super::markdown::plain_links(&line.to_string());
@@ -473,14 +483,6 @@ impl Entry {
             }
         }
 
-        // Every completed-looking streamed section owns exactly one trailing
-        // blank row. This keeps reasoning distinct from the following tool or
-        // final answer without relying on the next transcript entry to know
-        // what came before it.
-        if !text.is_empty() {
-            self.push(Line::from(""), width);
-        }
-
         self.observed_bytes = Some(text.len());
     }
 
@@ -514,7 +516,6 @@ impl Entry {
                 );
             }
 
-            self.push(Line::from(""), width);
             return;
         }
 
@@ -559,7 +560,6 @@ impl Entry {
             ))),
             width,
         );
-        self.push(Line::from(""), width);
     }
 }
 
@@ -680,8 +680,8 @@ impl TranscriptLayout {
         }
 
         let first = self.dirty_from.min(self.entries.len());
-        // Appends can change the previous entry's group or trailing spacing.
-        let first = if first == self.entries.len() && first < items.len() {
+        // A changed block can also change the spacing before it.
+        let first = if first < items.len() {
             first.saturating_sub(1)
         } else {
             first
@@ -705,6 +705,10 @@ impl TranscriptLayout {
             if item_index >= group.end {
                 group = super::tool_groups::range(items, item_index);
             }
+            entry.remove_spacing();
+            let mut next = item_index + 1;
+            let mut framed = false;
+            let mut block_end = true;
             match item {
                 TranscriptItem::Assistant(text) => entry.stream(text, false, width),
                 TranscriptItem::Thinking(row) if !row.finished => {
@@ -713,9 +717,16 @@ impl TranscriptLayout {
                 TranscriptItem::Thinking(row) => {
                     *entry = Entry::default();
                     let is_expanded = expanded.contains(&(first + relative));
-                    for line in render::thinking_card_with_links(row, is_expanded) {
-                        if entry.rows.is_empty() {
-                            entry.disclosures.push(0);
+                    let mut lines = render::thinking_card_with_links(row, is_expanded);
+                    if lines
+                        .last()
+                        .is_some_and(|line| line.line.to_string().is_empty())
+                    {
+                        lines.pop();
+                    }
+                    for line in lines {
+                        if !line.line.to_string().trim().is_empty() {
+                            entry.disclosures.push(entry.rows.len());
                         }
                         entry.push_linked(line, width);
                     }
@@ -729,54 +740,57 @@ impl TranscriptLayout {
                     let is_expanded = expanded.contains(&item_index);
                     let grouped = group.len() > 1;
                     let group_open = expanded_groups.contains(&group.start);
-                    let next = if grouped && !group_open {
-                        group.end
-                    } else {
-                        item_index + 1
-                    };
-                    let next_is_tool = matches!(items.get(next), Some(TranscriptItem::Tool(_)));
+                    if grouped {
+                        next = group.end;
+                        block_end = if group_open {
+                            item_index + 1 == group.end
+                        } else {
+                            item_index == group.start
+                        };
+                    }
+                    framed = width >= 10 && if grouped { group_open } else { is_expanded };
                     if grouped {
                         entry.tool_group = Some(group.clone());
                         if item_index == group.start {
-                            entry.group_header = true;
+                            if framed {
+                                entry.push_linked(
+                                    render::tool_border_line(width, ('╭', '╮')),
+                                    width,
+                                );
+                            }
+                            entry.group_header = Some(entry.rows.len());
                             entry.push_linked(
-                                super::tool_groups::header(&items[group.clone()], width),
+                                super::tool_groups::header(&items[group.clone()], width, framed),
                                 width,
                             );
                         }
                     }
                     if !grouped || group_open {
-                        let inset = if grouped { 2.min(width / 4) } else { 0 };
-                        let (lines, header) = if grouped {
+                        let (lines, header, body) = if grouped {
                             let section = super::tool_groups::section(
                                 row,
                                 is_expanded,
-                                width - inset * 2,
+                                width,
                                 item_index == group.start,
                                 item_index + 1 == group.end,
                             );
-                            (section.lines, Some(section.header))
+                            (section.lines, Some(section.header), section.body)
                         } else {
-                            (render::tool_card_with_links(row, is_expanded, width), None)
+                            (
+                                render::tool_card_with_links(row, is_expanded, width),
+                                None,
+                                0..0,
+                            )
                         };
                         for (index, line) in lines.into_iter().enumerate() {
                             if header.map_or_else(
                                 || !line.line.to_string().is_empty(),
-                                |header| header == index,
+                                |header| header == index || body.contains(&index),
                             ) {
                                 entry.disclosures.push(entry.rows.len());
                             }
-                            entry.push_linked(
-                                line.framed(
-                                    vec![Span::raw(" ".repeat(inset as usize))],
-                                    vec![Span::raw(" ".repeat(inset as usize))],
-                                ),
-                                width,
-                            );
+                            entry.push_linked(line, width);
                         }
-                    }
-                    if !next_is_tool && (!grouped || item_index == group.start || group_open) {
-                        entry.push(Line::from(""), width);
                     }
                 }
                 _ => {
@@ -789,11 +803,15 @@ impl TranscriptLayout {
                         )
                     });
 
-                    for line in render::transcript_lines_at_width(
+                    let mut lines = render::transcript_lines_at_width(
                         std::slice::from_ref(item),
                         expanded.contains(&(first + relative)),
                         width,
-                    ) {
+                    );
+                    if lines.last().is_some_and(|line| line.to_string().is_empty()) {
+                        lines.pop();
+                    }
+                    for line in lines {
                         if (collapsible && entry.rows.is_empty()) || toggle.as_ref() == Some(&line)
                         {
                             entry.disclosures.push(entry.rows.len());
@@ -804,6 +822,20 @@ impl TranscriptLayout {
                 }
             }
 
+            if entry.height > 0 && block_end && !framed {
+                let next_grouped = super::tool_groups::range(items, next).len() > 1;
+                let next_framed = width >= 10
+                    && matches!(items.get(next), Some(TranscriptItem::Tool(_)))
+                    && if next_grouped {
+                        expanded_groups.contains(&next)
+                    } else {
+                        expanded.contains(&next)
+                    };
+                if !next_framed {
+                    entry.push(Line::default(), width);
+                    entry.spacing = true;
+                }
+            }
             end += entry.height;
             entry.end = end;
         }
@@ -847,13 +879,19 @@ impl TranscriptLayout {
         self.entries.get(index)?.tool_group.clone()
     }
 
+    pub(super) fn group_offset(&self, index: usize) -> Option<usize> {
+        let entry = self.entries.get(index)?;
+        let row = entry.rows.get(entry.group_header?)?;
+        Some(entry.end - entry.height + row.start)
+    }
+
     pub(super) fn visible_group(&self, offset: usize, height: usize) -> Option<usize> {
         self.entries
             .iter()
             .enumerate()
             .rev()
             .find_map(|(index, entry)| {
-                (entry.group_header
+                (entry.group_header.is_some()
                     && entry.end > offset
                     && entry.end - entry.height < offset + height)
                     .then_some(index)
@@ -867,12 +905,20 @@ impl TranscriptLayout {
         let absolute = offset + usize::from(point.1 - area.y);
         let index = self.entries.partition_point(|entry| entry.end <= absolute);
         let entry = self.entries.get(index)?;
-        if !entry.group_header {
-            return None;
-        }
-        let row = entry.rows.first()?;
+        let row = entry.rows.get(entry.group_header?)?;
         let relative = absolute - (entry.end - entry.height);
-        (relative < row.height && usize::from(point.0 - area.x) < row.line.width()).then_some(index)
+        let column = usize::from(point.0 - area.x);
+        let gutter = row
+            .gutter
+            .as_ref()
+            .map_or(0, |gutter| usize::from(gutter.width));
+        (row.start <= relative
+            && relative < row.start + row.height
+            && column < gutter + row.line.width()
+            && !row.decorations[relative - row.start]
+                .iter()
+                .any(|range| range.contains(&column)))
+        .then_some(index)
     }
 
     pub(super) fn disclosure_at(
