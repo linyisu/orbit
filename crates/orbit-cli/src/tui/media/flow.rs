@@ -230,7 +230,7 @@ fn slice(linked: &LinkedLine, range: Range<usize>) -> LinkedLine {
 struct BoxAt {
     x: u16,
     picture: Arc<Prepared>,
-    text: String,
+    text: Arc<str>,
     url: Option<String>,
 }
 struct Flow {
@@ -331,7 +331,7 @@ impl Flow {
         self.boxes.push(BoxAt {
             x,
             picture,
-            text,
+            text: text.into(),
             url,
         });
         if block {
@@ -382,6 +382,13 @@ impl Flow {
                         x: b.x,
                         row: y - top,
                     });
+                    line.copy.push(CopyText {
+                        columns: usize::from(b.x)..usize::from(b.x + b.picture.size.width),
+                        row: y - top,
+                        height: b.picture.size.height,
+                        baseline: b.picture.baseline,
+                        text: b.text.clone(),
+                    });
                     if y != baseline
                         && let Some(url) = &b.url
                     {
@@ -393,12 +400,6 @@ impl Flow {
                             url: url.clone(),
                         });
                     }
-                }
-                if y == baseline {
-                    line.copy.push(CopyText {
-                        columns: usize::from(b.x)..usize::from(b.x + b.picture.size.width),
-                        text: b.text.clone(),
-                    });
                 }
             }
             if let Some(suffix) = &self.suffix {

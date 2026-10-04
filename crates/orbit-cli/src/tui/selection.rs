@@ -12,7 +12,7 @@ use ratatui::{
     layout::Rect,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     io::{self, Write},
     time::{Duration, Instant},
 };
@@ -32,6 +32,12 @@ enum Region {
     Transcript,
     Footer,
     Approval,
+}
+
+struct SelectedMedia {
+    block: super::media::SelectionBlock,
+    baseline: usize,
+    text: std::sync::Arc<str>,
 }
 
 #[derive(Debug, Default)]
@@ -361,45 +367,104 @@ impl Selection {
 
     pub fn text(&self) -> String {
         let mut lines = Vec::new();
-        for (&row, cells) in &self.rows {
-            let Some((left, right)) = self.selected_columns(row) else {
+        let media = self.selected_media();
+        // A clipped picture can be selected while its text baseline is offscreen.
+        // Keep copy order tied to that baseline and emit its source exactly once.
+        let mut rows = self.rows.keys().copied().collect::<BTreeSet<_>>();
+        rows.extend(media.iter().map(|m| m.baseline));
+
+        for row in rows {
+            let columns = self.selected_columns(row);
+            let copies = media
+                .iter()
+                .filter(|m| m.baseline == row)
+                .collect::<Vec<_>>();
+            if columns.is_none() && copies.is_empty() {
                 continue;
-            };
+            }
             let metadata = self.row_decorations(row);
-            if metadata.is_some_and(|metadata| metadata.chrome) {
+            let chrome = metadata.is_some_and(|metadata| metadata.chrome);
+            if chrome && copies.is_empty() {
                 continue;
             }
             let decorations = metadata.map_or(&[][..], |metadata| metadata.ranges.as_slice());
+            let cells = self.rows.get(&row);
+            let len = cells.map_or(usize::from(self.area().width), Vec::len);
+
             let mut text = String::new();
             let mut x = 0;
-            while x < cells.len() {
-                if let Some(copy) =
-                    metadata.and_then(|m| m.copy.iter().find(|c| c.columns.start == x))
-                {
-                    if copy.columns.start <= right as usize && copy.columns.end > left as usize {
-                        text.push_str(&copy.text);
-                    }
-                    x = copy.columns.end;
+
+            while x < len {
+                if let Some(copy) = copies.iter().find(|m| m.block.columns.start == x) {
+                    text.push_str(&copy.text);
+                    x = copy.block.columns.end;
                     continue;
                 }
-                let width = cells[x].symbol().width().max(1);
-                if x <= right as usize && x + width > left as usize {
+                let Some(cell) = cells.and_then(|cells| cells.get(x)) else {
+                    x += 1;
+                    continue;
+                };
+                let width = cell.symbol().width().max(1);
+
+                if !chrome
+                    && columns.is_some_and(|(left, right)| {
+                        x <= right as usize && x + width > left as usize
+                    })
+                {
                     if decorations
                         .iter()
                         .any(|range| range.start < x + width && range.end > x)
                     {
+                        // Remove gutters, but keep interior columns separated (e.g. tables).
+                        // Trailing padding is trimmed with the rest of the terminal row.
                         if !text.is_empty() {
                             text.extend(std::iter::repeat_n(' ', width));
                         }
                     } else {
-                        text.push_str(cells[x].symbol());
+                        text.push_str(cell.symbol());
                     }
                 }
+
                 x += width;
             }
+
             lines.push(text.trim_end().to_owned());
         }
+
         lines.join("\n")
+    }
+
+    fn selected_media(&self) -> Vec<SelectedMedia> {
+        if self.region != Some(Region::Transcript) || !self.moved {
+            return Vec::new();
+        }
+        let Some((start, end)) = self.bounds() else {
+            return Vec::new();
+        };
+        let mut blocks = BTreeMap::new();
+        for (&row, metadata) in self.decorations.range(start.1..=end.1) {
+            let Some((left, right)) = self.selected_columns(row) else {
+                continue;
+            };
+            for copy in &metadata.copy {
+                if copy.columns.start > usize::from(right) || copy.columns.end <= usize::from(left)
+                {
+                    continue;
+                }
+                let top = row.saturating_sub(usize::from(copy.row));
+                blocks
+                    .entry((top, copy.columns.start))
+                    .or_insert_with(|| SelectedMedia {
+                        block: super::media::SelectionBlock {
+                            rows: top..top + usize::from(copy.height),
+                            columns: copy.columns.clone(),
+                        },
+                        baseline: top + usize::from(copy.baseline),
+                        text: copy.text.clone(),
+                    });
+            }
+        }
+        blocks.into_values().collect()
     }
 
     fn row_decorations(&self, row: usize) -> Option<&super::transcript::Decorations> {
@@ -434,6 +499,27 @@ impl Selection {
 
         self.latest = Some(snapshot);
         let area = self.area().intersection(frame.area());
+        let media = self
+            .selected_media()
+            .into_iter()
+            .map(|m| m.block)
+            .collect::<Vec<_>>();
+        super::media::select(area, self.base(), &media);
+        for block in &media {
+            for row in block.rows.start.max(self.base())
+                ..block.rows.end.min(self.base() + usize::from(area.height))
+            {
+                let y = area.y + (row - self.base()) as u16;
+                for x in block
+                    .columns
+                    .clone()
+                    .take_while(|&x| x < usize::from(area.width))
+                {
+                    frame.buffer_mut()[(area.x + x as u16, y)]
+                        .set_bg(super::theme::THEME.selection);
+                }
+            }
+        }
         let mut styles = HashMap::new();
 
         for y in area.y..area.bottom() {

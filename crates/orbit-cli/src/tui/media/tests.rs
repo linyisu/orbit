@@ -637,6 +637,284 @@ fn copied_graphics_use_tex_once_without_protocol_bytes_or_thinking_rails() {
 }
 
 #[test]
+fn selecting_one_slice_selects_the_entire_occurrence_and_restores_each_protocol() {
+    use crate::tui::theme::THEME;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("opaque.png");
+    image::RgbaImage::from_pixel(80, 180, image::Rgba([230, 100, 50, 255]))
+        .save(&path)
+        .unwrap();
+    for protocol in [
+        ProtocolType::Kitty,
+        ProtocolType::Sixel,
+        ProtocolType::Iterm2,
+        ProtocolType::Halfblocks,
+    ] {
+        for source in [
+            "$$\\frac{a}{b}$$".to_owned(),
+            format!("![图片正文]({})", path.display()),
+        ] {
+            let context = context(protocol);
+            let line = markdown::document(&source, 80).remove(0);
+            let request = requests(&line, 80).remove(0);
+            if matches!(request.source, Source::Math { .. }) && protocol == ProtocolType::Halfblocks
+            {
+                continue; // This protocol deliberately retains selectable TeX.
+            }
+            let picture = ready(&context, request.source, request.width, request.height);
+            assert!(picture.size.height > 1);
+            let mut layout = TranscriptLayout::default();
+            layout.set_media(context);
+            // Same cache entry, distinct occurrences: only the second is selected.
+            layout.update(
+                &[TranscriptItem::Assistant(format!(
+                    "before\n\n{source}\n\nbetween\n\n{source}\n\nafter"
+                ))],
+                None,
+                80,
+            );
+            let area = Rect::new(3, 2, 80, layout.height() as u16);
+            let mut selection = Selection::default();
+            selection.viewport = area;
+            let mut terminal = Terminal::new(TestBackend::new(86, area.bottom() + 2)).unwrap();
+            begin_frame();
+            terminal
+                .draw(|f| {
+                    selection.transcript_view(0, &layout);
+                    layout.draw(f, area, 0);
+                    selection.paint(f);
+                    paint(f.buffer_mut());
+                })
+                .unwrap();
+            let (top, columns) = (0..layout.height())
+                .filter_map(|row| {
+                    layout
+                        .selection_metadata(row)?
+                        .copy
+                        .iter()
+                        .find(|copy| copy.row == 0)
+                        .map(|copy| (row, copy.columns.clone()))
+                })
+                .nth(1)
+                .unwrap();
+            let x = area.x + columns.start as u16;
+            let y = area.y + top as u16;
+            let original = terminal.backend().buffer()[(x, y)].clone();
+            for reverse in [false, true] {
+                let middle = y + picture.size.height / 2;
+                let (a, b) = if reverse { (x + 1, x) } else { (x, x + 1) };
+                selection
+                    .handle(&mouse(MouseEventKind::Down(MouseButton::Left), a, middle))
+                    .unwrap();
+                selection
+                    .handle(&mouse(MouseEventKind::Drag(MouseButton::Left), b, middle))
+                    .unwrap();
+                begin_frame();
+                terminal
+                    .draw(|f| {
+                        assert!(selection.draw_frozen(f));
+                        for row in y..y + picture.size.height {
+                            for column in x..x + picture.size.width {
+                                assert_eq!(f.buffer_mut()[(column, row)].bg, THEME.selection);
+                            }
+                            assert_ne!(f.buffer_mut()[(x - 1, row)].bg, THEME.selection);
+                        }
+                        LAYER.with(|layer| {
+                            for p in &layer.borrow().current {
+                                assert_eq!(
+                                    p.selected,
+                                    usize::from(p.area.y - area.y) - usize::from(p.fragment.row)
+                                        == top
+                                );
+                            }
+                        });
+                        paint(f.buffer_mut());
+                    })
+                    .unwrap();
+                assert_ne!(terminal.backend().buffer()[(x, y)], original);
+                assert_eq!(
+                    selection.text().trim(),
+                    if source.starts_with("$$") {
+                        source.as_str()
+                    } else {
+                        "图片正文"
+                    }
+                );
+                selection
+                    .handle(&Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+                    .unwrap();
+                begin_frame();
+                terminal
+                    .draw(|f| {
+                        layout.draw(f, area, 0);
+                        selection.paint(f);
+                        LAYER.with(|layer| {
+                            assert!(layer.borrow().current.iter().all(|p| !p.selected))
+                        });
+                        paint(f.buffer_mut());
+                    })
+                    .unwrap();
+                assert_eq!(terminal.backend().buffer()[(x, y)].bg, original.bg);
+            }
+            clear_layers();
+        }
+    }
+}
+
+#[test]
+fn clipped_media_copies_its_source_even_when_the_baseline_is_offscreen() {
+    let context = context(ProtocolType::Kitty);
+    let source = "$$\\frac{a+b}{c+d}$$";
+    let line = crate::tui::render::thinking_linked(markdown::document(source, 80).remove(0));
+    let request = requests(&line, 80).remove(0);
+    let picture = ready(&context, request.source, request.width, request.height);
+    let mut layout = TranscriptLayout::default();
+    layout.set_media(context);
+    layout.update(
+        &[TranscriptItem::Thinking(source.to_owned().into())],
+        None,
+        80,
+    );
+    let top = (0..layout.height())
+        .find(|&row| {
+            layout
+                .selection_metadata(row)
+                .is_some_and(|m| m.copy.iter().any(|c| c.row == 0))
+        })
+        .unwrap();
+    let offset = top + usize::from(picture.size.height) - 1;
+    let copy = &layout.selection_metadata(offset).unwrap().copy[0];
+    assert_ne!(copy.row, copy.baseline);
+    let area = Rect::new(4, 3, 80, 1);
+    let mut selection = Selection::default();
+    selection.viewport = area;
+    let x = area.x + copy.columns.start as u16;
+    let mut terminal = Terminal::new(TestBackend::new(88, 8)).unwrap();
+    begin_frame();
+    terminal
+        .draw(|f| {
+            selection.transcript_view(offset, &layout);
+            layout.draw(f, area, offset);
+            selection.paint(f);
+            paint(f.buffer_mut());
+        })
+        .unwrap();
+    selection
+        .handle(&mouse(MouseEventKind::Down(MouseButton::Left), x, area.y))
+        .unwrap();
+    selection
+        .handle(&mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            x + 1,
+            area.y,
+        ))
+        .unwrap();
+    begin_frame();
+    terminal
+        .draw(|f| {
+            assert!(selection.draw_frozen(f));
+            LAYER.with(|layer| {
+                assert_eq!(layer.borrow().current.len(), 1);
+                assert!(layer.borrow().current[0].selected);
+            });
+            paint(f.buffer_mut());
+        })
+        .unwrap();
+    assert_eq!(selection.text().trim(), source);
+    assert!(!selection.text().contains(['┊', '\x1b']));
+    clear_layers();
+}
+
+#[test]
+fn selecting_an_inline_formula_preserves_the_surrounding_text_and_other_formula() {
+    let context = context(ProtocolType::Kitty);
+    let source = "前 $\\frac{a}{b}$ 中 $\\frac{a}{b}$ 后";
+    let line = markdown::document(source, 80).remove(0);
+    let request = requests(&line, 80).remove(0);
+    ready(&context, request.source, request.width, request.height);
+    let mut layout = TranscriptLayout::default();
+    layout.set_media(context);
+    layout.update(&[TranscriptItem::Assistant(source.into())], None, 80);
+    let area = Rect::new(2, 1, 80, layout.height() as u16);
+    let mut selection = Selection::default();
+    selection.viewport = area;
+    let mut terminal = Terminal::new(TestBackend::new(84, area.bottom() + 2)).unwrap();
+    begin_frame();
+    terminal
+        .draw(|f| {
+            selection.transcript_view(0, &layout);
+            layout.draw(f, area, 0);
+            selection.paint(f);
+            paint(f.buffer_mut());
+        })
+        .unwrap();
+    let (row, copy) = (0..layout.height())
+        .find_map(|row| {
+            let copy = layout.selection_metadata(row)?.copy.get(1)?;
+            (copy.row == 0).then_some((row, copy))
+        })
+        .unwrap();
+    let x = area.x + copy.columns.start as u16;
+    let y = area.y + row as u16;
+    selection
+        .handle(&mouse(MouseEventKind::Down(MouseButton::Left), x, y))
+        .unwrap();
+    selection
+        .handle(&mouse(MouseEventKind::Drag(MouseButton::Left), x + 1, y))
+        .unwrap();
+    begin_frame();
+    terminal
+        .draw(|f| {
+            assert!(selection.draw_frozen(f));
+            LAYER.with(|layer| {
+                for p in &layer.borrow().current {
+                    assert_eq!(p.selected, p.area.x == x);
+                }
+            });
+            paint(f.buffer_mut());
+        })
+        .unwrap();
+    assert_eq!(selection.text().trim(), "$\\frac{a}{b}$");
+    clear_layers();
+}
+
+#[test]
+fn an_outer_selection_does_not_clear_media_selection_in_another_surface() {
+    let context = context(ProtocolType::Kitty);
+    let picture = ready(
+        &context,
+        Source::Math {
+            tex: "x^2".into(),
+            display: false,
+        },
+        40,
+        10,
+    );
+    let fragment = Fragment {
+        picture,
+        x: 0,
+        row: 0,
+    };
+    let area = Rect::new(4, 3, 40, 8);
+    begin_frame();
+    schedule(
+        &fragment,
+        Rect::new(area.x + 2, area.y + 1, fragment.picture.size.width, 1),
+    );
+    let blocks = [SelectionBlock {
+        rows: 1..1 + usize::from(fragment.picture.size.height),
+        columns: 2..2 + usize::from(fragment.picture.size.width),
+    }];
+    select(area, 0, &blocks);
+    select(Rect::default(), 0, &[]);
+    select(Rect::new(0, 20, 40, 8), 0, &[]);
+    LAYER.with(|layer| assert!(layer.borrow().current[0].selected));
+    select(area, 0, &[]);
+    LAYER.with(|layer| assert!(!layer.borrow().current[0].selected));
+    clear_layers();
+}
+
+#[test]
 fn compositor_crops_rows_occludes_dialogs_and_uploads_kitty_only_once() {
     let context = context(ProtocolType::Kitty);
     let source = Source::Math {

@@ -156,33 +156,60 @@ impl Decoder {
                 .div_ceil(u32::from(cell.height))
                 .min(u32::from(key.height)) as u16,
         );
-        let kitty_id = (picker.protocol_type() == ProtocolType::Kitty).then(super::image_id);
-        let protocol = if let Some(id) = kitty_id {
-            let mut padded = RgbaImage::new(
-                u32::from(size.width) * u32::from(cell.width),
-                u32::from(size.height) * u32::from(cell.height),
-            );
-            image::imageops::overlay(&mut padded, &image.to_rgba8(), 0, 0);
-            SlicedProtocol::Kitty(Kitty::new(
-                DynamicImage::ImageRgba8(padded),
-                size,
-                id,
-                picker.tmux_detected(),
-                false,
-            )?)
-        } else {
-            SlicedProtocol::new(picker, image, Some(size))?
-        };
+        // Encode both states in the worker. Dragging never decodes, downloads
+        // or encodes an image on the UI thread, regardless of terminal protocol.
+        let mut padded = RgbaImage::new(
+            u32::from(size.width) * u32::from(cell.width),
+            u32::from(size.height) * u32::from(cell.height),
+        );
+        image::imageops::overlay(&mut padded, &image.to_rgba8(), 0, 0);
+        let selected = selected_image(&padded);
+        let (protocol, kitty_id) = encode(picker, padded, size)?;
+        let (selected_protocol, selected_kitty_id) = encode(picker, selected, size)?;
         Ok(Prepared {
             size: protocol.size(),
             protocol,
+            selected_protocol,
             source: key.source.clone(),
             baseline: baseline
                 .unwrap_or(size.height / 2)
                 .min(size.height.saturating_sub(1)),
             kitty_id,
+            selected_kitty_id,
         })
     }
+}
+
+fn encode(picker: &Picker, image: RgbaImage, size: Size) -> Result<(SlicedProtocol, Option<u32>)> {
+    let image = DynamicImage::ImageRgba8(image);
+    if picker.protocol_type() == ProtocolType::Kitty {
+        let id = super::image_id();
+        Ok((
+            SlicedProtocol::Kitty(Kitty::new(image, size, id, picker.tmux_detected(), false)?),
+            Some(id),
+        ))
+    } else {
+        Ok((SlicedProtocol::new(picker, image, Some(size))?, None))
+    }
+}
+
+fn selected_image(image: &RgbaImage) -> RgbaImage {
+    let ratatui::style::Color::Rgb(r, g, b) = crate::tui::theme::THEME.selection else {
+        unreachable!("selection theme must use RGB")
+    };
+    let mut selected = image.clone();
+    for pixel in selected.pixels_mut() {
+        // Fill transparent TeX/SVG pixels; tint opaque photos so their selected
+        // state is visible even when they cover the terminal cell background.
+        let alpha = u32::from(pixel[3]);
+        let ink = alpha * 3;
+        for (channel, background) in pixel.0[..3].iter_mut().zip([r, g, b]) {
+            *channel =
+                ((u32::from(*channel) * ink + u32::from(background) * (1020 - ink)) / 1020) as u8;
+        }
+        pixel[3] = 255;
+    }
+    selected
 }
 
 fn local_path(source: &str, workspace: &std::path::Path) -> Result<PathBuf> {
@@ -299,4 +326,26 @@ pub(super) fn raster_svg(
     Ok(DynamicImage::ImageRgba8(
         RgbaImage::from_raw(width, height, bytes).context("SVG 像素转换失败")?,
     ))
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn selection_fills_transparency_and_tints_opaque_pixels_without_changing_geometry() {
+        let mut image = RgbaImage::new(3, 1);
+        image.put_pixel(0, 0, image::Rgba([255, 255, 255, 0]));
+        image.put_pixel(1, 0, image::Rgba([230, 100, 50, 255]));
+        image.put_pixel(2, 0, image::Rgba([220, 224, 232, 128]));
+        let selected = selected_image(&image);
+        let ratatui::style::Color::Rgb(r, g, b) = crate::tui::theme::THEME.selection else {
+            unreachable!()
+        };
+        assert_eq!(selected.dimensions(), image.dimensions());
+        assert_eq!(selected.get_pixel(0, 0).0, [r, g, b, 255]);
+        assert_ne!(selected.get_pixel(1, 0), image.get_pixel(1, 0));
+        assert!(selected.pixels().all(|pixel| pixel[3] == 255));
+        assert_eq!(image.get_pixel(0, 0)[3], 0); // The original remains transparent.
+    }
 }

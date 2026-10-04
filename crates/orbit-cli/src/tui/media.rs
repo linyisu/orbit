@@ -57,25 +57,38 @@ pub(super) struct Request {
 #[derive(Clone, Debug)]
 pub(super) struct CopyText {
     pub columns: Range<usize>,
-    pub text: String,
+    pub row: u16,
+    pub height: u16,
+    pub baseline: u16,
+    pub text: Arc<str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SelectionBlock {
+    pub rows: Range<usize>,
+    pub columns: Range<usize>,
 }
 
 pub(super) struct Prepared {
     protocol: SlicedProtocol,
+    selected_protocol: SlicedProtocol,
     pub source: Source,
     pub size: Size,
     pub baseline: u16,
     kitty_id: Option<u32>,
+    selected_kitty_id: Option<u32>,
 }
 
 static DELETIONS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 impl Drop for Prepared {
     fn drop(&mut self) {
-        if let Some(id) = self.kitty_id
-            && let Ok(mut deletions) = DELETIONS.lock()
-        {
-            deletions.push(id);
+        if let Ok(mut deletions) = DELETIONS.lock() {
+            deletions.extend(
+                [self.kitty_id, self.selected_kitty_id]
+                    .into_iter()
+                    .flatten(),
+            );
         }
     }
 }
@@ -139,7 +152,7 @@ impl Value {
                     * usize::from(p.size.height)
                     * usize::from(picker.font_size().width)
                     * usize::from(picker.font_size().height)
-                    * 8
+                    * 16
             }
             _ => 0,
         }
@@ -401,6 +414,7 @@ pub(super) fn is_remote(source: &str) -> bool {
 struct Placement {
     fragment: Fragment,
     area: Rect,
+    selected: bool,
 }
 
 #[derive(Default)]
@@ -425,6 +439,7 @@ pub(super) fn schedule(fragment: &Fragment, area: Rect) {
             layer.current.push(Placement {
                 fragment: fragment.clone(),
                 area,
+                selected: false,
             })
         });
     }
@@ -445,6 +460,24 @@ pub(super) fn frozen_frame() {
     });
 }
 
+/// Match complete picture occurrences, rather than every use of a cached image.
+/// Offscreen slices share the same absolute origin with their visible slices.
+pub(super) fn select(area: Rect, offset: usize, blocks: &[SelectionBlock]) {
+    LAYER.with(|layer| {
+        for p in &mut layer.borrow_mut().current {
+            if !area.contains((p.area.x, p.area.y).into()) {
+                continue;
+            }
+            p.selected = blocks.iter().any(|block| {
+                let row = offset + usize::from(p.area.y - area.y);
+                row.checked_sub(usize::from(p.fragment.row)) == Some(block.rows.start)
+                    && usize::from(p.area.x - area.x) == block.columns.start
+                    && usize::from(p.fragment.picture.size.width) == block.columns.len()
+            });
+        }
+    });
+}
+
 pub(super) fn paint(buffer: &mut Buffer) {
     LAYER.with(|l| {
         let mut layer = l.borrow_mut();
@@ -452,7 +485,11 @@ pub(super) fn paint(buffer: &mut Buffer) {
             let area = p.area.intersection(buffer.area);
             if !area.is_empty() {
                 SlicedImage::new(
-                    &p.fragment.picture.protocol,
+                    if p.selected {
+                        &p.fragment.picture.selected_protocol
+                    } else {
+                        &p.fragment.picture.protocol
+                    },
                     (0, -(p.fragment.row as i16)).into(),
                 )
                 .render(area, buffer);
