@@ -962,7 +962,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         );
         let mut heading = vec![
             Line::styled(
-                title,
+                super::render::fit_label(
+                    &format!("{title}（{} 个会话）", picker.matches().len()),
+                    header.width as usize,
+                    false,
+                ),
                 Style::default()
                     .fg(crate::tui::theme::THEME.accent)
                     .add_modifier(Modifier::BOLD),
@@ -1068,11 +1072,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
         fit_hit_rows(&mut state.dialog_rows, &lines, body);
         frame.render_widget(Paragraph::new(lines), body);
-        let detail = format!("{} 个会话 · 按最近更新排序", rows.len());
         frame.render_widget(
-            Paragraph::new(format!(
-                "{detail}\n↑↓ 选择 · Enter 恢复 · Del 删除 · Esc 返回"
-            )),
+            Paragraph::new("\n↑↓ 选择 · Enter 恢复 · Del 删除 · Esc 返回"),
             footer,
         );
     } else if let Some(picker) = &mut state.model_picker {
