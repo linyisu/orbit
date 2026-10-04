@@ -1,3 +1,5 @@
+mod writer;
+
 use std::{
     collections::HashSet,
     fs::{File, OpenOptions},
@@ -6,9 +8,8 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use orbit_agent::events::AgentEvent;
-use orbit_model::types::ChatMessage;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -17,6 +18,8 @@ use crate::types::{
     MemoryCategory, ProjectPlugin, ProjectTask, Run, Session, SessionMemory, Snapshot, TaskStatus,
     VerificationRecord, WorkspaceChange,
 };
+
+const CONNECTION_BUSY_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 pub struct Store {
@@ -51,311 +54,11 @@ impl Store {
             std::fs::create_dir_all(parent)?;
             private_file(&path)?;
             let connection = Connection::open(&path)?;
-            connection.busy_timeout(Duration::from_secs(3))?;
-            connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous=FULL;")?;
-            connection.execute_batch("BEGIN IMMEDIATE;")?;
-            let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-            ensure!(
-                version <= 22,
-                "database schema {version} is newer than this Orbit supports"
-            );
-
-            if version == 0 {
-                connection.execute_batch(
-                    "CREATE TABLE IF NOT EXISTS sessions (
-                    id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL,
-                    demo INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
-                    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                    history TEXT NOT NULL DEFAULT '[]'
-                );
-                CREATE TABLE IF NOT EXISTS runs (
-                    id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
-                    prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running'
-                        CHECK(status IN ('running','completed','failed','cancelled','interrupted')),
-                    elapsed_ms INTEGER
-                );
-                CREATE INDEX IF NOT EXISTS runs_session ON runs(session_id, id);
-                CREATE TABLE IF NOT EXISTS events (
-                    id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES runs(id),
-                    payload TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS events_run ON events(run_id, id);
-                PRAGMA user_version = 1;",
-                )?;
-            }
-
-            if version < 2 {
-                crate::projects::migrate(&connection)?;
-            }
-
-            if version == 0 {
-                connection.execute_batch("PRAGMA user_version=3;")?;
-            } else if version < 3 {
-                connection.execute_batch(
-                    "ALTER TABLE runs ADD COLUMN elapsed_ms INTEGER;
-                     PRAGMA user_version=3;",
-                )?;
-            }
-
-            if version < 4 {
-                connection.execute_batch(
-                    "ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT;
-                     PRAGMA user_version=4;",
-                )?;
-            }
-
-            if version < 5 {
-                connection.execute_batch(
-                    "CREATE TABLE project_tasks (
-                        id INTEGER PRIMARY KEY,
-                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                        parent_id INTEGER REFERENCES project_tasks(id) ON DELETE SET NULL,
-                        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 512),
-                        details TEXT NOT NULL DEFAULT '' CHECK(length(details) <= 8192),
-                        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','blocked','completed','cancelled')),
-                        priority INTEGER NOT NULL DEFAULT 0 CHECK(priority BETWEEN -100 AND 100),
-                        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-                    );
-                    CREATE INDEX project_tasks_project_status ON project_tasks(project_id,status,priority DESC,id);
-                    CREATE TABLE project_memories (
-                        id INTEGER PRIMARY KEY,
-                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                        category TEXT NOT NULL CHECK(category IN ('constraint','decision','fact','preference')),
-                        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 512),
-                        content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 8192),
-                        source_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-                        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
-                        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-                    );
-                    CREATE INDEX project_memories_project_active ON project_memories(project_id,active,updated_at DESC,id DESC);
-                    PRAGMA user_version=5;",
-                )?;
-            }
-
-            if version < 6 {
-                connection.execute_batch(
-                    "ALTER TABLE events ADD COLUMN created_at_ms INTEGER;
-                     PRAGMA user_version=6;",
-                )?;
-            }
-
-            if version < 7 {
-                connection.execute_batch(
-                    "CREATE TABLE workspace_undos (
-                        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-                        call_id TEXT NOT NULL,
-                        path TEXT NOT NULL,
-                        undone_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                        PRIMARY KEY(session_id,run_id,call_id,path)
-                    );
-                    CREATE INDEX workspace_undos_session ON workspace_undos(session_id,run_id);
-                    PRAGMA user_version=7;",
-                )?;
-            }
-
-            if version < 8 {
-                connection.execute_batch(
-                    "CREATE TABLE session_git_baselines (
-                        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-                        payload TEXT NOT NULL,
-                        captured_at INTEGER NOT NULL DEFAULT (unixepoch())
-                    );
-                    PRAGMA user_version=8;",
-                )?;
-            }
-
-            if version < 9 {
-                connection.execute_batch(
-                    "CREATE TABLE project_plugins (
-                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                        marketplace_source TEXT NOT NULL CHECK(length(marketplace_source) BETWEEN 1 AND 4096),
-                        plugin_name TEXT NOT NULL CHECK(length(plugin_name) BETWEEN 1 AND 256),
-                        package_source TEXT NOT NULL CHECK(length(package_source) BETWEEN 1 AND 4096),
-                        version TEXT CHECK(version IS NULL OR length(version) BETWEEN 1 AND 256),
-                        enabled_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                        PRIMARY KEY(project_id, marketplace_source, plugin_name)
-                    );
-                    CREATE INDEX project_plugins_project_enabled ON project_plugins(project_id,enabled_at DESC,plugin_name);
-                    PRAGMA user_version=9;",
-                )?;
-            }
-
-            if version < 10 {
-                // Project memories from older Orbit builds were unsafe: every
-                // session for a project received them. Preserve the legacy
-                // table for auditability, but migrate only records with a
-                // known owner or exactly one possible owner. Ambiguous
-                // records must never leak into a new session.
-                connection.execute_batch(
-                    "CREATE TABLE session_memories (
-                        id INTEGER PRIMARY KEY,
-                        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                        category TEXT NOT NULL CHECK(category IN ('constraint','decision','fact','preference')),
-                        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 512),
-                        content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 8192),
-                        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
-                        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-                    );
-                    CREATE INDEX session_memories_session_active ON session_memories(session_id,active,updated_at DESC,id DESC);
-                    INSERT INTO session_memories(session_id,category,title,content,active,created_at,updated_at)
-                    SELECT memories.source_session_id, memories.category, memories.title, memories.content,
-                           memories.active, memories.created_at, memories.updated_at
-                    FROM project_memories AS memories
-                    JOIN sessions AS sessions
-                      ON sessions.id=memories.source_session_id
-                     AND sessions.project_id=memories.project_id
-                    WHERE memories.source_session_id IS NOT NULL
-                    UNION ALL
-                    SELECT sessions.id, memories.category, memories.title, memories.content,
-                           memories.active, memories.created_at, memories.updated_at
-                    FROM project_memories AS memories
-                    JOIN sessions AS sessions ON sessions.project_id=memories.project_id
-                    WHERE memories.source_session_id IS NULL
-                      AND 1=(SELECT count(*) FROM sessions AS scoped
-                             WHERE scoped.project_id=memories.project_id);
-                    PRAGMA user_version=10;",
-                )?;
-            }
-
-            if version < 11 {
-                connection.execute_batch(
-                    "CREATE TABLE context_archives (
-                        id INTEGER PRIMARY KEY,
-                        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                        created_at INTEGER NOT NULL DEFAULT (unixepoch())
-                    );
-                    CREATE INDEX context_archives_session ON context_archives(session_id,id);
-                    CREATE TABLE context_archive_messages (
-                        archive_id INTEGER NOT NULL REFERENCES context_archives(id) ON DELETE CASCADE,
-                        ordinal INTEGER NOT NULL,
-                        payload TEXT NOT NULL,
-                        PRIMARY KEY(archive_id,ordinal)
-                    );
-                    PRAGMA user_version=11;",
-                )?;
-            }
-
-            if version < 12 {
-                connection.execute_batch("CREATE TABLE execution_checkpoints(run_id INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, payload TEXT NOT NULL); PRAGMA user_version=12;")?;
-            }
-
-            if version < 13 {
-                connection.execute_batch("CREATE TABLE session_workspace_baselines(session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,payload TEXT NOT NULL); PRAGMA user_version=13;")?;
-            }
-
-            if version < 14 {
-                connection.execute_batch(
-                    "CREATE TABLE session_messages (
-                        id INTEGER PRIMARY KEY,
-                        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-                        ordinal INTEGER NOT NULL,
-                        payload TEXT NOT NULL,
-                        sha256 TEXT NOT NULL,
-                        UNIQUE(run_id, ordinal)
-                    );
-                    CREATE INDEX session_messages_session ON session_messages(session_id,id);
-                    CREATE TABLE session_log_gaps (
-                        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-                        reason TEXT NOT NULL
-                    );
-                    INSERT INTO session_log_gaps(session_id,reason)
-                    SELECT id,'session predates the canonical message log'
-                    FROM sessions;
-                    PRAGMA user_version=14;",
-                )?;
-            }
-
-            if version < 15 {
-                let has_content_sha256: bool = connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('context_archives') WHERE name='content_sha256')",
-                    [],
-                    |row| row.get(0),
-                )?;
-
-                if !has_content_sha256 {
-                    connection.execute_batch(
-                        "ALTER TABLE context_archives ADD COLUMN content_sha256 TEXT;",
-                    )?;
-                }
-
-                connection.execute_batch(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS context_archives_content
-                       ON context_archives(session_id,content_sha256)
-                       WHERE content_sha256 IS NOT NULL;
-                     CREATE TABLE IF NOT EXISTS compaction_progress (
-                         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                         source_fingerprint TEXT NOT NULL,
-                         payload TEXT NOT NULL,
-                         updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                         PRIMARY KEY(session_id,source_fingerprint)
-                     );
-                     PRAGMA user_version=15;",
-                )?;
-            }
-
-            if version < 16 {
-                let has_revision: bool = connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('project_plugins') WHERE name='marketplace_revision')",
-                    [],
-                    |row| row.get(0),
-                )?;
-
-                if !has_revision {
-                    connection.execute_batch(
-                        "ALTER TABLE project_plugins ADD COLUMN marketplace_revision TEXT;",
-                    )?;
-                }
-
-                connection.execute_batch("PRAGMA user_version=16;")?;
-            }
-
-            if version < 17 {
-                let has_boundary: bool = connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='workspace_since_run')",
-                    [], |row| row.get(0),
-                )?;
-
-                if !has_boundary {
-                    connection.execute_batch("ALTER TABLE sessions ADD COLUMN workspace_since_run INTEGER NOT NULL DEFAULT 0;")?;
-                }
-
-                connection.execute_batch("PRAGMA user_version=17;")?;
-            }
-
-            if version < 18 {
-                connection.execute_batch("CREATE TABLE IF NOT EXISTS tui_tabs (
-                    position INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE
-                ); PRAGMA user_version=18;")?;
-            }
-
-            if version < 19 {
-                connection.execute_batch("CREATE TABLE IF NOT EXISTS tui_session_state (
-                    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-                    permission_mode TEXT NOT NULL DEFAULT 'auto',
-                    run_id INTEGER REFERENCES runs(id) ON DELETE CASCADE,
-                    runtime TEXT
-                ); PRAGMA user_version=19;")?;
-            }
-
-            // Early schema 19 databases contain presentation state but no file grants.
-            // Keep this a separate versioned migration, including for existing grants.
-            if version < 20 {
-                connection.execute_batch("CREATE TABLE IF NOT EXISTS tui_file_grants (
-                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                    path TEXT NOT NULL,
-                    PRIMARY KEY(session_id,path)
-                ); PRAGMA user_version=20;")?;
-            }
-
-            if version < 21 { crate::subagents::migrate(&connection)?; }
-            if version < 22 { crate::side_questions::migrate(&connection)?; }
-            connection.execute_batch("COMMIT;")?;
+            connection.busy_timeout(CONNECTION_BUSY_TIMEOUT)?;
+            connection.execute_batch(
+                "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous=FULL;",
+            )?;
+            crate::schema::migrate(&connection)?;
 
             Ok(Self {
                 connection: Arc::new(Mutex::new(connection)),
@@ -397,7 +100,7 @@ impl Store {
                 path,
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?;
-            connection.busy_timeout(Duration::from_secs(3))?;
+            connection.busy_timeout(CONNECTION_BUSY_TIMEOUT)?;
 
             operation(&mut connection)
         })
@@ -429,9 +132,19 @@ impl Store {
 
     pub async fn list(&self) -> Result<Vec<Session>> {
         self.access(|conn| {
-            let mut statement = conn.prepare("SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.reasoning_effort,s.demo,s.title,s.updated_at,s.project_id FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE NOT EXISTS(SELECT 1 FROM agent_sessions a WHERE a.session_id=s.id) ORDER BY s.updated_at DESC, s.rowid DESC")?;
-            Ok(statement.query_map([], session_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
-        }).await
+            let mut statement = conn.prepare(
+                "SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.reasoning_effort,
+                        s.demo,s.title,s.updated_at,s.project_id
+                 FROM sessions s LEFT JOIN projects p ON p.id=s.project_id
+                 WHERE NOT EXISTS(SELECT 1 FROM agent_sessions a WHERE a.session_id=s.id)
+                 ORDER BY s.updated_at DESC, s.rowid DESC",
+            )?;
+
+            Ok(statement
+                .query_map([], session_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
     }
 
     pub async fn session_storage_usage(&self) -> Result<Vec<SessionStorageUsage>> {
@@ -528,15 +241,34 @@ impl Store {
                 });
             }
 
-            let checkpoint: Option<String> = transaction.query_row(
-                "SELECT c.payload FROM runs r JOIN execution_checkpoints c ON c.run_id=r.id WHERE r.session_id=?1 AND r.id>COALESCE((SELECT max(id) FROM runs WHERE session_id=?1 AND status='completed'),0) AND r.status!='completed' ORDER BY r.id DESC LIMIT 1",[&id],|r|r.get(0)).optional()?;
+            let checkpoint: Option<String> = transaction
+                .query_row(
+                    "SELECT c.payload FROM runs r
+                     JOIN execution_checkpoints c ON c.run_id=r.id
+                     WHERE r.session_id=?1
+                       AND r.id>COALESCE((SELECT max(id) FROM runs
+                                          WHERE session_id=?1 AND status='completed'),0)
+                       AND r.status!='completed'
+                     ORDER BY r.id DESC LIMIT 1",
+                    [&id],
+                    |row| row.get(0),
+                )
+                .optional()?;
             let mut effective_history = serde_json::from_str(&history)?;
             let recovery = if let Some(payload) = checkpoint {
-                let checkpoint: orbit_agent::checkpoint::ExecutionCheckpoint = serde_json::from_str(&payload)?;
+                let checkpoint: orbit_agent::checkpoint::ExecutionCheckpoint =
+                    serde_json::from_str(&payload)?;
                 let (restored, unresolved_tools) = checkpoint.recovered_history();
                 effective_history = restored;
-                Some(crate::types::RecoveryInfo {turns:checkpoint.turns,tool_calls:checkpoint.tool_calls,unresolved_tools})
-            } else { None };
+
+                Some(crate::types::RecoveryInfo {
+                    turns: checkpoint.turns,
+                    tool_calls: checkpoint.tool_calls,
+                    unresolved_tools,
+                })
+            } else {
+                None
+            };
 
             Ok(Snapshot {
                 session,
@@ -1420,259 +1152,6 @@ fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMemory> {
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
     })
-}
-
-impl SessionWriter {
-    /// Move only this locked session. Historical messages and events remain intact.
-    /// Write receipts from earlier workspaces must never be offered for undo here.
-    pub async fn move_to(
-        &self,
-        directory: &Path,
-        git_baseline: Option<serde_json::Value>,
-    ) -> Result<crate::types::Session> {
-        let project = self.store.resolve_project(directory).await?;
-        let path = directory.canonicalize()?.to_string_lossy().into_owned();
-        let id = self.id.clone();
-        let baseline = git_baseline
-            .map(|value| serde_json::to_string(&value))
-            .transpose()?;
-
-        self.store
-            .access(move |conn| {
-                let tx =
-                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-                let running: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM runs WHERE session_id=?1 AND status='running')",
-                    [&id],
-                    |row| row.get(0),
-                )?;
-                ensure!(!running, "cannot move a running session");
-
-                tx.execute(
-                    "UPDATE sessions SET project_id=?2,workspace=?3,
-                     workspace_since_run=COALESCE((SELECT MAX(id) FROM runs WHERE session_id=?1),0),
-                     updated_at=unixepoch() WHERE id=?1",
-                    params![id, project.id, path],
-                )?;
-                tx.execute("DELETE FROM tui_file_grants WHERE session_id=?1", [&id])?;
-                tx.execute(
-                    "DELETE FROM session_workspace_baselines WHERE session_id=?1",
-                    [&id],
-                )?;
-                tx.execute(
-                    "DELETE FROM session_git_baselines WHERE session_id=?1",
-                    [&id],
-                )?;
-
-                if let Some(payload) = baseline {
-                    tx.execute(
-                        "INSERT INTO session_git_baselines(session_id,payload) VALUES(?1,?2)",
-                        params![id, payload],
-                    )?;
-                }
-
-                tx.commit()?;
-                Ok(())
-            })
-            .await?;
-
-        self.store.session(&self.id).await
-    }
-
-    pub fn active_run_id(&self) -> Option<i64> {
-        self.active_run
-    }
-
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub async fn set_model_profile(
-        &self,
-        model: String,
-        reasoning_effort: Option<String>,
-    ) -> Result<()> {
-        let id = self.id.clone();
-
-        self.store
-            .access(move |conn| {
-                conn.execute(
-                    "UPDATE sessions SET model=?2, reasoning_effort=?3, updated_at=unixepoch() WHERE id=?1",
-                    params![id, model, reasoning_effort],
-                )?;
-                Ok(())
-            })
-            .await
-    }
-
-    /// Change only the user-visible label. The event log and stable session ID
-    /// remain untouched, so `/resume` and project association keep working.
-    pub async fn set_title(&self, title: String) -> Result<()> {
-        ensure!(!title.trim().is_empty(), "session title must not be empty");
-        ensure!(
-            title.chars().count() <= 120,
-            "session title exceeds 120 characters"
-        );
-
-        let id = self.id.clone();
-
-        self.store
-            .access(move |conn| {
-                conn.execute(
-                    "UPDATE sessions SET title=?2, updated_at=unixepoch() WHERE id=?1",
-                    params![id, title],
-                )?;
-                Ok(())
-            })
-            .await
-    }
-
-    pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
-        ensure!(self.active_run.is_none(), "a run is already active");
-
-        let id = self.id.clone();
-        let run = self.store.access(move |conn| {
-            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            transaction.execute("INSERT INTO runs(session_id,prompt) VALUES(?1,?2)", params![id,prompt])?;
-            let run = transaction.last_insert_rowid();
-            let title: String = prompt.chars().take(80).collect();
-            transaction.execute("UPDATE sessions SET model=?2, updated_at=unixepoch(), title=CASE WHEN title='' THEN ?3 ELSE title END WHERE id=?1", params![id,model,title])?;
-            transaction.commit()?;
-
-            Ok(run)
-        }).await?;
-        self.active_run = Some(run);
-        self.active_started = Some(std::time::Instant::now());
-
-        Ok(())
-    }
-
-    pub async fn append(&self, events: Vec<AgentEvent>) -> Result<()> {
-        let run = self.active_run.context("no active run")?;
-
-        self.store
-            .access(move |conn| {
-                let transaction =
-                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-                for event in events {
-                    transaction.execute(
-                        "INSERT INTO events(run_id,payload,created_at_ms) VALUES(?1,?2,?3)",
-                        params![run, serde_json::to_string(&event)?, now_millis()],
-                    )?;
-                }
-
-                transaction.commit()?;
-
-                Ok(())
-            })
-            .await
-    }
-
-    pub fn execution_journal(&self) -> Result<Arc<dyn orbit_agent::checkpoint::ExecutionJournal>> {
-        Ok(Arc::new(crate::execution::Journal {
-            store: self.store.clone(),
-            run: self.active_run.context("no active run")?,
-            session: self.id.clone(),
-            commit_lock: tokio::sync::Mutex::new(()),
-            pending: Mutex::new(Vec::new()),
-            pending_messages: Mutex::new(Vec::new()),
-        }))
-    }
-
-    pub async fn finish(
-        &mut self,
-        status: &str,
-        events: Vec<AgentEvent>,
-        history: Option<Vec<ChatMessage>>,
-    ) -> Result<()> {
-        self.finish_with_result(status, events, history, None).await
-    }
-
-    pub async fn finish_subagent(
-        &mut self,
-        status: &str,
-        history: Option<Vec<ChatMessage>>,
-        parent: String,
-        invocation: i64,
-        result: serde_json::Value,
-    ) -> Result<()> {
-        self.finish_with_result(
-            status,
-            Vec::new(),
-            history,
-            Some((parent, invocation, result)),
-        )
-        .await
-    }
-
-    async fn finish_with_result(
-        &mut self,
-        status: &str,
-        events: Vec<AgentEvent>,
-        history: Option<Vec<ChatMessage>>,
-        agent_result: Option<(String, i64, serde_json::Value)>,
-    ) -> Result<()> {
-        ensure!(
-            matches!(status, "completed" | "failed" | "cancelled"),
-            "invalid terminal status"
-        );
-        ensure!(
-            (status == "completed") == history.is_some(),
-            "only completed runs may update model history"
-        );
-        let Some(run) = self.active_run else {
-            bail!("no active run")
-        };
-
-        let elapsed_ms = self
-            .active_started
-            .map(|started| started.elapsed().as_millis().min(i64::MAX as u128) as i64);
-        let status = status.to_owned();
-        let id = self.id.clone();
-        self.store
-            .access(move |conn| {
-                let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-                for event in events {
-                    transaction.execute(
-                        "INSERT INTO events(run_id,payload,created_at_ms) VALUES(?1,?2,?3)",
-                        params![run, serde_json::to_string(&event)?, now_millis()],
-                    )?;
-                }
-
-                if let Some((parent,invocation,result)) = agent_result {
-                    ensure!(transaction.execute("UPDATE agent_invocations SET result=?4 WHERE id=?1 AND parent_session_id=?2 AND child_session_id=?3 AND result IS NULL",params![invocation,parent,id,serde_json::to_string(&result)?])? == 1,"subagent invocation is unavailable or already finished");
-                }
-                transaction.execute(
-                    "UPDATE runs SET status=?2,elapsed_ms=?3 WHERE id=?1",
-                    params![run, status, elapsed_ms],
-                )?;
-
-                if status == "cancelled" {
-                    transaction.execute("UPDATE agent_invocations SET delivered=1 WHERE parent_run_id=?1",[run])?;
-                }
-                if let Some(history) = history {
-                    transaction.execute(
-                        "UPDATE sessions SET history=?2 WHERE id=?1",
-                        params![id, serde_json::to_string(&history)?],
-                    )?;
-                }
-
-                transaction.execute(
-                    "UPDATE sessions SET updated_at=unixepoch() WHERE id=?1",
-                    [id],
-                )?;
-                transaction.commit()?;
-
-                Ok(())
-            })
-            .await?;
-        self.active_run = None;
-        self.active_started = None;
-
-        Ok(())
-    }
 }
 
 fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {

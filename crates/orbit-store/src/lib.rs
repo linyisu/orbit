@@ -4,6 +4,7 @@ pub mod diagnostics;
 mod execution;
 pub mod project;
 pub mod projects;
+mod schema;
 pub mod session_log;
 pub mod store;
 pub mod tui_sessions;
