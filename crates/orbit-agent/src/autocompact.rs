@@ -461,8 +461,9 @@ pub async fn execute_configured(
                 )
             ) && archived.is_some()
                 && ((plan.mode == CompactionMode::Automatic
-                    && plan.before_tokens
-                        >= limit.saturating_sub(output).saturating_mul(92) / 100)
+                    && (error.compaction_kind() != Some(Failure::InvalidSummary)
+                        || plan.before_tokens
+                            >= limit.saturating_sub(output).saturating_mul(92) / 100))
                     || (plan.mode == CompactionMode::Manual
                         && error.compaction_kind() == Some(Failure::InvalidSummary))) =>
         {

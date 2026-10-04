@@ -374,6 +374,58 @@ async fn automatic_compaction_preserves_history_after_a_retryable_summary_failur
     assert_eq!(backend.requests().len(), 1);
 }
 
+#[tokio::test]
+async fn transient_summary_failure_below_the_emergency_threshold_uses_the_saved_archive() {
+    use orbit_agent::{
+        compaction::CompactionSettings,
+        memory::{CompactionMode, CompactionStrategy},
+    };
+    let history = prose_task();
+    let settings = CompactionSettings::default();
+    let before = estimate_tokens(&history, &[]);
+    let limit = 1000 + before * 100 / 88;
+    let plan = autocompact::plan_configured(
+        &history,
+        &[],
+        1000,
+        limit,
+        CompactionMode::Automatic,
+        &settings,
+    )
+    .unwrap();
+    assert!(before < (limit - 1000) * 92 / 100);
+    let backend = MockModel::from_results([Err(ModelError::Http {
+        status: 429,
+        request_id: String::new(),
+        body: "Orbit rate limit".into(),
+        retryable: true,
+        context_limit: false,
+    })]);
+    let archive = Archive::default();
+    let result = autocompact::execute_configured(
+        &backend,
+        plan,
+        &[],
+        1000,
+        limit,
+        CancellationToken::new(),
+        Some(&archive),
+        &settings,
+    )
+    .await
+    .unwrap();
+    assert!(result.record.fallback);
+    assert_eq!(
+        result.record.strategy,
+        CompactionStrategy::ArchiveProjection
+    );
+    assert_eq!(
+        archive.0.lock().unwrap().as_slice(),
+        std::slice::from_ref(&history)
+    );
+    check_budget(&result.history, &[], 1000, limit).unwrap();
+}
+
 #[test]
 fn never_splits_pending_tool_batches_or_truncates_an_uncompressible_request() {
     let mut history = long_task();
