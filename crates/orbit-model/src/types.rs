@@ -88,6 +88,9 @@ pub enum Attachment {
 }
 
 impl Attachment {
+    /// Shared byte limit for imported, transmitted and displayed images.
+    pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
     pub fn name(&self) -> &str {
         match self {
             Self::Image { name, .. } => name,
@@ -95,30 +98,47 @@ impl Attachment {
     }
 
     pub fn image(&self) -> Result<(&str, String), crate::error::ModelError> {
-        const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
-
         match self {
             Self::Image {
                 mime_type, path, ..
             } => {
-                let metadata = std::fs::metadata(path).map_err(|error| {
-                    crate::error::ModelError::Attachment(format!("{}: {error}", path.display()))
-                })?;
-
-                if !metadata.is_file() || metadata.len() > MAX_IMAGE_BYTES {
-                    return Err(crate::error::ModelError::Attachment(format!(
-                        "{} is not a regular image up to 20 MiB",
-                        path.display()
-                    )));
-                }
-
-                let bytes = std::fs::read(path).map_err(|error| {
-                    crate::error::ModelError::Attachment(format!("{}: {error}", path.display()))
-                })?;
-
+                let bytes = Self::read_image_bytes(path)?;
                 Ok((mime_type, STANDARD.encode(bytes)))
             }
         }
+    }
+
+    /// Read a regular image file within the shared byte budget. Format decoding
+    /// belongs to the caller; this also supports SVG bytes in terminal previews.
+    pub fn read_image_bytes(path: &std::path::Path) -> Result<Vec<u8>, crate::error::ModelError> {
+        use std::io::Read;
+
+        let io_error =
+            |error| crate::error::ModelError::Attachment(format!("{}: {error}", path.display()));
+        let too_large = || {
+            crate::error::ModelError::Attachment(format!(
+                "{} is not a regular image up to 20 MiB",
+                path.display()
+            ))
+        };
+        let metadata = std::fs::metadata(path).map_err(io_error)?;
+        if !metadata.is_file() || metadata.len() > Self::MAX_IMAGE_BYTES as u64 {
+            return Err(too_large());
+        }
+
+        let file = std::fs::File::open(path).map_err(io_error)?;
+        if !file.metadata().map_err(io_error)?.is_file() {
+            return Err(too_large());
+        }
+        let mut bytes = Vec::new();
+        file.take(Self::MAX_IMAGE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(io_error)?;
+        if bytes.len() > Self::MAX_IMAGE_BYTES {
+            return Err(too_large());
+        }
+
+        Ok(bytes)
     }
 }
 
@@ -410,6 +430,22 @@ mod duration_seconds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_files_are_bounded_before_encoding_or_decoding() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.png");
+        std::fs::write(&path, b"image bytes").unwrap();
+        assert_eq!(Attachment::read_image_bytes(&path).unwrap(), b"image bytes");
+
+        // A sparse file checks rejection without allocating a large fixture.
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(Attachment::MAX_IMAGE_BYTES as u64 + 1)
+            .unwrap();
+        assert!(Attachment::read_image_bytes(&path).is_err());
+        assert!(Attachment::read_image_bytes(directory.path()).is_err());
+    }
 
     #[test]
     fn max_effort_round_trips_without_becoming_xhigh() {

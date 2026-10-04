@@ -8,7 +8,8 @@ use anyhow::{Context, Result, ensure};
 use orbit_model::types::Attachment;
 use sha2::{Digest, Sha256};
 
-pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+pub const MAX_IMAGE_BYTES: usize = Attachment::MAX_IMAGE_BYTES;
+const MAX_ATTACHMENT_EDGE_PIXELS: u32 = 2048;
 
 #[derive(Clone)]
 pub struct ImageAssets {
@@ -23,8 +24,8 @@ impl ImageAssets {
     }
 
     pub fn import_path(&self, source: &Path) -> Result<Attachment> {
-        let bytes =
-            std::fs::read(source).with_context(|| format!("无法读取图片 {}", source.display()))?;
+        let bytes = Attachment::read_image_bytes(source)
+            .with_context(|| format!("无法读取图片 {}", source.display()))?;
         let name = source
             .file_name()
             .unwrap_or_default()
@@ -126,8 +127,6 @@ fn image_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
 fn normalize_image(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str, &'static str)> {
     use image::{GenericImageView, ImageFormat, ImageReader};
 
-    const MAX_EDGE: u32 = 2048;
-
     let (mime_type, extension) =
         image_type(&bytes).context("只支持 PNG、JPEG、GIF 和 WebP 图片；扩展名不能代替真实格式")?;
     let format = match mime_type {
@@ -143,11 +142,15 @@ fn normalize_image(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str, &'static st
         .context("图片内容损坏或无法解码")?;
     let (width, height) = image.dimensions();
     ensure!(width > 0 && height > 0, "图片尺寸无效");
-    if width <= MAX_EDGE && height <= MAX_EDGE {
+    if width <= MAX_ATTACHMENT_EDGE_PIXELS && height <= MAX_ATTACHMENT_EDGE_PIXELS {
         return Ok((bytes, mime_type, extension));
     }
 
-    let resized = image.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Lanczos3);
+    let resized = image.resize(
+        MAX_ATTACHMENT_EDGE_PIXELS,
+        MAX_ATTACHMENT_EDGE_PIXELS,
+        image::imageops::FilterType::Lanczos3,
+    );
     let mut output = std::io::Cursor::new(Vec::new());
     resized
         .write_to(&mut output, ImageFormat::Png)

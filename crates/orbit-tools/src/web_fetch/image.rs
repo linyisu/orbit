@@ -65,7 +65,12 @@ async fn fetch(value: &str) -> Result<Vec<u8>, ToolError> {
         {
             return Err(failed("压缩的图片响应不受支持"));
         }
-        return read_body_limit(response, 20 * 1024 * 1024, "图片超过 20 MiB").await;
+        return read_body_limit(
+            response,
+            orbit_model::types::Attachment::MAX_IMAGE_BYTES,
+            "图片超过 20 MiB",
+        )
+        .await;
     }
     Err(failed("too many redirects"))
 }

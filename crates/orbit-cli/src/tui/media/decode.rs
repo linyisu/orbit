@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    io::{Cursor, Read},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashMap, io::Cursor, path::PathBuf, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
 use image::{DynamicImage, ImageReader, RgbaImage};
@@ -19,7 +14,11 @@ use resvg::{tiny_skia, usvg};
 
 use super::{Key, Prepared, Source};
 
-const MAX_BYTES: usize = 20 * 1024 * 1024;
+const MAX_BYTES: usize = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
+const MAX_REMOTE_CACHE_BYTES: usize = 2 * MAX_BYTES;
+const MAX_RENDER_EDGE_PIXELS: u32 = 2048;
+const MAX_DECODE_EDGE_PIXELS: u32 = 8192;
+const MAX_TEX_BYTES: usize = 8192;
 const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 
 #[derive(Default)]
@@ -32,8 +31,9 @@ pub(super) struct Decoder {
 impl Decoder {
     pub fn prepare(&mut self, key: &Key, picker: &Picker) -> Result<Prepared> {
         let cell = picker.font_size();
-        let max_w = (u32::from(key.width) * u32::from(cell.width)).clamp(1, 2048);
-        let max_h = (u32::from(key.height) * u32::from(cell.height)).clamp(1, 2048);
+        let max_w = (u32::from(key.width) * u32::from(cell.width)).clamp(1, MAX_RENDER_EDGE_PIXELS);
+        let max_h =
+            (u32::from(key.height) * u32::from(cell.height)).clamp(1, MAX_RENDER_EDGE_PIXELS);
         let mut baseline = None;
         let image = match &key.source {
             Source::Image(source) => {
@@ -56,7 +56,7 @@ impl Decoder {
                         );
                         while self.remote_bytes.values().map(|b| b.len()).sum::<usize>()
                             + bytes.len()
-                            > 2 * MAX_BYTES
+                            > MAX_REMOTE_CACHE_BYTES
                         {
                             if let Some(key) = self.remote_bytes.keys().next().cloned() {
                                 self.remote_bytes.remove(&key);
@@ -69,11 +69,7 @@ impl Decoder {
                     }
                 } else {
                     let path = local_path(source, &key.workspace)?;
-                    let mut bytes = Vec::new();
-                    std::fs::File::open(&path)?
-                        .take(MAX_BYTES as u64 + 1)
-                        .read_to_end(&mut bytes)?;
-                    Arc::new(bytes)
+                    Arc::new(orbit_model::types::Attachment::read_image_bytes(&path)?)
                 };
                 if bytes.len() > MAX_BYTES {
                     bail!("图片超过 20 MiB");
@@ -90,8 +86,8 @@ impl Decoder {
                     let mut reader =
                         ImageReader::new(Cursor::new(bytes.as_slice())).with_guessed_format()?;
                     let mut limits = image::Limits::default();
-                    limits.max_image_width = Some(8192);
-                    limits.max_image_height = Some(8192);
+                    limits.max_image_width = Some(MAX_DECODE_EDGE_PIXELS);
+                    limits.max_image_height = Some(MAX_DECODE_EDGE_PIXELS);
                     limits.max_alloc = Some(MAX_PIXELS * 4);
                     reader.limits(limits);
                     let image = reader.decode()?;
@@ -102,7 +98,7 @@ impl Decoder {
                 }
             }
             Source::Math { tex, display } => {
-                if tex.len() > 8192 {
+                if tex.len() > MAX_TEX_BYTES {
                     bail!("公式超过 8192 字节");
                 }
                 let color = picker

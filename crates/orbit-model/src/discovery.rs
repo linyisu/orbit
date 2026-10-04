@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 
 use crate::{client::ApiFormat, error::ModelError};
 
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub const CODEX_CLIENT_VERSION: &str = "0.153.0";
 
 /// Only fixed account endpoints are accepted; credentials never follow redirects.
@@ -61,7 +63,7 @@ pub async fn discover(
         .await?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(15))
+        .timeout(DISCOVERY_TIMEOUT)
         .build()?;
     let mut last = None;
 
@@ -188,7 +190,7 @@ async fn discover_api_catalog_inner(
     endpoint.set_path(&format!("{}/models", endpoint.path().trim_end_matches('/')));
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(15))
+        .timeout(DISCOVERY_TIMEOUT)
         .build()?;
     let auth = if let Some(reference) = reference {
         let target = if format == ApiFormat::AnthropicMessages {
@@ -218,7 +220,7 @@ async fn discover_api_catalog_inner(
     }
 
     let request = request.build()?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + DISCOVERY_TIMEOUT;
     let mut cursor = None::<String>;
     let mut seen = std::collections::HashSet::new();
     let mut all = Vec::new();
