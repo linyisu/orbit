@@ -141,6 +141,219 @@ fn subagent_results_and_rules_stay_inside_the_shared_tool_frame() {
 }
 
 #[tokio::test]
+async fn viewer_updates_live_keeps_parent_state_and_accepts_no_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("orbit.db"))
+        .await
+        .unwrap();
+    let parent = store
+        .create(
+            directory.path().to_string_lossy().into_owned(),
+            "orbit::parent".into(),
+            false,
+        )
+        .await
+        .unwrap();
+    let mut child = store
+        .create_subagent(
+            parent.id(),
+            "orbit::child".into(),
+            "review".into(),
+            "检查 Orbit".into(),
+        )
+        .await
+        .unwrap();
+    child
+        .begin("检查 Orbit".into(), "orbit::child".into())
+        .await
+        .unwrap();
+    child
+        .append(vec![AgentEvent::Model(StreamEvent::TextDelta(
+            "首段 Orbit\n\n".into(),
+        ))])
+        .await
+        .unwrap();
+    let mut state = UiState::new("orbit::parent");
+    state.submit("父任务".into());
+    state
+        .transcript
+        .push(TranscriptItem::Assistant("Orbit 父任务\n".repeat(60)));
+    state.input.set("Orbit 未发送草稿".into());
+    let mut terminal = Terminal::new(TestBackend::new(141, 41)).unwrap();
+    terminal
+        .draw(|frame| super::super::render::draw(frame, &mut state))
+        .unwrap();
+    state.scroll_up(10);
+    let parent_scroll = state.scroll;
+    let parent_items = state.transcript.len();
+    open(&mut state, child.id().into());
+    let viewer = state.subagent_dialog.as_mut().unwrap();
+    assert!(viewer.poll(&store, parent.id()).await);
+    assert!(viewer.error.is_none());
+    let call = ToolCall::function("orbit-read", "read_file", json!({"path":"src/orbit.rs"}));
+    child
+        .append(vec![
+            AgentEvent::ToolStarted { call: call.clone() },
+            AgentEvent::ToolFinished {
+                call,
+                content: "Orbit 工具结果".into(),
+                changes: vec![],
+            },
+            AgentEvent::Model(StreamEvent::TextDelta(format!(
+                "{}\n\n---\n\n末段 Orbit",
+                "Orbit 记录\n".repeat(50)
+            ))),
+        ])
+        .await
+        .unwrap();
+    assert!(viewer.poll(&store, parent.id()).await);
+    child
+        .finish("completed", vec![], Some(vec![]))
+        .await
+        .unwrap();
+    assert!(viewer.poll(&store, parent.id()).await);
+    assert_eq!(viewer.view.ui.status, RunStatus::Completed);
+    assert_eq!(viewer.view.ui.tool_calls, 1);
+    terminal
+        .draw(|frame| super::super::render::draw(frame, &mut state))
+        .unwrap();
+    assert!(state.ime_cursor.is_none());
+    let viewer = state.subagent_dialog.as_mut().unwrap();
+    assert!(viewer.view.ui.max_scroll > 0);
+    viewer
+        .handle(&Event::Key(KeyEvent::new(
+            KeyCode::Home,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+    assert_eq!(viewer.view.ui.scroll, viewer.view.ui.max_scroll);
+    let area = viewer.view.ui.selection.viewport;
+    for event in [
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x + 2,
+            area.y + 2,
+        ),
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 8,
+            area.y + 2,
+        ),
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 8,
+            area.y + 2,
+        ),
+    ] {
+        viewer.handle(&event).unwrap();
+    }
+    assert!(viewer.view.ui.selection.active());
+    assert!(!viewer.poll(&store, parent.id()).await);
+    viewer.handle(&Event::Paste("不会发送".into())).unwrap();
+    viewer
+        .handle(&Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+    assert!(viewer.view.ui.input.text.is_empty());
+    assert!(matches!(
+        viewer
+            .handle(&Event::Key(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL
+            )))
+            .unwrap(),
+        ViewerAction::Close
+    ));
+    assert_eq!(state.model, "orbit::parent");
+    assert_eq!(state.status, RunStatus::Running);
+    assert_eq!(state.input.text, "Orbit 未发送草稿");
+    assert_eq!(state.scroll, parent_scroll);
+    assert_eq!(state.transcript.len(), parent_items);
+    assert!(state.resume_request.is_none());
+    assert!(!state.new_tab_request);
+    assert!(store.load(parent.id()).await.unwrap().runs.is_empty());
+    for (width, height) in [(40, 18), (10, 3), (1, 1)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| super::super::render::draw(frame, &mut state))
+            .unwrap();
+        assert!(state.ime_cursor.is_none());
+    }
+}
+
+#[tokio::test]
+async fn viewer_replays_large_logs_in_batches_without_recovering_an_orphaned_writer() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("orbit.db"))
+        .await
+        .unwrap();
+    let parent = store
+        .create(
+            directory.path().to_string_lossy().into_owned(),
+            "orbit::parent".into(),
+            false,
+        )
+        .await
+        .unwrap();
+    let mut child = store
+        .create_subagent(
+            parent.id(),
+            "orbit::child".into(),
+            "explore".into(),
+            "Orbit 日志".into(),
+        )
+        .await
+        .unwrap();
+    let id = child.id().to_owned();
+    child
+        .begin("Orbit 日志".into(), "orbit::child".into())
+        .await
+        .unwrap();
+    child
+        .append(
+            (0..5000)
+                .map(|_| AgentEvent::Model(StreamEvent::TextDelta("轨".into())))
+                .collect(),
+        )
+        .await
+        .unwrap();
+    drop(child);
+    let mut state = UiState::new("orbit::parent");
+    open(&mut state, id.clone());
+    let viewer = state.subagent_dialog.as_mut().unwrap();
+    assert!(viewer.poll(&store, parent.id()).await);
+    let text_len = |viewer: &Viewer| {
+        viewer
+            .view
+            .ui
+            .transcript
+            .iter()
+            .filter_map(|item| {
+                if let TranscriptItem::Assistant(text) = item {
+                    Some(text.chars().count())
+                } else {
+                    None
+                }
+            })
+            .sum::<usize>()
+    };
+    assert!(text_len(viewer) > 0 && text_len(viewer) < 5000);
+    for _ in 0..100 {
+        if !viewer.poll(&store, parent.id()).await {
+            break;
+        }
+    }
+    assert_eq!(text_len(viewer), 5000);
+    assert_eq!(
+        store.session_revision(&id).await.unwrap().unwrap().status,
+        "running"
+    );
+    assert_eq!(store.load(&id).await.unwrap().runs[0].events.len(), 5000);
+}
+
+#[tokio::test]
 async fn journal_progress_is_incremental_and_continuations_do_not_change_old_cards() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path().join("orbit.db"))

@@ -49,9 +49,16 @@ pub(super) async fn publish(
 }
 
 #[derive(Default)]
+struct Reader {
+    revision: Option<SessionRevision>,
+    replay: HistoryReplay,
+    replaying: bool,
+}
+
+#[derive(Default)]
 pub(super) struct SessionSync {
     deleted: HashSet<String>,
-    readers: HashMap<String, (Option<SessionRevision>, HistoryReplay)>,
+    readers: HashMap<String, Reader>,
 }
 
 impl SessionSync {
@@ -66,6 +73,28 @@ impl SessionSync {
         state: &mut UiState,
         history: &mut Vec<ChatMessage>,
     ) -> Result<bool> {
+        self.poll_inner(store, snapshot, state, history, true).await
+    }
+
+    pub async fn poll_read_only(
+        &mut self,
+        store: &Store,
+        snapshot: &mut Snapshot,
+        state: &mut UiState,
+        history: &mut Vec<ChatMessage>,
+    ) -> Result<bool> {
+        self.poll_inner(store, snapshot, state, history, false)
+            .await
+    }
+
+    async fn poll_inner(
+        &mut self,
+        store: &Store,
+        snapshot: &mut Snapshot,
+        state: &mut UiState,
+        history: &mut Vec<ChatMessage>,
+        recover_writer: bool,
+    ) -> Result<bool> {
         let id = snapshot.session.id.clone();
         if self.deleted.contains(&id) {
             return Ok(false);
@@ -78,18 +107,31 @@ impl SessionSync {
             state.invalidate_transcript(0);
             return Ok(true);
         };
-        let (previous, replay) = self
-            .readers
-            .entry(id.clone())
-            .or_insert_with(|| (None, HistoryReplay::following(snapshot, state)));
+        let Reader {
+            revision: previous,
+            replay,
+            replaying,
+        } = self.readers.entry(id.clone()).or_insert_with(|| Reader {
+            replay: if recover_writer {
+                HistoryReplay::following(snapshot, state)
+            } else {
+                HistoryReplay::default()
+            },
+            ..Default::default()
+        });
         // An exited writer releases its OS lease, even after a crash. Recover only then.
-        if revision.status == "running"
+        if recover_writer
+            && revision.status == "running"
             && let Ok(lease) = store.acquire(&id).await
         {
             drop(lease);
             revision = store.session_revision(&id).await?.unwrap_or(revision);
         }
         if previous.as_ref() == Some(&revision) {
+            if *replaying {
+                *replaying = !replay.advance(snapshot, state, 2048, Duration::from_millis(4));
+                return Ok(true);
+            }
             return Ok(false);
         }
         let incremental = previous.as_ref().is_some_and(|old| {
@@ -123,8 +165,12 @@ impl SessionSync {
                 .collect();
             history.splice(0..0, systems);
         }
-        while !replay.advance(next, state, 2048, Duration::from_millis(4)) {
-            tokio::task::yield_now().await;
+        *replaying = !replay.advance(next, state, 2048, Duration::from_millis(4));
+        if recover_writer {
+            while *replaying {
+                tokio::task::yield_now().await;
+                *replaying = !replay.advance(next, state, 2048, Duration::from_millis(4));
+            }
         }
         *previous = Some(revision);
         Ok(true)

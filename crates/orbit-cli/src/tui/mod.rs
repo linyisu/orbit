@@ -35,6 +35,7 @@ pub mod theme;
 mod tool_display;
 mod tool_groups;
 mod transcript;
+mod transcript_dialog;
 mod wheel;
 mod workspace;
 
@@ -543,6 +544,21 @@ pub async fn run(
                         continue;
                     }
 
+                    if let Some(viewer) = &mut state.subagent_dialog {
+                        let action = viewer.handle(&event)?;
+                        match action {
+                            subagents::ViewerAction::None => {},
+                            subagents::ViewerAction::Close => { state.subagent_dialog = None; dirty = true; },
+                            subagents::ViewerAction::Redraw => dirty = true,
+                            subagents::ViewerAction::Link(url) => {
+                                if let Err(error) = open_link_in_browser(&url) { viewer.link_error(&error); }
+                                dirty = true;
+                            }
+                        }
+                        if dirty { frames.request(time::Instant::now()); }
+                        continue;
+                    }
+
                     if state.info_dialog.is_some() {
                         dialogs::handle(&mut state, event);
                         dirty = true;
@@ -736,7 +752,7 @@ pub async fn run(
                             state.selection.clear();
 
                             if let Some(id) = subagent_link_id(&url) {
-                                state.resume_request = Some(id.to_owned());
+                                subagents::open(&mut state, id.to_owned());
                             } else if let Err(error) = open_link_in_browser(&url) {
                                 state.report_local(TranscriptItem::Error(format!(
                                     "无法打开链接：{error}"
@@ -1438,6 +1454,9 @@ pub async fn run(
                             dirty |= session_sync::sync_runtime(&session.store, session.id(), &mut state).await?;
                         }
                         dirty |= tabs.synchronize_parked(&mut session_sync, &background_runs).await?;
+                        if let Some(viewer) = &mut state.subagent_dialog {
+                            dirty |= viewer.poll(&session.store, session.id()).await;
+                        }
                         if history_replay.is_none() {
                             dirty |= subagent_progress.poll(&session.store, &mut state).await?;
                         }
@@ -1485,6 +1504,7 @@ pub async fn run(
                     }
 
                     let direction = state.selection.auto_scroll(std::time::Instant::now());
+                    if let Some(viewer) = &mut state.subagent_dialog { dirty |= viewer.tick(); }
 
                     if direction != 0 {
                         if direction < 0 { state.scroll_up(2); } else { state.scroll_down(2); }
@@ -2928,8 +2948,7 @@ fn open_subagent_at(state: &mut UiState, point: (u16, u16)) -> bool {
         .and_then(subagent_link_id)
         .map(str::to_owned);
     if let Some(id) = target {
-        state.selection.clear();
-        state.resume_request = Some(id);
+        subagents::open(state, id);
         true
     } else {
         false
@@ -4771,7 +4790,7 @@ mod subagent_tests {
     use super::*;
 
     #[test]
-    fn child_session_links_route_inside_tui_without_opening_a_browser() {
+    fn child_session_links_open_a_dialog_without_switching_tabs() {
         assert_eq!(
             subagent_link_id("orbit://session/00000000000000000000000000000001"),
             Some("00000000000000000000000000000001")
@@ -4807,7 +4826,8 @@ mod subagent_tests {
             })
             .expect("live child view link is visible");
         assert!(open_subagent_at(&mut state, point));
-        assert_eq!(state.resume_request.as_deref(), Some(id));
+        assert!(state.resume_request.is_none());
+        assert!(state.subagent_dialog.is_some());
         assert!(state.expanded.is_empty());
     }
 }

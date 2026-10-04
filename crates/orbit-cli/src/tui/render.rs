@@ -681,16 +681,20 @@ fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
         return;
     };
     let offset = state.max_scroll.saturating_sub(state.scroll);
-    if state
-        .transcript_layout
-        .link_at(state.selection.viewport, offset, (anchor_x, anchor_y))
-        .is_none()
-    {
+    let Some(url) =
+        state
+            .transcript_layout
+            .link_at(state.selection.viewport, offset, (anchor_x, anchor_y))
+    else {
         state.link_hovered = None;
         return;
-    }
+    };
 
-    let text = "Ctrl + Click 跳转";
+    let text = if super::subagent_link_id(url).is_some() {
+        "单击查看子代理"
+    } else {
+        "Ctrl + Click 跳转"
+    };
     let width = (text.width() as u16 + 2).min(state.selection.viewport.width);
 
     if width == 0 {
@@ -754,16 +758,12 @@ pub(super) fn scrolling_title(
 }
 
 fn tab_control_style(state: &UiState, target: &super::TabAction) -> Style {
-    let base = Style::default().fg(ACCENT).remove_modifier(Modifier::BOLD);
-    let Some((_, since)) = state
+    let hover = state
         .tab_hover
         .as_ref()
         .filter(|(action, _)| action == target)
-    else {
-        return base;
-    };
-
-    base.bg(super::theme::tab_hover_background(since.elapsed()))
+        .map(|(_, since)| since.elapsed());
+    super::theme::control_style(hover)
 }
 
 fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
@@ -1013,16 +1013,30 @@ fn draw_welcome(frame: &mut Frame<'_>, area: Rect) {
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    draw_transcript_in(frame, state, area, true);
+}
+
+pub(super) fn draw_transcript_in(
+    frame: &mut Frame<'_>,
+    state: &mut UiState,
+    area: Rect,
+    navigation: bool,
+) {
     super::navigation::clear_previous_tooltip(frame, state);
     clear_previous_link_tooltip(frame, state);
-    state.selection.viewport = Rect {
-        x: area.x + 2,
-        // Keep a generous blank gap between wrapped output and the navigation dots
-        // so double-width CJK characters never collide with or touch the dots.
-        width: area.width.saturating_sub(6),
-        ..area
+    state.selection.viewport = if navigation {
+        Rect {
+            x: area.x + 2,
+            // Keep a generous blank gap between wrapped output and the navigation dots
+            // so double-width CJK characters never collide with or touch the dots.
+            width: area.width.saturating_sub(6),
+            ..area
+        }
+    } else {
+        area
     };
-    if area.height > 1
+    if navigation
+        && area.height > 1
         && state
             .transcript
             .iter()
@@ -1038,7 +1052,9 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             return;
         }
 
-        draw_welcome(frame, area);
+        if navigation {
+            draw_welcome(frame, area);
+        }
         return;
     }
 
@@ -1158,7 +1174,9 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         }
     }
 
-    super::navigation::draw(frame, state, area, offset);
+    if navigation {
+        super::navigation::draw(frame, state, area, offset);
+    }
     draw_link_tooltip(frame, state);
 }
 

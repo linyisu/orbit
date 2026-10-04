@@ -817,6 +817,30 @@ fn clean(text: &str) -> String {
         .collect()
 }
 
+pub(super) fn centered_area(full: Rect) -> Rect {
+    centered_size(full, 96, 24)
+}
+
+fn transcript_area(full: Rect) -> Rect {
+    let width = full.width.saturating_sub(full.width / 5).max(96);
+    // Keep the half-screen proportions, then grow with the width for long records.
+    let height = (width / 4)
+        .min(full.height.saturating_sub(full.height / 5))
+        .max(24);
+    centered_size(full, width, height)
+}
+
+fn centered_size(full: Rect, width: u16, height: u16) -> Rect {
+    let width = full.width.saturating_sub(4).min(width);
+    let height = full.height.saturating_sub(2).min(height);
+    Rect::new(
+        full.x + (full.width - width) / 2,
+        full.y + (full.height - height) / 2,
+        width,
+        height,
+    )
+}
+
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.dialog_rows.clear();
     if !state.dialog_open() {
@@ -824,15 +848,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     }
 
     state.selection.clear();
-    let full = frame.area();
-    let width = full.width.saturating_sub(4).min(96);
-    let height = full.height.saturating_sub(2).min(24);
-    let area = Rect::new(
-        (full.width - width) / 2,
-        (full.height - height) / 2,
-        width,
-        height,
-    );
+    let area = if state.subagent_dialog.is_some() {
+        transcript_area(frame.area())
+    } else {
+        centered_area(frame.area())
+    };
     super::overlay::clear(frame, area);
     let title = if state.picker.is_some() {
         "恢复会话 · 当前项目"
@@ -849,6 +869,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         .border_style(Style::default().fg(crate::tui::theme::THEME.accent));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if let Some(viewer) = &mut state.subagent_dialog {
+        state.ime_cursor = None;
+        viewer.draw(frame, area, inner);
+        return;
+    }
     if let Some(dialog) = &mut state.info_dialog {
         state.ime_cursor = None;
         let title = Rect::new(
@@ -1552,6 +1577,43 @@ mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn transcript_dialog_grows_on_wide_screens_and_keeps_half_screen_size() {
+        for (full, expected) in [
+            (Rect::new(0, 0, 105, 47), (96, 24)),
+            (Rect::new(0, 0, 120, 50), (96, 24)),
+            (Rect::new(0, 0, 150, 45), (120, 30)),
+            (Rect::new(0, 0, 200, 50), (160, 40)),
+            (Rect::new(0, 0, 200, 12), (160, 10)),
+        ] {
+            let area = transcript_area(full);
+            assert_eq!((area.width, area.height), expected);
+        }
+        let widths = (100..=240)
+            .map(|width| transcript_area(Rect::new(0, 0, width, 50)))
+            .collect::<Vec<_>>();
+        assert!(
+            widths.windows(2).all(|pair| {
+                pair[1].width >= pair[0].width && pair[1].width - pair[0].width <= 1
+            })
+        );
+    }
+
+    #[test]
+    fn transcript_dialog_preserves_centering_and_bounds_at_all_sizes() {
+        for (width, height) in [(0, 0), (1, 1), (8, 3), (100, 30), (201, 51)] {
+            let full = Rect::new(7, 11, width, height);
+            let area = transcript_area(full);
+            assert_eq!(area.intersection(full), area);
+            let left = area.left() - full.left();
+            let right = full.right() - area.right();
+            let top = area.top() - full.top();
+            let bottom = full.bottom() - area.bottom();
+            assert!(left.abs_diff(right) <= 1);
+            assert!(top.abs_diff(bottom) <= 1);
+        }
+    }
 
     #[test]
     fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {

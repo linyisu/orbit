@@ -158,6 +158,7 @@ pub struct UiState {
     pub help_keys: bool,
     pub help_scroll: usize,
     pub info_dialog: Option<super::dialogs::InfoDialog>,
+    pub(super) subagent_dialog: Option<Box<super::subagents::Viewer>>,
     pub picker: Option<super::dialogs::SessionPicker>,
     pub resume_request: Option<String>,
     pub(super) subagent_parent: Option<String>,
@@ -201,6 +202,7 @@ impl UiState {
 
     pub(super) fn dialog_open(&self) -> bool {
         self.info_dialog.is_some()
+            || self.subagent_dialog.is_some()
             || self.show_help
             || self.picker.is_some()
             || self.model_picker.is_some()
@@ -336,6 +338,7 @@ impl UiState {
             help_keys: false,
             help_scroll: 0,
             info_dialog: None,
+            subagent_dialog: None,
             picker: None,
             resume_request: None,
             subagent_parent: None,

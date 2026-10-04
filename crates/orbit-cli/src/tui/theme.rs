@@ -460,7 +460,14 @@ pub(super) static CODE_THEME: LazyLock<syntect::highlighting::Theme> = LazyLock:
     }
 });
 
-pub(super) fn tab_hover_background(elapsed: std::time::Duration) -> Color {
+pub(super) fn control_style(hover: Option<std::time::Duration>) -> Style {
+    let base = Style::default()
+        .fg(THEME.accent)
+        .remove_modifier(Modifier::BOLD);
+    hover.map_or(base, |elapsed| base.bg(control_hover_background(elapsed)))
+}
+
+fn control_hover_background(elapsed: std::time::Duration) -> Color {
     let shade = 48 + (elapsed.as_millis().min(240) / 10) as u8;
     Color::Rgb(shade, shade - 8, shade - 10)
 }

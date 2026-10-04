@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use orbit_agent::events::AgentEvent;
 use orbit_model::types::StreamEvent;
+use orbit_store::types::Snapshot;
 use orbit_store::{store::Store, tui_sessions::SessionRevision};
 use ratatui::{
     Frame,
@@ -15,11 +16,139 @@ use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
 use super::{
+    app::RunStatus,
     app::{ToolRow, ToolStatus, TranscriptItem, UiState},
     markdown::{LinkTarget, LinkedLine},
     render::{fit_label, safe_output},
     theme::THEME,
 };
+
+pub(super) use super::transcript_dialog::Action as ViewerAction;
+
+pub(super) struct Viewer {
+    id: String,
+    view: super::transcript_dialog::TranscriptDialog,
+    snapshot: Option<Snapshot>,
+    sync: super::session_sync::SessionSync,
+    error: Option<String>,
+}
+
+impl std::fmt::Debug for Viewer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Viewer")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+pub(super) fn open(state: &mut UiState, id: String) {
+    state.selection.clear();
+    state.input_dragging = false;
+    state.cursor_motion.clear();
+    let mut view = super::transcript_dialog::TranscriptDialog::new("");
+    view.ui.resume_loading = Some("加载子代理记录…".into());
+    state.subagent_dialog = Some(Box::new(Viewer {
+        id,
+        view,
+        snapshot: None,
+        sync: Default::default(),
+        error: None,
+    }));
+}
+
+impl Viewer {
+    /// Read saved events without acquiring a writer or changing the active parent session.
+    pub async fn poll(&mut self, store: &Store, parent: &str) -> bool {
+        if self.error.is_some() || self.view.ui.selection.active() {
+            return false;
+        }
+        let result: anyhow::Result<bool> = async {
+            if self.snapshot.is_none() {
+                anyhow::ensure!(
+                    store.subagent_parent(&self.id).await?.as_deref() == Some(parent),
+                    "该记录不是当前会话的子代理。"
+                );
+                let snapshot = store.load(&self.id).await?;
+                self.view.ui.model = snapshot.session.model.clone();
+                self.view.ui.subagent_parent = Some(parent.into());
+                self.view.ui.follow_bottom = snapshot
+                    .runs
+                    .last()
+                    .is_some_and(|run| run.status == "running");
+                self.view.ui.resume_loading = None;
+                self.snapshot = Some(snapshot);
+            }
+            let mut history = Vec::new();
+            self.sync
+                .poll_read_only(
+                    store,
+                    self.snapshot.as_mut().unwrap(),
+                    &mut self.view.ui,
+                    &mut history,
+                )
+                .await
+        }
+        .await;
+        match result {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.error = Some(format!("无法读取子代理记录：{error}"));
+                self.view.ui.resume_loading = None;
+                self.view.ui.status = RunStatus::Failed;
+                true
+            }
+        }
+    }
+
+    pub fn tick(&mut self) -> bool {
+        self.view.tick()
+    }
+
+    pub fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, inner: Rect) {
+        let status = if self.view.ui.resume_loading.is_some() {
+            "加载中"
+        } else {
+            match self.view.ui.status {
+                RunStatus::Running => "运行中",
+                RunStatus::Cancelling => "取消中",
+                RunStatus::Completed => "完成",
+                RunStatus::Failed => "失败",
+                RunStatus::Cancelled => "已取消",
+                RunStatus::Idle => "等待运行",
+            }
+        };
+        let metadata = self.view.ui.resume_loading.clone().unwrap_or_else(|| {
+            if self.view.ui.model.is_empty() {
+                "记录不可用".into()
+            } else {
+                format!(
+                    "{} · {} 次调用",
+                    self.view.ui.model, self.view.ui.tool_calls
+                )
+            }
+        });
+        self.view.draw(
+            &format!("子代理 · {status}"),
+            &metadata,
+            self.error.as_deref(),
+            frame,
+            area,
+            inner,
+        );
+    }
+
+    pub fn handle(&mut self, event: &Event) -> std::io::Result<ViewerAction> {
+        self.view.handle(event)
+    }
+
+    pub fn link_error(&mut self, error: &anyhow::Error) {
+        self.view
+            .ui
+            .report_local(TranscriptItem::CommandError(format!(
+                "无法打开链接：{error}"
+            )));
+    }
+}
 
 pub(super) fn is_task(name: &str) -> bool {
     matches!(name, "spawn_agent" | "send_agent_message")
