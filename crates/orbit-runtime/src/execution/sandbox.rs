@@ -485,7 +485,14 @@ impl BwrapSandboxBackend {
         )?;
 
         if spec.unmask_git {
-            apply_git_mounts(&mut command, ws_target, spec, &mut protected_inodes, policy)?;
+            apply_git_mounts(
+                &mut command,
+                ws_target,
+                spec,
+                &mut protected_inodes,
+                policy,
+                placeholder_guard,
+            )?;
         }
 
         let container_cwd = resolve_container_cwd(ws_target, mounts, spec.cwd.as_deref());
@@ -1006,6 +1013,7 @@ fn apply_git_mounts(
     spec: &ProcessSpec,
     protected_inodes: &mut HashSet<(u64, u64)>,
     policy: &EffectivePolicy,
+    placeholders: &mut PlaceholderGuard,
 ) -> Result<(), RuntimeError> {
     use crate::git::discovery::GitRepositoryInfo;
     use std::os::unix::fs::MetadataExt;
@@ -1134,84 +1142,66 @@ fn apply_git_mounts(
         )?;
     }
 
-    if !repo.is_gitfile {
-        if !read_only_workspace && !allow_config_write {
-            let config = repo.config_path();
-            if config.exists() && !allow_config_write {
+    if repo.is_gitfile {
+        for directory in [&repo.git_dir, &repo.common_dir] {
+            if !directory.starts_with(ws_target) {
                 command
-                    .arg("--ro-bind")
-                    .arg(&config)
-                    .arg("/workspace/.git/config");
-                if let Ok(meta) = std::fs::symlink_metadata(&config) {
-                    protected_inodes.insert((meta.dev(), meta.ino()));
-                }
-            }
-            let wt_config = repo.worktree_config_path();
-            if wt_config.exists() && !allow_config_write {
-                command
-                    .arg("--ro-bind")
-                    .arg(&wt_config)
-                    .arg("/workspace/.git/config.worktree");
-                if let Ok(meta) = std::fs::symlink_metadata(&wt_config) {
-                    protected_inodes.insert((meta.dev(), meta.ino()));
-                }
-            }
-            let hooks = repo.hooks_path();
-            if hooks.exists() && !allow_config_write {
-                command
-                    .arg("--ro-bind")
-                    .arg(&hooks)
-                    .arg("/workspace/.git/hooks");
-                if let Ok(meta) = std::fs::symlink_metadata(&hooks) {
-                    protected_inodes.insert((meta.dev(), meta.ino()));
-                }
+                    .arg(if read_only_workspace {
+                        "--ro-bind"
+                    } else {
+                        "--bind"
+                    })
+                    .arg(directory)
+                    .arg(directory);
             }
         }
-    } else {
-        let is_outside_ws = !repo.git_dir.starts_with(ws_target);
-        if is_outside_ws {
-            if read_only_workspace {
-                command
-                    .arg("--ro-bind")
-                    .arg(&repo.git_dir)
-                    .arg(&repo.git_dir);
-                if repo.common_dir != repo.git_dir && !repo.common_dir.starts_with(ws_target) {
-                    command
-                        .arg("--ro-bind")
-                        .arg(&repo.common_dir)
-                        .arg(&repo.common_dir);
-                }
-            } else {
-                command.arg("--bind").arg(&repo.git_dir).arg(&repo.git_dir);
-                if repo.common_dir != repo.git_dir && !repo.common_dir.starts_with(ws_target) {
-                    command
-                        .arg("--bind")
-                        .arg(&repo.common_dir)
-                        .arg(&repo.common_dir);
-                }
+    }
 
-                let config = repo.config_path();
-                if config.exists() && !allow_config_write {
-                    command.arg("--ro-bind").arg(&config).arg(&config);
-                    if let Ok(meta) = std::fs::symlink_metadata(&config) {
-                        protected_inodes.insert((meta.dev(), meta.ino()));
-                    }
+    if !read_only_workspace && !allow_config_write {
+        for source in [
+            repo.config_path(),
+            repo.worktree_config_path(),
+            repo.hooks_path(),
+        ] {
+            let target = if let Ok(relative) = source.strip_prefix(ws_target) {
+                Path::new("/workspace").join(relative)
+            } else {
+                source.clone()
+            };
+            let directory = source == repo.hooks_path();
+            if !source.exists() {
+                use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+                if directory {
+                    std::fs::DirBuilder::new()
+                        .mode(0o700)
+                        .create(&source)
+                        .map_err(failed)?;
+                } else {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(&source)
+                        .map_err(failed)?;
                 }
-                let wt_config = repo.worktree_config_path();
-                if wt_config.exists() && !allow_config_write {
-                    command.arg("--ro-bind").arg(&wt_config).arg(&wt_config);
-                    if let Ok(meta) = std::fs::symlink_metadata(&wt_config) {
-                        protected_inodes.insert((meta.dev(), meta.ino()));
+                let meta = std::fs::symlink_metadata(&source).map_err(failed)?;
+                placeholders.push(if directory {
+                    Placeholder::Dir {
+                        path: source.clone(),
+                        dev: meta.dev(),
+                        ino: meta.ino(),
                     }
-                }
-                let hooks = repo.hooks_path();
-                if hooks.exists() && !allow_config_write {
-                    command.arg("--ro-bind").arg(&hooks).arg(&hooks);
-                    if let Ok(meta) = std::fs::symlink_metadata(&hooks) {
-                        protected_inodes.insert((meta.dev(), meta.ino()));
+                } else {
+                    Placeholder::File {
+                        path: source.clone(),
+                        dev: meta.dev(),
+                        ino: meta.ino(),
                     }
-                }
+                });
             }
+            command.arg("--ro-bind").arg(&source).arg(target);
+            let meta = std::fs::symlink_metadata(&source).map_err(failed)?;
+            protected_inodes.insert((meta.dev(), meta.ino()));
         }
     }
 
@@ -2646,6 +2636,36 @@ mod tests {
         filesystem::ResolvedPath,
         policy::BasePolicy,
     };
+
+    #[tokio::test]
+    async fn absent_git_config_and_hooks_are_protected_in_a_writable_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/objects")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/refs")).unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        let policy =
+            EffectivePolicy::new(BasePolicy::new(ResolvedPath::from_canonical(dir.path())));
+        let mut spec = ProcessSpec::new(
+            "set -eu; git status --porcelain; for path in .git/config .git/config.worktree .git/hooks/pre-commit; do if (printf injected > \"$path\") 2>/dev/null; then exit 42; fi; done; printf safe",
+            Duration::from_secs(10),
+        ).with_read_write_workspace(true);
+        spec.unmask_git = true;
+        let result = BwrapSandboxBackend::new()
+            .unwrap()
+            .run(spec, &policy, None, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0), "{}", result.stderr);
+        assert!(result.stdout.ends_with("safe"));
+        for name in ["config", "config.worktree", "hooks"] {
+            assert!(
+                !dir.path().join(".git").join(name).exists(),
+                "placeholder {name} must be cleaned up"
+            );
+        }
+        assert!(dir.path().join(".git/HEAD").exists());
+    }
+
 
     #[tokio::test]
     async fn capture_keeps_bounded_unicode_tail_and_counts_all_output() {

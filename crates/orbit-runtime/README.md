@@ -84,7 +84,7 @@ orbit-runtime/
 
 ### 受保护路径（Protected Paths）与遮蔽（Masking）
 - 文件工具保护 `.git`、`.env`、`.env.*` 与临时写入元数据；CLI 还注册数据库、认证与会话存储路径。`.env.example` 等模板默认也受保护；用户可通过 `[permissions].read_templates` / `write_templates` 授予精确模板路径例外，不能覆盖注册的认证和数据库保护路径。
-- 命令沙箱对受保护文件绑定只读 `/dev/null`，对目录绑定空只读 tmpfs。例外是 `run_command` 当前设置 `unmask_git=true`：原生 Git 元数据可见，其读写随工作区访问模式变化，已有 config、config.worktree 和 hooks 默认只读；批准的配置操作可通过 `allow_git_config_write` 放行。
+- 命令沙箱对受保护文件绑定只读 `/dev/null`，对目录绑定空只读 tmpfs。例外是 `run_command` 当前设置 `unmask_git=true`：原生 Git 元数据可见，其读写随工作区访问模式变化，config、config.worktree 和 hooks 默认只读，缺失时建立受保护的临时挂载点，执行后按 inode 校验并清理；批准的配置操作可通过 `allow_git_config_write` 放行。
 - 单链接与多链接 Inode 检查：
   - `collect_all_protected_inodes` 递归收集工作区内受保护文件与目录的 Inode。
   - 无论是单链接文件（如普通 `.env`）还是硬链接别名，均会纳入受保护 Inode 集合；任何自定义挂载源若包含这些 Inode，均会在挂载前被直接拒绝。
