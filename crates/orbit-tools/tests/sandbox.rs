@@ -102,9 +102,40 @@ async fn reads_snapshot_but_cannot_write_project_or_read_protected_files() {
     workspace.protect(root.path().join("private.db")).unwrap();
     fs::hard_link(root.path().join("private.db"), root.path().join("alias")).unwrap();
     symlink("/etc/passwd", root.path().join("outside")).unwrap();
+
+    // The legacy snapshot API rejects escaping entries before process launch;
+    // it must not silently include their targets or report a successful scan.
+    let error = sandbox::run(
+        workspace.clone(),
+        "echo must-not-run > /workspace/source.txt".into(),
+        Duration::from_secs(10),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("workspace-relative"), "{error}");
+    assert_eq!(
+        fs::read_to_string(root.path().join("source.txt")).unwrap(),
+        "hello sandbox\n"
+    );
+    fs::remove_file(root.path().join("outside")).unwrap();
+
     fs::create_dir(root.path().join(".git")).unwrap();
     fs::write(root.path().join(".git/config"), "secret").unwrap();
-    let result = sandbox::run(workspace,"pwd; cat source.txt; test ! -e .env && test ! -e private.db && test ! -e alias && test ! -e outside && test ! -e .git && test ! -e nested/.env.local || exit 9; echo changed > source.txt; test \"$(cat source.txt)\" = 'hello sandbox'".into(),Duration::from_secs(10),CancellationToken::new()).await.unwrap();
+    let result = sandbox::run(
+        workspace,
+        concat!(
+            "pwd; cat source.txt; ",
+            "test ! -e .env && test ! -e private.db && test ! -e alias ",
+            "&& test ! -e outside && test ! -e .git && test ! -e nested/.env.local || exit 9; ",
+            "echo changed > source.txt; test \"$(cat source.txt)\" = 'hello sandbox'",
+        )
+        .into(),
+        Duration::from_secs(10),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stdout.contains("/workspace\nhello sandbox"));
@@ -113,7 +144,7 @@ async fn reads_snapshot_but_cannot_write_project_or_read_protected_files() {
         fs::read_to_string(root.path().join("source.txt")).unwrap(),
         "hello sandbox\n"
     );
-    assert!(result.skipped_entries >= 6);
+    assert!(result.skipped_entries >= 5);
 }
 
 #[tokio::test]
