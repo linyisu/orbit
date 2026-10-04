@@ -14,12 +14,15 @@ use tokio_util::sync::CancellationToken;
 
 use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 
-const MAX_VISITED: usize = 20_000;
+use crate::limits::{MAX_DIRECTORY_ENTRIES, MAX_TEXT_OUTPUT_BYTES, OUTPUT_METADATA_RESERVE_BYTES};
+
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SCANNED_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 const MAX_LINE_BYTES: usize = 4 * 1024;
 const MAX_QUERY_BYTES: usize = 4096;
+const DEFAULT_PAGE_MATCHES: usize = 100;
+const MAX_PAGE_MATCHES: usize = 500;
+const MAX_CONTEXT_LINES: usize = 10;
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -45,7 +48,7 @@ impl Default for Arguments {
             glob: None,
             context_lines: 0,
             offset: 0,
-            limit: 100,
+            limit: DEFAULT_PAGE_MATCHES,
             include_hidden: false,
         }
     }
@@ -86,7 +89,7 @@ impl Tool for SearchText {
                     "query": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 4096,
+                        "maxLength": MAX_QUERY_BYTES,
                         "description": "Search text. Literal unless regex=true: a|b means the literal pipe expression by default. For either term, use query=a|b AND regex=true. Do not add shell quotes or /regex/ delimiters."
                     },
                     "path": {
@@ -101,9 +104,9 @@ impl Tool for SearchText {
                     },
                     "case_sensitive": { "type": "boolean", "default": false },
                     "glob": { "type": "string", "description": "Optional glob filter, for example **/*.rs" },
-                    "context_lines": { "type": "integer", "minimum": 0, "maximum": 10, "default": 0 },
-                    "offset": { "type": "integer", "minimum": 0, "maximum": 20000, "default": 0 },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 },
+                    "context_lines": { "type": "integer", "minimum": 0, "maximum": MAX_CONTEXT_LINES, "default": 0 },
+                    "offset": { "type": "integer", "minimum": 0, "maximum": MAX_DIRECTORY_ENTRIES, "default": 0 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_MATCHES, "default": DEFAULT_PAGE_MATCHES },
                     "include_hidden": { "type": "boolean", "default": false }
                 },
                 "required": ["query"],
@@ -150,9 +153,9 @@ fn validate(args: &Arguments) -> Result<(), ToolError> {
     if args.query.is_empty()
         || args.query.len() > MAX_QUERY_BYTES
         || args.path.trim().is_empty()
-        || !(1..=500).contains(&args.limit)
-        || args.context_lines > 10
-        || args.offset > MAX_VISITED
+        || !(1..=MAX_PAGE_MATCHES).contains(&args.limit)
+        || args.context_lines > MAX_CONTEXT_LINES
+        || args.offset > MAX_DIRECTORY_ENTRIES
     {
         return Err(invalid(
             "query must be 1–4096 bytes, path nonempty; limit 1–500, context_lines 0–10, offset 0–20000",
@@ -233,7 +236,7 @@ fn search(
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }
-        if visited >= MAX_VISITED {
+        if visited >= MAX_DIRECTORY_ENTRIES {
             scan_truncated = true;
             break 'files;
         }
@@ -336,7 +339,9 @@ fn search(
                 );
                 let size = entry.to_string().len() + 1;
 
-                if matches.len() == args.limit || output_bytes + size > MAX_OUTPUT_BYTES - 1024 {
+                if matches.len() == args.limit
+                    || output_bytes + size > MAX_TEXT_OUTPUT_BYTES - OUTPUT_METADATA_RESERVE_BYTES
+                {
                     has_more = true;
                     break 'files;
                 }

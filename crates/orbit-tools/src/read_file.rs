@@ -12,8 +12,11 @@ use tokio_util::sync::CancellationToken;
 
 use orbit_runtime::filesystem::Workspace;
 
+use crate::limits::MAX_TEXT_OUTPUT_BYTES;
+
 const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_OUTPUT_BYTES: usize = 32 * 1024;
+const DEFAULT_PAGE_LINES: usize = 200;
+const MAX_PAGE_LINES: usize = 500;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,7 +59,7 @@ fn first_line() -> usize {
 }
 
 fn default_limit() -> usize {
-    200
+    DEFAULT_PAGE_LINES
 }
 
 pub struct ReadFile {
@@ -71,9 +74,7 @@ impl ReadFile {
             scan_budget: MAX_SCAN_BYTES,
         }
     }
-}
 
-impl ReadFile {
     pub fn with_scan_budget(mut self, bytes: u64) -> Self {
         self.scan_budget = bytes;
         self
@@ -92,7 +93,7 @@ impl Tool for ReadFile {
                     "cursor": { "type": "object", "description": "Pass next_cursor unchanged to resume this file version", "properties": {"version": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "line": {"type": "integer", "minimum": 1}, "character": {"type": "integer", "minimum": 0}}, "required": ["version", "offset", "line", "character"], "additionalProperties": false },
                     "start_line": { "type": "integer", "minimum": 1, "default": 1 },
                     "start_char": { "type": "integer", "minimum": 0, "default": 0 },
-                    "max_lines": { "type": "integer", "minimum": 1, "maximum": 500, "default": 200 }
+                    "max_lines": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_LINES, "default": DEFAULT_PAGE_LINES }
                 },
                 "required": ["path"],
                 "additionalProperties": false
@@ -107,7 +108,7 @@ impl Tool for ReadFile {
 
             if arguments.path.trim().is_empty()
                 || arguments.start_line == 0
-                || !(1..=500).contains(&arguments.max_lines)
+                || !(1..=MAX_PAGE_LINES).contains(&arguments.max_lines)
             {
                 return Err(invalid(
                     "path must be nonempty, start_line >= 1, and max_lines between 1 and 500",
@@ -200,7 +201,7 @@ fn read(
             String::new()
         };
         // Reserve enough for any UTF-8 scalar before consuming it.
-        if selected && MAX_OUTPUT_BYTES - content.len() < prefix.len() + 4 {
+        if selected && MAX_TEXT_OUTPUT_BYTES - content.len() < prefix.len() + 4 {
             break;
         }
         let scalar = read_scalar(&mut reader)?;
@@ -241,7 +242,7 @@ fn read(
     if eof && (start_line > total_at_eof.max(1) || line == start_line && character < start_char) {
         return Err(invalid("requested range exceeds file length"));
     }
-    if eof && prefix_written && !content.ends_with('\n') && content.len() < MAX_OUTPUT_BYTES {
+    if eof && prefix_written && !content.ends_with('\n') && content.len() < MAX_TEXT_OUTPUT_BYTES {
         content.push('\n');
     }
     if snapshot != version(&reader.get_ref().metadata().map_err(failed)?) {

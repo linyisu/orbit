@@ -14,7 +14,7 @@ use orbit_runtime::execution::MAX_RETAINED_OUTPUT_PER_STREAM;
 
 pub type CommandOutputDirectory = Arc<RwLock<PathBuf>>;
 
-const MAX_PAGE_BYTES: usize = 32 * 1024;
+use crate::limits::MAX_TEXT_OUTPUT_BYTES;
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -31,7 +31,7 @@ impl Default for Arguments {
             output_id: String::new(),
             stream: Stream::Stdout,
             offset: 0,
-            max_bytes: MAX_PAGE_BYTES,
+            max_bytes: MAX_TEXT_OUTPUT_BYTES,
         }
     }
 }
@@ -77,11 +77,11 @@ impl Tool for ReadCommandOutput {
                     "offset": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 16777216,
+                        "maximum": MAX_RETAINED_OUTPUT_PER_STREAM,
                         "default": 0,
                         "description": "Zero-based byte offset"
                     },
-                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 32768, "default": 32768 }
+                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": MAX_TEXT_OUTPUT_BYTES, "default": MAX_TEXT_OUTPUT_BYTES }
                 },
                 "required": ["output_id"],
                 "additionalProperties": false
@@ -124,7 +124,7 @@ fn validate(arguments: &Arguments) -> Result<(), ToolError> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         || arguments.offset > MAX_RETAINED_OUTPUT_PER_STREAM
-        || !(1..=MAX_PAGE_BYTES).contains(&arguments.max_bytes)
+        || !(1..=MAX_TEXT_OUTPUT_BYTES).contains(&arguments.max_bytes)
     {
         return Err(invalid(
             "output_id must be an Orbit command id; offset must be 0..16777216 and max_bytes 1..32768",

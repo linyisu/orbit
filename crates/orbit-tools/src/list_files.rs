@@ -11,8 +11,11 @@ use tokio_util::sync::CancellationToken;
 
 use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 
-const MAX_VISITED: usize = 20_000;
-const MAX_OUTPUT: usize = 32 * 1024;
+use crate::limits::{MAX_DIRECTORY_ENTRIES, MAX_TEXT_OUTPUT_BYTES, OUTPUT_METADATA_RESERVE_BYTES};
+
+const DEFAULT_PAGE_ENTRIES: usize = 200;
+const MAX_PAGE_ENTRIES: usize = 1000;
+const MAX_DEPTH: usize = 8;
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -30,7 +33,7 @@ impl Default for Arguments {
             path: ".".into(),
             depth: 1,
             offset: 0,
-            limit: 200,
+            limit: DEFAULT_PAGE_ENTRIES,
             include_hidden: false,
         }
     }
@@ -59,9 +62,9 @@ impl Tool for ListFiles {
                         "default": ".",
                         "description": "Directory path (workspace-relative, or outside path granted via request_capability)"
                     },
-                    "depth": { "type": "integer", "minimum": 1, "maximum": 8, "default": 1 },
-                    "offset": { "type": "integer", "minimum": 0, "maximum": 20000, "default": 0 },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 200 },
+                    "depth": { "type": "integer", "minimum": 1, "maximum": MAX_DEPTH, "default": 1 },
+                    "offset": { "type": "integer", "minimum": 0, "maximum": MAX_DIRECTORY_ENTRIES, "default": 0 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_ENTRIES, "default": DEFAULT_PAGE_ENTRIES },
                     "include_hidden": { "type": "boolean", "default": false }
                 },
                 "required": [],
@@ -75,9 +78,9 @@ impl Tool for ListFiles {
             let arguments: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|error| invalid(error.to_string()))?;
 
-            if !(1..=8).contains(&arguments.depth)
-                || !(1..=1000).contains(&arguments.limit)
-                || arguments.offset > MAX_VISITED
+            if !(1..=MAX_DEPTH).contains(&arguments.depth)
+                || !(1..=MAX_PAGE_ENTRIES).contains(&arguments.limit)
+                || arguments.offset > MAX_DIRECTORY_ENTRIES
                 || arguments.path.trim().is_empty()
             {
                 return Err(invalid(
@@ -176,7 +179,7 @@ fn list(
             if token.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
-            if visited >= MAX_VISITED {
+            if visited >= MAX_DIRECTORY_ENTRIES {
                 scan_truncated = true;
                 break 'scan;
             }
@@ -259,7 +262,9 @@ fn list(
             let entry = json!({ "path": path, "kind": kind });
             let size = entry.to_string().len() + 1;
 
-            if entries.len() == args.limit || bytes + size > MAX_OUTPUT - 1024 {
+            if entries.len() == args.limit
+                || bytes + size > MAX_TEXT_OUTPUT_BYTES - OUTPUT_METADATA_RESERVE_BYTES
+            {
                 more = true;
                 break 'scan;
             }
