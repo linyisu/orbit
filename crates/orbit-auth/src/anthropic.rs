@@ -70,29 +70,7 @@ impl AnthropicLogin {
     }
 
     pub(crate) fn callback_code(&self, callback: &str) -> Result<String> {
-        let url = Url::parse(callback).map_err(|_| AuthError::InvalidCallback)?;
-        if url.origin() != self.redirect.origin()
-            || url.path() != self.redirect.path()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(AuthError::InvalidCallback);
-        }
-        let pairs: Vec<_> = url.query_pairs().collect();
-        let states: Vec<_> = pairs.iter().filter(|(key, _)| key == "state").collect();
-        if states.len() != 1 || states[0].1 != self.state {
-            return Err(AuthError::InvalidCallback);
-        }
-        if pairs.iter().any(|(key, _)| key == "error") {
-            return Err(AuthError::Denied);
-        }
-        let codes: Vec<_> = pairs.iter().filter(|(key, _)| key == "code").collect();
-        if codes.len() != 1 || codes[0].1.is_empty() || codes[0].1.len() > 4096 {
-            return Err(AuthError::InvalidCallback);
-        }
-
-        Ok(codes[0].1.to_string())
+        crate::callback::authorization_code(callback, &self.redirect, &self.state)
     }
 
     pub async fn finish(self, callback: &str, store: &AuthStore, name: &str) -> Result<()> {
@@ -133,7 +111,7 @@ async fn exchange(
 ) -> Result<Credential> {
     let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(crate::http::AUTH_REQUEST_TIMEOUT)
         .build()
         .map_err(|_| AuthError::Transport)?;
     let mut response = client
@@ -147,7 +125,7 @@ async fn exchange(
     let mut bytes = Vec::new();
 
     while let Some(chunk) = response.chunk().await.map_err(|_| AuthError::Transport)? {
-        if bytes.len().saturating_add(chunk.len()) > 65_536 {
+        if bytes.len().saturating_add(chunk.len()) > crate::http::MAX_TOKEN_RESPONSE_BYTES {
             return Err(AuthError::InvalidToken);
         }
         bytes.extend_from_slice(&chunk);

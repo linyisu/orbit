@@ -218,29 +218,7 @@ impl CallbackFlow for OAuthLogin {
         if let Some(login) = &self.anthropic {
             return login.callback_code(callback);
         }
-        let url = Url::parse(callback).map_err(|_| AuthError::InvalidCallback)?;
-        if url.origin() != self.redirect.origin()
-            || url.path() != self.redirect.path()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(AuthError::InvalidCallback);
-        }
-        let pairs: Vec<_> = url.query_pairs().collect();
-        let states: Vec<_> = pairs.iter().filter(|(key, _)| key == "state").collect();
-        if states.len() != 1 || states[0].1 != self.state {
-            return Err(AuthError::InvalidCallback);
-        }
-        if pairs.iter().any(|(key, _)| key == "error") {
-            return Err(AuthError::Denied);
-        }
-        let codes: Vec<_> = pairs.iter().filter(|(key, _)| key == "code").collect();
-        if codes.len() != 1 || codes[0].1.is_empty() || codes[0].1.len() > 4096 {
-            return Err(AuthError::InvalidCallback);
-        }
-
-        Ok(codes[0].1.to_string())
+        crate::callback::authorization_code(callback, &self.redirect, &self.state)
     }
 }
 

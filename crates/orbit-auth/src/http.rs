@@ -9,10 +9,13 @@ use crate::{
     credential::{Credential, Secret, now},
 };
 
+pub(crate) const AUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
+
 pub(crate) fn client() -> Result<Client> {
     Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(30))
+        .timeout(AUTH_REQUEST_TIMEOUT)
         .user_agent(concat!("orbit/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|_| AuthError::Transport)
@@ -23,7 +26,7 @@ pub(crate) async fn json_response(mut response: Response) -> Result<Value> {
     let mut bytes = Vec::new();
 
     while let Some(chunk) = response.chunk().await.map_err(|_| AuthError::Transport)? {
-        if bytes.len().saturating_add(chunk.len()) > 65_536 {
+        if bytes.len().saturating_add(chunk.len()) > MAX_TOKEN_RESPONSE_BYTES {
             return Err(AuthError::InvalidToken);
         }
         bytes.extend_from_slice(&chunk);

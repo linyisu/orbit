@@ -8,6 +8,38 @@ use url::Url;
 
 use crate::{AuthError, CallbackFlow, Result};
 
+const MAX_AUTHORIZATION_CODE_BYTES: usize = 4096;
+const MAX_CALLBACK_HEADER_BYTES: usize = 8 * 1024;
+const CALLBACK_IO_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Validate the redirect and state before accepting either a code or denial.
+pub(crate) fn authorization_code(callback: &str, redirect: &Url, state: &str) -> Result<String> {
+    let url = Url::parse(callback).map_err(|_| AuthError::InvalidCallback)?;
+    if url.origin() != redirect.origin()
+        || url.path() != redirect.path()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AuthError::InvalidCallback);
+    }
+    let pairs: Vec<_> = url.query_pairs().collect();
+    let states: Vec<_> = pairs.iter().filter(|(key, _)| key == "state").collect();
+    if states.len() != 1 || states[0].1 != state {
+        return Err(AuthError::InvalidCallback);
+    }
+    if pairs.iter().any(|(key, _)| key == "error") {
+        return Err(AuthError::Denied);
+    }
+    let codes: Vec<_> = pairs.iter().filter(|(key, _)| key == "code").collect();
+    if codes.len() != 1 || codes[0].1.is_empty() || codes[0].1.len() > MAX_AUTHORIZATION_CODE_BYTES
+    {
+        return Err(AuthError::InvalidCallback);
+    }
+
+    Ok(codes[0].1.to_string())
+}
+
 /// A loopback-only listener. The host owns browser launching and cancellation.
 pub struct CallbackListener {
     listener: TcpListener,
@@ -65,7 +97,7 @@ impl CallbackListener {
             let (mut stream, _) = self.listener.accept().await?;
             let read = async {
                 let mut bytes = Vec::new();
-                while bytes.len() < 8192 {
+                while bytes.len() < MAX_CALLBACK_HEADER_BYTES {
                     let byte = stream.read_u8().await?;
                     bytes.push(byte);
                     if bytes.ends_with(b"\r\n\r\n") {
@@ -74,7 +106,7 @@ impl CallbackListener {
                 }
                 Err(std::io::Error::other("callback headers too large"))
             };
-            let Ok(Ok(bytes)) = tokio::time::timeout(Duration::from_secs(2), read).await else {
+            let Ok(Ok(bytes)) = tokio::time::timeout(CALLBACK_IO_TIMEOUT, read).await else {
                 continue;
             };
             let request = String::from_utf8_lossy(&bytes);
@@ -101,11 +133,9 @@ impl CallbackListener {
                 "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
             );
-            let _ = tokio::time::timeout(
-                Duration::from_secs(2),
-                stream.write_all(response.as_bytes()),
-            )
-            .await;
+            let _ =
+                tokio::time::timeout(CALLBACK_IO_TIMEOUT, stream.write_all(response.as_bytes()))
+                    .await;
 
             match result {
                 Ok(_) => return Ok(callback),
