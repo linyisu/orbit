@@ -167,7 +167,7 @@ impl Theme {
             md_bold: Color::Rgb(255, 215, 140),
             md_italic: Color::Rgb(185, 175, 225),
             md_bold_italic: Color::Rgb(255, 185, 205),
-            md_strikethrough: Color::Rgb(210, 155, 160),
+            md_strikethrough: Color::Rgb(170, 190, 150),
             md_mark: Color::Rgb(255, 195, 110),
             md_inline_code: Color::Rgb(145, 220, 225),
             md_quote_rail: Color::Rgb(120, 175, 235),
