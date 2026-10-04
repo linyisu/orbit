@@ -33,6 +33,7 @@ pub(super) use flow::requests;
 pub(super) use preview::Preview;
 
 const MAX_ENTRIES: usize = 48;
+const WORKER_QUEUE_CAPACITY: usize = 32;
 const MAX_CACHE_BYTES: usize = 96 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -202,8 +203,8 @@ impl Context {
     }
 
     fn new(picker: Picker) -> Self {
-        let (local_send, local_receive) = mpsc::sync_channel::<Key>(32);
-        let (remote_send, remote_receive) = mpsc::sync_channel::<Key>(32);
+        let (local_send, local_receive) = mpsc::sync_channel::<Key>(WORKER_QUEUE_CAPACITY);
+        let (remote_send, remote_receive) = mpsc::sync_channel::<Key>(WORKER_QUEUE_CAPACITY);
         let shared = Arc::new(Shared {
             picker,
             cache: Mutex::new(HashMap::new()),
