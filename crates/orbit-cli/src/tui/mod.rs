@@ -2,6 +2,7 @@ pub mod app;
 mod approval;
 mod approval_diff;
 mod background;
+mod btw;
 mod changes;
 mod code;
 pub mod commands;
@@ -544,6 +545,19 @@ pub async fn run(
                         continue;
                     }
 
+                    if state.btw.visible() {
+                        match state.btw.handle(&event)? {
+                            transcript_dialog::Action::None => {},
+                            transcript_dialog::Action::Close | transcript_dialog::Action::Redraw => dirty = true,
+                            transcript_dialog::Action::Link(url) => {
+                                if let Err(error) = open_link_in_browser(&url) { state.btw.link_error(&error); }
+                                dirty = true;
+                            }
+                        }
+                        if dirty { frames.request(time::Instant::now()); }
+                        continue;
+                    }
+
                     if let Some(viewer) = &mut state.subagent_dialog {
                         let action = viewer.handle(&event)?;
                         match action {
@@ -937,6 +951,16 @@ pub async fn run(
                         }
 
                         Action::Submit(prompt) => {
+                            if let Some(question) = btw::question(&prompt) {
+                                state.selection.clear();
+                                state.input_dragging = false;
+                                state.cursor_motion.clear();
+                                if let Err(error) = state.btw.ask(&session.store, session.id(), &model, &history, question, state.max_output_tokens).await {
+                                    state.info_dialog = Some(dialogs::InfoDialog::new("旁路提问", error.to_string()));
+                                }
+                                continue;
+                            }
+
                             if prompt.trim() == "/new" {
                                 state.new_tab_request = true;
                                 continue;
@@ -1505,6 +1529,8 @@ pub async fn run(
 
                     let direction = state.selection.auto_scroll(std::time::Instant::now());
                     if let Some(viewer) = &mut state.subagent_dialog { dirty |= viewer.tick(); }
+                    dirty |= state.btw.tick();
+                    dirty |= tabs.poll_side_questions();
 
                     if direction != 0 {
                         if direction < 0 { state.scroll_up(2); } else { state.scroll_down(2); }

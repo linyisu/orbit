@@ -848,7 +848,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     }
 
     state.selection.clear();
-    let area = if state.subagent_dialog.is_some() {
+    let area = if state.btw.visible() || state.subagent_dialog.is_some() {
         transcript_area(frame.area())
     } else {
         centered_area(frame.area())
@@ -869,6 +869,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         .border_style(Style::default().fg(crate::tui::theme::THEME.accent));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if state.btw.visible() {
+        state.ime_cursor = None;
+        state.btw.draw(frame, area, inner);
+        return;
+    }
     if let Some(viewer) = &mut state.subagent_dialog {
         state.ime_cursor = None;
         viewer.draw(frame, area, inner);

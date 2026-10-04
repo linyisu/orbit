@@ -112,6 +112,12 @@ impl Tabs {
         changed
     }
 
+    pub fn poll_side_questions(&mut self) -> bool {
+        self.parked
+            .values_mut()
+            .fold(false, |changed, tab| tab.state.btw.poll() | changed)
+    }
+
     pub fn has_drafts(&self) -> bool {
         self.parked
             .values()
@@ -129,6 +135,7 @@ impl Tabs {
 
     pub fn empty_tab(&self, session: &SessionState, state: &UiState) -> Option<String> {
         (session.active_run_id().is_none()
+            && !state.btw.has_records()
             && session.snapshot.runs.is_empty()
             && session
                 .snapshot
@@ -233,7 +240,14 @@ impl Tabs {
         let closed: Vec<_> = self
             .parked
             .keys()
-            .filter(|id| !self.order.contains(id) && !runs.get(*id).is_some_and(|run| run.busy()))
+            .filter(|id| {
+                !self.order.contains(id)
+                    && !runs.get(*id).is_some_and(|run| run.busy())
+                    && !self
+                        .parked
+                        .get(*id)
+                        .is_some_and(|tab| tab.state.btw.running())
+            })
             .cloned()
             .collect();
         for id in &closed {

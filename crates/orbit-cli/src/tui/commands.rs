@@ -57,6 +57,10 @@ pub const COMMANDS: &[Command] = &[
         description: "查看上下文估算和预算",
     },
     Command {
+        name: "/btw",
+        description: "独立询问当前上下文；不打断主任务，再次输入可查看记录",
+    },
+    Command {
         name: "/skills",
         description: "查看已发现的 Skills",
     },
@@ -127,14 +131,13 @@ pub fn matching(input: &str) -> Vec<&'static Command> {
     })
 }
 
-/// These commands only inspect or adjust local UI state. They may run while an
-/// agent request is streaming and never alter that in-flight request, its
-/// history, or tool execution. `/model` persists the profile for the next request;
-/// `/resume` and `/sessions` navigate without stopping the current task.
+/// Available during a main run. Profile changes affect the next request;
+/// `/btw` makes an isolated request and never enters the main history.
 pub fn available_while_running(name: &str) -> bool {
     matches!(
         name,
-        "/status"
+        "/btw"
+            | "/status"
             | "/diagnostics"
             | "/model"
             | "/reasoning"
