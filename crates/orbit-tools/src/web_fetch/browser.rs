@@ -6,10 +6,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Url, header};
 use serde_json::{Value, json};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::Command,
-};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
 use super::{MAX_BODY, ToolError, checked_url, failed};
@@ -56,20 +53,11 @@ pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolErr
     file.flush().await.map_err(failed)?;
     drop(file);
 
-    let mut child = Command::new("/usr/bin/firefox")
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("HOME", profile.path())
-        .env("XDG_CONFIG_HOME", profile.path())
-        .env("XDG_CACHE_HOME", profile.path())
-        .env("LANG", "C.UTF-8")
+    let mut child = orbit_runtime::execution::sandbox::browser_reader_command(profile.path())
+        .map_err(failed)?
         .args(["--headless", "--no-remote", "--profile"])
-        .arg(profile.path())
+        .arg("/orbit-browser")
         .args(["--remote-debugging-port", "0"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
         .spawn()
         .map_err(|error| {
             failed(format!(

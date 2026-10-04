@@ -623,6 +623,56 @@ fn configure_isolation(command: &mut Command, network: NetworkPolicy) {
     }
 }
 
+/// A browser reader gets system libraries and one disposable profile, never the workspace or host home.
+pub fn browser_reader_command(profile: &Path) -> Result<Command, RuntimeError> {
+    let mut command = Command::new("/usr/bin/bwrap");
+    command
+        .env_clear()
+        .arg("--clearenv")
+        .stdin(Stdio::from(seccomp_filter()?))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    configure_isolation(&mut command, NetworkPolicy::Allow);
+    mount_system_paths(&mut command, NetworkPolicy::Allow);
+    command
+        .arg("--bind")
+        .arg(profile)
+        .arg("/orbit-browser")
+        .args([
+            "--size",
+            &TMP_SIZE_BYTES.to_string(),
+            "--tmpfs",
+            "/tmp",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+        ])
+        .args([
+            "--setenv",
+            "PATH",
+            "/usr/bin:/bin",
+            "--setenv",
+            "HOME",
+            "/orbit-browser",
+            "--setenv",
+            "XDG_CONFIG_HOME",
+            "/orbit-browser",
+            "--setenv",
+            "XDG_CACHE_HOME",
+            "/orbit-browser",
+            "--setenv",
+            "LANG",
+            "C.UTF-8",
+            "--chdir",
+            "/orbit-browser",
+            "--",
+            "/usr/bin/firefox",
+        ]);
+    Ok(command)
+}
+
 fn seccomp_filter() -> Result<std::fs::File, RuntimeError> {
     let blocked = [
         libc::SYS_ptrace,
@@ -2666,6 +2716,60 @@ mod tests {
         assert!(dir.path().join(".git/HEAD").exists());
     }
 
+    #[test]
+    fn browser_reader_mounts_only_system_files_and_a_disposable_profile() {
+        let profile = tempfile::tempdir().unwrap();
+        let command = browser_reader_command(profile.path()).unwrap();
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--unshare-pid".into()));
+        assert!(args.contains(&"--die-with-parent".into()));
+        assert!(
+            args.windows(3)
+                .any(|part| part == ["--bind", profile.path().to_str().unwrap(), "/orbit-browser"])
+        );
+        assert!(!args.iter().any(|arg| arg == "/workspace" || arg == "/home"));
+        assert!(args.windows(2).any(|part| part == ["--seccomp", "0"]));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Firefox and Bubblewrap on the host"]
+    async fn isolated_firefox_starts_its_debugger_and_can_be_reaped() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let profile = tempfile::tempdir().unwrap();
+        let mut child = browser_reader_command(profile.path())
+            .unwrap()
+            .args([
+                "--headless",
+                "--no-remote",
+                "--profile",
+                "/orbit-browser",
+                "--remote-debugging-port",
+                "0",
+            ])
+            .spawn()
+            .unwrap();
+        let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
+        let mut diagnostic = String::new();
+        let ready = tokio::time::timeout(Duration::from_secs(20), async {
+            while let Some(line) = lines.next_line().await.unwrap() {
+                if line.starts_with("WebDriver BiDi listening on ws://") {
+                    return true;
+                }
+                diagnostic.push_str(&line);
+                diagnostic.push('\n');
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+        let _ = child.kill().await;
+        child.wait().await.unwrap();
+        assert!(ready, "Firefox failed to start in isolation: {diagnostic}");
+    }
 
     #[tokio::test]
     async fn capture_keeps_bounded_unicode_tail_and_counts_all_output() {

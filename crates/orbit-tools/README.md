@@ -1,6 +1,6 @@
 # orbit-tools
 
-`orbit-tools` 是 Orbit 的工具集与执行适配库，为 AI Agent 提供一组完备、安全且受限的操作工具。`run_command` 在容器内执行；内置文件工具在宿主进程中使用受保护文件描述符访问。文档转换在独立离线沙箱进程中执行；图片处理和网页请求在宿主侧执行，MCP 服务及网页回退浏览器是独立宿主进程，不能视为具有相同的容器隔离。
+`orbit-tools` 是 Orbit 的工具集与执行适配库，为 AI Agent 提供一组完备、安全且受限的操作工具。`run_command` 在容器内执行；内置文件工具在宿主进程中使用受保护文件描述符访问。文档转换在独立离线沙箱进程中执行；图片处理和网页请求在宿主侧执行，MCP 服务是独立宿主进程；网页回退 Firefox 使用独立 Bubblewrap 命名空间、Seccomp 和临时 profile，不挂载工作区或宿主 HOME。
 
 ## 架构与核心设计
 
@@ -125,7 +125,7 @@
 - **功能**：直接获取公网已知 URL 的网页正文并转为结构化 Markdown。
 - **约束与安全**：
   - 仅开放公网 80/443 端口，严格防范 SSRF，严禁访问内网及保留地址。
-  - 支持 HTTP(S) 可信代理配置（`[web].proxy`）；当遇到 Cloudflare 浏览器挑战且配置了代理时，可使用独立临时 profile 的宿主无头 Firefox 提取正文；这不是 `run_command` 的 Bubblewrap 隔离。
+  - 支持 HTTP(S) 可信代理配置（`[web].proxy`）；当遇到 Cloudflare 浏览器挑战且配置了代理时，可使用独立 Bubblewrap 沙箱中的无头 Firefox 提取正文，仅挂载系统文件与临时 profile，进程退出/取消时 PID 命名空间一并清理。
   - 单次响应体上限 2 MiB，总超时 60 秒，最多 5 次重定向；按 Unicode 字符分页。
 
 #### `web_search`
