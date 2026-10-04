@@ -12,3 +12,5 @@ pub mod types;
 pub mod tui_windows;
 
 pub mod subagents;
+
+pub mod side_questions;

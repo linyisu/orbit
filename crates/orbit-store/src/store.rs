@@ -56,7 +56,7 @@ impl Store {
             connection.execute_batch("BEGIN IMMEDIATE;")?;
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             ensure!(
-                version <= 21,
+                version <= 22,
                 "database schema {version} is newer than this Orbit supports"
             );
 
@@ -354,6 +354,7 @@ impl Store {
             }
 
             if version < 21 { crate::subagents::migrate(&connection)?; }
+            if version < 22 { crate::side_questions::migrate(&connection)?; }
             connection.execute_batch("COMMIT;")?;
 
             Ok(Self {
@@ -447,6 +448,7 @@ impl Store {
                     + COALESCE((SELECT sum(length(CAST(m.content AS BLOB))) FROM session_memories m WHERE m.session_id=s.id),0)
                     + COALESCE((SELECT length(CAST(b.payload AS BLOB)) FROM session_git_baselines b WHERE b.session_id=s.id),0)
                     + COALESCE((SELECT length(CAST(b.payload AS BLOB)) FROM session_workspace_baselines b WHERE b.session_id=s.id),0)
+                    + COALESCE((SELECT sum(length(CAST(q.payload AS BLOB))) FROM side_questions q WHERE q.session_id=s.id),0)
                  FROM sessions s ORDER BY 3 DESC,s.id",
             )?;
 

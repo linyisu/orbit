@@ -27,6 +27,7 @@ orbit.db
 ├── agent_sessions            # 父子会话关系及只读角色
 ├── agent_invocations         # 子任务调用、持久结果与投递确认
 ├── agent_messages            # 子任务补充消息与接收确认
+├── side_questions            # 独立的旁路提问与回答，不进入主会话上下文
 ├── execution_checkpoints     # 工具调用执行检查点 (用于故障中断识别)
 └── tui_windows               # 活跃 TUI 窗口注册与跨会话恢复快照
 ```
@@ -108,3 +109,5 @@ orbit sessions compactions <SESSION_ID>
 # 运行 orbit-store 单元与集成测试（使用内存/临时 SQLite 验证事务与锁）
 cargo test -p orbit-store --offline
 ```
+
+旁路提问使用独立的 `side_questions` 表，保存已结束的问题、回答和状态，不追加到主会话的消息日志或模型历史。当前旁路上下文通过只读事务读取原始执行检查点与流式事件，不获取写入租约，不触发中断恢复。删除会话时旁路记录随之删除。
