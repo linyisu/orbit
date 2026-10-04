@@ -126,7 +126,9 @@ impl Store {
         let id = id.to_owned();
         self.access(move |conn| {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let run: i64 = tx.query_row("SELECT id FROM runs WHERE session_id=?1 AND status='running' ORDER BY id DESC LIMIT 1", [&parent], |r|r.get(0)).context("parent agent has no active run")?;
+            // A direct user follow-up can resume a child after the parent has finished.
+            // Retain its originating run without inventing a new parent execution.
+            let run: i64 = tx.query_row("SELECT id FROM runs WHERE session_id=?1 ORDER BY id DESC LIMIT 1", [&parent], |r|r.get(0)).context("parent agent has no originating run")?;
             tx.execute("INSERT INTO agent_invocations(parent_session_id,parent_run_id,child_session_id,call) VALUES(?1,?2,?3,?4)",params![parent,run,id,serde_json::to_string(&call)?])?;
             let invocation = tx.last_insert_rowid();
             tx.commit()?;

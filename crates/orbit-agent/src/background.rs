@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     future::Future,
     panic::AssertUnwindSafe,
     sync::{
@@ -63,6 +63,7 @@ struct State {
     outputs: HashMap<String, String>,
     generation: u64,
     active: bool,
+    notices: VecDeque<(String, String)>,
 }
 
 struct Inner {
@@ -152,6 +153,7 @@ impl Drop for RunGuard {
             }
         }
         state.active = false;
+        state.notices.clear();
         self.jobs.0.changed.notify_waiters();
     }
 }
@@ -165,6 +167,38 @@ pub(crate) struct Completion {
 }
 
 impl BackgroundJobs {
+    /// An advisory wakes a waiting parent without finishing or cancelling the job.
+    pub fn notify_progress(&self, content: String) {
+        let mut state = self.0.state.lock().expect("background jobs lock poisoned");
+        if state.notices.len() < MAX_RETAINED_JOBS {
+            state
+                .notices
+                .push_back((next_id(), bounded(&content, 8192)));
+        }
+        drop(state);
+        self.0.changed.notify_waiters();
+    }
+
+    pub(crate) fn notices(&self) -> Vec<(String, String)> {
+        self.0
+            .state
+            .lock()
+            .expect("background jobs lock poisoned")
+            .notices
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn acknowledge_notice(&self, id: &str) {
+        self.0
+            .state
+            .lock()
+            .expect("background jobs lock poisoned")
+            .notices
+            .retain(|(key, _)| key != id);
+    }
+
     pub fn with_capacity(capacity: usize) -> Result<Self, ToolError> {
         if !(1..=MAX_RETAINED_JOBS).contains(&capacity) {
             return Err(ToolError::ExecutionFailed(
@@ -223,6 +257,10 @@ impl BackgroundJobs {
         }
         state.generation += 1;
         state.active = true;
+        let generation = state.generation;
+        for job in state.jobs.values_mut().filter(|job| !job.delivered) {
+            job.generation = generation;
+        }
         state.outputs.clear();
         Ok(RunGuard {
             jobs: self.clone(),
@@ -398,7 +436,11 @@ impl BackgroundJobs {
                     .iter()
                     .filter(|id| state.jobs.get(*id).is_some_and(|job| job.result.is_some()))
                     .count();
-                if ids.is_empty() || (all && ready == ids.len()) || (!all && ready > 0) {
+                if ids.is_empty()
+                    || (all && ready == ids.len())
+                    || (!all && ready > 0)
+                    || !state.notices.is_empty()
+                {
                     let mut snapshots = Vec::new();
                     for id in &ids {
                         let job = state.jobs.get_mut(id).ok_or_else(|| unknown(id))?;
@@ -446,10 +488,11 @@ impl BackgroundJobs {
             }
             {
                 let state = self.0.state.lock().expect("background jobs lock poisoned");
-                if !state
-                    .jobs
-                    .values()
-                    .any(|job| job.generation == state.generation && !job.delivered)
+                if !state.notices.is_empty()
+                    || !state
+                        .jobs
+                        .values()
+                        .any(|job| job.generation == state.generation && !job.delivered)
                     || state.jobs.values().any(|job| {
                         job.generation == state.generation && !job.delivered && job.result.is_some()
                     })

@@ -406,7 +406,7 @@ async fn eight_children_overlap_while_parent_works_and_waits_without_polling() {
 async fn running_input_and_finished_continuation_keep_identity_and_canonical_history() {
     let dir = tempfile::tempdir().unwrap();
     let model = GatedModel::new();
-    let (service, _parent) = fixture(dir.path(), model.clone(), Default::default()).await;
+    let (service, mut parent) = fixture(dir.path(), model.clone(), Default::default()).await;
     let receipt = spawn(&service, "orbit-explore", CancellationToken::new()).await;
     let id = receipt["agent_id"].as_str().unwrap();
     let job = receipt["job_id"].as_str().unwrap().to_owned();
@@ -445,6 +445,15 @@ async fn running_input_and_finished_continuation_keep_identity_and_canonical_his
             .unwrap()
             .is_empty()
     );
+    parent
+        .finish(
+            "completed",
+            Vec::new(),
+            Some(vec![ChatMessage::user("private parent context")]),
+        )
+        .await
+        .unwrap();
+    let parent_before = service.store.load(parent.id()).await.unwrap();
     let args = json!({"agent_id":id,"message":"再次核对 Orbit"});
     let call = ToolCall::function("continue", "send_agent_message", args.clone());
     let receipt: Value = serde_json::from_str(
@@ -467,6 +476,10 @@ async fn running_input_and_finished_continuation_keep_identity_and_canonical_his
         )
         .await
         .unwrap();
+    let parent_after = service.store.load(parent.id()).await.unwrap();
+    assert_eq!(parent_after.runs.len(), parent_before.runs.len());
+    assert_eq!(parent_after.history, parent_before.history);
+    assert_eq!(parent_after.runs.last().unwrap().status, "completed");
     let (_, messages) = service
         .store
         .canonical_messages(id, None, 100)
@@ -730,6 +743,19 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
 #[test]
 fn validates_subagent_limits_and_defaults_to_eight() {
     assert_eq!(SubagentConfig::default().max_concurrent, 8);
+    assert_eq!(SubagentConfig::default().max_turns, 0);
+    for limit in [0, 60, 300, 1000] {
+        assert!(
+            SubagentConfig {
+                max_turns: limit,
+                max_tool_calls: limit,
+                timeout_seconds: 0,
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+    }
     for limit in [1, 8, 32, 128] {
         assert!(
             SubagentConfig {
@@ -752,10 +778,86 @@ fn validates_subagent_limits_and_defaults_to_eight() {
     }
     assert!(
         SubagentConfig {
-            timeout_seconds: 0,
+            timeout_seconds: 86401,
             ..Default::default()
         }
         .validate()
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn progress_deadline_wakes_parent_without_terminating_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let child_model = GatedModel::new();
+    let (service, _parent) = fixture(
+        dir.path(),
+        child_model.clone(),
+        SubagentConfig {
+            timeout_seconds: 1,
+            ..Default::default()
+        },
+    )
+    .await;
+    let receipt = spawn(&service, "orbit-progress", CancellationToken::new()).await;
+    child_model.received(1).await;
+    let agent = service
+        .store
+        .owned_subagent(&service.parent, receipt["agent_id"].as_str().unwrap())
+        .await
+        .unwrap();
+    let reminder = service
+        .progress_reminder(
+            &agent,
+            receipt["run_id"].as_i64().unwrap(),
+            Duration::from_secs(1),
+        )
+        .await;
+    assert_eq!(reminder["status"], "running");
+    assert!(
+        reminder["latest_activity"]["message_preview"]
+            .as_str()
+            .unwrap()
+            .contains("inspect orbit-progress")
+    );
+    let activity = read(&service, reminder["inspect"].clone()).await.unwrap();
+    assert_eq!(
+        activity["message_id"],
+        reminder["latest_activity"]["message_id"]
+    );
+    assert!(
+        activity["content"]
+            .as_str()
+            .unwrap()
+            .contains("inspect orbit-progress")
+    );
+    let waiting = tokio::time::timeout(
+        Duration::from_secs(5),
+        service.jobs.wait(&[], true, CancellationToken::new()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(waiting[0].status, JobStatus::Running);
+    assert_eq!(
+        service
+            .store
+            .session_revision(receipt["agent_id"].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "running"
+    );
+    child_model.gate.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if service.jobs.snapshots(&[], true).unwrap()[0].status == JobStatus::Completed {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 }

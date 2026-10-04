@@ -1,7 +1,7 @@
 # 默认供应商（对应下方 [providers.<名称>]）
 default_provider = "deepseek"
 
-# 可选：任务轮数与工具调用上限（默认 300 轮、2000 次工具调用；设为 0 表示不限制）
+# 可选：任务轮数与工具调用上限（默认不限轮数、2000 次工具调用；设为 0 表示不限制）
 # max_turns = 0
 # max_tool_calls = 0
 
@@ -12,9 +12,9 @@ default_provider = "deepseek"
 # 子 Agent 独立运行，只提供探索和审查两个只读角色。
 [subagents]
 max_concurrent = 8 # 同一父会话的并行上限，可设为 1..128
-max_turns = 60
-max_tool_calls = 400
-timeout_seconds = 1800
+max_turns = 0 # 不限制轮数
+max_tool_calls = 2000 # 0 表示不限
+timeout_seconds = 1800 # 进度提醒间隔；提醒父代理先查看或沟通，再决定继续/终止，0 关闭提醒
 # enabled = false
 # explore_model = "deepseek::deepseek-chat" # 不设置时继承父模型与思考档位
 # review_model = "openai::gpt-5.6-sol"

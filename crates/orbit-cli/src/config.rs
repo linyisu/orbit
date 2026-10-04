@@ -144,7 +144,7 @@ fn default_context_tokens() -> usize {
 }
 
 fn default_max_turns() -> usize {
-    300
+    0
 }
 
 fn default_max_tool_calls() -> usize {

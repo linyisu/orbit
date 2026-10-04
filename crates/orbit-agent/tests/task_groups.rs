@@ -136,3 +136,81 @@ async fn inbox_wakes_waiting_agent_and_cancellation_reaps_auxiliary_jobs() {
             .any(|m| matches!(m,ChatMessage::User{content,..} if content=="extra context"))
     );
 }
+
+#[tokio::test]
+async fn progress_reminders_wake_parent_and_idle_launched_children_join_the_next_run() {
+    let jobs = BackgroundJobs::default();
+    let release = Arc::new(Notify::new());
+    let child_release = release.clone();
+    let receipt = jobs
+        .start(
+            ToolCall::function("ui-followup", "send_agent_message", serde_json::json!({})),
+            "continued child".into(),
+            None,
+            CancellationToken::new(),
+            move |_| async move {
+                child_release.notified().await;
+                Ok(ToolOutput::text(
+                    "{\"agent_id\":\"orbit-child\",\"status\":\"completed\"}",
+                ))
+            },
+        )
+        .unwrap();
+    let mut tools = ToolRegistry::new();
+    tools.add_task_group(jobs.clone());
+    let wait_jobs = jobs.clone();
+    tools.register(orbit_agent::tool::ClosureTool::new(
+        "continue_child",
+        "",
+        serde_json::json!({}),
+        move |_, token| {
+            let jobs = wait_jobs.clone();
+            let release = release.clone();
+            let id = receipt.job_id.clone();
+            async move {
+                release.notify_one();
+                let results = jobs.wait(&[id], true, token).await?;
+                Ok::<_, orbit_agent::tool::ToolError>(serde_json::to_string(&results).unwrap())
+            }
+        },
+    ));
+    let mut communicate = response("");
+    communicate.message = ChatMessage::assistant_tool_calls(vec![ToolCall::function(
+        "progress-decision",
+        "continue_child",
+        serde_json::json!({}),
+    )]);
+    let model = MockModel::new([response("waiting"), communicate, response("complete")]);
+    let (sender, mut events) = tokio::sync::mpsc::channel(32);
+    let agent = Agent::new(model.clone(), tools, AgentConfig::default());
+    let run = tokio::spawn(async move {
+        agent
+            .run_with_agent_events(
+                ChatRequest::new(vec![ChatMessage::user("parent task")]),
+                CancellationToken::new(),
+                sender,
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(event) = events.recv().await {
+            if matches!(event, AgentEvent::WaitingForTasks { .. }) {
+                jobs.notify_progress("Orbit child needs a progress check".into());
+                return;
+            }
+        }
+        panic!("idle-launched child was not adopted");
+    })
+    .await
+    .unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(model.requests().len(), 3);
+    assert!(model.requests()[1].messages.iter().any(|message| matches!(message, ChatMessage::User{content,..} if content.contains("needs a progress check"))));
+    assert_eq!(result.history.iter().filter(|message| matches!(message, ChatMessage::User{content,..} if content.contains("needs a progress check"))).count(), 1);
+    assert!(result.history.iter().any(|message| matches!(message, ChatMessage::Tool{content,..} if content.contains("orbit-child") && content.contains("completed"))));
+    assert!(!result.history.iter().any(|message| matches!(message, ChatMessage::Tool{tool_call_id,..} if tool_call_id == "ui-followup")));
+}

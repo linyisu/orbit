@@ -12,11 +12,11 @@ pub enum AgentError {
     #[error("tool failed: {0}")]
     Tool(#[from] ToolError),
     #[error(
-        "agent reached the maximum number of turns (已达单次任务轮数上限；可在 config.toml 配置 max_turns = 0 取消限制，或发送“继续”)"
+        "已达配置的任务轮数上限；在 config.toml 将主代理的 max_turns 或 [subagents] 的 max_turns 设为 0 可取消限制，也可发送消息续跑"
     )]
     MaxTurns,
     #[error(
-        "agent reached the maximum number of tool calls (已达工具调用上限；可在 config.toml 配置 max_tool_calls = 0 取消限制)"
+        "已达配置的工具调用上限；在 config.toml 将主代理的 max_tool_calls 或 [subagents] 的 max_tool_calls 设为 0 可取消限制"
     )]
     MaxToolCalls,
     #[error(
