@@ -872,11 +872,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     if state.btw.visible() {
         state.ime_cursor = None;
         state.btw.draw(frame, area, inner);
+        state.ime_cursor = state.btw.cursor();
         return;
     }
     if let Some(viewer) = &mut state.subagent_dialog {
         state.ime_cursor = None;
         viewer.draw(frame, area, inner);
+        state.ime_cursor = viewer.cursor();
         return;
     }
     if let Some(dialog) = &mut state.info_dialog {

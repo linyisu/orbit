@@ -115,6 +115,7 @@ fn tool_less_requests_preserve_context_without_unresolved_protocol_calls() {
     let sent = request(
         history.clone(),
         &[],
+        &[],
         "什么原因？",
         Some(ReasoningEffort::High),
         4096,
@@ -334,17 +335,127 @@ async fn history_navigation_and_new_questions_do_not_import_other_side_answers()
     );
     assert_eq!(questions.dialog.as_ref().unwrap().index, 1);
     questions
-        .handle(&key(KeyCode::Left, KeyModifiers::NONE))
+        .handle(&key(KeyCode::Left, KeyModifiers::ALT))
         .unwrap();
     assert_eq!(questions.dialog.as_ref().unwrap().index, 0);
     assert!(
         matches!(&questions.dialog.as_ref().unwrap().view.ui.transcript[1], TranscriptItem::Assistant(text) if text == "第一个独立回答")
     );
     questions
-        .handle(&key(KeyCode::Right, KeyModifiers::NONE))
+        .handle(&key(KeyCode::Right, KeyModifiers::ALT))
         .unwrap();
     assert_eq!(questions.dialog.as_ref().unwrap().index, 1);
     assert!(store.load(writer.id()).await.unwrap().runs.is_empty());
+}
+
+#[tokio::test]
+async fn follow_ups_keep_their_thread_after_restart_and_leave_other_questions_independent() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
+    let writer = store
+        .create(dir.path().display().to_string(), "orbit-fast".into(), false)
+        .await
+        .unwrap();
+    let before = store.load(writer.id()).await.unwrap();
+    let backend = MockModel::new([
+        completion("Orbit 原回答"),
+        completion("Orbit 另一回答"),
+        completion("Orbit 追问回答"),
+    ]);
+    let mut questions = Questions::default();
+    for prompt in ["Orbit 原问题", "Orbit 另一问题"] {
+        questions
+            .ask_with_backend(
+                &store,
+                writer.id(),
+                &client(),
+                &[],
+                prompt,
+                4096,
+                Arc::new(backend.clone()),
+            )
+            .await
+            .unwrap();
+        settle(&mut questions).await;
+    }
+    let mut restored = Questions::default();
+    restored
+        .ask_with_backend(
+            &store,
+            writer.id(),
+            &client(),
+            &[],
+            "",
+            4096,
+            Arc::new(backend.clone()),
+        )
+        .await
+        .unwrap();
+    restored.open(0);
+    restored
+        .dialog
+        .as_mut()
+        .unwrap()
+        .view
+        .ui
+        .input
+        .set("再解释 Orbit".into());
+    assert!(
+        matches!(restored.handle(&key(KeyCode::Enter, KeyModifiers::NONE)).unwrap(), Action::Submit(text) if text == "再解释 Orbit")
+    );
+    restored
+        .start(
+            &store,
+            writer.id(),
+            &client(),
+            &[],
+            "再解释 Orbit",
+            4096,
+            Arc::new(backend.clone()),
+            Some(0),
+        )
+        .await
+        .unwrap();
+    settle(&mut restored).await;
+    assert_eq!(restored.thread_heads(), vec![2, 1]);
+    let sent = serde_json::to_string(&backend.requests()[2].messages).unwrap();
+    for expected in ["Orbit 原问题", "Orbit 原回答", "再解释 Orbit"] {
+        assert!(sent.contains(expected));
+    }
+    assert!(!sent.contains("Orbit 另一回答"));
+    assert!(
+        restored
+            .dialog
+            .as_ref()
+            .unwrap()
+            .view
+            .ui
+            .input
+            .text
+            .is_empty()
+    );
+    assert_eq!(
+        restored.dialog.as_ref().unwrap().view.ui.transcript.len(),
+        4
+    );
+    let after = store.load(writer.id()).await.unwrap();
+    assert_eq!(before.history, after.history);
+    assert!(after.runs.is_empty());
+    let mut again = Questions::default();
+    again
+        .ask_with_backend(
+            &store,
+            writer.id(),
+            &client(),
+            &[],
+            "",
+            4096,
+            Arc::new(backend),
+        )
+        .await
+        .unwrap();
+    assert_eq!(again.thread_heads(), vec![2, 1]);
+    assert_eq!(again.dialog.as_ref().unwrap().view.ui.transcript.len(), 4);
 }
 
 #[tokio::test]

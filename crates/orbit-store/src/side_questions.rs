@@ -8,6 +8,8 @@ use crate::store::Store;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SideQuestion {
+    #[serde(default)]
+    pub thread_id: String,
     pub model: String,
     pub question: String,
     pub answer: String,
@@ -30,6 +32,13 @@ pub(crate) fn migrate(conn: &rusqlite::Connection) -> Result<()> {
 }
 
 impl Store {
+    pub async fn new_side_question_thread(&self) -> Result<String> {
+        self.read_access(|conn| {
+            Ok(conn.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?)
+        })
+        .await
+    }
+
     pub async fn save_side_question(&self, session: &str, question: SideQuestion) -> Result<()> {
         ensure!(
             matches!(
@@ -57,11 +66,20 @@ impl Store {
     pub async fn side_questions(&self, session: &str) -> Result<Vec<SideQuestion>> {
         let session = session.to_owned();
         self.read_access(move |conn| {
-            let mut query =
-                conn.prepare("SELECT payload FROM side_questions WHERE session_id=?1 ORDER BY id")?;
+            let mut query = conn
+                .prepare("SELECT id,payload FROM side_questions WHERE session_id=?1 ORDER BY id")?;
             query
-                .query_map([session], |r| r.get::<_, String>(0))?
-                .map(|row| Ok(serde_json::from_str(&row?)?))
+                .query_map([session], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?
+                .map(|row| {
+                    let (id, payload) = row?;
+                    let mut record: SideQuestion = serde_json::from_str(&payload)?;
+                    if record.thread_id.is_empty() {
+                        record.thread_id = format!("legacy-{id}");
+                    }
+                    Ok(record)
+                })
                 .collect()
         })
         .await

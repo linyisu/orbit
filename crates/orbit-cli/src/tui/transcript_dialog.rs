@@ -1,12 +1,14 @@
 use std::time::Instant;
 
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::Line,
-    widgets::Paragraph,
+    widgets::{Block, Borders, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -22,6 +24,7 @@ pub(super) enum Action {
     Redraw,
     Close,
     Link(String),
+    Submit(String),
 }
 
 #[derive(Debug)]
@@ -32,6 +35,10 @@ pub(super) struct TranscriptDialog {
     close_hover: Option<Instant>,
     close_hover_tick: u128,
     close_pressed: bool,
+    input_enabled: bool,
+    input_focus: bool,
+    submit_blocked: bool,
+    input_message: Option<String>,
 }
 
 impl TranscriptDialog {
@@ -45,7 +52,31 @@ impl TranscriptDialog {
             close_hover: None,
             close_hover_tick: 0,
             close_pressed: false,
+            input_enabled: false,
+            input_focus: true,
+            submit_blocked: false,
+            input_message: None,
         }
+    }
+
+    pub fn enable_input(&mut self) {
+        self.input_enabled = true;
+    }
+
+    pub fn block_submission(&mut self, blocked: bool) {
+        self.submit_blocked = blocked;
+    }
+
+    pub fn submitted(&mut self) {
+        self.ui.input.take();
+        self.ui.selection.clear();
+        self.ui.follow_bottom = true;
+        self.ui.scroll = 0;
+        self.input_message = None;
+    }
+
+    pub fn submit_error(&mut self, error: impl ToString) {
+        self.input_message = Some(error.to_string());
     }
 
     pub fn tick(&mut self) -> bool {
@@ -127,11 +158,20 @@ impl TranscriptDialog {
                 },
             );
         }
+        self.ui.ime_cursor = None;
+        self.ui.input_area = Rect::default();
+        self.ui.input_width = usize::from(header.width.saturating_sub(2));
+        let (lines, cursor) = self.ui.input.visual_lines(self.ui.input_width);
+        let composer_height = if self.input_enabled && inner.height >= 7 {
+            (lines.len().clamp(1, 4) as u16 + 2).min(inner.height.saturating_sub(4))
+        } else {
+            0
+        };
         let body = Rect::new(
             header.x,
             header.bottom().saturating_add(1).min(inner.bottom()),
             header.width,
-            inner.height.saturating_sub(3),
+            inner.height.saturating_sub(3 + composer_height),
         );
         if let Some(error) = error {
             frame.render_widget(
@@ -145,12 +185,127 @@ impl TranscriptDialog {
             super::render::draw_transcript_in(frame, &mut self.ui, body, false);
             self.ui.selection.paint(frame);
         }
+        if composer_height > 0 {
+            let composer = Rect::new(
+                header.x,
+                inner.bottom() - composer_height,
+                header.width,
+                composer_height,
+            );
+            let block = Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(THEME.accent));
+            let prompt = block.inner(composer);
+            frame.render_widget(block, composer);
+            super::render::draw_prompt(
+                frame,
+                &mut self.ui,
+                Rect {
+                    height: prompt.height.saturating_sub(1),
+                    ..prompt
+                },
+                lines,
+                cursor,
+            );
+            let hint = self
+                .input_message
+                .as_deref()
+                .unwrap_or(if self.submit_blocked {
+                    "生成中，可先输入下一条追问"
+                } else {
+                    "继续追问"
+                });
+            frame.render_widget(
+                Paragraph::new(fit_label(&safe_output(hint), prompt.width as usize, false)).style(
+                    Style::default().fg(if self.input_message.is_some() {
+                        THEME.tool_failed
+                    } else {
+                        THEME.tool_detail
+                    }),
+                ),
+                Rect::new(
+                    prompt.x + 2,
+                    prompt.bottom() - 1,
+                    prompt.width.saturating_sub(2),
+                    1,
+                ),
+            );
+            if !self.input_focus {
+                self.ui.ime_cursor = None;
+            }
+        }
     }
 
     pub fn handle(&mut self, event: &Event) -> std::io::Result<Action> {
+        if self.input_enabled {
+            if let Event::Key(key) = event
+                && key.kind != KeyEventKind::Release
+                && key.code == KeyCode::Char('c')
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && let Some(text) = self.ui.input.selected_text()
+            {
+                super::selection::copy_text(text)?;
+                return Ok(Action::Redraw);
+            }
+            if super::handle_input_mouse(&mut self.ui, event) {
+                self.input_focus = true;
+                return Ok(Action::Redraw);
+            }
+            if let Event::Mouse(mouse) = event
+                && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && self
+                    .ui
+                    .selection
+                    .viewport
+                    .contains((mouse.column, mouse.row).into())
+            {
+                self.input_focus = false;
+            }
+            if let Event::Key(key) = event
+                && key.kind != KeyEventKind::Release
+            {
+                if key.code == KeyCode::Tab {
+                    self.input_focus = !self.input_focus;
+                    return Ok(Action::Redraw);
+                }
+                if key.code == KeyCode::Enter && key.modifiers.is_empty() {
+                    return Ok(
+                        if !self.submit_blocked && !self.ui.input.text.trim().is_empty() {
+                            Action::Submit(self.ui.input.text.clone())
+                        } else {
+                            Action::Redraw
+                        },
+                    );
+                }
+                if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
+                        Ok(text) => {
+                            self.ui.input.insert(&text);
+                            self.input_focus = true;
+                        }
+                        Err(error) => self.submit_error(error),
+                    }
+                    return Ok(Action::Redraw);
+                }
+            }
+            let text_input = matches!(
+                event,
+                Event::Paste(_)
+                    | Event::Key(KeyEvent {
+                        code: KeyCode::Char(_),
+                        ..
+                    })
+            );
+            if (self.input_focus || text_input) && self.ui.input.edit(event, self.ui.input_width) {
+                self.input_focus = true;
+                self.ui.selection.clear();
+                self.input_message = None;
+                return Ok(Action::Redraw);
+            }
+        }
         if let Event::Key(key) = event
             && key.kind != KeyEventKind::Release
-            && (matches!(key.code, KeyCode::Esc | KeyCode::Enter)
+            && ((key.code == KeyCode::Esc || (!self.input_enabled && key.code == KeyCode::Enter))
                 || (key.code == KeyCode::Char('c')
                     && key.modifiers.contains(KeyModifiers::CONTROL)
                     && !self.ui.selection.active()))
@@ -352,5 +507,33 @@ mod tests {
                 assert_eq!(view.close_area.intersection(view.area), view.close_area);
             }
         }
+    }
+
+    #[test]
+    fn follow_up_composer_preserves_unicode_drafts_until_submission_succeeds() {
+        let mut view = TranscriptDialog::new("orbit-model");
+        view.enable_input();
+        for (width, height) in [(180, 50), (80, 35), (40, 18), (10, 8), (1, 1)] {
+            render(&mut view, width, height);
+            if let Some(cursor) = view.ui.ime_cursor {
+                assert!(view.ui.input_area.contains(cursor));
+            }
+        }
+        render(&mut view, 100, 30);
+        assert!(view.ui.ime_cursor.is_some());
+        view.handle(&Event::Paste("Orbit 中文🦀\n后续问题".into()))
+            .unwrap();
+        view.block_submission(true);
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(view.handle(&enter).unwrap(), Action::Redraw));
+        view.block_submission(false);
+        assert!(
+            matches!(view.handle(&enter).unwrap(), Action::Submit(text) if text == "Orbit 中文🦀\n后续问题")
+        );
+        view.submit_error("Orbit 请求未发送");
+        assert_eq!(view.ui.input.text, "Orbit 中文🦀\n后续问题");
+        view.submitted();
+        assert!(view.ui.input.text.is_empty());
+        assert!(view.input_message.is_none());
     }
 }

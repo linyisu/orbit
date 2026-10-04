@@ -30,6 +30,7 @@ async fn side_records_survive_restart_are_session_scoped_and_do_not_change_main_
             .save_side_question(
                 &id,
                 SideQuestion {
+                    thread_id: String::new(),
                     model: "orbit-fast".into(),
                     question: format!("Orbit {status}?"),
                     answer: "独立回答".into(),
@@ -197,4 +198,39 @@ async fn context_handles_the_gap_before_checkpoint_and_failed_partial_answers() 
     assert!(context.iter().any(
         |m| matches!(m, ChatMessage::User { content, .. } if content.contains("Orbit 请求失败"))
     ));
+}
+
+#[tokio::test]
+async fn legacy_side_questions_keep_stable_thread_ids_after_restart_and_follow_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("orbit.db");
+    let store = Store::open(&path).await.unwrap();
+    let writer = store
+        .create(
+            dir.path().display().to_string(),
+            "orbit-model".into(),
+            false,
+        )
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    let old = serde_json::json!({"model":"orbit-model","question":"old question","answer":"old answer","status":"completed","error":null});
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO side_questions(session_id,payload) VALUES(?1,?2)",
+            rusqlite::params![id, old.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+    let original = store.side_questions(&id).await.unwrap().remove(0);
+    assert!(original.thread_id.starts_with("legacy-"));
+    let mut follow_up = original.clone();
+    follow_up.question = "continued question".into();
+    store.save_side_question(&id, follow_up).await.unwrap();
+    let reopened = Store::open(&path).await.unwrap();
+    let records = reopened.side_questions(&id).await.unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].thread_id, original.thread_id);
+    assert_eq!(records[1].thread_id, original.thread_id);
 }

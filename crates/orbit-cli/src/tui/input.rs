@@ -28,6 +28,63 @@ pub struct InputState {
 }
 
 impl InputState {
+    /// Editing without command completion, attachment handling or submission.
+    pub(super) fn edit(&mut self, event: &crossterm::event::Event, width: usize) -> bool {
+        use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+        let Event::Key(key) = event else {
+            if let Event::Paste(text) = event {
+                self.insert(text);
+                return true;
+            }
+            return false;
+        };
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let selecting = key.modifiers.contains(KeyModifiers::SHIFT);
+        let motion = match (control, key.code) {
+            (true, KeyCode::Left) => Some(Motion::WordLeft),
+            (true, KeyCode::Right) => Some(Motion::WordRight),
+            (true, KeyCode::Home) => Some(Motion::Start),
+            (true, KeyCode::End) => Some(Motion::Finish),
+            (true, KeyCode::Char('e')) => Some(Motion::End),
+            (false, KeyCode::Left) => Some(Motion::Left),
+            (false, KeyCode::Right) => Some(Motion::Right),
+            (false, KeyCode::Home) => Some(Motion::Home),
+            (false, KeyCode::End) => Some(Motion::End),
+            (false, KeyCode::Up) => Some(Motion::Up),
+            (false, KeyCode::Down) => Some(Motion::Down),
+            _ => None,
+        };
+        if let Some(motion) = motion {
+            self.navigate(motion, width, selecting);
+        } else {
+            match (control, key.code) {
+                (true, KeyCode::Char('a')) => self.select_all(),
+                (true, KeyCode::Char('u')) => self.kill_to_home(),
+                (true, KeyCode::Char('k')) => self.kill_to_end(),
+                (true, KeyCode::Char('d')) | (false, KeyCode::Delete) => self.delete(),
+                (true, KeyCode::Char('j')) => self.insert("\n"),
+                (true, KeyCode::Up) => self.history_up(),
+                (true, KeyCode::Down) => self.history_down(),
+                (false, KeyCode::Backspace) => self.backspace(),
+                (false, KeyCode::Enter)
+                    if key
+                        .modifiers
+                        .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+                {
+                    self.insert("\n")
+                }
+                (false, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::ALT) => {
+                    self.insert(&c.to_string())
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
     pub fn insert(&mut self, text: &str) {
         let text = Self::normalize(text);
         if !text.is_empty() {

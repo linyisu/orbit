@@ -2141,11 +2141,18 @@ fn draw_composer(
         height: inner.height.saturating_sub(attachment_height),
         ..inner
     };
+    draw_prompt(frame, state, prompt_area, lines, cursor);
+}
+
+pub(super) fn draw_prompt(
+    frame: &mut Frame<'_>,
+    state: &mut UiState,
+    prompt_area: Rect,
+    lines: Vec<String>,
+    cursor: (usize, usize),
+) {
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            icons::CHEVRON_RIGHT,
-            Style::default().fg(ACCENT),
-        )),
+        Paragraph::new(Span::styled(icons::CHEVRON_RIGHT, Style::default().fg(ACCENT))),
         Rect {
             width: 2,
             ..prompt_area
@@ -2165,6 +2172,7 @@ fn draw_composer(
         ..text_area
     };
     state.input_scroll = scroll;
+    state.ime_cursor = None;
     // IME preedit belongs to the terminal; placeholder text underneath it is misleading.
     let text = Text::from(
         lines

@@ -46,6 +46,8 @@ pub(super) fn open(state: &mut UiState, id: String) {
     state.input_dragging = false;
     state.cursor_motion.clear();
     let mut view = super::transcript_dialog::TranscriptDialog::new("");
+    view.enable_input();
+    view.block_submission(true);
     view.ui.resume_loading = Some("加载子代理记录…".into());
     state.subagent_dialog = Some(Box::new(Viewer {
         id,
@@ -90,7 +92,10 @@ impl Viewer {
         }
         .await;
         match result {
-            Ok(changed) => changed,
+            Ok(changed) => {
+                self.view.block_submission(false);
+                changed
+            }
             Err(error) => {
                 self.error = Some(format!("无法读取子代理记录：{error}"));
                 self.view.ui.resume_loading = None;
@@ -139,6 +144,29 @@ impl Viewer {
 
     pub fn handle(&mut self, event: &Event) -> std::io::Result<ViewerAction> {
         self.view.handle(event)
+    }
+
+    pub async fn send(&mut self, tools: &orbit_agent::tool::ToolRegistry, message: String) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let call = orbit_model::types::ToolCall::function(
+            format!("ui-followup-{}-{stamp}", std::process::id()),
+            "send_agent_message",
+            json!({"agent_id":self.id,"message":message}),
+        );
+        match tools
+            .execute(call, tokio_util::sync::CancellationToken::new())
+            .await
+        {
+            Ok(_) => self.view.submitted(),
+            Err(error) => self.view.submit_error(error),
+        }
+    }
+
+    pub fn cursor(&self) -> Option<ratatui::layout::Position> {
+        self.view.ui.ime_cursor
     }
 
     pub fn link_error(&mut self, error: &anyhow::Error) {

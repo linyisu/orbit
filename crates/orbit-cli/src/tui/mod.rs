@@ -553,6 +553,10 @@ pub async fn run(
                                 if let Err(error) = open_link_in_browser(&url) { state.btw.link_error(&error); }
                                 dirty = true;
                             }
+                            transcript_dialog::Action::Submit(question) => {
+                                if let Err(error) = state.btw.follow_up(&session.store, session.id(), &model, &history, &question, state.max_output_tokens).await { state.btw.submit_error(&error); }
+                                dirty = true;
+                            }
                         }
                         if dirty { frames.request(time::Instant::now()); }
                         continue;
@@ -566,6 +570,10 @@ pub async fn run(
                             subagents::ViewerAction::Redraw => dirty = true,
                             subagents::ViewerAction::Link(url) => {
                                 if let Err(error) = open_link_in_browser(&url) { viewer.link_error(&error); }
+                                dirty = true;
+                            }
+                            subagents::ViewerAction::Submit(message) => {
+                                viewer.send(&tools, message).await;
                                 dirty = true;
                             }
                         }

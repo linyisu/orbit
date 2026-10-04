@@ -141,7 +141,7 @@ fn subagent_results_and_rules_stay_inside_the_shared_tool_frame() {
 }
 
 #[tokio::test]
-async fn viewer_updates_live_keeps_parent_state_and_accepts_no_input() {
+async fn viewer_updates_live_keeps_parent_state_and_accepts_follow_up_drafts() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path().join("orbit.db"))
         .await
@@ -217,9 +217,12 @@ async fn viewer_updates_live_keeps_parent_state_and_accepts_no_input() {
     terminal
         .draw(|frame| super::super::render::draw(frame, &mut state))
         .unwrap();
-    assert!(state.ime_cursor.is_none());
+    assert!(state.ime_cursor.is_some());
     let viewer = state.subagent_dialog.as_mut().unwrap();
     assert!(viewer.view.ui.max_scroll > 0);
+    viewer
+        .handle(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))
+        .unwrap();
     viewer
         .handle(&Event::Key(KeyEvent::new(
             KeyCode::Home,
@@ -249,14 +252,17 @@ async fn viewer_updates_live_keeps_parent_state_and_accepts_no_input() {
     }
     assert!(viewer.view.ui.selection.active());
     assert!(!viewer.poll(&store, parent.id()).await);
-    viewer.handle(&Event::Paste("不会发送".into())).unwrap();
+    viewer.handle(&Event::Paste("Orbit 追问".into())).unwrap();
     viewer
         .handle(&Event::Key(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::NONE,
         )))
         .unwrap();
-    assert!(viewer.view.ui.input.text.is_empty());
+    assert_eq!(viewer.view.ui.input.text, "Orbit 追问a");
+    assert!(
+        matches!(viewer.handle(&Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))).unwrap(), ViewerAction::Submit(text) if text == "Orbit 追问a")
+    );
     assert!(matches!(
         viewer
             .handle(&Event::Key(KeyEvent::new(
@@ -279,8 +285,42 @@ async fn viewer_updates_live_keeps_parent_state_and_accepts_no_input() {
         terminal
             .draw(|frame| super::super::render::draw(frame, &mut state))
             .unwrap();
-        assert!(state.ime_cursor.is_none());
+        if let Some(cursor) = state.ime_cursor {
+            assert!(Rect::new(0, 0, width, height).contains(cursor));
+        }
     }
+}
+
+#[tokio::test]
+async fn viewer_follow_up_uses_the_existing_tool_and_keeps_failed_drafts() {
+    use std::sync::{Arc, Mutex};
+    let mut state = UiState::new("orbit-parent");
+    state.input.set("Orbit 父会话草稿".into());
+    open(&mut state, "orbit-child".into());
+    let viewer = state.subagent_dialog.as_mut().unwrap();
+    let mut tools = orbit_agent::tool::ToolRegistry::new();
+    viewer.view.ui.input.set("Orbit 补充问题".into());
+    viewer.send(&tools, "Orbit 补充问题".into()).await;
+    assert_eq!(viewer.view.ui.input.text, "Orbit 补充问题");
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let calls = received.clone();
+    tools.register(orbit_agent::tool::ClosureTool::new(
+        "send_agent_message",
+        "",
+        json!({}),
+        move |args, _| {
+            calls.lock().unwrap().push(args);
+            async { Ok::<_, orbit_agent::tool::ToolError>("queued".into()) }
+        },
+    ));
+    viewer.send(&tools, "Orbit 补充问题".into()).await;
+    assert_eq!(
+        received.lock().unwrap()[0],
+        json!({"agent_id":"orbit-child","message":"Orbit 补充问题"})
+    );
+    assert!(viewer.view.ui.input.text.is_empty());
+    assert_eq!(state.input.text, "Orbit 父会话草稿");
+    assert!(state.transcript.is_empty());
 }
 
 #[tokio::test]
