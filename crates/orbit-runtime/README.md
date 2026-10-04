@@ -139,3 +139,5 @@ cargo test -p orbit-runtime --offline
 # 运行代码规范与静态检查
 cargo clippy -p orbit-runtime --all-targets -- -D warnings
 ```
+
+对含硬链接的文件，仅缓存已找到全部链接的安全路径集合；复用前重新核对链接数量、inode 和所有父目录。新增链接或重命名会使缓存失效，仍拒绝受保护路径的别名。

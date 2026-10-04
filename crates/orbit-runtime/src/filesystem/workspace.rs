@@ -462,6 +462,7 @@ impl Workspace {
             && super::inodes::is_reserved_workspace_inode_with_templates(
                 &self.path,
                 (metadata.dev(), metadata.ino()),
+                metadata.nlink(),
                 &self.policy.effective_policy().read_templates,
                 &self.policy.effective_policy().write_templates,
             )
