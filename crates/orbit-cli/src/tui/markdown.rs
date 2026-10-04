@@ -1372,6 +1372,11 @@ mod tests {
                 .iter()
                 .any(|s| s.content == "斜体" && s.style.add_modifier.contains(Modifier::ITALIC))
         );
+        assert!(value.spans.iter().any(|span| {
+            span.content == "删除"
+                && span.style.add_modifier.contains(Modifier::CROSSED_OUT)
+                && span.style.fg == Some(THEME.md_strikethrough)
+        }));
         assert_eq!(
             render(r"\*literal\* and snake_case_name").to_string(),
             "  *literal* and snake_case_name"
