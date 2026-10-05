@@ -1,10 +1,4 @@
-//! Discovery and lazy loading for user-authored Agent Skills.
-//!
-//! A skill is deliberately data, not executable Orbit configuration: Orbit
-//! discovers its short description at startup and exposes the full `SKILL.md`
-//! only through `load_skill` when the model (or the user through `/skill`)
-//! requests it. This follows the public Agent Skills convention used by Claude
-//! Code without permanently charging every skill body to each request.
+//! Discover skill metadata at startup; load instruction bodies only on explicit request.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -14,11 +8,18 @@ use std::{
 
 use orbit_agent::tool::{ClosureTool, ToolError, ToolRegistry};
 use orbit_model::types::ChatMessage;
+use serde::Deserialize;
 use serde_json::json;
 
 const CATALOG_PREFIX: &str = "ORBIT_SKILL_CATALOG_V1\n";
 const MAX_SKILL_BYTES: u64 = 64 * 1024;
 const MAX_DESCRIPTION_CHARS: usize = 500;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoadArguments {
+    name: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Skill {
@@ -170,14 +171,20 @@ impl Skills {
     }
 
     pub(crate) fn register_tool(&self, tools: &mut ToolRegistry) {
+        if self.entries.is_empty() {
+            tools.remove("load_skill");
+            return;
+        }
+
         let entries = self.entries.clone();
+        let names: Vec<_> = entries.iter().map(|skill| skill.command.clone()).collect();
         tools.register(ClosureTool::new(
             "load_skill",
             "Load the complete instructions for one installed Skill. The available skill names and summaries are in the system context. Use only when the task needs that skill; do not guess names.",
             json!({
                 "type": "object",
                 "properties": {
-                    "name": { "type": "string", "description": "Skill command name without the leading slash" }
+                    "name": { "type": "string", "enum": names, "description": "An installed Skill command name without the leading slash" }
                 },
                 "required": ["name"],
                 "additionalProperties": false
@@ -190,17 +197,20 @@ impl Skills {
                         return Err(ToolError::Cancelled);
                     }
 
-                    let name = arguments
-                        .get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|name| !name.is_empty())
-                        .ok_or_else(|| ToolError::InvalidArguments {
+                    let arguments: LoadArguments = serde_json::from_value(arguments)
+                        .map_err(|error| ToolError::InvalidArguments {
                             tool: "load_skill".into(),
-                            message: "name must be a nonempty skill name".into(),
+                            message: error.to_string(),
                         })?;
+                    let name = arguments.name.trim();
                     let skill = entries.iter().find(|skill| skill.command == name).ok_or_else(|| {
-                        ToolError::ExecutionFailed(format!("Skill {name:?} is not installed"))
+                        ToolError::InvalidArguments {
+                            tool: "load_skill".into(),
+                            message: format!(
+                                "Skill {name:?} is not installed. Available installed names: {}. Use an exact name from this catalog.",
+                                entries.iter().map(|skill| skill.command.as_str()).collect::<Vec<_>>().join(", ")
+                            ),
+                        }
                     })?;
                     let body = read_skill(&skill.path).map_err(ToolError::ExecutionFailed)?;
 
@@ -344,11 +354,73 @@ fn truncate_chars(value: &str, limit: usize) -> String {
     result
 }
 
-
-
 #[cfg(test)]
 mod tests {
+    use orbit_model::types::ToolCall;
+    use tokio_util::sync::CancellationToken;
+
     use super::*;
+
+    #[tokio::test]
+    async fn loader_exposes_only_installed_skills_and_clears_an_empty_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill_path = dir.path().join("review/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_path,
+            "---\ndescription: Review a change\n---\nRead the diff first.",
+        )
+        .unwrap();
+        let skills = Skills {
+            entries: discover_directory(dir.path(), SkillSource::OrbitProject),
+        };
+        let mut tools = ToolRegistry::new();
+        skills.register_tool(&mut tools);
+        let definition = tools.definitions().pop().unwrap();
+        assert_eq!(
+            definition.function.parameters["properties"]["name"]["enum"],
+            json!(["review"])
+        );
+
+        let loaded = tools
+            .execute(
+                ToolCall::function("load", "load_skill", json!({"name":"review"})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let loaded: serde_json::Value = serde_json::from_str(&loaded.content).unwrap();
+        assert!(
+            loaded["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("Read the diff first.")
+        );
+        let unknown = tools
+            .execute(
+                ToolCall::function("unknown", "load_skill", json!({"name":"missing"})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(unknown, ToolError::InvalidArguments { .. }));
+        assert!(
+            unknown
+                .to_string()
+                .contains("Available installed names: review")
+        );
+
+        let mut history = vec![ChatMessage::system("core instructions")];
+        skills.inject(&mut history);
+        assert_eq!(history.len(), 2);
+
+        let empty = Skills::default();
+        empty.register_tool(&mut tools);
+        empty.inject(&mut history);
+        assert!(!tools.contains("load_skill"));
+        assert_eq!(history, vec![ChatMessage::system("core instructions")]);
+    }
 
     #[test]
     fn discovers_claude_compatible_skill_and_loads_it_lazily() {
