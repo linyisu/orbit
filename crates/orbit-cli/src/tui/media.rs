@@ -73,7 +73,7 @@ pub(super) struct SelectionBlock {
 
 pub(super) struct Prepared {
     protocol: SlicedProtocol,
-    selected_protocol: SlicedProtocol,
+    selected_protocol: Option<SlicedProtocol>,
     pub source: Source,
     pub size: Size,
     pub baseline: u16,
@@ -177,7 +177,7 @@ impl Value {
                     * usize::from(p.size.height)
                     * usize::from(picker.font_size().width)
                     * usize::from(picker.font_size().height)
-                    * 16
+                    * if p.selected_protocol.is_some() { 16 } else { 8 }
             }
 
             _ => 0,
@@ -556,7 +556,11 @@ pub(super) fn paint(buffer: &mut Buffer) {
             if !area.is_empty() {
                 SlicedImage::new(
                     if p.selected {
-                        &p.fragment.picture.selected_protocol
+                        p.fragment
+                            .picture
+                            .selected_protocol
+                            .as_ref()
+                            .unwrap_or(&p.fragment.picture.protocol)
                     } else {
                         &p.fragment.picture.protocol
                     },

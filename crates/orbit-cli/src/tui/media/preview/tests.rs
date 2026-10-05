@@ -190,3 +190,49 @@ fn image_previews_zoom_pan_reset_and_clip_on_every_protocol() {
         super::super::clear_layers();
     }
 }
+
+#[test]
+fn large_pixel_cells_use_the_entire_preview_width_before_clipping() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("wide.png");
+    let svg = dir.path().join("wide.svg");
+    image::RgbaImage::from_pixel(1600, 450, image::Rgba([230, 100, 50, 255]))
+        .save(&png)
+        .unwrap();
+    std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="450"><rect width="1600" height="450" fill="red"/></svg>"#).unwrap();
+
+    for path in [png, svg] {
+        // TestBackend cannot query the terminal's reported pixel cell size.
+        #[allow(deprecated)]
+        let mut picker = Picker::from_fontsize((32, 64).into());
+        picker.set_protocol_type(ProtocolType::Kitty);
+        let mut preview = Preview::new(
+            Context::new(picker),
+            Source::Image(path.to_string_lossy().into_owned()),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(90, 30)).unwrap();
+        for zoom in [100, 125] {
+            preview.view.zoom = zoom;
+            draw_ready(&mut preview, &mut terminal);
+            let picture = preview.picture.as_ref().unwrap();
+            assert!(u32::from(preview.body.width) * 32 > 2048);
+            assert_eq!(picture.size.width, preview.body.width);
+            assert_eq!(picture.pan_extent.1, 0.0);
+            if zoom == 100 {
+                assert_eq!(picture.pan_extent.0, 0.0);
+            } else {
+                assert!((picture.pan_extent.0 - f32::from(preview.body.width) * 0.25).abs() < 0.01);
+            }
+            assert!(picture.selected_protocol.is_none());
+            let bytes = super::super::Value::Ready(picture.clone())
+                .bytes(&preview.context.shared.as_ref().unwrap().picker);
+            assert!(bytes <= super::super::MAX_CACHE_BYTES);
+            super::super::LAYER.with(|layer| {
+                assert!(layer.borrow().current.iter().all(|placement| {
+                    placement.area.x == preview.body.x && placement.area.width == preview.body.width
+                }));
+            });
+        }
+        super::super::clear_layers();
+    }
+}

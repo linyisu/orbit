@@ -17,6 +17,7 @@ use super::{Key, Network, Prepared, Source, View};
 const MAX_SOURCE_BYTES: usize = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
 const MAX_REMOTE_CACHE_BYTES: usize = 2 * MAX_SOURCE_BYTES;
 const MAX_RENDER_EDGE_PIXELS: u32 = 2048;
+const MAX_PREVIEW_PIXELS: u64 = super::MAX_CACHE_BYTES as u64 / 8;
 const MAX_DECODE_EDGE_PIXELS: u32 = 8192;
 const MAX_TEX_BYTES: usize = 8192;
 const MAX_SOURCE_PIXELS: u64 = 16 * 1024 * 1024;
@@ -31,9 +32,16 @@ pub(super) struct Decoder {
 impl Decoder {
     pub fn prepare(&mut self, key: &Key, picker: &Picker) -> Result<Prepared> {
         let cell = picker.font_size();
-        let max_w = (u32::from(key.width) * u32::from(cell.width)).clamp(1, MAX_RENDER_EDGE_PIXELS);
-        let max_h =
-            (u32::from(key.height) * u32::from(cell.height)).clamp(1, MAX_RENDER_EDGE_PIXELS);
+        let viewport_w = (u32::from(key.width) * u32::from(cell.width)).max(1);
+        let viewport_h = (u32::from(key.height) * u32::from(cell.height)).max(1);
+        let (max_w, max_h) = if key.view.is_some() {
+            (viewport_w, viewport_h)
+        } else {
+            (
+                viewport_w.min(MAX_RENDER_EDGE_PIXELS),
+                viewport_h.min(MAX_RENDER_EDGE_PIXELS),
+            )
+        };
         let mut baseline = None;
         let mut pan_extent = (0.0, 0.0);
         let image = match &key.source {
@@ -117,6 +125,7 @@ impl Decoder {
                             max_w,
                             max_h,
                         );
+                        check_preview_size(geometry.width, geometry.height)?;
                         pan_extent = geometry.overflow;
                         geometry.crop(image)
                     } else {
@@ -189,16 +198,26 @@ impl Decoder {
                 .div_ceil(u32::from(cell.height))
                 .min(u32::from(key.height)) as u16,
         );
-        // Encode both states in the worker. Selecting never decodes, downloads
-        // or encodes an image on the UI thread, regardless of terminal protocol.
+        if key.view.is_some() {
+            check_preview_size(
+                u32::from(size.width) * u32::from(cell.width),
+                u32::from(size.height) * u32::from(cell.height),
+            )?;
+        }
+        // Inline selections need a pre-encoded variant; previews have no
+        // selection and keep only the primary protocol within the cache budget.
         let mut padded = RgbaImage::new(
             u32::from(size.width) * u32::from(cell.width),
             u32::from(size.height) * u32::from(cell.height),
         );
         image::imageops::overlay(&mut padded, &image.to_rgba8(), 0, 0);
-        let selected = selected_image(&padded);
+        let (selected_protocol, selected_kitty_id) = if key.view.is_none() {
+            let (protocol, id) = encode(picker, selected_image(&padded), size)?;
+            (Some(protocol), id)
+        } else {
+            (None, None)
+        };
         let (protocol, kitty_id) = encode(picker, padded, size)?;
-        let (selected_protocol, selected_kitty_id) = encode(picker, selected, size)?;
         Ok(Prepared {
             size: protocol.size(),
             protocol,
@@ -215,6 +234,13 @@ impl Decoder {
             selected_kitty_id,
         })
     }
+}
+
+fn check_preview_size(width: u32, height: u32) -> Result<()> {
+    if u64::from(width) * u64::from(height) > MAX_PREVIEW_PIXELS {
+        bail!("预览区域像素尺寸过大，请缩小窗口或降低缩放倍率");
+    }
+    Ok(())
 }
 
 fn encode(picker: &Picker, image: RgbaImage, size: Size) -> Result<(SlicedProtocol, Option<u32>)> {
@@ -359,6 +385,7 @@ fn raster_svg_view(
     let size = tree.size();
     let (width, height, transform, overflow) = if let Some(view) = view {
         let geometry = view.geometry(size.width(), size.height(), max_w, max_h);
+        check_preview_size(geometry.width, geometry.height)?;
         (
             geometry.width,
             geometry.height,
