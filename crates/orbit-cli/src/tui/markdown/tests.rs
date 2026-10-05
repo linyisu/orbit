@@ -647,3 +647,27 @@ fn markdown_examples_recover_nested_triple_fences() {
     assert_eq!(line("```", 5, &mut fence).to_string(), "  ╰─");
     assert!(fence.is_none());
 }
+
+#[test]
+fn document_fragment_links_are_plain_text_in_markdown_html_and_tables() {
+    for source in [
+        "文档内锚点：[跳转至第一节标题测试](#section-one)",
+        r##"<a href="#section-one">跳转至第一节标题测试</a>"##,
+        "| 标题 |\n| --- |\n| [跳转至第一节标题测试](#section-one) |",
+    ] {
+        let lines = document(source, 80);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.text().contains("跳转至第一节标题测试"))
+        );
+        assert!(lines.iter().all(|line| line.links.is_empty()));
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.line.spans)
+                .filter(|span| span.content.contains("跳转"))
+                .all(|span| !span.style.add_modifier.contains(Modifier::UNDERLINED))
+        );
+    }
+}

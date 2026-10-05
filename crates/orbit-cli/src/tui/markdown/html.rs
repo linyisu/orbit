@@ -70,6 +70,7 @@ pub(super) fn events(source: &str) -> Option<Vec<Event>> {
                         continue;
                     }
 
+                    "a" if attr("href").starts_with('#') => Formatting::Custom(Style::default()),
                     "a" => Formatting::Link(
                         tag.attrs
                             .iter()

@@ -26,7 +26,7 @@ pub(super) enum Formatting {
 impl Formatting {
     fn hyperlink(&self) -> Option<&str> {
         match self {
-            Self::Link(url) if !url.is_empty() => Some(url),
+            Self::Link(url) if !url.is_empty() && !url.starts_with('#') => Some(url),
             Self::Group(items) => items.iter().find_map(Self::hyperlink),
             _ => None,
         }
@@ -259,7 +259,9 @@ impl Renderer {
                         None
                     }
 
-                    Tag::Link { dest_url, .. } => Some(Formatting::Link(dest_url.to_string())),
+                    Tag::Link { dest_url, .. } => {
+                        (!dest_url.starts_with('#')).then(|| Formatting::Link(dest_url.to_string()))
+                    }
                     Tag::Image { dest_url, .. } => {
                         self.image_starts.push(self.rows.iter().map(Vec::len).sum());
                         Some(Formatting::Image(dest_url.to_string()))
