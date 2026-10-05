@@ -12,6 +12,16 @@ cargo build --release -p orbit-cli
 ./target/release/orbit tui
 ```
 
+`orbit connect` 提供实验性的统一工作区服务入口。本地、SSH、WSL 共用连接协议和会话服务，界面在本机渲染，Agent 与工具在目标环境运行：
+
+```sh
+orbit connect --workspace /path/to/project
+orbit connect --ssh my-host --workspace /home/me/project
+orbit connect --wsl Ubuntu --workspace /home/me/project
+```
+
+SSH 沿用系统 OpenSSH 配置；SSH/WSL 首次连接自动上传匹配架构的 Linux 服务二进制。目标环境仍需有模型配置、凭据及执行依赖。本仓库目前仍是 Linux 客户端，WSL 适配器需要调用环境能运行 `wsl.exe`，不代表已支持 Windows 原生构建。断开连接不会取消任务，可用相同参数加 `--resume <ID>` 接回。支持范围、配置路径和恢复行为见 [工作区连接说明](crates/orbit-cli/README.md#统一工作区连接实验性)。
+
 用 TUI 的 `/connect` 配置连接，或参考 [config.example.toml](config.example.toml) 编写 `config.toml`。可用 `--config <路径>` 指定配置文件，API Key 也可通过 `orbit auth set-key` 保存，再用配置中的 `credential` 引用。示例中的模型 ID 和能力需要与实际服务一致。
 
 API 模型的可用列表由服务接口发现；公共模型规格补齐缺失能力，缓存与离线快照保证更新失败后仍可使用。用户配置和服务返回的能力优先，详见 [模型连接说明](crates/orbit-cli/README.md)。

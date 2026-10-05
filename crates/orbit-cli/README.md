@@ -4,6 +4,34 @@
 
 `orbit-cli` 是 Orbit 的命令行接口与终端用户交互系统（TUI）。它集成了基于 Ratatui 的高性能无闪烁渲染引擎、平滑流式输出呈现、多终端会话实时同步、交互式连接管理向导以及丰富的工程命令集。
 
+## 统一工作区连接（实验性）
+
+`orbit connect` 将本地进程、系统 SSH 和 `wsl.exe` 放在同一个连接层。三者启动相同的工作区服务，并通过有长度上限的结构化协议交流；本地入口也经过服务，不直接调用工具。原来的 `orbit tui` 保留完整的本地交互功能。
+
+```sh
+orbit connect --workspace /path/to/project
+orbit connect --ssh dev-host --workspace /home/me/project
+orbit connect --wsl Ubuntu --wsl-user me --workspace /home/me/project
+orbit connect --ssh dev-host --workspace /home/me/project --list
+orbit connect --ssh dev-host --workspace /home/me/project --resume SESSION_ID
+orbit connect --workspace /path/to/project --prompt '检查测试失败原因'
+orbit connect --workspace /path/to/project --stop
+```
+
+SSH 使用系统客户端，因此沿用主机别名、跳板机、密钥代理及主机校验配置；不关闭主机校验。WSL 直接启动选定发行版的 Linux 进程，无需安装 SSH 服务。本仓库的客户端仍依赖 Unix/Linux 接口；WSL 启动适配器需要当前环境能执行 `wsl.exe`，Windows 原生客户端尚未完成。
+
+首次 SSH/WSL 连接会检测 Linux 系统与架构，把本机 Orbit 二进制上传到目标用户的 `~/.cache/orbit/servers/<SHA-256>/orbit`，校验后原子安装；已存在的相同版本会复用。支持自动匹配 x86-64 和 AArch64；异架构可用 `--upload-server /local/path/to/linux-orbit` 指定目标二进制。用 `--server /remote/path/to/orbit` 可直接连接预装服务。目标仍需兼容二进制的动态库，以及运行命令所需的 `bwrap`、`prlimit` 和用户命名空间。部署不要求目标访问下载站点。
+
+`--config`、`--database`、`--auth-dir` 指目标环境中的路径。默认配置为工作区内的 `config.toml`，相对配置和数据库路径相对目标工作区；认证目录默认取目标用户的配置目录。服务使用目标环境的模型凭据、网络代理、Skill 和 MCP 配置，不隐式复制本机账号。`--allow-mcp-start` 仍需显式指定。
+
+新入口支持流式对话、工具卡片、审批、取消、模型及权限模式切换、历史恢复和媒体预览。界面复用现有渲染器，目标文件通过当前连接中的权限检查接口读取，公式在本机排版；网络图片目前由本机下载，尚未接入目标环境的 `[web]` 配置。界面命令为 `/help`、`/sessions`、`/resume <ID>`、`/new`、`/model [供应商::模型]`、`/mode ask|auto|yolo`、`/quit`。`Ctrl+C` 取消执行，`Ctrl+D` 或 `/quit` 断开连接。`--prompt` 是无交互入口，使用 auto 策略，需额外审批的请求会明确拒绝。标签页管理、运行中追加指令、输入图片附件和其余本地斜杠命令尚未迁入该入口；需要这些功能时仍使用 `orbit tui`。
+
+远端连接代理与服务进程分开：断开连接不取消任务，待审批请求也会保留；再次连接相同目标并指定会话 ID 即可接回。服务无运行中任务且 15 分钟没有请求时退出；`--stop` 只停止空闲服务。任务执行期间服务持有会话写入锁，其他进程不能接管写入。机器或服务退出后，恢复历史会标记中断，不自动重跑旧任务。
+
+请求 ID 和内容指纹保存在会话数据库中，重复投递不会重复启动任务；若服务在接收与确认之间退出，返回结果不确定的提示，要求先检查历史。连接中断不会自动重发写操作。客户端按事件游标分页读取，重接会话时从持久历史恢复。协议标准输出与日志分离，并跳过协议握手前的有限登录横幅；日志位于目标临时目录的私有 `orbit-workspace-<uid>` 目录。
+
+实现按职责分在 [workspace/setup.rs](src/workspace/setup.rs)、[transport.rs](src/workspace/transport.rs)、[bootstrap.rs](src/workspace/bootstrap.rs)、[server.rs](src/workspace/server.rs)、[session.rs](src/workspace/session.rs) 和 [run.rs](src/workspace/run.rs)；服务前端在 [workspace_client.rs](src/tui/workspace_client.rs)。测试使用真实本地服务、模拟模型和 SSH/WSL 启动替身，覆盖断连审批、取消、服务重启后去重、路径引号、横幅和部署校验；真实 SSH 认证及 Windows/WSL 环境仍需实机验证。
+
 ## 渲染与输入的实现入口
 
 [render.rs](src/tui/render.rs) 保留帧和视口协调，工具卡片、思考内容、安全终端文本与链接悬停分别放在 [render/tool_cards.rs](src/tui/render/tool_cards.rs)、[render/thinking.rs](src/tui/render/thinking.rs)、[render/text.rs](src/tui/render/text.rs)、[render/links.rs](src/tui/render/links.rs)，通过原渲染入口调用。代码语法高亮仍统一使用 [code.rs](src/tui/code.rs)，没有为各工具复制渲染实现。
@@ -24,6 +52,7 @@ orbit-cli/
 │   ├── config.rs          # 配置文件解析、校验与运行时参数构造
 │   ├── subagents.rs       # 子会话的模型选择、只读权限与异步调度
 │   ├── connections.rs     # 服务连接的持久化与热重载
+│   ├── workspace/         # 本地、SSH、WSL 传输、服务生命周期与会话执行
 │   └── tui/               # 现代化终端用户界面
 │       ├── mod.rs         # TUI 主事件循环与运行协调
 │       ├── app.rs         # UI 状态与事件应用
