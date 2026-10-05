@@ -196,6 +196,9 @@ impl LinkedLine {
         }
         let start = leading.len();
         let end = start + self.line.spans.len();
+        for span in &mut self.line.spans {
+            span.style = self.line.style.patch(span.style);
+        }
         self.shift_offsets(leading.iter().map(|span| span.content.len()).sum::<usize>() as isize);
         self.line.spans.splice(0..0, leading);
         self.line.spans.extend(trailing);

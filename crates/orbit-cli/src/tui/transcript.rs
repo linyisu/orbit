@@ -481,7 +481,7 @@ impl Entry {
                     span.content = format!(
                         "{} ",
                         if open {
-                            super::icons::ARROW_DOWN
+                            super::icons::CHEVRON_DOWN
                         } else {
                             super::icons::CHEVRON_RIGHT
                         }

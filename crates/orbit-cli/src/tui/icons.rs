@@ -13,6 +13,7 @@ pub(super) const BLOCK_HELPER: &str = "󰂭";
 pub(super) const CANCEL: &str = "󰜺";
 pub(super) const LOADING: &str = "󰝲";
 pub(super) const CHEVRON_RIGHT: &str = "󰅂";
+pub(super) const CHEVRON_DOWN: &str = "󰅀";
 pub(super) const ARROW_DOWN: &str = "󰁅";
 pub(super) const RHOMBUS: &str = "󰜋";
 pub(super) const CIRCLE_SMALL: &str = "󰧟";
