@@ -17,6 +17,7 @@ pub(super) struct Tabs {
     pub remote: HashMap<String, super::workspace_client::Tab>,
     pub active_remote: Option<String>,
     order: Vec<String>,
+    discovery_revision: u64,
     parked: HashMap<String, ParkedTab>,
     remembered: Vec<String>,
     window: Option<orbit_store::tui_windows::TuiWindow>,
@@ -53,7 +54,9 @@ impl Tabs {
     }
 
     pub async fn poll_remote(&mut self) -> bool {
-        let mut changed = false;
+        let revision = crate::workspace::discovery::revision();
+        let mut changed = self.discovery_revision != revision;
+        self.discovery_revision = revision;
         for tab in self.remote.values_mut() {
             changed |= tab.poll().await;
         }

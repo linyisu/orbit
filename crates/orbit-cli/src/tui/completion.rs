@@ -127,6 +127,43 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
             .collect();
     };
     let argument = argument.trim_start();
+    if matches!(command, "/ssh" | "/wsl") {
+        let (hosts, distributions) = crate::workspace::discovery::snapshot();
+        if argument.contains(char::is_whitespace) {
+            return Vec::new();
+        }
+        let (user, query) = argument
+            .rsplit_once('@')
+            .map_or((String::new(), argument), |(user, host)| {
+                (format!("{user}@"), host)
+            });
+        let choices: Vec<_> = if command == "/ssh" {
+            hosts
+                .into_iter()
+                .map(|host| {
+                    (
+                        format!("{user}{}", host.name),
+                        format!("{} {} {}", host.hostname, host.user, host.port),
+                    )
+                })
+                .collect()
+        } else {
+            distributions
+                .into_iter()
+                .map(|name| (name, "WSL 发行版".into()))
+                .collect()
+        };
+        return super::search::ranked(choices.iter(), |(name, _)| super::search::rank(name, query))
+            .into_iter()
+            .map(|(name, description)| Candidate {
+                name: format!("{command} {}", shlex::try_quote(name).unwrap()),
+                display: Some(name.clone()),
+                description: description.clone(),
+                continue_input: false,
+            })
+            .collect();
+    }
+
     let candidates: Vec<(String, String, bool)> = match command {
         "/model" => models
             .iter()

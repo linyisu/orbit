@@ -2761,6 +2761,7 @@ dependencies = [
  "crossterm",
  "cssparser",
  "futures-util",
+ "globset",
  "html2text",
  "html5ever",
  "image",

@@ -3696,6 +3696,8 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                     || matches!(
                         candidate.name.as_str(),
                         "/cd"
+                            | "/ssh"
+                            | "/wsl"
                             | "/mode"
                             | "/model"
                             | "/reasoning"
