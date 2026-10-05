@@ -82,6 +82,15 @@ pub(crate) struct Credential {
     pub project_id: Option<String>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CredentialSnapshot(pub(crate) Credential);
+
+impl fmt::Debug for CredentialSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CredentialSnapshot([redacted])")
+    }
+}
+
 impl Credential {
     pub fn info(&self, name: String) -> CredentialInfo {
         CredentialInfo {
