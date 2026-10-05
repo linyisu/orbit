@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use crate::{
@@ -12,7 +12,7 @@ use crate::{
     workspace::{connect::Spec, directories::Listing},
 };
 
-use super::configuration::Config;
+use super::{configuration::Config, controls};
 
 #[derive(Debug)]
 pub(crate) struct Wizard {
@@ -27,7 +27,8 @@ pub(crate) struct Wizard {
     selected: usize,
     hidden: bool,
     path: InputState,
-    editing_path: bool,
+    focus: usize,
+    hover: Option<usize>,
     areas: Vec<(Rect, usize)>,
 }
 
@@ -55,7 +56,8 @@ impl Wizard {
             selected: 0,
             hidden: false,
             path: InputState::default(),
-            editing_path: false,
+            focus: 8,
+            hover: None,
             areas: Vec::new(),
         }
     }
@@ -64,6 +66,7 @@ impl Wizard {
         self.path.set(listing.path.clone());
         self.listing = Some(listing);
         self.selected = 0;
+        self.focus = 8;
         self.scroll = None;
         self.busy = false;
     }
@@ -101,6 +104,11 @@ impl Wizard {
 
     pub(super) fn handle(&mut self, event: &Event) -> Action {
         if let Event::Mouse(mouse) = event {
+            self.hover = self
+                .areas
+                .iter()
+                .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
+                .map(|(_, id)| *id);
             if let Some(config) = &mut self.form
                 && config.picker
             {
@@ -149,10 +157,6 @@ impl Wizard {
                     return Action::Retry;
                 }
                 if let Some(config) = &mut self.form {
-                    if choice == 80 || choice == 81 {
-                        config.switch(choice == 81);
-                        return Action::None;
-                    }
                     if choice == 6 {
                         config.toggle_picker();
                         return Action::None;
@@ -169,18 +173,21 @@ impl Wizard {
                         config.suggestion = choice - 100;
                         config.choose();
                     }
-                } else if self.listing.is_some() && !self.busy {
+                } else if let Some(listing) = &self.listing
+                    && !self.busy
+                {
                     if choice == 5 {
-                        return Action::Open(self.path.text.clone());
+                        return Action::Open(listing.path.clone());
                     }
                     if choice == 6 {
                         self.hidden = !self.hidden;
                         self.selected = 0;
                     }
                     if choice == 7 {
-                        self.editing_path = true;
+                        self.focus = 7;
                     }
                     if choice >= 100 {
+                        self.focus = 8;
                         self.selected = choice - 100;
                         return self.browse();
                     }
@@ -194,12 +201,15 @@ impl Wizard {
                         config.edit_field(config.focus);
                         form::paste(&mut config.fields[config.focus], text);
                     }
-                } else if self.editing_path {
+                } else if self.focus == 7 {
                     form::paste(&mut self.path, text);
                 }
             }
             return Action::None;
         };
+        if key.code == KeyCode::Enter && !key.modifiers.is_empty() {
+            return Action::None;
+        }
         if key.kind == KeyEventKind::Release {
             return Action::None;
         }
@@ -214,38 +224,65 @@ impl Wizard {
         if let Some(config) = &mut self.form {
             return config.handle(key);
         }
+        if key.code == KeyCode::Tab || key.code == KeyCode::BackTab {
+            let order: &[usize] = if self.failed {
+                &[97, 98, 99]
+            } else if self.listing.is_some() && !self.busy {
+                &[8, 5, 6, 99, 7]
+            } else {
+                &[99]
+            };
+            let index = order
+                .iter()
+                .position(|focus| *focus == self.focus)
+                .unwrap_or(0);
+            let back = key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+            self.focus = order[if back {
+                (index + order.len() - 1) % order.len()
+            } else {
+                (index + 1) % order.len()
+            }];
+            return Action::None;
+        }
         if self.failed {
             return match key.code {
                 KeyCode::Char('r') => Action::Retry,
                 KeyCode::Char('b') => Action::Back,
+                KeyCode::Enter => match self.focus {
+                    98 => Action::Back,
+                    99 => Action::Cancel,
+                    _ => Action::Retry,
+                },
                 _ => Action::None,
             };
         }
-        if self.listing.is_some() && !self.busy {
+        if let Some(listing) = &self.listing
+            && !self.busy
+        {
             match key.code {
-                KeyCode::Tab => self.editing_path = !self.editing_path,
-                KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    return Action::Open(self.path.text.clone());
+                KeyCode::Enter => {
+                    return match self.focus {
+                        5 => Action::Open(listing.path.clone()),
+                        7 => Action::Browse(self.path.text.clone()),
+                        99 => Action::Cancel,
+                        6 => {
+                            self.hidden = !self.hidden;
+                            self.selected = 0;
+                            Action::None
+                        }
+                        _ => self.browse(),
+                    };
                 }
-                KeyCode::Enter if self.editing_path => {
-                    return Action::Browse(self.path.text.clone());
-                }
-                KeyCode::Enter => return self.browse(),
-                KeyCode::Up if !self.editing_path => {
-                    self.selected = self.selected.saturating_sub(1)
-                }
-                KeyCode::Down if !self.editing_path => {
+                KeyCode::Up if self.focus == 8 => self.selected = self.selected.saturating_sub(1),
+                KeyCode::Down if self.focus == 8 => {
                     self.selected = (self.selected + 1).min(self.entries().len().saturating_sub(1))
                 }
-                KeyCode::Char('h') if !self.editing_path => {
-                    self.hidden = !self.hidden;
-                    self.selected = 0;
-                }
-                _ if self.editing_path => form::edit(&mut self.path, key.code, key.modifiers),
+                _ if self.focus == 7 => form::edit(&mut self.path, key.code, key.modifiers),
                 _ => {}
             }
         } else {
             match key.code {
+                KeyCode::Enter if self.focus == 99 => return Action::Cancel,
                 KeyCode::PageUp => self.scroll = Some(self.last_offset.saturating_sub(8)),
                 KeyCode::PageDown => self.scroll = Some(self.last_offset.saturating_add(8)),
                 KeyCode::End => self.scroll = None,
@@ -257,8 +294,15 @@ impl Wizard {
 
     pub fn draw(&mut self, frame: &mut Frame<'_>) {
         let bounds = frame.area();
-        let width = bounds.width.saturating_sub(4).min(110);
-        let height = bounds.height.saturating_sub(4).min(30);
+        let width = bounds.width.saturating_sub(4).min(88);
+        let desired = if self.form.is_some() {
+            if width >= 68 { 23 } else { 29 }
+        } else if self.listing.is_some() && !self.failed && !self.busy {
+            (self.entries().len() as u16 + 14).clamp(18, 24)
+        } else {
+            24
+        };
+        let height = bounds.height.saturating_sub(4).min(desired);
         let area = Rect::new(
             bounds.x + (bounds.width - width) / 2,
             bounds.y + (bounds.height - height) / 2,
@@ -268,14 +312,16 @@ impl Wizard {
         overlay::clear(frame, area);
         self.areas.clear();
         frame.render_widget(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" 远程工作区 ")
-                .border_style(Style::default().fg(THEME.dialog_accent)),
+            controls::panel(false).title(Span::styled(
+                " 远程工作区 ",
+                Style::default()
+                    .fg(THEME.foreground)
+                    .add_modifier(Modifier::BOLD),
+            )),
             area,
         );
         let inner = area.inner(ratatui::layout::Margin::new(2, 1));
-        if inner.height < 5 || inner.width < 12 {
+        if inner.height < 10 || inner.width < 20 {
             return;
         }
         let stage = if self.form.is_some() {
@@ -297,7 +343,7 @@ impl Wizard {
                                 .fg(THEME.dialog_accent)
                                 .add_modifier(Modifier::BOLD)
                         } else {
-                            Style::default()
+                            Style::default().fg(THEME.muted)
                         },
                     )
                 })
@@ -314,25 +360,31 @@ impl Wizard {
             inner.x,
             inner.y + 2,
             inner.width,
-            inner.height.saturating_sub(4),
+            inner.height.saturating_sub(7),
         );
         if let Some(config) = &mut self.form {
-            config.draw(frame, body, &mut self.areas);
+            config.draw(frame, body, &mut self.areas, self.hover);
         } else if self.listing.is_some() && !self.failed && !self.busy {
-            let path = Rect::new(body.x, body.y, body.width, 1);
-            frame.render_widget(
-                Paragraph::new(form::input_line(
-                    &self.path,
-                    path.width as usize,
-                    false,
-                    self.editing_path,
-                    "目标目录",
-                )),
+            let path = Rect::new(body.x, body.y, body.width, 3);
+            controls::field(
+                frame,
                 path,
+                "当前目录",
+                &self.path,
+                self.focus == 7,
+                "输入路径后按 Enter 前往",
             );
             self.areas.push((path, 7));
+            let list = Rect::new(
+                body.x,
+                body.y + 3,
+                body.width,
+                body.height.saturating_sub(3),
+            );
+            frame.render_widget(controls::panel(self.focus == 8).title(" 文件夹 "), list);
+            let list = list.inner(ratatui::layout::Margin::new(1, 1));
             let entries = self.entries();
-            let count = body.height.saturating_sub(2) as usize;
+            let count = list.height as usize;
             let start = self.selected.saturating_sub(count.saturating_sub(1));
             for (row, (index, name)) in entries
                 .iter()
@@ -341,29 +393,27 @@ impl Wizard {
                 .take(count)
                 .enumerate()
             {
-                let rect = Rect::new(body.x, body.y + 2 + row as u16, body.width, 1);
+                let rect = Rect::new(list.x, list.y + row as u16, list.width, 1);
+                let name = if name == ".." {
+                    "..  上一级".into()
+                } else {
+                    format!("{}/", render::safe_output(name))
+                };
                 frame.render_widget(
                     Paragraph::new(format!(
-                        "{} {}",
-                        if index == self.selected { "›" } else { " " },
-                        render::safe_output(name)
+                        " {} {name}",
+                        if index == self.selected { "›" } else { " " }
                     ))
                     .style(if index == self.selected {
-                        Style::default().fg(THEME.dialog_accent)
+                        Style::default()
+                            .fg(THEME.foreground)
+                            .bg(THEME.tab_hover_background)
                     } else {
                         Style::default()
                     }),
                     rect,
                 );
                 self.areas.push((rect, 100 + index));
-            }
-            if self.editing_path {
-                frame.set_cursor_position((
-                    path.x
-                        + (form::cursor_column(&self.path, path.width as usize, false) as u16)
-                            .min(path.width.saturating_sub(1)),
-                    path.y,
-                ));
             }
         } else {
             let mut lines = self
@@ -393,37 +443,67 @@ impl Wizard {
                 body,
             );
         }
-        let footer = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+        let footer = Rect::new(inner.x, inner.bottom() - 4, inner.width, 3);
         let buttons: Vec<(&str, usize)> = if self.form.is_some() {
-            vec![("[连接 Ctrl+Enter]", 5), ("[取消 Esc]", 99)]
+            vec![("取消", 99), ("连接", 5)]
         } else if self.failed {
-            vec![("[重试 R]", 97), ("[修改配置 B]", 98), ("[关闭]", 99)]
-        } else if self.listing.is_some() {
+            if !matches!(self.focus, 97..=99) {
+                self.focus = 97;
+            }
+            vec![("关闭", 99), ("修改配置", 98), ("重试", 97)]
+        } else if self.listing.is_some() && !self.busy {
             vec![
-                ("[打开此目录 Ctrl+Enter]", 5),
-                ("[显示/隐藏目录 H]", 6),
-                ("[取消]", 99),
+                (
+                    if self.hidden {
+                        "隐藏项 开"
+                    } else {
+                        "隐藏项 关"
+                    },
+                    6,
+                ),
+                ("取消", 99),
+                ("打开此目录", 5),
             ]
         } else {
-            vec![("[取消连接 Esc]", 99)]
+            vec![("取消连接", 99)]
         };
-        let mut x = footer.x;
+        let total: u16 = buttons
+            .iter()
+            .map(|(text, _)| unicode_width::UnicodeWidthStr::width(*text) as u16 + 6)
+            .sum::<u16>()
+            + (buttons.len().saturating_sub(1) * 2) as u16;
+        let compact = total > footer.width;
+        let compact_width = footer
+            .width
+            .saturating_sub((buttons.len().saturating_sub(1) * 2) as u16)
+            / buttons.len() as u16;
+        let mut x = footer.right().saturating_sub(total).max(footer.x);
         for (text, id) in buttons {
-            let width = unicode_width::UnicodeWidthStr::width(text) as u16;
-            let rect = Rect::new(x, footer.y, width.min(footer.right().saturating_sub(x)), 1);
-            frame.render_widget(
-                Paragraph::new(text).style(
-                    if id == 5 && self.form.as_ref().is_some_and(|form| form.focus == 5) {
-                        Style::default().fg(THEME.on_accent).bg(THEME.dialog_accent)
-                    } else {
-                        Style::default().fg(THEME.dialog_accent)
-                    },
-                ),
+            let width = if compact {
+                compact_width
+            } else {
+                unicode_width::UnicodeWidthStr::width(text) as u16 + 6
+            };
+            let rect = Rect::new(x, footer.y, width.min(footer.right().saturating_sub(x)), 3);
+            let focused = self
+                .form
+                .as_ref()
+                .map_or(self.focus == id, |form| form.focus == id);
+            controls::button(
+                frame,
                 rect,
+                text,
+                focused || self.hover == Some(id),
+                matches!(id, 5 | 97),
             );
             self.areas.push((rect, id));
             x = x.saturating_add(width + 2);
         }
+        frame.render_widget(
+            Paragraph::new("Tab 切换 · Enter 确认 · Esc 返回")
+                .style(Style::default().fg(THEME.muted)),
+            Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
+        );
     }
 }
 
@@ -452,9 +532,80 @@ mod tests {
         let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         wizard.selected = 1;
         assert!(matches!(wizard.handle(&enter), Action::Browse(path) if path == "/home/me/a b"));
+        assert!(matches!(
+            wizard.handle(&Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::CONTROL
+            ))),
+            Action::None
+        ));
+        wizard.handle(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        assert!(matches!(wizard.handle(&enter), Action::Open(path) if path == "/home/me"));
+    }
+
+    #[test]
+    fn directory_buttons_are_keyboard_accessible_without_modified_enter() {
+        let mut wizard = Wizard::new(None);
+        wizard.set_listing(Listing {
+            path: "/work".into(),
+            directories: vec!["child".into()],
+        });
+        let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        wizard.handle(&key(KeyCode::Tab));
         assert!(
-            matches!(wizard.handle(&Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL))), Action::Open(path) if path == "/home/me")
+            matches!(wizard.handle(&key(KeyCode::Enter)), Action::Open(path) if path == "/work")
         );
+        wizard.handle(&key(KeyCode::Tab));
+        wizard.handle(&key(KeyCode::Enter));
+        assert!(wizard.hidden);
+        wizard.handle(&key(KeyCode::Tab));
+        assert!(matches!(
+            wizard.handle(&key(KeyCode::Enter)),
+            Action::Cancel
+        ));
+        wizard.handle(&key(KeyCode::Tab));
+        wizard.path.set("/another".into());
+        assert!(
+            matches!(wizard.handle(&key(KeyCode::Enter)), Action::Browse(path) if path == "/another")
+        );
+    }
+
+    #[test]
+    fn dialog_layout_keeps_actions_visible_and_exports_optional_previews() {
+        for (name, spec) in [
+            ("ssh", Some(Spec::parse("/ssh server.example").unwrap())),
+            ("wsl", Some(Spec::parse("/wsl Ubuntu").unwrap())),
+            ("directory", None),
+        ] {
+            let mut wizard = Wizard::new(spec);
+            if wizard.form.is_none() {
+                wizard.set_listing(Listing {
+                    path: "/home/me/project".into(),
+                    directories: vec!["backup".into(), "models".into(), "src".into()],
+                });
+            }
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
+            terminal.draw(|frame| wizard.draw(frame)).unwrap();
+            let action = wizard.areas.iter().find(|(_, id)| *id == 5).unwrap().0;
+            assert!(action.width > 0 && action.height == 3);
+            assert!(
+                wizard
+                    .areas
+                    .iter()
+                    .all(|(area, _)| area.right() <= 100 && area.bottom() <= 34)
+            );
+            assert!(!wizard.areas.iter().any(|(_, id)| matches!(id, 80 | 81)));
+            if let Ok(path) = std::env::var("ORBIT_WIZARD_PREVIEW") {
+                let buffer = terminal.backend().buffer();
+                let cells = buffer.content.iter().map(|cell| serde_json::json!({"text": cell.symbol(), "fg": format!("{:?}", cell.fg), "bg": format!("{:?}", cell.bg)})).collect::<Vec<_>>();
+                std::fs::write(
+                    format!("{path}-{name}.json"),
+                    serde_json::to_vec(&cells).unwrap(),
+                )
+                .unwrap();
+            }
+        }
     }
 
     #[test]

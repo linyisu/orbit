@@ -1,5 +1,6 @@
 pub(crate) mod auth;
 mod configuration;
+mod controls;
 mod input;
 mod pump;
 mod standalone;
@@ -333,6 +334,13 @@ impl Tab {
                 Ok(Ok(listing)) => {
                     if let Some(wizard) = &mut self.state.workspace_wizard {
                         wizard.set_listing(listing);
+                        self.state.model = "选择目录".into();
+                        if let Some(TranscriptItem::Notice(notice)) =
+                            self.state.transcript.first_mut()
+                        {
+                            *notice = "连接已就绪，请选择工作目录".into();
+                            self.state.transcript_layout.invalidate_from(0);
+                        }
                     }
                 }
                 Ok(Err(error)) => {

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{Frame, layout::Rect, style::Style, widgets::Paragraph};
 
-use super::wizard::Action;
+use super::{controls, wizard::Action};
 use crate::{
     tui::{connect_custom::form, input::InputState, theme::THEME},
     workspace::{connect::Spec, discovery},
@@ -38,14 +38,6 @@ impl Config {
         };
         config.refresh_alias();
         config
-    }
-
-    pub(super) fn switch(&mut self, wsl: bool) {
-        if wsl != self.spec.is_wsl() {
-            *self = Self::new(
-                Spec::parse(if wsl { "/wsl" } else { "/ssh" }).expect("valid built-in command"),
-            );
-        }
     }
 
     fn refresh_alias(&mut self) {
@@ -146,6 +138,9 @@ impl Config {
     }
 
     pub(super) fn handle(&mut self, key: &crossterm::event::KeyEvent) -> Action {
+        if key.code == KeyCode::Enter && !key.modifiers.is_empty() {
+            return Action::None;
+        }
         if self.picker {
             match key.code {
                 KeyCode::Esc => self.picker = false,
@@ -160,13 +155,13 @@ impl Config {
             return Action::None;
         }
         let indices: &[usize] = if self.spec.is_wsl() {
-            &[0, 1, 4, 5]
+            &[0, 1, 4, 5, 99]
         } else {
-            &[6, 0, 1, 2, 3, 4, 5]
+            &[6, 0, 2, 1, 3, 4, 5, 99]
         };
         match key.code {
-            KeyCode::F(2) => self.switch(!self.spec.is_wsl()),
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) || self.focus == 5 => {
+            KeyCode::Enter if self.focus == 99 => return Action::Cancel,
+            KeyCode::Enter if self.focus == 5 => {
                 return self.start();
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Down if self.focus == 6 => {
@@ -212,63 +207,23 @@ impl Config {
         frame: &mut Frame<'_>,
         area: Rect,
         areas: &mut Vec<(Rect, usize)>,
+        hover: Option<usize>,
     ) {
         self.refresh_alias();
-        let labels = if self.spec.is_wsl() {
-            [
-                "WSL 发行版",
-                "用户名（可选）",
-                "",
-                "",
-                "目录（留空则连接后选择）",
-            ]
-        } else {
-            [
-                "主机（地址或 SSH 别名）",
-                "用户名（可选，或 user@host）",
-                "端口（留空沿用 SSH 配置）",
-                "私钥路径（可选；密码将在认证时询问）",
-                "目录（留空则连接后选择）",
-            ]
-        };
-        let modes = if self.spec.is_wsl() {
-            ["[ SSH ]", "[• WSL ]"]
-        } else {
-            ["[• SSH ]", "[ WSL ]"]
-        };
-        for (index, mode) in modes.into_iter().enumerate() {
-            let rect = Rect::new(
-                area.x + index as u16 * 12,
-                area.y,
-                11.min(area.width.saturating_sub(index as u16 * 12)),
-                1,
-            );
-            frame.render_widget(
-                Paragraph::new(mode).style(Style::default().fg(THEME.dialog_accent)),
-                rect,
-            );
-            areas.push((rect, 80 + index));
-        }
-        let mut y = area.y + 2;
-        let selector = if !self.spec.is_wsl() && y + 1 < area.bottom() {
-            frame.render_widget(
-                Paragraph::new("SSH 配置（~/.ssh/config，可选）")
-                    .style(Style::default().fg(THEME.dialog_accent)),
-                Rect::new(area.x, y, area.width, 1),
-            );
-            let rect = Rect::new(area.x, y + 1, area.width, 1);
+        let mut y = area.y;
+        let selector = if !self.spec.is_wsl() && y + 3 <= area.bottom() {
+            let rect = Rect::new(area.x, y, area.width, 3);
             let name = self
                 .selected_host
                 .as_ref()
                 .map(|host| host.name.as_str())
                 .unwrap_or("手动填写新服务器");
-            frame.render_widget(
-                Paragraph::new(format!("{name}  ▾")).style(if self.focus == 6 {
-                    Style::default().fg(THEME.on_accent).bg(THEME.dialog_accent)
-                } else {
-                    Style::default()
-                }),
+            controls::select(
+                frame,
                 rect,
+                "SSH 配置 · ~/.ssh/config",
+                name,
+                self.focus == 6 || hover == Some(6),
             );
             areas.push((rect, 6));
             y += 3;
@@ -276,54 +231,72 @@ impl Config {
         } else {
             None
         };
-        if let Some(error) = &self.error {
+        let labels = if self.spec.is_wsl() {
+            ["发行版", "用户名", "端口", "私钥", "工作目录"]
+        } else {
+            ["主机", "用户名", "端口", "私钥", "工作目录"]
+        };
+        let placeholders = [
+            "地址或配置别名",
+            "使用默认用户",
+            "默认端口",
+            "私钥路径（可选）",
+            "连接后选择目录",
+        ];
+        let rows: Vec<Vec<usize>> = if self.spec.is_wsl() {
+            vec![vec![0], vec![1], vec![4]]
+        } else if area.width >= 64 {
+            vec![vec![0, 2], vec![1, 3], vec![4]]
+        } else {
+            vec![vec![0], vec![2], vec![1], vec![3], vec![4]]
+        };
+        let capacity = (area.bottom().saturating_sub(y + 1) / 3) as usize;
+        let focused_row = rows
+            .iter()
+            .position(|row| row.contains(&self.focus))
+            .unwrap_or(0);
+        let start = focused_row.saturating_sub(capacity.saturating_sub(1));
+        for row in rows.into_iter().skip(start).take(capacity) {
+            let left = if row.first() == Some(&0) {
+                area.width * 2 / 3
+            } else {
+                area.width / 3
+            };
+            for (column, index) in row.iter().copied().enumerate() {
+                let (x, width) = if row.len() == 1 {
+                    (area.x, area.width)
+                } else if column == 0 {
+                    (area.x, left - 1)
+                } else {
+                    (area.x + left + 1, area.width - left - 1)
+                };
+                let rect = Rect::new(x, y, width, 3);
+                controls::field(
+                    frame,
+                    rect,
+                    labels[index],
+                    &self.fields[index],
+                    self.focus == index && !self.picker,
+                    placeholders[index],
+                );
+                areas.push((rect, index));
+            }
+            y += 3;
+        }
+        if y < area.bottom() {
+            let text = self
+                .error
+                .as_deref()
+                .unwrap_or("密码和私钥口令将在连接时询问");
             frame.render_widget(
-                Paragraph::new(error.as_str()).style(Style::default().fg(THEME.error)),
+                Paragraph::new(text).style(Style::default().fg(if self.error.is_some() {
+                    THEME.error
+                } else {
+                    THEME.muted
+                })),
                 Rect::new(area.x, y, area.width, 1),
             );
             y += 1;
-        }
-        let visible = labels
-            .iter()
-            .enumerate()
-            .filter(|(_, label)| !label.is_empty())
-            .collect::<Vec<_>>();
-        let capacity = (area.bottom().saturating_sub(y) as usize / 3).max(1);
-        let focus = visible
-            .iter()
-            .position(|(index, _)| *index == self.focus)
-            .unwrap_or(visible.len().saturating_sub(1));
-        let start = focus.saturating_sub(capacity.saturating_sub(1));
-        for (index, label) in visible.into_iter().skip(start).take(capacity) {
-            if y + 1 >= area.bottom() {
-                break;
-            }
-            frame.render_widget(
-                Paragraph::new(*label).style(Style::default().fg(THEME.dialog_accent)),
-                Rect::new(area.x, y, area.width, 1),
-            );
-            let field = Rect::new(area.x, y + 1, area.width, 1);
-            frame.render_widget(
-                Paragraph::new(form::input_line(
-                    &self.fields[index],
-                    area.width as usize,
-                    false,
-                    self.focus == index,
-                    "—",
-                )),
-                field,
-            );
-            areas.push((field, index));
-            if self.focus == index {
-                frame.set_cursor_position((
-                    area.x
-                        + (form::cursor_column(&self.fields[index], area.width as usize, false)
-                            as u16)
-                            .min(area.width.saturating_sub(1)),
-                    y + 1,
-                ));
-            }
-            y += 3;
         }
         if self.spec.is_wsl() && self.focus == 0 {
             let count = area.bottom().saturating_sub(y) as usize;
@@ -417,6 +390,28 @@ mod tests {
     }
 
     #[test]
+    fn plain_tab_and_enter_reach_connect_without_terminal_shortcuts() {
+        let mut config = Config::new(Spec::parse("/ssh server.example").unwrap());
+        assert!(matches!(
+            config.handle(&KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
+            Action::None
+        ));
+        for _ in 0..6 {
+            config.handle(&KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        }
+        assert_eq!(config.focus, 5);
+        assert!(matches!(
+            config.handle(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::Start(_)
+        ));
+        config.handle(&KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(matches!(
+            config.handle(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::Cancel
+        ));
+    }
+
+    #[test]
     fn manual_server_clears_inherited_credentials_and_does_not_replace_entered_host() {
         let mut config = Config::new(Spec::parse("/ssh dev /project").unwrap());
         config.fill(&discovery::Host {
@@ -433,7 +428,7 @@ mod tests {
         config.fields[0].set("new.example".into());
         config.handle(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(config.fields[0].text, "new.example");
-        assert_eq!(config.focus, 1);
+        assert_eq!(config.focus, 2);
         let Action::Start(spec) = config.start() else {
             panic!("manual connection")
         };
