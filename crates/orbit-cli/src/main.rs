@@ -253,6 +253,9 @@ struct SwePrediction<'a> {
 }
 
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--internal-ssh-askpass") {
+        return workspace::interaction::askpass();
+    }
     if std::env::args().nth(1).as_deref() == Some("--internal-document-worker") {
         let args: Vec<_> = std::env::args_os().skip(2).collect();
         anyhow::ensure!(

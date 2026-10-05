@@ -9,15 +9,23 @@ use tokio::{
 
 use super::protocol::{self, Request, Response};
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SshOptions {
+    pub user: Option<String>,
+    pub port: Option<u16>,
+    pub identity: Option<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     Local,
     Ssh {
         host: String,
+        options: SshOptions,
     },
     Wsl {
         distribution: String,
@@ -29,19 +37,24 @@ impl Target {
     pub fn label(&self) -> String {
         match self {
             Self::Local => "本地".into(),
-            Self::Ssh { host } => format!("SSH {host}"),
+            Self::Ssh { host, .. } => format!("SSH {host}"),
             Self::Wsl { distribution, .. } => format!("WSL {distribution}"),
         }
     }
 
-    pub fn command(&self, arguments: &[String], unattended: bool) -> Result<Command> {
+    pub fn command(
+        &self,
+        arguments: &[String],
+        unattended: bool,
+        interactive: Option<&super::interaction::Interaction>,
+    ) -> Result<Command> {
         let command = match self {
             Target::Local => {
                 let mut command = Command::new(&arguments[0]);
                 command.args(&arguments[1..]);
                 command
             }
-            Target::Ssh { host } => {
+            Target::Ssh { host, options } => {
                 ensure!(
                     !host.is_empty()
                         && !host.starts_with('-')
@@ -49,11 +62,26 @@ impl Target {
                     "invalid SSH host"
                 );
                 let mut command = Command::new("ssh");
-                if unattended {
+                if let Some(user) = &options.user {
+                    command.arg("-l").arg(user);
+                }
+                if let Some(port) = options.port {
+                    command.arg("-p").arg(port.to_string());
+                }
+                if let Some(identity) = &options.identity {
+                    command.arg("-i").arg(identity);
+                }
+                if let Some(interactive) = interactive {
+                    interactive.configure(&mut command);
+                } else if unattended {
                     command.args(["-o", "BatchMode=yes"]);
                 }
                 command.args([
                     "-T",
+                    "-o",
+                    "ConnectTimeout=15",
+                    "-o",
+                    "ConnectionAttempts=1",
                     "-o",
                     "ServerAliveInterval=15",
                     "-o",
@@ -83,7 +111,7 @@ impl Target {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct Connection {
     pub target: Target,
     pub workspace: String,
@@ -93,6 +121,7 @@ pub struct Connection {
     pub auth_dir: Option<PathBuf>,
     pub allow_mcp_start: bool,
     pub unattended: bool,
+    pub interactive: Option<Arc<super::interaction::Interaction>>,
 }
 
 impl Connection {
@@ -121,7 +150,9 @@ impl Connection {
         if self.allow_mcp_start {
             arguments.push("--allow-mcp-start".into());
         }
-        let mut command = self.target.command(&arguments, self.unattended)?;
+        let mut command =
+            self.target
+                .command(&arguments, self.unattended, self.interactive.as_deref())?;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -131,6 +162,13 @@ impl Connection {
     }
 
     pub async fn connect(&self) -> Result<Client> {
+        self.connect_progress(None).await
+    }
+
+    pub async fn connect_progress(
+        &self,
+        progress: Option<&super::interaction::Progress>,
+    ) -> Result<Client> {
         let mut process = self
             .command()?
             .spawn()
@@ -149,11 +187,20 @@ impl Connection {
             .context("workspace transport has no stderr")?;
         let diagnostics = Arc::new(Mutex::new(Vec::new()));
         let captured = diagnostics.clone();
+        let progress = progress.cloned().or_else(|| {
+            self.interactive
+                .as_ref()
+                .map(|interactive| interactive.progress.clone())
+        });
+        let log_progress = progress.clone();
         let drain = tokio::spawn(async move {
             let mut bytes = [0; 4096];
             while let Ok(count) = stderr.read(&mut bytes).await {
                 if count == 0 {
                     break;
+                }
+                if let Some(progress) = &log_progress {
+                    progress.log(&String::from_utf8_lossy(&bytes[..count]));
                 }
                 let mut output = captured.lock().await;
                 output.extend_from_slice(&bytes[..count]);
@@ -169,10 +216,11 @@ impl Connection {
             drain,
             failed: false,
         };
-        let marker =
-            tokio::time::timeout(CONNECT_TIMEOUT, protocol::read_preamble(&mut client.stdout))
-                .await;
-        if !matches!(marker, Ok(Ok(()))) {
+        let marker = super::interaction::timeout(CONNECT_TIMEOUT, progress.as_ref(), async {
+            Ok(protocol::read_preamble(&mut client.stdout).await?)
+        })
+        .await;
+        if marker.is_err() {
             let _ = client.process.start_kill();
             let _ = tokio::time::timeout(Duration::from_secs(1), &mut client.drain).await;
             let log = client.diagnostics.lock().await;
@@ -278,12 +326,16 @@ mod tests {
             auth_dir: None,
             allow_mcp_start: false,
             unattended: false,
+            interactive: None,
         }
     }
 
     #[test]
     fn embedded_ssh_never_prompts_on_the_tui_terminal() {
-        let mut config = connection(Target::Ssh { host: "dev".into() });
+        let mut config = connection(Target::Ssh {
+            host: "dev".into(),
+            options: Default::default(),
+        });
         config.unattended = true;
         let command = config.command().unwrap();
         assert!(
@@ -306,6 +358,7 @@ mod tests {
     fn transports_use_one_service_command_and_quote_every_remote_argument() {
         let ssh = connection(Target::Ssh {
             host: "my-jump-host".into(),
+            options: Default::default(),
         })
         .command()
         .unwrap();
@@ -323,7 +376,8 @@ mod tests {
         assert_eq!(remote[4], "/tmp/project '中文';$(touch nope)");
         assert!(
             connection(Target::Ssh {
-                host: "-oProxyCommand=evil".into()
+                host: "-oProxyCommand=evil".into(),
+                options: Default::default()
             })
             .command()
             .is_err()

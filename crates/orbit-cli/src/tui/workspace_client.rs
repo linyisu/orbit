@@ -1,8 +1,11 @@
+pub(crate) mod auth;
+mod configuration;
 mod input;
 mod pump;
 mod standalone;
 #[cfg(test)]
 mod tests;
+pub(crate) mod wizard;
 
 use std::{sync::Arc, time::Duration};
 
@@ -41,6 +44,11 @@ pub(super) struct Tab {
     pub connection: Option<Arc<Connection>>,
     spec: Option<Spec>,
     connecting: Option<AbortOnDropHandle<Result<Opened>>>,
+    updates: Option<workspace::interaction::Updates>,
+    progress: Option<workspace::interaction::Progress>,
+    preparing: Option<AbortOnDropHandle<Result<Arc<Connection>>>>,
+    browsing: Option<AbortOnDropHandle<Result<workspace::directories::Listing>>>,
+    connected_at: std::time::Instant,
     worker: Option<AbortOnDropHandle<()>>,
     commands: Option<Arc<mpsc::Sender<Call>>>,
     incoming: Option<mpsc::Receiver<Result<Response>>>,
@@ -56,8 +64,68 @@ impl Tab {
     pub fn connecting(spec: Spec, media: media::Context) -> Self {
         let mut tab = Self::empty(spec.label(), spec.workspace().into(), media);
         tab.spec = Some(spec.clone());
-        tab.connecting = Some(AbortOnDropHandle::new(tokio::spawn(spec.open())));
+        if spec.remote() && spec.configure_required() {
+            tab.state.workspace_wizard = Some(wizard::Wizard::new(Some(spec)));
+        } else {
+            tab.start(spec);
+        }
         tab
+    }
+
+    fn start(&mut self, spec: Spec) {
+        self.connecting = None;
+        self.preparing = None;
+        self.browsing = None;
+        self.connection = None;
+        self.state.ssh_prompt = None;
+        self.spec = Some(spec.clone());
+        self.title = spec.label();
+        self.state.connection_label = Some(spec.label());
+        self.offline = false;
+        self.connected_at = std::time::Instant::now();
+        let (progress, updates) = workspace::interaction::channel();
+        self.progress = Some(progress.clone());
+        self.updates = Some(updates);
+        let mut wizard = wizard::Wizard::new(None);
+        wizard.busy = true;
+        self.state.workspace_wizard = Some(wizard);
+        if spec.remote() && spec.configure_required() {
+            self.preparing = Some(AbortOnDropHandle::new(tokio::spawn(async move {
+                spec.prepare(progress).await
+            })));
+        } else {
+            self.connecting = Some(AbortOnDropHandle::new(tokio::spawn(spec.open(progress))));
+        }
+    }
+
+    fn browse(&mut self, path: String) {
+        let (Some(connection), Some(progress)) = (self.connection.clone(), self.progress.clone())
+        else {
+            return;
+        };
+        if let Some(wizard) = &mut self.state.workspace_wizard {
+            wizard.busy = true;
+            wizard.failed = false;
+        }
+        self.browsing = Some(AbortOnDropHandle::new(tokio::spawn(async move {
+            workspace::directories::list(&connection, &path, &progress).await
+        })));
+    }
+
+    fn open_directory(&mut self, path: String) {
+        let (Some(connection), Some(progress)) = (self.connection.clone(), self.progress.clone())
+        else {
+            return;
+        };
+        let mut connection = (*connection).clone();
+        connection.workspace = path;
+        if let Some(wizard) = &mut self.state.workspace_wizard {
+            wizard.listing = None;
+            wizard.busy = true;
+        }
+        self.connecting = Some(AbortOnDropHandle::new(tokio::spawn(
+            Opened::connect_progress(Arc::new(connection), None, progress),
+        )));
     }
 
     fn empty(label: String, workspace: String, media: media::Context) -> Self {
@@ -73,6 +141,11 @@ impl Tab {
             connection: None,
             spec: None,
             connecting: None,
+            updates: None,
+            progress: None,
+            preparing: None,
+            browsing: None,
+            connected_at: std::time::Instant::now(),
             worker: None,
             commands: None,
             incoming: None,
@@ -103,9 +176,13 @@ impl Tab {
                 self.state.media.clone(),
             );
             tab.connection = Some(connection.clone());
+            tab.state.workspace_wizard = Some(wizard::Wizard::new(None));
             let connection = connection.clone();
-            tab.connecting = Some(AbortOnDropHandle::new(tokio::spawn(Opened::connect(
-                connection, resume,
+            let (progress, updates) = workspace::interaction::channel();
+            tab.progress = Some(progress.clone());
+            tab.updates = Some(updates);
+            tab.connecting = Some(AbortOnDropHandle::new(tokio::spawn(Opened::reopen(
+                connection, resume, progress,
             ))));
             tab
         } else {
@@ -182,6 +259,96 @@ impl Tab {
 
     pub async fn poll(&mut self) -> bool {
         let mut changed = false;
+        if let Some(updates) = &mut self.updates {
+            if let Some(wizard) = &mut self.state.workspace_wizard {
+                let logs = updates
+                    .logs
+                    .lock()
+                    .map(|logs| logs.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if wizard.logs != logs {
+                    wizard.logs = logs;
+                    changed = true;
+                }
+                let status = format!(
+                    "{} · {}s",
+                    updates.stage.borrow().as_str(),
+                    self.connected_at.elapsed().as_secs()
+                );
+                if wizard.status != status && !wizard.failed {
+                    wizard.status = status;
+                    changed = true;
+                }
+            }
+            if self
+                .state
+                .ssh_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.closed())
+            {
+                self.state.ssh_prompt = None;
+                changed = true;
+            }
+            if self.state.ssh_prompt.is_none()
+                && let Ok(prompt) = updates.prompts.try_recv()
+            {
+                self.state.ssh_prompt = Some(auth::Prompt::new(prompt));
+                self.state.cursor_motion.clear();
+                changed = true;
+            }
+            if self.connecting.is_some() || self.preparing.is_some() || self.browsing.is_some() {
+                let stage = updates.stage.borrow_and_update().clone();
+                let seconds = self.connected_at.elapsed().as_secs();
+                let status = format!("{stage} · {seconds}s · Esc / Ctrl+C 取消");
+                if let Some(TranscriptItem::Notice(current)) = self.state.transcript.first_mut()
+                    && *current != status
+                {
+                    *current = status;
+                    self.state.transcript_layout.invalidate_from(0);
+                    changed = true;
+                }
+            }
+        }
+        if self
+            .preparing
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            match self.preparing.take().unwrap().await {
+                Ok(Ok(connection)) => {
+                    self.connection = Some(connection);
+                    self.browse("~".into());
+                }
+                Ok(Err(error)) => self.disconnected(format!("{error:#}")),
+                Err(error) => self.disconnected(error.to_string()),
+            }
+            changed = true;
+        }
+        if self
+            .browsing
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            match self.browsing.take().unwrap().await {
+                Ok(Ok(listing)) => {
+                    if let Some(wizard) = &mut self.state.workspace_wizard {
+                        wizard.set_listing(listing);
+                    }
+                }
+                Ok(Err(error)) => {
+                    if let Some(wizard) = &mut self.state.workspace_wizard {
+                        wizard.busy = false;
+                        wizard.failed = true;
+                        wizard.status = format!("{error:#}");
+                        if let Some(progress) = &self.progress {
+                            progress.log(&wizard.status);
+                        }
+                    }
+                }
+                Err(error) => self.disconnected(error.to_string()),
+            }
+            changed = true;
+        }
         if self
             .connecting
             .as_ref()
@@ -311,6 +478,14 @@ impl Tab {
 
     fn disconnected(&mut self, error: String) {
         self.restore_submission();
+        if let Some(wizard) = &mut self.state.workspace_wizard {
+            wizard.failed = true;
+            wizard.busy = false;
+            wizard.status = error.clone();
+            wizard.logs.push(error.clone());
+        }
+        self.updates = None;
+        self.state.ssh_prompt = None;
         self.worker = None;
         self.incoming = None;
         self.commands = None;
@@ -340,14 +515,30 @@ impl Tab {
         self.offline = false;
         self.state
             .report_local(TranscriptItem::Notice("正在重新连接…".into()));
+        let (progress, updates) = workspace::interaction::channel();
+        self.progress = Some(progress.clone());
+        self.updates = Some(updates);
+        self.state.workspace_wizard = Some(wizard::Wizard::new(None));
+        self.connected_at = std::time::Instant::now();
         let task = if let Some(connection) = &self.connection {
-            tokio::spawn(Opened::connect(connection.clone(), self.id.clone()))
+            tokio::spawn(Opened::reopen(
+                connection.clone(),
+                self.id.clone(),
+                progress,
+            ))
         } else if let Some(spec) = &self.spec {
-            tokio::spawn(spec.clone().open())
+            tokio::spawn(spec.clone().open(progress))
         } else {
             return;
         };
         self.connecting = Some(AbortOnDropHandle::new(task));
+    }
+
+    fn cancel_connect(&mut self) {
+        self.connecting = None;
+        self.preparing = None;
+        self.browsing = None;
+        self.disconnected("连接已取消".into());
     }
 
     fn send(&mut self, request: Request) -> bool {

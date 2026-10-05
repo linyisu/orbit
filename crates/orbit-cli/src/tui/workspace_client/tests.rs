@@ -216,3 +216,31 @@ async fn mixed_tabs_close_to_the_left_without_rebinding_the_local_executor() {
     tabs.remove_remote(&wsl_id);
     assert_eq!(tabs.active_remote.as_deref(), Some(ssh_id.as_str()));
 }
+
+#[tokio::test]
+async fn cancelling_authentication_closes_only_its_own_prompt() {
+    let (mut first, _) = tab("SSH first");
+    let (mut second, _) = tab("SSH second");
+    let (first_reply, first_answer) = tokio::sync::oneshot::channel();
+    let (second_reply, mut second_answer) = tokio::sync::oneshot::channel();
+    first.state.workspace_wizard = Some(wizard::Wizard::new(None));
+    first.state.ssh_prompt = Some(auth::Prompt::new(workspace::interaction::Challenge {
+        prompt: "first password".into(),
+        confirm: false,
+        reply: first_reply,
+    }));
+    second.state.ssh_prompt = Some(auth::Prompt::new(workspace::interaction::Challenge {
+        prompt: "second password".into(),
+        confirm: false,
+        reply: second_reply,
+    }));
+    first
+        .handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+        .unwrap();
+    assert!(first_answer.await.is_err());
+    assert!(first.state.ssh_prompt.is_none());
+    assert!(first.state.workspace_wizard.as_ref().unwrap().failed);
+    assert!(second_answer.try_recv().is_err());
+    assert!(!second.state.ssh_prompt.as_ref().unwrap().closed());
+    assert!(!second.offline);
+}

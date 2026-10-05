@@ -5,6 +5,40 @@ use crate::tui::{self, approval, render, selection};
 
 impl Tab {
     pub fn handle(&mut self, event: Event) -> Result<Action> {
+        if let Some(prompt) = &mut self.state.ssh_prompt {
+            if prompt.handle(&event) {
+                self.cancel_connect();
+            }
+            return Ok(Action::Redraw);
+        }
+        if let Some(wizard) = &mut self.state.workspace_wizard {
+            match wizard.handle(&event) {
+                super::wizard::Action::Start(spec) => self.start(*spec),
+                super::wizard::Action::Browse(path) => self.browse(path),
+                super::wizard::Action::Open(path) => self.open_directory(path),
+                super::wizard::Action::Cancel => return Ok(Action::Close),
+                super::wizard::Action::Back => {
+                    if let Some(spec) = self.spec.clone() {
+                        self.state.workspace_wizard = Some(super::wizard::Wizard::new(Some(spec)));
+                    }
+                }
+                super::wizard::Action::Retry => {
+                    if self.id.is_some() {
+                        self.reconnect();
+                    } else if let Some(spec) = self.spec.clone() {
+                        self.start(spec);
+                    }
+                }
+                super::wizard::Action::None => {}
+            }
+            return Ok(Action::Redraw);
+        }
+        if self.connecting.is_some()
+            && matches!(&event, Event::Key(key) if key.kind != KeyEventKind::Release && (key.code == KeyCode::Esc || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))))
+        {
+            self.cancel_connect();
+            return Ok(Action::Redraw);
+        }
         if let Some(preview) = &mut self.state.media_preview {
             let (_, close) = preview.handle(&event);
             if close {

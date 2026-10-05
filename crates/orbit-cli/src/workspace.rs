@@ -1,6 +1,9 @@
 mod bootstrap;
+mod command;
 pub(crate) mod connect;
+pub(crate) mod directories;
 pub(crate) mod discovery;
+pub(crate) mod interaction;
 pub(crate) mod protocol;
 mod run;
 mod server;
@@ -26,6 +29,12 @@ pub struct ConnectArgs {
     /// System SSH destination or a Host alias from ~/.ssh/config.
     #[arg(long, conflicts_with = "wsl")]
     ssh: Option<String>,
+    #[arg(long, requires = "ssh")]
+    ssh_user: Option<String>,
+    #[arg(long, requires = "ssh")]
+    ssh_port: Option<u16>,
+    #[arg(long, requires = "ssh")]
+    identity: Option<String>,
     /// WSL distribution. Omit both --ssh and --wsl for a local workspace.
     #[arg(long)]
     wsl: Option<String>,
@@ -71,7 +80,7 @@ pub async fn connect(
     database: Option<PathBuf>,
     auth_dir: Option<PathBuf>,
 ) -> Result<()> {
-    let connection = prepare_connection(&args, config, database, auth_dir, false).await?;
+    let connection = prepare_connection(&args, config, database, auth_dir, None).await?;
     let mut client = connection.connect().await?;
     if args.stop {
         client.request(Request::Shutdown).await?;
@@ -118,10 +127,17 @@ async fn prepare_connection(
     config: PathBuf,
     database: Option<PathBuf>,
     auth_dir: Option<PathBuf>,
-    unattended: bool,
+    progress: Option<interaction::Progress>,
 ) -> Result<Arc<Connection>> {
     let target = match (args.ssh.clone(), args.wsl.clone()) {
-        (Some(host), None) => Target::Ssh { host },
+        (Some(host), None) => Target::Ssh {
+            host,
+            options: transport::SshOptions {
+                user: args.ssh_user.clone(),
+                port: args.ssh_port,
+                identity: args.identity.clone(),
+            },
+        },
         (None, Some(distribution)) => Target::Wsl {
             distribution,
             user: args.wsl_user.clone(),
@@ -129,9 +145,29 @@ async fn prepare_connection(
         (None, None) => Target::Local,
         _ => bail!("choose one workspace target"),
     };
+    let unattended = progress.is_some();
+    let interactive = if matches!(target, Target::Ssh { .. }) {
+        match &progress {
+            Some(progress) => Some(Arc::new(
+                interaction::Interaction::new(progress.clone(), None).await?,
+            )),
+            None => None,
+        }
+    } else {
+        None
+    };
     let executable = match args.server.clone() {
         Some(executable) => executable,
-        None => bootstrap::executable(&target, args.upload_server.clone(), unattended).await?,
+        None => {
+            bootstrap::executable(
+                &target,
+                args.upload_server.clone(),
+                unattended,
+                interactive.as_deref(),
+                progress.as_ref(),
+            )
+            .await?
+        }
     };
     let connection = Arc::new(Connection {
         target,
@@ -142,6 +178,7 @@ async fn prepare_connection(
         auth_dir,
         allow_mcp_start: args.allow_mcp_start,
         unattended,
+        interactive,
     });
     Ok(connection)
 }

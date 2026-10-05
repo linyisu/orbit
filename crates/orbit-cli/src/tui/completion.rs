@@ -122,7 +122,7 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
                 name: command.name.into(),
                 display: None,
                 description: command.description.into(),
-                continue_input: matches!(command.name, "/ssh" | "/wsl"),
+                continue_input: false,
             })
             .collect();
     };

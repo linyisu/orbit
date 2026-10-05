@@ -73,7 +73,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     }
 
     let now = std::time::Instant::now();
-    let editing = !state.dialog_open()
+    let editing = state.workspace_wizard.is_none()
+        && state.ssh_prompt.is_none()
+        && !state.dialog_open()
         && state.restore_picker.is_none()
         && state.approval.is_none()
         && state.input.selection().is_none()
@@ -93,6 +95,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     }
     if let Some(preview) = &mut state.media_preview {
         preview.draw(frame);
+    }
+    if let Some(wizard) = &mut state.workspace_wizard {
+        wizard.draw(frame);
+    }
+    if let Some(prompt) = &state.ssh_prompt {
+        prompt.draw(frame);
     }
 }
 

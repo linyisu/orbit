@@ -149,6 +149,8 @@ pub struct UiState {
     pub(super) cursor_motion: super::cursor::CursorMotion,
     pub restore_picker: Option<super::restore::RestorePicker>,
     pub restore_selection: Option<Vec<String>>,
+    pub workspace_wizard: Option<super::workspace_client::wizard::Wizard>,
+    pub ssh_prompt: Option<super::workspace_client::auth::Prompt>,
     pub stored_completions: Vec<super::completion::Candidate>,
     pub menu_area: ratatui::layout::Rect,
     pub menu_rows: Vec<(ratatui::layout::Rect, usize)>,
@@ -341,6 +343,8 @@ impl UiState {
             cursor_motion: Default::default(),
             restore_picker: None,
             restore_selection: None,
+            workspace_wizard: None,
+            ssh_prompt: None,
             stored_completions: Vec::new(),
             menu_area: Default::default(),
             menu_rows: Vec::new(),
@@ -637,7 +641,9 @@ impl UiState {
     }
 
     pub fn menu(&self) -> Vec<super::completion::Candidate> {
-        if self.dialog_open()
+        if self.workspace_wizard.is_some()
+            || self.ssh_prompt.is_some()
+            || self.dialog_open()
             || self.restore_picker.is_some()
             || self.menu_dismissed
             || self.resume_loading.is_some()

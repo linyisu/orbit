@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::transport::Target;
 
@@ -17,6 +17,8 @@ pub async fn executable(
     target: &Target,
     upload: Option<PathBuf>,
     unattended: bool,
+    interactive: Option<&super::interaction::Interaction>,
+    progress: Option<&super::interaction::Progress>,
 ) -> Result<String> {
     if matches!(target, Target::Local) {
         ensure!(
@@ -25,15 +27,30 @@ pub async fn executable(
         );
         return Ok(std::env::current_exe()?.to_string_lossy().into_owned());
     }
-    tokio::time::timeout(BOOTSTRAP_TIMEOUT, prepare(target, upload, unattended))
-        .await
-        .context("workspace server deployment timed out")?
+    super::interaction::timeout(
+        BOOTSTRAP_TIMEOUT,
+        progress,
+        prepare(target, upload, unattended, interactive, progress),
+    )
+    .await
+    .context("workspace server deployment failed")
 }
 
-async fn prepare(target: &Target, upload: Option<PathBuf>, unattended: bool) -> Result<String> {
+async fn prepare(
+    target: &Target,
+    upload: Option<PathBuf>,
+    unattended: bool,
+    interactive: Option<&super::interaction::Interaction>,
+    progress: Option<&super::interaction::Progress>,
+) -> Result<String> {
+    if let Some(progress) = progress {
+        progress.report("连接目标并检测系统与架构");
+    }
     let platform = shell(
         target,
         unattended,
+        interactive,
+        progress,
         "printf '%s\\n' \"$(uname -s)\" \"$(uname -m)\" \"$HOME\"".into(),
     )
     .await?;
@@ -50,6 +67,9 @@ async fn prepare(target: &Target, upload: Option<PathBuf>, unattended: bool) -> 
         home.starts_with('/') && !home.contains(['\0', '\r', '\n']),
         "target HOME is invalid"
     );
+    if let Some(progress) = progress {
+        progress.report("准备服务程序，计算版本校验值");
+    }
     let binary = upload.unwrap_or(std::env::current_exe()?);
     let (machine, digest) = tokio::task::spawn_blocking({
         let binary = binary.clone();
@@ -69,20 +89,32 @@ async fn prepare(target: &Target, upload: Option<PathBuf>, unattended: bool) -> 
     );
     let directory = format!("{home}/.cache/orbit/servers/{digest}");
     let executable = format!("{directory}/orbit");
+    if let Some(progress) = progress {
+        progress.report("检查目标上的服务版本");
+    }
     let probe = shell(
         target,
         unattended,
+        interactive,
+        progress,
         format!("if test -x {}; then printf ready; fi", quote(&executable)),
     )
     .await?;
     if probe.lines().last() == Some("ready") {
+        if let Some(progress) = progress {
+            progress.report("复用已安装的工作区服务");
+        }
         return Ok(executable);
     }
     if !unattended {
         eprintln!("正在为 {} 安装工作区服务…", target.label());
     }
+    if let Some(progress) = progress {
+        progress.report("上传并校验工作区服务程序");
+    }
     let script = upload_script(&directory, &digest);
-    let mut command = target.command(&["sh".into(), "-c".into(), script], unattended)?;
+    let mut command =
+        target.command(&["sh".into(), "-c".into(), script], unattended, interactive)?;
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -91,11 +123,31 @@ async fn prepare(target: &Target, upload: Option<PathBuf>, unattended: bool) -> 
     let mut child = command.spawn()?;
     let mut input = child.stdin.take().context("missing server upload pipe")?;
     let mut file = tokio::fs::File::open(binary).await?;
+    let size = file.metadata().await?.len();
     let upload = async {
-        tokio::io::copy(&mut file, &mut input).await?;
-        input.shutdown().await
+        let mut buffer = [0; 64 * 1024];
+        let mut sent = 0;
+        let mut last_percent = 0;
+        loop {
+            let count = file.read(&mut buffer).await?;
+            if count == 0 {
+                break;
+            }
+            input.write_all(&buffer[..count]).await?;
+            sent += count as u64;
+            let percent = sent.saturating_mul(100) / size.max(1);
+            if percent >= last_percent + 10 {
+                if let Some(progress) = progress {
+                    progress.report(format!("上传工作区服务：{percent}%"));
+                }
+                last_percent = percent;
+            }
+        }
+        input.shutdown().await?;
+        drop(input);
+        Ok::<_, std::io::Error>(())
     };
-    let (sent, output) = tokio::join!(upload, child.wait_with_output());
+    let (sent, output) = tokio::join!(upload, super::command::output(child, progress));
     let output = output?;
     ensure!(
         output.status.success(),
@@ -118,13 +170,26 @@ fn upload_script(directory: &str, digest: &str) -> String {
     )
 }
 
-async fn shell(target: &Target, unattended: bool, script: String) -> Result<String> {
-    let output = target
-        .command(&["sh".into(), "-c".into(), script], unattended)?
+async fn shell(
+    target: &Target,
+    unattended: bool,
+    interactive: Option<&super::interaction::Interaction>,
+    progress: Option<&super::interaction::Progress>,
+    script: String,
+) -> Result<String> {
+    let child = target
+        .command(&["sh".into(), "-c".into(), script], unattended, interactive)?
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .output()
-        .await?;
+        .spawn()?;
+    let output = super::interaction::timeout(
+        Duration::from_secs(30),
+        progress,
+        super::command::output(child, progress),
+    )
+    .await?;
     ensure!(
         output.status.success(),
         "target environment check failed: {}",
