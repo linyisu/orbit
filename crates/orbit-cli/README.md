@@ -17,7 +17,7 @@
 /local
 ```
 
-`/ssh`、`/wsl` 或仅填写主机名的命令会打开配置弹窗：根据命令直接填写 SSH 主机或 WSL 发行版、用户名、端口、私钥路径；目录留空时，连接后可浏览远端目录并选择工作区。SSH 配置选择框读取 `~/.ssh/config` 及 `Include` 文件，选择别名会填入主机、用户名、端口和私钥路径，并保留别名对应的跳板机等 SSH 设置；也可选择“手动填写新服务器”自行填写。WSL 输入列出已安装的发行版。命令中明确指定目录则直接连接。表单与按钮可用 `Tab` / `Shift+Tab` 切换，`Enter` 激活当前项，`Esc` 返回或取消；目录列表中 `Enter` 进入选中目录，`Tab` 移到“打开此目录”后按 `Enter` 打开工作区，也可直接点击按钮；连接期间可以切换其他标签。
+`/ssh`、`/wsl` 或仅填写主机名的命令会打开配置弹窗：根据命令直接填写 SSH 主机或 WSL 发行版、用户名、端口、私钥路径；目录留空时，连接后可浏览远端目录并选择工作区。SSH 配置选择框读取 `~/.ssh/config` 及 `Include` 文件，选择别名会填入主机、用户名、端口和私钥路径，并保留别名对应的跳板机等 SSH 设置；也可选择“手动填写新服务器”自行填写。WSL 输入列出已安装的发行版。命令中明确指定目录则直接连接。表单与按钮可用 `Tab` / `Shift+Tab` 切换，`Enter` 激活当前项，`Esc` 返回或取消；目录列表默认选中“打开当前目录”，直接 `Enter` 即可确认；选中子目录后 `Enter` 进入，进入后再次 `Enter` 确认当前目录，也可直接点击底部“打开此目录”；路径输入框支持输入后 `Enter` 前往；连接期间可以切换其他标签。
 
 连接日志实时显示环境探测、服务部署进度、SSH 诊断和握手状态。失败后可重试或修改配置，不会无限停在“连接中”。
 
@@ -37,7 +37,11 @@ orbit connect --workspace /path/to/project --stop
 
 SSH 使用系统客户端，因此沿用主机别名、跳板机、密钥代理及主机校验配置；不关闭主机校验。TUI 内通过私有 askpass 通道显示首次主机指纹确认、密码、私钥口令及交互认证提示，敏感输入遮蔽显示，不保存到聊天记录、配置文件或命令参数。认证等待不计入连接超时。相同连接的新标签复用私有 SSH 主连接，各标签的认证提示独立；最后一个标签关闭后清理主连接。可用 `--ssh-user`、`--ssh-port`、`--identity` 覆盖 SSH 配置。WSL 直接启动选定发行版的 Linux 进程，无需安装 SSH 服务。本仓库的客户端仍依赖 Unix/Linux 接口；WSL 启动适配器需要当前环境能执行 `wsl.exe`，Windows 原生客户端尚未完成。
 
-首次 SSH/WSL 连接会检测 Linux 系统与架构，把本机 Orbit 二进制上传到目标用户的 `~/.cache/orbit/servers/<SHA-256>/orbit`，校验后原子安装；已存在的相同版本会复用。支持自动匹配 x86-64 和 AArch64；异架构可用 `--upload-server /local/path/to/linux-orbit` 指定目标二进制。用 `--server /remote/path/to/orbit` 可直接连接预装服务。目标仍需兼容二进制的动态库，以及运行命令所需的 `bwrap`、`prlimit` 和用户命名空间。部署不要求目标访问下载站点。
+首次 SSH/WSL 连接检测 Linux 系统与架构，优先上传客户端旁的 `orbit-server-<架构>-linux-musl` 静态服务程序（x86_64 / aarch64），不依赖远端 glibc 版本。服务安装到目标用户的 `~/.cache/orbit/servers/<SHA-256>/orbit`，校验后原子替换；已有相同版本会复用。上传、复用或指定预装程序时都会先验证目标能否运行，再开始握手。缺少静态服务程序时兼容旧行为，尝试上传本机程序；不兼容时在部署阶段明确报错，不再只显示握手 EOF。
+
+发布包须将客户端和静态服务程序放在同一目录。从源码构建时，先安装 `musl-tools` 和相应 Rust musl target，再运行 `scripts/build-bundle.sh`（开发构建用 `scripts/build-bundle.sh debug`）；输出在 `target/bundle/`，同时为 `target/release/orbit` 或 `target/debug/orbit` 配齐服务程序。CI 生成 x86-64 Linux 压缩包，并在隔离的 Ubuntu 20.04 容器里验证自动部署、服务握手与缓存复用；AArch64 可在对应 Linux 主机上运行同一脚本构建。
+
+异架构或自定义构建可用 `--upload-server /local/path/to/linux-orbit`；`--server /remote/path/to/orbit` 连接预装服务。目标仍需运行命令所需的 `bwrap`、`prlimit` 和用户命名空间。部署不要求目标访问下载站点，也不修改目标系统库。
 
 `--config`、`--database`、`--auth-dir` 指目标环境中的路径。默认配置为工作区内的 `config.toml`，相对配置和数据库路径相对目标工作区；认证目录默认取目标用户的配置目录。服务使用目标环境的模型凭据、网络代理、Skill 和 MCP 配置，不隐式复制本机账号。`--allow-mcp-start` 仍需显式指定。
 

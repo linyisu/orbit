@@ -12,6 +12,8 @@ cargo build --release -p orbit-cli
 ./target/release/orbit tui
 ```
 
+连接旧版 Linux 服务器时，建议构建包含静态远端服务的包：安装 `musl-tools`，执行 `rustup target add x86_64-unknown-linux-musl`（AArch64 改为 `aarch64-unknown-linux-musl`），再运行 `scripts/build-bundle.sh`。分发时保留 `target/bundle/` 内的两个可执行文件，避免把本机 glibc 依赖带到服务器。
+
 在 TUI 内用 `/ssh HOST [PATH]`、`/wsl DISTRO [PATH]` 打开远端标签，本地与多个远端会话可同时运行；`/new` 在当前环境新建会话，`/local` 新建本地标签。界面在本机渲染，Agent 与工具在各自环境运行。也保留实验性的命令行连接入口：
 
 ```sh
