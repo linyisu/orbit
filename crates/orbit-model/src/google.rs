@@ -20,6 +20,7 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                 system.push(json!({ "text": content }));
                 continue;
             }
+
             ChatMessage::User {
                 content,
                 attachments,
@@ -32,8 +33,10 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                     let (mime, data) = attachment.image()?;
                     parts.push(json!({ "inlineData": { "mimeType": mime, "data": data } }));
                 }
+
                 ("user", parts)
             }
+
             ChatMessage::Assistant {
                 content,
                 tool_calls,
@@ -70,11 +73,14 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                         // Documented Gemini replay marker for imported / unsigned calls.
                         part["thoughtSignature"] = json!("skip_thought_signature_validator");
                     }
+
                     parts.push(part);
                     calls.insert(call.id, (call.function.name, native_id));
                 }
+
                 ("model", parts)
             }
+
             ChatMessage::Tool {
                 tool_call_id,
                 content,
@@ -116,8 +122,10 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                 })
             })
             .collect::<Vec<_>>();
+
         body["tools"] = json!([{ "functionDeclarations": declarations }]);
     }
+
     let mut generation = json!({});
     if let Some(max) = request.max_tokens {
         generation["maxOutputTokens"] = json!(max);
@@ -133,9 +141,11 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
             ReasoningEffort::High => "HIGH",
             ReasoningEffort::None | ReasoningEffort::Xhigh | ReasoningEffort::Max => return Err(ModelError::Protocol("Google thinkingLevel supports minimal, low, medium, or high; configure only levels supported by the model".into())),
         };
+
         generation["thinkingConfig"] =
             json!({ "thinkingLevel": level, "includeThoughts": effort != ReasoningEffort::None });
     }
+
     body["generationConfig"] = generation;
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
@@ -155,6 +165,7 @@ pub(crate) fn stream(
             Err(ModelError::Protocol("secure randomness unavailable".into()))
         }));
     }
+
     let nonce = nonce
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -191,6 +202,7 @@ fn decode(
                 StreamEvent::TextDelta(text.into())
             });
         }
+
         if let Some(call) = part.get("functionCall") {
             let name = call["name"]
                 .as_str()
@@ -225,6 +237,7 @@ fn decode(
             *next_call += 1;
         }
     }
+
     if let Some(reason) = candidate["finishReason"].as_str() {
         let finish = match reason {
             "STOP" if *next_call > 0 => "tool_calls",
@@ -250,6 +263,7 @@ fn decode(
             }),
         });
     }
+
     Ok(events)
 }
 
@@ -315,6 +329,7 @@ fn project_antigravity_model(body: &mut Value) -> Result<(), ModelError> {
         .and_then(|thinking| thinking["effortRouting"][effort.as_deref().unwrap_or("off")].as_str())
         .or(profile.request_model_id.as_deref())
         .unwrap_or(&id);
+
     body["model"] = json!(route);
 
     let generation = &mut body["request"]["generationConfig"];
@@ -330,6 +345,7 @@ fn project_antigravity_model(body: &mut Value) -> Result<(), ModelError> {
                 "medium" => 8192,
                 _ => 16384,
             });
+
         generation["thinkingConfig"] = json!({ "thinkingBudget": budget, "includeThoughts": true });
     }
 
@@ -349,6 +365,7 @@ fn project_antigravity_model(body: &mut Value) -> Result<(), ModelError> {
                 }
             }
         }
+
         body["request"]["toolConfig"] = json!({ "functionCallingConfig": { "mode": "VALIDATED" } });
     }
 
@@ -369,6 +386,7 @@ fn cca_schema(schema: Value) -> Result<Value, ModelError> {
             result.insert(key.into(), value.clone());
         }
     }
+
     if source
         .keys()
         .any(|key| matches!(key.as_str(), "$ref" | "anyOf" | "oneOf" | "allOf" | "not"))
@@ -386,6 +404,7 @@ fn cca_schema(schema: Value) -> Result<Value, ModelError> {
         }
         result.insert("properties".into(), Value::Object(normalized));
     }
+
     if let Some(items) = source.get("items") {
         result.insert("items".into(), cca_schema(items.clone())?);
     }
@@ -435,6 +454,7 @@ mod tests {
             } else {
                 assert_eq!(thinking["thinkingLevel"], effort);
             }
+
             let tool = &body["request"]["tools"][0]["functionDeclarations"][0];
             assert!(tool.get("parametersJsonSchema").is_none());
             assert_eq!(
@@ -553,6 +573,7 @@ mod tests {
                 ]),
             )
             .unwrap();
+
             assert_eq!(
                 body["request"]["contents"][0]["parts"][0]["functionCall"]["id"],
                 id

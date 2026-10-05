@@ -20,6 +20,7 @@ fn merge_extra(body: &mut Value, extra: &Value) {
                 }
             }
         }
+
         (body, extra) => *body = extra.clone(),
     }
 }

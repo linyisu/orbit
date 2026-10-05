@@ -53,6 +53,7 @@ pub(crate) fn encode(
 
                 input.push(json!({ "role": "user", "content": blocks }));
             }
+
             ChatMessage::Assistant {
                 content,
                 tool_calls,
@@ -65,6 +66,7 @@ pub(crate) fn encode(
                     input.push(json!({ "type": "function_call", "call_id": call.id, "name": call.function.name, "arguments": call.function.arguments }));
                 }
             }
+
             ChatMessage::Tool {
                 tool_call_id,
                 content,
@@ -161,11 +163,13 @@ pub(crate) fn stream(
                     events.push(StreamEvent::TextDelta(delta));
                 }
             }
+
             "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
                 if let Some(delta) = event.delta {
                     events.push(StreamEvent::ReasoningDelta(delta));
                 }
             }
+
             "response.output_item.added" => {
                 if let Some(item) = event.item.filter(|item| item.kind == "function_call") {
                     events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
@@ -177,6 +181,7 @@ pub(crate) fn stream(
                     }));
                 }
             }
+
             "response.function_call_arguments.delta" => {
                 events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
                     metadata: None,
@@ -187,6 +192,7 @@ pub(crate) fn stream(
                     arguments: event.delta.unwrap_or_default(),
                 }));
             }
+
             "response.completed" | "response.incomplete" => {
                 if let Some(response) = event.response {
                     events.push(StreamEvent::Completed {
@@ -198,6 +204,7 @@ pub(crate) fn stream(
                     });
                 }
             }
+
             _ => {}
         }
 

@@ -52,6 +52,7 @@ pub(crate) fn encode(
                     messages.push(json!({ "role": "user", "content": blocks }));
                 }
             }
+
             ChatMessage::Assistant {
                 content,
                 tool_calls,
@@ -69,6 +70,7 @@ pub(crate) fn encode(
                 }
                 messages.push(message);
             }
+
             ChatMessage::Tool {
                 tool_call_id,
                 content,
@@ -286,6 +288,7 @@ mod input_tests {
             let parsed: WireDelta = serde_json::from_value(message).unwrap();
             assert!(parsed.tool_calls.is_empty());
         }
+
         for invalid in [json!({}), json!("oops"), json!(1)] {
             assert!(serde_json::from_value::<WireDelta>(json!({"tool_calls": invalid})).is_err());
         }
@@ -315,6 +318,7 @@ mod input_tests {
                 stream,
             )
             .unwrap();
+
             assert_eq!(body["messages"][1]["content"], "hello back");
             assert!(body["messages"][1].get("tool_calls").is_none());
             let calls = body["messages"][2]["tool_calls"].as_array().unwrap();

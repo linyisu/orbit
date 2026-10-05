@@ -38,12 +38,14 @@ pub(crate) async fn completion(
                 }
                 call.function.arguments.push_str(&delta.arguments);
             }
+
             StreamEvent::Completed {
                 finish_reason,
                 usage,
             } => finished = Some((finish_reason, usage)),
         }
     }
+
     let (finish_reason, usage) = finished
         .ok_or_else(|| ModelError::Protocol("account response ended without completion".into()))?;
 

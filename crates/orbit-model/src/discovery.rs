@@ -21,10 +21,12 @@ pub async fn discover(
             AuthTarget::Openai,
             vec!["https://api.deepseek.com/v1/models".to_owned()],
         ),
+
         (ApiFormat::OpenaiChatCompletions, "https://open.bigmodel.cn/api/coding/paas/v4") => (
             AuthTarget::Openai,
             vec!["https://open.bigmodel.cn/api/coding/paas/v4/models".to_owned()],
         ),
+
         (ApiFormat::GoogleCodeAssist, "https://daily-cloudcode-pa.googleapis.com") => (
             AuthTarget::GoogleCodeAssist,
             vec![
@@ -32,10 +34,12 @@ pub async fn discover(
                     .to_owned(),
             ],
         ),
+
         (ApiFormat::GoogleCodeAssist, "https://cloudcode-pa.googleapis.com") => (
             AuthTarget::GoogleCodeAssist,
             vec!["https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota".to_owned()],
         ),
+
         (ApiFormat::ChatgptCodex, "https://chatgpt.com/backend-api/codex") => (
             AuthTarget::ChatgptCodex,
             vec![
@@ -47,6 +51,7 @@ pub async fn discover(
                 ),
             ],
         ),
+
         _ => {
             return Err(ModelError::Protocol(
                 "account discovery is unavailable for this endpoint".into(),
@@ -95,6 +100,7 @@ pub async fn discover(
                 continue;
             }
         };
+
         if !response.status().is_success() {
             let status = response.status();
             if status.as_u16() == 401 || status.as_u16() == 403 {
@@ -102,6 +108,7 @@ pub async fn discover(
                     "model discovery rejected authorization: HTTP {status}"
                 )));
             }
+
             last = Some(format!("HTTP {status}"));
             continue;
         }
@@ -113,8 +120,10 @@ pub async fn discover(
                     "model discovery response exceeds 4 MiB".into(),
                 ));
             }
+
             bytes.extend_from_slice(&chunk);
         }
+
         let payload: Value = serde_json::from_slice(&bytes)?;
         return Ok(payload);
     }
@@ -125,7 +134,6 @@ pub async fn discover(
     )))
 }
 
-/// Discover API models without persisting a draft connection or making an inference request.
 pub async fn discover_api_models(
     base: &str,
     format: ApiFormat,
@@ -174,6 +182,7 @@ async fn discover_api_catalog_inner(
             "unsupported API discovery protocol".into(),
         ));
     }
+
     let mut endpoint = reqwest::Url::parse(base)
         .map_err(|_| ModelError::Protocol("invalid service URL".into()))?;
     if !matches!(endpoint.scheme(), "http" | "https")
@@ -187,6 +196,7 @@ async fn discover_api_catalog_inner(
             "use an HTTP(S) base URL without credentials, query or fragment".into(),
         ));
     }
+
     endpoint.set_path(&format!("{}/models", endpoint.path().trim_end_matches('/')));
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -232,6 +242,7 @@ async fn discover_api_catalog_inner(
                 .query_pairs_mut()
                 .append_pair("after_id", cursor);
         }
+
         *page.timeout_mut() = Some(
             deadline
                 .checked_duration_since(std::time::Instant::now())
@@ -241,12 +252,14 @@ async fn discover_api_catalog_inner(
             .execute(page)
             .await
             .map_err(|_| ModelError::Protocol("model discovery request failed".into()))?;
+
         if !response.status().is_success() {
             return Err(ModelError::Protocol(format!(
                 "model discovery returned HTTP {}",
                 response.status()
             )));
         }
+
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
             size = size.saturating_add(chunk.len());
@@ -255,6 +268,7 @@ async fn discover_api_catalog_inner(
             }
             bytes.extend_from_slice(&chunk);
         }
+
         let mut payload: Value = serde_json::from_slice(&bytes)
             .map_err(|_| ModelError::Protocol("model catalog is not JSON".into()))?;
         let rows = payload["data"]
@@ -266,17 +280,21 @@ async fn discover_api_catalog_inner(
             api_model_ids(&payload)?;
             return Ok(payload);
         }
+
         let next = payload["last_id"]
             .as_str()
             .filter(|value| !value.is_empty())
             .ok_or_else(|| ModelError::Protocol("model catalog pagination has no cursor".into()))?;
+
         if !seen.insert(next.to_owned()) {
             return Err(ModelError::Protocol(
                 "model catalog pagination repeated its cursor".into(),
             ));
         }
+
         cursor = Some(next.to_owned());
     }
+
     Err(ModelError::Protocol(
         "model catalog has too many pages".into(),
     ))
@@ -297,6 +315,7 @@ fn api_model_ids(payload: &Value) -> Result<Vec<String>, ModelError> {
             ids.push(id.to_owned());
         }
     }
+
     if ids.is_empty() {
         return Err(ModelError::Protocol(
             "model catalog is empty; enter model IDs manually".into(),
@@ -308,8 +327,9 @@ fn api_model_ids(payload: &Value) -> Result<Vec<String>, ModelError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
 
     async fn catalog_server(listener: tokio::net::TcpListener, status: &str, body: &str) -> String {
         let (mut socket, _) = listener.accept().await.unwrap();
@@ -381,6 +401,7 @@ mod tests {
                 socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
                 requests.push(String::from_utf8(request).unwrap().to_ascii_lowercase());
             }
+
             requests
         };
         let (result, requests) = tokio::join!(

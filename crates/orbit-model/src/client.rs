@@ -120,6 +120,7 @@ impl ModelClient {
                 "base_url appears to contain an API key instead of a service address; put the service URL in base_url and the credential in api_key".into(),
             ));
         }
+
         if !endpoint.username().is_empty() || endpoint.password().is_some() {
             return Err(ModelError::InvalidBaseUrl(
                 "base_url must not contain login credentials; use api_key for authentication"
@@ -132,6 +133,7 @@ impl ModelClient {
                 "choose either api_key or credential authentication".into(),
             ));
         }
+
         if matches!(
             format,
             ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
@@ -141,6 +143,7 @@ impl ModelClient {
                 "account-backed providers require a saved credential".into(),
             ));
         }
+
         let auth_store = config
             .credential
             .as_ref()
@@ -187,6 +190,7 @@ impl ModelClient {
             let stream = self.stream_with_cancel(request, cancellation).await?;
             return crate::collect::completion(stream, &self.config.model).await;
         }
+
         let (response, _) = self.send(request, false, cancellation.clone()).await?;
         let decode = async {
             match self.config.api_format {
@@ -260,6 +264,7 @@ impl ModelClient {
                 cancellation,
                 self.config.model.clone(),
             ),
+
             ApiFormat::OpenaiChatCompletions => {
                 crate::openai::chat_completions::stream(response, self.config.timeout, cancellation)
             }
@@ -293,6 +298,7 @@ impl ModelClient {
                 self.config.reasoning_adapter,
                 &self.config.reasoning_extra,
             ),
+
             ApiFormat::OpenaiChatCompletions => crate::openai::chat_completions::encode(
                 &self.config.model,
                 request,
@@ -300,6 +306,7 @@ impl ModelClient {
                 &self.config.reasoning_extra,
                 stream,
             ),
+
             ApiFormat::OpenaiResponses => crate::openai::responses::encode(
                 &self.config.model,
                 request,
@@ -307,6 +314,7 @@ impl ModelClient {
                 &self.config.reasoning_extra,
                 stream,
             ),
+
             ApiFormat::AnthropicMessages => crate::anthropic::messages::encode(
                 &self.config.model,
                 request,
@@ -330,6 +338,7 @@ impl ModelClient {
                         _ = time::sleep(delay) => {}
                     }
                 }
+
                 Err(error) => return Err(error),
             }
         }
@@ -369,10 +378,12 @@ impl ModelClient {
                     },
                 )) => result.map_err(|_| orbit_auth::AuthError::Timeout)??,
             };
+
             if format == ApiFormat::GoogleCodeAssist {
                 body["project"] =
                     serde_json::json!(auth.project_id.ok_or(orbit_auth::AuthError::InvalidToken)?);
             }
+
             if auth.kind == orbit_auth::CredentialKind::AntigravityOAuth {
                 crate::google::antigravity_envelope(&mut body)?;
                 if body["model"]
@@ -382,6 +393,7 @@ impl ModelClient {
                     builder = builder.header("anthropic-beta", "interleaved-thinking-2025-05-14");
                 }
             }
+
             builder = builder.headers(auth.headers);
         } else if let Some(api_key) = &self.config.api_key {
             builder = match format {

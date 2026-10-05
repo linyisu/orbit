@@ -38,6 +38,7 @@ async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() 
             "account_id": "test-account",
             "project_id": "test-project"
         });
+
         std::fs::write(&path, credential.to_string()).unwrap();
         #[cfg(unix)]
         {
@@ -97,6 +98,7 @@ async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() 
             assert!(wire.contains("\"requesttype\":\"agent\""));
             assert!(wire.contains("\"requestid\":\"agent/"));
         }
+
         if format == ApiFormat::ChatgptCodex {
             assert_eq!(tool_calls[0].id, "call-one");
             assert!(wire.contains("chatgpt-account-id: test-account"));
@@ -255,13 +257,15 @@ fn rejects_credentials_used_as_service_addresses_without_echoing_them() {
     }
 }
 
-use super::*;
-use futures_util::StreamExt;
 use std::sync::Arc;
+
+use futures_util::StreamExt;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
+
+use super::*;
 
 #[test]
 fn parses_all_supported_api_formats() {
@@ -391,6 +395,7 @@ async fn anthropic_thinking_and_top_level_usage_survive_token_exhaustion() {
                     finished = true;
                 }
             }
+
             _ => panic!("unexpected event"),
         }
     }

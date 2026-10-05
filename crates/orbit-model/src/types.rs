@@ -409,8 +409,9 @@ pub const fn default_supports_vision() -> bool {
 }
 
 mod duration_seconds {
-    use serde::{Deserialize, Deserializer, Serializer};
     use std::time::Duration;
+
+    use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(value: &Duration, serializer: S) -> Result<S::Ok, S::Error>
     where

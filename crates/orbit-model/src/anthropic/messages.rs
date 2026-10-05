@@ -176,6 +176,7 @@ pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompleti
                     ));
                 }
             }
+
             _ => {}
         }
     }
@@ -225,16 +226,19 @@ pub(crate) fn stream(
                                 .map(|v| v.to_string())
                                 .unwrap_or_default(),
                         })),
+
                         "text" => {
                             if let Some(text) = block.text.filter(|s| !s.is_empty()) {
                                 events.push(StreamEvent::TextDelta(text));
                             }
                         }
+
                         "thinking" => {
                             if let Some(text) = block.thinking.filter(|s| !s.is_empty()) {
                                 events.push(StreamEvent::ReasoningDelta(text));
                             }
                         }
+
                         _ => {}
                     }
                 }
@@ -248,11 +252,13 @@ pub(crate) fn stream(
                                 events.push(StreamEvent::ReasoningDelta(text));
                             }
                         }
+
                         Some("text_delta") => {
                             if let Some(text) = delta.text {
                                 events.push(StreamEvent::TextDelta(text));
                             }
                         }
+
                         Some("input_json_delta") => {
                             if let Some(json) = delta.partial_json {
                                 events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
@@ -264,6 +270,7 @@ pub(crate) fn stream(
                                 }));
                             }
                         }
+
                         _ => {}
                     }
                 }
