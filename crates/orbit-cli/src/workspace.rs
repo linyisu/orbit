@@ -1,4 +1,5 @@
 mod bootstrap;
+pub(crate) mod connect;
 pub(crate) mod protocol;
 mod run;
 mod server;

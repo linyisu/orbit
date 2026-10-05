@@ -258,7 +258,9 @@ fn running_menu_keeps_only_safe_local_commands() {
 
     assert!(commands.iter().any(|command| command.name == "/model"));
     assert!(commands.iter().any(|command| command.name == "/status"));
-    assert!(!commands.iter().any(|command| command.name == "/new"));
+    for name in ["/new", "/ssh", "/wsl", "/local", "/close"] {
+        assert!(commands.iter().any(|command| command.name == name));
+    }
     assert!(!commands.iter().any(|command| command.name == "/compact"));
 }
 

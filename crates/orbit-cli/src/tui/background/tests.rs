@@ -302,12 +302,13 @@ async fn two_background_runs_stream_finish_and_keep_resources_and_approvals_sepa
     assert!(session.store.acquire(&first_id).await.is_err());
     assert!(session.scratch.read().unwrap().ends_with(&first_id));
     assert!(state.approval.is_some());
+    tabs.sync_ui(&mut state, &session);
     let event = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
         KeyCode::Char('2'),
         KeyModifiers::ALT,
     ));
     assert_eq!(
-        super::super::tab_target(&event, &state, &tabs),
+        super::super::tab_target(&event, &state),
         Some(super::super::TabAction::Select(third_id.clone()))
     );
     assert!(tabs.restore(

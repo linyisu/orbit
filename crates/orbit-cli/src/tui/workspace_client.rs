@@ -1,441 +1,379 @@
+mod input;
+mod pump;
+mod standalone;
+#[cfg(test)]
+mod tests;
+
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Result, bail};
-use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
-};
+use anyhow::Result;
 use tokio::sync::mpsc;
+use tokio_util::task::AbortOnDropHandle;
 
 use super::{
     app::{RunStatus, TranscriptItem, UiState},
-    approval,
-    frames::Frames,
-    input_events, media, render, selection, terminal,
+    media,
 };
 use crate::workspace::{
     self, Call, Files,
+    connect::{Opened, Spec},
     protocol::{Mode, Request, Response, SessionInfo, Update},
     transport::{Client, Connection},
 };
 
-const HELP: &str = "工作区连接：/sessions 列出会话，/resume <ID> 接回，/new 新建，/model <供应商::模型> 切换模型，/mode auto|ask|yolo，/quit 断开。Ctrl+C 取消任务，Ctrl+D 断开。任务在目标环境运行，断开后仍会继续。";
+const CHANNEL_CAPACITY: usize = 16;
+const HELP: &str = "/ssh HOST [PATH]、/wsl DISTRO [PATH] 连接新环境；/new 新建当前环境会话，/local 新建本地标签，/sessions 查看目标历史，/resume ID 在新标签恢复，/reconnect 重连，/close 断开当前标签。/model、/mode 切换模型与权限。";
 
-pub async fn run(client: Client, connection: Arc<Connection>, info: SessionInfo) -> Result<()> {
-    let (_guard, mut terminal) = terminal::TerminalGuard::enter()?;
-    let mut state = UiState::new(&info.model);
-    state.media = media::Context::detect(Arc::default());
-    let (commands, requests) = mpsc::channel(16);
-    let commands = Arc::new(commands);
-    install(&mut state, &info, connection.clone(), commands.clone());
-    state.report_local(TranscriptItem::Notice(HELP.into()));
-    let (responses, mut incoming) = mpsc::channel(16);
-    let _worker = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(pump(
-        client,
-        info.id.clone(),
-        requests,
-        responses,
-    )));
-    let mut id = info.id;
-    let mut busy = false;
-    let mut approval_id = None;
-    let mut selected_model = None;
-    let mut mode = Mode::Auto;
-    let mut events = EventStream::new();
-    let mut pending_event = None;
-    let mut frames = Frames::default();
-    frames.request(tokio::time::Instant::now());
-    let mut ticks = tokio::time::interval(Duration::from_millis(33));
-    loop {
-        tokio::select! {
-            response = incoming.recv() => {
-                let Some(response) = response else {
-                    bail!("workspace connection ended");
-                };
-                match response? {
-                    Response::Page(page) => {
-                        busy = page.busy;
-                        state.model = page.model;
-                        for update in page.updates {
-                            match update {
-                                Update::Profile(info) => {
-                                    state.model = info.model;
-                                    state.context_tokens = info.context_tokens;
-                                    state.input_context_tokens = info.input_context_tokens;
-                                    state.max_output_tokens = info.max_output_tokens;
-                                }
-                                Update::Started { prompt } => state.submit(prompt),
-                                Update::Agent(event) => state.apply(*event),
-                                Update::Finished { status } => {
-                                    state.pause_clock();
-                                    state.status = match status.as_str() {
-                                        "completed" => RunStatus::Completed,
-                                        "cancelled" => RunStatus::Cancelled,
-                                        _ => RunStatus::Failed,
-                                    };
-                                }
-                            }
-                        }
-                        let pending = page.approvals.into_iter().next();
-                        if pending.as_ref().map(|approval| approval.id) != approval_id {
-                            approval_id = pending.as_ref().map(|approval| approval.id);
-                            state.approval = pending.map(|approval| approval.preview);
-                            state.approval_scroll = 0;
-                            state.approval_expanded = false;
-                            state.approval_shown = false;
-                            state.approval_choice = 0;
-                            state.approval_diff = None;
-                            if state.approval.is_some() {
-                                state.pause_clock();
-                            } else if busy {
-                                state.resume_clock();
-                            }
-                        }
-                    }
-                    Response::Opened(info) => {
-                        id = info.id.clone();
-                        let media = state.media.clone();
-                        state = UiState::new(&info.model);
-                        state.media = media;
-                        install(&mut state, &info, connection.clone(), commands.clone());
-                        busy = false;
-                        approval_id = None;
-                        selected_model = None;
-                        mode = Mode::Auto;
-                    }
-                    Response::Sessions(sessions) => state.report_local(TranscriptItem::CommandResult(
-                        sessions
-                            .iter()
-                            .map(|session| format!("{}  {}  {}", session.id, session.model, session.title))
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                    )),
-                    Response::Error(error) => state.report_local(TranscriptItem::Error(error)),
-                    _ => {}
-                }
-                frames.request(tokio::time::Instant::now());
+pub(super) enum Action {
+    None,
+    Close,
+    Quit,
+    Local,
+    Open(Box<Spec>),
+    SameTarget(Option<String>),
+    Redraw,
+}
+
+pub(super) struct Tab {
+    pub state: UiState,
+    pub title: String,
+    pub id: Option<String>,
+    pub connection: Option<Arc<Connection>>,
+    spec: Option<Spec>,
+    connecting: Option<AbortOnDropHandle<Result<Opened>>>,
+    worker: Option<AbortOnDropHandle<()>>,
+    commands: Option<Arc<mpsc::Sender<Call>>>,
+    incoming: Option<mpsc::Receiver<Result<Response>>>,
+    busy: bool,
+    starting: Option<String>,
+    approval_id: Option<u64>,
+    selected_model: Option<String>,
+    mode: Mode,
+    offline: bool,
+}
+
+impl Tab {
+    pub fn connecting(spec: Spec, media: media::Context) -> Self {
+        let mut tab = Self::empty(spec.label(), spec.workspace().into(), media);
+        tab.spec = Some(spec.clone());
+        tab.connecting = Some(AbortOnDropHandle::new(tokio::spawn(spec.open())));
+        tab
+    }
+
+    fn empty(label: String, workspace: String, media: media::Context) -> Self {
+        let mut state = UiState::new("连接中");
+        state.media = media;
+        state.connection_label = Some(label.clone());
+        state.workspace = workspace;
+        state.report_local(TranscriptItem::Notice(format!("正在连接 {label}…")));
+        Self {
+            state,
+            title: label,
+            id: None,
+            connection: None,
+            spec: None,
+            connecting: None,
+            worker: None,
+            commands: None,
+            incoming: None,
+            busy: false,
+            starting: None,
+            approval_id: None,
+            selected_model: None,
+            mode: Mode::Auto,
+            offline: false,
+        }
+    }
+
+    pub fn ready(opened: Opened, media: media::Context) -> Self {
+        let mut tab = Self::empty(
+            opened.connection.target.label(),
+            opened.info.workspace.clone(),
+            media,
+        );
+        tab.install(opened);
+        tab
+    }
+
+    pub fn sibling(&self, resume: Option<String>) -> Self {
+        if let Some(connection) = &self.connection {
+            let mut tab = Self::empty(
+                connection.target.label(),
+                self.state.workspace.clone(),
+                self.state.media.clone(),
+            );
+            tab.connection = Some(connection.clone());
+            let connection = connection.clone();
+            tab.connecting = Some(AbortOnDropHandle::new(tokio::spawn(Opened::connect(
+                connection, resume,
+            ))));
+            tab
+        } else {
+            Self::connecting(
+                self.spec
+                    .as_ref()
+                    .expect("connecting tab has a spec")
+                    .with_resume(resume),
+                self.state.media.clone(),
+            )
+        }
+    }
+
+    fn install(&mut self, opened: Opened) {
+        let draft = self.state.input.text.clone();
+        let media = self.state.media.clone();
+        let cursor_trail = self.state.cursor_motion.enabled;
+        self.state = UiState::new(&opened.info.model);
+        self.state.media = media;
+        self.state.cursor_motion.enabled = cursor_trail;
+        self.state.input.set(draft);
+        self.state.connection_label = Some(opened.connection.target.label());
+        self.state.workspace = opened.info.workspace.clone();
+        self.profile(&opened.info);
+        self.id = Some(opened.info.id.clone());
+        let mut connection = opened.connection;
+        Arc::make_mut(&mut connection).unattended = true;
+        self.connection = Some(connection);
+        self.title = format!(
+            "{} · {}",
+            self.state.connection_label.as_deref().unwrap_or_default(),
+            std::path::Path::new(&self.state.workspace)
+                .file_name()
+                .and_then(|p| p.to_str())
+                .unwrap_or(&self.state.workspace)
+        );
+        let (commands, requests) = mpsc::channel(CHANNEL_CAPACITY);
+        let commands = Arc::new(commands);
+        self.state.media.files = Some(Files {
+            requests: commands.clone(),
+            session: opened.info.id.clone(),
+        });
+        self.commands = Some(commands);
+        let (responses, incoming) = mpsc::channel(CHANNEL_CAPACITY);
+        self.incoming = Some(incoming);
+        self.worker = Some(AbortOnDropHandle::new(tokio::spawn(pump::pump(
+            opened.client,
+            opened.info.id.clone(),
+            requests,
+            responses,
+        ))));
+        self.busy = false;
+        self.starting = None;
+        self.approval_id = None;
+        self.state.permission_mode = match self.mode {
+            Mode::Auto => super::permissions::Mode::Auto,
+            Mode::Ask => super::permissions::Mode::Ask,
+            Mode::Yolo => super::permissions::Mode::Yolo,
+        };
+        self.offline = false;
+        self.state.report_local(TranscriptItem::Notice(format!(
+            "工作区会话 {} · /help 查看连接命令",
+            opened.info.id
+        )));
+    }
+
+    fn profile(&mut self, info: &SessionInfo) {
+        self.state.model = self.selected_model.as_ref().unwrap_or(&info.model).clone();
+        self.state.model_completions = info.models.clone();
+        self.state.context_tokens = info.context_tokens;
+        self.state.input_context_tokens = info.input_context_tokens;
+        self.state.max_output_tokens = info.max_output_tokens;
+    }
+
+    pub async fn poll(&mut self) -> bool {
+        let mut changed = false;
+        if self
+            .connecting
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            let result = self.connecting.take().unwrap().await;
+            match result {
+                Ok(Ok(opened)) => self.install(opened),
+                Ok(Err(error)) => self.disconnected(format!("{error:#}")),
+                Err(error) => self.disconnected(error.to_string()),
             }
-            event = input_events::next(&mut events, &mut pending_event) => {
-                let Some(event) = event else { break; };
-                let event = event?;
-                if matches!(&event, Event::Key(key) if key.kind != KeyEventKind::Release && key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL) && state.input.text.is_empty())
-                {
+            changed = true;
+        }
+        for _ in 0..CHANNEL_CAPACITY {
+            let response = match self.incoming.as_mut().map(|rx| rx.try_recv()) {
+                Some(Ok(response)) => response,
+                Some(Err(mpsc::error::TryRecvError::Disconnected)) if !self.offline => {
+                    self.disconnected("工作区连接已结束".into());
+                    changed = true;
                     break;
                 }
-                if let Some(preview) = &mut state.media_preview {
-                    let (_, close) = preview.handle(&event);
-                    if close {
-                        state.media_preview = None;
-                    }
-                    frames.request(tokio::time::Instant::now());
-                    continue;
+                _ => break,
+            };
+            changed = true;
+            match response {
+                Ok(response) => self.apply(response),
+                Err(error) => {
+                    self.disconnected(format!("{error:#}"));
+                    break;
                 }
-                if let Some(approval) = approval_id {
-                    let action = approval::handle(&mut state, event.clone());
-                    let request = match action {
-                        approval::Action::Approve | approval::Action::AlwaysAllow | approval::Action::Deny => {
-                            Some(Request::Approve {
-                                session: id.clone(),
-                                approval,
-                                allow: action != approval::Action::Deny,
-                                remember: action == approval::Action::AlwaysAllow,
-                            })
-                        }
-                        approval::Action::Cancel => Some(Request::Cancel {
-                            session: id.clone(),
-                        }),
-                        approval::Action::None => None,
-                    };
-                    if let Some(request) = request {
-                        send(&commands, request, &mut state);
-                    }
-                    frames.request(tokio::time::Instant::now());
-                    continue;
-                }
-                let mut changed = false;
-                if !state.selection.dragging() {
-                    changed |= render::handle_link_hover(&mut state, &event) == Some(true);
-                    changed |= render::handle_transcript_hover(&mut state, &event) == Some(true);
-                    changed |= super::navigation::handle(&mut state, &event) == Some(true);
-                }
-                if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) {
-                    if changed {
-                        frames.request(tokio::time::Instant::now());
-                    }
-                    continue;
-                }
-                frames.request(tokio::time::Instant::now());
-                if super::handle_input_mouse(&mut state, &event) {
-                    continue;
-                }
-                if let Event::Mouse(mouse) = &event
-                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                    && mouse.modifiers.contains(KeyModifiers::CONTROL)
-                {
-                    let offset = state.max_scroll.saturating_sub(state.scroll);
-                    if let Some(link) = state
-                        .transcript_layout
-                        .link_at(state.selection.viewport, offset, (mouse.column, mouse.row))
-                        .map(str::to_owned)
-                    {
-                        if let Err(error) = super::open_link_in_browser(&link) {
-                            state.report_local(TranscriptItem::Error(error.to_string()));
-                        }
-                        continue;
-                    }
-                }
-                if let Some(point) = state.selection.click(&event)
-                    && (super::jump_footnote_at(&mut state, point)
-                        || super::toggle_transcript_at(&mut state, point))
-                {
-                    continue;
-                }
-                if state.selection.handle(&event)? {
-                    continue;
-                }
-                match &event {
-                    Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
-                        state.scroll_up(super::wheel::LINES)
-                    }
-                    Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
-                        state.scroll_down(super::wheel::LINES)
-                    }
-                    Event::Key(key) if key.kind != KeyEventKind::Release => {
-                        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-                        match key.code {
-                            KeyCode::Char('d') if control && state.input.text.is_empty() => break,
-                            KeyCode::Char('c') if control => {
-                                if let Some(text) = state.input.selected_text() {
-                                    selection::copy_text(text)?;
-                                } else if busy {
-                                    send(
-                                        &commands,
-                                        Request::Cancel {
-                                            session: id.clone(),
-                                        },
-                                        &mut state,
-                                    );
-                                } else if state.input.text.is_empty() {
-                                    break;
-                                } else {
-                                    state.input.clear();
-                                }
-                            }
-                            KeyCode::PageUp => state.scroll_up(10),
-                            KeyCode::PageDown => state.scroll_down(10),
-                            KeyCode::Enter if key.modifiers.is_empty() => {
-                                if let Some(prompt) = state.input.take() {
-                                    let request = match prompt.trim() {
-                                        "/quit" | "/exit" => break,
-                                        "/help" => {
-                                            state.report_local(TranscriptItem::Notice(HELP.into()));
-                                            None
-                                        }
-                                        "/sessions" => Some(Request::Sessions),
-                                        "/new" => Some(Request::Open { resume: None }),
-                                        "/model" => {
-                                            state.report_local(TranscriptItem::CommandResult(
-                                                state.model_completions.join("\n"),
-                                            ));
-                                            None
-                                        }
-                                        text if text.starts_with("/resume ") => Some(Request::Open {
-                                            resume: Some(text[8..].trim().into()),
-                                        }),
-                                        text if text.starts_with("/model ") => {
-                                            if busy {
-                                                state.report_local(TranscriptItem::Notice(
-                                                    "任务执行中，结束后再切换模型。".into(),
-                                                ));
-                                                continue;
-                                            }
-                                            let model = text[7..].trim();
-                                            if state.model_completions.iter().any(|choice| choice == model) {
-                                                selected_model = Some(model.to_owned());
-                                                state.model = model.into();
-                                            } else {
-                                                state.report_local(TranscriptItem::Error(
-                                                    "模型未配置；用 /model 查看目标环境的模型。".into(),
-                                                ));
-                                            }
-                                            None
-                                        }
-                                        text if text.starts_with("/mode ") => {
-                                            if busy {
-                                                state.report_local(TranscriptItem::Notice(
-                                                    "任务执行中，结束后再切换权限模式。".into(),
-                                                ));
-                                                continue;
-                                            }
-                                            match text[6..].trim() {
-                                                "auto" => {
-                                                    mode = Mode::Auto;
-                                                    state.permission_mode = super::permissions::Mode::Auto;
-                                                }
-                                                "ask" => {
-                                                    mode = Mode::Ask;
-                                                    state.permission_mode = super::permissions::Mode::Ask;
-                                                }
-                                                "yolo" => {
-                                                    mode = Mode::Yolo;
-                                                    state.permission_mode = super::permissions::Mode::Yolo;
-                                                }
-                                                _ => state.report_local(TranscriptItem::Error(
-                                                    "模式：auto、ask、yolo".into(),
-                                                )),
-                                            }
-                                            None
-                                        }
-                                        text if text.starts_with('/') => {
-                                            state.report_local(TranscriptItem::Error(
-                                                "此工作区入口尚未接入该命令；用 /help 查看支持的命令。".into(),
-                                            ));
-                                            None
-                                        }
-                                        _ if busy => {
-                                            state.input.set(prompt);
-                                            state.report_local(TranscriptItem::Notice(
-                                                "任务仍在执行；可先取消，输入已保留。".into(),
-                                            ));
-                                            None
-                                        }
-                                        _ => Some(Request::Start {
-                                            session: id.clone(),
-                                            request_id: workspace::request_id(),
-                                            prompt,
-                                            mode,
-                                            model: selected_model.clone(),
-                                        }),
-                                    };
-                                    if let Some(request) = request {
-                                        send(&commands, request, &mut state);
-                                    }
-                                }
-                            }
-                            _ => {
-                                state.input.edit(&event, state.input_width);
-                            }
-                        }
-                    }
-                    Event::Paste(_) => {
-                        state.input.edit(&event, state.input_width);
-                    }
-                    _ => {}
-                }
-            }
-            _ = ticks.tick() => {
-                if state.media.changed()
-                    || state
-                        .media_preview
-                        .as_ref()
-                        .is_some_and(|preview| preview.tick())
-                    || busy
-                {
-                    frames.request(tokio::time::Instant::now());
-                }
-            }
-            _ = tokio::time::sleep_until(frames.deadline()), if frames.pending() => {
-                state.menu_dismissed = true;
-                terminal::draw_synchronized(&mut terminal, |frame| {
-                    render::draw(frame, &mut state);
-                })?;
-                frames.drawn(tokio::time::Instant::now());
             }
         }
+        changed |= self.state.media.changed()
+            || self
+                .state
+                .media_preview
+                .as_ref()
+                .is_some_and(|preview| preview.tick());
+        let direction = self.state.selection.auto_scroll(std::time::Instant::now());
+        if direction < 0 {
+            self.state.scroll_up(2);
+        }
+        if direction > 0 {
+            self.state.scroll_down(2);
+        }
+        changed |= direction != 0;
+        changed |= self
+            .state
+            .thinking_hover_started
+            .is_some_and(|start| start.elapsed() < Duration::from_millis(160));
+        changed |= super::advance_tab_hover(&mut self.state);
+        changed |= self.state.expire_footnote_focus();
+        changed || self.state.running()
     }
-    Ok(())
-}
 
-fn install(
-    state: &mut UiState,
-    info: &SessionInfo,
-    connection: Arc<Connection>,
-    requests: Arc<mpsc::Sender<Call>>,
-) {
-    state.connection_label = Some(connection.target.label());
-    state.workspace = info.workspace.clone();
-    state.context_tokens = info.context_tokens;
-    state.input_context_tokens = info.input_context_tokens;
-    state.max_output_tokens = info.max_output_tokens;
-    state.model_completions = info.models.clone();
-    state.media.files = Some(Files {
-        requests,
-        session: info.id.clone(),
-    });
-    state.report_local(TranscriptItem::Notice(format!("工作区会话 {}", info.id)));
-}
-
-fn send(commands: &mpsc::Sender<Call>, request: Request, state: &mut UiState) {
-    if let Err(error) = commands.try_send(Call {
-        request,
-        reply: None,
-    }) {
-        let message = format!("连接请求未发送：{error}");
-        if let Request::Start { prompt, .. } = error.into_inner().request {
-            state.input.set(prompt);
-        }
-        state.report_local(TranscriptItem::Error(message));
-    }
-}
-
-async fn pump(
-    mut client: Client,
-    mut session: String,
-    mut commands: mpsc::Receiver<Call>,
-    responses: mpsc::Sender<Result<Response>>,
-) {
-    let mut cursor = 0;
-    let mut last_status = None;
-    let mut interval = tokio::time::interval(Duration::from_millis(75));
-    loop {
-        let call = tokio::select! {
-            command = commands.recv() => match command { Some(command) => command, None => break },
-            _ = interval.tick() => Call { request: Request::Poll { session: session.clone(), after: cursor }, reply: None },
-        };
-        let response = client.request(call.request).await;
-        let response = match response {
-            Ok(response) => response,
-            Err(error) if client.failed() => {
-                if let Some(reply) = call.reply {
-                    let _ = reply.send(Err(anyhow::anyhow!(error.to_string())));
-                }
-                let _ = responses.send(Err(error)).await;
-                break;
-            }
-            Err(error) => Response::Error(format!("{error:#}")),
-        };
-        if let Some(reply) = call.reply {
-            let _ = reply.send(Ok(response));
-            continue;
-        }
-        match &response {
+    fn apply(&mut self, response: Response) {
+        match response {
             Response::Page(page) => {
-                cursor = page.next;
-                if page.more {
-                    interval.reset_immediately();
+                self.busy = page.busy;
+                if self.selected_model.is_none() {
+                    self.state.model = page.model;
                 }
-                let status = (
-                    page.busy,
-                    page.model.clone(),
-                    page.approvals
-                        .iter()
-                        .map(|approval| approval.id)
-                        .collect::<Vec<_>>(),
-                );
-                if page.updates.is_empty() && last_status.as_ref() == Some(&status) {
-                    continue;
+                for update in page.updates {
+                    match update {
+                        Update::Profile(info) => self.profile(&info),
+                        Update::Started { prompt } => {
+                            self.starting = None;
+                            self.title = format!(
+                                "{} · {}",
+                                self.state.connection_label.as_deref().unwrap_or_default(),
+                                prompt.lines().next().unwrap_or_default()
+                            );
+                            self.state.submit(prompt);
+                        }
+                        Update::Agent(event) => self.state.apply(*event),
+                        Update::Finished { status } => {
+                            self.state.finish_clock();
+                            self.state.status = match status.as_str() {
+                                "completed" => RunStatus::Completed,
+                                "cancelled" => RunStatus::Cancelled,
+                                _ => RunStatus::Failed,
+                            };
+                        }
+                    }
                 }
-                last_status = Some(status);
+                let pending = page.approvals.into_iter().next();
+                if pending.as_ref().map(|approval| approval.id) != self.approval_id {
+                    self.approval_id = pending.as_ref().map(|approval| approval.id);
+                    self.state.approval = pending.map(|approval| approval.preview);
+                    self.state.approval_scroll = 0;
+                    self.state.approval_expanded = false;
+                    self.state.approval_shown = false;
+                    self.state.approval_choice = 0;
+                    self.state.approval_diff = None;
+                    if self.state.approval.is_some() {
+                        self.state.pause_clock();
+                    } else if self.busy {
+                        self.state.resume_clock();
+                    }
+                }
             }
-            Response::Opened(info) => {
-                session = info.id.clone();
-                cursor = 0;
-                last_status = None;
-                interval.reset_immediately();
+            Response::Sessions(sessions) => self.state.report_local(TranscriptItem::CommandResult(
+                sessions
+                    .iter()
+                    .map(|session| format!("{}  {}  {}", session.id, session.model, session.title))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )),
+            Response::Error(error) => {
+                self.restore_submission();
+                self.state.report_local(TranscriptItem::Error(error));
             }
             _ => {}
         }
-        if responses.send(Ok(response)).await.is_err() {
-            break;
+    }
+
+    fn restore_submission(&mut self) {
+        if let Some(prompt) = self.starting.take() {
+            if self.state.input.text.is_empty() {
+                self.state.input.set(prompt);
+            } else {
+                self.state
+                    .report_local(TranscriptItem::Notice(format!("尚未确认的输入：{prompt}")));
+            }
         }
     }
+
+    fn disconnected(&mut self, error: String) {
+        self.restore_submission();
+        self.worker = None;
+        self.incoming = None;
+        self.commands = None;
+        self.offline = true;
+        self.busy = false;
+        self.state.approval = None;
+        self.approval_id = None;
+        self.state.finish_clock();
+        self.state.status = RunStatus::Failed;
+        self.state.report_local(TranscriptItem::Error(format!(
+            "{error}\n连接已断开，目标任务可能仍在运行；/reconnect 接回，/close 关闭此标签。"
+        )));
+    }
+
+    fn reconnect(&mut self) {
+        if self.connecting.is_some() {
+            return;
+        }
+        if self.starting.is_some() || self.busy {
+            self.state
+                .report_local(TranscriptItem::Notice("当前连接仍在执行任务。".into()));
+            return;
+        }
+        self.worker = None;
+        self.incoming = None;
+        self.commands = None;
+        self.offline = false;
+        self.state
+            .report_local(TranscriptItem::Notice("正在重新连接…".into()));
+        let task = if let Some(connection) = &self.connection {
+            tokio::spawn(Opened::connect(connection.clone(), self.id.clone()))
+        } else if let Some(spec) = &self.spec {
+            tokio::spawn(spec.clone().open())
+        } else {
+            return;
+        };
+        self.connecting = Some(AbortOnDropHandle::new(task));
+    }
+
+    fn send(&mut self, request: Request) -> bool {
+        let Some(commands) = &self.commands else {
+            self.state.report_local(TranscriptItem::Error(
+                "尚未连接；输入已保留，可用 /reconnect 重试。".into(),
+            ));
+            return false;
+        };
+        if let Err(error) = commands.try_send(Call {
+            request,
+            reply: None,
+        }) {
+            self.state
+                .report_local(TranscriptItem::Error(format!("连接请求未发送：{error}")));
+            return false;
+        }
+        true
+    }
+}
+
+pub async fn run(client: Client, connection: Arc<Connection>, info: SessionInfo) -> Result<()> {
+    standalone::run(Opened {
+        client,
+        connection,
+        info,
+    })
+    .await
 }

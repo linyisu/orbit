@@ -415,6 +415,7 @@ pub async fn run(
             }
 
             if std::mem::take(&mut state.new_tab_request) {
+                tabs.active_remote = None;
                 if let Some(task) = resume_task.take() { task.abort(); }
                 if history_replay.is_none() { state.resume_loading = None; }
                 park_run!();
@@ -437,10 +438,19 @@ pub async fn run(
             }
 
             if let Some(id) = state.close_tab_request.take() {
+                if tabs.remote.contains_key(&id) {
+                    let next = tabs.close_target(&id).map(str::to_owned);
+                    tabs.remove_remote(&id);
+                    if let Some(next) = next { state.resume_request = Some(next); }
+                    else { state.new_tab_request = true; }
+                    dirty = true;
+                    frames.request(time::Instant::now());
+                    continue;
+                }
                 let closing_active = id == session.id();
                 let switching = closing_active
                     || tabs.close_target(&id).is_some_and(|target| target != session.id());
-                if switching {
+                if switching && !tabs.close_target(&id).is_some_and(|target| tabs.remote.contains_key(target)) {
                     if let Some(task) = resume_task.take() { task.abort(); }
                     if history_replay.is_none() { state.resume_loading = None; }
                     park_run!();
@@ -498,6 +508,13 @@ pub async fn run(
             }
 
             if let Some(id) = state.resume_request.take() {
+                if tabs.remote.contains_key(&id) {
+                    tabs.active_remote = Some(id);
+                    dirty = true;
+                    frames.request(time::Instant::now());
+                    continue;
+                }
+                tabs.active_remote = None;
                 if let Some(task) = resume_task.take() { task.abort(); }
                 if history_replay.is_none() { state.resume_loading = None; }
                 if id != session.id() && tabs.contains(&id) { park_run!(); }
@@ -535,6 +552,35 @@ pub async fn run(
                     let Some(event) = event else { break };
                     let mut event = event?;
                     if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+                    tabs.sync_ui(&mut state, &session);
+                    if let Some(id) = tabs.active_remote.clone() {
+                        let tab = tabs.remote.get_mut(&id).unwrap();
+                        update_tab_hover(&event, &mut tab.state);
+                        let action = tab_target(&event, &tab.state);
+                        if let Some(action) = action {
+                            match action {
+                                TabAction::Select(id) => state.resume_request = Some(id),
+                                TabAction::Close(id) => state.close_tab_request = Some(id),
+                                TabAction::New => { let next = tab.sibling(None); tabs.add_remote(next); }
+                            }
+                        } else {
+                            use workspace_client::Action as RemoteAction;
+                            match tab.handle(event)? {
+                                RemoteAction::Quit => break,
+                                RemoteAction::Close => state.close_tab_request = Some(id),
+                                RemoteAction::Local => state.new_tab_request = true,
+                                RemoteAction::Open(spec) => {
+                                    let next = workspace_client::Tab::connecting(*spec, state.media.clone());
+                                    tabs.add_remote(next);
+                                }
+                                RemoteAction::SameTarget(resume) => { let next = tab.sibling(resume); tabs.add_remote(next); }
+                                RemoteAction::None | RemoteAction::Redraw => {}
+                            }
+                        }
+                        dirty = true;
+                        frames.request(time::Instant::now());
+                        continue;
+                    }
                     if let Some(preview)=&mut state.media_preview {
                         let (consumed,close)=preview.handle(&event);
                         if close {state.media_preview=None;}
@@ -590,12 +636,12 @@ pub async fn run(
                         continue;
                     }
 
-                    if update_tab_hover(&event, &mut state, &tabs) {
+                    if update_tab_hover(&event, &mut state) {
                         dirty = true;
                         frames.request(time::Instant::now());
                     }
 
-                    if let Some(action) = tab_target(&event, &state, &tabs)
+                    if let Some(action) = tab_target(&event, &state)
                     {
                         match action {
                             TabAction::Select(id) => state.resume_request = Some(id),
@@ -963,6 +1009,15 @@ pub async fn run(
                         }
 
                         Action::Submit(prompt) => {
+                            if crate::workspace::connect::Spec::is_command(&prompt) {
+                                match crate::workspace::connect::Spec::parse(&prompt) {
+                                    Ok(spec) => tabs.add_remote(workspace_client::Tab::connecting(spec, state.media.clone())),
+                                    Err(error) => { state.input.set(prompt); state.report_local(TranscriptItem::CommandError(error.to_string())); }
+                                }
+                                dirty = true;
+                                frames.request(time::Instant::now());
+                                continue;
+                            }
                             if let Some(question) = btw::question(&prompt) {
                                 state.selection.clear();
                                 state.input_dragging = false;
@@ -973,7 +1028,7 @@ pub async fn run(
                                 continue;
                             }
 
-                            if prompt.trim() == "/new" {
+                            if matches!(prompt.trim(), "/new" | "/local") {
                                 state.new_tab_request = true;
                                 continue;
                             }
@@ -1430,20 +1485,22 @@ pub async fn run(
                 }
                 _ = time::sleep_until(frames.deadline()), if frames.pending() => {
                     tabs.sync_ui(&mut state, &session);
+                    let visible = tabs.visible(&mut state);
                     terminal::draw_synchronized(&mut terminal, |frame| {
-                        render::draw(frame, &mut state);
-                        state.selection.paint(frame);
+                        render::draw(frame, visible);
+                        visible.selection.paint(frame);
                         // Frozen copy selections must not retain transient cursor effects.
-                        state.cursor_motion.paint(frame.buffer_mut(), std::time::Instant::now());
+                        visible.cursor_motion.paint(frame.buffer_mut(), std::time::Instant::now());
                     })?;
                     let now = time::Instant::now();
                     frames.drawn(now);
-                    if state.cursor_motion.active(std::time::Instant::now()) {
+                    if visible.cursor_motion.active(std::time::Instant::now()) {
                         frames.request(now + Duration::from_millis(16));
                     }
                     dirty = false;
                 }
                 _ = ticks.tick() => {
+                    dirty |= tabs.poll_remote().await;
                     dirty |= state.media.changed();
                     if let Some(preview) = &state.media_preview { dirty |= preview.tick(); }
                     if let Some(result) = catalog_watcher.poll().await {
@@ -1521,18 +1578,7 @@ pub async fn run(
                         dirty |= picker.advance_title_scroll();
                     }
 
-                    if let Some((action, since)) = &state.tab_hover {
-                        let elapsed = since.elapsed().as_millis();
-                        let tick = match action {
-                            TabAction::Select(_) => elapsed / 120,
-                            _ => elapsed.min(240) / 40,
-                        };
-
-                        if tick != state.tab_hover_tick {
-                            state.tab_hover_tick = tick;
-                            dirty = true;
-                        }
-                    }
+                    dirty |= advance_tab_hover(&mut state);
 
                     if let Some(replay) = &mut history_replay {
                         let done = replay.advance(&session.snapshot, &mut state, 2048, Duration::from_millis(4));
@@ -2008,7 +2054,7 @@ enum TabAction {
     New,
 }
 
-fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAction> {
+fn tab_target(event: &Event, state: &UiState) -> Option<TabAction> {
     if state.dialog_open() {
         return None;
     }
@@ -2021,8 +2067,10 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAc
                 return None;
             };
 
-            tabs.target(digit.to_digit(10)? as usize - 1)
-                .map(|id| TabAction::Select(id.to_owned()))
+            state
+                .tabs
+                .get(digit.to_digit(10)? as usize - 1)
+                .map(|tab| TabAction::Select(tab.id.clone()))
         }
 
         Event::Key(key)
@@ -2030,11 +2078,14 @@ fn tab_target(event: &Event, state: &UiState, tabs: &tabs::Tabs) -> Option<TabAc
                 && key.code == KeyCode::Tab
                 && key.modifiers.contains(KeyModifiers::CONTROL) =>
         {
-            tabs.adjacent(
-                state.tabs.iter().find(|tab| tab.active)?.id.as_str(),
-                key.modifiers.contains(KeyModifiers::SHIFT),
-            )
-            .map(|id| TabAction::Select(id.to_owned()))
+            let index = state.tabs.iter().position(|tab| tab.active)?;
+            let count = state.tabs.len();
+            let next = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                (index + count - 1) % count
+            } else {
+                (index + 1) % count
+            };
+            Some(TabAction::Select(state.tabs[next].id.clone()))
         }
 
         Event::Mouse(mouse)
@@ -2108,14 +2159,14 @@ fn handle_list_hover(state: &mut UiState, event: &Event) -> bool {
     false
 }
 
-fn update_tab_hover(event: &Event, state: &mut UiState, tabs: &tabs::Tabs) -> bool {
+fn update_tab_hover(event: &Event, state: &mut UiState) -> bool {
     let next = match event {
         Event::Mouse(mouse)
             if mouse.kind == MouseEventKind::Moved && !state.selection.dragging() =>
         {
             let mut probe = *mouse;
             probe.kind = MouseEventKind::Down(MouseButton::Left);
-            tab_target(&Event::Mouse(probe), state, tabs)
+            tab_target(&Event::Mouse(probe), state)
         }
 
         Event::Resize(_, _) | Event::Key(_) | Event::Mouse(_) => None,
@@ -2129,6 +2180,22 @@ fn update_tab_hover(event: &Event, state: &mut UiState, tabs: &tabs::Tabs) -> bo
     state.tab_hover = next.map(|action| (action, std::time::Instant::now()));
     state.tab_hover_tick = 0;
 
+    true
+}
+
+fn advance_tab_hover(state: &mut UiState) -> bool {
+    let Some((action, since)) = &state.tab_hover else {
+        return false;
+    };
+    let elapsed = since.elapsed().as_millis();
+    let tick = match action {
+        TabAction::Select(_) => elapsed / 120,
+        _ => elapsed.min(240) / 40,
+    };
+    if tick == state.tab_hover_tick {
+        return false;
+    }
+    state.tab_hover_tick = tick;
     true
 }
 

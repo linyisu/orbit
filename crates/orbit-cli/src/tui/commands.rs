@@ -112,6 +112,22 @@ pub const COMMANDS: &[Command] = &[
         description: "使用外部编辑器编写草稿；保存返回后按 Enter 发送",
     },
     Command {
+        name: "/ssh",
+        description: "新标签连接 SSH 工作区；/ssh HOST [PATH]",
+    },
+    Command {
+        name: "/wsl",
+        description: "新标签连接 WSL 工作区；/wsl DISTRO [PATH]",
+    },
+    Command {
+        name: "/local",
+        description: "新建本地会话标签",
+    },
+    Command {
+        name: "/reconnect",
+        description: "重新连接当前工作区服务",
+    },
+    Command {
         name: "/exit",
         description: "退出 Orbit",
     },
@@ -135,7 +151,13 @@ pub fn matching(input: &str) -> Vec<&'static Command> {
 pub fn available_while_running(name: &str) -> bool {
     matches!(
         name,
-        "/btw"
+        "/ssh"
+            | "/wsl"
+            | "/local"
+            | "/reconnect"
+            | "/new"
+            | "/close"
+            | "/btw"
             | "/status"
             | "/diagnostics"
             | "/model"
@@ -197,6 +219,25 @@ fn edit_distance(left: &str, right: &str) -> usize {
     }
 
     previous[right.len()]
+}
+
+pub fn available_in_workspace(name: &str) -> bool {
+    matches!(
+        name,
+        "/ssh"
+            | "/wsl"
+            | "/local"
+            | "/new"
+            | "/close"
+            | "/reconnect"
+            | "/status"
+            | "/model"
+            | "/mode"
+            | "/sessions"
+            | "/resume"
+            | "/exit"
+            | "/help"
+    )
 }
 
 #[cfg(test)]

@@ -12,7 +12,10 @@ pub(super) struct ParkedTab {
     pub history: Vec<ChatMessage>,
 }
 
+#[derive(Default)]
 pub(super) struct Tabs {
+    pub remote: HashMap<String, super::workspace_client::Tab>,
+    pub active_remote: Option<String>,
     order: Vec<String>,
     parked: HashMap<String, ParkedTab>,
     remembered: Vec<String>,
@@ -20,6 +23,69 @@ pub(super) struct Tabs {
 }
 
 impl Tabs {
+    pub fn add_remote(&mut self, tab: super::workspace_client::Tab) {
+        let id = format!("workspace:{}", crate::workspace::request_id());
+        self.order.push(id.clone());
+        self.remote.insert(id.clone(), tab);
+        self.active_remote = Some(id);
+    }
+
+    pub fn remove_remote(&mut self, id: &str) -> bool {
+        if self.remote.remove(id).is_none() {
+            return false;
+        }
+        self.order.retain(|item| item != id);
+        if self.active_remote.as_deref() == Some(id) {
+            self.active_remote = None;
+        }
+        true
+    }
+
+    pub fn visible<'a>(&'a mut self, local: &'a mut UiState) -> &'a mut UiState {
+        match self
+            .active_remote
+            .as_ref()
+            .and_then(|id| self.remote.get_mut(id))
+        {
+            Some(tab) => &mut tab.state,
+            None => local,
+        }
+    }
+
+    pub async fn poll_remote(&mut self) -> bool {
+        let mut changed = false;
+        for tab in self.remote.values_mut() {
+            changed |= tab.poll().await;
+        }
+        changed
+    }
+
+    fn remote_descriptor(&self, id: &str, tab: &super::workspace_client::Tab) -> SessionTab {
+        SessionTab {
+            id: id.into(),
+            title: tab.title.clone(),
+            status: tab.state.status.clone(),
+            elapsed: tab.state.active_elapsed(),
+            waiting_approval: tab.state.approval.is_some(),
+            active: self.active_remote.as_deref() == Some(id),
+        }
+    }
+
+    pub fn sync_remote_ui(&mut self) {
+        let entries: Vec<_> = self
+            .order
+            .iter()
+            .filter_map(|id| {
+                self.remote
+                    .get(id)
+                    .map(|tab| self.remote_descriptor(id, tab))
+            })
+            .collect();
+        for tab in self.remote.values_mut() {
+            tab.state.tabs = entries.clone();
+        }
+    }
+
     pub async fn persist(&mut self, session: &SessionState) -> anyhow::Result<()> {
         if self.window.is_none() {
             self.window = Some(session.store.open_tui_window().await?);
@@ -124,14 +190,16 @@ impl Tabs {
         self.parked
             .values()
             .any(|tab| !tab.state.input.text.is_empty() || !tab.state.attachments.is_empty())
+            || self
+                .remote
+                .values()
+                .any(|tab| !tab.state.input.text.is_empty())
     }
 
     pub fn new(session: &SessionState) -> Self {
         Self {
             order: vec![session.id().to_owned()],
-            parked: HashMap::new(),
-            remembered: Vec::new(),
-            window: None,
+            ..Self::default()
         }
     }
 
@@ -153,17 +221,6 @@ impl Tabs {
         self.order.get(index).map(String::as_str)
     }
 
-    pub fn adjacent(&self, id: &str, backwards: bool) -> Option<&str> {
-        let index = self.order.iter().position(|item| item == id)?;
-        let next = if backwards {
-            (index + self.order.len() - 1) % self.order.len()
-        } else {
-            (index + 1) % self.order.len()
-        };
-
-        self.target(next)
-    }
-
     pub fn close_target(&self, id: &str) -> Option<&str> {
         let index = self.order.iter().position(|item| item == id)?;
         // Closing the leftmost tab selects the first remaining tab, rather
@@ -183,6 +240,7 @@ impl Tabs {
         history: &mut Vec<ChatMessage>,
         next: (PreparedResume, UiState, ModelClient, Vec<ChatMessage>),
     ) {
+        self.active_remote = None;
         let current_id = session.id().to_owned();
         let (prepared, next_state, next_model, next_history) = next;
         let parked = ParkedTab {
@@ -217,6 +275,7 @@ impl Tabs {
             return false;
         };
 
+        self.active_remote = None;
         let current_id = session.id().to_owned();
         let current = ParkedTab {
             session: std::mem::replace(session, parked.session),
@@ -278,6 +337,12 @@ impl Tabs {
         let Some(next_id) = self.close_target(id).map(str::to_owned) else {
             return false;
         };
+        if self.remote.contains_key(&next_id) {
+            self.active_remote = Some(next_id);
+            self.order.retain(|item| item != id);
+            return true;
+        }
+        self.active_remote = None;
         if next_id != session.id() && !self.restore(&next_id, session, state, model, history) {
             return false;
         }
@@ -285,11 +350,14 @@ impl Tabs {
         self.close_parked(id)
     }
 
-    pub fn sync_ui(&self, state: &mut UiState, session: &SessionState) {
+    pub fn sync_ui(&mut self, state: &mut UiState, session: &SessionState) {
         state.tabs = self
             .order
             .iter()
             .filter_map(|id| {
+                if let Some(tab) = self.remote.get(id) {
+                    return Some(self.remote_descriptor(id, tab));
+                }
                 let (title, status, elapsed) = if id == session.id() {
                     (
                         &session.snapshot.session.title,
@@ -316,10 +384,13 @@ impl Tabs {
                     id: id.clone(),
                     title: title.clone(),
                     status,
-                    active: id == session.id(),
+                    active: self.active_remote.is_none() && id == session.id(),
                 })
             })
             .collect();
+        for tab in self.remote.values_mut() {
+            tab.state.tabs = state.tabs.clone();
+        }
     }
 }
 
@@ -372,8 +443,9 @@ mod tests {
         let session = SessionState::open(dir.path().join("sessions.db"), None, "mock".into())
             .await
             .unwrap();
-        let tabs = Tabs::new(&session);
+        let mut tabs = Tabs::new(&session);
         let mut state = UiState::new("mock");
+        tabs.sync_ui(&mut state, &session);
         state.new_tab_area = ratatui::layout::Rect::new(20, 0, 3, 1);
         let event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -382,7 +454,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
 
-        assert_eq!(tab_target(&event, &state, &tabs), Some(TabAction::New));
+        assert_eq!(tab_target(&event, &state), Some(TabAction::New));
 
         state
             .tab_areas
@@ -398,14 +470,14 @@ mod tests {
         });
 
         assert_eq!(
-            tab_target(&close, &state, &tabs),
+            tab_target(&close, &state),
             Some(TabAction::Close("first".into()))
         );
 
         state.show_help = true;
 
-        assert_eq!(tab_target(&event, &state, &tabs), None);
-        assert_eq!(tab_target(&close, &state, &tabs), None);
+        assert_eq!(tab_target(&event, &state), None);
+        assert_eq!(tab_target(&close, &state), None);
     }
 
     #[tokio::test]

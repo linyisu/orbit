@@ -653,7 +653,9 @@ impl UiState {
             return Vec::new();
         }
 
-        if let Some(argument) = self.input.text.strip_prefix("/cd ") {
+        if self.connection_label.is_none()
+            && let Some(argument) = self.input.text.strip_prefix("/cd ")
+        {
             return self.directory_completions.matching(
                 argument,
                 std::path::Path::new(&self.workspace),
@@ -685,6 +687,16 @@ impl UiState {
             &self.skill_completions,
         )
         .into_iter()
+        .filter(|candidate| {
+            if self.connection_label.is_some() {
+                candidate.name != "/model refresh"
+                    && super::commands::available_in_workspace(
+                        candidate.name.split_whitespace().next().unwrap_or(""),
+                    )
+            } else {
+                candidate.name != "/reconnect"
+            }
+        })
         .filter(|candidate| {
             !self.running()
                 || super::commands::available_while_running(
