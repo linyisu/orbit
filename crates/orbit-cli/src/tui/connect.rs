@@ -79,7 +79,7 @@ const PROVIDERS: [(ConnectionProvider, &str, ApiFormat); 7] = [
 pub(super) async fn run(
     terminal: &mut terminal::AppTerminal,
     events: &mut EventStream,
-    options: &crate::TuiOptions,
+    options: &crate::WorkspaceOptions,
 ) -> Result<Option<Vec<ModelOption>>> {
     let mut connected = AuthStore::new(options.auth_directory.clone())?.list()?;
     let mut clipboard = None;

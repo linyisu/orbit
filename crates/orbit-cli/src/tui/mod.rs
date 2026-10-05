@@ -108,52 +108,17 @@ type ModelRefreshOutput = (Vec<ModelOption>, Vec<String>);
 
 type ModelRefreshTask = tokio_util::task::AbortOnDropHandle<Result<ModelRefreshOutput>>;
 
-#[derive(Clone, Debug)]
-pub struct ModelOption {
-    pub max_output_tokens: u32,
-    pub provider: String,
-    pub model: String,
-    /// Request budget passed to the agent, including the output upper bound.
-    pub context_tokens: usize,
-    /// Full usable input window shown to the user and used for compaction.
-    pub input_context_tokens: usize,
-    pub default_for_provider: bool,
-    pub reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
-    pub supports_vision: bool,
-    pub config: orbit_model::types::ModelConfig,
-}
-
-impl ModelOption {
-    pub fn qualified_name(&self) -> String {
-        format!("{}::{}", self.provider, self.model)
-    }
-}
-
-pub struct RequestBudget {
-    pub context_tokens: usize,
-    pub input_context_tokens: usize,
-    pub auto_compact: bool,
-    pub max_output_tokens: u32,
-    pub max_turns: usize,
-    pub max_tool_calls: usize,
-    pub instructions: crate::instructions::Instructions,
-    pub skills: crate::skills::Skills,
-    pub plugin_skill_diagnostics: Vec<String>,
-    pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
-    pub model_options: Vec<ModelOption>,
-    pub compaction: orbit_agent::compaction::CompactionRuntime,
-    pub memory_scope: crate::project_state::MemoryScope,
-}
+pub use crate::workspace::setup::{ModelOption, RequestBudget};
 
 pub async fn run(
-    setup: crate::PreparedTui,
-    options: &crate::TuiOptions,
-) -> Result<Option<crate::PreparedTui>> {
-    let crate::PreparedTui {
+    setup: crate::PreparedWorkspace,
+    options: &crate::WorkspaceOptions,
+) -> Result<Option<crate::PreparedWorkspace>> {
+    let crate::PreparedWorkspace {
         mut session,
         resources,
     } = setup;
-    let crate::TuiResources {
+    let crate::WorkspaceResources {
         web_client,
         cursor_trail,
         mut model,
@@ -165,7 +130,7 @@ pub async fn run(
         moved,
         ..
     } = resources;
-    let next_workspace: Option<crate::TuiResources> = None;
+    let next_workspace: Option<crate::WorkspaceResources> = None;
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut state = UiState::new(model_name);
     state.media = media::Context::detect(web_client);
@@ -375,7 +340,7 @@ pub async fn run(
 
                 let tab_workspace = std::path::Path::new(&session.snapshot.session.workspace);
                 if bound_session != session.id() || session.audit_workspace.as_ref().is_none_or(|workspace| workspace.root() != tab_workspace) {
-                    let prep = crate::prepare_tui_resources(options, tab_workspace, &session).await?;
+                    let prep = crate::prepare_workspace_resources(options, tab_workspace, &session).await?;
                     workspace::bind(&prep, &mut session, &mut state, &mut model, &mut history).await?;
                     bound_session = session.id().to_owned();
                     tools = prep.tools;
@@ -1048,7 +1013,7 @@ pub async fn run(
                                     let argument = prompt.split_once(char::is_whitespace).map_or("", |(_, text)| text.trim());
                                     match directory::resolve(argument, std::path::Path::new(&state.workspace), options.home.as_deref()) {
                                         Ok(path) if path == std::path::Path::new(&state.workspace) => {}
-                                        Ok(path) => match crate::prepare_tui_resources(options, &path, &session).await {
+                                        Ok(path) => match crate::prepare_workspace_resources(options, &path, &session).await {
                                             Ok(prepared) => {
                                                 match session.move_to(prepared.workspace.clone(), prepared.command_limits.clone()).await {
                                                     Ok(()) => {
@@ -1656,7 +1621,7 @@ pub async fn run(
 
     result.and(saved)?;
 
-    Ok(next_workspace.map(|resources| crate::PreparedTui { session, resources }))
+    Ok(next_workspace.map(|resources| crate::PreparedWorkspace { session, resources }))
 }
 
 fn queue_approval(
@@ -3049,14 +3014,14 @@ fn open_link_in_browser(value: &str) -> Result<()> {
 }
 
 async fn activate_resume(
-    options: &crate::TuiOptions,
+    options: &crate::WorkspaceOptions,
     tabs: &mut tabs::Tabs,
     session: &mut SessionState,
     state: &mut UiState,
     model: &mut ModelClient,
     history: &mut Vec<ChatMessage>,
     next: (crate::session::PreparedResume, Vec<ChatMessage>),
-) -> Result<crate::TuiResources> {
+) -> Result<crate::WorkspaceResources> {
     let (prepared, loaded_history) = next;
     let previous_id = session.id().to_owned();
     let restored_id = prepared.snapshot.session.id.clone();
@@ -3074,7 +3039,7 @@ async fn activate_resume(
     );
 
     let result: Result<_> = async {
-        let resources = crate::prepare_tui_resources(options, &directory, session).await?;
+        let resources = crate::prepare_workspace_resources(options, &directory, session).await?;
         workspace::bind(&resources, session, state, model, history).await?;
         Ok::<_, anyhow::Error>(resources)
     }
@@ -3870,7 +3835,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
 }
 
 /// First-run connection setup, before a model or session is constructed.
-pub(crate) async fn setup_connection(options: &crate::TuiOptions) -> Result<bool> {
+pub(crate) async fn setup_connection(options: &crate::WorkspaceOptions) -> Result<bool> {
     let (_guard, mut terminal) = terminal::TerminalGuard::enter()?;
     let mut events = EventStream::new();
     Ok(connect::run(&mut terminal, &mut events, options)

@@ -19,6 +19,10 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use self::config::FileConfig;
+pub(crate) use workspace::setup::{
+    PreparedWorkspace, WorkspaceOptions, WorkspaceResources, prepare_workspace,
+    prepare_workspace_resources,
+};
 
 mod account_models;
 mod auth_cli;
@@ -36,6 +40,7 @@ mod skills;
 mod subagents;
 mod tui;
 mod verification;
+mod workspace;
 
 #[derive(Debug, Parser)]
 #[command(name = "orbit")]
@@ -381,37 +386,6 @@ async fn run_cli() -> Result<()> {
     }
 }
 
-pub(crate) struct TuiOptions {
-    initial_directory: PathBuf,
-    auth_directory: PathBuf,
-    config: PathBuf,
-    database: PathBuf,
-    allow_mcp_start: bool,
-    home: Option<PathBuf>,
-    config_home: Option<PathBuf>,
-    instruction_dir: Option<PathBuf>,
-    editor_command: String,
-}
-
-pub(crate) struct PreparedTui {
-    session: session::SessionState,
-    resources: TuiResources,
-}
-
-pub(crate) struct TuiResources {
-    web_client: std::sync::Arc<orbit_tools::web_fetch::WebClient>,
-    cursor_trail: bool,
-    model: ModelClient,
-    model_name: String,
-    tools: orbit_agent::tool::ToolRegistry,
-    undo_writer: orbit_tools::write_file::WriteFile,
-    approvals: orbit_tools::approval::ApprovalReceiver,
-    budget: tui::RequestBudget,
-    workspace: orbit_runtime::filesystem::Workspace,
-    command_limits: orbit_tools::run_command::CommandLimits,
-    moved: bool,
-}
-
 async fn run_tui(
     config_path: PathBuf,
     database: Option<PathBuf>,
@@ -419,7 +393,7 @@ async fn run_tui(
     auth_directory: PathBuf,
 ) -> Result<()> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let options = TuiOptions {
+    let options = WorkspaceOptions {
         initial_directory: std::env::current_dir()?,
         auth_directory,
         config: std::path::absolute(config_path)?,
@@ -445,146 +419,13 @@ async fn run_tui(
         return Ok(());
     }
 
-    let mut prepared = prepare_tui(&options, &options.initial_directory, args.resume).await?;
+    let mut prepared = prepare_workspace(&options, &options.initial_directory, args.resume).await?;
 
     while let Some(next) = tui::run(prepared, &options).await? {
         prepared = next;
     }
 
     Ok(())
-}
-
-pub(crate) async fn prepare_tui(
-    options: &TuiOptions,
-    directory: &std::path::Path,
-    resume: Option<String>,
-) -> Result<PreparedTui> {
-    let config = FileConfig::load(&options.config, &options.auth_directory)?;
-    let model = config.default_model_option()?.qualified_name();
-    let mut session =
-        session::SessionState::open_shared_in(options.database.clone(), resume, model, directory)
-            .await?;
-    let resources = prepare_tui_resources(options, directory, &session).await?;
-    session
-        .initialize_audit(
-            resources.workspace.clone(),
-            resources.command_limits.clone(),
-        )
-        .await?;
-
-    Ok(PreparedTui { session, resources })
-}
-
-pub(crate) async fn prepare_tui_resources(
-    options: &TuiOptions,
-    directory: &std::path::Path,
-    session: &session::SessionState,
-) -> Result<TuiResources> {
-    let config_path = &options.config;
-    let instructions = instructions::load_for(
-        directory,
-        options.instruction_dir.as_deref(),
-        instructions::MAX_INSTRUCTION_BYTES,
-    );
-    let (approvals, approval_receiver) = orbit_tools::approval::channel();
-    let mut file_config = FileConfig::load(config_path, &options.auth_directory)?;
-    for diagnostic in account_models::refresh(&mut file_config, false).await {
-        eprintln!("{diagnostic}");
-    }
-    let model_options = file_config.model_options()?;
-    let default_model = file_config.default_model_option()?;
-    let agent_config = file_config.agent_config();
-    let command_limits = file_config.command.clone();
-    let web = file_config.web.clone();
-    let mcp = file_config.mcp.clone();
-    let max_output_tokens = default_model.max_output_tokens;
-    let model_name = default_model.qualified_name();
-    let context_tokens = default_model.context_tokens;
-    let input_context_tokens = default_model.input_context_tokens;
-    let client = ModelClient::new(default_model.config)?;
-    let target_project = session.store.resolve_project(directory).await?;
-    let enabled_plugins = session.store.project_plugins(&target_project.id).await?;
-    let plugin_skill_roots = crate::marketplaces::enabled_skill_roots(&enabled_plugins);
-    let skills = skills::Skills::discover_with_plugin_roots(
-        directory,
-        options.home.clone(),
-        options.config_home.clone(),
-        plugin_skill_roots.roots,
-    );
-    let undo_writer = runtime::workspace_writer(
-        directory,
-        config_path,
-        &options.auth_directory,
-        session.store.path(),
-        approvals.clone(),
-        Some(file_config.permissions.clone()),
-    )?;
-    let runtime = runtime::workspace_tools(
-        directory,
-        config_path,
-        &options.auth_directory,
-        Some(session.store.path()),
-        Some(approvals),
-        command_limits,
-        web,
-        mcp,
-        options.allow_mcp_start,
-        Some(session.scratch.clone()),
-        Some(session.command_output.clone()),
-        Some(file_config.permissions.clone()),
-    )
-    .await?;
-    let audit_workspace = runtime.workspace.clone();
-    let mut tools = runtime.tools;
-    let memory_scope = project_state::MemoryScope::new(session.id().into());
-    verification::register(
-        &mut tools,
-        session.store.clone(),
-        memory_scope.clone(),
-        audit_workspace,
-        runtime.command_limits.clone(),
-    );
-    history::register(&mut tools, session.store.clone(), memory_scope.clone());
-    project_state::register(&mut tools, session.store.clone(), memory_scope.clone());
-    skills.register_tool(&mut tools);
-    subagents::register(
-        &mut tools,
-        session.store.clone(),
-        session.id().into(),
-        config_path.clone(),
-        options.auth_directory.clone(),
-        instructions.clone(),
-        file_config.subagents.clone(),
-    )
-    .await?;
-
-    Ok(TuiResources {
-        web_client: runtime.web_client,
-        cursor_trail: file_config.tui.cursor_trail,
-        moved: false,
-        workspace: runtime.workspace,
-        command_limits: runtime.command_limits,
-        model: client,
-        model_name,
-        tools,
-        undo_writer,
-        approvals: approval_receiver,
-        budget: tui::RequestBudget {
-            context_tokens,
-            input_context_tokens,
-            max_output_tokens,
-            auto_compact: agent_config.auto_compact,
-            max_turns: agent_config.max_turns,
-            max_tool_calls: agent_config.max_tool_calls,
-            compaction: file_config.compaction_runtime()?,
-            instructions,
-            model_options,
-            skills,
-            plugin_skill_diagnostics: plugin_skill_roots.diagnostics,
-            mcp_statuses: runtime.mcp_statuses,
-            memory_scope,
-        },
-    })
 }
 
 async fn chat(

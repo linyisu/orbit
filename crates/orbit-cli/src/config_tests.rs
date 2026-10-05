@@ -26,7 +26,7 @@ id = "test"
 "#,
     )
     .unwrap();
-    let options = TuiOptions {
+    let options = WorkspaceOptions {
         initial_directory: old.clone(),
         auth_directory: directory.path().join("home/.config/orbit/auth"),
         config,
@@ -37,7 +37,7 @@ id = "test"
         instruction_dir: None,
         editor_command: "vi".into(),
     };
-    let prepared = prepare_tui(&options, &old, None).await.unwrap();
+    let prepared = prepare_workspace(&options, &old, None).await.unwrap();
 
     assert!(!options.auth_directory.exists());
     assert!(
@@ -49,7 +49,7 @@ id = "test"
     );
     let id = prepared.session.id().to_owned();
 
-    let resources = prepare_tui_resources(&options, &new, &prepared.session)
+    let resources = prepare_workspace_resources(&options, &new, &prepared.session)
         .await
         .unwrap();
     let output = resources
@@ -102,7 +102,7 @@ models = [{ id = "test" }]
 "#,
     )
     .unwrap();
-    let options = TuiOptions {
+    let options = WorkspaceOptions {
         initial_directory: second.clone(),
         auth_directory: directory.path().join("auth"),
         config,
@@ -113,8 +113,8 @@ models = [{ id = "test" }]
         instruction_dir: None,
         editor_command: "vi".into(),
     };
-    let previous = prepare_tui(&options, &first, None).await.unwrap();
-    let fresh = prepare_tui(&options, &second, None).await.unwrap();
+    let previous = prepare_workspace(&options, &first, None).await.unwrap();
+    let fresh = prepare_workspace(&options, &second, None).await.unwrap();
     assert_ne!(previous.session.id(), fresh.session.id());
     assert_ne!(
         previous.session.snapshot.session.project_id,

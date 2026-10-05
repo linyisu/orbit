@@ -189,7 +189,7 @@ id = "orbit-model"
 "#,
     )
     .unwrap();
-    let options = crate::TuiOptions {
+    let options = crate::WorkspaceOptions {
         initial_directory: original.clone(),
         config,
         database: directory.path().join("orbit.db"),
@@ -200,7 +200,9 @@ id = "orbit-model"
         instruction_dir: None,
         editor_command: "vi".into(),
     };
-    let setup = crate::prepare_tui(&options, &original, None).await.unwrap();
+    let setup = crate::prepare_workspace(&options, &original, None)
+        .await
+        .unwrap();
     let mut session = setup.session;
     session.enable_shared();
     let original_id = session.id().to_owned();

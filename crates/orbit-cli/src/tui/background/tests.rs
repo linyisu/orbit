@@ -7,7 +7,7 @@ use super::super::app::{self, UiState};
 use super::*;
 use crate::session::SessionState;
 
-fn options(dir: &std::path::Path) -> crate::TuiOptions {
+fn options(dir: &std::path::Path) -> crate::WorkspaceOptions {
     let config = dir.join("config.toml");
     std::fs::write(
         &config,
@@ -20,7 +20,7 @@ models = [{ id = "mock" }]
 "#,
     )
     .unwrap();
-    crate::TuiOptions {
+    crate::WorkspaceOptions {
         initial_directory: dir.to_path_buf(),
         auth_directory: dir.join("auth"),
         config,
@@ -34,7 +34,7 @@ models = [{ id = "mock" }]
 }
 
 async fn running(
-    setup: &mut crate::PreparedTui,
+    setup: &mut crate::PreparedWorkspace,
     label: &str,
 ) -> (
     BackgroundRun,
@@ -83,7 +83,7 @@ async fn running(
     (run, release, approval_sender)
 }
 
-fn runtime(setup: &crate::PreparedTui) -> BackgroundRun {
+fn runtime(setup: &crate::PreparedWorkspace) -> BackgroundRun {
     let resources = &setup.resources;
     BackgroundRun {
         task: None,
@@ -120,7 +120,7 @@ fn runtime(setup: &crate::PreparedTui) -> BackgroundRun {
 async fn refreshed_capabilities_reach_parked_tabs_after_their_reply_finishes() {
     let dir = tempfile::tempdir().unwrap();
     let options = options(dir.path());
-    let mut setup = crate::prepare_tui(&options, dir.path(), None)
+    let mut setup = crate::prepare_workspace(&options, dir.path(), None)
         .await
         .unwrap();
     let id = setup.session.id().to_owned();
@@ -199,7 +199,7 @@ async fn two_background_runs_stream_finish_and_keep_resources_and_approvals_sepa
     let second_dir = dir.path().join("second");
     std::fs::create_dir_all(&first_dir).unwrap();
     std::fs::create_dir_all(&second_dir).unwrap();
-    let mut first = crate::prepare_tui(&options, &first_dir, None)
+    let mut first = crate::prepare_workspace(&options, &first_dir, None)
         .await
         .unwrap();
     let first_id = first.session.id().to_owned();
@@ -213,7 +213,7 @@ async fn two_background_runs_stream_finish_and_keep_resources_and_approvals_sepa
     let mut model = first.resources.model;
     let mut session = first.session;
     let mut tabs = tabs::Tabs::new(&session);
-    let mut second = crate::prepare_tui(&options, &second_dir, None)
+    let mut second = crate::prepare_workspace(&options, &second_dir, None)
         .await
         .unwrap();
     let second_id = second.session.id().to_owned();
@@ -381,7 +381,7 @@ async fn two_background_runs_stream_finish_and_keep_resources_and_approvals_sepa
 async fn closing_the_active_tab_keeps_its_run_until_completion() {
     let dir = tempfile::tempdir().unwrap();
     let options = options(dir.path());
-    let mut setup = crate::prepare_tui(&options, dir.path(), None)
+    let mut setup = crate::prepare_workspace(&options, dir.path(), None)
         .await
         .unwrap();
     let id = setup.session.id().to_owned();
@@ -453,7 +453,7 @@ async fn closing_the_active_tab_keeps_its_run_until_completion() {
 async fn local_results_and_history_replay_stay_with_their_background_tab() {
     let dir = tempfile::tempdir().unwrap();
     let options = options(dir.path());
-    let mut setup = crate::prepare_tui(&options, dir.path(), None)
+    let mut setup = crate::prepare_workspace(&options, dir.path(), None)
         .await
         .unwrap();
     setup
@@ -531,7 +531,7 @@ async fn local_results_and_history_replay_stay_with_their_background_tab() {
 async fn shutdown_cancels_background_tasks_and_releases_the_writer() {
     let dir = tempfile::tempdir().unwrap();
     let options = options(dir.path());
-    let mut setup = crate::prepare_tui(&options, dir.path(), None)
+    let mut setup = crate::prepare_workspace(&options, dir.path(), None)
         .await
         .unwrap();
     let id = setup.session.id().to_owned();

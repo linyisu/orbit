@@ -2,10 +2,10 @@
 use orbit_model::{client::ModelClient, types::ChatMessage};
 
 use super::{app::UiState, restore_model_profile};
-use crate::{TuiResources, session::SessionState};
+use crate::{WorkspaceResources, session::SessionState};
 
 pub(super) async fn bind(
-    resources: &TuiResources,
+    resources: &WorkspaceResources,
     session: &mut SessionState,
     state: &mut UiState,
     model: &mut ModelClient,
@@ -72,7 +72,7 @@ id = "selected-model"
 "#,
         )
         .unwrap();
-        let options = crate::TuiOptions {
+        let options = crate::WorkspaceOptions {
             initial_directory: old.clone(),
             auth_directory: directory.path().join("auth"),
             config,
@@ -83,7 +83,9 @@ id = "selected-model"
             instruction_dir: None,
             editor_command: "vi".into(),
         };
-        let prepared = crate::prepare_tui(&options, &old, None).await.unwrap();
+        let prepared = crate::prepare_workspace(&options, &old, None)
+            .await
+            .unwrap();
         let mut session = prepared.session;
         session
             .set_model_profile("test::selected-model".into(), None)
@@ -109,7 +111,7 @@ id = "selected-model"
         let mut state = UiState::new("test::selected-model");
         let mut history = Vec::new();
         crate::instructions::inject(&mut history, &prepared.resources.budget.instructions);
-        let resources = crate::prepare_tui_resources(&options, &new, &session)
+        let resources = crate::prepare_workspace_resources(&options, &new, &session)
             .await
             .unwrap();
         session
@@ -165,7 +167,7 @@ id = "selected-model"
             )
             .await
             .unwrap();
-        let peer_resources = crate::prepare_tui_resources(
+        let peer_resources = crate::prepare_workspace_resources(
             &options,
             std::path::Path::new(&peer.snapshot.session.workspace),
             &peer,
@@ -219,7 +221,7 @@ id = "selected-model"
         assert_eq!(state.workspace, old.to_str().unwrap());
         assert_eq!(session.snapshot.session.workspace, old.to_str().unwrap());
         assert!(state.transcript.is_empty());
-        let fresh_resources = crate::prepare_tui_resources(&options, &old, &session)
+        let fresh_resources = crate::prepare_workspace_resources(&options, &old, &session)
             .await
             .unwrap();
         bind(
