@@ -65,16 +65,15 @@ use orbit_model::{
     client::ModelClient,
     types::{Attachment, ChatMessage, ChatRequest},
 };
+use orbit_store::types::Run;
 use tokio::{select, sync::mpsc, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
-
-use crate::session::SessionState;
-use orbit_store::types::Run;
 
 use self::{
     app::{TranscriptItem, UiState},
     terminal::TerminalGuard,
 };
+use crate::session::SessionState;
 
 #[cfg(test)]
 use attachments::queue_attachment;
@@ -186,6 +185,7 @@ pub async fn run(
         mut memory_scope,
         mut compaction,
     } = budget;
+
     state.context_tokens = context_tokens;
     state.input_context_tokens = input_context_tokens;
     state.auto_compact = auto_compact;
@@ -356,6 +356,7 @@ pub async fn run(
                 bound_session = session.id().to_owned();
                 session_sync.reset(session.id());
             }
+
             if state.resume_request.is_none() && resume_task.is_none() && history_replay.is_none() {
                 for error in restore_errors.drain(..) {
                     state.report_local(TranscriptItem::CommandError(error));
@@ -370,6 +371,7 @@ pub async fn run(
                     session_sync.poll(&session.store, &mut session.snapshot, &mut state, &mut history).await?;
                     restore_model_profile(&mut state, &mut model, &model_options, &session);
                 }
+
                 let tab_workspace = std::path::Path::new(&session.snapshot.session.workspace);
                 if bound_session != session.id() || session.audit_workspace.as_ref().is_none_or(|workspace| workspace.root() != tab_workspace) {
                     let prep = crate::prepare_tui_resources(options, tab_workspace, &session).await?;
@@ -391,6 +393,7 @@ pub async fn run(
                     dirty = true;
                 }
             }
+
             if model_refresh.as_ref().is_some_and(|task| task.is_finished()) {
                 let result = model_refresh.take().expect("model refresh task").await;
                 let refreshed = matches!(&result, Ok(Ok(_)));
@@ -399,14 +402,17 @@ pub async fn run(
                     catalog_watcher.resynchronize();
                     model_catalog::publish(model_options.clone(), &mut state, &mut model_options, &mut background_runs, &mut tabs);
                 }
+
                 dirty = true;
             }
+
             if task.is_none() && local_task.is_none() && resume_task.is_none() && history_replay.is_none()
                 && model_catalog::reconcile(&mut state, &mut model, &model_options)
             {
                 refresh_context_usage(&mut state, &history, &tools);
                 dirty = true;
             }
+
             let key = (session.id().to_owned(), state.input.text.clone());
             if completion_key.as_ref() != Some(&key) {
                 state.stored_completions = completion::stored(&state.input.text, &session).await.unwrap_or_default();
@@ -431,6 +437,7 @@ pub async fn run(
                             state.compact_after_model_switch = true;
                             continue;
                         }
+
                         Err(error) => state.report_local(TranscriptItem::CommandError(error.to_string())),
                     }
 
@@ -488,6 +495,7 @@ pub async fn run(
                         Err(error) => state.report_local(TranscriptItem::CommandError(error.to_string())),
                     }
                 }
+
                 for id in tabs.prune_closed(&background_runs) { background_runs.remove(&id); }
 
                 state.tab_hover = None;
@@ -497,7 +505,6 @@ pub async fn run(
             }
 
             if let Some(id) = state.delete_request.take() {
-                // Refuse to delete the currently active session.
                 if id == session.id() {
                     if let Some(picker) = &mut state.picker {
                         picker.error = Some("无法删除当前正在使用的会话。".into());
@@ -505,12 +512,11 @@ pub async fn run(
                 } else {
                     match session.store.delete_session(&id).await {
                         Ok(_) => {
-                            // Remove the deleted session from the picker list so the
-                            // UI reflects the change immediately without a reload.
                             if let Some(picker) = &mut state.picker {
                                 picker.remove_session(&id);
                             }
                         }
+
                         Err(error) => {
                             if let Some(picker) = &mut state.picker {
                                 picker.error = Some(format!("删除失败：{error}"));
@@ -518,6 +524,7 @@ pub async fn run(
                         }
                     }
                 }
+
                 dirty = true;
                 frames.request(time::Instant::now());
             }
@@ -1662,11 +1669,13 @@ fn queue_approval(
             std::path::Path::new(&session.snapshot.session.workspace),
         )
         .is_some_and(|key| state.session_allowed_files.contains(&key)),
+
         orbit_tools::approval::ApprovalPreview::Delete(p) => orbit_tools::approval::file_grant_key(
             &p.path,
             std::path::Path::new(&session.snapshot.session.workspace),
         )
         .is_some_and(|key| state.session_allowed_files.contains(&key)),
+
         orbit_tools::approval::ApprovalPreview::Command(cmd) => {
             if let Some(git) = &cmd.git {
                 match git.kind {
@@ -1675,6 +1684,7 @@ fn queue_approval(
                     | orbit_runtime::git::GitOperationKind::ReadOnlyQuery { .. } => cmd
                         .git_grant_key(std::path::Path::new(&session.snapshot.session.workspace))
                         .is_some_and(|key| state.session_git_commands.contains(&key)),
+
                     _ => false,
                 }
             } else {
@@ -1685,12 +1695,15 @@ fn queue_approval(
                 )
             }
         }
+
         _ => false,
     };
+
     if auto_allowed {
         let _ = request.decision.send(true);
         return;
     }
+
     if state.permission_mode.allows(
         &request.preview,
         std::path::Path::new(&session.snapshot.session.workspace),
@@ -1731,6 +1744,7 @@ fn refresh_context_usage(state: &mut UiState, history: &[ChatMessage], tools: &T
     ) {
         return;
     }
+
     state.context_used_tokens =
         state
             .calibration()
@@ -1899,6 +1913,7 @@ async fn start_agent_run(
                 &summary_runtime,
             )
             .await?;
+
             orbit_agent::context::check_budget(
                 &compacted.history,
                 &tools.definitions(),
@@ -1963,6 +1978,7 @@ fn retry_archive_id(runs: &[Run], history: &[ChatMessage]) -> Option<i64> {
         {
             record.archive.as_deref()
         }
+
         _ => None,
     })?;
     let id = reference
@@ -2003,6 +2019,7 @@ async fn compaction_source_history(
         .take_while(|message| matches!(message, ChatMessage::System { .. }))
         .cloned()
         .collect::<Vec<_>>();
+
     restored.extend(
         source
             .into_iter()
@@ -2128,6 +2145,7 @@ fn update_tab_hover(event: &Event, state: &mut UiState, tabs: &tabs::Tabs) -> bo
             probe.kind = MouseEventKind::Down(MouseButton::Left);
             tab_target(&Event::Mouse(probe), state, tabs)
         }
+
         Event::Resize(_, _) | Event::Key(_) | Event::Mouse(_) => None,
         _ => return false,
     };
@@ -2246,6 +2264,7 @@ async fn run_command(
                 "{}\nShift+Tab 切换 · /mode ask|auto|YOLO\n本会话各窗口同步；新会话默认为 auto。",
                 state.permission_mode.description()
             );
+
             if argument.is_empty() {
                 state.show_output("权限设置", description);
             } else {
@@ -2301,6 +2320,7 @@ async fn run_command(
                             &[],
                         ))
                     }
+
                     _ => None,
                 })
                 .sum::<usize>();
@@ -2373,6 +2393,7 @@ async fn run_command(
                             skill.command
                         )));
                     }
+
                     Err(error) => state.report_local(TranscriptItem::CommandError(format!(
                         "无法读取 Skill /{}：{error}",
                         skill.command
@@ -2406,14 +2427,17 @@ async fn run_command(
                 argument.trim(),
             ),
         ),
+
         "/diagnostics" if argument.is_empty() => state.show_output(
             "诊断记录",
             orbit_store::diagnostics::text(&session.store.diagnostics(session.id()).await?),
         ),
+
         "/resume" | "/sessions" if argument.is_empty() => {
             state.picker = Some(dialogs::SessionPicker::new(session.resumable().await?));
             state.selection = Default::default();
         }
+
         "/resume" => {
             state.resume_request = Some(argument.to_owned());
         }
@@ -2468,6 +2492,7 @@ async fn run_command(
                 .map(|definition| definition.function.name.as_str())
                 .collect::<Vec<_>>()
                 .join(" / ");
+
             state.show_output("会话状态", format!(
                 "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n{}\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\nSkills  {} 个\nMCP  {} 个 server，输入 /mcp 查看状态\n超时  {}s（流空闲）\n工具  {} · 审批：{}",
                 session.id(),
@@ -2690,6 +2715,7 @@ async fn run_memory_command(
                 ));
                 return Ok(());
             };
+
             if content.trim().is_empty() {
                 state.report_local(TranscriptItem::CommandError("记忆内容不能为空。".into()));
                 return Ok(());
@@ -2705,6 +2731,7 @@ async fn run_memory_command(
                     content.trim().into(),
                 )
                 .await?;
+
             crate::project_state::inject(
                 history,
                 &session.store,
@@ -2910,6 +2937,7 @@ async fn select_model(
                 ));
             }
         }
+
         Err(error) => state.report_local(TranscriptItem::Error(error.to_string())),
     }
 
@@ -2941,6 +2969,7 @@ fn open_subagent_at(state: &mut UiState, point: (u16, u16)) -> bool {
         .link_at(state.selection.viewport, offset, point)
         .and_then(subagent_link_id)
         .map(str::to_owned);
+
     if let Some(id) = target {
         subagents::open(state, id);
         true
@@ -2948,6 +2977,7 @@ fn open_subagent_at(state: &mut UiState, point: (u16, u16)) -> bool {
         false
     }
 }
+
 
 fn subagent_link_id(value: &str) -> Option<&str> {
     let id = value.strip_prefix("orbit://session/")?;
@@ -3070,6 +3100,7 @@ async fn resume_session(
         skills.clone(),
     )
     .await?;
+
     session.install_resume(prepared);
     memory_scope.set_session(session.id().into());
     *history = loaded_history;
@@ -3110,6 +3141,7 @@ fn read_command_stdout(dir: &std::path::Path, output_id: &str) -> Option<String>
     {
         return None;
     }
+
     let path = dir.join(format!("{output_id}.stdout"));
     let metadata = std::fs::symlink_metadata(&path).ok()?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -3184,18 +3216,23 @@ fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
     } else {
         state.max_scroll.saturating_sub(state.scroll)
     };
+
     if let Some(source) = state
         .transcript_layout
         .media_at(state.selection.viewport, offset, point)
     {
+        state.selection.clear();
+        if matches!(source, media::Source::Image(_)) {
+            return true;
+        }
         let mut context = state.media.clone();
         if !state.workspace.is_empty() {
             context.workspace = state.workspace.clone().into();
         }
-        state.selection.clear();
         state.media_preview = Some(media::Preview::new(context, source));
         return true;
     }
+
     let offset = state.max_scroll.saturating_sub(state.scroll);
     if let Some((index, id)) =
         state
@@ -3219,6 +3256,7 @@ fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
         state.scroll = state.max_scroll.saturating_sub(target);
         return true;
     }
+
     if let Some(index) = state
         .transcript_layout
         .group_at(state.selection.viewport, offset, point)
@@ -3226,6 +3264,7 @@ fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
         toggle_transcript_group(state, index);
         return true;
     }
+
     let Some(index) = state.transcript_layout.disclosure_at(
         &state.transcript,
         state.selection.viewport,
@@ -3275,12 +3314,14 @@ fn toggle_transcript(state: &mut UiState, index: usize, group: bool) {
     } else {
         expanded.insert(index);
     }
+
     if group
         && collapsing
         && let Some(range) = state.transcript_layout.group_range(index)
     {
         state.expanded.retain(|index| !range.contains(index));
     }
+
     state.follow_bottom = false;
     state.selection.clear();
     state.transcript_layout.update_expanded(
@@ -3312,6 +3353,7 @@ fn handle_input_mouse(state: &mut UiState, event: &Event) -> bool {
         state.input_dragging = false;
         return false;
     }
+
     let Event::Mouse(mouse) = event else {
         return false;
     };
@@ -3326,14 +3368,17 @@ fn handle_input_mouse(state: &mut UiState, event: &Event) -> bool {
                 (mouse.row - area.y) as usize + state.input_scroll,
                 state.input_width,
             );
+
             if mouse.modifiers.contains(KeyModifiers::SHIFT) {
                 state.input.extend_selection(index);
             } else {
                 state.input.begin_selection(index);
             }
+
             state.input_dragging = true;
             true
         }
+
         MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
             if state.input_dragging && area.width > 0 && area.height > 0 =>
         {
@@ -3344,15 +3389,18 @@ fn handle_input_mouse(state: &mut UiState, event: &Event) -> bool {
                 row as usize + state.input_scroll,
                 state.input_width,
             );
+
             state.input.extend_selection(index);
             state.input_dragging = !matches!(mouse.kind, MouseEventKind::Up(_));
             true
         }
+
         MouseEventKind::Down(_) => {
             state.input_dragging = false;
             state.input.clear_selection();
             false
         }
+
         _ => false,
     }
 }
@@ -3367,6 +3415,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
 
         return Action::None;
     }
+
     if let Event::Paste(text) = event {
         state.attachment_cursor = None;
 
@@ -3381,6 +3430,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         state.menu_dismissed = false;
         return Action::None;
     }
+
     let Event::Key(key) = event else {
         return Action::None;
     };
@@ -3397,6 +3447,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
     {
         return Action::CopyInput(text.to_owned());
     }
+
     let motion = match (control, key.code) {
         (true, KeyCode::Left) => Some(input::Motion::WordLeft),
         (true, KeyCode::Right) => Some(input::Motion::WordRight),
@@ -3410,6 +3461,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         (false, KeyCode::Down) => Some(input::Motion::Down),
         _ => None,
     };
+
     if (selecting || control)
         && let Some(motion) = motion
     {
@@ -3426,6 +3478,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.attachments.clear();
                 state.attachment_cursor = None;
             }
+
             KeyCode::Char('c') => return Action::Quit,
             KeyCode::Char('d') if state.input.text.is_empty() && state.attachments.is_empty() => {
                 return Action::Quit;
@@ -3448,24 +3501,28 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.attachment_cursor = None;
                 state.input.select_all();
             }
+
             KeyCode::Up => {
                 state.attachment_cursor = None;
                 state.input.history_up();
                 state.menu_dismissed = true;
                 return Action::None;
             }
+
             KeyCode::Down => {
                 state.attachment_cursor = None;
                 state.input.history_down();
                 state.menu_dismissed = true;
                 return Action::None;
             }
+
             KeyCode::Char('e') => {
                 state.attachment_cursor = None;
                 state
                     .input
                     .navigate(input::Motion::End, state.input_width, false);
             }
+
             KeyCode::Char('u') => state.input.kill_to_home(),
             KeyCode::Char('k') => state.input.kill_to_end(),
             KeyCode::Char('l') => return Action::Redraw,
@@ -3505,6 +3562,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                         offset,
                         state.selection.viewport.height as usize,
                     );
+
                     match (group, item) {
                         (Some(group), item) if item.is_none_or(|item| group >= item) => {
                             toggle_transcript_group(state, group)
@@ -3524,8 +3582,10 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
             state.menu_offset = 0;
             state.menu_manual_scroll = false;
         }
+
         return Action::None;
     }
+
     if key.code == KeyCode::Esc {
         state.attachment_cursor = None;
         state.input.clear_selection();
@@ -3533,6 +3593,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         state.menu_dismissed = true;
         return Action::None;
     }
+
     if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::ALT) {
         return Action::PasteClipboard;
     }
@@ -3544,6 +3605,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         state.menu_offset = 0;
         return Action::None;
     }
+
     let menu = state.menu();
 
     if !menu.is_empty() {
@@ -3554,10 +3616,12 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 state.menu_index = (state.menu_index + menu.len() - 1) % menu.len();
                 return Action::None;
             }
+
             KeyCode::Down => {
                 state.menu_index = (state.menu_index + 1) % menu.len();
                 return Action::None;
             }
+
             KeyCode::Tab => {
                 let candidate = &menu[state.menu_index];
                 let suffix = if (candidate.continue_input && !candidate.name.starts_with("/cd "))
@@ -3577,10 +3641,12 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 } else {
                     ""
                 };
+
                 state.input.set(format!("{}{suffix}", candidate.name));
                 state.menu_index = 0;
                 return Action::None;
             }
+
             KeyCode::Enter if key.modifiers.is_empty() => {
                 let candidate = &menu[state.menu_index];
                 if candidate.continue_input && !candidate.name.starts_with("/cd ") {
@@ -3606,6 +3672,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                     state.input.set(candidate.name.clone());
                 }
             }
+
             _ => {}
         }
     }
@@ -3732,6 +3799,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
                 .input
                 .navigate(input::Motion::End, state.input_width, false);
         }
+
         KeyCode::Up => {
             if state.attachment_cursor.is_none() {
                 state
@@ -3763,6 +3831,7 @@ fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
         state.menu_dismissed = false;
         state.menu_index = 0;
     }
+
     Action::None
 }
 

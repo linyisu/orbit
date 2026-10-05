@@ -86,6 +86,7 @@ impl TranscriptDialog {
         } else if direction > 0 {
             self.ui.scroll_down(2);
         }
+
         let tick = self
             .close_hover
             .map_or(0, |since| since.elapsed().as_millis().min(240) / 40);
@@ -122,6 +123,7 @@ impl TranscriptDialog {
             usize::from(header.width.saturating_sub(close_width + 1)),
             false,
         );
+
         frame.render_widget(
             Paragraph::new(Line::styled(
                 title,
@@ -158,6 +160,7 @@ impl TranscriptDialog {
                 },
             );
         }
+
         self.ui.ime_cursor = None;
         self.ui.input_area = Rect::default();
         self.ui.input_width = usize::from(header.width.saturating_sub(2));
@@ -173,6 +176,7 @@ impl TranscriptDialog {
             header.width,
             inner.height.saturating_sub(3 + composer_height),
         );
+
         if let Some(error) = error {
             frame.render_widget(
                 Paragraph::new(safe_output(error))
@@ -185,6 +189,7 @@ impl TranscriptDialog {
             super::render::draw_transcript_in(frame, &mut self.ui, body, false);
             self.ui.selection.paint(frame);
         }
+
         if composer_height > 0 {
             let composer = Rect::new(
                 header.x,
@@ -215,6 +220,7 @@ impl TranscriptDialog {
                 } else {
                     "继续追问"
                 });
+
             frame.render_widget(
                 Paragraph::new(fit_label(&safe_output(hint), prompt.width as usize, false)).style(
                     Style::default().fg(if self.input_message.is_some() {
@@ -234,6 +240,7 @@ impl TranscriptDialog {
                 self.ui.ime_cursor = None;
             }
         }
+
         if let Some(preview) = &mut self.ui.media_preview {
             preview.draw(frame);
             self.ui.ime_cursor = None;
@@ -248,6 +255,7 @@ impl TranscriptDialog {
             }
             return Ok(Action::Redraw);
         }
+
         if self.input_enabled {
             if let Event::Key(key) = event
                 && key.kind != KeyEventKind::Release
@@ -258,10 +266,12 @@ impl TranscriptDialog {
                 super::selection::copy_text(text)?;
                 return Ok(Action::Redraw);
             }
+
             if super::handle_input_mouse(&mut self.ui, event) {
                 self.input_focus = true;
                 return Ok(Action::Redraw);
             }
+
             if let Event::Mouse(mouse) = event
                 && mouse.kind == MouseEventKind::Down(MouseButton::Left)
                 && self
@@ -272,6 +282,7 @@ impl TranscriptDialog {
             {
                 self.input_focus = false;
             }
+
             if let Event::Key(key) = event
                 && key.kind != KeyEventKind::Release
             {
@@ -279,6 +290,7 @@ impl TranscriptDialog {
                     self.input_focus = !self.input_focus;
                     return Ok(Action::Redraw);
                 }
+
                 if key.code == KeyCode::Enter && key.modifiers.is_empty() {
                     return Ok(
                         if !self.submit_blocked && !self.ui.input.text.trim().is_empty() {
@@ -288,17 +300,21 @@ impl TranscriptDialog {
                         },
                     );
                 }
+
                 if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
                         Ok(text) => {
                             self.ui.input.insert(&text);
                             self.input_focus = true;
                         }
+
                         Err(error) => self.submit_error(error),
                     }
+
                     return Ok(Action::Redraw);
                 }
             }
+
             let text_input = matches!(
                 event,
                 Event::Paste(_)
@@ -307,6 +323,7 @@ impl TranscriptDialog {
                         ..
                     })
             );
+
             if (self.input_focus || text_input) && self.ui.input.edit(event, self.ui.input_width) {
                 self.input_focus = true;
                 self.ui.selection.clear();
@@ -314,6 +331,7 @@ impl TranscriptDialog {
                 return Ok(Action::Redraw);
             }
         }
+
         if let Event::Key(key) = event
             && key.kind != KeyEventKind::Release
             && ((key.code == KeyCode::Esc || (!self.input_enabled && key.code == KeyCode::Enter))
@@ -323,6 +341,7 @@ impl TranscriptDialog {
         {
             return Ok(Action::Close);
         }
+
         if let Event::Mouse(mouse) = event {
             let point = (mouse.column, mouse.row).into();
             if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
@@ -334,6 +353,7 @@ impl TranscriptDialog {
                     self.close_hover.get_or_insert_with(Instant::now);
                     return Ok(Action::Redraw);
                 }
+
                 if mouse.modifiers.contains(KeyModifiers::CONTROL) {
                     let offset = self.ui.max_scroll.saturating_sub(self.ui.scroll);
                     if let Some(url) = self.ui.transcript_layout.link_at(
@@ -345,6 +365,7 @@ impl TranscriptDialog {
                     }
                 }
             }
+
             if mouse.kind == MouseEventKind::Up(MouseButton::Left) && self.close_pressed {
                 self.close_pressed = false;
                 return Ok(if self.close_area.contains(point) {
@@ -353,6 +374,7 @@ impl TranscriptDialog {
                     Action::Redraw
                 });
             }
+
             if matches!(mouse.kind, MouseEventKind::Drag(_)) {
                 self.close_pressed = false;
             }
@@ -363,6 +385,7 @@ impl TranscriptDialog {
                     self.close_hover = hovered.then(Instant::now);
                     self.close_hover_tick = 0;
                 }
+
                 let links = super::render::handle_link_hover(&mut self.ui, event).unwrap_or(false);
                 let disclosure =
                     super::render::handle_transcript_hover(&mut self.ui, event).unwrap_or(false);
@@ -373,18 +396,21 @@ impl TranscriptDialog {
                 });
             }
         }
+
         if let Some(point) = self.ui.selection.click(event)
             && super::toggle_transcript_at(&mut self.ui, point)
         {
             self.ui.selection.clear();
             return Ok(Action::Redraw);
         }
+
         if self.ui.selection.handle(event)? {
             if self.ui.selection.transcript_drag() {
                 self.ui.follow_bottom = false;
             }
             return Ok(Action::Redraw);
         }
+
         let page = usize::from(self.ui.selection.viewport.height).max(1);
         match event {
             Event::Mouse(mouse) if self.area.contains((mouse.column, mouse.row).into()) => {
@@ -394,6 +420,7 @@ impl TranscriptDialog {
                     _ => return Ok(Action::None),
                 }
             }
+
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Up => self.ui.scroll_up(1),
                 KeyCode::Down => self.ui.scroll_down(1),
@@ -403,9 +430,11 @@ impl TranscriptDialog {
                 KeyCode::End => self.ui.scroll_down(self.ui.max_scroll),
                 _ => return Ok(Action::None),
             },
+
             Event::Resize(_, _) => {}
             _ => return Ok(Action::None),
         }
+
         Ok(Action::Redraw)
     }
 }
@@ -462,6 +491,7 @@ mod tests {
                 assert_eq!(hovered[(column, button.y)].bg, style.bg.unwrap());
                 assert_eq!(hovered[(column, button.y)].fg, style.fg.unwrap());
             }
+
             assert_eq!(
                 hovered[(view.area.right() - 1, button.y)],
                 plain[(view.area.right() - 1, button.y)]
@@ -492,6 +522,7 @@ mod tests {
                 Action::Close
             ));
         }
+
         view.handle(&mouse(
             MouseEventKind::Down(MouseButton::Left),
             button.x,
@@ -530,6 +561,7 @@ mod tests {
                 assert!(view.ui.input_area.contains(cursor));
             }
         }
+
         render(&mut view, 100, 30);
         assert!(view.ui.ime_cursor.is_some());
         view.handle(&Event::Paste("Orbit 中文🦀\n后续问题".into()))

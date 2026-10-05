@@ -1,7 +1,8 @@
+use ratatui::{Terminal, backend::TestBackend};
+
 use super::*;
 use crate::tui::app::SessionTab;
 use crate::tui::theme::desaturate_for_thinking;
-use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn tools_expand_independently_and_commands_expand_in_full() {
@@ -19,6 +20,7 @@ fn tools_expand_independently_and_commands_expand_in_full() {
                 output: "one\ntwo\nthree\nfour".into(),
             }));
     }
+
     render(&mut state, 100, 40);
 
     super::super::toggle_transcript_item(&mut state, 0);
@@ -32,6 +34,7 @@ fn tools_expand_independently_and_commands_expand_in_full() {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n");
+
     assert!(full.contains("run_command"));
     assert!(full.contains('╭') && full.contains('╰'));
     assert!(full.contains("end-0"));
@@ -111,6 +114,7 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
         row: point.1,
         modifiers: KeyModifiers::NONE,
     });
+
     assert_eq!(handle_transcript_hover(&mut state, &moved), Some(true));
     state.thinking_hover_started =
         Some(std::time::Instant::now() - std::time::Duration::from_millis(150));
@@ -136,6 +140,7 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
         row: 0,
         modifiers: KeyModifiers::NONE,
     });
+
     assert_eq!(handle_transcript_hover(&mut state, &leave), Some(true));
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
     assert!(
@@ -348,6 +353,7 @@ async fn home_changes_are_silent_and_queries_do_not_enter_the_conversation() {
         mcp_statuses: &[],
         model_options: &options,
     };
+
     for command in [
         "/mode ask",
         "/rename Orbit home",
@@ -372,6 +378,7 @@ async fn home_changes_are_silent_and_queries_do_not_enter_the_conversation() {
         assert_eq!(state.input_area, input_area, "{command}");
         assert!(!screen.contains('→'), "{command}");
     }
+
     assert_eq!(session.store.tui_mode(session.id()).await.unwrap(), "ask");
     let saved = session.store.load(session.id()).await.unwrap();
     assert_eq!(saved.session.title, "Orbit home");
@@ -384,12 +391,14 @@ async fn home_changes_are_silent_and_queries_do_not_enter_the_conversation() {
         .tasks(&session.snapshot.session.project_id, false)
         .await
         .unwrap();
+
     assert_eq!(tasks[0].title, "Orbit task");
     let memories = session
         .store
         .session_memories(session.id(), false)
         .await
         .unwrap();
+
     assert_eq!(memories[0].content, "Orbit memory");
     for command in [
         "/mode",
@@ -429,6 +438,7 @@ async fn home_changes_are_silent_and_queries_do_not_enter_the_conversation() {
             assert!(content.contains("原始上下文估算"));
             assert!(content.contains("校准后总计"));
         }
+
         assert!(state.transcript.is_empty(), "{command}");
         assert_eq!(state.status, RunStatus::Idle);
         assert_eq!(state.selection.viewport.height, 0);
@@ -440,11 +450,13 @@ async fn home_changes_are_silent_and_queries_do_not_enter_the_conversation() {
         assert_eq!(state.input_area, input_area);
         assert!(state.is_home());
     }
+
     for (width, height) in [(28, 18), (20, 10)] {
         render(&mut state, width, height);
         assert_eq!(state.selection.viewport.height, 0);
         assert_eq!(state.max_scroll, 0);
     }
+
     state.submit("Orbit message".into());
     let screen = render(&mut state, 140, 40);
     assert!(state.has_conversation());
@@ -575,7 +587,6 @@ fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
         output: serde_json::json!({ "written_bytes": 22, "created": true }).to_string(),
     };
 
-    // Collapsed state: strictly single line command
     let collapsed = tool_card(&row, false, 80);
     assert_eq!(collapsed.len(), 1);
     assert!(
@@ -587,7 +598,6 @@ fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
     assert!(!collapsed[0].to_string().contains(icons::LOADING));
     assert!(!collapsed[0].to_string().contains(icons::CLOSE));
 
-    // Expanded state: rounded box with breathing blank line and line-numbered code
     let expanded = tool_card(&row, true, 80);
     assert!(expanded.len() >= 4);
     assert!(expanded[0].to_string().starts_with('╭') && expanded[0].to_string().ends_with('╮'));
@@ -605,7 +615,6 @@ fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
         assert_eq!(line.width(), 80);
     }
 
-    // Click testing: any position inside the card (top border, header, blank line, code, bottom border) returns Some(0)
     let items = vec![TranscriptItem::Tool(row)];
     let mut layout = super::super::transcript::TranscriptLayout::default();
     let area = Rect::new(0, 0, 80, 40);
@@ -690,6 +699,7 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
         .enumerate()
         .map(|(index, line)| format!("{}: {line}\n", index + 40))
         .collect::<String>();
+
     for name in ["read_file", "write_file", "web_fetch", "read_document"] {
         let row = ToolRow {
             id: "orbit-preview".into(),
@@ -748,6 +758,7 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
                     );
                 }
             }
+
             if width >= 80 {
                 assert!(text.contains("Orbit Guide"));
                 if source {
@@ -760,6 +771,7 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
                     assert!(!text.contains("https://orbit.example/docs"));
                 }
             }
+
             if !source && width >= 12 {
                 assert!(
                     card.iter()
@@ -771,6 +783,7 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
                 );
             }
         }
+
         assert_eq!(row.output, original);
     }
 }
@@ -785,6 +798,7 @@ fn web_fetch_title_is_not_a_link_but_wrapped_body_urls_keep_the_full_target() {
         status: ToolStatus::Finished,
         output: serde_json::json!({"url":url, "content":"[Orbit 文档](https://orbit.example/docs/rendering/)", "total_chars":64}).to_string(),
     };
+
     for width in [16, 32, 80] {
         let collapsed = tool_card_with_links(&row, false, width);
         assert!(collapsed.iter().all(|line| line.links.is_empty()));
@@ -839,6 +853,7 @@ fn source_colors_and_multiline_state_match_across_code_previews() {
             .collect();
         colors[start..start + source.len()].to_vec()
     };
+
     for (index, sample) in samples.iter().enumerate() {
         let expected = colors(&message[index + 1].line, sample);
         for card in &cards {
@@ -846,6 +861,7 @@ fn source_colors_and_multiline_state_match_across_code_previews() {
         }
         assert_eq!(colors(&diff.right[index], sample), expected, "{sample}");
     }
+
     let comment_colors = colors(&message[2].line, samples[1]);
     assert!(
         comment_colors
@@ -978,6 +994,7 @@ fn command_menu_keeps_composer_anchored_and_highlights_the_entire_selection() {
             .find(|(_, index)| *index == state.menu_index)
             .unwrap()
             .0;
+
         assert_eq!(selected, selected_area.width as usize);
         assert!(selected < if home { 82 } else { 96 });
     }
@@ -1135,6 +1152,7 @@ fn clicking_memory_hint_toggles_that_memory_instead_of_the_last_tool() {
             row: point.1,
             modifiers: KeyModifiers::NONE,
         });
+
         state.selection.handle(&down).unwrap();
 
         assert_eq!(state.selection.click(&up), Some(point));
@@ -1395,6 +1413,7 @@ fn details_hover_fills_spaces_and_wide_glyphs_without_underlining_the_caption() 
             })
         })
         .unwrap();
+
     state.transcript_pointer = Some(point);
     let mut first = 0;
     terminal
@@ -1408,9 +1427,11 @@ fn details_hover_fills_spaces_and_wide_glyphs_without_underlining_the_caption() 
                 .unwrap();
             let end = first + 2 + "点击展开 / 折叠".width() as u16;
             for x in first..end {
-                assert_eq!(buffer[(x, point.1)].bg, THEME.tab_hover_background);
+                assert_eq!(buffer[(x, point.1)].bg, THEME.accent);
+                assert_eq!(buffer[(x, point.1)].fg, THEME.on_accent);
                 assert!(!buffer[(x, point.1)].modifier.contains(Modifier::UNDERLINED));
             }
+
             assert_eq!(buffer[(first - 1, point.1)].bg, Color::Reset);
         })
         .unwrap();
@@ -1421,6 +1442,39 @@ fn details_hover_fills_spaces_and_wide_glyphs_without_underlining_the_caption() 
         Color::Reset
     );
 }
+
+#[test]
+fn details_code_block_retains_one_border_color_including_its_closing_corner() {
+    let mut state = UiState::new("mock");
+    state.transcript.push(TranscriptItem::Assistant("<details open><summary>展开</summary>\n\n```json\n{\"status\": \"success\"}\n```\n</details>".into()));
+    let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let mut found = Vec::new();
+    for y in 0..30 {
+        for x in 0..80 {
+            if matches!(buffer[(x, y)].symbol(), "╭" | "│" | "╰") {
+                found.push((buffer[(x, y)].symbol().to_owned(), buffer[(x, y)].fg));
+            }
+        }
+    }
+
+    assert_eq!(found.len(), 3, "{found:?}");
+    assert!(
+        found
+            .iter()
+            .all(|(_, color)| *color == super::super::theme::code_label_color("json")),
+        "{found:?}"
+    );
+    assert!(
+        buffer
+            .content
+            .iter()
+            .any(|cell| cell.symbol() == icons::CHEVRON_DOWN)
+    );
+}
+
+
 
 #[test]
 fn file_approval_keeps_conversation_and_draft_visible() {
@@ -1479,6 +1533,7 @@ fn transcript_and_footer_selection_keeps_the_native_input_cursor() {
         } else {
             state.selection.viewport
         };
+
         for (kind, column) in [
             (MouseEventKind::Down(MouseButton::Left), area.x),
             (MouseEventKind::Drag(MouseButton::Left), area.right() - 1),
@@ -1498,6 +1553,7 @@ fn transcript_and_footer_selection_keeps_the_native_input_cursor() {
                 }))
                 .unwrap();
         }
+
         terminal
             .draw(|frame| {
                 assert!(state.selection.draw_frozen(frame));
@@ -1580,6 +1636,7 @@ fn native_caret_does_not_overwrite_wide_characters_or_the_end_of_full_rows() {
             Color::Reset
         );
     }
+
     state.input.set(format!("{}\nnext", "a".repeat(74)));
     state.input.set_cursor(74);
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
@@ -1615,6 +1672,7 @@ fn frozen_copy_selection_excludes_transient_cursor_effects() {
             })
             .unwrap();
     }
+
     assert!(state.cursor_motion.active(std::time::Instant::now()));
     let area = state.selection.viewport;
     state
@@ -1824,6 +1882,160 @@ fn link_hover_shows_and_clears_its_ctrl_click_hint() {
 }
 
 #[test]
+fn table_link_hint_is_anchored_near_the_label_and_restores_covered_content() {
+    use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+    use ratatui::buffer::CellWidth;
+
+    let url = "https://orbit.example/docs";
+    let source = format!(
+        "## 五、引用\n\n> 第一层引用。\n>\n> 引用块内的行内代码：`code` 与 **粗体**。\n\n## 六、表格\n\n| 左对齐 | 居中 | 右对齐 |\n| :--- | :---: | ---: |\n| 左对齐文本 | 居中文字 | 123456 |\n| 单元格内**粗体** | 单元格内*斜体* | 0.42 |\n| `行内代码` | [链接👩‍💻]({url}) | $e^{{i\\pi}}$ |\n\n## 七、代码块\n\n带语言标注的代码块：\n\n```python\n# 斐波那契数列\ndef fib(n: int) -> int:\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n```\n"
+    );
+    let mut state = UiState::new("mock");
+    state.transcript.push(TranscriptItem::Assistant(source));
+
+    for width in [44, 80, 140] {
+        let mut terminal = Terminal::new(TestBackend::new(width, 60)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let original = terminal.backend().buffer().clone();
+        let viewport = state.selection.viewport;
+        let points: Vec<_> = (viewport.y..viewport.bottom())
+            .flat_map(|y| (viewport.x..viewport.right()).map(move |x| (x, y)))
+            .filter(|&point| {
+                state
+                    .transcript_layout
+                    .link_at(viewport, state.max_scroll, point)
+                    == Some(url)
+            })
+            .collect();
+
+        assert!(
+            points.len() >= 6,
+            "Chinese and emoji link did not render: {width}"
+        );
+        let mut tooltip = None;
+        for (index, &(x, y)) in points.iter().enumerate() {
+            let hover = Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            });
+
+            assert_eq!(handle_link_hover(&mut state, &hover), Some(index == 0));
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let hint = state.link_tooltip_area;
+            assert!(!hint.is_empty());
+            assert_eq!(hint.y, y + 1, "tooltip drifted away from table link");
+            if let Some(previous) = tooltip {
+                assert_eq!(hint, previous);
+            }
+            tooltip = Some(hint);
+            let mut column = hint.x;
+            while column < hint.right() {
+                let cell = &terminal.backend().buffer()[(column, hint.y)];
+                assert_eq!(cell.fg, THEME.overlay_foreground);
+                assert_eq!(cell.bg, THEME.overlay_background);
+                column += cell.cell_width().max(1);
+            }
+        }
+
+        assert!(tooltip.unwrap().y < viewport.bottom() - 3);
+        handle_link_hover(
+            &mut state,
+            &Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            }),
+        );
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(state.link_tooltip_area.is_empty());
+        for (restored, original) in terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .zip(&original.content)
+        {
+            assert_eq!(
+                (restored.symbol(), restored.style()),
+                (original.symbol(), original.style())
+            );
+        }
+    }
+}
+
+#[test]
+fn wrapped_text_link_hints_stay_fixed_for_each_occurrence() {
+    use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+
+    let url = "https://orbit.example/docs";
+    let title = "中文👩‍💻abcdef".repeat(16);
+    for width in [30, 64, 140] {
+        let mut state = UiState::new("mock");
+        state.transcript.push(TranscriptItem::Assistant(format!(
+            "开始 [{title}]({url}) 结束\n\n分隔正文\n\n第二个 [{title}]({url})。"
+        )));
+        let mut terminal = Terminal::new(TestBackend::new(width, 120)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let viewport = state.selection.viewport;
+        let points: Vec<_> = (viewport.y..viewport.bottom())
+            .flat_map(|y| (viewport.x..viewport.right()).map(move |x| (x, y)))
+            .filter_map(|point| {
+                let hit = state
+                    .transcript_layout
+                    .link_hit(viewport, state.max_scroll, point)?;
+                (hit.url == url).then_some((point, hit.area))
+            })
+            .collect();
+        let mut subjects = Vec::new();
+        for &(_, area) in &points {
+            if !subjects.contains(&area) {
+                subjects.push(area);
+            }
+        }
+
+        assert_eq!(subjects.len(), 2, "width {width}");
+        assert!(
+            subjects.iter().all(|area| area.height > 1),
+            "width {width}: {subjects:?}"
+        );
+
+        for subject in subjects {
+            let points: Vec<_> = points
+                .iter()
+                .filter(|(_, area)| *area == subject)
+                .map(|(point, _)| *point)
+                .collect();
+            let mut tooltip = None;
+            for (index, &(x, y)) in [points[0], points[points.len() / 2], *points.last().unwrap()]
+                .iter()
+                .enumerate()
+            {
+                let hover = Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    column: x,
+                    row: y,
+                    modifiers: KeyModifiers::NONE,
+                });
+
+                assert_eq!(handle_link_hover(&mut state, &hover), Some(index == 0));
+                terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                let hint = state.link_tooltip_area;
+                assert!(!hint.is_empty());
+                assert_eq!(hint.y, subject.bottom());
+                assert!(hint.intersection(subject).is_empty());
+                if let Some(previous) = tooltip {
+                    assert_eq!(hint, previous);
+                }
+                tooltip = Some(hint);
+            }
+        }
+    }
+}
+
+#[test]
 fn repository_url_in_a_table_has_hover_feedback_after_wrapping_and_resize() {
     use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::buffer::CellWidth;
@@ -1848,6 +2060,7 @@ fn repository_url_in_a_table_has_hover_feedback_after_wrapping_and_resize() {
                 }
             }
         }
+
         assert_eq!(points.len(), url.len(), "width {width}: {points:?}");
         for &(x, y) in [points.first().unwrap(), points.last().unwrap()] {
             let hover = Event::Mouse(MouseEvent {
@@ -1856,6 +2069,7 @@ fn repository_url_in_a_table_has_hover_feedback_after_wrapping_and_resize() {
                 row: y,
                 modifiers: KeyModifiers::NONE,
             });
+
             handle_link_hover(&mut state, &hover);
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
             let hint = state.link_tooltip_area;
@@ -1867,8 +2081,10 @@ fn repository_url_in_a_table_has_hover_feedback_after_wrapping_and_resize() {
                 text.push_str(cell.symbol());
                 column += cell.cell_width().max(1);
             }
+
             assert!(text.replace(' ', "").contains("Ctrl+Click跳转"), "{text}");
         }
+
         state.link_hovered = None;
     }
 }

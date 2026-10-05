@@ -1,7 +1,11 @@
 //! Frame orchestration. Component renderers live beside this facade.
+mod links;
 mod text;
 mod thinking;
 mod tool_cards;
+
+pub(super) use links::handle_link_hover;
+use links::{clear_previous_link_tooltip, draw_link_tooltip};
 
 pub(super) use text::{
     compact_preview, parse_ansi_to_spans, safe_multiline_output, safe_output, sanitize_line,
@@ -26,7 +30,6 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
 };
-
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -34,7 +37,6 @@ use unicode_width::UnicodeWidthStr;
 use super::app::ToolStatus;
 use super::app::{RunStatus, TranscriptItem, UiState};
 use super::icons;
-
 use super::theme::THEME;
 
 const ACCENT: Color = THEME.accent;
@@ -65,14 +67,17 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         } else if state.menu_area.contains((mouse.column, mouse.row).into()) {
             super::completion::select_with_mouse(state, &mouse);
         }
+
         draw_contents(frame, state);
     }
+
     let now = std::time::Instant::now();
     let editing = !state.dialog_open()
         && state.restore_picker.is_none()
         && state.approval.is_none()
         && state.input.selection().is_none()
         && !state.selection.active();
+
     state.cursor_motion.update(
         frame.area(),
         state.input_area,
@@ -538,36 +543,6 @@ pub(super) fn handle_context_hover(
     Some(changed)
 }
 
-/// Track a link under the pointer independently from selection and navigation.
-/// The link target itself stays in the transcript layout so streamed output and
-/// resize rebuilds never leave a stale hit target behind.
-pub(super) fn handle_link_hover(
-    state: &mut UiState,
-    event: &crossterm::event::Event,
-) -> Option<bool> {
-    let crossterm::event::Event::Mouse(mouse) = event else {
-        return None;
-    };
-    if mouse.kind != crossterm::event::MouseEventKind::Moved {
-        return None;
-    }
-
-    let offset = if state.follow_bottom {
-        state.max_scroll
-    } else {
-        state.max_scroll.saturating_sub(state.scroll)
-    };
-
-    let hovered = state
-        .transcript_layout
-        .link_at(state.selection.viewport, offset, (mouse.column, mouse.row))
-        .map(|_| (mouse.column, mouse.row));
-    let changed = state.link_hovered != hovered;
-    state.link_hovered = hovered;
-
-    Some(changed)
-}
-
 pub(super) fn handle_transcript_hover(
     state: &mut UiState,
     event: &crossterm::event::Event,
@@ -614,6 +589,7 @@ pub(super) fn handle_transcript_hover(
             })
             .map(|_| std::time::Instant::now());
     }
+
     state.transcript_pointer = Some(point);
 
     Some(before != after)
@@ -697,69 +673,6 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         ),
         inner,
     );
-}
-
-fn clear_previous_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
-    if state.link_tooltip_area.width != 0 && state.link_tooltip_area.height != 0 {
-        super::overlay::clear(frame, state.link_tooltip_area);
-    }
-
-    state.link_tooltip_area = Rect::default();
-}
-
-fn draw_link_tooltip(frame: &mut Frame<'_>, state: &mut UiState) {
-    let Some((anchor_x, anchor_y)) = state.link_hovered else {
-        return;
-    };
-    let offset = state.max_scroll.saturating_sub(state.scroll);
-    let Some(url) =
-        state
-            .transcript_layout
-            .link_at(state.selection.viewport, offset, (anchor_x, anchor_y))
-    else {
-        state.link_hovered = None;
-        return;
-    };
-
-    let text = if super::subagent_link_id(url).is_some() {
-        "单击查看子代理".to_owned()
-    } else if state
-        .transcript_layout
-        .media_at(state.selection.viewport, offset, (anchor_x, anchor_y))
-        .is_some()
-    {
-        if super::browser_url(url).is_ok() {
-            format!("单击预览 · Ctrl + Click 跳转 · {}", safe_output(url))
-        } else {
-            "单击预览".to_owned()
-        }
-    } else {
-        "Ctrl + Click 跳转".to_owned()
-    };
-    let width = (text.width() as u16 + 2).min(state.selection.viewport.width);
-
-    if width == 0 {
-        return;
-    }
-
-    let x = anchor_x.min(state.selection.viewport.right().saturating_sub(width));
-    let y = if anchor_y + 1 < state.selection.viewport.bottom() {
-        anchor_y + 1
-    } else {
-        anchor_y.saturating_sub(1)
-    };
-
-    let area = Rect::new(x, y, width, 1);
-    super::overlay::clear(frame, area);
-    frame.render_widget(
-        Paragraph::new(fit_label(&text, width as usize, false)).style(
-            Style::default()
-                .fg(crate::tui::theme::THEME.overlay_foreground)
-                .bg(crate::tui::theme::THEME.overlay_background),
-        ),
-        area,
-    );
-    state.link_tooltip_area = area;
 }
 
 pub(super) fn scrolling_title(
@@ -1050,6 +963,7 @@ fn draw_welcome(frame: &mut Frame<'_>, area: Rect) {
         width,
         height,
     );
+
     frame.render_widget(Paragraph::new(logo), centered);
 }
 
@@ -1162,7 +1076,7 @@ pub(super) fn draw_transcript_in(
         let first = columns.clone().find(|&x| {
             matches!(
                 frame.buffer_mut()[(x, point.1)].symbol(),
-                icons::CHEVRON_RIGHT | icons::ARROW_DOWN
+                icons::CHEVRON_RIGHT | icons::CHEVRON_DOWN
             )
         });
         let last = columns.rev().find(|&x| {
@@ -1171,16 +1085,18 @@ pub(super) fn draw_transcript_in(
                 .any(|range| range.contains(&usize::from(x - state.selection.viewport.x)))
                 && frame.buffer_mut()[(x, point.1)].symbol() != " "
         });
+
         if let (Some(first), Some(last)) = (first, last) {
             let end = last
                 .saturating_add(frame.buffer_mut()[(last, point.1)].symbol().width().max(1) as u16)
                 .min(state.selection.viewport.right());
             for x in first..end {
                 let cell = &mut frame.buffer_mut()[(x, point.1)];
-                cell.set_bg(THEME.tab_hover_background);
+                cell.set_bg(THEME.accent).set_fg(THEME.on_accent);
             }
         }
     }
+
     if !state.selection.dragging()
         && let Some(point) = state.transcript_pointer
         && let Some(index) = state
@@ -1209,6 +1125,7 @@ pub(super) fn draw_transcript_in(
                     }
                 }
             }
+
             Some(TranscriptItem::Tool(row)) => {
                 let group_header = state
                     .transcript_layout
@@ -1246,6 +1163,7 @@ pub(super) fn draw_transcript_in(
                                     }) {
                                         continue;
                                     }
+
                                     let cell = &mut frame.buffer_mut()[(x, y)];
                                     if cell.symbol() != " " {
                                         cell.set_style(cell.style().add_modifier(Modifier::BOLD));
@@ -1259,6 +1177,7 @@ pub(super) fn draw_transcript_in(
                     }
                 }
             }
+
             _ => {}
         }
     }
@@ -1266,7 +1185,7 @@ pub(super) fn draw_transcript_in(
     if navigation {
         super::navigation::draw(frame, state, area, offset);
     }
-    draw_link_tooltip(frame, state);
+    draw_link_tooltip(frame, state, area, offset);
 }
 
 #[cfg(test)]
@@ -1450,6 +1369,7 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
             let bar = PROGRESS_FRAMES[(ms / 260) as usize % PROGRESS_FRAMES.len()];
             format!("  {}  ·  Ctrl+C 取消", bar)
         }
+
         RunStatus::Cancelling => format!("  {} 正在取消…", icons::LOADING),
         RunStatus::Failed => format!("  {} 操作未完成 · 请查看上方错误", icons::CLOSE),
     };
@@ -1581,6 +1501,7 @@ fn draw_composer(
                     thumbnail,
                 );
             }
+
             state.attachment_areas.push(chip);
             x = x.saturating_add(width + 2);
         }
@@ -1591,6 +1512,7 @@ fn draw_composer(
         height: inner.height.saturating_sub(attachment_height),
         ..inner
     };
+
     draw_prompt(frame, state, prompt_area, lines, cursor);
 }
 
@@ -1635,6 +1557,7 @@ pub(super) fn draw_prompt(
             .map(Line::from)
             .collect::<Vec<_>>(),
     );
+
     frame.render_widget(Paragraph::new(text), text_area);
 
     for (row, columns) in state.input.selection_cells(state.input_width) {
@@ -1649,6 +1572,7 @@ pub(super) fn draw_prompt(
             }
         }
     }
+
     if text_area.width > 0
         && text_area.height > 0
         && !state.dialog_open()
@@ -1666,6 +1590,7 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         picker.draw(frame, area);
         return;
     }
+
     let menu = state.menu();
 
     if menu.is_empty() || area.height == 0 || area.width <= 4 {
@@ -1688,6 +1613,7 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             .max(state.menu_index.saturating_sub(visible.saturating_sub(1)))
             .min(max_first);
     }
+
     state.menu_offset = state.menu_offset.min(max_first);
     let first = state.menu_offset;
 
