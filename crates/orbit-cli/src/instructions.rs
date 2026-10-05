@@ -1,7 +1,4 @@
-//! Discovery and prompt injection for user-authored `AGENTS.md` files.
-//!
-//! Orbit deliberately only reads these files. It never creates instruction,
-//! index, or memory files in a user workspace.
+//! Read user-authored AGENTS instructions without creating workspace metadata.
 
 use std::{
     env, fs,
@@ -131,6 +128,7 @@ pub(crate) fn load_for(cwd: &Path, user_dir: Option<&Path>, max_bytes: usize) ->
         .take_while(|path| path.starts_with(&root))
         .map(Path::to_path_buf)
         .collect::<Vec<_>>();
+
     directories.reverse();
 
     for directory in directories {
@@ -179,8 +177,7 @@ pub(crate) fn load_for(cwd: &Path, user_dir: Option<&Path>, max_bytes: usize) ->
     result
 }
 
-/// Replace a previous Orbit-owned instruction message. This makes restored sessions pick up
-/// moved workspaces and changed rules without duplicating the prompt after every turn.
+/// Replace Orbit-owned instructions so resumed sessions pick up the current workspace rules.
 pub(crate) fn inject(history: &mut Vec<ChatMessage>, instructions: &Instructions) {
     history.retain(|message| {
         !matches!(message, ChatMessage::System { content } if content.starts_with(MESSAGE_PREFIX) || content.starts_with(CORE_MESSAGE_PREFIX))

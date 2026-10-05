@@ -83,11 +83,13 @@ pub async fn list_text(store: &Store) -> Result<String> {
 /// before creating a run; this is not a user-facing failure.
 #[derive(Debug)]
 pub(crate) struct SessionRefreshRequired;
+
 impl std::fmt::Display for SessionRefreshRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("session snapshot requires refresh")
     }
 }
+
 impl std::error::Error for SessionRefreshRequired {}
 
 pub struct SessionState {
@@ -211,6 +213,7 @@ impl HistoryReplay {
                     .iter()
                     .take_while(|event| !matches!(event, AgentEvent::TurnStarted { .. }))
                     .any(|event| matches!(event, AgentEvent::InputReceived { .. }));
+
                 if run.prompt != "/compact" && !queued_input {
                     // Do not reset the reader's scroll position between runs.
                     let (scroll, follow) = (state.scroll, state.follow_bottom);
@@ -245,6 +248,7 @@ impl HistoryReplay {
                     turns: state.turn,
                     tool_calls: state.tool_calls,
                 }),
+
                 "cancelled" => state.apply(AgentEvent::Cancelled),
                 _ => {
                     state.status = crate::tui::app::RunStatus::Failed;
@@ -406,6 +410,7 @@ impl SessionState {
             .unwrap()
             .move_to(workspace.root(), baseline.clone())
             .await;
+
         self.release_idle_writer();
         self.snapshot.session = session?;
         self.git_baseline = baseline;
@@ -501,6 +506,7 @@ impl SessionState {
                     .map(str::to_owned),
             )
             .await;
+
         self.release_idle_writer();
         result?;
         self.snapshot.session.model = model;
@@ -557,12 +563,14 @@ impl SessionState {
                 return Err(error);
             }
         };
+
         if let Some(workspace) = &self.audit_workspace
             && workspace.root() != Path::new(&latest.session.workspace)
         {
             self.release_idle_writer();
             return Err(SessionRefreshRequired.into());
         }
+
         if latest.history != self.snapshot.history
             || latest.runs.len() != self.snapshot.runs.len()
             || latest.session.model != self.snapshot.session.model
@@ -571,10 +579,12 @@ impl SessionState {
             self.release_idle_writer();
             return Err(SessionRefreshRequired.into());
         }
+
         if let Err(error) = self.writer.as_mut().unwrap().begin(prompt, model).await {
             self.release_idle_writer();
             return Err(error);
         }
+
         self.active = true;
         self.journal = None;
         Ok(())
@@ -588,6 +598,7 @@ impl SessionState {
             .as_ref()
             .context("no active writer")?
             .execution_journal()?;
+
         self.journal = Some(journal.clone());
         Ok(journal)
     }
@@ -651,6 +662,7 @@ impl SessionState {
             id.to_owned(),
         )
         .await?;
+
         self.install_resume(prepared);
 
         Ok(())
@@ -747,6 +759,7 @@ impl SessionState {
             snapshot: std::mem::replace(&mut self.snapshot, prepared.snapshot),
             git_baseline: std::mem::replace(&mut self.git_baseline, prepared.git_baseline),
         };
+
         self.journal = None;
 
         if let Some(ws) = &self.audit_workspace {

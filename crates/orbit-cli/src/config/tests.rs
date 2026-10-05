@@ -53,6 +53,7 @@ reasoning = { adapter = "openai_chat", efforts = ["low", "max"], default = "low"
         Some(ReasoningEffort::High)
     );
 }
+
 #[test]
 fn provider_debug_redacts_credentials() {
     let provider = ProviderConfig {
@@ -269,6 +270,7 @@ credential = "anthropic"
 [[providers.test.models]]
 id = "test-model"
 "#;
+
     fs::write(&path, content).unwrap();
     let auth_directory = directory.path().join("auth");
 
@@ -306,6 +308,7 @@ fn account_configuration_example_connects_both_provider_protocols() {
         .split("```")
         .next()
         .unwrap();
+
     fs::write(&path, example).unwrap();
 
     let config = FileConfig::load(&path, &directory.path().join("auth")).unwrap();

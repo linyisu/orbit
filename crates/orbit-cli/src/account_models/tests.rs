@@ -22,6 +22,7 @@ fn refresh_updates_remote_capabilities_but_preserves_explicit_fields_and_choices
                      "reasoning": {"adapter": "openai_responses", "efforts": [effort], "default": effort}},
                     {"id": "orbit-new"}
                 ]})).unwrap();
+
             merge_discovered_models(&mut provider, models);
             let live = &provider.models[0];
             assert_eq!(live.context_tokens, Some(100000));
@@ -113,6 +114,7 @@ fn google_quota_models_do_not_retire_unlisted_or_exhausted_models() {
         ]}),
     )
     .unwrap();
+
     assert_eq!(models.len(), 2);
     assert!(models.iter().all(|model| model.reasoning.is_none()));
     merge_discovered_models(&mut provider, models);
@@ -195,6 +197,7 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
         } else {
             connection["api_key"] = json!(key);
         }
+
         providers.insert(name.into(), connection);
         servers.push((
             name,
@@ -208,6 +211,7 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
             )),
         ));
     }
+
     providers.insert(
         "orbit-failure".into(),
         json!({"base_url": "http://127.0.0.1:0/v1",
@@ -235,6 +239,7 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
         } else {
             assert!(!request.contains("authorization:") && !request.contains("x-api-key:"));
         }
+
         assert_eq!(
             config.providers[name].models[0].context_tokens,
             Some(200000)
@@ -244,6 +249,7 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
             if name == "orbit-responses" { 1 } else { 2 }
         );
     }
+
     let mut reloaded: FileConfig = serde_json::from_value(value.clone()).unwrap();
     reloaded.auth_directory = Some(directory.clone());
     reloaded
@@ -272,6 +278,7 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
                 && !text.contains("orbit-anthropic-key")
         );
     }
+
     let mut rotated: FileConfig = serde_json::from_value(value).unwrap();
     rotated.auth_directory = Some(directory.clone());
     rotated
@@ -328,6 +335,7 @@ fn reasoning_defaults_require_a_verified_model_endpoint_and_protocol() {
             }
         }
     }
+
     assert!(
         default_reasoning(
             ApiFormat::OpenaiChatCompletions,
@@ -461,6 +469,7 @@ fn cache_never_crosses_accounts() {
     assert!(read_cache(&path, &binding).is_some());
     assert!(read_cache(&path, &json!({ "account_id": "second" })).is_none());
 }
+
 #[test]
 fn flash_vision_is_scoped_to_verified_official_models_and_endpoints() {
     for format in [ApiFormat::OpenaiChatCompletions, ApiFormat::OpenaiResponses] {

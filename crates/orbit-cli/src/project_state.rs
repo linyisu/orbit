@@ -1,8 +1,4 @@
-//! Project-scoped planning and session-scoped durable-memory tools.
-//!
-//! These records are stored in Orbit's central database. They deliberately do
-//! not create project files. Tasks use stable project identity; memories belong
-//! only to the conversation that saved them.
+//! Central project tasks and session-scoped memories; no workspace metadata files.
 
 use std::sync::{Arc, RwLock};
 
@@ -37,9 +33,7 @@ impl MemoryScope {
     }
 }
 
-/// Refresh the small project overview attached to each conversation. It is
-/// generated from the central database every time, so it neither relies on a
-/// directory name nor becomes stale after a task tool updates a record.
+/// Rebuild the injected project overview from the current database state.
 pub async fn inject(
     history: &mut Vec<ChatMessage>,
     store: &Store,
@@ -457,10 +451,11 @@ fn failed(error: impl std::fmt::Display) -> ToolError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use orbit_model::types::ToolCall;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
+
+    use super::*;
 
     #[tokio::test]
     async fn injection_replaces_only_its_previous_snapshot() {
@@ -638,6 +633,7 @@ mod tests {
             )
             .await
             .unwrap();
+
         store
             .create_task(
                 &second_session.project_id,

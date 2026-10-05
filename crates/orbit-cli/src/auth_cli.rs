@@ -86,6 +86,7 @@ pub(crate) async fn run(command: AuthCommand, directory: PathBuf) -> Result<()> 
                 println!("{}", model.qualified_name());
             }
         }
+
         AuthCommand::SetKey {
             name,
             base_url,
@@ -95,6 +96,7 @@ pub(crate) async fn run(command: AuthCommand, directory: PathBuf) -> Result<()> 
             store.set_api_key(&name, key, &base_url).await?;
             println!("已保存凭据 {name}，配置中使用 credential = {name:?}");
         }
+
         AuthCommand::List => {
             for entry in store.list()? {
                 println!(
@@ -106,6 +108,7 @@ pub(crate) async fn run(command: AuthCommand, directory: PathBuf) -> Result<()> 
                 );
             }
         }
+
         AuthCommand::Logout { name } => {
             println!(
                 "{}",
@@ -116,6 +119,7 @@ pub(crate) async fn run(command: AuthCommand, directory: PathBuf) -> Result<()> 
                 }
             );
         }
+
         AuthCommand::Login {
             provider,
             name,
@@ -156,6 +160,7 @@ pub(crate) async fn run(command: AuthCommand, directory: PathBuf) -> Result<()> 
                 eprintln!("粘贴浏览器最终跳转的完整 URL：");
                 read_secret(!io::stdin().is_terminal())?
             };
+
             println!("正在交换登录凭据并检查账号配置…");
             tokio::select! {
                 result = login.finish(&callback, &store, &name) => result?,
@@ -180,6 +185,7 @@ fn read_secret(from_stdin: bool) -> Result<String> {
         }
         return Ok(String::from_utf8(bytes)?.trim().to_owned());
     }
+
     if !io::stdin().is_terminal() {
         bail!("当前没有交互终端，请使用 --stdin");
     }
@@ -220,6 +226,7 @@ fn read_secret(from_stdin: bool) -> Result<String> {
                     }
                     value.push(c);
                 }
+
                 _ => {}
             }
         }

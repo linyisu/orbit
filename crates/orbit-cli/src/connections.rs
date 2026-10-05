@@ -1,9 +1,11 @@
 //! Shared connection persistence for official and custom providers.
 pub(crate) mod edit;
-use crate::tui::ModelOption;
+use std::io::Write;
+
 use anyhow::{Context, Result, ensure};
 use orbit_model::client::ApiFormat;
-use std::io::Write;
+
+use crate::tui::ModelOption;
 
 pub(crate) fn append_profile(
     path: &std::path::Path,
@@ -135,6 +137,7 @@ fn persist(path: &std::path::Path, original: &str, updated: &str) -> Result<()> 
             .as_file()
             .set_permissions(metadata.permissions())?;
     }
+
     temporary.write_all(updated.as_bytes())?;
     temporary.as_file().sync_all()?;
     ensure!(
@@ -163,6 +166,7 @@ pub(crate) async fn save_account(
         OAuthProvider::Chatgpt => "https://chatgpt.com/backend-api/codex/",
         OAuthProvider::Anthropic => unreachable!(),
     };
+
     append_profile(path, auth_directory, provider.name(), format, endpoint)?;
     let mut config = crate::config::FileConfig::load(path, auth_directory)?;
     let diagnostics = crate::account_models::refresh(&mut config, true).await;

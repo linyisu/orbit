@@ -26,6 +26,7 @@ async fn isolated_document_worker_converts_pages_and_invalidates_changed_source(
             .unwrap(),
     )
     .unwrap();
+
     assert_eq!(first["truncated"], true);
     let next: Value = serde_json::from_str(
         &tool
@@ -37,6 +38,7 @@ async fn isolated_document_worker_converts_pages_and_invalidates_changed_source(
             .unwrap(),
     )
     .unwrap();
+
     assert_eq!(first["total_chars"], next["total_chars"]);
     std::fs::write(root.path().join("data.csv"), "name,value\nchanged,9\n").unwrap();
     assert!(
@@ -76,6 +78,7 @@ async fn cancellation_terminates_a_running_conversion_worker() {
         )
         .await
     });
+
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     token.cancel();
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)

@@ -1,5 +1,11 @@
 //! Application configuration, validation and runtime projection.
-use crate::tui;
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
 use anyhow::{Context, Result, bail};
 use orbit_agent::{agent::AgentConfig, model::ModelClientBackend};
 use orbit_model::{
@@ -7,12 +13,8 @@ use orbit_model::{
     types::{ModelConfig, ReasoningAdapter, ReasoningEffort},
 };
 use serde::Deserialize;
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+
+use crate::tui;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct FileConfig {
@@ -132,7 +134,7 @@ fn default_max_output_tokens() -> u32 {
 }
 
 fn default_auto_compact() -> bool {
-    true
+    AgentConfig::default().auto_compact
 }
 
 fn default_auto_refresh_models() -> bool {
@@ -140,15 +142,15 @@ fn default_auto_refresh_models() -> bool {
 }
 
 fn default_context_tokens() -> usize {
-    128_000
+    AgentConfig::default().context_tokens
 }
 
 fn default_max_turns() -> usize {
-    0
+    AgentConfig::default().max_turns
 }
 
 fn default_max_tool_calls() -> usize {
-    2000
+    AgentConfig::default().max_tool_calls
 }
 
 pub(crate) fn validate_reasoning_extra(
@@ -183,6 +185,7 @@ pub(crate) fn validate_reasoning_extra(
             .get("reasoning")
             .and_then(toml::Value::as_table)
             .is_some_and(|reasoning| reasoning.contains_key("effort")),
+
         ApiFormat::GoogleCodeAssist => !extra.is_empty(),
         ApiFormat::AnthropicMessages => extra
             .get("output_config")
@@ -342,6 +345,7 @@ impl FileConfig {
                             model.id
                         );
                     }
+
                     if reasoning.efforts.is_empty()
                         || !reasoning.efforts.contains(&reasoning.default)
                     {
@@ -422,6 +426,7 @@ impl FileConfig {
                     .unwrap_or(self.context_tokens)
                     .saturating_sub(runtime.settings.max_output_tokens)
             });
+
             runtime.settings.max_input_tokens = runtime.settings.max_input_tokens.min(input);
             runtime.backend = Some(std::sync::Arc::new(ModelClientBackend::new(
                 ModelClient::new(choice.config)?,
@@ -469,6 +474,7 @@ impl FileConfig {
                         &model.id,
                     )
                 });
+
                 options.push(tui::ModelOption {
                     max_output_tokens,
                     provider: name.clone(),

@@ -343,7 +343,6 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         .finish("completed", Some(history.clone()))
         .await
         .unwrap();
-    // Resuming the current session reloads the latest successful history.
     state.resume(&first).await.unwrap();
 
     assert_eq!(state.snapshot.history, history);
@@ -405,7 +404,6 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     assert_eq!(state.snapshot.history, history);
     assert_eq!(state.snapshot.runs.len(), 1);
     assert!(state.store.load(&second).await.is_ok());
-    // The old lease is released after a successful switch.
     assert!(state.store.acquire(&second).await.is_ok());
 
     drop(state);
@@ -419,6 +417,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         first_command_output
     );
 }
+
 #[tokio::test]
 async fn calibration_restores_per_profile_without_cross_provider_contamination() {
     let tmp = tempfile::tempdir().unwrap();
@@ -608,7 +607,6 @@ async fn test_resume_preserves_attachments_losslessly_and_projects_for_text_only
     let id = session.id().to_owned();
     drop(session);
 
-    // Resume session: canonical history remains lossless
     let resumed = SessionState::open(db_path, Some(id), "test::model".into())
         .await
         .unwrap();
@@ -630,7 +628,6 @@ async fn test_resume_preserves_attachments_losslessly_and_projects_for_text_only
     );
     assert_eq!(content, "check this");
 
-    // When projected for text-only model via model_messages, attachments are omitted
     let projected = orbit_agent::model_messages(&resumed.snapshot.history, false);
     let ChatMessage::User {
         content: proj_content,
@@ -655,7 +652,6 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("orbit.db");
 
-    // Round 1: Vision model session with image attachment
     let mut session = SessionState::open(db_path.clone(), None, "test::vision-model".into())
         .await
         .unwrap();
@@ -675,16 +671,15 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
         ),
         ChatMessage::assistant("I see a mountain in photo.png"),
     ];
+
     session.finish("completed", Some(history)).await.unwrap();
     let id = session.id().to_owned();
     drop(session);
 
-    // Round 2: Resume with text-only model (supports_vision: false)
     let mut session_text =
         SessionState::open(db_path.clone(), Some(id.clone()), "test::text-model".into())
             .await
             .unwrap();
-    // Model messages projected for text-only model omits image
     let projected = orbit_agent::model_messages(&session_text.snapshot.history, false);
 
     assert_eq!(projected.len(), 3);
@@ -702,7 +697,6 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
         content.contains("[Image omitted: current model does not support image input: photo.png]")
     );
 
-    // User sends a follow-up text message on text-only model and finishes
     session_text
         .begin("what was that mountain?".into(), "test::text-model".into())
         .await
@@ -740,7 +734,6 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
         "persisted history must still retain image attachment"
     );
 
-    // Round 3: Projected for vision model (supports_vision: true)
     let projected_vision = orbit_agent::model_messages(&session_vision.snapshot.history, true);
     let ChatMessage::User {
         attachments: vis_attachments,

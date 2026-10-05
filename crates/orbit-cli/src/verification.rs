@@ -1,6 +1,5 @@
 //! Compare execution evidence to the current filtered workspace, without
 //! claiming that a zero exit status proves a test suite or reproduces an OS.
-use crate::project_state::MemoryScope;
 use anyhow::Result;
 use orbit_agent::tool::{ClosureTool, ToolError, ToolRegistry};
 use orbit_runtime::{
@@ -14,6 +13,8 @@ use orbit_store::{
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
+
+use crate::project_state::MemoryScope;
 
 pub fn register(
     tools: &mut ToolRegistry,
@@ -261,6 +262,7 @@ pub async fn summary(session: &crate::session::SessionState) -> String {
                 entries.len() - unchanged - stale
             )
         }
+
         Err(error) => format!("输入版本  无法核对：{error}"),
     }
 }
@@ -323,9 +325,10 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use orbit_agent::tool::FileChange;
     use orbit_runtime::verification::{FileFingerprint, VerificationEvidence};
+
+    use super::*;
     fn input(content: &str) -> WorkspaceFingerprint {
         WorkspaceFingerprint {
             digest: content_hash(content.as_bytes()),
@@ -340,6 +343,7 @@ mod tests {
             ..Default::default()
         }
     }
+
     #[test]
     fn edits_stale_checks_and_distinguish_external_edits_without_claiming_test_success() {
         let baseline = input("user start");
@@ -385,7 +389,6 @@ mod tests {
 
         assert_eq!(same["commands"][0]["input_state"], "input_unchanged");
 
-        // When command itself modified workspace, e.output matches current workspace digest
         let mut modified_ws = verified.clone();
         modified_ws.digest = "modified_digest".into();
         let command_with_output = VerificationRecord {

@@ -107,6 +107,7 @@ pub(crate) async fn save(
                 "套餐账号的协议与地址由认证流程管理"
             );
         }
+
         if matches!(key, KeyChange::Keep) && provider.credential.is_some() {
             ensure!(
                 draft.endpoint.trim_end_matches('/') == provider.base_url.trim_end_matches('/'),
@@ -114,6 +115,7 @@ pub(crate) async fn save(
             );
         }
     }
+
     let mut document = draft.source.parse::<toml_edit::DocumentMut>()?;
     if let Some(name) = &draft.original_name {
         ensure!(name == &draft.name, "编辑连接时不能更改连接名称");
@@ -145,6 +147,7 @@ pub(crate) async fn save(
             .into_table()
             .map_err(|_| anyhow::anyhow!("连接配置无效"))?
     };
+
     *item = toml_edit::Item::Table(table);
     let provider = &mut document["providers"][&draft.name];
     provider["api_format"] = toml_edit::value(
@@ -166,12 +169,14 @@ pub(crate) async fn save(
             }
         }
     }
+
     if document["default_provider"]
         .as_str()
         .is_none_or(str::is_empty)
     {
         document["default_provider"] = toml_edit::value(&draft.name);
     }
+
     let updated = document.to_string();
     let parsed = FileConfig::parse(&updated, auth)?;
     for model in parsed.model_options()? {
@@ -188,6 +193,7 @@ pub(crate) async fn save(
             .set_api_key(&credential, secret.to_owned(), &draft.endpoint)
             .await?;
     }
+
     if let Err(error) = super::persist(path, &draft.source, &updated) {
         if matches!(key, KeyChange::Replace(_)) {
             store.remove(&credential).await?;

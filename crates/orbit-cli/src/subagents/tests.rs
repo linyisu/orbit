@@ -1,4 +1,3 @@
-use super::*;
 use orbit_agent::{
     events::AgentEvent,
     model::{CompletionFuture, MockModel, StreamFuture},
@@ -6,6 +5,8 @@ use orbit_agent::{
 };
 use orbit_model::{error::ModelError, types::ChatCompletion};
 use tokio::sync::Notify;
+
+use super::*;
 
 fn response(message: ChatMessage) -> ChatCompletion {
     ChatCompletion {
@@ -24,6 +25,7 @@ struct GatedModel {
     changed: Arc<Notify>,
     answer: Arc<str>,
 }
+
 impl GatedModel {
     fn new() -> Self {
         Self {
@@ -33,6 +35,7 @@ impl GatedModel {
             answer: "Orbit findings".into(),
         }
     }
+
     async fn received(&self, count: usize) {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
@@ -49,6 +52,7 @@ impl GatedModel {
         .unwrap();
     }
 }
+
 impl ModelBackend for GatedModel {
     fn complete<'a>(
         &'a self,
@@ -61,6 +65,7 @@ impl ModelBackend for GatedModel {
                 .await
         })
     }
+
     fn stream<'a>(&'a self, request: ChatRequest, token: CancellationToken) -> StreamFuture<'a> {
         Box::pin(async move {
             self.requests.lock().unwrap().push(request.clone());
@@ -105,6 +110,7 @@ reasoning = { adapter = "openai_chat", efforts = ["low", "high"], default = "low
         )
         .await
         .unwrap();
+
     parent
         .set_model_profile("orbit::orbit-model".into(), Some("high".into()))
         .await
@@ -146,6 +152,7 @@ fn install(service: &Arc<Service>) -> ToolRegistry {
             action,
         });
     }
+
     tools
 }
 
@@ -226,6 +233,7 @@ async fn final_results_are_direct_unicode_pages_with_stable_completion_cursors()
         reconstructed.push_str(page["content"].as_str().unwrap());
         cursor = page["next_read"].clone();
     }
+
     assert_eq!(reconstructed, answer);
     let transcript = read(&service, json!({"agent_id":id,"view":"transcript"}))
         .await
@@ -243,6 +251,7 @@ async fn final_results_are_direct_unicode_pages_with_stable_completion_cursors()
     )
     .await
     .unwrap();
+
     assert_eq!(next["view"], "transcript");
     assert_eq!(next["message_id"], completion["result_message_id"]);
     assert!(
@@ -330,6 +339,7 @@ async fn eight_children_overlap_while_parent_works_and_waits_without_polling() {
             )
         })
         .collect::<Vec<_>>();
+
     calls.push(ToolCall::function("work", "parent_work", json!({})));
     let model = MockModel::new(
         [
@@ -351,12 +361,14 @@ async fn eight_children_overlap_while_parent_works_and_waits_without_polling() {
             )
             .await
     });
+
     tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(event) = events.recv().await {
             if matches!(event, AgentEvent::WaitingForTasks { .. }) {
                 return;
             }
         }
+
         panic!("parent never waited");
     })
     .await
@@ -377,14 +389,17 @@ async fn eight_children_overlap_while_parent_works_and_waits_without_polling() {
             .iter()
             .map(|t| t.function.name.as_str())
             .collect::<Vec<_>>();
+
         assert_eq!(names, ["read_file", "read_history"]);
     }
+
     child_model.gate.add_permits(8);
     let result = tokio::time::timeout(Duration::from_secs(10), run)
         .await
         .unwrap()
         .unwrap()
         .unwrap();
+
     assert!(model.requests().len() >= 3 && model.requests().len() <= 10);
     assert_eq!(service.store.subagents(parent.id()).await.unwrap().len(), 8);
     assert!(
@@ -465,6 +480,7 @@ async fn running_input_and_finished_continuation_keep_identity_and_canonical_his
             .content,
     )
     .unwrap();
+
     assert_eq!(receipt["agent_id"], id);
     model.gate.add_permits(1);
     service
@@ -485,6 +501,7 @@ async fn running_input_and_finished_continuation_keep_identity_and_canonical_his
         .canonical_messages(id, None, 100)
         .await
         .unwrap();
+
     assert_eq!(
         messages
             .iter()
@@ -506,6 +523,7 @@ async fn running_input_and_finished_continuation_keep_identity_and_canonical_his
             .content,
     )
     .unwrap();
+
     assert_eq!(read["content"].as_str().unwrap().chars().count(), 1);
     assert_eq!(read["next_offset"], 1);
 }
@@ -624,6 +642,7 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
         )
         .await
         .unwrap();
+
     interrupted
         .begin("review".into(), "orbit::orbit-model".into())
         .await
@@ -652,6 +671,7 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
         slots: Arc::new(Semaphore::new(8)),
         backend: service.backend.clone(),
     };
+
     recovered.recover().await.unwrap();
     assert_eq!(model.requests.lock().unwrap().len(), 1);
     assert_eq!(
@@ -716,6 +736,7 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
             Ok::<_, ToolError>("unused".into())
         }));
     }
+
     register(
         &mut tools,
         service.store.clone(),
@@ -756,6 +777,7 @@ fn validates_subagent_limits_and_defaults_to_eight() {
             .is_ok()
         );
     }
+
     for limit in [1, 8, 32, 128] {
         assert!(
             SubagentConfig {
@@ -766,6 +788,7 @@ fn validates_subagent_limits_and_defaults_to_eight() {
             .is_ok()
         );
     }
+
     for limit in [0, 129] {
         assert!(
             SubagentConfig {
@@ -776,6 +799,7 @@ fn validates_subagent_limits_and_defaults_to_eight() {
             .is_err()
         );
     }
+
     assert!(
         SubagentConfig {
             timeout_seconds: 86401,
@@ -813,6 +837,7 @@ async fn progress_deadline_wakes_parent_without_terminating_the_child() {
             Duration::from_secs(1),
         )
         .await;
+
     assert_eq!(reminder["status"], "running");
     assert!(
         reminder["latest_activity"]["message_preview"]
@@ -838,6 +863,7 @@ async fn progress_deadline_wakes_parent_without_terminating_the_child() {
     .await
     .unwrap()
     .unwrap();
+
     assert_eq!(waiting[0].status, JobStatus::Running);
     assert_eq!(
         service

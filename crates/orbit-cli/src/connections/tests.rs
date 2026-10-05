@@ -35,6 +35,7 @@ async fn first_custom_connection_bootstraps_and_reloads_without_plaintext_key() 
         .await
         .unwrap()
         .headers;
+
     assert_eq!(headers["authorization"], "Bearer private-test-key");
 }
 
@@ -268,6 +269,7 @@ fn existing_antigravity_catalog_expands_without_rewriting_user_settings() {
             "missing {id}"
         );
     }
+
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 
     let connected = append_profile(

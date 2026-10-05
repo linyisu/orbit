@@ -64,6 +64,7 @@ fn request(prompt: &str) -> ChatRequest {
             prompt.chars().take(4000).collect::<String>()
         }),
     ]);
+
     request.max_tokens = Some(1024);
     request
 }

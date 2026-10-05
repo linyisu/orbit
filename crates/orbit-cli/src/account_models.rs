@@ -25,6 +25,7 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
             jobs.push(refresh_connection(name, provider, directory, force));
         }
     }
+
     let mut diagnostics = stream::iter(jobs)
         .buffer_unordered(4)
         .collect::<Vec<_>>()
@@ -32,6 +33,7 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
+
     diagnostics.sort();
     diagnostics
 }
@@ -123,10 +125,12 @@ async fn refresh_provider(
                 )
                 .await?
             };
+
             normalize(provider.api_format, &payload)?;
             Ok::<_, anyhow::Error>(payload)
         }
         .await;
+
         match discovered {
             Ok(payload) => {
                 let write = (|| -> Result<()> {
@@ -153,6 +157,7 @@ async fn refresh_provider(
                 }
                 payload
             }
+
             Err(error) => {
                 diagnostics.push(format!("{name}：模型刷新失败，保留缓存或现有目录：{error}"));
                 match cached {
@@ -181,6 +186,7 @@ fn merge_discovered_models(provider: &mut ProviderConfig, models: Vec<ModelProfi
             .models
             .retain(|existing| models.iter().any(|model| model.id == existing.id));
     }
+
     for mut model in models {
         if let Some(explicit) = configured.iter().find(|entry| entry.id == model.id) {
             model.max_output_tokens = explicit.max_output_tokens.or(model.max_output_tokens);
@@ -190,6 +196,7 @@ fn merge_discovered_models(provider: &mut ProviderConfig, models: Vec<ModelProfi
             model.supports_vision = explicit.supports_vision.or(model.supports_vision);
             model.reasoning = explicit.reasoning.clone().or(model.reasoning);
         }
+
         if let Some(existing) = provider
             .models
             .iter_mut()
@@ -211,6 +218,7 @@ fn supported(format: ApiFormat, base: &str) -> bool {
             base.trim_end_matches('/'),
             "https://daily-cloudcode-pa.googleapis.com" | "https://cloudcode-pa.googleapis.com"
         ),
+
         ApiFormat::ChatgptCodex => {
             base.trim_end_matches('/') == "https://chatgpt.com/backend-api/codex"
         }
@@ -264,6 +272,7 @@ pub(crate) fn normalize(
             {
                 continue;
             }
+
             ensure!(
                 model.context_tokens.is_none_or(|tokens| tokens >= 8192)
                     && model
@@ -279,6 +288,7 @@ pub(crate) fn normalize(
                     ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
                     _ => ReasoningAdapter::OpenaiChat,
                 };
+
                 ensure!(
                     reasoning.adapter == adapter && reasoning.efforts.contains(&reasoning.default),
                     "模型思考能力无效：{}",
@@ -286,8 +296,10 @@ pub(crate) fn normalize(
                 );
                 crate::config::validate_reasoning_extra(&model.id, format, &reasoning.extra)?;
             }
+
             models.push(model);
         }
+
         ensure!(!models.is_empty(), "账号未返回可用模型");
     } else if format == ApiFormat::ChatgptCodex {
         let entries = payload
@@ -295,6 +307,7 @@ pub(crate) fn normalize(
             .or_else(|| payload.get("data"))
             .and_then(Value::as_array)
             .context("模型目录缺少 models/data 数组")?;
+
         for entry in entries {
             let Some(id) = entry
                 .get("slug")
@@ -337,6 +350,7 @@ pub(crate) fn normalize(
                 models.push(serde_json::from_value(json!({ "id": id }))?);
             }
         }
+
         ensure!(!models.is_empty(), "配额接口未返回模型 ID，保留现有目录");
     } else {
         let entries = payload["models"]
@@ -386,6 +400,7 @@ pub(crate) fn normalize(
             )?);
         }
     }
+
     Ok((models, unavailable))
 }
 
@@ -397,12 +412,14 @@ fn anthropic_capabilities(model: &mut ModelProfile, entry: &Value) -> Result<()>
             .map(usize::try_from)
             .transpose()?;
     }
+
     if model.max_output_tokens.is_none() {
         model.max_output_tokens = entry["max_tokens"]
             .as_u64()
             .map(u32::try_from)
             .transpose()?;
     }
+
     let capabilities = &entry["capabilities"];
     if model.supports_vision.is_none() {
         model.supports_vision = capabilities["image_input"]["supported"].as_bool();
@@ -421,6 +438,7 @@ fn anthropic_capabilities(model: &mut ModelProfile, entry: &Value) -> Result<()>
         .into_iter()
         .filter(|effort| capabilities["effort"][effort.as_str()]["supported"] == true)
         .collect::<Vec<_>>();
+
         if let Some(default) = efforts
             .iter()
             .find(|&&effort| effort == ReasoningEffort::High)
@@ -435,6 +453,7 @@ fn anthropic_capabilities(model: &mut ModelProfile, entry: &Value) -> Result<()>
             });
         }
     }
+
     Ok(())
 }
 
@@ -484,6 +503,7 @@ pub(crate) fn default_reasoning(
     {
         return None;
     }
+
     let adapter = match format {
         ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
         ApiFormat::OpenaiResponses => ReasoningAdapter::OpenaiResponses,

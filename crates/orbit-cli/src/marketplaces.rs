@@ -1,9 +1,5 @@
-//! User-owned marketplace catalog storage and safe source acquisition.
-//!
-//! Marketplaces are never stored in a project directory. Adding one is an
-//! explicit user action; Git sources are cloned into Orbit's private data
-//! directory, where their catalogue and package declarations can be inspected
-//! before any plugin is installed or executable component enabled.
+//! Private marketplace catalogues and pinned source acquisition.
+//! Package declarations never execute during acquisition or inspection.
 
 use std::{
     collections::BTreeSet,
@@ -40,9 +36,7 @@ pub(crate) struct Plugin {
     pub source: Option<String>,
 }
 
-/// Read-only summary of one plugin package. The contents are deliberately
-/// limited to declarations: this never runs hooks, starts MCP servers, or
-/// interprets a plugin's instructions.
+/// Package declarations only; inspection never starts hooks, commands or MCP servers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PluginPackage {
     pub name: String,
@@ -69,11 +63,7 @@ pub(crate) async fn add_current(source: String) -> Result<Marketplace> {
     Store::current()?.add(source).await
 }
 
-/// Validated skill roots from plugins enabled for the current project.
-///
-/// A stale or altered package is skipped rather than made executable. The
-/// diagnostic is intended for the TUI transcript so the user can inspect or
-/// disable it in `/plugins`.
+/// Enabled skill roots; skip altered packages and report a diagnostic to the TUI.
 pub(crate) struct EnabledSkillRoots {
     pub roots: Vec<PathBuf>,
     pub diagnostics: Vec<String>,
@@ -108,6 +98,7 @@ fn enabled_skill_roots_from_markets(
                 .with_context(|| {
                     format!("市场 {} 已不在本地缓存中", configured.marketplace_source)
                 })?;
+
             ensure!(
                 market.revision.is_some() || local_directory(&market.source).is_some(),
                 "市场 {} 的旧缓存未记录 Git 提交；请重新添加市场后启用",
@@ -186,6 +177,7 @@ pub(crate) fn inspect_plugin(market: &Marketplace, plugin: &Plugin) -> Result<Pl
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .context("plugin manifest has no name")?;
+
     ensure!(valid_name(name), "plugin manifest name is invalid");
     ensure!(
         name == plugin.name,
@@ -327,6 +319,7 @@ impl Store {
             .output()
             .await
             .context("failed to inspect downloaded marketplace revision")?;
+
         ensure!(
             revision_output.status.success(),
             "downloaded marketplace has no Git commit"
@@ -387,6 +380,7 @@ fn verify_git_checkout(market: &Marketplace) -> Result<()> {
         "--ignored=matching",
         "--ignore-submodules=none",
     ])?;
+
     ensure!(
         status.status.success(),
         "cannot inspect cached marketplace files"
@@ -460,6 +454,7 @@ fn parse_catalog(directory: &Path) -> Result<Marketplace> {
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .with_context(|| format!("plugin entry {} has no name", index + 1))?;
+
         ensure!(
             valid_name(plugin_name),
             "plugin entry {} has an invalid name",
@@ -488,6 +483,7 @@ fn parse_catalog(directory: &Path) -> Result<Marketplace> {
 
                 Some(source.to_owned())
             }
+
             None => None,
         };
 
@@ -515,6 +511,7 @@ fn resolve_package_path(market_root: &Path, source: &str) -> Result<PathBuf> {
             market_root.display()
         )
     })?;
+
     ensure!(
         package.starts_with(market_root),
         "plugin package source escapes its marketplace directory"
@@ -556,6 +553,7 @@ fn optional_text(value: &serde_json::Value, key: &str, location: &str) -> Result
                 .take(240)
                 .collect(),
         )),
+
         None => Ok(None),
     }
 }
@@ -583,6 +581,7 @@ fn declared_markdown_files(directory: &Path, required_file: &str) -> Result<Vec<
             }
         })
         .collect::<Vec<_>>();
+
     names.sort();
 
     Ok(names)
