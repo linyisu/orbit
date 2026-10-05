@@ -66,6 +66,8 @@ impl Tab {
         let mut tab = Self::empty(spec.label(), spec.workspace().into(), media);
         tab.spec = Some(spec.clone());
         if spec.remote() && spec.configure_required() {
+            tab.state.model = "配置连接".into();
+            tab.state.transcript.clear();
             tab.state.workspace_wizard = Some(wizard::Wizard::new(Some(spec)));
         } else {
             tab.start(spec);
@@ -82,6 +84,7 @@ impl Tab {
         self.spec = Some(spec.clone());
         self.title = spec.label();
         self.state.connection_label = Some(spec.label());
+        self.state.model = "连接中".into();
         self.offline = false;
         self.connected_at = std::time::Instant::now();
         let (progress, updates) = workspace::interaction::channel();
@@ -490,7 +493,12 @@ impl Tab {
             wizard.failed = true;
             wizard.busy = false;
             wizard.status = error.clone();
-            wizard.logs.push(error.clone());
+            if let Some(updates) = &self.updates
+                && let Ok(logs) = updates.logs.lock()
+            {
+                wizard.logs = logs.iter().cloned().collect();
+            }
+            self.state.model = "连接失败".into();
         }
         self.updates = None;
         self.state.ssh_prompt = None;
@@ -503,9 +511,11 @@ impl Tab {
         self.approval_id = None;
         self.state.finish_clock();
         self.state.status = RunStatus::Failed;
-        self.state.report_local(TranscriptItem::Error(format!(
-            "{error}\n连接已断开，目标任务可能仍在运行；/reconnect 接回，/close 关闭此标签。"
-        )));
+        if self.state.workspace_wizard.is_none() {
+            self.state.report_local(TranscriptItem::Error(format!(
+                "{error}\n连接已断开，目标任务可能仍在运行；/reconnect 接回，/close 关闭此标签。"
+            )));
+        }
     }
 
     fn reconnect(&mut self) {

@@ -19,6 +19,7 @@ impl Tab {
                 super::wizard::Action::Cancel => return Ok(Action::Close),
                 super::wizard::Action::Back => {
                     if let Some(spec) = self.spec.clone() {
+                        self.state.model = "配置连接".into();
                         self.state.workspace_wizard = Some(super::wizard::Wizard::new(Some(spec)));
                     }
                 }

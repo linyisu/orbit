@@ -244,3 +244,69 @@ async fn cancelling_authentication_closes_only_its_own_prompt() {
     assert!(!second.state.ssh_prompt.as_ref().unwrap().closed());
     assert!(!second.offline);
 }
+
+#[test]
+fn remote_modals_own_the_cursor_and_preserve_the_composer_draft() {
+    let mut state = UiState::new("mock");
+    state.input.set("draft".into());
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut state))
+        .unwrap();
+    assert!(terminal.backend().cursor_visible());
+
+    state.workspace_wizard = Some(wizard::Wizard::new(Some(Spec::parse("/ssh").unwrap())));
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut state))
+        .unwrap();
+    assert!(state.ime_cursor.is_none());
+    assert!(!terminal.backend().cursor_visible());
+
+    let wizard = state.workspace_wizard.as_mut().unwrap();
+    wizard.form.as_mut().unwrap().focus = 0;
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut state))
+        .unwrap();
+    assert!(terminal.backend().cursor_visible());
+    assert!(
+        !state
+            .input_area
+            .contains(terminal.backend().cursor_position())
+    );
+
+    state.workspace_wizard = Some(wizard::Wizard::new(None));
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut state))
+        .unwrap();
+    assert!(!terminal.backend().cursor_visible());
+    let (reply, _answer) = tokio::sync::oneshot::channel();
+    state.ssh_prompt = Some(auth::Prompt::new(workspace::interaction::Challenge {
+        prompt: "password:".into(),
+        confirm: false,
+        reply,
+    }));
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut state))
+        .unwrap();
+    assert!(terminal.backend().cursor_visible());
+    assert!(
+        !state
+            .input_area
+            .contains(terminal.backend().cursor_position())
+    );
+    assert_eq!(state.input.text, "draft");
+}
+
+#[test]
+fn failed_setup_retains_the_last_diagnostic_without_duplicating_it() {
+    let mut tab = Tab::connecting(Spec::parse("/ssh").unwrap(), media::Context::default());
+    let (progress, updates) = workspace::interaction::channel();
+    progress.log("loader diagnostic");
+    tab.updates = Some(updates);
+    tab.disconnected("target cannot run the executable".into());
+    let wizard = tab.state.workspace_wizard.as_ref().unwrap();
+    assert_eq!(wizard.logs, ["loader diagnostic"]);
+    assert_eq!(wizard.status, "target cannot run the executable");
+    assert_eq!(tab.state.model, "连接失败");
+    assert!(tab.state.transcript.is_empty());
+}

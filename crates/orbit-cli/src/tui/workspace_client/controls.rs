@@ -1,56 +1,27 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
-    text::Span,
-    widgets::{Block, BorderType, Borders, Paragraph},
+    style::Style,
+    widgets::{Block, Borders, Paragraph},
 };
 
 use crate::tui::{connect_custom::form, input::InputState, render, theme::THEME};
 
-pub(super) fn panel(focused: bool) -> Block<'static> {
+pub(super) fn panel() -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if focused {
-            THEME.dialog_accent
-        } else {
-            THEME.border_muted
-        }))
+        .border_style(Style::default().fg(THEME.dialog_accent))
 }
 
-pub(super) fn button(frame: &mut Frame<'_>, area: Rect, label: &str, focused: bool, primary: bool) {
-    let style = if primary {
-        Style::default().bg(THEME.dialog_accent).fg(THEME.on_accent)
-    } else {
-        Style::default().fg(THEME.foreground)
-    };
-    let border = if primary && focused {
-        Style::default().fg(THEME.foreground)
-    } else if primary {
-        Style::default().fg(THEME.dialog_accent)
-    } else {
-        panel_border(focused)
-    };
-    frame.render_widget(panel(focused).border_style(border), area);
+pub(super) fn button(frame: &mut Frame<'_>, area: Rect, label: &str, focused: bool) {
     frame.render_widget(
-        Paragraph::new(label)
-            .alignment(ratatui::layout::Alignment::Center)
-            .style(if focused {
-                style.add_modifier(Modifier::BOLD)
-            } else {
-                style
-            }),
-        area.inner(ratatui::layout::Margin::new(1, 1)),
+        Paragraph::new(render::padded_label(label, area.width as usize, 1)).style(if focused {
+            Style::default().bg(THEME.dialog_accent).fg(THEME.on_accent)
+        } else {
+            Style::default().fg(THEME.dialog_accent)
+        }),
+        area,
     );
-}
-
-fn panel_border(focused: bool) -> Style {
-    Style::default().fg(if focused {
-        THEME.dialog_accent
-    } else {
-        THEME.border_muted
-    })
 }
 
 pub(super) fn field(
@@ -61,18 +32,7 @@ pub(super) fn field(
     focused: bool,
     placeholder: &str,
 ) {
-    let inner = area.inner(ratatui::layout::Margin::new(1, 1));
-    frame.render_widget(
-        panel(focused).title(Span::styled(
-            format!(" {label} "),
-            Style::default().fg(if focused {
-                THEME.dialog_accent
-            } else {
-                THEME.description
-            }),
-        )),
-        area,
-    );
+    let inner = field_label(frame, area, label, focused);
     frame.render_widget(
         Paragraph::new(form::input_line(
             input,
@@ -83,7 +43,7 @@ pub(super) fn field(
         )),
         inner,
     );
-    if focused && inner.width > 0 && inner.height > 0 {
+    if focused && !inner.is_empty() {
         frame.set_cursor_position((
             inner.x
                 + (form::cursor_column(input, inner.width as usize, false) as u16)
@@ -94,17 +54,28 @@ pub(super) fn field(
 }
 
 pub(super) fn select(frame: &mut Frame<'_>, area: Rect, label: &str, value: &str, focused: bool) {
-    frame.render_widget(
-        Paragraph::new(render::safe_output(&format!("{value}  ▾"))).block(panel(focused).title(
-            Span::styled(
-                format!(" {label} "),
-                Style::default().fg(if focused {
-                    THEME.dialog_accent
-                } else {
-                    THEME.description
-                }),
-            ),
-        )),
-        area,
+    let inner = field_label(frame, area, label, focused);
+    button(
+        frame,
+        inner,
+        &render::safe_output(&format!("{value}  ▾")),
+        focused,
     );
+}
+
+fn field_label(frame: &mut Frame<'_>, area: Rect, label: &str, focused: bool) -> Rect {
+    frame.render_widget(
+        Paragraph::new(label).style(Style::default().fg(if focused {
+            THEME.dialog_accent
+        } else {
+            THEME.description
+        })),
+        Rect::new(area.x, area.y, area.width, area.height.min(1)),
+    );
+    Rect::new(
+        area.x,
+        area.y + area.height.min(1),
+        area.width,
+        area.height.saturating_sub(1).min(1),
+    )
 }

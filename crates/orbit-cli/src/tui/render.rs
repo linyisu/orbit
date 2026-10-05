@@ -87,7 +87,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor.filter(|_| editing),
         now,
     );
-    if state.media_preview.is_some() {
+    if state.media_preview.is_some()
+        || state.workspace_wizard.is_some()
+        || state.ssh_prompt.is_some()
+    {
         state.ime_cursor = None;
     }
     if let Some(position) = state.ime_cursor.filter(|p| frame.area().contains(*p)) {
@@ -1596,6 +1599,8 @@ pub(super) fn draw_prompt(
     if text_area.width > 0
         && text_area.height > 0
         && !state.dialog_open()
+        && state.workspace_wizard.is_none()
+        && state.ssh_prompt.is_none()
         && state.approval.is_none()
         && state.attachment_cursor.is_none()
     {

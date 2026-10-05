@@ -72,7 +72,8 @@ impl Wizard {
     }
 
     fn entries(&self) -> Vec<String> {
-        std::iter::once("..".into())
+        ["打开当前目录".into(), "..".into()]
+            .into_iter()
             .chain(
                 self.listing
                     .iter()
@@ -83,7 +84,14 @@ impl Wizard {
             .collect()
     }
 
+    fn open(&self) -> Action {
+        Action::Open(self.path.text.trim().to_owned())
+    }
+
     fn browse(&self) -> Action {
+        if self.selected == 0 {
+            return self.open();
+        }
         let Some(listing) = &self.listing else {
             return Action::None;
         };
@@ -173,11 +181,9 @@ impl Wizard {
                         config.suggestion = choice - 100;
                         config.choose();
                     }
-                } else if let Some(listing) = &self.listing
-                    && !self.busy
-                {
+                } else if self.listing.is_some() && !self.busy {
                     if choice == 5 {
-                        return Action::Open(listing.path.clone());
+                        return self.open();
                     }
                     if choice == 6 {
                         self.hidden = !self.hidden;
@@ -256,13 +262,11 @@ impl Wizard {
                 _ => Action::None,
             };
         }
-        if let Some(listing) = &self.listing
-            && !self.busy
-        {
+        if self.listing.is_some() && !self.busy {
             match key.code {
                 KeyCode::Enter => {
                     return match self.focus {
-                        5 => Action::Open(listing.path.clone()),
+                        5 => self.open(),
                         7 => Action::Browse(self.path.text.clone()),
                         99 => Action::Cancel,
                         6 => {
@@ -312,10 +316,10 @@ impl Wizard {
         overlay::clear(frame, area);
         self.areas.clear();
         frame.render_widget(
-            controls::panel(false).title(Span::styled(
+            controls::panel().title(Span::styled(
                 " 远程工作区 ",
                 Style::default()
-                    .fg(THEME.foreground)
+                    .fg(THEME.dialog_accent)
                     .add_modifier(Modifier::BOLD),
             )),
             area,
@@ -381,8 +385,7 @@ impl Wizard {
                 body.width,
                 body.height.saturating_sub(3),
             );
-            frame.render_widget(controls::panel(self.focus == 8).title(" 文件夹 "), list);
-            let list = list.inner(ratatui::layout::Margin::new(1, 1));
+
             let entries = self.entries();
             let count = list.height as usize;
             let start = self.selected.saturating_sub(count.saturating_sub(1));
@@ -394,7 +397,9 @@ impl Wizard {
                 .enumerate()
             {
                 let rect = Rect::new(list.x, list.y + row as u16, list.width, 1);
-                let name = if name == ".." {
+                let name = if index == 0 {
+                    "打开当前目录  ↵".into()
+                } else if name == ".." {
                     "..  上一级".into()
                 } else {
                     format!("{}/", render::safe_output(name))
@@ -405,9 +410,7 @@ impl Wizard {
                         if index == self.selected { "›" } else { " " }
                     ))
                     .style(if index == self.selected {
-                        Style::default()
-                            .fg(THEME.foreground)
-                            .bg(THEME.tab_hover_background)
+                        Style::default().fg(THEME.on_accent).bg(THEME.dialog_accent)
                     } else {
                         Style::default()
                     }),
@@ -421,14 +424,16 @@ impl Wizard {
                 .iter()
                 .map(|line| Line::raw(render::safe_output(line)))
                 .collect::<Vec<_>>();
-            lines.push(Line::styled(
-                render::safe_output(&self.status),
-                Style::default().fg(if self.failed {
-                    THEME.error
-                } else {
-                    THEME.dialog_accent
-                }),
-            ));
+            let style = Style::default().fg(if self.failed {
+                THEME.error
+            } else {
+                THEME.dialog_accent
+            });
+            lines.extend(
+                self.status
+                    .lines()
+                    .map(|line| Line::styled(render::safe_output(line), style)),
+            );
             let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
             let bottom = paragraph
                 .line_count(body.width)
@@ -443,16 +448,17 @@ impl Wizard {
                 body,
             );
         }
-        let footer = Rect::new(inner.x, inner.bottom() - 4, inner.width, 3);
+        let footer = Rect::new(inner.x, inner.bottom() - 3, inner.width, 1);
         let buttons: Vec<(&str, usize)> = if self.form.is_some() {
-            vec![("取消", 99), ("连接", 5)]
+            vec![("连接", 5), ("取消", 99)]
         } else if self.failed {
             if !matches!(self.focus, 97..=99) {
                 self.focus = 97;
             }
-            vec![("关闭", 99), ("修改配置", 98), ("重试", 97)]
+            vec![("重试", 97), ("修改配置", 98), ("关闭", 99)]
         } else if self.listing.is_some() && !self.busy {
             vec![
+                ("打开此目录", 5),
                 (
                     if self.hidden {
                         "隐藏项 开"
@@ -462,14 +468,13 @@ impl Wizard {
                     6,
                 ),
                 ("取消", 99),
-                ("打开此目录", 5),
             ]
         } else {
             vec![("取消连接", 99)]
         };
         let total: u16 = buttons
             .iter()
-            .map(|(text, _)| unicode_width::UnicodeWidthStr::width(*text) as u16 + 6)
+            .map(|(text, _)| unicode_width::UnicodeWidthStr::width(*text) as u16 + 2)
             .sum::<u16>()
             + (buttons.len().saturating_sub(1) * 2) as u16;
         let compact = total > footer.width;
@@ -477,31 +482,29 @@ impl Wizard {
             .width
             .saturating_sub((buttons.len().saturating_sub(1) * 2) as u16)
             / buttons.len() as u16;
-        let mut x = footer.right().saturating_sub(total).max(footer.x);
+        let mut x = footer.x;
         for (text, id) in buttons {
             let width = if compact {
                 compact_width
             } else {
-                unicode_width::UnicodeWidthStr::width(text) as u16 + 6
+                unicode_width::UnicodeWidthStr::width(text) as u16 + 2
             };
-            let rect = Rect::new(x, footer.y, width.min(footer.right().saturating_sub(x)), 3);
+            let rect = Rect::new(x, footer.y, width.min(footer.right().saturating_sub(x)), 1);
             let focused = self
                 .form
                 .as_ref()
                 .map_or(self.focus == id, |form| form.focus == id);
-            controls::button(
-                frame,
-                rect,
-                text,
-                focused || self.hover == Some(id),
-                matches!(id, 5 | 97),
-            );
+            controls::button(frame, rect, text, focused || self.hover == Some(id));
             self.areas.push((rect, id));
             x = x.saturating_add(width + 2);
         }
         frame.render_widget(
-            Paragraph::new("Tab 切换 · Enter 确认 · Esc 返回")
-                .style(Style::default().fg(THEME.muted)),
+            Paragraph::new(if self.listing.is_some() && !self.busy {
+                "↑↓ 选择 · Enter 打开 · Tab 切换 · Esc 返回"
+            } else {
+                "Tab 切换 · Enter 确认 · Esc 返回"
+            })
+            .style(Style::default().fg(THEME.muted)),
             Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
         );
     }
@@ -530,7 +533,7 @@ mod tests {
             directories: vec![".hidden".into(), "a b".into()],
         });
         let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        wizard.selected = 1;
+        wizard.selected = 2;
         assert!(matches!(wizard.handle(&enter), Action::Browse(path) if path == "/home/me/a b"));
         assert!(matches!(
             wizard.handle(&Event::Key(KeyEvent::new(
@@ -571,6 +574,42 @@ mod tests {
     }
 
     #[test]
+    fn directory_confirmation_works_from_the_list_button_and_edited_path() {
+        use crossterm::event::MouseEvent;
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        for (width, height) in [(80, 24), (150, 40)] {
+            let mut wizard = Wizard::new(None);
+            wizard.set_listing(Listing {
+                path: "/work".into(),
+                directories: vec!["child".into()],
+            });
+            assert!(matches!(wizard.handle(&enter), Action::Open(path) if path == "/work"));
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| wizard.draw(frame)).unwrap();
+            for id in [100, 5] {
+                let (area, _) = wizard
+                    .areas
+                    .iter()
+                    .find(|(_, target)| *target == id)
+                    .unwrap();
+                let click = Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: area.x + area.width / 2,
+                    row: area.y,
+                    modifiers: KeyModifiers::NONE,
+                });
+                assert!(matches!(wizard.handle(&click), Action::Open(path) if path == "/work"));
+            }
+            wizard.path.set("/work/typed folder".into());
+            wizard.focus = 5;
+            assert!(
+                matches!(wizard.handle(&enter), Action::Open(path) if path == "/work/typed folder")
+            );
+        }
+    }
+
+    #[test]
     fn dialog_layout_keeps_actions_visible_and_exports_optional_previews() {
         for (name, spec) in [
             ("ssh", Some(Spec::parse("/ssh server.example").unwrap())),
@@ -588,7 +627,7 @@ mod tests {
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
             terminal.draw(|frame| wizard.draw(frame)).unwrap();
             let action = wizard.areas.iter().find(|(_, id)| *id == 5).unwrap().0;
-            assert!(action.width > 0 && action.height == 3);
+            assert!(action.width > 0 && action.height == 1);
             assert!(
                 wizard
                     .areas
@@ -606,6 +645,29 @@ mod tests {
                 .unwrap();
             }
         }
+    }
+
+    #[test]
+    fn multiline_failure_is_rendered_on_separate_rows_without_escaped_newlines() {
+        let mut wizard = Wizard::new(None);
+        wizard.failed = true;
+        wizard.status = "summary\nloader detail".into();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
+        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        let rows = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(100)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>();
+        let summary = rows
+            .iter()
+            .position(|line| line.contains("summary"))
+            .unwrap();
+        assert!(rows[summary + 1].contains("loader detail"));
+        assert!(rows.iter().all(|line| !line.contains("\\n")));
     }
 
     #[test]
