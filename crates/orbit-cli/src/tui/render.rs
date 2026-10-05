@@ -50,6 +50,8 @@ const TOOL_FAILED: Color = THEME.tool_failed;
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
 const BORDER: Color = THEME.border;
+const PROGRESS_FRAMES: &[&str] = &["█     ", "██    ", "███   ", "████  ", "█████ ", "██████"];
+const PROGRESS_FRAME_MILLIS: u128 = 260;
 pub(super) const MAX_COMPLETION_ITEMS: usize = 8;
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
@@ -332,6 +334,26 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
 }
 
 fn activity_spans(state: &UiState, width: usize) -> Vec<Span<'static>> {
+    if state.status == RunStatus::Running && state.approval.is_none() && state.activity.executing()
+    {
+        let index = (state.active_elapsed().as_millis() / PROGRESS_FRAME_MILLIS)
+            % PROGRESS_FRAMES.len() as u128;
+        let mut spans = vec![Span::styled(
+            PROGRESS_FRAMES[index as usize]
+                .chars()
+                .take(width)
+                .collect::<String>(),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )];
+        if width >= 26 {
+            spans.push(Span::styled(
+                " · Ctrl+C 取消",
+                Style::default().fg(THEME.muted_text),
+            ));
+        }
+        return spans;
+    }
+
     let label: String = if state.status == RunStatus::Cancelling {
         "正在取消".into()
     } else if state.approval.is_some() {

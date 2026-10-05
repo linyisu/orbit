@@ -60,6 +60,13 @@ impl Activity {
         }
     }
 
+    pub fn executing(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Executing | Phase::WaitingCommands | Phase::WaitingTasks
+        )
+    }
+
     pub fn label(&self) -> Option<&'static str> {
         match self.phase {
             Phase::Waiting | Phase::PreparingTools => Some("等待模型响应"),

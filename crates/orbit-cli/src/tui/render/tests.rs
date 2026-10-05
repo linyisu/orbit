@@ -2544,7 +2544,11 @@ fn live_tool_and_thinking_labels_animate_without_changing_body_or_layout() {
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
     let second = terminal.backend().buffer();
     let mut changed = 0;
-    for (a, b) in first.content.iter().zip(&second.content) {
+    let transcript_end = usize::from(state.selection.footer.y) * 100;
+    for (a, b) in first.content[..transcript_end]
+        .iter()
+        .zip(&second.content[..transcript_end])
+    {
         assert_eq!(a.symbol(), b.symbol());
         if a.fg != b.fg {
             assert!("run_command".contains(a.symbol()));
@@ -2567,4 +2571,43 @@ fn live_tool_and_thinking_labels_animate_without_changing_body_or_layout() {
     state.elapsed += std::time::Duration::from_millis(800);
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
     assert_eq!(&first, terminal.backend().buffer());
+}
+
+#[test]
+fn execution_footer_keeps_an_animated_bar_for_commands_and_tasks() {
+    use orbit_agent::events::AgentEvent;
+
+    for connection in [None, Some("SSH 204".into())] {
+        let mut state = UiState::new("mock");
+        state.connection_label = connection;
+        state.submit("work".into());
+        state.started_at = None;
+
+        for event in [
+            AgentEvent::WaitingForCommands { job_ids: vec![] },
+            AgentEvent::WaitingForTasks { job_ids: vec![] },
+        ] {
+            state.apply(event);
+            let mut frames = std::collections::HashSet::new();
+            let mut hint_offset = None;
+            for millis in (0..2000).step_by(130) {
+                state.elapsed = std::time::Duration::from_millis(millis);
+                let line = footer(&state, 100).to_string();
+                assert!(line.contains('█'));
+                let offset = line[..line.find("Ctrl+C 取消").unwrap()].width();
+                assert_eq!(*hint_offset.get_or_insert(offset), offset);
+                frames.insert(line);
+            }
+            assert!(frames.len() > 1);
+            for width in [12, 24, 40, 80] {
+                assert!(footer(&state, width).width() <= width);
+            }
+        }
+
+        state.cancel();
+        assert!(footer(&state, 100).to_string().contains("正在取消"));
+        assert!(!footer(&state, 100).to_string().contains('█'));
+        state.apply(AgentEvent::Cancelled);
+        assert!(!footer(&state, 100).to_string().contains('█'));
+    }
 }
