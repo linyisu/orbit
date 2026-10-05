@@ -68,9 +68,15 @@ async fn prepare(
         "target HOME is invalid"
     );
     if let Some(progress) = progress {
-        progress.report("准备服务程序，计算版本校验值");
+        progress.report("选择与目标架构匹配的服务程序");
     }
-    let binary = upload.unwrap_or(std::env::current_exe()?);
+    let binary = select_binary(upload, &std::env::current_exe()?, architecture)?;
+    if let Some(progress) = progress {
+        progress.report(format!(
+            "准备服务程序：{}",
+            binary.file_name().unwrap_or_default().to_string_lossy()
+        ));
+    }
     let (machine, digest) = tokio::task::spawn_blocking({
         let binary = binary.clone();
         move || binary_identity(&binary)
@@ -104,6 +110,7 @@ async fn prepare(
         if let Some(progress) = progress {
             progress.report("复用已安装的工作区服务");
         }
+        verify(target, &executable, unattended, interactive, progress).await?;
         return Ok(executable);
     }
     if !unattended {
@@ -155,7 +162,73 @@ async fn prepare(
         String::from_utf8_lossy(&output.stderr)
     );
     sent?;
+    verify(target, &executable, unattended, interactive, progress).await?;
     Ok(executable)
+}
+
+fn select_binary(upload: Option<PathBuf>, current: &Path, architecture: &str) -> Result<PathBuf> {
+    if let Some(upload) = upload {
+        return Ok(upload);
+    }
+    ensure!(
+        matches!(architecture, "x86_64" | "aarch64"),
+        "unsupported target architecture: {architecture}"
+    );
+    let companion = current.with_file_name(format!("orbit-server-{architecture}-linux-musl"));
+    Ok(if companion.is_file() {
+        companion
+    } else {
+        current.to_owned()
+    })
+}
+
+pub(super) async fn verify(
+    target: &Target,
+    executable: &str,
+    unattended: bool,
+    interactive: Option<&super::interaction::Interaction>,
+    progress: Option<&super::interaction::Progress>,
+) -> Result<()> {
+    if let Some(progress) = progress {
+        progress.report("检查服务程序能否在目标系统运行");
+    }
+    let child = target
+        .command(
+            &[
+                "sh".into(),
+                "-c".into(),
+                format!("{} workspace-service --help", quote(executable)),
+            ],
+            unattended,
+            interactive,
+        )?
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let output = super::interaction::timeout(
+        Duration::from_secs(30),
+        progress,
+        super::command::output(child, progress),
+    )
+    .await?;
+    ensure!(
+        output.status.success(),
+        "{}",
+        runtime_error(&String::from_utf8_lossy(&output.stderr))
+    );
+    Ok(())
+}
+
+pub(super) fn runtime_error(diagnostics: &str) -> String {
+    if diagnostics.contains("GLIBC_") && diagnostics.contains("not found") {
+        "目标系统的 glibc 版本低于服务程序的要求。请使用包含 musl 服务程序的 Orbit 构建，或通过 --upload-server 指定兼容的 Linux 程序；无需升级服务器 glibc。".into()
+    } else if diagnostics.contains("error while loading shared libraries") {
+        "目标系统缺少服务程序需要的动态库。请使用包含 musl 服务程序的 Orbit 构建，或通过 --upload-server 指定兼容的 Linux 程序。".into()
+    } else {
+        format!("目标服务程序无法启动：{}", diagnostics.trim())
+    }
 }
 
 fn quote(value: &str) -> String {
@@ -230,6 +303,53 @@ fn binary_identity(path: &Path) -> Result<(u16, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deployment_prefers_the_matching_portable_bundle_and_honors_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("orbit");
+        let portable = root.path().join("orbit-server-x86_64-linux-musl");
+        std::fs::write(&portable, b"test").unwrap();
+        assert_eq!(select_binary(None, &current, "x86_64").unwrap(), portable);
+        assert_eq!(select_binary(None, &current, "aarch64").unwrap(), current);
+        assert_eq!(
+            select_binary(Some("/explicit".into()), &current, "x86_64").unwrap(),
+            Path::new("/explicit")
+        );
+    }
+
+    #[tokio::test]
+    async fn incompatible_binary_fails_preflight_before_the_protocol_handshake() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("old linux 'server'");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nprintf '%s\\n' \"libm.so.6: version 'GLIBC_2.43' not found\" >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let (progress, updates) = super::super::interaction::channel();
+        let error = verify(
+            &Target::Local,
+            executable.to_str().unwrap(),
+            true,
+            None,
+            Some(&progress),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("glibc"));
+        assert!(!error.to_string().contains("unexpected end of file"));
+        assert!(
+            updates
+                .logs
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.contains("GLIBC_2.43"))
+        );
+    }
 
     #[tokio::test]
     async fn deployment_checks_checksum_and_atomically_installs_in_quoted_paths() {

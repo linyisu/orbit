@@ -220,13 +220,16 @@ impl Connection {
             Ok(protocol::read_preamble(&mut client.stdout).await?)
         })
         .await;
-        if marker.is_err() {
+        if let Err(error) = marker {
             let _ = client.process.start_kill();
             let _ = tokio::time::timeout(Duration::from_secs(1), &mut client.drain).await;
             let log = client.diagnostics.lock().await;
+            if log.is_empty() {
+                bail!("工作区握手失败：{error:#}");
+            }
             bail!(
-                "workspace handshake failed: {marker:?}; check the target executable and runtime\n{}",
-                String::from_utf8_lossy(&log)
+                "{}",
+                super::bootstrap::runtime_error(&String::from_utf8_lossy(&log))
             );
         }
         let result = tokio::time::timeout(

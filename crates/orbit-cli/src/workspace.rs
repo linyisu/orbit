@@ -157,7 +157,17 @@ async fn prepare_connection(
         None
     };
     let executable = match args.server.clone() {
-        Some(executable) => executable,
+        Some(executable) => {
+            bootstrap::verify(
+                &target,
+                &executable,
+                unattended,
+                interactive.as_deref(),
+                progress.as_ref(),
+            )
+            .await?;
+            executable
+        }
         None => {
             bootstrap::executable(
                 &target,
