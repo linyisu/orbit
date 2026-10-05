@@ -44,11 +44,30 @@ pub(crate) async fn prepare_workspace(
     directory: &std::path::Path,
     resume: Option<String>,
 ) -> Result<PreparedWorkspace> {
+    prepare(options, directory, resume, true).await
+}
+
+pub(super) async fn prepare_service(
+    options: &WorkspaceOptions,
+    resume: Option<String>,
+) -> Result<PreparedWorkspace> {
+    prepare(options, &options.initial_directory, resume, false).await
+}
+
+async fn prepare(
+    options: &WorkspaceOptions,
+    directory: &std::path::Path,
+    resume: Option<String>,
+    shared: bool,
+) -> Result<PreparedWorkspace> {
     let config = FileConfig::load(&options.config, &options.auth_directory)?;
     let model = config.default_model_option()?.qualified_name();
-    let mut session =
+    let mut session = if shared {
         session::SessionState::open_shared_in(options.database.clone(), resume, model, directory)
-            .await?;
+            .await?
+    } else {
+        session::SessionState::open_in(options.database.clone(), resume, model, directory).await?
+    };
     let resources = prepare_workspace_resources(options, directory, &session).await?;
     session
         .initialize_audit(

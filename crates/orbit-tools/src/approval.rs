@@ -6,14 +6,14 @@ use std::path::Path;
 
 use tokio::sync::{mpsc, oneshot};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WritePreview {
     pub path: String,
     pub before: Option<String>,
     pub after: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DeletePreview {
     pub path: String,
     pub before: String,
@@ -27,7 +27,7 @@ pub enum CommandWorkspaceAccess {
     ReadWrite,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CommandPreview {
     pub command: String,
     pub cwd: Option<String>,
@@ -164,14 +164,14 @@ pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
 /// An MCP server is an external program with capabilities Orbit cannot
 /// reliably infer from its advertised schema. Keep every invocation behind
 /// the same explicit approval boundary as other side-effecting tools.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct McpPreview {
     pub server: String,
     pub tool: String,
     pub arguments: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CapabilityPreview {
     pub environment: orbit_runtime::capability::EnvironmentId,
     pub path: std::path::PathBuf,
@@ -179,7 +179,7 @@ pub struct CapabilityPreview {
     pub reason: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ApprovalPreview {
     Write(WritePreview),
     Delete(DeletePreview),

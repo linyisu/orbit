@@ -18,6 +18,7 @@ futures-util.workspace = true
 html2text.workspace = true
 html5ever.workspace = true
 image.workspace = true
+libc.workspace = true
 orbit-agent.workspace = true
 orbit-auth.workspace = true
 orbit-model.workspace = true

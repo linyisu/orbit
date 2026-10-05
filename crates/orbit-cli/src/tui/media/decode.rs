@@ -26,6 +26,7 @@ pub(super) const MAX_SOURCE_PIXELS: u64 = 16 * 1024 * 1024;
 pub(super) struct Decoder {
     fonts: Option<Arc<usvg::fontdb::Database>>,
     remote_bytes: HashMap<(Network, String), Arc<Vec<u8>>>,
+    workspace_bytes: HashMap<(crate::workspace::Files, String), Arc<Vec<u8>>>,
     runtime: Option<tokio::runtime::Runtime>,
     assets: super::assets::Assets,
 }
@@ -80,6 +81,41 @@ impl Decoder {
                         }
 
                         self.remote_bytes.insert(remote_key, bytes.clone());
+                        bytes
+                    }
+                } else if let Some(files) = &key.files {
+                    if self.runtime.is_none() {
+                        self.runtime = Some(
+                            tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()?,
+                        );
+                    }
+                    let path = local_path(source, &key.workspace)?;
+                    let asset = (files.clone(), path.to_string_lossy().into_owned());
+                    if let Some(bytes) = self.workspace_bytes.get(&asset) {
+                        bytes.clone()
+                    } else {
+                        let bytes = Arc::new(
+                            self.runtime
+                                .as_ref()
+                                .unwrap()
+                                .block_on(files.read(&asset.1))?,
+                        );
+                        while self
+                            .workspace_bytes
+                            .values()
+                            .map(|bytes| bytes.len())
+                            .sum::<usize>()
+                            + bytes.len()
+                            > MAX_REMOTE_CACHE_BYTES
+                        {
+                            let Some(oldest) = self.workspace_bytes.keys().next().cloned() else {
+                                break;
+                            };
+                            self.workspace_bytes.remove(&oldest);
+                        }
+                        self.workspace_bytes.insert(asset, bytes.clone());
                         bytes
                     }
                 } else {

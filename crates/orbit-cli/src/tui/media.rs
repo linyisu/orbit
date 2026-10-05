@@ -172,6 +172,7 @@ impl std::hash::Hash for Network {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Key {
     network: Option<Network>,
+    files: Option<crate::workspace::Files>,
     source: Source,
     workspace: PathBuf,
     width: u16,
@@ -230,6 +231,7 @@ impl std::fmt::Debug for Shared {
 #[derive(Clone, Debug, Default)]
 pub(super) struct Context {
     network: Network,
+    pub files: Option<crate::workspace::Files>,
     shared: Option<Arc<Shared>>,
     pub workspace: PathBuf,
     seen: u64,
@@ -525,6 +527,7 @@ impl Context {
 
     fn key(&self, source: &Source, width: u16, height: u16, large: bool) -> Key {
         Key {
+            files: self.files.clone(),
             network: matches!(source, Source::Image(url) if is_remote(url))
                 .then(|| self.network.clone()),
             source: source.clone(),

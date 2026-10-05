@@ -2764,6 +2764,7 @@ dependencies = [
  "html2text",
  "html5ever",
  "image",
+ "libc",
  "orbit-agent",
  "orbit-auth",
  "orbit-model",

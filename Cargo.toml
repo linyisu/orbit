@@ -70,7 +70,7 @@ syntect = { version = "5.3.0", default-features = false, features = ["default-fa
 tempfile = "3.27.0"
 thiserror = "2.0.17"
 tokei = { version = "15.0.0", default-features = false }
-tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "time", "process", "io-util", "signal", "fs"] }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "time", "process", "io-util", "io-std", "signal", "fs"] }
 tokio-tungstenite = "0.28.0"
 tokio-util = { version = "0.7.19", features = ["rt"] }
 toml = "0.9.8"

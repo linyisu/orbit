@@ -42,6 +42,8 @@ mod transcript;
 mod transcript_dialog;
 mod wheel;
 mod workspace;
+mod workspace_client;
+pub(crate) use workspace_client::run as run_workspace;
 
 use std::{
     path::PathBuf,

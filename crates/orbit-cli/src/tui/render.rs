@@ -348,14 +348,24 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(&state.workspace);
-    let full_path = safe_output(&super::project_label::path_label(
+    let mut full_path = safe_output(&super::project_label::path_label(
         &state.workspace,
         state.completion_home.as_deref(),
     ));
+    if let Some(label) = &state.connection_label {
+        full_path = format!("{} · {full_path}", safe_output(label));
+    }
     let path = if full_path.width() <= path_width {
         full_path
     } else {
-        fit_label(&safe_output(project), path_width, false)
+        fit_label(
+            &safe_output(&state.connection_label.as_ref().map_or_else(
+                || project.to_owned(),
+                |label| format!("{label} · {project}"),
+            )),
+            path_width,
+            false,
+        )
     };
 
     let (left_spans, left_width) = if state.status == RunStatus::Running {
@@ -436,6 +446,9 @@ fn composer_details(state: &UiState, width: usize) -> Vec<Line<'static>> {
         ),
         Span::raw(safe_output(model)),
     ];
+    if let Some(label) = &state.connection_label {
+        fields.insert(0, Span::styled(safe_output(label), accent));
+    }
 
     if !provider.is_empty() {
         fields.push(Span::styled(

@@ -1453,6 +1453,7 @@ fn remote_images_keep_the_source_or_outer_link_on_every_picture_row() {
         let request = requests(&line, 80).remove(0);
         let mut key = Key {
             network: None,
+            files: None,
             source: Source::Image(path.to_string_lossy().into_owned()),
             workspace: dir.path().into(),
             width: request.width,

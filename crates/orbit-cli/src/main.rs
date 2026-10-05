@@ -78,6 +78,10 @@ enum Command {
     },
     Chat(ChatArgs),
     Tui(TuiArgs),
+    /// Connect to a local, SSH, or WSL workspace service.
+    Connect(workspace::ConnectArgs),
+    #[command(hide = true)]
+    WorkspaceService(workspace::ServiceArgs),
     /// List projects or reconnect a moved directory without connecting to an API.
     Projects {
         #[command(subcommand)]
@@ -277,7 +281,7 @@ async fn run_cli() -> Result<()> {
 
     let auth_directory = || {
         auth_cli::directory(
-            cli.auth_dir,
+            cli.auth_dir.clone(),
             std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
             std::env::var_os("HOME").map(PathBuf::from),
         )
@@ -287,6 +291,12 @@ async fn run_cli() -> Result<()> {
         Command::Auth { command } => auth_cli::run(command, auth_directory()?).await,
         Command::Chat(args) => chat(cli.config, cli.database, args, auth_directory()?).await,
         Command::Tui(args) => run_tui(cli.config, cli.database, args, auth_directory()?).await,
+        Command::Connect(args) => {
+            workspace::connect(args, cli.config, cli.database, cli.auth_dir).await
+        }
+        Command::WorkspaceService(args) => {
+            workspace::serve(args, cli.config, cli.database, auth_directory()?).await
+        }
 
         Command::Projects { command } => {
             let store =

@@ -78,6 +78,7 @@ pub enum TranscriptItem {
 
 #[derive(Debug)]
 pub struct UiState {
+    pub(super) connection_label: Option<String>,
     pub(super) media: super::media::Context,
     pub(super) media_preview: Option<super::media::Preview>,
     pub tabs: Vec<SessionTab>,
@@ -201,7 +202,10 @@ pub struct UiState {
 
 impl UiState {
     pub(super) fn is_home(&self) -> bool {
-        !self.has_conversation() && self.subagent_parent.is_none() && self.resume_loading.is_none()
+        !self.has_conversation()
+            && self.subagent_parent.is_none()
+            && self.resume_loading.is_none()
+            && self.connection_label.is_none()
     }
 
     pub(super) fn dialog_open(&self) -> bool {
@@ -273,6 +277,7 @@ impl UiState {
 
     pub fn new(model: impl Into<String>) -> Self {
         Self {
+            connection_label: None,
             media: Default::default(),
             media_preview: None,
             tabs: Vec::new(),
