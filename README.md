@@ -12,7 +12,7 @@ cargo build --release -p orbit-cli
 ./target/release/orbit tui
 ```
 
-`orbit connect` 提供实验性的统一工作区服务入口。本地、SSH、WSL 共用连接协议和会话服务，界面在本机渲染，Agent 与工具在目标环境运行：
+在 TUI 内用 `/ssh HOST [PATH]`、`/wsl DISTRO [PATH]` 打开远端标签，本地与多个远端会话可同时运行；`/new` 在当前环境新建会话，`/local` 新建本地标签。界面在本机渲染，Agent 与工具在各自环境运行。也保留实验性的命令行连接入口：
 
 ```sh
 orbit connect --workspace /path/to/project
