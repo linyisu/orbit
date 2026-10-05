@@ -37,9 +37,9 @@ orbit connect --workspace /path/to/project --stop
 
 SSH 使用系统客户端，因此沿用主机别名、跳板机、密钥代理及主机校验配置；不关闭主机校验。TUI 内通过私有 askpass 通道显示首次主机指纹确认、密码、私钥口令及交互认证提示，敏感输入遮蔽显示，不保存到聊天记录、配置文件或命令参数。认证等待不计入连接超时。相同连接的新标签复用私有 SSH 主连接，各标签的认证提示独立；最后一个标签关闭后清理主连接。可用 `--ssh-user`、`--ssh-port`、`--identity` 覆盖 SSH 配置。WSL 直接启动选定发行版的 Linux 进程，无需安装 SSH 服务。本仓库的客户端仍依赖 Unix/Linux 接口；WSL 启动适配器需要当前环境能执行 `wsl.exe`，Windows 原生客户端尚未完成。
 
-首次 SSH/WSL 连接检测 Linux 系统与架构，优先上传客户端旁的 `orbit-server-<架构>-linux-musl` 静态服务程序（x86_64 / aarch64），不依赖远端 glibc 版本。服务安装到目标用户的 `~/.cache/orbit/servers/<SHA-256>/orbit`，校验后原子替换；已有相同版本会复用。上传、复用或指定预装程序时都会先验证目标能否运行，再开始握手。缺少静态服务程序时兼容旧行为，尝试上传本机程序；不兼容时在部署阶段明确报错，不再只显示握手 EOF。
+首次 SSH/WSL 连接检测 Linux 系统与架构，上传客户端内置的同架构静态服务程序（x86_64 / aarch64），不依赖远端 glibc 版本或客户端旁的额外文件。服务安装到目标用户的 `~/.cache/orbit/servers/<SHA-256>/orbit`，校验后原子替换；已有相同版本会复用。上传、复用或指定预装程序时都会先验证目标能否运行，再开始握手。自动部署不会回退到本机的动态链接程序。
 
-发布包须将客户端和静态服务程序放在同一目录。从源码构建时，先安装 `musl-tools` 和相应 Rust musl target，再运行 `scripts/build-bundle.sh`（开发构建用 `scripts/build-bundle.sh debug`）；输出在 `target/bundle/`，同时为 `target/release/orbit` 或 `target/debug/orbit` 配齐服务程序。CI 生成 x86-64 Linux 压缩包，并在隔离的 Ubuntu 20.04 容器里验证自动部署、服务握手与缓存复用；AArch64 可在对应 Linux 主机上运行同一脚本构建。
+源码构建需要 `musl-tools`、`binutils` 和相应 Rust musl target。普通 `cargo build` / `cargo build --release` 自动在独立的 `target/workspace-server/` 缓存中构建静态服务，检查其没有动态加载器或共享库依赖，然后将它内置到客户端；musl 构建自身就是静态服务，不再嵌套构建。源码变化会更新内置服务，不依赖之前手动复制的旧文件。`CC_<target>` 可选择 musl 编译器（例如 `CC_x86_64_unknown_linux_musl`）；也会识别工作区 `target/portable-toolchain/install/bin/musl-gcc`。发布包只需包含一个 `orbit` 文件。CI 将客户端单独复制到空目录，在隔离的 Ubuntu 20.04 容器里验证静态服务自动部署、握手与缓存复用。
 
 异架构或自定义构建可用 `--upload-server /local/path/to/linux-orbit`；`--server /remote/path/to/orbit` 连接预装服务。目标仍需运行命令所需的 `bwrap`、`prlimit` 和用户命名空间。部署不要求目标访问下载站点，也不修改目标系统库。
 

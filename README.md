@@ -4,7 +4,7 @@ Orbit 是用 Rust 编写的终端编码 Agent。它提供交互式 TUI 和单次
 
 ## 启动
 
-使用 stable Rust 工具链构建；依赖版本由 `Cargo.lock` 固定。目前命令执行后端需要 Linux、Bubblewrap（`bwrap`）、`prlimit` 和可用的用户命名空间。文件工具使用 Unix 文件描述符接口；其他系统尚未提供完整的等价执行后端。
+使用 stable Rust 工具链构建，源码构建还需要 `musl-tools`（含 `musl-gcc`）、`binutils` 和同架构 Rust musl target（x86-64：`rustup target add x86_64-unknown-linux-musl`；AArch64：`rustup target add aarch64-unknown-linux-musl`）；依赖版本由 `Cargo.lock` 固定。目前命令执行后端需要 Linux、Bubblewrap（`bwrap`）、`prlimit` 和可用的用户命名空间。文件工具使用 Unix 文件描述符接口；其他系统尚未提供完整的等价执行后端。
 
 ```sh
 cargo build --release -p orbit-cli
@@ -12,7 +12,7 @@ cargo build --release -p orbit-cli
 ./target/release/orbit tui
 ```
 
-连接旧版 Linux 服务器时，建议构建包含静态远端服务的包：安装 `musl-tools`，执行 `rustup target add x86_64-unknown-linux-musl`（AArch64 改为 `aarch64-unknown-linux-musl`），再运行 `scripts/build-bundle.sh`。分发时保留 `target/bundle/` 内的两个可执行文件，避免把本机 glibc 依赖带到服务器。
+普通 `cargo build` 会自动构建并内置同架构的静态远端服务；首次构建会多花一些时间，后续复用独立的构建缓存。分发、安装或移动时只需一个 `orbit` 文件，用户无需安装 musl 工具链、准备额外服务文件或升级服务器 glibc。`scripts/build-bundle.sh` 仅将普通 release 构建输出复制到 `target/bundle/orbit`。
 
 在 TUI 内用 `/ssh HOST [PATH]`、`/wsl DISTRO [PATH]` 打开远端标签，本地与多个远端会话可同时运行；`/new` 在当前环境新建会话，`/local` 新建本地标签。界面在本机渲染，Agent 与工具在各自环境运行。也保留实验性的命令行连接入口：
 
