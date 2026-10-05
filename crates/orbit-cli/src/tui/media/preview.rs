@@ -172,6 +172,29 @@ impl Preview {
         if let Some(picture) = self.jobs.take_ready() {
             self.picture = Some(picture);
         }
+        if let Some(native) = self
+            .picture
+            .as_ref()
+            .and_then(|picture| picture.native.clone())
+        {
+            super::schedule_preview(native, body, self.view);
+            return;
+        }
+        if let Ok(picture) = self.context.native_picture(&self.jobs, &self.source) {
+            if let Some(picture) = picture {
+                self.picture = Some(picture);
+            }
+            if let Some(native) = self
+                .picture
+                .as_ref()
+                .and_then(|picture| picture.native.clone())
+            {
+                super::schedule_preview(native, body, self.view);
+            } else {
+                frame.render_widget(Paragraph::new("正在生成预览…"), body);
+            }
+            return;
+        }
         let quality = if self.drag.is_some()
             || self
                 .changed_at
@@ -284,10 +307,11 @@ impl Preview {
 
     fn pan(&mut self, delta: (i16, i16)) {
         let before = self.view.pan;
-        if let Some(picture) = &self.picture {
+        let extent = self.pan_extent();
+        if self.picture.is_some() {
             for (position, change, extent) in [
-                (&mut self.view.pan.0, delta.0, picture.pan_extent.0),
-                (&mut self.view.pan.1, delta.1, picture.pan_extent.1),
+                (&mut self.view.pan.0, delta.0, extent.0),
+                (&mut self.view.pan.1, delta.1, extent.1),
             ] {
                 if extent > 0.0 {
                     *position = (*position + change).clamp(-PAN_RANGE, PAN_RANGE);
@@ -297,6 +321,38 @@ impl Preview {
         if before != self.view.pan {
             self.changed_at = Some(Instant::now());
         }
+    }
+
+    fn pan_extent(&self) -> (f32, f32) {
+        self.picture.as_ref().map_or((0.0, 0.0), |picture| {
+            if let Some(native) = &picture.native {
+                let geometry = native.geometry(self.body, self.view);
+                (
+                    geometry.overflow.0 / f32::from(native.cell.width),
+                    geometry.overflow.1 / f32::from(native.cell.height),
+                )
+            } else {
+                picture.pan_extent
+            }
+        })
+    }
+
+    fn drag_to(&mut self, point: (u16, u16)) {
+        let Some(drag) = &self.drag else { return };
+        let shift = |origin, current, initial: i16, extent: f32| {
+            if extent <= 0.0 {
+                return initial;
+            }
+            let delta = f32::from(origin) - f32::from(current);
+            (f32::from(initial) + delta * f32::from(2 * PAN_RANGE) / extent)
+                .round()
+                .clamp(-f32::from(PAN_RANGE), f32::from(PAN_RANGE)) as i16
+        };
+        self.view.pan = (
+            shift(drag.origin.0, point.0, drag.pan.0, drag.extent.0),
+            shift(drag.origin.1, point.1, drag.pan.1, drag.extent.1),
+        );
+        self.changed_at = Some(Instant::now());
     }
 
     /// Returns (consumed, close). Events do not leak into the underlying composer.
@@ -345,39 +401,18 @@ impl Preview {
                         if let Some(control) = control {
                             return (true, self.activate(control));
                         }
-                        if self.body.contains(point.into())
-                            && let Some(picture) = &self.picture
-                        {
+                        if self.body.contains(point.into()) && self.picture.is_some() {
                             self.drag = Some(Drag {
                                 origin: point,
                                 pan: self.view.pan,
-                                extent: picture.pan_extent,
+                                extent: self.pan_extent(),
                             });
                         }
                     }
-                    MouseEventKind::Drag(MouseButton::Left) => {
-                        if let Some(drag) = &self.drag {
-                            let shift = |origin, current, initial: i16, extent: f32| {
-                                if extent <= 0.0 {
-                                    return initial;
-                                }
-                                let delta = f32::from(origin) - f32::from(current);
-                                (f32::from(initial) + delta * f32::from(2 * PAN_RANGE) / extent)
-                                    .round()
-                                    .clamp(-f32::from(PAN_RANGE), f32::from(PAN_RANGE))
-                                    as i16
-                            };
-                            self.view.pan = (
-                                shift(drag.origin.0, point.0, drag.pan.0, drag.extent.0),
-                                shift(drag.origin.1, point.1, drag.pan.1, drag.extent.1),
-                            );
-                            self.changed_at = Some(Instant::now());
-                        }
-                    }
+                    MouseEventKind::Drag(MouseButton::Left) => self.drag_to(point),
                     MouseEventKind::Up(MouseButton::Left) => {
-                        if self.drag.take().is_some() {
-                            self.changed_at = Some(Instant::now());
-                        }
+                        self.drag_to(point);
+                        self.drag = None;
                     }
                     MouseEventKind::ScrollUp if self.area.contains(point.into()) => self.zoom(true),
                     MouseEventKind::ScrollDown if self.area.contains(point.into()) => {

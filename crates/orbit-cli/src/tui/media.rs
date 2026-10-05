@@ -4,6 +4,7 @@ mod assets;
 mod decode;
 mod flow;
 mod jobs;
+mod kitty_preview;
 mod preview;
 #[cfg(test)]
 mod tests;
@@ -83,6 +84,7 @@ pub(super) struct Prepared {
     pan_extent: (f32, f32),
     kitty_id: Option<u32>,
     selected_kitty_id: Option<u32>,
+    native: Option<Arc<kitty_preview::Image>>,
 }
 
 static DELETIONS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
@@ -164,6 +166,7 @@ struct Key {
     height: u16,
     large: bool,
     view: Option<View>,
+    native: bool,
 }
 
 enum Value {
@@ -176,6 +179,9 @@ impl Value {
     fn bytes(&self, picker: &Picker) -> usize {
         match self {
             Self::Ready(p) => {
+                if let Some(native) = &p.native {
+                    return native.bytes();
+                }
                 usize::from(p.size.width)
                     * usize::from(p.size.height)
                     * usize::from(picker.font_size().width)
@@ -403,6 +409,27 @@ impl Context {
         self.lookup(key, true, Some(ticket))
     }
 
+    fn native_picture(
+        &self,
+        jobs: &Arc<PreviewJobs>,
+        source: &Source,
+    ) -> Result<Option<Arc<Prepared>>, ()> {
+        let shared = self.shared.as_ref().ok_or(())?;
+        if shared.picker.protocol_type() != ProtocolType::Kitty
+            || shared.picker.tmux_detected()
+            || !matches!(source, Source::Image(_))
+        {
+            return Err(());
+        }
+        let mut key = self.key(source, 0, 0, true);
+        key.native = true;
+        if self.failure(key.clone()).is_some() {
+            return Err(());
+        }
+        let ticket = jobs.request(&key);
+        Ok(self.lookup(key, true, Some(ticket)))
+    }
+
     fn lookup(&self, key: Key, request: bool, ticket: Option<Ticket>) -> Option<Arc<Prepared>> {
         let shared = self.shared.as_ref()?;
         // Pixel math is illegible in halfblocks. Keep selectable TeX in that case.
@@ -412,7 +439,7 @@ impl Context {
             return None;
         }
 
-        if key.width == 0 || key.height == 0 {
+        if !key.native && (key.width == 0 || key.height == 0) {
             return None;
         }
         let mut cache = shared.cache.lock().ok()?;
@@ -500,6 +527,7 @@ impl Context {
             height,
             large,
             view: None,
+            native: false,
         }
     }
 }
@@ -519,12 +547,24 @@ struct Placement {
 struct Layer {
     current: Vec<Placement>,
     previous: Vec<Placement>,
+    current_preview: Option<kitty_preview::Placement>,
+    previous_preview: Option<kitty_preview::Placement>,
 }
 
 thread_local! { static LAYER: RefCell<Layer> = RefCell::new(Layer::default()); }
 
 pub(super) fn begin_frame() {
-    LAYER.with(|l| l.borrow_mut().current.clear());
+    LAYER.with(|l| {
+        let mut layer = l.borrow_mut();
+        layer.current.clear();
+        layer.current_preview = None;
+    });
+}
+
+fn schedule_preview(image: Arc<kitty_preview::Image>, body: Rect, view: View) {
+    LAYER.with(|layer| {
+        layer.borrow_mut().current_preview = Some(kitty_preview::Placement { image, body, view })
+    });
 }
 
 pub(super) fn schedule(fragment: &Fragment, area: Rect) {
@@ -545,9 +585,17 @@ pub(super) fn schedule(fragment: &Fragment, area: Rect) {
 
 pub(super) fn occlude(area: Rect) {
     LAYER.with(|l| {
-        l.borrow_mut()
+        let mut layer = l.borrow_mut();
+        layer
             .current
-            .retain(|p| p.area.intersection(area).is_empty())
+            .retain(|p| p.area.intersection(area).is_empty());
+        if layer
+            .current_preview
+            .as_ref()
+            .is_some_and(|p| !p.body.intersection(area).is_empty())
+        {
+            layer.current_preview = None;
+        }
     });
 }
 
@@ -555,6 +603,7 @@ pub(super) fn frozen_frame() {
     LAYER.with(|l| {
         let mut l = l.borrow_mut();
         l.current = l.previous.clone();
+        l.current_preview = l.previous_preview.clone();
     });
 }
 
@@ -599,6 +648,12 @@ pub(super) fn paint(buffer: &mut Buffer) {
         }
 
         layer.previous = layer.current.clone();
+        kitty_preview::paint(
+            layer.current_preview.as_ref(),
+            layer.previous_preview.as_ref(),
+            buffer,
+        );
+        layer.previous_preview = layer.current_preview.clone();
     });
 }
 

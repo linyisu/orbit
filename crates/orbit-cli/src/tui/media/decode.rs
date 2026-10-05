@@ -90,6 +90,27 @@ impl Decoder {
                     bail!("图片超过 20 MiB");
                 }
                 let svg = image::guess_format(&bytes).is_err();
+                if key.native {
+                    if svg {
+                        bail!("矢量图片使用媒体重绘预览");
+                    }
+                    let pixels = self.assets.raster(&bytes)?;
+                    let native = Arc::new(super::kitty_preview::Image::new(
+                        pixels.as_rgba8().unwrap(),
+                        Size::new(cell.width, cell.height),
+                    )?);
+                    return Ok(Prepared {
+                        protocol: SlicedProtocol::Sliced(Vec::new()),
+                        selected_protocol: None,
+                        source: key.source.clone(),
+                        size: Size::default(),
+                        baseline: 0,
+                        pan_extent: (0.0, 0.0),
+                        kitty_id: None,
+                        selected_kitty_id: None,
+                        native: Some(native),
+                    });
+                }
                 if svg {
                     if self.fonts.is_none() {
                         let mut db = usvg::fontdb::Database::new();
@@ -217,6 +238,7 @@ impl Decoder {
                 .min(size.height.saturating_sub(1)),
             kitty_id,
             selected_kitty_id,
+            native: None,
         })
     }
 }

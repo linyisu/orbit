@@ -86,7 +86,7 @@ impl Geometry {
             )
     }
 
-    fn bounds(&self, width: u32, height: u32) -> (u32, u32, u32, u32) {
+    pub(super) fn bounds(&self, width: u32, height: u32) -> (u32, u32, u32, u32) {
         let x = ((self.x / self.scale).floor() as u32).min(width - 1);
         let y = ((self.y / self.scale).floor() as u32).min(height - 1);
         let right = ((self.x + self.width as f32) / self.scale).ceil() as u32;

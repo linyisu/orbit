@@ -1229,6 +1229,7 @@ fn remote_images_keep_the_source_or_outer_link_on_every_picture_row() {
             height: request.height,
             large: false,
             view: None,
+            native: false,
         };
         let shared = context.shared.as_ref().unwrap();
         let mut picture = decode::Decoder::default()
