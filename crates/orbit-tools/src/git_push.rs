@@ -1,7 +1,10 @@
 //! Explicit HTTPS push with host credentials confined to a trusted sandbox worker.
-use crate::approval::{
-    ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview, CommandWorkspaceAccess,
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
 };
+
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::{
@@ -13,12 +16,16 @@ use orbit_runtime::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{
-    path::{Path, PathBuf},
-    process::Stdio,
-    time::Duration,
-};
 use tokio_util::sync::CancellationToken;
+
+use crate::approval::{
+    ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview, CommandWorkspaceAccess,
+};
+
+const DEFAULT_PUSH_TIMEOUT: Duration = Duration::from_secs(120);
+const CREDENTIAL_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_CREDENTIAL_BYTES: u64 = 64 * 1024;
+const REMOTE_URL_REQUIREMENT: &str = "remote_url must be an explicit HTTPS URL without embedded credentials, query or fragment; SSH/scp remotes are unsupported and SSH credentials cannot authenticate this HTTPS push";
 
 pub struct GitPush {
     workspace: Workspace,
@@ -26,15 +33,17 @@ pub struct GitPush {
     process_limits: orbit_runtime::execution::ProcessLimits,
     timeout: Duration,
 }
+
 impl GitPush {
     pub fn new(workspace: Workspace, approvals: ApprovalSender) -> Self {
         Self {
             workspace,
             approvals,
             process_limits: Default::default(),
-            timeout: Duration::from_secs(120),
+            timeout: DEFAULT_PUSH_TIMEOUT,
         }
     }
+
     pub fn with_limits(mut self, limits: &crate::run_command::CommandLimits) -> Self {
         self.process_limits = limits.process_limits.clone();
         self.timeout = Duration::from_secs(
@@ -45,6 +54,7 @@ impl GitPush {
         self
     }
 }
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Arguments {
@@ -52,6 +62,7 @@ struct Arguments {
     source_branch: String,
     target_branch: String,
 }
+
 #[derive(Deserialize, Serialize)]
 struct WorkerInput {
     arguments: Arguments,
@@ -60,11 +71,17 @@ struct WorkerInput {
     git_dir: PathBuf,
     objects: PathBuf,
 }
+
 fn failed(error: impl std::fmt::Display) -> ToolError {
     ToolError::ExecutionFailed(error.to_string())
 }
+
 fn validate(args: &Arguments) -> Result<url::Url, ToolError> {
-    let url = url::Url::parse(&args.remote_url).map_err(failed)?;
+    let invalid = |message: &str| ToolError::InvalidArguments {
+        tool: "git_push".into(),
+        message: message.into(),
+    };
+    let url = url::Url::parse(&args.remote_url).map_err(|_| invalid(REMOTE_URL_REQUIREMENT))?;
     if url.scheme() != "https"
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -72,10 +89,9 @@ fn validate(args: &Arguments) -> Result<url::Url, ToolError> {
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err(failed(
-            "push requires an HTTPS URL without embedded credentials, query or fragment",
-        ));
+        return Err(invalid(REMOTE_URL_REQUIREMENT));
     }
+
     for branch in [&args.source_branch, &args.target_branch] {
         if branch.is_empty()
             || branch.len() > 200
@@ -86,19 +102,22 @@ fn validate(args: &Arguments) -> Result<url::Url, ToolError> {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"/-_.".contains(&b))
         {
-            return Err(failed("invalid branch name"));
+            return Err(invalid("invalid branch name"));
         }
     }
+
     Ok(url)
 }
+
 impl Tool for GitPush {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "git_push",
-            "Push one local branch to one HTTPS remote branch using the user's host Git credential helper. Requires explicit remote-write approval. Credentials are confined to a trusted sandbox worker and never exposed to run_command or tool results. Only ordinary fast-forward pushes are supported; no force, deletion, mirror or SSH. Obtain the exact remote URL and branches before calling.",
-            json!({"type":"object","properties":{"remote_url":{"type":"string"},"source_branch":{"type":"string"},"target_branch":{"type":"string"}},"required":["remote_url","source_branch","target_branch"],"additionalProperties":false}),
+            "Push one local branch to one explicit HTTPS remote branch. Prerequisite: the user's host global Git credential helper must already provide noninteractive HTTPS credentials for that remote. This tool never reads origin or converts an SSH remote; SSH keys/agents cannot authenticate it. Requires explicit remote-write approval. Credentials are confined to a trusted sandbox worker and never exposed to run_command or tool results. Only ordinary fast-forward pushes are supported; no force, deletion, mirror or SSH. Obtain the exact HTTPS URL and branches before calling. If credentials are unavailable, report the prerequisite instead of retrying or inventing credentials.",
+            json!({"type":"object","properties":{"remote_url":{"type":"string","description":"Exact HTTPS repository URL; independent of origin and requires host HTTPS authentication"},"source_branch":{"type":"string"},"target_branch":{"type":"string"}},"required":["remote_url","source_branch","target_branch"],"additionalProperties":false}),
         )
     }
+
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
         Box::pin(async move {
             let args: Arguments = serde_json::from_str(&call.function.arguments).map_err(failed)?;
@@ -122,6 +141,7 @@ impl Tool for GitPush {
                         .map(|p| format!("{} (rw)", p.canonical().display())),
                 )
                 .collect();
+
             if let Ok(store) = effective.session_grants.read() {
                 external_capabilities.extend(
                     store
@@ -137,6 +157,7 @@ impl Tool for GitPush {
                         }),
                 );
             }
+
             let description = format!(
                 "git push {} {}:refs/heads/{}",
                 args.remote_url, args.source_branch, args.target_branch
@@ -211,6 +232,7 @@ impl Tool for GitPush {
                         .map(|g| g.path.canonical().to_owned()),
                 );
             }
+
             policy.mounts = vec![
                 MountSpec::read_only(
                     std::env::current_exe().map_err(failed)?,
@@ -243,10 +265,12 @@ impl Tool for GitPush {
                     "HTTPS push failed or was rejected; check credentials, connectivity and branch protection",
                 ));
             }
+
             Ok(ToolOutput::text(json!({"remote_url":input.arguments.remote_url,"source_branch":input.arguments.source_branch,"target_branch":input.arguments.target_branch,"pushed":true}).to_string()))
         })
     }
 }
+
 async fn credential(
     url: &url::Url,
     cancellation: CancellationToken,
@@ -271,6 +295,7 @@ async fn credential(
             command.env(name, value);
         }
     }
+
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -284,6 +309,7 @@ async fn credential(
         url.port().map(|p| format!(":{p}")).unwrap_or_default(),
         url.path().trim_start_matches('/')
     );
+
     child
         .stdin
         .take()
@@ -291,14 +317,14 @@ async fn credential(
         .write_all(request.as_bytes())
         .await
         .map_err(failed)?;
-    let mut stdout = child.stdout.take().unwrap().take(64 * 1024 + 1);
+    let mut stdout = child.stdout.take().unwrap().take(MAX_CREDENTIAL_BYTES + 1);
     let fetch = async {
         let mut bytes = Vec::new();
         stdout
             .read_to_end(&mut bytes)
             .await
             .map_err(|_| failed("credential helper failed"))?;
-        if bytes.len() > 64 * 1024 {
+        if bytes.len() as u64 > MAX_CREDENTIAL_BYTES {
             return Err(failed("credential helper response exceeds limit"));
         }
         let status = child
@@ -306,26 +332,37 @@ async fn credential(
             .await
             .map_err(|_| failed("credential helper failed"))?;
         if !status.success() {
-            return Err(failed(
-                "host Git credential helper did not provide HTTPS credentials",
-            ));
+            return Err(missing_credentials(url));
         }
         String::from_utf8(bytes).map_err(|_| failed("invalid credential response"))
     };
     let text = tokio::select! {
         _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-        result = tokio::time::timeout(Duration::from_secs(30), fetch) => result.map_err(|_| failed("credential helper timed out"))??,
+        result = tokio::time::timeout(CREDENTIAL_TIMEOUT, fetch) => result.map_err(|_| failed("credential helper timed out"))??,
     };
+    parse_credentials(url, &text)
+}
+
+fn missing_credentials(url: &url::Url) -> ToolError {
+    failed(format!(
+        "host global Git credential helper did not provide usable HTTPS credentials for {}. Configure noninteractive HTTPS authentication for this remote in the host global Git configuration before retrying. An SSH origin/key does not supply HTTPS credentials; repository-local helpers are not used. Credentials must not be supplied in tool arguments.",
+        url.host_str().unwrap_or("the remote")
+    ))
+}
+
+fn parse_credentials(url: &url::Url, text: &str) -> Result<(String, String), ToolError> {
     let field = |name: &str| {
         text.lines()
             .find_map(|line| line.strip_prefix(name))
+            .filter(|value| !value.is_empty())
             .map(str::to_owned)
     };
     Ok((
-        field("username=").ok_or_else(|| failed("credential helper returned no username"))?,
-        field("password=").ok_or_else(|| failed("credential helper returned no password"))?,
+        field("username=").ok_or_else(|| missing_credentials(url))?,
+        field("password=").ok_or_else(|| missing_credentials(url))?,
     ))
 }
+
 /// Trusted subprocess entry point; its Git repository has no project configuration/hooks.
 pub fn push_worker(path: &Path) -> Result<(), String> {
     let input: WorkerInput =
@@ -340,6 +377,7 @@ pub fn push_worker(path: &Path) -> Result<(), String> {
     {
         return Err("unsupported repository object path".into());
     }
+
     let git = |directory: &Path| {
         let mut cmd = std::process::Command::new("/usr/bin/git");
         cmd.current_dir(directory)
@@ -369,12 +407,14 @@ pub fn push_worker(path: &Path) -> Result<(), String> {
         .map_err(|_| "invalid source commit")?
         .trim()
         .to_owned();
+
     if !commit.status.success()
         || ![40, 64].contains(&oid.len())
         || !oid.bytes().all(|b| b.is_ascii_hexdigit())
     {
         return Err("source branch does not resolve to a commit".into());
     }
+
     let bare = tempfile::tempdir().map_err(|_| "cannot prepare push repository")?;
     let status = git(Path::new("/tmp"))
         .args(["init", "--bare"])
@@ -418,15 +458,77 @@ pub fn push_worker(path: &Path) -> Result<(), String> {
         .stderr(Stdio::null())
         .status()
         .map_err(|_| "push failed")?;
+
     if status.success() {
         Ok(())
     } else {
         Err("push failed or rejected".into())
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ssh_remote_is_rejected_before_approval_or_authentication() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sender, mut receiver) = crate::approval::channel();
+        let tool = GitPush::new(Workspace::new(dir.path()).unwrap(), sender);
+        for remote in [
+            "git@example.com:owner/repo.git",
+            "ssh://git@example.com/owner/repo.git",
+        ] {
+            let error = tool
+                .execute(
+                    ToolCall::function(
+                        "push",
+                        "git_push",
+                        json!({
+                            "remote_url": remote, "source_branch": "main", "target_branch": "main"
+                        }),
+                    ),
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap_err();
+
+            assert!(matches!(error, ToolError::InvalidArguments { .. }));
+            assert!(error.to_string().contains("explicit HTTPS URL"));
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+        }
+    }
+
+    #[test]
+    fn missing_or_empty_credentials_give_safe_actionable_guidance() {
+        let url = url::Url::parse("https://example.com/repo").unwrap();
+        for response in [
+            "",
+            "username=demo\n",
+            "password=fake-test-secret\n",
+            "username=demo\npassword=\n",
+            "username=\npassword=fake-test-secret\n",
+        ] {
+            let error = parse_credentials(&url, response).unwrap_err().to_string();
+            assert!(error.contains("host global Git credential helper"));
+            assert!(error.contains("example.com"));
+            assert!(error.contains("SSH origin/key does not supply HTTPS credentials"));
+            assert!(!error.contains("fake-test-secret"));
+        }
+
+        assert_eq!(
+            parse_credentials(
+                &url,
+                "protocol=https\nusername=demo\npassword=fake-test-secret\n\n"
+            )
+            .unwrap(),
+            ("demo".into(), "fake-test-secret".into())
+        );
+    }
+
     #[test]
     fn restricts_push_to_one_https_branch() {
         for remote in [
@@ -444,6 +546,7 @@ mod tests {
                 .is_err()
             );
         }
+
         for branch in ["", "--force", ":main", "+main", "main~1", "a..b"] {
             assert!(
                 validate(&Arguments {
@@ -454,6 +557,7 @@ mod tests {
                 .is_err()
             );
         }
+
         assert!(
             validate(&Arguments {
                 remote_url: "https://example.com/repo".into(),
