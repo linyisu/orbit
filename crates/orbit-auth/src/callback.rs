@@ -23,6 +23,7 @@ pub(crate) fn authorization_code(callback: &str, redirect: &Url, state: &str) ->
     {
         return Err(AuthError::InvalidCallback);
     }
+
     let pairs: Vec<_> = url.query_pairs().collect();
     let states: Vec<_> = pairs.iter().filter(|(key, _)| key == "state").collect();
     if states.len() != 1 || states[0].1 != state {
@@ -64,6 +65,7 @@ impl CallbackListener {
         {
             return Err(AuthError::InvalidCallback);
         }
+
         let port = redirect.port().ok_or(AuthError::InvalidCallback)?;
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
         let port = listener.local_addr()?.port();
@@ -104,6 +106,7 @@ impl CallbackListener {
                         return Ok::<_, std::io::Error>(bytes);
                     }
                 }
+
                 Err(std::io::Error::other("callback headers too large"))
             };
             let Ok(Ok(bytes)) = tokio::time::timeout(CALLBACK_IO_TIMEOUT, read).await else {

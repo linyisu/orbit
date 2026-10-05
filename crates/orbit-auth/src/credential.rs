@@ -111,6 +111,7 @@ impl Credential {
                 Some((crate::chatgpt::API_BASE, AuthTarget::ChatgptCodex))
             }
         };
+
         if let Some((base, required_target)) = required {
             if self.endpoint != base || target != required_target {
                 return Err(AuthError::Scope);
@@ -121,6 +122,7 @@ impl Credential {
         ) {
             return Err(AuthError::Scope);
         }
+
         let base = endpoint_scope(&self.endpoint)?;
         if endpoint.origin() != base.origin() || !endpoint.path().starts_with(base.path()) {
             return Err(AuthError::Scope);
@@ -153,6 +155,7 @@ impl Credential {
             headers.insert("chatgpt-account-id", value);
             headers.insert("originator", HeaderValue::from_static("orbit"));
         }
+
         if self.kind == CredentialKind::AntigravityOAuth {
             crate::google::validate_project(
                 self.project_id.as_deref().ok_or(AuthError::InvalidToken)?,

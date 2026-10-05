@@ -41,6 +41,7 @@ impl AuthStore {
                 "API key must contain 1–16384 bytes and no control characters",
             ));
         }
+
         let credential = Credential {
             version: 1,
             kind: CredentialKind::ApiKey,
@@ -63,6 +64,7 @@ impl AuthStore {
                 self.sync_directory()?;
                 Ok(true)
             }
+
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(error.into()),
         }
@@ -153,6 +155,7 @@ impl AuthStore {
                     }
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
+
                 Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
             }
         }
@@ -210,6 +213,7 @@ impl AuthStore {
                 "credential directory must not be a symlink",
             ));
         }
+
         validate_owner(&metadata)?;
         Ok(())
     }
@@ -242,6 +246,7 @@ fn private_file(path: &Path, create: bool) -> std::io::Result<File> {
             "credential path must be a regular file",
         ));
     }
+
     validate_owner(&metadata)?;
     #[cfg(unix)]
     {
@@ -282,6 +287,7 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
             "credential name must contain 1–64 ASCII letters, digits, '-' or '_'",
         ));
     }
+
     Ok(())
 }
 

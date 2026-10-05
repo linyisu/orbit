@@ -66,6 +66,7 @@ impl OAuthLogin {
                 "project is only supported by Google login",
             ));
         }
+
         if let Some(project) = &project {
             crate::google::validate_project(project)?;
         }
@@ -99,16 +100,19 @@ impl OAuthLogin {
                 crate::antigravity::CLIENT_ID,
                 "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs",
             ),
+
             OAuthProvider::Google => (
                 "https://accounts.google.com/o/oauth2/v2/auth",
                 crate::google::CLIENT_ID,
                 "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
             ),
+
             OAuthProvider::Chatgpt => (
                 "https://auth.openai.com/oauth/authorize",
                 crate::chatgpt::CLIENT_ID,
                 "openid profile email offline_access",
             ),
+
             OAuthProvider::Anthropic => unreachable!("Anthropic has its own login flow"),
         };
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(self.verifier.0.as_bytes()));
@@ -127,6 +131,7 @@ impl OAuthLogin {
                 url.query_pairs_mut()
                     .extend_pairs([("access_type", "offline"), ("prompt", "consent")]);
             }
+
             OAuthProvider::Chatgpt => {
                 url.query_pairs_mut().extend_pairs([
                     ("id_token_add_organizations", "true"),
@@ -134,8 +139,10 @@ impl OAuthLogin {
                     ("originator", "orbit"),
                 ]);
             }
+
             OAuthProvider::Anthropic => unreachable!(),
         }
+
         url
     }
 
@@ -175,9 +182,11 @@ impl OAuthLogin {
                             credential,
                         }));
                     }
+
                     Err(error) => return Err(error),
                 }
             }
+
             OAuthProvider::Chatgpt => {
                 crate::chatgpt::exchange(&code, &self.verifier.0, &self.redirect).await?
             }

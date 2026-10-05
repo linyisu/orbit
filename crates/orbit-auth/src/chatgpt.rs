@@ -61,12 +61,14 @@ fn parse_tokens(value: Value, previous: Option<&Credential>) -> Result<Credentia
         })
         .ok_or(AuthError::InvalidToken)?
         .to_owned();
+
     if previous
         .and_then(|credential| credential.account_id.as_deref())
         .is_some_and(|old| old != account_id)
     {
         return Err(AuthError::LoginRequired);
     }
+
     let email = access["https://api.openai.com/profile"]["email"]
         .as_str()
         .or_else(|| identity["email"].as_str())
@@ -84,6 +86,7 @@ fn parse_tokens(value: Value, previous: Option<&Credential>) -> Result<Credentia
         account_id: Some(account_id),
         project_id: None,
     };
+
     tokens.apply(&mut credential)?;
     Ok(credential)
 }
@@ -106,8 +109,9 @@ fn claims(token: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn response(account: &str, refresh: Option<&str>) -> Value {
         let claims = json!({ "https://api.openai.com/auth": { "chatgpt_account_id": account } });

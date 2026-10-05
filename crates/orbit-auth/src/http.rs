@@ -31,6 +31,7 @@ pub(crate) async fn json_response(mut response: Response) -> Result<Value> {
         }
         bytes.extend_from_slice(&chunk);
     }
+
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
         if status.is_success() {
             AuthError::InvalidToken
@@ -38,6 +39,7 @@ pub(crate) async fn json_response(mut response: Response) -> Result<Value> {
             AuthError::Http(status.as_u16())
         }
     })?;
+
     if !status.is_success() {
         if value["error"].as_str() == Some("invalid_grant") {
             return Err(AuthError::LoginRequired);
@@ -78,11 +80,13 @@ impl Tokens {
         {
             return Err(AuthError::InvalidToken);
         }
+
         let refresh = self
             .refresh_token
             .or_else(|| credential.refresh.clone())
             .filter(|value| !value.0.is_empty() && !value.0.chars().any(char::is_control))
             .ok_or(AuthError::InvalidToken)?;
+
         credential.access = self.access_token;
         credential.refresh = Some(refresh);
         credential.expires_at = Some(
@@ -96,8 +100,9 @@ impl Tokens {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
 
     #[tokio::test]
     async fn grant_forms_escape_codes_and_token_errors_do_not_echo_the_body() {

@@ -62,6 +62,7 @@ pub(crate) async fn exchange_using(
         account_id: None,
         project_id: None,
     };
+
     tokens.apply(&mut credential)?;
     // Profile lookup is optional; a userinfo outage must not invalidate a grant.
     if let Ok(response) = client()?
@@ -73,6 +74,7 @@ pub(crate) async fn exchange_using(
     {
         credential.account = value["email"].as_str().map(str::to_owned);
     }
+
     Ok(credential)
 }
 
@@ -124,6 +126,7 @@ pub(crate) fn validate_project(project: &str) -> Result<()> {
     {
         return Err(AuthError::Configuration("invalid Google Cloud project ID"));
     }
+
     Ok(())
 }
 
@@ -151,6 +154,7 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
         body["metadata"] = metadata.clone();
         body["cloudaicompanionProject"] = json!(project);
     }
+
     let loaded = post(base, "loadCodeAssist", token, body).await?;
     if loaded
         .get("currentTier")
@@ -163,6 +167,7 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
         validate_project(resolved)?;
         return Ok(resolved.to_owned());
     }
+
     let default_tier = loaded["allowedTiers"]
         .as_array()
         .and_then(|tiers| tiers.iter().find(|tier| tier["isDefault"] == true));
@@ -179,6 +184,7 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
     {
         body["cloudaicompanionProject"] = json!(project);
     }
+
     let mut operation = post(base, "onboardUser", token, body).await?;
 
     for _ in 0..24 {
@@ -192,9 +198,11 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
                 .ok_or(AuthError::Configuration(
                     "Google did not return a Cloud Code Assist project",
                 ))?;
+
             validate_project(resolved)?;
             return Ok(resolved.to_owned());
         }
+
         let name = operation["name"].as_str().ok_or(AuthError::InvalidToken)?;
         if !name.starts_with("operations/")
             || !name
@@ -203,6 +211,7 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
         {
             return Err(AuthError::InvalidToken);
         }
+
         tokio::time::sleep(Duration::from_secs(5)).await;
         let response = client()?
             .get(format!("{base}v1internal/{name}"))
@@ -210,15 +219,18 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
             .send()
             .await
             .map_err(|_| AuthError::Transport)?;
+
         operation = json_response(response).await?;
     }
+
     Err(AuthError::Timeout)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
 
     pub(crate) async fn server(
         responses: Vec<Value>,
@@ -274,6 +286,7 @@ pub(crate) mod tests {
                 );
                 socket.write_all(response.as_bytes()).await.unwrap();
             }
+
             requests
         });
         (base, task)

@@ -91,6 +91,7 @@ async fn load(base: &str, token: &str) -> Result<Value> {
         json!({ "metadata": { "ideType": "ANTIGRAVITY" } }),
     )
     .await?;
+
     if data.get("paidTier").is_none_or(Value::is_null)
         && let Some(project) = data["cloudaicompanionProject"]
             .as_str()
@@ -129,6 +130,7 @@ async fn onboard(base: &str, token: &str) -> Result<()> {
                     "Antigravity project initialization failed",
                 ));
             }
+
             if !operation["response"].is_object() {
                 return Err(AuthError::InvalidToken);
             }
@@ -143,6 +145,7 @@ async fn onboard(base: &str, token: &str) -> Result<()> {
         {
             return Err(AuthError::InvalidToken);
         }
+
         tokio::time::sleep(Duration::from_secs(1)).await;
         let response = client()?
             .get(format!("{base}v1internal/{name}"))
@@ -152,6 +155,7 @@ async fn onboard(base: &str, token: &str) -> Result<()> {
             .send()
             .await
             .map_err(|_| AuthError::Transport)?;
+
         operation = json_response(response).await?;
     }
 }
@@ -228,6 +232,7 @@ async fn discover_project(base: &str, token: &str) -> Result<String> {
         .ok_or(AuthError::Configuration(
             "Antigravity did not return a managed project; retry account initialization",
         ))?;
+
     crate::google::validate_project(project)?;
     Ok(project.into())
 }

@@ -94,6 +94,7 @@ fn model_ids(payload: &Value) -> Result<Vec<String>> {
             ids.push(id.to_owned());
         }
     }
+
     if ids.is_empty() {
         return Err(AuthError::Configuration(
             "account returned no available models",
@@ -105,8 +106,9 @@ fn model_ids(payload: &Value) -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn model_list_uses_server_ids_and_rejects_invalid_responses() {

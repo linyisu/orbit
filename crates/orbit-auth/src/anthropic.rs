@@ -39,6 +39,7 @@ impl AnthropicLogin {
                 "OAuth redirect must be an HTTP loopback /callback URL",
             ));
         }
+
         let verifier = random(96)?;
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
 
@@ -266,6 +267,7 @@ mod tests {
                     assert_eq!(credential.access.0, "new-access");
                     assert_eq!(credential.refresh.unwrap().0, "new-refresh");
                 }
+
                 "login" => assert!(matches!(result, Err(AuthError::LoginRequired))),
                 "redirect" => assert!(matches!(result, Err(AuthError::Http(302)))),
                 _ => assert!(matches!(result, Err(AuthError::InvalidToken))),
