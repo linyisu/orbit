@@ -27,6 +27,7 @@ mod connections;
 mod history;
 mod instructions;
 mod marketplaces;
+mod model_metadata;
 mod project_state;
 mod runtime;
 mod session;

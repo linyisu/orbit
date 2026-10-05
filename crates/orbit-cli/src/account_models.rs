@@ -36,6 +36,9 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
         .flatten()
         .collect::<Vec<_>>();
 
+    if let Some(message) = crate::model_metadata::supplement(config, force).await {
+        diagnostics.push(message);
+    }
     diagnostics.sort();
     diagnostics
 }

@@ -1,0 +1,168 @@
+use super::*;
+
+fn fixture() -> Catalog {
+    normalize(json!({
+        "openai": {"models": {
+            "fixture": {"limit": {"context": 200000, "input": 180000, "output": 64000},
+                "modalities": {"input": ["text", "image"]},
+                "reasoning_options": [{"type": "effort", "values": ["low", "high", "future"]}]},
+            "unavailable": {"limit": {"context": 1000000}}
+        }},
+        "other": {"api": "https://other.example/v1", "models": {
+            "fixture": {"limit": {"context": 120000, "output": 16000},
+                "modalities": {"input": ["text"]},
+                "reasoning_options": [{"type": "effort", "values": ["high"]}]}
+        }}
+    }))
+    .unwrap()
+}
+
+fn provider(base: &str, format: ApiFormat) -> ProviderConfig {
+    serde_json::from_value(json!({"base_url": base, "api_format": format,
+        "models": [{"id": "fixture"}, {"id": "unknown"}]}))
+    .unwrap()
+}
+
+#[test]
+fn exact_endpoint_and_model_metadata_fills_missing_fields_without_adding_models() {
+    let mut provider = provider("https://api.openai.com/v1/", ApiFormat::OpenaiResponses);
+    fixture().supplement(&mut provider);
+    assert_eq!(provider.models.len(), 2);
+    let model = &provider.models[0];
+    assert_eq!(model.context_tokens, Some(200000));
+    assert_eq!(model.input_context_tokens, Some(180000));
+    assert_eq!(model.max_output_tokens, Some(64000));
+    assert_eq!(model.supports_vision, Some(true));
+    let reasoning = model.reasoning.as_ref().unwrap();
+    assert_eq!(reasoning.adapter, ReasoningAdapter::OpenaiResponses);
+    assert_eq!(
+        reasoning.efforts,
+        [ReasoningEffort::Low, ReasoningEffort::High]
+    );
+    assert_eq!(reasoning.default, ReasoningEffort::High);
+    assert!(provider.models[1].context_tokens.is_none());
+    assert!(
+        provider.configured_models.as_ref().unwrap()[0]
+            .context_tokens
+            .is_none()
+    );
+
+    for base in [
+        "https://relay.example/v1",
+        "https://api.openai.com/custom/v1",
+        "http://api.openai.com/v1",
+    ] {
+        let mut unknown = self::provider(base, ApiFormat::OpenaiResponses);
+        fixture().supplement(&mut unknown);
+        assert!(unknown.models[0].context_tokens.is_none(), "{base}");
+    }
+}
+
+#[test]
+fn explicit_and_discovered_fields_take_precedence_and_unknown_protocols_are_not_inferred() {
+    let mut provider = provider("https://api.openai.com", ApiFormat::OpenaiResponses);
+    let profile = &mut provider.models[0];
+    profile.context_tokens = Some(100000);
+    profile.input_context_tokens = Some(80000);
+    profile.max_output_tokens = Some(8000);
+    profile.supports_vision = Some(false);
+    profile.reasoning = Some(ReasoningProfile {
+        adapter: ReasoningAdapter::OpenaiResponses,
+        efforts: vec![ReasoningEffort::Low],
+        default: ReasoningEffort::Low,
+        extra: toml::Table::new(),
+    });
+    let before = serde_json::to_value(&*profile).unwrap();
+    fixture().supplement(&mut provider);
+    assert_eq!(serde_json::to_value(&provider.models[0]).unwrap(), before);
+
+    let mut other = self::provider("https://other.example/v1", ApiFormat::OpenaiChatCompletions);
+    fixture().supplement(&mut other);
+    assert_eq!(other.models[0].context_tokens, Some(120000));
+    assert_eq!(other.models[0].supports_vision, Some(false));
+    assert!(other.models[0].reasoning.is_none());
+
+    let mut account = self::provider("https://api.openai.com/v1", ApiFormat::ChatgptCodex);
+    fixture().supplement(&mut account);
+    assert!(account.models[0].context_tokens.is_none());
+}
+
+#[test]
+fn shared_endpoint_conflicts_and_invalid_limits_do_not_supply_ambiguous_specs() {
+    let mut catalog = fixture();
+    let mut conflicting = catalog.providers["other"].clone();
+    conflicting.models.get_mut("fixture").unwrap().limit.context = Some(300000);
+    catalog.providers.insert("other-plan".into(), conflicting);
+    let mut provider = provider("https://other.example/v1", ApiFormat::AnthropicMessages);
+    catalog.supplement(&mut provider);
+    assert!(provider.models[0].context_tokens.is_none());
+
+    let mut model: ModelProfile = serde_json::from_value(json!({"id": "fixture"})).unwrap();
+    let spec: Spec =
+        serde_json::from_value(json!({"limit": {"context": 10000, "input": 20000, "output": 0}}))
+            .unwrap();
+    spec.supplement(&mut model, "other", ApiFormat::AnthropicMessages);
+    assert_eq!(model.context_tokens, Some(10000));
+    assert!(model.input_context_tokens.is_none());
+    assert!(model.max_output_tokens.is_none());
+}
+
+#[tokio::test]
+async fn disabled_refresh_uses_cached_specs_without_network_access() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = FileConfig::parse(
+        r#"default_provider = "test"
+[providers.test]
+api_format = "openai_responses"
+base_url = "https://api.openai.com/v1"
+auto_refresh_models = false
+models = [{id = "fixture"}]
+[web]
+proxy = "http://invalid.invalid:1"
+"#,
+        directory.path(),
+    )
+    .unwrap();
+    let path = directory.path().join("model-metadata/catalog.json");
+    save(&path, &fixture()).unwrap();
+    assert!(supplement(&mut config, true).await.is_none());
+    assert_eq!(
+        config.providers["test"].models[0].context_tokens,
+        Some(200000)
+    );
+}
+
+#[test]
+fn snapshots_round_trip_and_invalid_cache_sources_are_rejected() {
+    let catalog = bundled();
+    assert!(catalog.providers.len() > 100);
+    assert!(
+        catalog
+            .providers
+            .values()
+            .map(|p| p.models.len())
+            .sum::<usize>()
+            > 1000
+    );
+    assert!(
+        normalize(json!({"broken": {"models": {"": {}, "bad": {"limit": {"output": -1}}}}}))
+            .is_err()
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("nested/catalog.json");
+    save(&path, &fixture()).unwrap();
+    let cached = read_cache(&path).unwrap();
+    assert_eq!(
+        cached.providers["openai"].models["fixture"],
+        fixture().providers["openai"].models["fixture"]
+    );
+    let mut invalid = fixture();
+    invalid.source["url"] = json!("https://other.example/api.json");
+    save(&path, &invalid).unwrap();
+    assert!(read_cache(&path).is_none());
+    fs::write(&path, "broken JSON").unwrap();
+    assert!(read_cache(&path).is_none());
+    let file = fs::File::create(&path).unwrap();
+    file.set_len(MAX_CATALOG_BYTES as u64 + 1).unwrap();
+    assert!(read_cache(&path).is_none());
+}
