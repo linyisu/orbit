@@ -6,15 +6,13 @@ use std::{
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::filesystem::Workspace;
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use orbit_runtime::filesystem::Workspace;
+use crate::limits::{DEFAULT_FILE_SCAN_BYTES, MAX_TEXT_OUTPUT_BYTES};
 
-use crate::limits::MAX_TEXT_OUTPUT_BYTES;
-
-const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_PAGE_LINES: usize = 200;
 const MAX_PAGE_LINES: usize = 500;
 
@@ -71,7 +69,7 @@ impl ReadFile {
     pub fn new(workspace: Workspace) -> Self {
         Self {
             workspace,
-            scan_budget: MAX_SCAN_BYTES,
+            scan_budget: DEFAULT_FILE_SCAN_BYTES,
         }
     }
 
@@ -114,6 +112,7 @@ impl Tool for ReadFile {
                     "path must be nonempty, start_line >= 1, and max_lines between 1 and 500",
                 ));
             }
+
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
@@ -158,10 +157,12 @@ fn read(
                 "cursor is invalid or file changed; read again without cursor",
             ));
         }
+
         (cursor.line, cursor.character, cursor.offset)
     } else {
         (1, 0, 0)
     };
+
     file.seek(SeekFrom::Start(offset)).map_err(failed)?;
     let mut reader = BufReader::new(file);
     let start_line = arguments
@@ -187,10 +188,12 @@ fn read(
                 "read scan budget exceeded; request a nearer range or use a continuation cursor",
             ));
         }
+
         if reader.fill_buf().map_err(failed)?.is_empty() {
             eof = true;
             break;
         }
+
         if line >= start_line.saturating_add(arguments.max_lines) {
             break;
         }
@@ -223,6 +226,7 @@ fn read(
             }
             content.push(scalar);
         }
+
         if scalar == '\n' {
             if line == start_line && character < start_char {
                 return Err(invalid("start_char exceeds the selected line length"));
@@ -238,6 +242,7 @@ fn read(
                 .ok_or_else(|| invalid("character offset overflow"))?;
         }
     }
+
     let total_at_eof = if character == 0 { line - 1 } else { line };
     if eof && (start_line > total_at_eof.max(1) || line == start_line && character < start_char) {
         return Err(invalid("requested range exceeds file length"));
@@ -279,6 +284,7 @@ fn read_scalar(reader: &mut impl Read) -> Result<char, ToolError> {
         0xf0..=0xf4 => 4,
         _ => return Err(failed("file is not UTF-8 text")),
     };
+
     reader.read_exact(&mut bytes[1..length]).map_err(failed)?;
     std::str::from_utf8(&bytes[..length])
         .map_err(|_| failed("file is not UTF-8 text"))?

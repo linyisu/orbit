@@ -4,23 +4,11 @@ use std::{
     time::Duration,
 };
 
-pub type ScratchDirectory = Arc<RwLock<PathBuf>>;
-
-pub type CommandOutputDirectory = crate::read_command_output::CommandOutputDirectory;
-
 use orbit_agent::{
     background::BackgroundJobs,
     tool::{Tool, ToolError, ToolFuture, ToolOutput},
 };
 use orbit_model::types::{ToolCall, ToolDefinition};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
-
-use crate::approval::{
-    ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview, CommandWorkspaceAccess,
-};
 use orbit_runtime::{
     RuntimeError,
     execution::{
@@ -29,6 +17,20 @@ use orbit_runtime::{
     },
     filesystem::Workspace,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
+
+use crate::approval::{
+    ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview, CommandWorkspaceAccess,
+    pinned_local_command,
+};
+use crate::limits::DEFAULT_FILE_SCAN_BYTES;
+
+pub type ScratchDirectory = Arc<RwLock<PathBuf>>;
+
+pub type CommandOutputDirectory = crate::read_command_output::CommandOutputDirectory;
 
 #[derive(Clone)]
 pub struct RunCommand {
@@ -111,24 +113,23 @@ impl From<&CommandLimits> for WorkspaceScanLimits {
 
 impl From<CommandLimits> for WorkspaceScanLimits {
     fn from(limits: CommandLimits) -> Self {
-        Self {
-            max_scan_mib: limits.max_scan_mib,
-            max_scan_entries: limits.max_scan_entries,
-        }
+        Self::from(&limits)
     }
 }
 
 impl Default for CommandLimits {
     fn default() -> Self {
+        let scan_limits = WorkspaceScanLimits::default();
+
         Self {
             network: orbit_runtime::capability::NetworkPolicy::Allow,
             rust_toolchain: None,
-            max_scan_mib: 64,
-            max_scan_entries: 10_000,
+            max_scan_mib: scan_limits.max_scan_mib,
+            max_scan_entries: scan_limits.max_scan_entries,
             legacy_writable_snapshot_mib: None,
             process_limits: ProcessLimits::default(),
             artifacts: Default::default(),
-            read_file_scan_bytes: 64 * 1024 * 1024,
+            read_file_scan_bytes: DEFAULT_FILE_SCAN_BYTES,
             dependency_caches: Vec::new(),
             verification_commands: Default::default(),
             default_timeout_seconds: 120,
@@ -146,6 +147,7 @@ impl CommandLimits {
                 "command timeout defaults must be positive and not exceed max_timeout_seconds",
             );
         }
+
         if self
             .rust_toolchain
             .as_ref()
@@ -153,6 +155,7 @@ impl CommandLimits {
         {
             return Err("command.rust_toolchain must be an absolute toolchain directory");
         }
+
         if !(1..=1024).contains(&self.max_scan_mib)
             || !(1..=100_000).contains(&self.max_scan_entries)
         {
@@ -238,7 +241,7 @@ impl Tool for RunCommand {
         ToolDefinition::function(
             "run_command",
             format!(
-                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (requires approval in Auto mode). Native Git commands are available within the requested sandbox permissions. Offline read-only queries may run automatically; writes and network requests follow approval policy. Use git_push for an ordinary HTTPS push requiring host credentials. Protected paths (.env*, orbit config/db) are isolated and masked; Existing repository configuration and hooks are read-only unless an explicitly approved configuration operation requests read_write. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is denied by default; request network=allow explicitly, subject to the configured policy and approval. Enforces execution timeout, private script execution, and resource limits. When background=true, starts a managed command and returns a job_id after approval; the same timeout and permissions apply. Independent background commands may overlap. Completion is delivered automatically to this session between model requests. Continue useful independent work; when nothing remains, call wait_commands once rather than polling get_command_status. Use cancel_commands to stop jobs. Background jobs do not survive an Orbit restart and are cancelled when the Agent run is stopped. /tmp is a disposable command temporary directory. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
+                "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (usually requires approval in Auto mode). Literal mkdir, echo, printf, cat and tee commands with workspace-scoped paths, pipelines, > / >> redirection and && sequencing run automatically in Auto mode when offline and without external write access. Shell expansions and other programs still require approval. Native Git commands are available within the requested sandbox permissions. Offline read-only queries may run automatically; writes and network requests follow approval policy. Use git_push for an ordinary HTTPS push requiring host credentials. Protected paths (.env*, orbit config/db) are isolated and masked; Existing repository configuration and hooks are read-only unless an explicitly approved configuration operation requests read_write. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is denied by default; request network=allow explicitly, subject to the configured policy and approval. Enforces execution timeout, private script execution, and resource limits. When background=true, starts a managed command and returns a job_id after approval; the same timeout and permissions apply. Independent background commands may overlap. Completion is delivered automatically to this session between model requests. Continue useful independent work; when nothing remains, call wait_commands once rather than polling get_command_status. Use cancel_commands to stop jobs. Background jobs do not survive an Orbit restart and are cancelled when the Agent run is stopped. /tmp is a disposable command temporary directory. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
                 serde_json::to_string(
                     &self
                         .limits
@@ -290,6 +293,7 @@ impl Tool for RunCommand {
                     "background commands are unavailable for this adapter",
                 ));
             }
+
             let timeout_seconds = args
                 .timeout_seconds
                 .unwrap_or(self.limits.default_timeout_seconds);
@@ -321,6 +325,7 @@ impl Tool for RunCommand {
                         self.workspace.root().join(dir_path)
                     }
                 }
+
                 None => self.workspace.root().to_path_buf(),
             };
 
@@ -339,6 +344,7 @@ impl Tool for RunCommand {
             {
                 return Err(invalid("network access is disabled by the command policy"));
             }
+
             let network_allowed = args.network.is_allowed();
             let mut external_capabilities = Vec::new();
             let mut external_write = false;
@@ -379,6 +385,8 @@ impl Tool for RunCommand {
             }
 
             let git_analysis = orbit_runtime::git::GitCommandAnalysis::parse(&args.command);
+            let command =
+                pinned_local_command(&args.command).unwrap_or_else(|| args.command.clone());
 
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
@@ -422,8 +430,10 @@ impl Tool for RunCommand {
                         .clone();
                     Some(OutputLog::create(&directory).await?)
                 }
+
                 None => None,
             };
+
             if let Some(jobs) = &self.jobs
                 && let Some(log) = &output_log
             {
@@ -455,7 +465,7 @@ impl Tool for RunCommand {
 
             let backend = BwrapBackend::new()?;
             let mut request = ExecutionRequest::new(
-                args.command,
+                command,
                 execution_env.cwd.clone(),
                 Duration::from_secs(timeout_seconds),
             )
@@ -569,6 +579,7 @@ impl Tool for RunCommand {
                         } else {
                             verification_error = Some(warning.into());
                         }
+
                         evidence.output = None;
                     } else {
                         evidence.output = post_fingerprint;
@@ -603,6 +614,7 @@ impl Tool for RunCommand {
                     "status": job.status,
                     "message": "Command started in the background. Completion will be delivered automatically; use wait_commands when there is no independent work."
                 }).to_string());
+
                 output.background_job = Some(job.job_id);
                 Ok(output)
             } else {
@@ -638,7 +650,6 @@ mod configuration_tests {
             orbit_runtime::capability::NetworkPolicy::Deny
         );
 
-        // Backward compatibility: alias snapshot_mib and snapshot_entries
         let legacy: CommandLimits =
             toml::from_str("snapshot_mib=256\nsnapshot_entries=30000\nwritable_snapshot_mib=512\n")
                 .unwrap();

@@ -9,3 +9,5 @@ pub(crate) const OUTPUT_METADATA_RESERVE_BYTES: usize = 1024;
 
 /// Bound directory traversal even when few entries match the requested page.
 pub(crate) const MAX_DIRECTORY_ENTRIES: usize = 20_000;
+
+pub(crate) const DEFAULT_FILE_SCAN_BYTES: u64 = 64 * 1024 * 1024;

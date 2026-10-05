@@ -23,6 +23,7 @@ async fn absent_git_config_and_hooks_are_protected_in_a_writable_workspace() {
         .run(spec, &policy, None, CancellationToken::new())
         .await
         .unwrap();
+
     assert_eq!(result.exit_code, Some(0), "{}", result.stderr);
     assert!(result.stdout.ends_with("safe"));
     for name in ["config", "config.worktree", "hooks"] {
@@ -31,6 +32,7 @@ async fn absent_git_config_and_hooks_are_protected_in_a_writable_workspace() {
             "placeholder {name} must be cleaned up"
         );
     }
+
     assert!(dir.path().join(".git/HEAD").exists());
 }
 
@@ -48,6 +50,7 @@ async fn temporary_volume_enforces_an_aggregate_quota() {
         .run(spec, &policy, None, CancellationToken::new())
         .await
         .unwrap();
+
     assert_eq!(result.exit_code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout, "bounded");
 }
@@ -61,6 +64,7 @@ fn browser_reader_mounts_only_system_files_and_a_disposable_profile() {
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
+
     assert!(args.contains(&"--unshare-pid".into()));
     assert!(args.contains(&"--die-with-parent".into()));
     assert!(
@@ -98,6 +102,7 @@ async fn isolated_firefox_starts_its_debugger_and_can_be_reaped() {
             diagnostic.push_str(&line);
             diagnostic.push('\n');
         }
+
         false
     })
     .await
@@ -331,7 +336,6 @@ fn test_validate_mounts_capability_collision() {
             &cap_canonical,
         ));
 
-    // Mount target collides with capability path
     let collides = vec![MountSpec::read_only(mount_src.path(), &cap_canonical)];
     let err = validate_mounts(&collides, &policy).unwrap_err();
 
@@ -340,7 +344,6 @@ fn test_validate_mounts_capability_collision() {
             .contains("conflicts or overlaps with active capability grant")
     );
 
-    // Mount target is subpath of capability path
     let subpath = vec![MountSpec::read_only(
         mount_src.path(),
         cap_canonical.join("sub"),
@@ -352,7 +355,6 @@ fn test_validate_mounts_capability_collision() {
             .contains("conflicts or overlaps with active capability grant")
     );
 
-    // Non-colliding target succeeds
     let valid = vec![MountSpec::read_only(
         mount_src.path(),
         "/opt/orbit-cache/cargo",
@@ -438,7 +440,6 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
     ];
     let opaque_runtime_roots = vec![nonexistent_dir.clone()];
 
-    // Case A: Read-only workspace - does NOT create placeholders
     {
         let mut guard = PlaceholderGuard::new();
         let (masked, _) = collect_masked_paths(
@@ -454,7 +455,6 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
         assert!(!nonexistent_file.exists());
         assert!(!nonexistent_dir.exists());
 
-        // But existing config and alias are masked!
         assert!(
             masked
                 .iter()
@@ -477,7 +477,6 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
         );
     }
 
-    // Case B: Read-write workspace - creates guarded placeholders and cleans them up
     {
         let mut guard = PlaceholderGuard::new();
         let (masked, _) = collect_masked_paths(
@@ -493,7 +492,6 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
         assert!(nonexistent_file.is_file());
         assert!(nonexistent_dir.is_dir());
 
-        // Masked list contains the placeholders with correct is_dir flags
         assert!(
             masked
                 .iter()
@@ -505,7 +503,6 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
                 .any(|(p, is_dir)| p == Path::new("/workspace/orbit.db.workspaces") && *is_dir)
         );
 
-        // Masked list contains the hardlink aliases
         assert!(
             masked
                 .iter()
@@ -519,15 +516,12 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
 
         drop(guard);
 
-        // After drop, placeholders are removed!
         assert!(!nonexistent_file.exists());
         assert!(!nonexistent_dir.exists());
-        // Existing files are NOT removed!
         assert!(config_file.exists());
         assert!(env_file.exists());
     }
 
-    // Case C: Protected directory contents are recursively added to protected_inodes
     {
         let artifact_dir = ws.join("my.artifacts");
         std::fs::create_dir_all(&artifact_dir).unwrap();
@@ -547,7 +541,6 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
         )
         .unwrap();
 
-        // Both the artifact directory and the hardlink outside it are masked!
         assert!(
             masked
                 .iter()
@@ -560,14 +553,12 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
         );
     }
 
-    // Case D: Non-existent .git and .env are protected with placeholders in RW mode
     {
         let fresh_ws = tempfile::tempdir().unwrap();
         let mut guard = PlaceholderGuard::new();
         let (masked, _) =
             collect_masked_paths(fresh_ws.path(), &[], &[], false, false, &mut guard).unwrap();
 
-        // .git (dir) and .env (file) were created as placeholders and masked!
         assert!(fresh_ws.path().join(".git").is_dir());
         assert!(fresh_ws.path().join(".env").is_file());
         assert!(
@@ -583,12 +574,10 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
 
         drop(guard);
 
-        // Cleaned up after drop
         assert!(!fresh_ws.path().join(".git").exists());
         assert!(!fresh_ws.path().join(".env").exists());
     }
 
-    // Case E: When unmask_git is true, .git is left unmasked while .env remains protected
     {
         let git_ws = tempfile::tempdir().unwrap();
         let dot_git = git_ws.path().join(".git");
@@ -599,13 +588,11 @@ fn test_collect_masked_paths_masks_deep_env_and_nonexistent_placeholders_and_har
         let (masked, _) =
             collect_masked_paths(git_ws.path(), &[], &[], false, true, &mut guard).unwrap();
 
-        // .git is NOT masked
         assert!(
             !masked
                 .iter()
                 .any(|(p, _)| p == Path::new("/workspace/.git"))
         );
-        // .env is STILL masked
         assert!(
             masked
                 .iter()
@@ -621,7 +608,6 @@ fn test_mount_capabilities_rejects_deep_nested_hardlinks() {
     let config_file = ws.join("config.toml");
     std::fs::write(&config_file, "super_api_key").unwrap();
 
-    // Collect protected inodes for the workspace
     let mut guard = PlaceholderGuard::new();
     let (_, protected_inodes) = collect_masked_paths(
         ws,
@@ -633,7 +619,6 @@ fn test_mount_capabilities_rejects_deep_nested_hardlinks() {
     )
     .unwrap();
 
-    // Create an external capability directory with a deeply nested hardlink to config.toml
     let cap_dir = tempfile::tempdir().unwrap();
     let nested_dir = cap_dir.path().join("sub1").join("sub2");
     std::fs::create_dir_all(&nested_dir).unwrap();
@@ -854,7 +839,6 @@ fn test_external_protected_directory_descendant_hardlinks_are_masked() {
     let (masked, inodes) =
         collect_masked_paths(ws, &protected_paths, &[], false, false, &mut guard).unwrap();
 
-    // The secret files inside external directory MUST be collected into protected_inodes
     let secret_meta1 = std::fs::symlink_metadata(&secret_file).unwrap();
     let secret_meta2 = std::fs::symlink_metadata(&nested_secret_file).unwrap();
 
@@ -867,7 +851,6 @@ fn test_external_protected_directory_descendant_hardlinks_are_masked() {
         "nested descendant file inside external protected directory must be tracked in protected_inodes"
     );
 
-    // Both hardlink aliases inside workspace MUST be masked!
     assert!(
         masked
             .iter()
@@ -900,7 +883,6 @@ fn test_external_directory_matching_heuristic_name_scans_descendants_when_not_in
     std::fs::hard_link(&secret, &ws_link).unwrap();
 
     let protected_paths = vec![custom_workspaces.clone()];
-    // NOT in opaque_runtime_roots
     let opaque_runtime_roots = vec![];
 
     let mut guard = PlaceholderGuard::new();
@@ -951,6 +933,7 @@ fn test_task_tmp_disk_dir_and_optional_resource_limits() {
         .get_args()
         .map(|arg| arg.to_string_lossy().to_string())
         .collect::<Vec<_>>();
+
     assert!(
         args.windows(4)
             .any(|args| args == ["--size", "1048576", "--tmpfs", "/tmp"])
@@ -1089,23 +1072,19 @@ fn test_configure_limits_and_entrypoint_env() {
         .map(|s| s.to_string_lossy().to_string())
         .collect::<Vec<_>>();
 
-    // Custom variable should be set
     let custom_idx = args.iter().position(|a| a == "CUSTOM_VAR").unwrap();
     assert_eq!(args[custom_idx - 1], "--setenv");
     assert_eq!(args[custom_idx + 1], "my_value");
 
-    // Sensitive variable must be filtered out
     assert!(!args.contains(&"OPENAI_API_KEY".to_string()));
     assert!(!args.contains(&"leak_secret".to_string()));
 
-    // PATH should have rust prepended
     let path_idx = args.iter().position(|a| a == "PATH").unwrap();
     assert_eq!(
         args[path_idx + 1],
         "/opt/orbit-rust/bin:/custom/bin:/usr/bin"
     );
 
-    // Host CARGO_HOME and RUSTUP_HOME should be remapped to container home
     let cargo_idx = args.iter().position(|a| a == "CARGO_HOME").unwrap();
     assert_eq!(args[cargo_idx + 1], "/tmp/home/.cargo");
 
@@ -1126,7 +1105,6 @@ fn test_resolve_container_cwd_with_symlink_mounts() {
     let symlink_cache = temp.path().join("symlink_cache");
     std::os::unix::fs::symlink(&real_cache, &symlink_cache).unwrap();
 
-    // Mount configured using symlink source
     let mounts = vec![MountSpec::read_only(&symlink_cache, "/opt/cache")];
 
     let resolved = resolve_container_cwd(&ws, &mounts, Some(&real_cache_canon.join("sub")));
@@ -1319,14 +1297,12 @@ fn test_system_rust_toolchain_in_usr_is_not_rejected_as_reserved() {
     };
     let policy = EffectivePolicy::new(base);
 
-    // Ordinary mount source rejects /usr as reserved system path
     let err = validate_mount_source(Path::new("/usr"), &policy).unwrap_err();
     assert!(
         err.to_string().contains("is a reserved system path"),
         "expected reserved system path error for /usr mount source, got: {err}"
     );
 
-    // Toolchain source allows /usr (does not reject as reserved system path)
     let toolchain_res = validate_toolchain_source(Path::new("/usr"), &policy);
     assert!(
         toolchain_res.is_ok(),

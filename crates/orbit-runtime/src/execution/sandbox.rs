@@ -1,8 +1,6 @@
 mod isolation;
 
 pub use isolation::browser_reader_command;
-use isolation::{configure_isolation, mount_system_paths, seccomp_filter};
-
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     io::{Read, Write},
@@ -11,8 +9,6 @@ use std::{
     time::Duration,
 };
 
-use crate::error::{RuntimeError, failed};
-use crate::verification::{FileFingerprint, VerificationEvidence, WorkspaceFingerprint};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -22,10 +18,13 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+use self::isolation::{configure_isolation, mount_system_paths, seccomp_filter};
+use crate::error::{RuntimeError, failed};
+use crate::verification::{FileFingerprint, VerificationEvidence, WorkspaceFingerprint};
 use crate::{
     execution::process::{
         CommandResult, MAX_OUTPUT, MIB, MountAccess, MountSpec, OutputLog, ProcessLimits,
-        ProcessSpec, TMP_SIZE_BYTES,
+        ProcessSpec, TMP_SIZE_BYTES, system_executable,
     },
     filesystem::inodes::{collect_dir_inodes, collect_opaque_inodes_for_dev},
     filesystem::workspace::{Workspace, WorkspaceError},
@@ -128,6 +127,7 @@ impl Snapshot {
             bytes: 0,
             visited: 0,
         };
+
         snapshot.copy_directory(&workspace, Path::new(""), &cancellation, 0)?;
         snapshot.fingerprint.directories.sort();
         snapshot.fingerprint.skipped_entries = snapshot.skipped;
@@ -166,6 +166,7 @@ impl Snapshot {
                     self.limits.max_scan_entries
                 )));
             }
+
             if token.is_cancelled() {
                 return Err(RuntimeError::Cancelled);
             }
@@ -311,11 +312,11 @@ pub struct BwrapSandboxBackend {
 
 impl BwrapSandboxBackend {
     pub fn new() -> Result<Self, RuntimeError> {
-        let bwrap_path = find_executable("bwrap").ok_or_else(|| {
+        let bwrap_path = system_executable("bwrap").ok_or_else(|| {
             failed("sandbox unavailable: install Bubblewrap at /usr/bin/bwrap; refusing unsandboxed execution")
         })?;
 
-        let prlimit_path = find_executable("prlimit").ok_or_else(|| {
+        let prlimit_path = system_executable("prlimit").ok_or_else(|| {
             failed("sandbox unavailable: /usr/bin/prlimit is required for resource limits")
         })?;
 
@@ -373,6 +374,7 @@ impl Drop for PlaceholderGuard {
                         let _ = std::fs::remove_file(path);
                     }
                 }
+
                 Placeholder::Dir { path, dev, ino } => {
                     let matches = std::fs::symlink_metadata(path).is_ok_and(|meta| {
                         meta.dev() == *dev && meta.ino() == *ino && meta.is_dir()
@@ -476,6 +478,7 @@ impl BwrapSandboxBackend {
                     .arg(Path::new("/workspace").join(rel));
             }
         }
+
         mount_scratch_and_tmp(
             &mut command,
             spec.scratch.as_deref(),
@@ -779,6 +782,7 @@ fn validate_inode_against_protected(
                             curr.display()
                         ))
                     })?;
+
                     visited += 1;
 
                     if let Some(limit) = max_scan_entries.filter(|&limit| visited > limit) {
@@ -848,12 +852,14 @@ fn mount_capabilities(
                 canonical.display()
             )));
         }
+
         if ws_target.starts_with(canonical) {
             return Err(failed(format!(
                 "capability target '{}' is an ancestor of workspace",
                 canonical.display()
             )));
         }
+
         if canonical.starts_with(ws_target) {
             return Err(failed(format!(
                 "capability target '{}' is inside workspace",
@@ -973,12 +979,14 @@ fn apply_git_mounts(
                         && directory.starts_with(g.path.canonical())
                         && if read_only_workspace { g.read } else { g.write }
                 });
+
         if !allowed {
             return Err(failed(format!(
                 "external Git metadata '{}' requires request_capability",
                 directory.display()
             )));
         }
+
         validate_mount_source(directory, policy)?;
         if protected_paths
             .iter()
@@ -988,6 +996,7 @@ fn apply_git_mounts(
                 "external Git metadata conflicts with protected path",
             ));
         }
+
         validate_inode_against_protected(
             directory,
             protected_inodes,
@@ -1016,6 +1025,7 @@ fn apply_git_mounts(
                 "Git configuration or hooks conflict with a protected path",
             ));
         }
+
         if !canonical.starts_with(ws_target) {
             let needs_write = allow_config_write && !read_only_workspace;
             let allowed = policy
@@ -1038,13 +1048,16 @@ fn apply_git_mounts(
                             && canonical.starts_with(g.path.canonical())
                             && if needs_write { g.write } else { g.read }
                     });
+
             if !allowed {
                 return Err(failed(
                     "external Git configuration or hooks require request_capability",
                 ));
             }
+
             validate_mount_source(&canonical, policy)?;
         }
+
         validate_inode_against_protected(
             &canonical,
             protected_inodes,
@@ -1097,6 +1110,7 @@ fn apply_git_mounts(
                         .open(&source)
                         .map_err(failed)?;
                 }
+
                 let meta = std::fs::symlink_metadata(&source).map_err(failed)?;
                 placeholders.push(if directory {
                     Placeholder::Dir {
@@ -1112,6 +1126,7 @@ fn apply_git_mounts(
                     }
                 });
             }
+
             command.arg("--ro-bind").arg(&source).arg(target);
             let meta = std::fs::symlink_metadata(&source).map_err(failed)?;
             protected_inodes.insert((meta.dev(), meta.ino()));
@@ -1178,6 +1193,7 @@ fn collect_masked_paths_with_templates(
         } else {
             &[".git", ".env", ".env.local"][..]
         };
+
         for name in names {
             let candidate = ws_target.join(name);
 
@@ -1256,6 +1272,7 @@ fn collect_masked_paths_with_templates(
                                         protected.display()
                                     ))
                                 })?;
+
                                 placeholder_guard.push(Placeholder::Dir {
                                     path: protected.clone(),
                                     dev: meta.dev(),
@@ -1267,6 +1284,7 @@ fn collect_masked_paths_with_templates(
                                     masked.push((container_path, true));
                                 }
                             }
+
                             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                                 let meta = std::fs::symlink_metadata(protected).map_err(|e| {
                                     failed(format!(
@@ -1274,12 +1292,14 @@ fn collect_masked_paths_with_templates(
                                         protected.display()
                                     ))
                                 })?;
+
                                 protected_inodes.insert((meta.dev(), meta.ino()));
 
                                 if seen.insert(container_path.clone()) {
                                     masked.push((container_path, meta.is_dir()));
                                 }
                             }
+
                             Err(e) => {
                                 return Err(failed(format!(
                                     "failed to create placeholder directory for protected path '{}': {e}",
@@ -1297,6 +1317,7 @@ fn collect_masked_paths_with_templates(
                                         protected.display()
                                     ))
                                 })?;
+
                                 placeholder_guard.push(Placeholder::File {
                                     path: protected.clone(),
                                     dev: meta.dev(),
@@ -1308,6 +1329,7 @@ fn collect_masked_paths_with_templates(
                                     masked.push((container_path, false));
                                 }
                             }
+
                             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                                 let meta = std::fs::symlink_metadata(protected).map_err(|e| {
                                     failed(format!(
@@ -1315,12 +1337,14 @@ fn collect_masked_paths_with_templates(
                                         protected.display()
                                     ))
                                 })?;
+
                                 protected_inodes.insert((meta.dev(), meta.ino()));
 
                                 if seen.insert(container_path.clone()) {
                                     masked.push((container_path, meta.is_dir()));
                                 }
                             }
+
                             Err(e) => {
                                 return Err(failed(format!(
                                     "failed to create placeholder file for protected path '{}': {e}",
@@ -1357,6 +1381,7 @@ fn collect_masked_paths_with_templates(
                 "workspace directory count exceeds {MAX_SCAN_DIRS} while scanning protected paths; refusing to start sandbox"
             )));
         }
+
         if depth > MAX_DEPTH {
             return Err(failed(format!(
                 "workspace directory depth exceeds {MAX_DEPTH} at '{}'; refusing to start sandbox",
@@ -1488,7 +1513,7 @@ fn collect_masked_paths_with_templates(
             protected_inodes.insert((metadata.dev(), metadata.ino()));
         }
     }
-    // Mask all files matching protected_inodes (including discovered aliases).
+
     for entry in files_to_check {
         if protected_inodes.contains(&(entry.dev, entry.ino))
             && !(read_templates.contains(&ws_target.join(&entry.relative))
@@ -1502,7 +1527,6 @@ fn collect_masked_paths_with_templates(
         }
     }
 
-    // Filter so that if a parent directory is already masked with tmpfs, child paths are omitted
     let mut filtered = Vec::new();
     masked.sort_by_key(|(p, _)| p.components().count());
 
@@ -1700,6 +1724,7 @@ fn validate_toolchain_source(
                 Some(10_000),
             )?;
         }
+
         let rustlib = canonical.join("lib/rustlib");
         if rustlib.is_dir() {
             validate_inode_against_protected(
@@ -1797,6 +1822,7 @@ pub fn resolve_container_cwd(
             return Path::new("/workspace").join(rel);
         }
     }
+
     if let Some(rel) = cwd_canon
         .as_ref()
         .and_then(|cc| cc.strip_prefix(ws_target).ok())
@@ -1816,6 +1842,7 @@ pub fn resolve_container_cwd(
             Path::new("/workspace").join(rel)
         };
     }
+
     if let Some(rel) = ws_canon
         .as_ref()
         .and_then(|wc| cwd_canon.as_ref().and_then(|cc| cc.strip_prefix(wc).ok()))
@@ -1839,6 +1866,7 @@ pub fn resolve_container_cwd(
                 target.join(rel)
             };
         }
+
         if let Some(rel) = mount_source_canon
             .as_ref()
             .and_then(|sc| cwd.strip_prefix(sc).ok())
@@ -1849,6 +1877,7 @@ pub fn resolve_container_cwd(
                 target.join(rel)
             };
         }
+
         if let Some(rel) = cwd_canon
             .as_ref()
             .and_then(|cc| cc.strip_prefix(&mount.source).ok())
@@ -1859,6 +1888,7 @@ pub fn resolve_container_cwd(
                 target.join(rel)
             };
         }
+
         if let Some(rel) = mount_source_canon
             .as_ref()
             .and_then(|sc| cwd_canon.as_ref().and_then(|cc| cc.strip_prefix(sc).ok()))
@@ -1869,6 +1899,7 @@ pub fn resolve_container_cwd(
                 target.join(rel)
             };
         }
+
         if cwd.starts_with(&target) {
             return cwd.to_path_buf();
         }
@@ -1917,6 +1948,7 @@ fn mount_scratch_and_tmp(
                     .create(&home)
                     .map_err(failed)?;
             }
+
             Err(error) => return Err(failed(error)),
         }
 
@@ -1942,6 +1974,7 @@ fn mount_scratch_and_tmp(
         } else {
             max_tmp_bytes
         };
+
         command.args(["--size", &size.to_string(), "--tmpfs", "/tmp"]);
 
         if scratch.is_none() {
@@ -1965,6 +1998,7 @@ fn is_valid_container_path(
     {
         return true;
     }
+
     for m in mounts {
         if m.normalized_target()
             .map(|target| p == target || p.starts_with(&target))
@@ -1973,6 +2007,7 @@ fn is_valid_container_path(
             return true;
         }
     }
+
     if let Some(policy) = policy {
         for cap in &policy.persistent_read {
             let c = cap.canonical();
@@ -1980,12 +2015,14 @@ fn is_valid_container_path(
                 return true;
             }
         }
+
         for cap in &policy.persistent_read_write {
             let c = cap.canonical();
             if p == c || p.starts_with(c) {
                 return true;
             }
         }
+
         if let Ok(store) = policy.session_grants.read() {
             for grant in store.grants() {
                 if grant.environment.is_local() {
@@ -1997,6 +2034,7 @@ fn is_valid_container_path(
             }
         }
     }
+
     false
 }
 
@@ -2128,6 +2166,7 @@ fn configure_limits_and_entrypoint(
         ) {
             continue;
         }
+
         if !crate::execution::environment::is_sensitive_key(k) {
             env_map.insert(k.clone(), v.clone());
         }
@@ -2179,21 +2218,6 @@ fn configure_limits_and_entrypoint(
     } else {
         command.arg("/orbit-command.sh");
     }
-}
-
-fn find_executable(name: &str) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-
-    ["/usr/bin", "/bin"]
-        .into_iter()
-        .map(|directory| Path::new(directory).join(name))
-        .filter_map(|path| path.canonicalize().ok())
-        .find(|path| {
-            path.starts_with("/usr/bin")
-                && path.metadata().is_ok_and(|metadata| {
-                    metadata.is_file() && metadata.permissions().mode() & 0o022 == 0
-                })
-        })
 }
 
 struct Captured {

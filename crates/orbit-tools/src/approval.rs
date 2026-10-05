@@ -1,4 +1,9 @@
+mod commands;
+
+pub(crate) use commands::{local_workspace_command, pinned_local_command};
+
 use std::path::Path;
+
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone, Debug)]
@@ -48,6 +53,7 @@ impl CommandPreview {
             self.external_capabilities
         )
     }
+
     /// Bind reuse to the exact approved request and repository configuration.
     pub fn git_grant_key(&self, workspace: &Path) -> Option<String> {
         use std::io::Read;
@@ -84,6 +90,7 @@ impl CommandPreview {
                 }
             }
         }
+
         Some(format!(
             "{}:{:?}:{}:{:?}:{}:{:?}:{}",
             repo.git_dir.display(),
@@ -112,6 +119,7 @@ pub fn file_grant_key(path: &str, workspace: &Path) -> Option<String> {
             .canonicalize()
             .ok()?
             .join(requested.file_name()?),
+
         Err(_) => return None,
     };
     Some(canonical.to_str()?.to_owned())
@@ -124,9 +132,8 @@ pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
     file_grant_key(path, &root).is_some_and(|path| Path::new(&path).starts_with(root))
 }
 
-/// Auto mode permits read-only, offline commands and workspace-local file
-/// edits. Shell commands with network, workspace writes, or external mounts
-/// require approval because their effects cannot be inferred from the text.
+/// Auto permits scoped workspace operations and offline read-only commands.
+/// Network access, external writes and other shell scripts require approval.
 pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
     match preview {
         ApprovalPreview::Command(command) => {
@@ -139,11 +146,15 @@ pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
             }) {
                 return false;
             }
+
             !command.network_allowed
-                && command.workspace_access == CommandWorkspaceAccess::Read
                 && !command.external_write
-                && command.external_capabilities.is_empty()
+                && ((command.workspace_access == CommandWorkspaceAccess::Read
+                    && command.external_capabilities.is_empty())
+                    || local_workspace_command(&command.command, command.cwd.as_deref(), workspace)
+                        .is_some())
         }
+
         ApprovalPreview::Write(write) => workspace_local_file(&write.path, workspace),
         ApprovalPreview::Delete(delete) => workspace_local_file(&delete.path, workspace),
         ApprovalPreview::Mcp(_) | ApprovalPreview::Capability(_) => false,
@@ -218,6 +229,7 @@ mod tests {
             assert!(!workspace_local_file("linked/data.txt", root.path()));
         }
     }
+
     #[test]
     fn git_query_does_not_override_network_or_filesystem_permissions() {
         let root = tempfile::tempdir().unwrap();
@@ -231,6 +243,7 @@ mod tests {
             external_capabilities: Vec::new(),
             git: orbit_runtime::git::GitCommandAnalysis::parse("git status"),
         };
+
         assert!(auto_allows(
             &ApprovalPreview::Command(command.clone()),
             root.path()
@@ -253,6 +266,44 @@ mod tests {
             root.path()
         ));
     }
+
+    #[test]
+    fn auto_directory_creation_checks_targets_and_keeps_other_permissions() {
+        let root = tempfile::tempdir().unwrap();
+        let mut command = CommandPreview {
+            command: "mkdir -p demo/nested".into(),
+            cwd: None,
+            timeout_seconds: 30,
+            workspace_access: CommandWorkspaceAccess::ReadWrite,
+            network_allowed: false,
+            external_capabilities: Vec::new(),
+            external_write: false,
+            git: None,
+        };
+        let allowed = |command: &CommandPreview| {
+            auto_allows(&ApprovalPreview::Command(command.clone()), root.path())
+        };
+        assert!(allowed(&command));
+        command
+            .external_capabilities
+            .push("cache (ro, dependency cache)".into());
+        assert!(allowed(&command));
+        command.external_write = true;
+        assert!(!allowed(&command));
+        command.external_write = false;
+        command.network_allowed = true;
+        assert!(!allowed(&command));
+        command.network_allowed = false;
+        for script in [
+            "mkdir -p demo && touch file",
+            "mkdir -p /tmp/outside",
+            "cargo build",
+        ] {
+            command.command = script.into();
+            assert!(!allowed(&command), "{script}");
+        }
+    }
+
     #[test]
     fn final_link_target_controls_local_write_and_grant_reuse() {
         let workspace = tempfile::tempdir().unwrap();
