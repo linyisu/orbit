@@ -8,7 +8,65 @@ use sha2::{Digest, Sha256};
 
 use crate::store::Store;
 
+const ARCHIVE_LIST_LIMIT: usize = 20;
+
 impl Store {
+    /// Discover the newest snapshots in this conversation without loading
+    /// message bodies. IDs from another conversation are never listed.
+    pub async fn list_context_archives(
+        &self,
+        session_id: &str,
+        before_archive: Option<i64>,
+    ) -> Result<Value> {
+        ensure!(
+            before_archive.is_none_or(|id| id > 0),
+            "invalid history archive cursor"
+        );
+        let session_id = session_id.to_owned();
+
+        self.access(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT a.id,a.created_at,
+                        (SELECT count(*) FROM context_archive_messages m WHERE m.archive_id=a.id)
+                 FROM context_archives a
+                 WHERE a.session_id=?1 AND (?2 IS NULL OR a.id<?2)
+                 ORDER BY a.id DESC LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(
+                params![session_id, before_archive, (ARCHIVE_LIST_LIMIT + 1) as i64],
+                |row| Ok(json!({
+                    "archive_id": row.get::<_, i64>(0)?,
+                    "created_at": row.get::<_, i64>(1)?,
+                    "message_count": row.get::<_, i64>(2)?,
+                })),
+            )?;
+            let mut archives = rows.collect::<Result<Vec<_>, _>>()?;
+            let has_more = archives.len() > ARCHIVE_LIST_LIMIT;
+            archives.truncate(ARCHIVE_LIST_LIMIT);
+            let next = if has_more {
+                archives.last().map(|archive| archive["archive_id"].clone())
+            } else {
+                None
+            };
+            let message = if archives.is_empty() {
+                if before_archive.is_some() {
+                    "No older archives in this conversation."
+                } else {
+                    "No pre-compaction archives exist in this conversation yet. Read_history only reads saved compaction snapshots; do not guess archive IDs."
+                }
+            } else {
+                "Use an archive_id from this list to search or read saved original messages."
+            };
+
+            Ok(json!({
+                "source_kind": "untrusted_session_history",
+                "archives": archives,
+                "next_before_archive": next,
+                "message": message,
+            }))
+        }).await
+    }
+
     /// Restore the complete snapshot for a retry of a previously incomplete
     /// compaction. The archive ID alone never grants cross-session access.
     pub async fn load_context_archive(
@@ -26,6 +84,7 @@ impl Store {
                 params![archive_id, session_id],
                 |row| row.get(0),
             )?;
+
             ensure!(exists, "history archive not found in this session");
 
             let mut stmt = conn.prepare(
@@ -119,7 +178,7 @@ impl Store {
 
         self.access(move |conn| {
             let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM context_archives WHERE id=?1 AND session_id=?2)", params![archive_id,session], |r| r.get(0))?;
-            ensure!(exists, "history archive not found in this session");
+            ensure!(exists, "history archive not found in this session; call read_history with {{}} to discover available archive IDs instead of guessing");
 
             // SQL performs slicing: do not load the entire snapshot to show a
             // few hits. Query previews begin near the first matching text.
@@ -163,6 +222,94 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn archive_listing_is_bounded_newest_first_and_session_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
+        let owner = store
+            .create(dir.path().display().to_string(), "model".into(), false)
+            .await
+            .unwrap();
+        let foreign = store
+            .create(dir.path().display().to_string(), "model".into(), false)
+            .await
+            .unwrap();
+
+        let empty = store.list_context_archives(owner.id(), None).await.unwrap();
+        assert_eq!(empty["archives"], json!([]));
+        assert!(
+            empty["message"]
+                .as_str()
+                .unwrap()
+                .contains("No pre-compaction archives")
+        );
+
+        let mut ids = Vec::new();
+        for index in 0..ARCHIVE_LIST_LIMIT + 3 {
+            ids.push(
+                store
+                    .archive_context(
+                        owner.id(),
+                        &[
+                            ChatMessage::user(format!("private source body {index}")),
+                            ChatMessage::assistant("answer"),
+                        ],
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        let foreign_id = store
+            .archive_context(foreign.id(), &[ChatMessage::user("foreign body")])
+            .await
+            .unwrap();
+        let first = store.list_context_archives(owner.id(), None).await.unwrap();
+        assert_eq!(
+            first["archives"].as_array().unwrap().len(),
+            ARCHIVE_LIST_LIMIT
+        );
+        assert_eq!(first["archives"][0]["archive_id"], *ids.last().unwrap());
+        assert_eq!(first["archives"][0]["message_count"], 2);
+        assert!(first["archives"][0]["created_at"].as_i64().is_some());
+        assert!(!first.to_string().contains("private source body"));
+
+        let second = store
+            .list_context_archives(owner.id(), first["next_before_archive"].as_i64())
+            .await
+            .unwrap();
+        assert_eq!(second["archives"].as_array().unwrap().len(), 3);
+        assert!(second["next_before_archive"].is_null());
+        let listed: Vec<_> = [first, second]
+            .into_iter()
+            .flat_map(|page| {
+                page["archives"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|archive| archive["archive_id"].as_i64().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        ids.reverse();
+        assert_eq!(listed, ids);
+        assert!(!listed.contains(&foreign_id));
+        assert_eq!(
+            store
+                .list_context_archives(foreign.id(), None)
+                .await
+                .unwrap()["archives"][0]["archive_id"],
+            foreign_id
+        );
+        assert!(
+            store
+                .list_context_archives(owner.id(), Some(0))
+                .await
+                .is_err()
+        );
+    }
 
     #[tokio::test]
     async fn archive_is_durable_paged_and_session_scoped() {
