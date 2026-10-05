@@ -1228,6 +1228,7 @@ fn remote_images_keep_the_source_or_outer_link_on_every_picture_row() {
             width: request.width,
             height: request.height,
             large: false,
+            view: None,
         };
         let shared = context.shared.as_ref().unwrap();
         let mut picture = decode::Decoder::default()
@@ -1262,6 +1263,8 @@ fn remote_images_keep_the_source_or_outer_link_on_every_picture_row() {
 
 #[test]
 fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints() {
+    use crate::tui::app::{ToolRow, ToolStatus};
+
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image.png");
     image::RgbaImage::from_pixel(40, 60, image::Rgba([230, 100, 50, 255]))
@@ -1269,24 +1272,46 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
         .unwrap();
     let destination = "https://orbit.example/document";
 
-    for (source, linked) in [
-        (format!("![示意]({})", path.display()), false),
-        (format!("<img src='{}' alt='示意'>", path.display()), false),
+    let image = format!("![示意]({})", path.display());
+    for (item, linked, expanded) in [
+        (TranscriptItem::Assistant(image.clone()), false, false),
         (
-            format!("[![示意]({})]({destination})", path.display()),
-            true,
+            TranscriptItem::Assistant(format!("<img src='{}' alt='示意'>", path.display())),
+            false,
+            false,
         ),
         (
-            format!(
+            TranscriptItem::Assistant(format!("[![示意]({})]({destination})", path.display())),
+            true,
+            false,
+        ),
+        (
+            TranscriptItem::Assistant(format!(
                 "<a href='{destination}'><img src='{}' alt='示意'></a>",
                 path.display()
-            ),
+            )),
+            true,
+            false,
+        ),
+        (TranscriptItem::Thinking(image.into()), false, true),
+        (
+            TranscriptItem::Tool(ToolRow {
+                id: "read-image".into(),
+                name: "read_image".into(),
+                arguments: serde_json::json!({"path": path}).to_string(),
+                output: serde_json::json!({"path": path}).to_string(),
+                status: ToolStatus::Finished,
+            }),
+            false,
             true,
         ),
     ] {
         let mut state = UiState::new("mock");
         state.media = context(ProtocolType::Kitty);
-        state.transcript.push(TranscriptItem::Assistant(source));
+        state.transcript.push(item);
+        if expanded {
+            state.expanded.insert(0);
+        }
         state.input.insert("未发送的草稿");
         let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1358,7 +1383,24 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
         assert!(crate::tui::toggle_transcript_at(&mut state, clicked));
         assert!(!state.selection.dragging());
         assert!(!state.selection.active());
-        assert!(state.media_preview.is_none());
+        assert!(state.media_preview.is_some());
+        draw_ui(&mut state, &mut terminal);
+        assert!(state.ime_cursor.is_none());
+        assert_eq!(
+            state
+                .media_preview
+                .as_mut()
+                .unwrap()
+                .handle(&Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))),
+            (true, true)
+        );
+        state.media_preview = None;
+        draw_ui(&mut state, &mut terminal);
+        crate::tui::render::handle_link_hover(
+            &mut state,
+            &mouse(MouseEventKind::Moved, point.0, point.1),
+        );
+        assert_eq!(state.link_hovered, linked.then_some(point));
         assert_eq!(state.input.text, "未发送的草稿");
         clear_layers();
     }

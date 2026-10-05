@@ -12,7 +12,7 @@ use ratex_layout::LayoutOptions;
 use ratex_types::{color::Color, math_style::MathStyle};
 use resvg::{tiny_skia, usvg};
 
-use super::{Key, Network, Prepared, Source};
+use super::{Key, Network, Prepared, Source, View};
 
 const MAX_SOURCE_BYTES: usize = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
 const MAX_REMOTE_CACHE_BYTES: usize = 2 * MAX_SOURCE_BYTES;
@@ -35,6 +35,7 @@ impl Decoder {
         let max_h =
             (u32::from(key.height) * u32::from(cell.height)).clamp(1, MAX_RENDER_EDGE_PIXELS);
         let mut baseline = None;
+        let mut pan_extent = (0.0, 0.0);
         let image = match &key.source {
             Source::Image(source) => {
                 let bytes = if super::is_remote(source) {
@@ -87,7 +88,16 @@ impl Decoder {
                         self.fonts = Some(Arc::new(db));
                     }
 
-                    raster_svg(&bytes, max_w, max_h, self.fonts.clone(), key.large)?
+                    let (image, overflow) = raster_svg_view(
+                        &bytes,
+                        max_w,
+                        max_h,
+                        self.fonts.clone(),
+                        key.large,
+                        key.view,
+                    )?;
+                    pan_extent = overflow;
+                    image
                 } else {
                     let mut reader =
                         ImageReader::new(Cursor::new(bytes.as_slice())).with_guessed_format()?;
@@ -100,7 +110,18 @@ impl Decoder {
                     if u64::from(image.width()) * u64::from(image.height()) > MAX_SOURCE_PIXELS {
                         bail!("图片像素尺寸过大");
                     }
-                    image.resize(max_w, max_h, image::imageops::FilterType::Triangle)
+                    if let Some(view) = key.view {
+                        let geometry = view.geometry(
+                            image.width() as f32,
+                            image.height() as f32,
+                            max_w,
+                            max_h,
+                        );
+                        pan_extent = geometry.overflow;
+                        geometry.crop(image)
+                    } else {
+                        image.resize(max_w, max_h, image::imageops::FilterType::Triangle)
+                    }
                 }
             }
 
@@ -128,26 +149,34 @@ impl Decoder {
                     u32::from(cell.height).max(8) * if key.large { 2 } else { 1 },
                     color,
                 )?;
-                let tree = usvg::Tree::from_str(&svg, &usvg::Options::default())?;
-                let image = raster_svg(
-                    svg.as_bytes(),
-                    max_w,
-                    max_h.saturating_sub(u32::from(cell.height)).max(1),
-                    None,
-                    false,
-                )?;
-                let ratio = image.height() as f64 / f64::from(tree.size().height());
-                let baseline_px = baseline_px * ratio;
-                let cell_h = u32::from(cell.height);
-                let offset = ((f64::from(cell_h) * 0.75
-                    - baseline_px.rem_euclid(f64::from(cell_h)))
-                .rem_euclid(f64::from(cell_h)))
-                .round() as u32;
-                baseline =
-                    Some(((baseline_px + f64::from(offset)) / f64::from(cell_h)).floor() as u16);
-                let mut padded = RgbaImage::new(image.width(), image.height() + offset);
-                image::imageops::overlay(&mut padded, &image.to_rgba8(), 0, i64::from(offset));
-                DynamicImage::ImageRgba8(padded)
+                if let Some(view) = key.view {
+                    let (image, overflow) =
+                        raster_svg_view(svg.as_bytes(), max_w, max_h, None, true, Some(view))?;
+                    pan_extent = overflow;
+                    image
+                } else {
+                    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default())?;
+                    let image = raster_svg(
+                        svg.as_bytes(),
+                        max_w,
+                        max_h.saturating_sub(u32::from(cell.height)).max(1),
+                        None,
+                        false,
+                    )?;
+                    let ratio = image.height() as f64 / f64::from(tree.size().height());
+                    let baseline_px = baseline_px * ratio;
+                    let cell_h = u32::from(cell.height);
+                    let offset = ((f64::from(cell_h) * 0.75
+                        - baseline_px.rem_euclid(f64::from(cell_h)))
+                    .rem_euclid(f64::from(cell_h)))
+                    .round() as u32;
+                    baseline = Some(
+                        ((baseline_px + f64::from(offset)) / f64::from(cell_h)).floor() as u16,
+                    );
+                    let mut padded = RgbaImage::new(image.width(), image.height() + offset);
+                    image::imageops::overlay(&mut padded, &image.to_rgba8(), 0, i64::from(offset));
+                    DynamicImage::ImageRgba8(padded)
+                }
             }
         };
         let size = Size::new(
@@ -160,7 +189,7 @@ impl Decoder {
                 .div_ceil(u32::from(cell.height))
                 .min(u32::from(key.height)) as u16,
         );
-        // Encode both states in the worker. Dragging never decodes, downloads
+        // Encode both states in the worker. Selecting never decodes, downloads
         // or encodes an image on the UI thread, regardless of terminal protocol.
         let mut padded = RgbaImage::new(
             u32::from(size.width) * u32::from(cell.width),
@@ -175,6 +204,10 @@ impl Decoder {
             protocol,
             selected_protocol,
             source: key.source.clone(),
+            pan_extent: (
+                pan_extent.0 / f32::from(cell.width),
+                pan_extent.1 / f32::from(cell.height),
+            ),
             baseline: baseline
                 .unwrap_or(size.height / 2)
                 .min(size.height.saturating_sub(1)),
@@ -287,6 +320,17 @@ pub(super) fn raster_svg(
     fonts: Option<Arc<usvg::fontdb::Database>>,
     upscale: bool,
 ) -> Result<DynamicImage> {
+    raster_svg_view(bytes, max_w, max_h, fonts, upscale, None).map(|(image, _)| image)
+}
+
+fn raster_svg_view(
+    bytes: &[u8],
+    max_w: u32,
+    max_h: u32,
+    fonts: Option<Arc<usvg::fontdb::Database>>,
+    upscale: bool,
+    view: Option<View>,
+) -> Result<(DynamicImage, (f32, f32))> {
     let mut options = usvg::Options::default();
     if let Some(fonts) = fonts {
         options.fontdb = fonts;
@@ -313,16 +357,27 @@ pub(super) fn raster_svg(
     });
     let tree = usvg::Tree::from_data(bytes, &options).context("无法解析 SVG")?;
     let size = tree.size();
-    let scale = (max_w as f32 / size.width()).min(max_h as f32 / size.height());
-    let scale = if upscale { scale } else { scale.min(1.0) };
-    let width = (size.width() * scale).ceil().max(1.0) as u32;
-    let height = (size.height() * scale).ceil().max(1.0) as u32;
+    let (width, height, transform, overflow) = if let Some(view) = view {
+        let geometry = view.geometry(size.width(), size.height(), max_w, max_h);
+        (
+            geometry.width,
+            geometry.height,
+            tiny_skia::Transform::from_scale(geometry.scale, geometry.scale)
+                .post_translate(-geometry.x, -geometry.y),
+            geometry.overflow,
+        )
+    } else {
+        let scale = (max_w as f32 / size.width()).min(max_h as f32 / size.height());
+        let scale = if upscale { scale } else { scale.min(1.0) };
+        (
+            (size.width() * scale).ceil().max(1.0) as u32,
+            (size.height() * scale).ceil().max(1.0) as u32,
+            tiny_skia::Transform::from_scale(scale, scale),
+            (0.0, 0.0),
+        )
+    };
     let mut pixmap = tiny_skia::Pixmap::new(width, height).context("SVG 尺寸过大")?;
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
     // tiny-skia is premultiplied; image/Kitty require straight RGBA.
     let bytes = pixmap
         .pixels()
@@ -332,14 +387,32 @@ pub(super) fn raster_svg(
             [p.red(), p.green(), p.blue(), p.alpha()]
         })
         .collect();
-    Ok(DynamicImage::ImageRgba8(
-        RgbaImage::from_raw(width, height, bytes).context("SVG 像素转换失败")?,
+    Ok((
+        DynamicImage::ImageRgba8(
+            RgbaImage::from_raw(width, height, bytes).context("SVG 像素转换失败")?,
+        ),
+        overflow,
     ))
 }
 
 #[cfg(test)]
 mod selection_tests {
     use super::*;
+
+    #[test]
+    fn svg_view_renders_a_bounded_crop_at_the_requested_pan_and_preserves_alpha() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="50" height="100" fill="red"/><rect x="50" width="50" height="100" fill="blue" fill-opacity="0.5"/></svg>"#;
+        for (pan, expected) in [(-1000, [255, 0, 0, 255]), (1000, [0, 0, 255, 128])] {
+            let view = View {
+                zoom: 800,
+                pan: (pan, 0),
+            };
+            let (image, overflow) = raster_svg_view(svg, 40, 20, None, true, Some(view)).unwrap();
+            assert_eq!((image.width(), image.height()), (40, 20));
+            assert!(overflow.0 > 0.0 && overflow.1 > 0.0);
+            assert_eq!(image.to_rgba8().get_pixel(20, 10).0, expected);
+        }
+    }
 
     #[test]
     fn selection_fills_transparency_and_tints_opaque_pixels_without_changing_geometry() {

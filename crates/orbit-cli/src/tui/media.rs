@@ -5,6 +5,7 @@ mod flow;
 mod preview;
 #[cfg(test)]
 mod tests;
+mod view;
 
 use std::{
     cell::RefCell,
@@ -30,6 +31,7 @@ use ratatui_image::{
 
 pub(super) use flow::{layout, layout_in_cell, requests, requests_in_cell};
 pub(super) use preview::Preview;
+use view::View;
 
 const MAX_CACHE_ENTRIES: usize = 48;
 const WORKER_QUEUE_CAPACITY: usize = 32;
@@ -75,6 +77,7 @@ pub(super) struct Prepared {
     pub source: Source,
     pub size: Size,
     pub baseline: u16,
+    pan_extent: (f32, f32),
     kitty_id: Option<u32>,
     selected_kitty_id: Option<u32>,
 }
@@ -157,6 +160,7 @@ struct Key {
     width: u16,
     height: u16,
     large: bool,
+    view: Option<View>,
 }
 
 enum Value {
@@ -350,7 +354,7 @@ impl Context {
         height: u16,
         large: bool,
     ) -> Option<Arc<Prepared>> {
-        self.lookup(source, width, height, large, true)
+        self.lookup(self.key(source, width, height, large), true)
     }
 
     pub fn cached_picture(
@@ -359,29 +363,33 @@ impl Context {
         width: u16,
         height: u16,
     ) -> Option<Arc<Prepared>> {
-        self.lookup(source, width, height, false, false)
+        self.lookup(self.key(source, width, height, false), false)
     }
 
-    fn lookup(
+    fn preview_picture(
         &self,
         source: &Source,
         width: u16,
         height: u16,
-        large: bool,
-        request: bool,
+        view: View,
     ) -> Option<Arc<Prepared>> {
+        let mut key = self.key(source, width, height, true);
+        key.view = Some(view);
+        self.lookup(key, true)
+    }
+
+    fn lookup(&self, key: Key, request: bool) -> Option<Arc<Prepared>> {
         let shared = self.shared.as_ref()?;
         // Pixel math is illegible in halfblocks. Keep selectable TeX in that case.
-        if matches!(source, Source::Math { .. })
+        if matches!(key.source, Source::Math { .. })
             && shared.picker.protocol_type() == ProtocolType::Halfblocks
         {
             return None;
         }
 
-        if width == 0 || height == 0 {
+        if key.width == 0 || key.height == 0 {
             return None;
         }
-        let key = self.key(source, width, height, large);
         let mut cache = shared.cache.lock().ok()?;
         let touched = shared.clock.fetch_add(1, Ordering::Relaxed);
         if let Some(entry) = cache.get_mut(&key) {
@@ -405,7 +413,7 @@ impl Context {
             cache.remove(&oldest?);
         }
 
-        let remote = matches!(source, Source::Image(url) if is_remote(url));
+        let remote = matches!(&key.source, Source::Image(url) if is_remote(url));
         if shared.requests[usize::from(remote)]
             .try_send(key.clone())
             .is_ok()
@@ -422,16 +430,33 @@ impl Context {
         None
     }
 
+    #[cfg(test)]
     pub fn error(&self, source: &Source, width: u16, height: u16, large: bool) -> Option<String> {
+        self.failure(self.key(source, width, height, large))
+    }
+
+    fn preview_error(
+        &self,
+        source: &Source,
+        width: u16,
+        height: u16,
+        view: View,
+    ) -> Option<String> {
+        let mut key = self.key(source, width, height, true);
+        key.view = Some(view);
+        self.failure(key)
+    }
+
+    fn failure(&self, key: Key) -> Option<String> {
         let shared = self.shared.as_ref()?;
-        if matches!(source, Source::Math { .. })
+        if matches!(key.source, Source::Math { .. })
             && shared.picker.protocol_type() == ProtocolType::Halfblocks
         {
             return Some("当前终端未提供像素图形，正文保留公式源码".into());
         }
 
         let cache = shared.cache.lock().ok()?;
-        match &cache.get(&self.key(source, width, height, large))?.value {
+        match &cache.get(&key)?.value {
             Value::Failed(error) => Some(error.clone()),
             _ => None,
         }
@@ -446,6 +471,7 @@ impl Context {
             width,
             height,
             large,
+            view: None,
         }
     }
 }

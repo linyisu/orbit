@@ -83,6 +83,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor.filter(|_| editing),
         now,
     );
+    if state.media_preview.is_some() {
+        state.ime_cursor = None;
+    }
     if let Some(position) = state.ime_cursor.filter(|p| frame.area().contains(*p)) {
         frame.set_cursor_position(position);
     }

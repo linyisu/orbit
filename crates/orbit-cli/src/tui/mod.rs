@@ -3257,9 +3257,6 @@ fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
         .media_at(state.selection.viewport, offset, point)
     {
         state.selection.clear();
-        if matches!(source, media::Source::Image(_)) {
-            return true;
-        }
         let mut context = state.media.clone();
         if !state.workspace.is_empty() {
             context.workspace = state.workspace.clone().into();
