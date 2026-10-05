@@ -28,8 +28,7 @@ use ratatui_image::{
     sliced::{SlicedImage, SlicedProtocol},
 };
 
-pub(super) use flow::layout;
-pub(super) use flow::requests;
+pub(super) use flow::{layout, layout_in_cell, requests, requests_in_cell};
 pub(super) use preview::Preview;
 
 const MAX_CACHE_ENTRIES: usize = 48;

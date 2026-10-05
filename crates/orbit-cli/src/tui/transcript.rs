@@ -1,13 +1,12 @@
-//! Cache Unicode-aware physical-line layout, and hand only visible lines to
-//! Ratatui. Scrolling never asks a Paragraph to wrap and skip the entire
-//! conversation from its beginning.
+//! Cache physical lines and draw only visible rows; scrolling never rewraps the full history.
+use std::{collections::HashSet, ops::Range};
+
 use ratatui::{
     Frame,
     layout::Rect,
     text::{Line, Span},
     widgets::{Paragraph, Widget},
 };
-use std::{collections::HashSet, ops::Range};
 use unicode_linebreak::{BreakClass, break_property, linebreaks};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -28,6 +27,7 @@ struct Row {
     wrapped: Vec<Line<'static>>,
     ranges: Vec<Range<usize>>,
     links: Vec<super::markdown::LinkTarget>,
+    anchors: Vec<String>,
     html_disclosure: Option<String>,
     decorations: Vec<Decorations>,
     gutter: Option<Gutter>,
@@ -307,7 +307,7 @@ fn wrap_linked_line_with(
 ) -> Vec<super::markdown::LinkedLine> {
     // Mixed media must be wrapped once, after images have their cell sizes.
     // Wrapping here would split formulas and lose their complete target range.
-    if !linked.media.is_empty() {
+    if !linked.media.is_empty() || linked.table.is_some() {
         return vec![linked];
     }
     let original = linked.line.clone();
@@ -355,6 +355,11 @@ fn wrap_linked_line_with(
                 chrome: linked.chrome,
                 folds: linked.folds.clone(),
                 disclosure: linked.disclosure.clone(),
+                anchors: if index == 0 {
+                    linked.anchors.clone()
+                } else {
+                    Vec::new()
+                },
                 media: linked
                     .media
                     .iter()
@@ -420,6 +425,7 @@ impl Entry {
         self.html_toggles = toggles;
         self.media = media;
     }
+
     fn remove_spacing(&mut self) {
         if self.spacing {
             if let Some(row) = self.rows.pop() {
@@ -457,7 +463,9 @@ impl Entry {
         render::sanitize_linked_line(&mut linked);
         let requests = super::media::requests(&linked, width);
         for line in super::media::layout(linked, &self.media, width) {
-            self.push_physical(line, width, requests.clone());
+            let mut requests = requests.clone();
+            requests.extend(line.media_requests.clone());
+            self.push_physical(line, width, requests);
         }
     }
 
@@ -474,6 +482,7 @@ impl Entry {
         {
             return;
         }
+
         if let Some(fold) = &linked.disclosure {
             let open = fold.open ^ self.html_toggles.contains(&fold.id);
             for span in &mut linked.line.spans {
@@ -491,12 +500,14 @@ impl Entry {
                 }
             }
         }
+
         let line = &mut linked.line;
         // Markdown and HTML rules share the body's symmetric margins.
         if super::markdown::expand_rule(line, width) {
             linked.decorations = std::iter::once(0..line.to_string().len()).collect();
             linked.chrome = true;
         }
+
         render::sanitize_line(line);
         let original = line.to_string();
         let gutter = if let Some(column) = linked.graphics.iter().map(|g| g.x).min() {
@@ -519,6 +530,7 @@ impl Entry {
             target.range.start = target.range.start.saturating_sub(removed);
             target.range.end = target.range.end.saturating_sub(removed);
         }
+
         let content_width = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
         let (wrapped, ranges) = wrap_line(line, content_width);
         let decorations = ranges
@@ -534,6 +546,7 @@ impl Entry {
                         excluded.push(start.width()..end.width());
                     }
                 }
+
                 let prefix_width = gutter
                     .as_ref()
                     .map_or(0, |gutter| usize::from(gutter.width));
@@ -549,6 +562,7 @@ impl Entry {
                         excluded.push(prefix_width + start.width()..prefix_width + end.width());
                     }
                 }
+
                 Decorations {
                     ranges: excluded,
                     chrome: linked.chrome,
@@ -562,12 +576,14 @@ impl Entry {
                 .x
                 .saturating_sub(gutter.as_ref().map_or(0, |g| g.width));
         }
+
         self.rows.push(Row {
             gutter,
             line: linked.line,
             wrapped,
             ranges,
             links: linked.links,
+            anchors: linked.anchors,
             html_disclosure: linked.disclosure.map(|fold| fold.id),
             decorations,
             start: self.height,
@@ -597,6 +613,7 @@ impl Entry {
                 self.clear();
                 self.references = definitions;
             }
+
             context
         } else {
             super::markdown::Context::default()
@@ -611,6 +628,7 @@ impl Entry {
         let mut can_commit = true;
 
         while consumed < text.len() {
+
             if code.is_none()
                 && let Some((bytes, lines)) = context.math_block(&text[consumed..])
             {
@@ -624,6 +642,7 @@ impl Entry {
                         width,
                     );
                 }
+
                 index += text[consumed..consumed + bytes].lines().count();
                 consumed += bytes;
                 // Display math is provisional until its terminating newline is
@@ -635,13 +654,16 @@ impl Entry {
                     self.code = code.clone();
                     self.inline = inline.clone();
                 }
+
                 continue;
             }
+
             if code.is_none() && super::markdown::Context::math_candidate(&text[consumed..]) {
                 // An opening delimiter can become display math when later
                 // chunks arrive. Keep its paragraph provisional meanwhile.
                 can_commit = false;
             }
+
             if code.is_none()
                 && let Some(block) = super::markdown::blocks::render(
                     &text[consumed..],
@@ -664,6 +686,7 @@ impl Entry {
                         width,
                     );
                 }
+
                 index += text[consumed..consumed + block.bytes].lines().count();
                 consumed += block.bytes;
                 if can_commit && block.complete && text[..consumed].ends_with('\n') {
@@ -673,8 +696,10 @@ impl Entry {
                     self.code = code.clone();
                     self.inline = inline.clone();
                 }
+
                 continue;
             }
+
             if !thinking
                 && code.is_none()
                 && let Some((bytes, lines)) = context.table(&text[consumed..], width)
@@ -722,8 +747,10 @@ impl Entry {
                 } else {
                     rendered
                 };
+
                 self.push_linked(rendered, width);
             }
+
             index += 1;
             consumed += part.len();
 
@@ -835,6 +862,11 @@ pub(super) struct TranscriptAnchor {
     byte: usize,
 }
 
+pub(super) struct LinkHit<'a> {
+    pub url: &'a str,
+    pub area: Rect,
+}
+
 impl TranscriptLayout {
     pub(super) fn set_media(&mut self, media: super::media::Context) {
         let revision = media.revision();
@@ -842,8 +874,66 @@ impl TranscriptLayout {
             self.entries.clear();
             self.dirty_from = 0;
         }
+
         self.media = media;
         self.media_revision = revision;
+    }
+
+    fn row_at(
+        &self,
+        area: Rect,
+        offset: usize,
+        point: (u16, u16),
+    ) -> Option<(&Entry, &Row, usize)> {
+        if !area.contains(point.into()) {
+            return None;
+        }
+
+        let absolute = offset + usize::from(point.1 - area.y);
+        let entry = self
+            .entries
+            .get(self.entries.partition_point(|entry| entry.end <= absolute))?;
+        let relative = absolute - (entry.end - entry.height);
+        let row = entry.rows.get(
+            entry
+                .rows
+                .partition_point(|row| row.start + row.height <= relative),
+        )?;
+
+        Some((entry, row, relative.checked_sub(row.start)?))
+    }
+
+    /// Recover visible bounds from any slice, even if the picture starts above
+    /// the viewport. Repeated uses of a cached picture retain distinct hit areas.
+    pub(super) fn picture_area_at(
+        &self,
+        area: Rect,
+        offset: usize,
+        point: (u16, u16),
+    ) -> Option<Rect> {
+        let (entry, row, _) = self.row_at(area, offset, point)?;
+        let gutter = row.gutter.as_ref().map_or(0, |gutter| gutter.width);
+        let column = point.0.checked_sub(area.x + gutter)?;
+        let fragment = row
+            .graphics
+            .iter()
+            .find(|f| column >= f.x && column < f.x + f.picture.size.width)?;
+        let top = (entry.end - entry.height + row.start).checked_sub(usize::from(fragment.row))?;
+        let bottom = (top + usize::from(fragment.picture.size.height))
+            .min(offset + usize::from(area.height));
+        let top = top.max(offset);
+        let x = area.x + gutter + fragment.x;
+
+        Some(Rect::new(
+            x,
+            area.y + (top - offset) as u16,
+            fragment
+                .picture
+                .size
+                .width
+                .min(area.right().saturating_sub(x)),
+            (bottom - top) as u16,
+        ))
     }
 
     pub(super) fn media_at(
@@ -855,37 +945,23 @@ impl TranscriptLayout {
         if !self.media.enabled() {
             return None;
         }
-        if !area.contains(point.into()) {
-            return None;
-        }
-        let absolute = offset + usize::from(point.1 - area.y);
-        let entry = self
-            .entries
-            .get(self.entries.partition_point(|e| e.end <= absolute))?;
-        let relative = absolute - (entry.end - entry.height);
-        let row = entry
-            .rows
-            .iter()
-            .find(|r| r.start <= relative && relative < r.start + r.height)?;
+        let (_, row, wrapped) = self.row_at(area, offset, point)?;
         let column = point
             .0
-            .saturating_sub(area.x + row.gutter.as_ref().map_or(0, |g| g.width));
+            .checked_sub(area.x + row.gutter.as_ref().map_or(0, |g| g.width))?;
         row.graphics
             .iter()
             .find(|f| column >= f.x && column < f.x + f.picture.size.width)
             .map(|f| f.picture.source.clone())
             .or_else(|| {
-                let byte = byte_at_column(
-                    &row.line.to_string(),
-                    row.ranges.get(relative - row.start)?,
-                    column,
-                )?;
+                let byte = byte_at_column(&row.line.to_string(), row.ranges.get(wrapped)?, column)?;
                 row.media
                     .iter()
                     .find(|t| t.range.contains(&byte))
                     .map(|t| t.source.clone())
             })
     }
+
     pub(super) fn html_disclosure_at(
         &self,
         area: Rect,
@@ -919,6 +995,7 @@ impl TranscriptLayout {
         }
         self.reset_rows_from(index);
     }
+
     pub(super) fn anchor_at(&self, offset: usize) -> Option<TranscriptAnchor> {
         let entry_index = self.entries.partition_point(|entry| entry.end <= offset);
         let entry = self.entries.get(entry_index)?;
@@ -947,6 +1024,7 @@ impl TranscriptLayout {
         {
             return self.item_offset(group.start);
         }
+
         let row = entry.rows.get(anchor.row)?;
         let wrapped = row
             .ranges
@@ -973,6 +1051,7 @@ impl TranscriptLayout {
             .get(index)
             .and_then(|entry| entry.tool_group.as_ref())
             .map_or(index, |group| group.start);
+
         self.entries.truncate(index);
         self.invalidate_from(index);
     }
@@ -1016,6 +1095,7 @@ impl TranscriptLayout {
             {
                 self.invalidate_from(index);
             }
+
             self.expanded_groups = expanded_groups.clone();
         }
 
@@ -1074,6 +1154,7 @@ impl TranscriptLayout {
                     {
                         lines.pop();
                     }
+
                     for line in lines {
                         if !line.line.to_string().trim().is_empty() {
                             entry.disclosures.push(entry.rows.len());
@@ -1081,10 +1162,12 @@ impl TranscriptLayout {
                         entry.push_linked(line, width);
                     }
                 }
+
                 TranscriptItem::User(text) => {
                     entry.clear();
                     entry.user(text, width);
                 }
+
                 TranscriptItem::Tool(row) => {
                     entry.clear();
                     let is_expanded = expanded.contains(&item_index);
@@ -1098,6 +1181,7 @@ impl TranscriptLayout {
                             item_index == group.start
                         };
                     }
+
                     framed = width >= 10 && if grouped { group_open } else { is_expanded };
                     if grouped {
                         entry.tool_group = Some(group.clone());
@@ -1108,6 +1192,7 @@ impl TranscriptLayout {
                                     width,
                                 );
                             }
+
                             entry.group_header = Some(entry.rows.len());
                             entry.push_linked(
                                 super::tool_groups::header(&items[group.clone()], width, framed),
@@ -1115,6 +1200,7 @@ impl TranscriptLayout {
                             );
                         }
                     }
+
                     if !grouped || group_open {
                         let (lines, header, body) = if grouped {
                             let section = super::tool_groups::section(
@@ -1132,6 +1218,7 @@ impl TranscriptLayout {
                                 0..0,
                             )
                         };
+
                         for (index, line) in lines.into_iter().enumerate() {
                             if header.map_or_else(
                                 || !line.line.to_string().is_empty(),
@@ -1139,10 +1226,12 @@ impl TranscriptLayout {
                             ) {
                                 entry.disclosures.push(entry.rows.len());
                             }
+
                             entry.push_linked(line, width);
                         }
                     }
                 }
+
                 _ => {
                     entry.clear();
                     let collapsible = matches!(item, TranscriptItem::Thinking(_));
@@ -1181,11 +1270,13 @@ impl TranscriptLayout {
                     } else {
                         expanded.contains(&next)
                     };
+
                 if !next_framed {
                     entry.push(Line::default(), width);
                     entry.spacing = true;
                 }
             }
+
             end += entry.height;
             entry.end = end;
         }
@@ -1338,27 +1429,57 @@ impl TranscriptLayout {
     }
 
     pub(super) fn link_at(&self, area: Rect, offset: usize, point: (u16, u16)) -> Option<&str> {
-        if !area.contains(point.into()) {
-            return None;
-        }
+        self.link_hit(area, offset, point).map(|hit| hit.url)
+    }
 
-        let absolute_row = offset + (point.1 - area.y) as usize;
-        let entry = self.entries.iter().find(|entry| entry.end > absolute_row)?;
-        let entry_start = entry.end - entry.height;
-        let row = entry.rows.iter().find(|row| {
-            let start = entry_start + row.start;
-            absolute_row >= start && absolute_row < start + row.height
-        })?;
+
+    /// One anchor per wrapped link or complete picture occurrence.
+    /// Pointer movement within that anchor does not move its tooltip.
+    pub(super) fn link_hit(
+        &self,
+        area: Rect,
+        offset: usize,
+        point: (u16, u16),
+    ) -> Option<LinkHit<'_>> {
+        let (entry, row, wrapped) = self.row_at(area, offset, point)?;
         let gutter_width = row.gutter.as_ref().map_or(0, |gutter| gutter.width);
         let column = point.0.checked_sub(area.x + gutter_width)?;
-        let wrapped = absolute_row - entry_start - row.start;
         let range = row.ranges.get(wrapped)?;
-        let byte = byte_at_column(&row.line.to_string(), range, column)?;
+        let text = row.line.to_string();
+        let byte = byte_at_column(&text, range, column)?;
 
-        row.links
+        let link = row
+            .links
             .iter()
-            .find(|link| link.start <= byte && byte < link.end)
-            .map(|link| link.url.as_str())
+            .find(|link| link.start <= byte && byte < link.end)?;
+        let text_area = || {
+            row.ranges
+                .iter()
+                .enumerate()
+                .filter_map(|(index, range)| {
+                    let absolute = entry.end - entry.height + row.start + index;
+                    if absolute < offset || absolute >= offset + usize::from(area.height) {
+                        return None;
+                    }
+                    let start = link.start.max(range.start);
+                    let end = link.end.min(range.end);
+                    if start >= end {
+                        return None;
+                    }
+                    let x = area.x + gutter_width + text.get(range.start..start)?.width() as u16;
+                    let width =
+                        (text.get(start..end)?.width() as u16).min(area.right().saturating_sub(x));
+                    Some(Rect::new(x, area.y + (absolute - offset) as u16, width, 1))
+                })
+                .reduce(|bounds, segment| bounds.union(segment))
+        };
+
+        Some(LinkHit {
+            url: &link.url,
+            area: self
+                .picture_area_at(area, offset, point)
+                .or_else(text_area)?,
+        })
     }
 
     pub fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize) {
@@ -1375,10 +1496,12 @@ impl TranscriptLayout {
                 {
                     continue;
                 }
+
                 for request in &row.media_requests {
                     self.media
                         .picture(&request.source, request.width, request.height, false);
                 }
+
                 if absolute < offset {
                     continue;
                 }
@@ -1395,6 +1518,7 @@ impl TranscriptLayout {
                             .min(area.right().saturating_sub(x)),
                         1,
                     );
+
                     super::media::schedule(fragment, image_area);
                 }
             }

@@ -1,3 +1,4 @@
+use super::table::labelled_table_rows;
 use super::*;
 use crate::tui::languages::syntax_for_label;
 

@@ -4,6 +4,9 @@ pub(super) mod blocks;
 mod css;
 mod html;
 mod inline;
+mod table;
+
+use table::{Cell, render_table};
 
 pub(super) use inline::State as InlineState;
 
@@ -19,8 +22,6 @@ use super::{
     languages::{is_markdown_label, label_key},
     theme::code_label_color,
 };
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 pub(super) const BODY_MARGIN: u16 = 2;
 
@@ -70,9 +71,14 @@ pub(super) struct LinkedLine {
     pub chrome: bool,
     pub folds: Vec<Disclosure>,
     pub disclosure: Option<Disclosure>,
+    pub anchors: Vec<String>,
     pub media: Vec<super::media::Target>,
     pub graphics: Vec<super::media::Fragment>,
     pub copy: Vec<super::media::CopyText>,
+    // Cell decode requests keep their own widths instead of using the whole table width.
+    pub media_requests: Vec<super::media::Request>,
+    // Preserve cells until the media pass; subsequent fallback rows share this table.
+    pub table: Option<table::Part>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,12 +124,14 @@ impl LinkedLine {
             Some(ratatui::layout::Alignment::Right) => spare,
             _ => 0,
         };
+
         self.line.alignment = None;
         if left > 0 {
             self = self.framed(vec![Span::raw(" ".repeat(left))], Vec::new());
         }
         self
     }
+
     pub fn plain(mut line: Line<'static>) -> Self {
         super::render::sanitize_line(&mut line);
         let links = plain_links(&line.to_string());
@@ -141,7 +149,13 @@ impl LinkedLine {
             && let Some(rest) = first.content.strip_prefix("  ")
         {
             first.content = rest.to_owned().into();
+            if first.content.is_empty() {
+                self.line.spans.remove(0);
+            }
             self.shift_offsets(-2);
+            if let Some(table) = &mut self.table {
+                table.strip_body_margin();
+            }
         }
     }
 
@@ -154,6 +168,7 @@ impl LinkedLine {
             }
             offset = end;
         }
+
         self
     }
 
@@ -173,6 +188,7 @@ impl LinkedLine {
             target.range.start = target.range.start.saturating_add_signed(amount);
             target.range.end = target.range.end.saturating_add_signed(amount);
         }
+
         self.links.retain_mut(|link| {
             link.start = link.start.saturating_add_signed(amount);
             link.end = link.end.saturating_add_signed(amount);
@@ -186,6 +202,11 @@ impl LinkedLine {
     }
 
     pub fn framed(mut self, leading: Vec<Span<'static>>, trailing: Vec<Span<'static>>) -> Self {
+        if let Some(table) = &mut self.table {
+            table.leading.splice(0..0, leading.clone());
+            table.trailing.extend(trailing.clone());
+        }
+
         let columns = leading.iter().map(Span::width).sum::<usize>();
         for graphic in &mut self.graphics {
             graphic.x = graphic.x.saturating_add(columns as u16);
@@ -194,8 +215,11 @@ impl LinkedLine {
             copy.columns.start += columns;
             copy.columns.end += columns;
         }
+
         let start = leading.len();
         let end = start + self.line.spans.len();
+        // Project the body's base style before resetting it. Generated frame
+        // padding must stay neutral, while closing code rails retain their color.
         for span in &mut self.line.spans {
             span.style = self.line.style.patch(span.style);
         }
@@ -277,11 +301,12 @@ impl<'a> Context<'a> {
             ),
         ))
     }
+
     pub fn new(source: &'a str) -> Self {
         Self {
-            parser: source
-                .contains('[')
-                .then(|| Parser::new_ext(source, Options::ENABLE_TABLES)),
+            parser: source.contains('[').then(|| {
+                Parser::new_ext(source, Options::ENABLE_TABLES)
+            }),
         }
     }
 
@@ -299,9 +324,11 @@ impl<'a> Context<'a> {
                 })
                 .collect::<Vec<_>>()
         });
+
         definitions.sort();
         definitions
     }
+
 
     fn parse<'s>(
         &self,
@@ -374,12 +401,15 @@ impl Context<'_> {
                 .decorate(&decorations),
             ];
         }
+
         let trimmed = source.trim_start();
         let indent = source.len() - trimmed.len();
         inline::render(
             self.parse(
                 trimmed,
-                Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_MATH,
+                Options::ENABLE_STRIKETHROUGH
+                    | Options::ENABLE_TASKLISTS
+                    | Options::ENABLE_MATH,
             ),
             trimmed,
             format!("  {}", &source[..indent]),
@@ -394,12 +424,24 @@ pub(super) fn document(source: &str, width: u16) -> Vec<LinkedLine> {
 
 fn document_at(source: &str, width: u16, path: &str, depth: usize) -> Vec<LinkedLine> {
     let context = Context::new(source);
+    document_with_context(source, width, path, depth, &context, Some(0))
+}
+
+fn document_with_context(
+    source: &str,
+    width: u16,
+    path: &str,
+    depth: usize,
+    context: &Context<'_>,
+    _source_offset: Option<usize>,
+) -> Vec<LinkedLine> {
     let mut out = Vec::new();
     let mut remaining = source;
     let mut fence = None;
     let mut inline = InlineState::default();
     let mut index = 0;
     while !remaining.is_empty() {
+
         if fence.is_none()
             && let Some((bytes, lines)) = context.math_block(remaining)
         {
@@ -408,6 +450,7 @@ fn document_at(source: &str, width: u16, path: &str, depth: usize) -> Vec<Linked
             remaining = &remaining[bytes..];
             continue;
         }
+
         if fence.is_none()
             && let Some(block) = blocks::render(
                 remaining,
@@ -421,6 +464,7 @@ fn document_at(source: &str, width: u16, path: &str, depth: usize) -> Vec<Linked
             remaining = &remaining[block.bytes..];
             continue;
         }
+
         if fence.is_none()
             && let Some((bytes, lines)) = context.table(remaining, width)
         {
@@ -436,6 +480,7 @@ fn document_at(source: &str, width: u16, path: &str, depth: usize) -> Vec<Linked
         remaining = &remaining[part.len()..];
         index += 1;
     }
+
     out
 }
 
@@ -444,6 +489,7 @@ pub(super) fn expand_rule(line: &mut Line<'static>, width: u16) -> bool {
         .spans
         .iter()
         .filter(|span| !span.content.trim().is_empty());
+
     if let Some(rule) = visible.next()
         && visible.next().is_none()
         && rule.style.fg == Some(THEME.md_rule)
@@ -452,6 +498,7 @@ pub(super) fn expand_rule(line: &mut Line<'static>, width: u16) -> bool {
         *line = rule_line(width);
         return true;
     }
+
     false
 }
 
@@ -654,6 +701,7 @@ fn push_text_with_cjk_strong(
         } else {
             THEME.md_bold
         };
+
         push_text_with_bare_links(
             spans,
             content,
@@ -680,6 +728,7 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
             open += 1;
             continue;
         }
+
         let Some(close) = (open + 2..spans.len().saturating_sub(1))
             .find(|&index| spans[index].content == "*" && spans[index + 1].content == "*")
         else {
@@ -708,6 +757,7 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
             } else {
                 THEME.md_bold
             };
+
             span.style = span.style.fg(strong_fg).add_modifier(Modifier::BOLD);
         }
 
@@ -761,6 +811,7 @@ impl Context<'_> {
                         let removed = line.line.spans.remove(0).content.len();
                         line.shift_offsets(-(removed as isize));
                     }
+
                     let header = rows.len() == 1;
                     rows.last_mut()?.push(Cell {
                         lines,
@@ -769,10 +820,12 @@ impl Context<'_> {
                         header,
                     });
                 }
+
                 Event::End(pulldown_cmark::TagEnd::Table) => {
                     end = range.end;
                     break;
                 }
+
                 _ => {}
             }
         }
@@ -783,377 +836,6 @@ impl Context<'_> {
 
         Some((end, render_table(&rows, &alignments, width)))
     }
-}
-
-fn render_table(
-    rows: &[Vec<Cell>],
-    alignments: &[pulldown_cmark::Alignment],
-    width: u16,
-) -> Vec<LinkedLine> {
-    let cols = alignments.len();
-    if cols == 0 || rows.is_empty() {
-        return Vec::new();
-    }
-    let available = usize::from(width).saturating_sub(3 * cols + 3);
-
-    // On narrow terminals use labelled cells rather than losing columns/content.
-    if available < cols * 3 {
-        return labelled_table_rows(rows);
-    }
-    let normalized = rows
-        .iter()
-        .map(|row| {
-            let mut row = row.clone();
-            let occupied = row.iter().map(|cell| cell.colspan).sum::<usize>();
-            for _ in occupied..cols {
-                row.push(Cell {
-                    lines: vec![LinkedLine::default()],
-                    colspan: 1,
-                    alignment: None,
-                    header: false,
-                });
-            }
-            row
-        })
-        .collect::<Vec<_>>();
-    let rows = normalized.as_slice();
-
-    let mut widths = vec![3usize; cols];
-    for row in rows {
-        let mut column = 0;
-        for cell in row {
-            let count = cell.colspan.min(cols - column);
-            let desired = cell
-                .lines
-                .iter()
-                .map(|line| line.line.width())
-                .max()
-                .unwrap_or(0);
-            let available =
-                widths[column..column + count].iter().sum::<usize>() + 3 * count.saturating_sub(1);
-            if desired > available {
-                widths[column + count - 1] += desired - available;
-            }
-            column += count;
-            if column >= cols {
-                break;
-            }
-        }
-    }
-
-    while widths.iter().sum::<usize>() > available {
-        let Some(i) = (0..cols).max_by_key(|&i| widths[i]) else {
-            break;
-        };
-
-        widths[i] -= 1;
-    }
-
-    let boundaries = |row: &[Cell]| {
-        let mut column = 0;
-        row.iter()
-            .map(|cell| {
-                column += cell.colspan;
-                column
-            })
-            .collect::<std::collections::BTreeSet<_>>()
-    };
-    let border = |left: &str, above: Option<&[Cell]>, below: Option<&[Cell]>, right: &str| {
-        let above = above.map(boundaries).unwrap_or_default();
-        let below = below.map(boundaries).unwrap_or_default();
-        let mut body = String::new();
-        for (i, w) in widths.iter().enumerate() {
-            body.push_str(&"─".repeat(w + 2));
-            if i + 1 < cols {
-                body.push(match (above.contains(&(i + 1)), below.contains(&(i + 1))) {
-                    (true, true) => '┼',
-                    (true, false) => '┴',
-                    (false, true) => '┬',
-                    (false, false) => '─',
-                });
-            }
-        }
-        LinkedLine::chrome(Line::styled(
-            format!("  {left}{body}{right}"),
-            Style::default().fg(THEME.md_table_border),
-        ))
-    };
-    let mut lines = vec![border("┌", None, rows.first().map(Vec::as_slice), "┐")];
-
-    for (r, row) in rows.iter().enumerate() {
-        let mut column = 0;
-        let cells: Vec<_> = row
-            .iter()
-            .map(|cell| {
-                let count = cell.colspan.min(cols.saturating_sub(column));
-                let span_width = widths[column..column + count].iter().sum::<usize>()
-                    + 3 * count.saturating_sub(1);
-                column += count;
-                (
-                    span_width,
-                    cell.lines
-                        .iter()
-                        .flat_map(|line| wrap_cell(line, span_width))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect();
-
-        for n in 0..cells
-            .iter()
-            .map(|(_, lines)| lines.len())
-            .max()
-            .unwrap_or(1)
-        {
-            let mut spans = vec![Span::styled(
-                "  │",
-                Style::default().fg(THEME.md_table_border),
-            )];
-            let mut links = Vec::new();
-            let mut decorations = vec![0];
-            let mut byte_offset = spans[0].content.len();
-
-            let mut column = 0;
-            for (i, (cell_width, rendered)) in cells.iter().enumerate() {
-                let cell = rendered.get(n);
-                let definition = &row[i];
-                let padding = cell_width.saturating_sub(cell.map_or(0, |cell| cell.line.width()));
-                let alignment = definition.alignment.unwrap_or(match alignments[column] {
-                    pulldown_cmark::Alignment::Right => ratatui::layout::Alignment::Right,
-                    pulldown_cmark::Alignment::Center => ratatui::layout::Alignment::Center,
-                    _ => ratatui::layout::Alignment::Left,
-                });
-                let left = match alignment {
-                    ratatui::layout::Alignment::Right => padding,
-                    ratatui::layout::Alignment::Center => padding / 2,
-                    _ => 0,
-                };
-                decorations.push(spans.len());
-                spans.push(Span::raw(" ".repeat(left + 1)));
-                byte_offset += left + 1;
-                if let Some(cell) = cell {
-                    links.extend(cell.links.iter().cloned().map(|mut link| {
-                        link.start += byte_offset;
-                        link.end += byte_offset;
-                        link
-                    }));
-                    byte_offset += cell.line.to_string().len();
-                    spans.extend(cell.line.spans.iter().cloned().map(|mut span| {
-                        if definition.header {
-                            span.style = span
-                                .style
-                                .add_modifier(Modifier::BOLD)
-                                .fg(THEME.md_table_header);
-                        }
-                        span
-                    }));
-                }
-                decorations.extend([spans.len(), spans.len() + 1]);
-                spans.push(Span::raw(" ".repeat(padding - left + 1)));
-                spans.push(Span::styled(
-                    "│",
-                    Style::default().fg(THEME.md_table_border),
-                ));
-                byte_offset += padding - left + 1 + "│".len();
-                column += definition.colspan;
-            }
-
-            lines.push(
-                LinkedLine {
-                    line: Line::from(spans),
-                    links,
-                    decorations: Vec::new(),
-                    chrome: false,
-                    ..Default::default()
-                }
-                .decorate(&decorations),
-            );
-        }
-
-        if r + 1 < rows.len() {
-            let mut separator = border("├", Some(row), Some(&rows[r + 1]), "┤");
-
-            if r > 0 {
-                separator.line.style = Style::default().fg(THEME.md_table_separator);
-            }
-
-            lines.push(separator);
-        }
-    }
-
-    lines.push(border("└", rows.last().map(Vec::as_slice), None, "┘"));
-
-    lines
-}
-
-#[derive(Clone)]
-struct Cell {
-    lines: Vec<LinkedLine>,
-    colspan: usize,
-    alignment: Option<ratatui::layout::Alignment>,
-    header: bool,
-}
-
-impl Cell {
-    fn heading(&self) -> LinkedLine {
-        let mut spans = Vec::new();
-        let mut links = Vec::new();
-        let mut offset = 0;
-        for (index, line) in self.lines.iter().enumerate() {
-            if index > 0 {
-                spans.push(Span::raw(" "));
-                offset += 1;
-            }
-            links.extend(line.links.iter().cloned().map(|mut link| {
-                link.start += offset;
-                link.end += offset;
-                link
-            }));
-            offset += line.line.to_string().len();
-            spans.extend(line.line.spans.iter().cloned());
-        }
-        LinkedLine {
-            line: Line::from(spans),
-            links,
-            decorations: Vec::new(),
-            chrome: false,
-            ..Default::default()
-        }
-    }
-}
-
-fn labelled_table_rows(rows: &[Vec<Cell>]) -> Vec<LinkedLine> {
-    let mut lines = Vec::new();
-    let has_header = rows[0].iter().any(|cell| cell.header);
-    for row in rows.iter().skip(usize::from(has_header)) {
-        let mut column = 0;
-        for cell in row {
-            let start = column;
-            column += cell.colspan;
-            let mut heading_column = 0;
-            let headings = rows[0]
-                .iter()
-                .filter_map(|header| {
-                    let begin = heading_column;
-                    heading_column += header.colspan;
-                    (has_header && begin < column && heading_column > start)
-                        .then(|| header.heading())
-                })
-                .collect::<Vec<_>>();
-            let mut header = LinkedLine::default();
-            for heading in headings {
-                if !header.line.spans.is_empty() {
-                    header.line.spans.push(Span::raw(" / "));
-                }
-                let offset = header.line.to_string().len();
-                header
-                    .links
-                    .extend(heading.links.into_iter().map(|mut link| {
-                        link.start += offset;
-                        link.end += offset;
-                        link
-                    }));
-                header.line.spans.extend(heading.line.spans);
-            }
-            if header.line.spans.is_empty() {
-                header.line = Line::from(if cell.colspan == 1 {
-                    format!("第 {} 列", start + 1)
-                } else {
-                    format!("第 {}–{} 列", start + 1, column)
-                });
-            }
-            let label = format!("  {}: ", header.line);
-            for (index, line) in cell.lines.iter().enumerate() {
-                let prefix = if index == 0 {
-                    label.clone()
-                } else {
-                    " ".repeat(label.width())
-                };
-                let offset = prefix.len();
-                let mut links: Vec<_> = line
-                    .links
-                    .iter()
-                    .cloned()
-                    .map(|mut link| {
-                        link.start += offset;
-                        link.end += offset;
-                        link
-                    })
-                    .collect();
-                if index == 0 {
-                    links.extend(header.links.iter().cloned().map(|mut link| {
-                        link.start += 2;
-                        link.end += 2;
-                        link
-                    }));
-                }
-                let mut spans = vec![Span::styled(
-                    prefix,
-                    Style::default().fg(THEME.md_table_header),
-                )];
-                spans.extend(line.line.spans.iter().cloned());
-                lines.push(LinkedLine {
-                    line: Line::from(spans),
-                    links,
-                    decorations: Vec::new(),
-                    chrome: false,
-                    ..Default::default()
-                });
-            }
-        }
-        lines.push(LinkedLine::plain(Line::from("")));
-    }
-    if lines.is_empty() {
-        lines.extend(rows[0].iter().map(Cell::heading));
-    }
-    lines
-}
-
-fn wrap_cell(cell: &LinkedLine, width: usize) -> Vec<LinkedLine> {
-    let mut lines = vec![Line::default()];
-    let mut used = 0;
-
-    for span in &cell.line.spans {
-        for grapheme in span.content.graphemes(true) {
-            let size = grapheme.width();
-
-            if used + size > width && used > 0 {
-                lines.push(Line::default());
-                used = 0;
-            }
-
-            lines
-                .last_mut()
-                .unwrap()
-                .spans
-                .push(Span::styled(grapheme.to_owned(), span.style));
-            used += size;
-        }
-    }
-
-    let mut offset = 0;
-    lines
-        .into_iter()
-        .map(|line| {
-            let end = offset + line.to_string().len();
-            let links = cell
-                .links
-                .iter()
-                .filter_map(|link| link.slice(&(offset..end), 0))
-                .collect();
-            let decorations = slice_decorations(&cell.decorations, offset..end, 0);
-            offset = end;
-            LinkedLine {
-                line,
-                links,
-                decorations,
-                chrome: cell.chrome,
-                folds: cell.folds.clone(),
-                disclosure: cell.disclosure.clone(),
-                ..Default::default()
-            }
-        })
-        .collect()
 }
 
 fn is_fence_opening(marker: char, count: usize, trimmed: &str) -> bool {
@@ -1230,6 +912,7 @@ impl Context<'_> {
                     .remove(0),
             );
         }
+
         if matches!(marker, '`' | '~')
             && count >= 3
             && !(marker == '`' && trimmed[count..].contains('`'))

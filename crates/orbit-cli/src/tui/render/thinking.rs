@@ -35,6 +35,7 @@ pub(in crate::tui) fn thinking_card_at_width(
                 }
             },
         );
+
         lines.push(LinkedLine::plain(Line::from(vec![
             Span::raw("  "),
             Span::styled(label, Style::default().fg(THINKING_MUTED)),
@@ -44,6 +45,7 @@ pub(in crate::tui) fn thinking_card_at_width(
             return lines;
         }
     }
+
     let text = row.content.trim_end();
     lines.extend(
         markdown::document(text, width.saturating_sub(2))
@@ -71,6 +73,9 @@ pub(in crate::tui) fn thinking_linked_line(
 }
 
 pub(in crate::tui) fn thinking_linked(mut linked: LinkedLine) -> LinkedLine {
+    if let Some(table) = &mut linked.table {
+        table.thinking = true;
+    }
     let rendered = &mut linked.line;
     let style = rendered.style;
     rendered.style = Style::default();
@@ -83,20 +88,12 @@ pub(in crate::tui) fn thinking_linked(mut linked: LinkedLine) -> LinkedLine {
     }
 
     // Reserve the outer rail separately so code rails keep their own color.
-    if let Some(first) = rendered.spans.first_mut()
-        && let Some(rest) = first.content.strip_prefix("  ")
-    {
-        if rest.is_empty() {
-            rendered.spans.remove(0);
-        } else {
-            first.content = rest.to_owned().into();
-        }
-        linked.shift_offsets(-2);
-    }
-    linked.line.spans.insert(
-        0,
-        Span::styled("  ┊ ", Style::default().fg(THEME.thinking_rail)),
-    );
-    linked.shift_offsets("  ┊ ".len() as isize);
-    linked.decorate(&[0])
+    linked.strip_body_margin();
+    linked.framed(
+        vec![Span::styled(
+            "  ┊ ",
+            Style::default().fg(THEME.thinking_rail),
+        )],
+        Vec::new(),
+    )
 }

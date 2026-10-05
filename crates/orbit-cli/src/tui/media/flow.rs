@@ -9,11 +9,34 @@ use super::{Context, CopyText, Fragment, Prepared, Request, Source};
 use crate::tui::markdown::{LinkTarget, LinkedLine, slice_decorations};
 
 pub(in crate::tui) fn layout(linked: LinkedLine, context: &Context, width: u16) -> Vec<LinkedLine> {
+    layout_with_margin(linked, context, width, super::super::markdown::BODY_MARGIN)
+}
+
+pub(in crate::tui) fn layout_in_cell(
+    linked: LinkedLine,
+    context: &Context,
+    width: u16,
+) -> Vec<LinkedLine> {
+    layout_with_margin(linked, context, width, 0)
+}
+
+fn layout_with_margin(
+    linked: LinkedLine,
+    context: &Context,
+    width: u16,
+    margin: u16,
+) -> Vec<LinkedLine> {
+    if context.enabled()
+        && let Some(table) = &linked.table
+    {
+        return table.layout(context, width, &linked);
+    }
+
     if linked.media.is_empty() || !context.enabled() || width < 4 {
         return plain_rows(linked, width);
     }
     let source = linked.text();
-    let bounds = Bounds::new(&linked, width);
+    let bounds = Bounds::new(&linked, width, margin);
     let prefix = slice(&linked, 0..bounds.prefix);
     let ready = linked
         .media
@@ -26,6 +49,7 @@ pub(in crate::tui) fn layout(linked: LinkedLine, context: &Context, width: u16) 
         return plain_rows(linked, width);
     }
     let mut flow = Flow {
+        margin,
         width: width.saturating_sub(bounds.suffix.as_ref().map_or(0, |s| s.width() as u16)),
         suffix: bounds.suffix,
         template: linked.clone(),
@@ -37,6 +61,7 @@ pub(in crate::tui) fn layout(linked: LinkedLine, context: &Context, width: u16) 
         boxes: Vec::new(),
         output: Vec::new(),
     };
+
     flow.reset();
     let mut start = bounds.prefix;
     for (target, ready) in linked.media.iter().zip(ready) {
@@ -54,6 +79,7 @@ pub(in crate::tui) fn layout(linked: LinkedLine, context: &Context, width: u16) 
                     let delimiter = if *display { "$$" } else { "$" };
                     format!("{delimiter}{tex}{delimiter}")
                 }
+
                 Source::Image(_) => source[target.range.clone()].to_owned(),
             };
             let url = linked
@@ -61,12 +87,15 @@ pub(in crate::tui) fn layout(linked: LinkedLine, context: &Context, width: u16) 
                 .iter()
                 .find(|link| link.start <= target.range.start && link.end >= target.range.end)
                 .map(|link| link.url.clone());
+
             flow.picture(ready, copy, block, url);
         } else {
             flow.text(slice(&linked, target.range.clone()));
         }
+
         start = target.range.end;
     }
+
     flow.text(slice(&linked, start..bounds.end));
     flow.flush();
     flow.output
@@ -77,13 +106,17 @@ fn plain_rows(linked: LinkedLine, width: u16) -> Vec<LinkedLine> {
     if !source.contains('\n') {
         return vec![linked];
     }
-    let bounds = Bounds::new(&linked, width);
+    let bounds = Bounds::new(&linked, width, super::super::markdown::BODY_MARGIN);
     let prefix = slice(&linked, 0..bounds.prefix);
     let mut start = bounds.prefix;
     source[bounds.prefix..bounds.end]
         .split('\n')
-        .map(|text| {
+        .enumerate()
+        .map(|(index, text)| {
             let mut row = slice(&linked, start..start + text.len());
+            if index == 0 {
+                row.anchors = linked.anchors.clone();
+            }
             row = row.framed(prefix.line.spans.clone(), Vec::new());
             if let Some(suffix) = &bounds.suffix {
                 let padding = usize::from(width).saturating_sub(row.line.width() + suffix.width());
@@ -92,6 +125,7 @@ fn plain_rows(linked: LinkedLine, width: u16) -> Vec<LinkedLine> {
                     vec![Span::raw(" ".repeat(padding)), suffix.clone()],
                 );
             }
+
             start += text.len() + 1;
             row
         })
@@ -107,10 +141,18 @@ fn height(source: &Source) -> u16 {
 }
 
 pub(in crate::tui) fn requests(linked: &LinkedLine, width: u16) -> Vec<Request> {
+    requests_with_margin(linked, width, super::super::markdown::BODY_MARGIN)
+}
+
+pub(in crate::tui) fn requests_in_cell(linked: &LinkedLine, width: u16) -> Vec<Request> {
+    requests_with_margin(linked, width, 0)
+}
+
+fn requests_with_margin(linked: &LinkedLine, width: u16, margin: u16) -> Vec<Request> {
     if linked.media.is_empty() {
         return Vec::new();
     }
-    let width = Bounds::new(linked, width).available;
+    let width = Bounds::new(linked, width, margin).available;
     linked
         .media
         .iter()
@@ -130,7 +172,7 @@ struct Bounds {
 }
 
 impl Bounds {
-    fn new(linked: &LinkedLine, width: u16) -> Self {
+    fn new(linked: &LinkedLine, width: u16, margin: u16) -> Self {
         let prefix = linked
             .line
             .spans
@@ -177,7 +219,7 @@ impl Bounds {
                 .saturating_sub(
                     (prefix.iter().map(|s| s.width()).sum::<usize>()
                         + suffix.as_ref().map_or(0, Span::width)) as u16
-                        + super::super::markdown::BODY_MARGIN,
+                        + margin,
                 )
                 .min(80),
             suffix,
@@ -189,9 +231,15 @@ fn slice(linked: &LinkedLine, range: Range<usize>) -> LinkedLine {
     let mut result = LinkedLine {
         folds: linked.folds.clone(),
         disclosure: linked.disclosure.clone(),
+        anchors: if range.start == 0 {
+            linked.anchors.clone()
+        } else {
+            Vec::new()
+        },
         chrome: linked.chrome,
         ..Default::default()
     };
+
     result.line.style = linked.line.style;
     let mut offset = 0;
     for span in &linked.line.spans {
@@ -204,8 +252,10 @@ fn slice(linked: &LinkedLine, range: Range<usize>) -> LinkedLine {
                 span.style,
             ));
         }
+
         offset = end;
     }
+
     result.links = linked
         .links
         .iter()
@@ -233,7 +283,9 @@ struct BoxAt {
     text: Arc<str>,
     url: Option<String>,
 }
+
 struct Flow {
+    margin: u16,
     width: u16,
     suffix: Option<Span<'static>>,
     template: LinkedLine,
@@ -256,6 +308,7 @@ impl Flow {
         self.columns = self.prefix.line.width() as u16;
         self.has_content = false;
     }
+
     fn append(&mut self, mut part: LinkedLine) {
         self.has_content |= !part.line.spans.is_empty();
         part.shift_offsets(self.bytes as isize);
@@ -271,6 +324,7 @@ impl Flow {
         self.current.decorations.extend(part.decorations);
         self.current.media.extend(part.media);
     }
+
     fn text(&mut self, part: LinkedLine) {
         let source = part.text();
         let mut start = 0;
@@ -283,6 +337,7 @@ impl Flow {
             start += chunk.len();
         }
     }
+
     fn text_row(&mut self, part: LinkedLine) {
         let source = part.text();
         if self.columns >= self.width {
@@ -293,6 +348,7 @@ impl Flow {
             self.width.saturating_sub(self.prefix.line.width() as u16),
             self.width.saturating_sub(self.columns),
         );
+
         for (i, range) in ranges.into_iter().enumerate() {
             if i > 0 {
                 self.flush();
@@ -300,19 +356,20 @@ impl Flow {
             self.append(slice(&part, range));
         }
     }
+
     fn picture(&mut self, picture: Arc<Prepared>, text: String, block: bool, url: Option<String>) {
         if block || self.columns + picture.size.width > self.width {
             self.flush();
         }
         if block {
-            let right_margin = super::super::markdown::BODY_MARGIN;
             let spare = self
                 .width
-                .saturating_sub(self.columns + right_margin + picture.size.width);
+                .saturating_sub(self.columns + self.margin + picture.size.width);
             self.append(LinkedLine::chrome(Line::from(Span::raw(
                 " ".repeat(usize::from(spare / 2)),
             ))));
         }
+
         let x = self.columns;
         self.current
             .line
@@ -325,6 +382,7 @@ impl Flow {
                 url: url.clone(),
             });
         }
+
         self.bytes += usize::from(picture.size.width);
         self.columns += picture.size.width;
         self.has_content = true;
@@ -338,11 +396,13 @@ impl Flow {
             self.flush();
         }
     }
+
     fn flush(&mut self) {
         if !self.has_content {
             self.reset();
             return;
         }
+
         let baseline = self
             .boxes
             .iter()
@@ -374,6 +434,7 @@ impl Flow {
                 line.disclosure = None;
                 line
             };
+
             for b in &self.boxes {
                 let top = baseline - b.picture.baseline;
                 if y >= top && y < top + b.picture.size.height {
@@ -402,6 +463,7 @@ impl Flow {
                     }
                 }
             }
+
             if let Some(suffix) = &self.suffix {
                 let padding = usize::from(self.width).saturating_sub(line.line.width());
                 line = line.framed(
@@ -409,8 +471,10 @@ impl Flow {
                     vec![Span::raw(" ".repeat(padding)), suffix.clone()],
                 );
             }
+
             self.output.push(line);
         }
+
         self.boxes.clear();
         self.reset();
     }
