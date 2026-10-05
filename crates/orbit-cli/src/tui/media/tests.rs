@@ -20,6 +20,18 @@ fn context(protocol: ProtocolType) -> Context {
     Context::new(picker)
 }
 
+#[test]
+fn terminal_detection_probes_graphics_without_exercising_zlib_inflation() {
+    for tmux in [false, true] {
+        let query =
+            ratatui_image::picker::cap_parser::Parser::query(tmux, terminal_query_options());
+        assert!(query.contains("i=31,s=1,v=1,a=q,t=d,f=24;AAAA"));
+        assert!(query.contains("]11;?"));
+        assert!(!query.contains("i=32"));
+        assert!(!query.contains("o=z"));
+    }
+}
+
 fn ready(context: &Context, source: Source, width: u16, height: u16) -> Arc<Prepared> {
     let key = context.key(&source, width, height, false);
     let shared = context.shared.as_ref().unwrap();
@@ -146,7 +158,7 @@ fn draw_ui(state: &mut UiState, terminal: &mut Terminal<TestBackend>) {
         .unwrap();
 }
 
-fn assert_ui_graphics(state: &mut UiState) {
+fn assert_ui_graphics(state: &mut UiState) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -170,6 +182,7 @@ fn assert_ui_graphics(state: &mut UiState) {
     }
 
     clear_layers();
+    terminal.backend().buffer().clone()
 }
 
 #[tokio::test]
@@ -289,6 +302,155 @@ async fn saved_sessions_restore_media_capabilities_before_replaying_formula_outp
             .any(|item| matches!(item, TranscriptItem::Assistant(text) if text.contains("\\int")))
     );
     assert_ui_graphics(&mut state);
+}
+
+#[tokio::test]
+async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row_clipping() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use orbit_agent::events::AgentEvent;
+    use orbit_model::{client::ModelClient, types::ToolCall};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image.png");
+    image::RgbImage::from_pixel(1800, 520, image::Rgb([80, 120, 160]))
+        .save(&path)
+        .unwrap();
+    let mut session = crate::session::SessionState::open_in(
+        dir.path().join("sessions.db"),
+        None,
+        "mock".into(),
+        dir.path(),
+    )
+    .await
+    .unwrap();
+    let id = session.id().to_owned();
+    session.begin("image".into(), "mock".into()).await.unwrap();
+    let call = ToolCall::function(
+        "image",
+        "read_image",
+        serde_json::json!({"path": "image.png"}),
+    );
+    let journal = session.execution_journal().unwrap();
+    let checkpoint = orbit_agent::checkpoint::ExecutionCheckpoint {
+        history: Vec::new(),
+        turns: 1,
+        tool_calls: 1,
+        in_flight: None,
+        attachments: Vec::new(),
+    };
+    for event in [
+        AgentEvent::ToolStarted { call: call.clone() },
+        AgentEvent::ToolFinished {
+            call,
+            content: serde_json::json!({"path": "image.png", "loaded": true}).to_string(),
+            changes: Vec::new(),
+        },
+    ] {
+        journal.save(checkpoint.clone(), Some(event)).await.unwrap();
+    }
+    session.finish("completed", Some(Vec::new())).await.unwrap();
+    session.new_session("mock".into()).await.unwrap();
+
+    let mut state = UiState::new("mock");
+    state.media = context(ProtocolType::Kitty);
+    let mut model = ModelClient::new(Default::default()).unwrap();
+    let mut history = Vec::new();
+    let scope = crate::project_state::MemoryScope::new(session.id().into());
+    crate::tui::resume_session(
+        &id,
+        &mut state,
+        &mut model,
+        &mut history,
+        &mut session,
+        &Default::default(),
+        &Default::default(),
+        &[],
+        &scope,
+        &orbit_agent::tool::ToolRegistry::new(),
+    )
+    .await
+    .unwrap();
+    let index = state
+        .transcript
+        .iter()
+        .position(|item| matches!(item, TranscriptItem::Tool(row) if row.name == "read_image"))
+        .unwrap();
+    state.expanded.insert(index);
+    let rendered = assert_ui_graphics(&mut state);
+    let picture = state
+        .media
+        .shared
+        .as_ref()
+        .unwrap()
+        .cache
+        .lock()
+        .unwrap()
+        .values()
+        .find_map(|entry| match &entry.value {
+            Value::Ready(picture) => Some(picture.clone()),
+            _ => None,
+        })
+        .unwrap();
+
+    let cell = state.media.shared.as_ref().unwrap().picker.font_size();
+    let expected = usize::from(picture.size.width)
+        * usize::from(cell.width)
+        * usize::from(picture.size.height)
+        * usize::from(cell.height)
+        * 4;
+    let mut uploads = Vec::new();
+    for (variant, protocol) in [
+        &picture.protocol,
+        picture.selected_protocol.as_ref().unwrap(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let area = Rect::new(0, 0, picture.size.width, 1);
+        let buffer = if variant == 0 {
+            rendered.clone()
+        } else {
+            let mut buffer = Buffer::empty(area);
+            SlicedImage::new(protocol, (0, -1).into()).render(area, &mut buffer);
+            buffer
+        };
+        let output = buffer
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!output.contains("o=z"));
+        assert!(output.contains("a=T,U=1,f=32"));
+        assert!(output.contains('\u{10eeee}'));
+        let mut pixels = Vec::new();
+        let commands = output.split("\x1b_G").skip(1).collect::<Vec<_>>();
+        assert!(commands.len() > 1, "large images must span multiple chunks");
+        for (index, command) in commands.iter().enumerate() {
+            let (control, payload) = command.split_once(';').unwrap();
+            let payload = payload.split_once("\x1b\\").unwrap().0;
+            let more = if index + 1 < commands.len() {
+                "m=1"
+            } else {
+                "m=0"
+            };
+            assert!(control.ends_with(more));
+            pixels.extend(STANDARD.decode(payload).unwrap());
+        }
+        assert_eq!(pixels.len(), expected);
+        uploads.push(pixels);
+
+        let mut second = Buffer::empty(area);
+        SlicedImage::new(protocol, (0, -1).into()).render(area, &mut second);
+        assert!(
+            second
+                .content
+                .iter()
+                .all(|cell| !cell.symbol().contains("a=T"))
+        );
+    }
+    assert!(uploads[0].as_chunks::<4>().0.contains(&[80, 120, 160, 255]));
+    assert_ne!(uploads[0], uploads[1]);
+    clear_layers();
 }
 
 #[test]

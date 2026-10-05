@@ -260,9 +260,7 @@ fn encode(picker: &Picker, image: RgbaImage, size: Size) -> Result<(SlicedProtoc
                 size,
                 id,
                 picker.tmux_detected(),
-                picker
-                    .capabilities()
-                    .contains(&ratatui_image::picker::Capability::KittyCompression),
+                super::KITTY_TRANSMISSION_COMPRESSION,
             )?),
             Some(id),
         ))

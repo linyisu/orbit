@@ -41,6 +41,18 @@ const MAX_CACHE_ENTRIES: usize = 48;
 const WORKER_QUEUE_CAPACITY: usize = 32;
 const MAX_CACHE_BYTES: usize = 96 * 1024 * 1024;
 
+// A compression probe can succeed while larger uploads crash the terminal's
+// inflater. Keep both the probe and RGBA transfers uncompressed.
+const KITTY_TRANSMISSION_COMPRESSION: bool = false;
+
+fn terminal_query_options() -> ratatui_image::picker::cap_parser::QueryStdioOptions {
+    ratatui_image::picker::cap_parser::QueryStdioOptions {
+        terminal_background_color_osc: true,
+        kitty_compression: KITTY_TRANSMISSION_COMPRESSION,
+        ..Default::default()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Source {
     Image(String),
@@ -227,14 +239,8 @@ impl Context {
     /// Called before EventStream exists; capability replies must have one reader.
     pub fn detect(client: Arc<orbit_tools::web_fetch::WebClient>) -> Self {
         let mut context = Self::new(
-            Picker::from_query_stdio_with_options(
-                ratatui_image::picker::cap_parser::QueryStdioOptions {
-                    terminal_background_color_osc: true,
-                    kitty_compression: true,
-                    ..Default::default()
-                },
-            )
-            .unwrap_or_else(|_| Picker::halfblocks()),
+            Picker::from_query_stdio_with_options(terminal_query_options())
+                .unwrap_or_else(|_| Picker::halfblocks()),
         );
 
         context.set_client(client);
