@@ -228,6 +228,7 @@ impl UiState {
                         self.info_dialog = Some(super::dialogs::InfoDialog::new("操作失败", text));
                     }
                 }
+
                 TranscriptItem::Notice(_)
                 | TranscriptItem::Maintenance(_)
                 | TranscriptItem::CommandResult(_) => {}
@@ -428,6 +429,7 @@ impl UiState {
                             .invalidate_from(self.transcript.len().saturating_sub(1));
                     }
                 }
+
                 if self.status != RunStatus::Cancelling {
                     self.status = RunStatus::Running;
                 }
@@ -531,6 +533,7 @@ impl UiState {
                     row.elapsed = Some(std::time::Duration::from_millis(elapsed_ms));
                 }
             }
+
             AgentEvent::Model(event) => self.apply_model_event(event),
 
             AgentEvent::ToolStarted { call } => {
@@ -561,12 +564,14 @@ impl UiState {
                 self.transcript.push(TranscriptItem::User(content));
                 self.transcript_layout.invalidate_from(first);
             }
+
             AgentEvent::WaitingForCommands { .. } | AgentEvent::WaitingForTasks { .. } => {
                 self.background_waiting = true;
                 self.finish_thinking();
                 self.model_started_at = None;
                 self.finish_assistant();
             }
+
             AgentEvent::ToolFailed { call, error } => {
                 self.update_tool(&call, ToolStatus::Failed, error);
             }
@@ -575,12 +580,14 @@ impl UiState {
                 self.status = RunStatus::Completed;
                 self.finish_clock();
             }
+
             AgentEvent::Failed { error } => {
                 self.finish_pending_tools("运行已中断；已请求取消未完成命令。");
                 self.status = RunStatus::Failed;
                 self.finish_clock();
                 self.transcript.push(TranscriptItem::Error(error));
             }
+
             AgentEvent::Cancelled => {
                 self.finish_pending_tools("运行已取消；已请求取消未完成命令。");
                 self.status = RunStatus::Cancelled;
@@ -700,6 +707,7 @@ impl UiState {
             self.input_context_tokens = runtime.input_limit;
             self.max_output_tokens = runtime.max_output;
         }
+
         let live = matches!(self.status, RunStatus::Running | RunStatus::Cancelling)
             && matches!(runtime.status.as_str(), "running" | "cancelling");
         let terminal = matches!(
@@ -718,6 +726,7 @@ impl UiState {
             } else {
                 0
             });
+
         self.elapsed = std::time::Duration::from_millis(elapsed);
         let now = Instant::now();
         self.started_at = live.then(|| now.checked_sub(self.elapsed).unwrap_or(now));
@@ -779,6 +788,7 @@ impl UiState {
                     content.push_str(&text);
                 }
             }
+
             StreamEvent::ReasoningDelta(text) => {
                 if text.is_empty() {
                     return;
@@ -802,6 +812,7 @@ impl UiState {
                     self.transcript_layout.invalidate_from(index);
                 }
             }
+
             StreamEvent::ToolCallDelta(_) | StreamEvent::Completed { .. } => self.finish_thinking(),
         }
     }

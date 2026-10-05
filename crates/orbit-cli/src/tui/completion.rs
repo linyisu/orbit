@@ -88,6 +88,7 @@ fn directories(input: &str, workspace: &Path, home: Option<&Path>) -> Vec<Candid
         .filter(|name| !name.starts_with('.') || partial.starts_with('.'))
         .filter(|name| !name.chars().any(char::is_control))
         .collect::<Vec<_>>();
+
     names.sort();
 
     if prefix.is_empty() && "..".starts_with(partial) {
@@ -136,10 +137,12 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
                 false,
             )))
             .collect(),
+
         "/skill" => skills
             .iter()
             .map(|(name, description)| (name.clone(), description.clone(), false))
             .collect(),
+
         "/mode" | "/permissions" => [
             ("ask", "逐次确认", false),
             ("auto", "自动模式", false),
@@ -148,6 +151,7 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
         .into_iter()
         .map(|(n, d, c)| (n.into(), d.into(), c))
         .collect(),
+
         "/tasks" => options(
             argument,
             &[
@@ -160,6 +164,7 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
                 ("cancel", "输入任务编号", true),
             ],
         ),
+
         "/memory" => options(
             argument,
             &[
@@ -173,6 +178,7 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
                 ("forget", "输入记忆编号", true),
             ],
         ),
+
         _ => Vec::new(),
     };
 
@@ -231,12 +237,14 @@ pub async fn stored(
             .filter(|change| words[0] != "/undo" || !change.undone)
             .map(|change| (change.change.path, "会话文件变更".into()))
             .collect(),
+
         "/resume" => session
             .resumable()
             .await?
             .into_iter()
             .map(|entry| (entry.id, entry.title))
             .collect(),
+
         "/tasks" => session
             .store
             .tasks(&session.snapshot.session.project_id, true)
@@ -244,6 +252,7 @@ pub async fn stored(
             .into_iter()
             .map(|task| (task.id.to_string(), task.title))
             .collect(),
+
         "/memory" => session
             .store
             .session_memories(session.id(), false)
@@ -251,6 +260,7 @@ pub async fn stored(
             .into_iter()
             .map(|memory| (memory.id.to_string(), memory.title))
             .collect(),
+
         _ => Vec::new(),
     };
     let argument = input[prefix.len()..].trim_start();
@@ -263,6 +273,7 @@ pub async fn stored(
             continue_input: false,
         })
         .collect::<Vec<_>>();
+
     candidates.sort_by(|left, right| left.name.cmp(&right.name));
     candidates.dedup_by(|left, right| left.name == right.name);
     Ok(super::search::ranked(candidates, |candidate| {
@@ -291,6 +302,7 @@ pub fn select_with_mouse(state: &mut super::app::UiState, mouse: &crossterm::eve
             state.menu_manual_scroll = true;
             state.pending_list_hover = Some(*mouse);
         }
+
         MouseEventKind::ScrollDown => {
             state.menu_offset = state
                 .menu_offset
@@ -299,6 +311,7 @@ pub fn select_with_mouse(state: &mut super::app::UiState, mouse: &crossterm::eve
             state.menu_manual_scroll = true;
             state.pending_list_hover = Some(*mouse);
         }
+
         MouseEventKind::Moved | MouseEventKind::Down(MouseButton::Left) => {
             if let Some((_, index)) = state
                 .menu_rows
@@ -308,6 +321,7 @@ pub fn select_with_mouse(state: &mut super::app::UiState, mouse: &crossterm::eve
                 state.menu_index = *index;
             }
         }
+
         _ => {}
     }
 }

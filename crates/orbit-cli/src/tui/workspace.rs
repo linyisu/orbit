@@ -1,7 +1,8 @@
 //! Rebind the execution workspace and its prompt together when switching sessions.
+use orbit_model::{client::ModelClient, types::ChatMessage};
+
 use super::{app::UiState, restore_model_profile};
 use crate::{TuiResources, session::SessionState};
-use orbit_model::{client::ModelClient, types::ChatMessage};
 
 pub(super) async fn bind(
     resources: &TuiResources,
@@ -17,6 +18,7 @@ pub(super) async fn bind(
         )
         .await?;
     state.workspace = session.snapshot.session.workspace.clone();
+    state.media.set_client(resources.web_client.clone());
     state.subagent_parent = session.store.subagent_parent(session.id()).await?;
     state.cursor_motion.enabled = resources.cursor_trail;
     state.cursor_motion.clear();
@@ -96,6 +98,7 @@ id = "selected-model"
         )
         .await
         .unwrap();
+
         peer.initialize_audit(
             prepared.resources.workspace.clone(),
             prepared.resources.command_limits.clone(),
@@ -143,6 +146,7 @@ id = "selected-model"
             )
             .await
             .unwrap();
+
         assert!(output.content.contains("destination"));
         assert!(
             peer.begin("peer request".into(), state.model.clone())
@@ -168,6 +172,7 @@ id = "selected-model"
         )
         .await
         .unwrap();
+
         bind(
             &peer_resources,
             &mut peer,

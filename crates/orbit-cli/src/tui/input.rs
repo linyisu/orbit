@@ -1,4 +1,5 @@
 use std::ops::Range;
+
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -36,6 +37,7 @@ impl InputState {
                 self.insert(text);
                 return true;
             }
+
             return false;
         };
         if key.kind == KeyEventKind::Release {
@@ -57,6 +59,7 @@ impl InputState {
             (false, KeyCode::Down) => Some(Motion::Down),
             _ => None,
         };
+
         if let Some(motion) = motion {
             self.navigate(motion, width, selecting);
         } else {
@@ -76,12 +79,14 @@ impl InputState {
                 {
                     self.insert("\n")
                 }
+
                 (false, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::ALT) => {
                     self.insert(&c.to_string())
                 }
                 _ => return false,
             }
         }
+
         true
     }
 
@@ -170,13 +175,16 @@ impl InputState {
                     self.set_cursor(range.start);
                     return;
                 }
+
                 Motion::Right => {
                     self.set_cursor(range.end);
                     return;
                 }
+
                 _ => {}
             }
         }
+
         match motion {
             Motion::Left => self.move_left(),
             Motion::Right => self.move_right(),
@@ -192,8 +200,10 @@ impl InputState {
                     .rev()
                     .find(|(_, word)| !word.trim().is_empty())
                     .map_or(0, |(index, _)| index);
+
                 self.set_cursor(offset);
             }
+
             Motion::WordRight => {
                 let offset = self.text[self.cursor..]
                     .split_word_bound_indices()
@@ -201,9 +211,11 @@ impl InputState {
                     .map_or(self.text.len(), |(index, word)| {
                         self.cursor + index + word.len()
                     });
+
                 self.set_cursor(offset);
             }
         }
+
         self.selection_anchor = anchor;
     }
 
@@ -221,6 +233,7 @@ impl InputState {
             self.replace(range, "");
             return;
         }
+
         let end = self.cursor;
         self.move_left();
         if self.cursor != end {
@@ -233,6 +246,7 @@ impl InputState {
             self.replace(range, "");
             return;
         }
+
         let start = self.cursor;
         self.move_right();
         if self.cursor != start {
@@ -245,6 +259,7 @@ impl InputState {
             self.replace(range, "");
             return;
         }
+
         let end = self.cursor;
         self.home();
         if self.cursor != end {
@@ -257,6 +272,7 @@ impl InputState {
             self.replace(range, "");
             return;
         }
+
         let start = self.cursor;
         self.end();
         if self.cursor != start {
@@ -388,6 +404,7 @@ impl InputState {
             let start = positions.iter().find(|p| p.2 == row).unwrap().0;
             return start + lines[row].len();
         }
+
         positions
             .iter()
             .filter(|p| p.2 == row)
@@ -495,9 +512,11 @@ mod tests {
                 input.move_right();
                 input.backspace();
             }
+
             assert_eq!(input.text, "👩‍💻");
             assert_eq!(input.visual_lines(10).1, (2, 0));
         }
+
         input.set("\u{301}".into());
         input.home();
         input.insert("e");
@@ -548,6 +567,7 @@ mod tests {
                     input.delete();
                 }
             }
+
             let edited = input.text.clone();
             input.history_down();
             assert_eq!(input.text, edited);

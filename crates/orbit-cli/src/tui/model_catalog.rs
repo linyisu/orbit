@@ -55,6 +55,7 @@ impl Watcher {
                 ));
             }
         }
+
         if !self.task.as_ref().is_some_and(|task| task.is_finished()) {
             return None;
         }
@@ -110,12 +111,14 @@ pub(super) fn publish_background(
         .iter()
         .map(ModelOption::qualified_name)
         .collect::<Vec<_>>();
+
     for (id, run) in runs {
         run.model_options = models.clone();
         if let Some(tab) = tabs.parked_mut(id) {
             tab.state.model_completions = completions.clone();
         }
     }
+
     *options = models;
 }
 
@@ -138,6 +141,7 @@ pub(super) fn reconcile(
     {
         config.reasoning_effort = Some(effort);
     }
+
     if model.config() == &config
         && state.max_output_tokens == choice.max_output_tokens
         && state.context_tokens == choice.context_tokens
@@ -148,6 +152,7 @@ pub(super) fn reconcile(
     {
         return false;
     }
+
     let Ok(client) = ModelClient::new(config) else {
         return false;
     };
@@ -165,8 +170,9 @@ pub(super) fn reconcile(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use orbit_model::types::{ReasoningAdapter, ReasoningEffort};
+
+    use super::*;
 
     fn config(reasoning: &str) -> String {
         format!(

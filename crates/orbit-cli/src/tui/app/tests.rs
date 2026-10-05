@@ -78,8 +78,9 @@ fn reasoning_completion_only_offers_current_model_capabilities() {
     state.input.set("/reasoning hi".into());
     assert_eq!(state.menu()[0].name, "/reasoning high");
 }
-use super::*;
 use orbit_model::types::FunctionCall;
+
+use super::*;
 
 #[test]
 fn reasoning_finishes_before_text_tools_and_terminal_events() {

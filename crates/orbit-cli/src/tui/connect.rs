@@ -112,6 +112,7 @@ pub(super) async fn run(
                 width,
                 height,
             );
+
             super::overlay::clear(frame, area);
             let block = Block::default()
                 .borders(Borders::ALL)
@@ -148,13 +149,16 @@ pub(super) async fn run(
                     inner.width as usize,
                     1,
                 );
+
                 if let Some(row) = rows.last_mut() {
                     row.width = row
                         .width
                         .min(unicode_width::UnicodeWidthStr::width(label.as_str()) as u16);
                 }
+
                 lines.push(Line::styled(label, style));
             }
+
             lines.push(Line::raw(""));
             if pending_project.is_some() {
                 lines.push(Line::raw(
@@ -162,6 +166,7 @@ pub(super) async fn run(
                 ));
                 lines.push(Line::raw(format!("Google Cloud 项目 ID：{project}")));
             }
+
             lines.push(Line::raw(&message));
             let mut content = inner;
             if !url.is_empty() || verification_url.is_some() {
@@ -173,6 +178,7 @@ pub(super) async fn run(
                 } else {
                     "[打开浏览器]"
                 };
+
                 copy_button = button_area(inner, inner.x.saturating_add(1), y, copy_label);
                 verification_button =
                     button_area(inner, copy_button.right().saturating_add(2), y, open_label);
@@ -186,9 +192,11 @@ pub(super) async fn run(
                     } else {
                         Style::default().fg(crate::tui::theme::THEME.dialog_accent)
                     };
+
                     frame.render_widget(Paragraph::new(label).style(style), area);
                 }
             }
+
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), content);
         })?;
 
@@ -211,11 +219,13 @@ pub(super) async fn run(
                     Ok(models) => return Ok(Some(models)),
                     Err(error) => message = format!("账号已连接，但配置未保存：{error:#}"),
                 },
+
                 Ok((LoginOutcome::GoogleProjectRequired(pending), error)) => {
                     pending_project = Some(pending);
                     message = error
                         .unwrap_or_else(|| "填写项目后继续初始化，无需再次登录 Google。".into());
                 }
+
                 Err(error) => {
                     if let Some(orbit_auth::AuthError::AntigravityVerification { reason, url }) =
                         error.downcast_ref::<orbit_auth::AuthError>()
@@ -227,6 +237,7 @@ pub(super) async fn run(
                     }
                 }
             }
+
             url.clear();
             connected = AuthStore::new(options.auth_directory.clone())?.list()?;
         }
@@ -250,8 +261,10 @@ pub(super) async fn run(
                     Ok(()) => copied_at = Some(Instant::now()),
                     Err(_) => message = "复制失败，请重试或打开浏览器。".into(),
                 }
+
                 continue;
             }
+
             if open_verification_requested(&event, verification_button) {
                 crate::auth_cli::launch_browser(link).await;
                 continue;
@@ -265,6 +278,7 @@ pub(super) async fn run(
                     abort(&mut task);
                     return Ok(None);
                 }
+
                 KeyCode::Esc => {
                     if task.is_some() {
                         abort(&mut task);
@@ -277,6 +291,7 @@ pub(super) async fn run(
                         return Ok(None);
                     }
                 }
+
                 KeyCode::Enter if task.is_none() && pending_project.is_some() => activate = true,
                 KeyCode::Backspace if task.is_none() && pending_project.is_some() => {
                     project.pop();
@@ -292,11 +307,13 @@ pub(super) async fn run(
                 {
                     project.push(character);
                 }
+
                 _ if task.is_none() && pending_project.is_none() => {
                     activate = select_provider(Event::Key(key), &mut selected, &rows)
                 }
                 _ => {}
             },
+
             Event::Paste(text) if task.is_none() && pending_project.is_some() => {
                 project.extend(
                     text.chars()
@@ -304,6 +321,7 @@ pub(super) async fn run(
                         .take(256usize.saturating_sub(project.chars().count())),
                 );
             }
+
             event if task.is_none() && pending_project.is_none() => {
                 activate = select_provider(event, &mut selected, &rows)
             }
@@ -345,16 +363,20 @@ pub(super) async fn run(
                 {
                     return Ok(Some(models));
                 }
+
                 continue;
             }
+
             ConnectionProvider::Custom => {
                 if let Some(models) =
                     super::connect_custom::run(terminal, events, options, None).await?
                 {
                     return Ok(Some(models));
                 }
+
                 continue;
             }
+
             ConnectionProvider::OAuth(provider) => provider,
             ConnectionProvider::ApiKey(provider) => {
                 if let Some(models) =
@@ -362,6 +384,7 @@ pub(super) async fn run(
                 {
                     return Ok(Some(models));
                 }
+
                 continue;
             }
         };
@@ -407,11 +430,13 @@ fn copy_requested(event: &Event, button: Rect) -> bool {
             mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left)
                 && button.contains((mouse.column, mouse.row).into())
         }
+
         Event::Key(key) => {
             key.kind != KeyEventKind::Release
                 && key.code == KeyCode::Char('y')
                 && key.modifiers.is_empty()
         }
+
         _ => false,
     }
 }
@@ -444,10 +469,12 @@ fn open_verification_requested(event: &Event, button: Rect) -> bool {
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         }
+
         Event::Mouse(mouse) => {
             mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left)
                 && button.contains((mouse.column, mouse.row).into())
         }
+
         _ => false,
     }
 }
@@ -461,6 +488,7 @@ fn select_provider(event: Event, selected: &mut usize, rows: &[Rect]) -> bool {
             KeyCode::Up => *selected = (*selected + PROVIDERS.len() - 1) % PROVIDERS.len(),
             _ => {}
         },
+
         Event::Mouse(mouse) => match mouse.kind {
             MouseEventKind::Moved | MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
                 if let Some(index) = rows
@@ -471,8 +499,10 @@ fn select_provider(event: Event, selected: &mut usize, rows: &[Rect]) -> bool {
                     return mouse.kind != MouseEventKind::Moved;
                 }
             }
+
             _ => {}
         },
+
         _ => {}
     }
 

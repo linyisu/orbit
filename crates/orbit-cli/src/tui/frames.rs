@@ -1,6 +1,7 @@
 //! Coalesce redraw requests without putting input behind the stream refresh tick.
 //! Design reference: openai/codex, tui/src/tui/frame_requester.rs.
 use std::time::Duration;
+
 use tokio::time::Instant;
 
 const MIN_FRAME_INTERVAL: Duration = Duration::from_micros(8_334);

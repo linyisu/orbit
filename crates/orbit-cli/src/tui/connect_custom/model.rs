@@ -1,11 +1,12 @@
 //! Editable model drafts, committed only with the connection.
-use super::form::Field;
-use crate::config::{ModelProfile, ReasoningProfile};
 use anyhow::{Result, ensure};
 use orbit_model::{
     client::ApiFormat,
     types::{ReasoningAdapter, ReasoningEffort},
 };
+
+use super::form::Field;
+use crate::config::{ModelProfile, ReasoningProfile};
 
 pub(super) fn blank(id: &str) -> ModelProfile {
     ModelProfile {
@@ -99,6 +100,7 @@ pub(super) fn read(
             .unwrap_or(default_context)
             .saturating_sub(output as usize)
     });
+
     ensure!(input >= 8192, "可用输入预算不能小于 8192 tokens");
     updated.supports_vision = Some(fields[4].value() == "支持");
     Ok(updated)
@@ -114,6 +116,7 @@ pub(super) fn reasoning_fields(current: &Option<ReasoningProfile>) -> Vec<Field>
         },
         &["继承服务端", "自定义"],
     )];
+
     for effort in EFFORTS {
         let enabled = current.as_ref().is_some_and(|p| {
             p.efforts.iter().any(|e| {
@@ -124,17 +127,20 @@ pub(super) fn reasoning_fields(current: &Option<ReasoningProfile>) -> Vec<Field>
                     == Some(effort)
             })
         });
+
         fields.push(Field::choice(
             effort,
             if enabled { "启用" } else { "关闭" },
             &["启用", "关闭"],
         ));
     }
+
     let default = current
         .as_ref()
         .and_then(|p| serde_json::to_value(p.default).ok())
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_default();
+
     fields.push(Field::choice("默认强度", &default, &EFFORTS));
     fields
 }

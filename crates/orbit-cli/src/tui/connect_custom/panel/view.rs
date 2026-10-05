@@ -44,6 +44,7 @@ pub(super) fn draw(
             viewport.width.saturating_sub(row.indent),
             1,
         );
+
         if row.target == Some(Target::Action(Action::Load)) {
             let mut x = rect.x;
             for (label, action) in [
@@ -116,6 +117,7 @@ pub(super) fn draw(
                 rect.width.saturating_sub(label_width),
                 1,
             );
+
             if !field.choices.is_empty() && !field.readonly {
                 let mut x = rect.x;
                 for (index, value) in field.choices.iter().enumerate() {
@@ -161,6 +163,7 @@ pub(super) fn draw(
                     focused,
                     &field.hint,
                 );
+
                 frame.render_widget(Paragraph::new(line), rect);
                 if focused && !loading && rect.width > 0 {
                     frame.set_cursor_position((
@@ -170,6 +173,7 @@ pub(super) fn draw(
                         rect.y,
                     ));
                 }
+
                 if !field.readonly {
                     hits.push((rect, Target::Field(id)));
                 }
@@ -233,6 +237,7 @@ pub(super) fn draw(
             }
         }
     }
+
     let status = if !panel.message.is_empty() {
         panel.message.clone()
     } else if loading {
@@ -244,6 +249,7 @@ pub(super) fn draw(
             panel.models.iter().filter(|m| m.entry.enabled).count()
         )
     };
+
     frame.render_widget(
         Paragraph::new(status).style(Style::default().fg(ACCENT)),
         Rect::new(
@@ -272,6 +278,7 @@ pub(super) fn draw(
         );
         hits.push((rect, Target::Action(action)));
     }
+
     (viewport, hits, max_offset)
 }
 

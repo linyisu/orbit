@@ -8,6 +8,7 @@ pub(super) fn path_label(workspace: &str, home: Option<&Path>) -> String {
         }
         return format!("~/{}", relative.display());
     }
+
     workspace.to_owned()
 }
 
@@ -34,12 +35,14 @@ pub(super) async fn branch(workspace: &str) -> Option<String> {
         .await
         .ok()?
         .ok()?;
+
         if output.status.success() {
             let value = String::from_utf8(output.stdout).ok()?;
             let value = value.trim();
             return (!value.is_empty()).then(|| value.to_owned());
         }
     }
+
     None
 }
 
@@ -59,6 +62,7 @@ mod tests {
             .arg(root.path())
             .output()
             .unwrap();
+
         assert!(
             output.status.success(),
             "stdout: {}\nstderr: {}",

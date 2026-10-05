@@ -36,6 +36,7 @@ pub(super) async fn run(
                 width,
                 height,
             );
+
             super::overlay::clear(frame, area);
             let block = Block::default()
                 .borders(Borders::ALL)
@@ -49,6 +50,7 @@ pub(super) async fn run(
                 inner.width.saturating_sub(10),
                 u16::from(inner.height > 0),
             );
+
             frame.render_widget(
                 Paragraph::new(vec![
                     Line::raw(" API Key:"),
@@ -117,9 +119,11 @@ pub(super) async fn run(
                         Ok((secret, ids))
                     })));
                 }
+
                 code if task.is_none() => form::edit(&mut key, code, event.modifiers),
                 _ => {}
             },
+
             Event::Paste(text) if task.is_none() => form::paste(&mut key, text.trim()),
             _ => {}
         }

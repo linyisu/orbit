@@ -44,6 +44,7 @@ impl CursorMotion {
         {
             self.trail = None;
         }
+
         if let Some((old_screen, old_area, from)) = previous {
             if old_screen != screen || old_area != area || from.y != position.y {
                 self.trail = None;
@@ -116,6 +117,7 @@ impl CursorMotion {
                     buffer[(column, trail.to.y)].set_bg(color);
                 }
             }
+
             x = end;
         }
     }
@@ -173,6 +175,7 @@ mod tests {
             assert_eq!(old.symbol(), new.symbol());
             assert_eq!(old.fg, new.fg);
         }
+
         assert_eq!(buffer[(5, 0)].bg, buffer[(6, 0)].bg);
         assert_eq!(buffer[(7, 0)].bg, buffer[(8, 0)].bg);
         assert_eq!(buffer[(9, 0)].bg, Color::Reset);
@@ -194,6 +197,7 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
+
         for reset in 0..4 {
             motion.clear();
             motion.update(area, area, Some((1, 0).into()), now);
@@ -207,6 +211,7 @@ mod tests {
                     motion.update(area, area, Some((5, 0).into()), now);
                 }
             }
+
             assert!(!motion.active(now));
         }
     }

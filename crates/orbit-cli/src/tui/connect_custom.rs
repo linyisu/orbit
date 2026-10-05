@@ -8,9 +8,9 @@ use anyhow::Result;
 use crossterm::event::EventStream;
 use orbit_model::client::ApiFormat;
 
+use self::form::Field;
 use super::{ModelOption, terminal};
 use crate::connections::edit::ConnectionDraft;
-use form::Field;
 
 const FORMATS: [&str; 3] = [
     "OpenAI Chat Completions",
@@ -54,6 +54,7 @@ pub(super) async fn run(
             "输入 API Key"
         },
     );
+
     key.secret = true;
     key.readonly = draft.account();
     panel::run(
@@ -79,5 +80,6 @@ pub(super) async fn manage(
     {
         return run(terminal, events, options, Some(&name)).await;
     }
+
     Ok(None)
 }

@@ -4,7 +4,6 @@ pub struct Command {
     pub description: &'static str,
 }
 
-/// Keep command descriptions aligned even for the longest built-in name.
 pub const COMMAND_NAME_WIDTH: usize = 14;
 
 pub const COMMANDS: &[Command] = &[

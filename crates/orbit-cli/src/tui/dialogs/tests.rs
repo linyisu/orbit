@@ -1,6 +1,7 @@
-use super::*;
 use crossterm::event::KeyEvent;
 use ratatui::{Terminal, backend::TestBackend};
+
+use super::*;
 
 #[test]
 fn transcript_dialog_grows_on_wide_screens_and_keeps_half_screen_size() {
@@ -14,6 +15,7 @@ fn transcript_dialog_grows_on_wide_screens_and_keeps_half_screen_size() {
         let area = transcript_area(full);
         assert_eq!((area.width, area.height), expected);
     }
+
     let widths = (100..=240)
         .map(|width| transcript_area(Rect::new(0, 0, width, 50)))
         .collect::<Vec<_>>();
@@ -114,6 +116,7 @@ fn home_errors_leave_no_transcript_and_keep_dialogs_safe_at_small_sizes() {
             let panel_width = width.saturating_sub(4).min(96);
             assert!(width - x - panel_width - x <= 1);
         }
+
         handle(
             &mut state,
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
@@ -130,7 +133,6 @@ fn delete_requires_two_presses_to_confirm_and_any_other_key_cancels() {
     ]);
     picker.selected = 1;
 
-    // First Delete: enters pending state, no delete_request yet.
     assert!(picker.pending_delete.is_none());
     let del_key = Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
 
@@ -144,14 +146,12 @@ fn delete_requires_two_presses_to_confirm_and_any_other_key_cancels() {
     );
     assert!(state.delete_request.is_none());
 
-    // Pressing Up cancels pending delete.
     handle(
         &mut state,
         Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
     );
     assert!(state.picker.as_ref().unwrap().pending_delete.is_none());
 
-    // Navigate back and press Delete twice → delete_request is set.
     handle(
         &mut state,
         Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
@@ -167,14 +167,12 @@ fn delete_confirmed_with_enter_after_first_del_press() {
     let mut state = UiState::new("model");
     state.picker = Some(SessionPicker::new(vec![session("abc", "会话")]));
 
-    // First Delete → pending.
     handle(
         &mut state,
         Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
     );
     assert!(state.picker.as_ref().unwrap().pending_delete.is_some());
 
-    // Enter confirms.
     handle(
         &mut state,
         Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
@@ -193,7 +191,6 @@ fn calendar_year_changes_only_once_for_january_and_february() {
 
 #[test]
 fn format_session_time_produces_iso_date_and_dash_for_zero() {
-    // Zero / negative → em dash placeholder.
     assert_eq!(format_session_time(0), "—");
     assert_eq!(format_session_time(-1), "—");
 
@@ -204,12 +201,12 @@ fn format_session_time_produces_iso_date_and_dash_for_zero() {
         s.starts_with("2024-06-"),
         "expected 2024-06-xx date, got {s}"
     );
-    // Must match YYYY-MM-DD HH:MM
     let re_like = s.len() == 16
         && s.as_bytes()[4] == b'-'
         && s.as_bytes()[7] == b'-'
         && s.as_bytes()[10] == b' '
         && s.as_bytes()[13] == b':';
+
     assert!(re_like, "unexpected format: {s}");
 }
 
@@ -221,6 +218,7 @@ fn resume_search_ranks_titles_with_the_shared_matching_rules() {
         session("three", "ABC 开头"),
         session("aabbcc", "按编号查找"),
     ]);
+
     picker.query = "abc".into();
 
     let ids = picker
@@ -229,7 +227,6 @@ fn resume_search_ranks_titles_with_the_shared_matching_rules() {
         .map(|session| session.id.as_str())
         .collect::<Vec<_>>();
 
-    // Only title-matching sessions are returned; "aabbcc" (ID only) is excluded.
     assert_eq!(ids, ["three", "two", "one"]);
     picker.query = "项c".into();
     assert_eq!(picker.matches()[0].id, "two");
@@ -276,6 +273,7 @@ fn selected_session_title_scrolls_and_resets_for_selection_search_and_width() {
         session("second", "另一段很长的会话标题 abcdefghijklmnopqrstuvwxyz"),
         session("short", "短标题"),
     ]);
+
     picker.prepare_title_scroll(12);
     picker.title_scroll.as_mut().unwrap().2 = Instant::now() - Duration::from_secs(1);
 
@@ -304,6 +302,7 @@ fn selected_session_title_scrolls_and_resets_for_selection_search_and_width() {
 fn key(code: KeyCode) -> Event {
     Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
 }
+
 fn session(id: &str, title: &str) -> Session {
     Session {
         id: id.into(),
@@ -354,6 +353,7 @@ fn grouped_models_keep_last_row_visible_and_support_mouse_selection() {
         .iter()
         .find(|(_, index)| *index == 29)
         .unwrap();
+
     assert!(last.height > 0 && last.width > 0);
     let (area, index) = state.dialog_rows[0];
     let mouse = |kind| {
@@ -383,7 +383,6 @@ fn grouped_models_keep_last_row_visible_and_support_mouse_selection() {
     assert_eq!(state.model_picker.as_ref().unwrap().selected, index);
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
     assert!(state.dialog_rows[0].1 < index);
-    // Restore the original viewport for the click check below.
     state.model_picker.as_mut().unwrap().offset = index;
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
     let blank = Event::Mouse(crossterm::event::MouseEvent {
@@ -392,6 +391,7 @@ fn grouped_models_keep_last_row_visible_and_support_mouse_selection() {
         row: area.y,
         modifiers: KeyModifiers::NONE,
     });
+
     assert!(!super::super::handle_list_hover(&mut state, &blank));
     assert_eq!(state.model_picker.as_ref().unwrap().selected, index);
 
@@ -448,6 +448,7 @@ fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
         .find(|(rect, _)| rect.contains((area.x + 2, area.y).into()))
         .unwrap()
         .1;
+
     assert!(after > before);
     assert_eq!(state.model_picker.as_ref().unwrap().selected, after);
     assert!(state.pending_list_hover.is_none());
@@ -466,6 +467,7 @@ fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
                 .contains("共30个模型·Esc返回")
         })
         .unwrap();
+
     assert!((3..97).all(|x| buffer[(x, footer_y - 1)].symbol() == " "));
 }
 
@@ -567,7 +569,6 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
         state.model.clone(),
         Some(orbit_model::types::ReasoningEffort::Low),
     ));
-    // Horizontal arrows no longer change reasoning in the model picker.
     handle(&mut state, key(KeyCode::Left));
     handle(&mut state, key(KeyCode::Enter));
 
@@ -577,7 +578,6 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
         Some(orbit_model::types::ReasoningEffort::Low)
     );
 
-    // Model without None in efforts cannot select None
     state.model = "deepseek::strict-model".into();
     state.model_picker = Some(ModelPicker::new(
         vec![ModelOption {
@@ -879,6 +879,7 @@ fn dialog_borders_survive_wide_background_text_and_restore_on_close() {
                         Line::from(format!("{indent}{}", glyph.repeat(150)));
                         30
                     ]);
+
                 terminal
                     .draw(|frame| frame.render_widget(background.clone(), frame.area()))
                     .unwrap();

@@ -34,6 +34,7 @@ impl Editor {
             .status()
             .await
             .with_context(|| format!("无法启动编辑器 {program}"))?;
+
         ensure!(status.success(), "编辑器退出失败：{status}；原草稿已保留");
 
         std::fs::read_to_string(file.path()).context("编辑器返回的内容不是有效的 UTF-8 文本")

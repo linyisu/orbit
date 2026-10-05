@@ -172,11 +172,13 @@ fn read_clipboard() -> Result<ClipboardPayload> {
             bytes: image.bytes.into_owned(),
         });
     }
+
     if let Ok(files) = clipboard.get().file_list()
         && !files.is_empty()
     {
         return Ok(ClipboardPayload::Files(files));
     }
+
     if let Ok(text) = clipboard.get_text() {
         return Ok(ClipboardPayload::Text(text));
     }
@@ -202,6 +204,7 @@ pub(super) async fn paste_clipboard(state: &mut UiState, session: &SessionState)
             let attachment = session.import_clipboard_image(width, height, bytes)?;
             queue_attachment(state, attachment);
         }
+
         ClipboardPayload::Files(files) => {
             let images = files
                 .iter()
@@ -225,6 +228,7 @@ pub(super) async fn paste_clipboard(state: &mut UiState, session: &SessionState)
                 );
             }
         }
+
         ClipboardPayload::Text(text) => {
             if let Some(paths) = pasted_image_paths(&text, std::path::Path::new(&state.workspace)) {
                 attach_paths(state, session, paths)?;

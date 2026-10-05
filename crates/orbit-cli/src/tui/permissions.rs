@@ -1,5 +1,6 @@
-use orbit_tools::approval::ApprovalPreview;
 use std::path::Path;
+
+use orbit_tools::approval::ApprovalPreview;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
@@ -47,7 +48,7 @@ impl Mode {
         match self {
             Self::Ask => "ask：文件修改、沙箱命令、MCP 调用和外部权限逐次确认",
             Self::Auto => {
-                "auto：工作区文件工具和离线只读命令自动执行；联网命令、Shell 写入、MCP 和外部权限需确认"
+                "auto：工作区文件工具、简单文本写入、建目录和离线只读命令自动执行；其他脚本、联网、MCP 和外部权限需确认"
             }
             Self::Yolo => "YOLO：全部操作自动确认通过（沙箱和权限边界限制不变）",
         }
@@ -56,13 +57,15 @@ impl Mode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::PathBuf;
+
     use orbit_runtime::capability::{EnvironmentId, FilesystemAccess};
     use orbit_tools::approval::{
         CapabilityPreview, CommandPreview, CommandWorkspaceAccess, DeletePreview, McpPreview,
         WritePreview,
     };
-    use std::path::PathBuf;
+
+    use super::*;
 
     #[test]
     fn policy_matrix_and_cycle() {
@@ -125,6 +128,28 @@ mod tests {
         });
 
         assert!(Mode::Auto.allows(&offline_read, root));
+        let mkdir = ApprovalPreview::Command(CommandPreview {
+            command: "mkdir -p demo".into(),
+            workspace_access: CommandWorkspaceAccess::ReadWrite,
+            ..match offline_read.clone() {
+                ApprovalPreview::Command(command) => command,
+                _ => unreachable!(),
+            }
+        });
+
+        assert!(Mode::Auto.allows(&mkdir, root));
+        assert!(!Mode::Ask.allows(&mkdir, root));
+        assert!(Mode::Yolo.allows(&mkdir, root));
+        let text_write = ApprovalPreview::Command(CommandPreview {
+            command: "echo hello | tee demo.txt".into(),
+            ..match mkdir.clone() {
+                ApprovalPreview::Command(command) => command,
+                _ => unreachable!(),
+            }
+        });
+
+        assert!(Mode::Auto.allows(&text_write, root));
+        assert!(!Mode::Ask.allows(&text_write, root));
         assert!(Mode::Auto.allows(&write, root));
         assert!(Mode::Auto.allows(&delete, root));
         assert!(!Mode::Ask.allows(&mcp, root));
@@ -174,6 +199,7 @@ mod tests {
             external_write: false,
             git: orbit_runtime::git::GitCommandAnalysis::parse("git status"),
         });
+
         assert!(Mode::Auto.allows(&git_status, root));
 
         let git_push = ApprovalPreview::Command(CommandPreview {
@@ -186,6 +212,7 @@ mod tests {
             external_write: false,
             git: orbit_runtime::git::GitCommandAnalysis::parse("git push origin main"),
         });
+
         assert!(!Mode::Auto.allows(&git_push, root));
 
         let git_reset_hard = ApprovalPreview::Command(CommandPreview {
@@ -198,6 +225,7 @@ mod tests {
             external_write: false,
             git: orbit_runtime::git::GitCommandAnalysis::parse("git reset --hard"),
         });
+
         assert!(!Mode::Auto.allows(&git_reset_hard, root));
         assert_eq!(Mode::default(), Mode::Auto);
         assert_eq!(Mode::Auto.next().next().next(), Mode::Auto);

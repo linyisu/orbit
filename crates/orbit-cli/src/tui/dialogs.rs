@@ -1,5 +1,3 @@
-use super::{ModelOption, app::UiState, commands::COMMANDS, icons};
-use crate::marketplaces::{Marketplace, PluginPackage};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use orbit_store::types::{ProjectPlugin, Session};
 use ratatui::{
@@ -9,6 +7,9 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+
+use super::{ModelOption, app::UiState, commands::COMMANDS, icons};
+use crate::marketplaces::{Marketplace, PluginPackage};
 
 #[derive(Debug)]
 pub struct SessionPicker {
@@ -102,6 +103,7 @@ impl MarketplaceDialog {
             .get(self.selected_market)
             .map(|market| market.plugins.len())
             .unwrap_or_default();
+
         self.selected_plugin = move_selection(self.selected_plugin, count, down);
     }
 
@@ -163,6 +165,7 @@ impl MarketplaceDialog {
                 .get(self.selected_plugin)
                 .map(|plugin| (market.clone(), plugin.clone()))
         });
+
         self.inspection = Some(match selected {
             Some((market, plugin)) => crate::marketplaces::inspect_plugin(&market, &plugin)
                 .map_err(|error| error.to_string()),
@@ -218,6 +221,7 @@ impl ModelPicker {
             }
             first += 1;
         }
+
         self.offset = first;
         first
     }
@@ -338,7 +342,6 @@ impl SessionPicker {
         };
     }
 
-    /// Remove the session with `id` from the list and clamp the selection index.
     pub fn remove_session(&mut self, id: &str) {
         self.sessions.retain(|s| s.id != id);
         self.selected = self.selected.min(self.sessions.len().saturating_sub(1));
@@ -446,6 +449,7 @@ impl InfoDialog {
                 KeyCode::End => self.scroll = self.max_scroll,
                 _ => {}
             },
+
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     self.scroll = self.scroll.saturating_sub(super::wheel::LINES)
@@ -455,8 +459,10 @@ impl InfoDialog {
                 }
                 _ => {}
             },
+
             _ => {}
         }
+
         self.scroll = self.scroll.min(self.max_scroll);
         false
     }
@@ -469,6 +475,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         }
         return None;
     }
+
     if matches!(&event, Event::Key(_) | Event::Paste(_)) {
         state.dialog_manual_scroll = false;
     }
@@ -493,6 +500,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 offset.saturating_sub(3)
             };
         };
+
         if let Some(picker) = &mut state.picker {
             let count = picker.matches().len();
             scroll(&mut picker.offset, count);
@@ -509,10 +517,12 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 scroll(&mut dialog.market_offset, dialog.marketplaces.len());
             }
         }
+
         state.dialog_manual_scroll = true;
         state.pending_list_hover = Some(*mouse);
         return None;
     }
+
     if let Event::Key(key) = &event {
         if key.kind == KeyEventKind::Release {
             return None;
@@ -554,7 +564,6 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
     {
         let index = *index;
         if let Some(picker) = &mut state.picker {
-            // Moving to a different row cancels any pending delete confirmation.
             if picker.selected != index {
                 picker.pending_delete = None;
             }
@@ -571,6 +580,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 dialog.selected_plugin = 0;
             }
         }
+
         if mouse.kind == MouseEventKind::Moved {
             return None;
         }
@@ -591,31 +601,32 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     picker.pending_delete = None;
                     picker.move_by(false);
                 }
+
                 KeyCode::Down => {
                     picker.pending_delete = None;
                     picker.move_by(true);
                 }
+
                 KeyCode::Enter => {
-                    // If a delete is pending, confirm it; otherwise resume.
                     if let Some(id) = picker.pending_delete.take() {
                         state.delete_request = Some(id);
                     } else {
                         return picker.matches().get(picker.selected).map(|s| s.id.clone());
                     }
                 }
+
                 KeyCode::Delete => {
                     let selected_id = picker.matches().get(picker.selected).map(|s| s.id.clone());
                     if let Some(id) = selected_id {
                         if picker.pending_delete.as_deref() == Some(&id) {
-                            // Second Delete on the same session — confirm.
                             picker.pending_delete = None;
                             state.delete_request = Some(id);
                         } else {
-                            // First Delete — enter confirmation state.
                             picker.pending_delete = Some(id);
                         }
                     }
                 }
+
                 KeyCode::Char(c)
                     if !key
                         .modifiers
@@ -626,16 +637,19 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     picker.selected = 0;
                     picker.error = None;
                 }
+
                 KeyCode::Backspace => {
                     picker.pending_delete = None;
                     picker.query.pop();
                     picker.selected = 0;
                     picker.error = None;
                 }
+
                 _ => {
                     picker.pending_delete = None;
                 }
             },
+
             Event::Paste(text) => {
                 picker.pending_delete = None;
                 picker
@@ -643,14 +657,17 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     .extend(text.chars().filter(|c| !c.is_control()));
                 picker.selected = 0;
             }
+
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
                 picker.pending_delete = None;
                 picker.move_by(false);
             }
+
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
                 picker.pending_delete = None;
                 picker.move_by(true);
             }
+
             _ => {}
         }
     } else if let Some(picker) = &mut state.model_picker {
@@ -666,6 +683,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     state.chosen_effort = picker.effort;
                     state.model_picker = None;
                 }
+
                 KeyCode::Char(c)
                     if !key
                         .modifiers
@@ -675,13 +693,16 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     picker.selected = 0;
                     picker.normalize_effort();
                 }
+
                 KeyCode::Backspace => {
                     picker.query.pop();
                     picker.selected = 0;
                     picker.normalize_effort();
                 }
+
                 _ => {}
             },
+
             Event::Paste(text) => {
                 picker
                     .query
@@ -689,6 +710,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 picker.selected = 0;
                 picker.normalize_effort();
             }
+
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => picker.move_by(false),
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => picker.move_by(true),
             _ => {}
@@ -794,10 +816,12 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     state.help_keys = !state.help_keys;
                     state.help_scroll = 0;
                 }
+
                 KeyCode::Up => state.help_scroll = state.help_scroll.saturating_sub(1),
                 KeyCode::Down => state.help_scroll += 1,
                 _ => {}
             },
+
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
                 state.help_scroll = state.help_scroll.saturating_sub(super::wheel::LINES)
             }
@@ -853,6 +877,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     } else {
         centered_area(frame.area())
     };
+
     super::overlay::clear(frame, area);
     let title = if state.picker.is_some() {
         "恢复会话 · 当前项目"
@@ -877,6 +902,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor = state.btw.cursor();
         return;
     }
+
     if let Some(viewer) = &mut state.subagent_dialog {
         state.ime_cursor = None;
         let mut media = state.media.clone();
@@ -885,6 +911,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor = viewer.cursor();
         return;
     }
+
     if let Some(dialog) = &mut state.info_dialog {
         state.ime_cursor = None;
         let title = Rect::new(
@@ -899,6 +926,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             title.width,
             inner.height.saturating_sub(2),
         );
+
         frame.render_widget(
             Paragraph::new(Line::styled(
                 super::render::fit_label(&clean(&dialog.title), title.width as usize, false),
@@ -923,6 +951,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         frame.render_widget(paragraph.scroll((dialog.scroll as u16, 0)), body);
         return;
     }
+
     let header = Rect::new(
         inner.x + 1,
         inner.y,
@@ -959,6 +988,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             header.width.saturating_sub(1) as usize,
             true,
         );
+
         state.ime_cursor = Some(
             (
                 header.x + unicode_width::UnicodeWidthStr::width(search.as_str()) as u16,
@@ -1001,6 +1031,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 .min(picker.selected)
                 .max(picker.selected.saturating_sub(visible - 1));
         }
+
         let first = picker.offset;
         let rows = picker.matches();
         let mut lines = Vec::new();
@@ -1092,6 +1123,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             header.width.saturating_sub(1) as usize,
             true,
         );
+
         state.ime_cursor = Some(
             (
                 header.x + unicode_width::UnicodeWidthStr::width(search.as_str()) as u16,
@@ -1173,6 +1205,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 },
                 if current { "  (当前)" } else { "" },
             );
+
             lines.push(Line::styled(
                 super::render::padded_label(&label, body.width as usize, 2),
                 style,
@@ -1196,6 +1229,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 header.width.saturating_sub(1) as usize,
                 true,
             );
+
             state.ime_cursor = Some(
                 (
                     header.x + unicode_width::UnicodeWidthStr::width(source.as_str()) as u16,
@@ -1311,6 +1345,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                             Style::default().fg(crate::tui::theme::THEME.secondary),
                         ),
                     ];
+
                     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
                 }
 
@@ -1355,6 +1390,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     .min(dialog.selected_plugin)
                     .max(dialog.selected_plugin.saturating_sub(visible - 1));
             }
+
             let Some(market) = dialog.selected_market() else {
                 return;
             };
@@ -1403,6 +1439,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     },
                     clean(&plugin.name)
                 );
+
                 entries.push(Line::styled(
                     super::render::padded_label(&label, body.width as usize, 2),
                     style,
@@ -1451,6 +1488,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                     .min(dialog.selected_market)
                     .max(dialog.selected_market.saturating_sub(visible - 1));
             }
+
             let first = dialog.market_offset;
             let mut entries = Vec::new();
 

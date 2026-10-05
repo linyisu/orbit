@@ -16,8 +16,6 @@ use unicode_width::UnicodeWidthStr;
 use super::super::{input::InputState, overlay, terminal};
 
 pub(super) const ACCENT: Color = crate::tui::theme::THEME.dialog_accent;
-// Explicit RGB keeps secondary text readable when a terminal theme maps
-// ANSI dark gray close to the transparent background.
 const HINT_TEXT: Color = crate::tui::theme::THEME.placeholder;
 
 pub(super) struct Field {
@@ -76,6 +74,7 @@ fn start(input: &InputState, width: usize, secret: bool) -> usize {
         }
         start = index;
     }
+
     start
 }
 
@@ -129,10 +128,12 @@ pub(in crate::tui) fn edit(input: &mut InputState, code: KeyCode, modifiers: Key
         (_, KeyCode::End) => Some(crate::tui::input::Motion::Finish),
         _ => None,
     };
+
     if let Some(motion) = motion {
         input.navigate(motion, usize::MAX, modifiers.contains(KeyModifiers::SHIFT));
         return;
     }
+
     match code {
         KeyCode::Backspace => input.backspace(),
         KeyCode::Delete => input.delete(),
@@ -147,6 +148,7 @@ pub(in crate::tui) fn edit(input: &mut InputState, code: KeyCode, modifiers: Key
         {
             input.insert(&c.to_string());
         }
+
         _ => {}
     }
 }
@@ -177,6 +179,7 @@ pub(super) async fn choose(
                 56,
                 choices.len().saturating_add(4).min(u16::MAX as usize) as u16,
             );
+
             overlay::clear(frame, outer);
             let block = Block::default()
                 .title(format!(" {title} "))
@@ -201,6 +204,7 @@ pub(super) async fn choose(
                     }
                 }
             }
+
             for (index, choice) in choices
                 .iter()
                 .enumerate()
@@ -218,6 +222,7 @@ pub(super) async fn choose(
                     label.width() as u16,
                     1,
                 );
+
                 frame.render_widget(
                     Paragraph::new(label).style(if index == selected {
                         Style::default()
@@ -247,6 +252,7 @@ pub(super) async fn choose(
                     KeyCode::Down => selected = (selected + 1).min(choices.len() - 1),
                     _ => {}
                 }
+
                 if selected < offset {
                     offset = selected;
                 }
@@ -254,6 +260,7 @@ pub(super) async fn choose(
                     offset = selected.saturating_sub(viewport.height.saturating_sub(1) as usize);
                 }
             }
+
             Event::Mouse(mouse) => {
                 let point = (mouse.column, mouse.row).into();
                 pointer = Some(point);
@@ -263,6 +270,7 @@ pub(super) async fn choose(
                             offset = (offset + 3)
                                 .min(choices.len().saturating_sub(viewport.height as usize))
                         }
+
                         MouseEventKind::ScrollUp => offset = offset.saturating_sub(3),
                         MouseEventKind::Down(MouseButton::Left) => {
                             if let Some((index, _)) =
@@ -271,10 +279,12 @@ pub(super) async fn choose(
                                 return Ok(Some(choices[*index].clone()));
                             }
                         }
+
                         _ => {}
                     }
                 }
             }
+
             _ => {}
         }
     }

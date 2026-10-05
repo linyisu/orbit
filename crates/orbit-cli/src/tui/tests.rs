@@ -46,8 +46,9 @@ fn running_context_is_not_overwritten_by_completed_history() {
     assert!(state.context_used_tokens < live);
 }
 
-use super::*;
 use crossterm::event::KeyEvent;
+
+use super::*;
 
 #[tokio::test]
 async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
@@ -227,6 +228,7 @@ id = "orbit-model"
         )
         .await
         .unwrap();
+
         saved
             .begin("Orbit saved request".into(), "test::orbit-model".into())
             .await
@@ -240,6 +242,7 @@ id = "orbit-model"
             .unwrap();
         saved_ids.push(saved.id().to_owned());
     }
+
     std::fs::remove_dir(&missing).unwrap();
 
     let mut resources = None;
@@ -263,6 +266,7 @@ id = "orbit-model"
             next,
         )
         .await;
+
         if index == 0 {
             let error = result.err().unwrap();
             assert!(format!("{error:#}").contains(missing.to_str().unwrap()));
@@ -303,6 +307,7 @@ id = "orbit-model"
         )
         .await
         .unwrap();
+
     assert!(output.content.contains("Orbit restored workspace"));
     assert!(tabs.restore(
         &original_id,
@@ -603,6 +608,7 @@ fn continuation_enter_only_removes_a_backslash_at_the_caret_including_when_busy(
         } else {
             Action::Submit("Orbit\\".into())
         };
+
         assert_eq!(
             press(&mut state, KeyCode::Enter, KeyModifiers::NONE, busy),
             expected
@@ -755,6 +761,7 @@ fn input_mouse_drag_and_shift_click_edit_without_using_transcript_selection() {
             })
         ));
     }
+
     assert_eq!(state.input.selected_text(), Some("你好"));
     assert!(!state.selection.active());
     assert!(!state.input_dragging);
@@ -909,7 +916,6 @@ async fn text_only_model_blocks_queuing_and_attaching_images() {
             .contains("当前模型未启用图片输入，未添加图片附件")
     );
 
-    // With vision enabled, queue_attachment works
     state.supports_vision = true;
 
     assert!(queue_attachment(&mut state, image("test.png")));

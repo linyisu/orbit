@@ -157,6 +157,7 @@ impl Panel {
             }
             self.field_rows(&mut rows, FieldId::Service(i), 0);
         }
+
         rows.push(Row {
             label: String::new(),
             target: None,
@@ -257,6 +258,7 @@ impl Panel {
                 {
                     continue;
                 }
+
                 if let Target::Field(id) = target
                     && !self.field(id).choices.is_empty()
                 {
@@ -269,21 +271,25 @@ impl Panel {
                 } else {
                     targets.push((line, target));
                 }
+
                 if target == Target::Action(Action::Load) {
                     targets.push((line, Target::Action(Action::Add)));
                     targets.push((line, Target::Action(Action::All)));
                 }
+
                 if let Target::Action(Action::Effort(i, 1)) = target {
                     for j in 2..=7 {
                         targets.push((line, Target::Action(Action::Effort(i, j))));
                     }
                 }
+
                 if let Target::Action(Action::Toggle(i)) = target {
                     targets.push((line, Target::Action(Action::Expand(i))));
                     targets.push((line, Target::Action(Action::Default(i))));
                 }
             }
         }
+
         targets.push((rows.len(), Target::Action(Action::Save)));
         targets.push((rows.len(), Target::Action(Action::Cancel)));
         let current = targets
@@ -309,6 +315,7 @@ impl Panel {
                 } else {
                     (row_end + 1 < targets.len()).then_some(row_end + 1)
                 };
+
                 if let Some(adjacent) = adjacent {
                     let line = targets[adjacent].0;
                     let start = targets
@@ -324,6 +331,7 @@ impl Panel {
                     current
                 }
             }
+
             KeyCode::BackTab => (current + targets.len() - 1) % targets.len(),
             _ => (current + 1) % targets.len(),
         };
@@ -412,6 +420,7 @@ impl Panel {
                 self.config.max_output_tokens,
                 self.config.context_tokens,
             )?;
+
             profile.reasoning = model::read_reasoning(
                 &entry.reasoning,
                 &entry.entry.profile.reasoning,
@@ -501,6 +510,7 @@ pub(super) async fn run(
                     }
                 }
             }
+
             Event::Paste(text) => {
                 if let Target::Field(id) = panel.focus {
                     let field = panel.field_mut(id);
@@ -512,6 +522,7 @@ pub(super) async fn run(
                     }
                 }
             }
+
             Event::Mouse(mouse) => {
                 let point = Position::new(mouse.column, mouse.row);
                 panel.pointer = Some(point);
@@ -528,9 +539,11 @@ pub(super) async fn run(
                             .find(|(r, _)| r.contains(point))
                             .map(|(_, t)| *t)
                     }
+
                     _ => {}
                 }
             }
+
             _ => {}
         }
 
@@ -550,6 +563,7 @@ pub(super) async fn run(
                     task = None;
                 }
             }
+
             Target::Action(action) => match action {
                 Action::Cancel => return Ok(None),
                 Action::Expand(i) => {
@@ -559,12 +573,14 @@ pub(super) async fn run(
                         Some(i)
                     };
                 }
+
                 Action::Effort(i, j) => panel.toggle_effort(i, j),
                 Action::Toggle(i) => panel.models[i].entry.enabled = !panel.models[i].entry.enabled,
                 Action::Default(i) => {
                     panel.default = Some(i);
                     panel.models[i].entry.enabled = true;
                 }
+
                 Action::All => {
                     let enabled = panel.models.iter().any(|m| {
                         !m.entry.enabled
@@ -577,6 +593,7 @@ pub(super) async fn run(
                         }
                     }
                 }
+
                 Action::Add => {
                     panel.query.input.set(String::new());
                     panel.add(model::blank(""), true);
@@ -590,6 +607,7 @@ pub(super) async fn run(
                         .unwrap_or(0)
                         .saturating_sub(2);
                 }
+
                 Action::Load | Action::Save => {
                     if let Err(error) = panel.service_draft(draft) {
                         panel.message = error.to_string();
@@ -620,6 +638,7 @@ pub(super) async fn run(
                             panel.message = error.to_string();
                             continue;
                         }
+
                         match crate::connections::edit::save(
                             &options.config,
                             &options.auth_directory,

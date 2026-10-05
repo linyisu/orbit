@@ -1,6 +1,7 @@
+use ratatui::{Terminal, backend::TestBackend};
+
 use super::super::form::ACCENT;
 use super::*;
-use ratatui::{Terminal, backend::TestBackend};
 
 fn setup() -> (tempfile::TempDir, ConnectionDraft, Panel) {
     let directory = tempfile::tempdir().unwrap();
@@ -49,6 +50,7 @@ fn scroll_recomputes_hover_and_keeps_footer_fixed() {
         .iter()
         .position(|r| r.target == Some(Target::Action(Action::Toggle(0))))
         .unwrap();
+
     panel.offset = first_line;
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     let mut before = None;
@@ -179,6 +181,7 @@ fn toolbar_and_single_choices_are_inline_and_focused_label_is_accented() {
             .unwrap()
             .0
     });
+
     assert!(buttons.iter().all(|rect| rect.y == buttons[0].y));
     let choices = hits
         .iter()
@@ -195,6 +198,7 @@ fn toolbar_and_single_choices_are_inline_and_focused_label_is_accented() {
         .find(|(_, target)| *target == Target::Field(FieldId::Service(1)))
         .unwrap()
         .0;
+
     assert_eq!(
         terminal.backend().buffer()[(viewport.x, input.y)].fg,
         ACCENT

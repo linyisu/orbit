@@ -55,6 +55,7 @@ fn mark_background_edges(buffer: &mut Buffer) {
             {
                 buffer[(next, y)].set_diff_option(CellDiffOption::AlwaysUpdate);
             }
+
             x = next;
         }
     }
@@ -234,6 +235,7 @@ mod tests {
                 Rect::new(3, 3, 30, 1),
             );
         };
+
         draw_buffer(&mut terminal, draw).unwrap();
         let mut artifact = Cell::default();
         artifact.set_bg(crate::tui::theme::THEME.accent);
@@ -249,6 +251,7 @@ mod tests {
             assert_eq!(cell.symbol(), " ");
             assert_eq!(cell.bg, Color::Reset, "stale highlight at {position:?}");
         }
+
         assert_eq!(
             terminal.backend().buffer()[(3, 3)].bg,
             crate::tui::theme::THEME.accent

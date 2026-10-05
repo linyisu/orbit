@@ -1,6 +1,7 @@
 //! Bound terminal wheel-event bursts without delaying the first movement.
-use crossterm::event::{Event, MouseEventKind};
 use std::time::{Duration, Instant};
+
+use crossterm::event::{Event, MouseEventKind};
 
 pub(super) const LINES: usize = 8;
 const INTERVAL: Duration = Duration::from_millis(40);
@@ -16,12 +17,14 @@ impl Wheel {
             self.last = None;
             return true;
         };
+
         if !matches!(
             mouse.kind,
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
         ) {
             return true;
         }
+
         if self.last.is_some_and(|(direction, last)| {
             direction == mouse.kind && now.saturating_duration_since(last) < INTERVAL
         }) {
@@ -37,8 +40,9 @@ impl Wheel {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+
+    use super::*;
 
     fn wheel(kind: MouseEventKind) -> Event {
         Event::Mouse(MouseEvent {

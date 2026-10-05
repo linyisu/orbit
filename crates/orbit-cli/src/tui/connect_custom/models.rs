@@ -1,10 +1,11 @@
 //! Searchable model selection with independent enabled state and viewport.
+use anyhow::Result;
+
 use super::model;
 use crate::{
     config::ModelProfile,
     connections::edit::{ConnectionDraft, KeyChange},
 };
-use anyhow::Result;
 
 pub(super) struct Entry {
     pub profile: ModelProfile,
@@ -35,12 +36,14 @@ pub(super) async fn discover(
                 directory: directory.to_path_buf(),
                 name: name.clone(),
             };
+
             if draft.account() {
                 let payload =
                     orbit_model::discovery::discover(&reference, draft.format, &draft.endpoint)
                         .await?;
                 return Ok(crate::account_models::normalize(draft.format, &payload)?.0);
             }
+
             orbit_model::discovery::discover_saved_api_models(
                 &reference,
                 &draft.endpoint,
