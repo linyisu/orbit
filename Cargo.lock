@@ -3755,10 +3755,9 @@ dependencies = [
 [[package]]
 name = "ratex-unicode-font"
 version = "0.1.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c460464b7fba27343b2b391179ac6c86fcffac5116455158e2b08ce80866fd8"
 dependencies = [
  "fontdb",
+ "log",
  "system-fonts",
  "ttf-parser",
 ]

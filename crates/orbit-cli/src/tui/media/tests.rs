@@ -4,6 +4,7 @@ use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::{Terminal, backend::TestBackend, buffer::CellWidth, style::Style, text::Span};
+use resvg::usvg;
 use unicode_width::UnicodeWidthStr;
 
 use super::*;
@@ -597,6 +598,73 @@ fn screenshot_formulas_render_through_the_full_async_ui_pipeline() {
             .contains(r"\frac")
     );
     clear_layers();
+}
+
+#[test]
+fn ratex_unicode_fonts_do_not_write_to_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut fonts = usvg::fontdb::Database::new();
+    fonts.load_system_fonts();
+    let override_font = fonts.faces().find_map(|face| match &face.source {
+        usvg::fontdb::Source::File(path) | usvg::fontdb::Source::SharedFile(path, _) => {
+            Some(format!("{}#{}", path.display(), face.index))
+        }
+
+        usvg::fontdb::Source::Binary(_) => None,
+    });
+    let mut sources = vec![
+        None,
+        Some(dir.path().join("missing.ttf").display().to_string()),
+    ];
+    if let Some(font) = override_font {
+        sources.push(Some(font));
+    }
+
+    for source in sources {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--exact",
+            "tui::media::tests::ratex_unicode_formula_uses_glyphs_or_text_fallback",
+            "--nocapture",
+        ]);
+        if let Some(font) = &source {
+            command.env("RATEX_UNICODE_FONT", font);
+        } else {
+            command.env_remove("RATEX_UNICODE_FONT");
+        }
+        let output = command.output().unwrap();
+
+        assert!(output.status.success(), "{source:?}: {output:?}");
+        assert!(
+            output.stderr.is_empty(),
+            "formula rendering wrote to the terminal: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("1 passed"), "{stdout}");
+        assert!(!stdout.contains("[ratex-unicode-font]"));
+    }
+}
+
+#[test]
+fn ratex_unicode_formula_uses_glyphs_or_text_fallback() {
+    for tex in [r"\text{中文} + x^2", r"\text{质量} = mc^2"] {
+        match decode::math_svg(tex, true, 32, [220, 224, 232]) {
+            Ok((svg, baseline)) => {
+                assert!(svg.contains("<path"));
+                assert!(!svg.contains("<text"));
+                assert!(baseline > 0.0);
+
+                let image = decode::raster_svg(svg.as_bytes(), 1200, 400, None, false)
+                    .unwrap()
+                    .to_rgba8();
+                assert!(image.pixels().any(|p| p[3] > 0));
+                assert!(image.pixels().any(|p| p[3] == 0));
+            }
+
+            Err(error) => assert_eq!(error.to_string(), "公式字体不可用"),
+        }
+    }
 }
 
 #[test]

@@ -1,0 +1,13 @@
+[package]
+name = "ratex-unicode-font"
+version = "0.1.14"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/erweixin/RaTeX"
+description = "System Unicode font discovery for RaTeX fallback rendering"
+
+[dependencies]
+fontdb = { version = "0.23", features = ["std"] }
+log = "0.4"
+system-fonts = "0.1"
+ttf-parser = "0.25"

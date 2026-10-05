@@ -9,6 +9,10 @@ members = [
     "crates/orbit-tools",
     "crates/orbit-store",
 ]
+exclude = ["vendor/ratex-unicode-font"]
+
+[patch.crates-io]
+ratex-unicode-font = { path = "vendor/ratex-unicode-font" }
 
 [workspace.package]
 version = "0.1.0"
