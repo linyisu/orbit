@@ -9,11 +9,17 @@
 在普通 TUI 内直接输入连接命令，远端会话作为新标签加入，与本地标签并列。可以同时连接多个 SSH 主机、WSL 发行版或同一环境中的多个工作区；切换标签保留草稿、模型、权限模式和运行状态，各自接收事件与审批。
 
 ```text
+/ssh
+/wsl
 /ssh dev-host /home/me/project
 /wsl Ubuntu /home/me/project --wsl-user me
 /ssh another-host '/home/me/project with spaces' --config custom.toml
 /local
 ```
+
+`/ssh`、`/wsl` 或仅填写主机名的命令会打开配置弹窗：选择 SSH/WSL、填写主机或发行版、用户名、端口、私钥路径；目录留空时，连接后可浏览远端目录并选择工作区。主机输入支持 `~/.ssh/config` 中的别名及 `Include` 文件，WSL 输入列出已安装的发行版。命令中明确指定目录则直接连接。配置项可用 `Tab` 切换，`Ctrl+Enter` 开始连接或打开当前目录，`Esc` 取消；连接期间可以切换其他标签。
+
+连接日志实时显示环境探测、服务部署进度、SSH 诊断和握手状态。失败后可重试或修改配置，不会无限停在“连接中”。
 
 `/new` 或标签栏的 `+` 在当前环境新建会话；本地标签使用启动目录，远端标签沿用其目标工作区和配置。`/local` 新建本地标签。远端 `/sessions` 列出目标工作区的历史，`/resume ID` 在新标签恢复。`/close` 关闭标签并选中左邻标签，最左侧关闭后选择剩余第一个；一个连接断开不影响其他标签，`/reconnect` 可接回原会话。远端标签暂不加入本地 `/restore` 清单，重启后使用 `/ssh … --resume ID` 或 `/wsl … --resume ID` 恢复。
 
@@ -29,7 +35,7 @@ orbit connect --workspace /path/to/project --prompt '检查测试失败原因'
 orbit connect --workspace /path/to/project --stop
 ```
 
-SSH 使用系统客户端，因此沿用主机别名、跳板机、密钥代理及主机校验配置；不关闭主机校验。TUI 内连接采用后台认证，避免密码或主机确认提示破坏界面；首次主机确认、密钥和代理设置需先在普通终端完成。WSL 直接启动选定发行版的 Linux 进程，无需安装 SSH 服务。本仓库的客户端仍依赖 Unix/Linux 接口；WSL 启动适配器需要当前环境能执行 `wsl.exe`，Windows 原生客户端尚未完成。
+SSH 使用系统客户端，因此沿用主机别名、跳板机、密钥代理及主机校验配置；不关闭主机校验。TUI 内通过私有 askpass 通道显示首次主机指纹确认、密码、私钥口令及交互认证提示，敏感输入遮蔽显示，不保存到聊天记录、配置文件或命令参数。认证等待不计入连接超时。相同连接的新标签复用私有 SSH 主连接，各标签的认证提示独立；最后一个标签关闭后清理主连接。可用 `--ssh-user`、`--ssh-port`、`--identity` 覆盖 SSH 配置。WSL 直接启动选定发行版的 Linux 进程，无需安装 SSH 服务。本仓库的客户端仍依赖 Unix/Linux 接口；WSL 启动适配器需要当前环境能执行 `wsl.exe`，Windows 原生客户端尚未完成。
 
 首次 SSH/WSL 连接会检测 Linux 系统与架构，把本机 Orbit 二进制上传到目标用户的 `~/.cache/orbit/servers/<SHA-256>/orbit`，校验后原子安装；已存在的相同版本会复用。支持自动匹配 x86-64 和 AArch64；异架构可用 `--upload-server /local/path/to/linux-orbit` 指定目标二进制。用 `--server /remote/path/to/orbit` 可直接连接预装服务。目标仍需兼容二进制的动态库，以及运行命令所需的 `bwrap`、`prlimit` 和用户命名空间。部署不要求目标访问下载站点。
 
@@ -41,7 +47,7 @@ SSH 使用系统客户端，因此沿用主机别名、跳板机、密钥代理�
 
 请求 ID 和内容指纹保存在会话数据库中，重复投递不会重复启动任务；若服务在接收与确认之间退出，返回结果不确定的提示，要求先检查历史。连接中断不会自动重发写操作。客户端按事件游标分页读取，重接会话时从持久历史恢复。协议标准输出与日志分离，并跳过协议握手前的有限登录横幅；日志位于目标临时目录的私有 `orbit-workspace-<uid>` 目录。
 
-实现按职责分在 [workspace/setup.rs](src/workspace/setup.rs)、[transport.rs](src/workspace/transport.rs)、[bootstrap.rs](src/workspace/bootstrap.rs)、[server.rs](src/workspace/server.rs)、[session.rs](src/workspace/session.rs) 和 [run.rs](src/workspace/run.rs)；服务前端在 [workspace_client.rs](src/tui/workspace_client.rs)。测试使用真实本地服务、模拟模型和 SSH/WSL 启动替身，覆盖断连审批、取消、服务重启后去重、路径引号、横幅和部署校验；真实 SSH 认证及 Windows/WSL 环境仍需实机验证。
+实现按职责分在 [workspace/setup.rs](src/workspace/setup.rs)、[transport.rs](src/workspace/transport.rs)、[bootstrap.rs](src/workspace/bootstrap.rs)、[server.rs](src/workspace/server.rs)、[session.rs](src/workspace/session.rs)、[interaction.rs](src/workspace/interaction.rs)、[discovery.rs](src/workspace/discovery.rs)、[directories.rs](src/workspace/directories.rs) 和 [run.rs](src/workspace/run.rs)；服务前端在 [workspace_client.rs](src/tui/workspace_client.rs)。测试使用真实本地服务、模拟模型和 SSH/WSL 启动替身，覆盖断连审批、取消、服务重启后去重、路径引号、横幅和部署校验；Windows/WSL 环境仍需实机验证。
 
 ## 渲染与输入的实现入口
 
