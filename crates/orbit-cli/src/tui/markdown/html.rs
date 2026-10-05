@@ -5,12 +5,9 @@ use html5ever::{
     tendril::StrTendril,
     tokenizer::{BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer},
 };
+use ratatui::style::Style;
 
-use super::{
-    css,
-    inline::{Formatting, Script},
-};
-use ratatui::style::{Modifier, Style};
+use super::{css, inline::Formatting};
 
 pub(super) enum Event {
     Start(String, Formatting),
@@ -59,17 +56,6 @@ pub(super) fn events(source: &str) -> Option<Vec<Event>> {
                     "u" => Formatting::Underline,
                     "mark" => Formatting::Mark,
                     "code" => Formatting::Code,
-                    "sub" => Formatting::Script(Script::Sub),
-                    "sup" => Formatting::Script(Script::Super),
-                    "small" => Formatting::Custom(Style::default().add_modifier(Modifier::DIM)),
-                    "kbd" => Formatting::Group(vec![Formatting::Code, Formatting::Underline]),
-                    "q" => {
-                        if tag.kind == TagKind::StartTag {
-                            events.push(Event::Text("“".into()));
-                        }
-                        Formatting::Custom(Style::default())
-                    }
-                    "abbr" => Formatting::Hint(attr("title")),
                     "span" => Formatting::Custom(Style::default()),
                     "img" if tag.kind == TagKind::StartTag => {
                         let label = attr("alt");
@@ -83,6 +69,7 @@ pub(super) fn events(source: &str) -> Option<Vec<Event>> {
                         ));
                         continue;
                     }
+
                     "a" => Formatting::Link(
                         tag.attrs
                             .iter()
@@ -90,12 +77,15 @@ pub(super) fn events(source: &str) -> Option<Vec<Event>> {
                             .map(|attr| attr.value.to_string())
                             .unwrap_or_default(),
                     ),
+
                     "br" if tag.kind == TagKind::StartTag => {
                         events.push(Event::Break);
                         continue;
                     }
+
                     _ => return None,
                 };
+
                 if tag.kind == TagKind::EndTag {
                     events.push(Event::End(name));
                 } else if !tag.self_closing {
@@ -105,14 +95,17 @@ pub(super) fn events(source: &str) -> Option<Vec<Event>> {
                     } else {
                         Formatting::Group(vec![formatting, Formatting::Custom(presentation.style)])
                     };
+
                     events.push(Event::Start(name, formatting));
                 }
             }
+
             Token::CharacterTokens(text) => events.push(Event::Text(text.to_string())),
             Token::EOFToken => {}
             Token::ParseError(_) => return None,
             _ => return None,
         }
     }
+
     Some(events)
 }

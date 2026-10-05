@@ -7,12 +7,6 @@ use ratatui::{
 
 use super::{LinkTarget, LinkedLine, THEME, html, icons};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Script {
-    Sub,
-    Super,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Formatting {
     Bold,
@@ -25,10 +19,8 @@ pub(super) enum Formatting {
     Quote,
     Link(String),
     Image(String),
-    Script(Script),
     Group(Vec<Formatting>),
     Custom(Style),
-    Hint(String),
 }
 
 impl Formatting {
@@ -39,31 +31,20 @@ impl Formatting {
             _ => None,
         }
     }
-    fn link(&self) -> Option<&str> {
+
+    fn image_link(&self) -> Option<&str> {
         match self {
-            Self::Link(url) | Self::Image(url) if !url.is_empty() => Some(url),
-            Self::Group(items) => items.iter().find_map(Self::link),
+            Self::Image(url) if super::super::browser_url(url).is_ok() => Some(url),
+            Self::Group(items) => items.iter().find_map(Self::image_link),
             _ => None,
         }
     }
-    fn script(&self) -> Option<Script> {
-        match self {
-            Self::Script(script) => Some(*script),
-            Self::Group(items) => items.iter().find_map(Self::script),
-            _ => None,
-        }
-    }
-    fn hint(&self) -> Option<&str> {
-        match self {
-            Self::Hint(title) if !title.is_empty() => Some(title),
-            Self::Group(items) => items.iter().find_map(Self::hint),
-            _ => None,
-        }
-    }
+
     fn code(&self) -> bool {
         matches!(self, Self::Code)
             || matches!(self, Self::Group(items) if items.iter().any(Self::code))
     }
+
     fn style(&self, style: Style) -> Style {
         match self {
             Self::Bold => style
@@ -73,6 +54,7 @@ impl Formatting {
                     THEME.md_bold
                 })
                 .add_modifier(Modifier::BOLD),
+
             Self::Italic => style
                 .fg(if style.add_modifier.contains(Modifier::BOLD) {
                     THEME.md_bold_italic
@@ -80,6 +62,7 @@ impl Formatting {
                     THEME.md_italic
                 })
                 .add_modifier(Modifier::ITALIC),
+
             Self::Strike => style
                 .fg(THEME.md_strikethrough)
                 .add_modifier(Modifier::CROSSED_OUT),
@@ -94,14 +77,12 @@ impl Formatting {
                     _ => THEME.md_h4_plus,
                 })
                 .add_modifier(Modifier::BOLD),
+
             Self::Quote => style.fg(THEME.md_quote_text),
-            Self::Link(_) | Self::Image(_) => {
-                style.fg(THEME.md_link).add_modifier(Modifier::UNDERLINED)
-            }
-            Self::Script(_) => style,
+            Self::Link(_) => style.fg(THEME.md_link).add_modifier(Modifier::UNDERLINED),
+            Self::Image(_) => style,
             Self::Group(items) => items.iter().fold(style, |style, item| item.style(style)),
             Self::Custom(custom) => style.patch(*custom),
-            Self::Hint(_) => style.add_modifier(Modifier::UNDERLINED),
         }
     }
 }
@@ -127,7 +108,6 @@ pub(crate) struct State {
 struct Atom {
     span: Span<'static>,
     url: Option<String>,
-    scripts: Vec<Script>,
     media: Option<crate::tui::media::Source>,
 }
 
@@ -159,6 +139,7 @@ pub(super) fn render<'a>(
             renderer.push(span);
         }
     }
+
     state.frames = renderer
         .frames
         .iter()
@@ -205,19 +186,14 @@ impl Renderer {
                     frame
                         .formatting
                         .as_ref()
-                        .and_then(Formatting::link)
+                        .and_then(Formatting::image_link)
                         .map(str::to_owned)
                 })
             });
-        let scripts = self
-            .frames
-            .iter()
-            .filter_map(|frame| frame.formatting.as_ref().and_then(Formatting::script))
-            .collect();
+
         self.rows.last_mut().unwrap().push(Atom {
             span,
             url,
-            scripts,
             media: self.frames.iter().rev().find_map(|f| match &f.formatting {
                 Some(Formatting::Image(url)) => Some(crate::tui::media::Source::Image(url.clone())),
                 _ => None,
@@ -231,6 +207,7 @@ impl Renderer {
             .frames
             .iter()
             .any(|frame| frame.formatting.as_ref().is_some_and(Formatting::code));
+
         if literal || !markdown {
             self.push(Span::styled(text.to_owned(), style));
         } else {
@@ -257,16 +234,16 @@ impl Renderer {
                     Tag::Strong => Some(Formatting::Bold),
                     Tag::Emphasis => Some(Formatting::Italic),
                     Tag::Strikethrough => Some(Formatting::Strike),
-                    Tag::Superscript => Some(Formatting::Script(Script::Super)),
-                    Tag::Subscript => Some(Formatting::Script(Script::Sub)),
                     Tag::BlockQuote(_) => {
                         self.push(Span::styled("▎ ", Style::default().fg(THEME.md_quote_rail)));
                         Some(Formatting::Quote)
                     }
+
                     Tag::List(start) => {
                         self.ordered = *start;
                         None
                     }
+
                     Tag::Item => {
                         self.push(Span::styled(
                             self.ordered.map_or("• ".into(), |n| format!("{n}. ")),
@@ -278,24 +255,29 @@ impl Renderer {
                         ));
                         None
                     }
+
                     Tag::Link { dest_url, .. } => Some(Formatting::Link(dest_url.to_string())),
                     Tag::Image { dest_url, .. } => {
                         self.image_starts.push(self.rows.iter().map(Vec::len).sum());
                         Some(Formatting::Image(dest_url.to_string()))
                     }
+
                     _ => None,
                 };
+
                 self.frames.push(Frame {
                     key: Key::Markdown(tag.to_end()),
                     formatting,
                 });
             }
+
             Event::End(tag) => {
                 if tag == TagEnd::Image
                     && self.image_starts.pop() == Some(self.rows.iter().map(Vec::len).sum())
                 {
                     self.text("图片", false);
                 }
+
                 if let Some(index) = self
                     .frames
                     .iter()
@@ -304,11 +286,14 @@ impl Renderer {
                     self.frames.remove(index);
                 }
             }
+
             Event::Text(text) => self.text(&text, true),
+
             Event::Code(text) => {
                 let style = Formatting::Code.style(self.style());
                 self.push(Span::styled(text.into_string(), style));
             }
+
             Event::InlineMath(tex) | Event::DisplayMath(tex) => {
                 let source = crate::tui::media::Source::Math {
                     tex: tex.to_string(),
@@ -325,6 +310,7 @@ impl Renderer {
                 ));
                 self.rows.last_mut().unwrap().last_mut().unwrap().media = Some(source);
             }
+
             Event::Html(text) | Event::InlineHtml(text) => {
                 if let Some(events) = html::events(&text) {
                     self.semantic_html = true;
@@ -334,26 +320,17 @@ impl Renderer {
                                 key: Key::Html(name),
                                 formatting: Some(formatting),
                             }),
+
                             html::Event::End(name) => {
                                 if let Some(index) = self
                                     .frames
                                     .iter()
                                     .rposition(|frame| frame.key == Key::Html(name.clone()))
                                 {
-                                    if name == "q" {
-                                        self.text("”", false);
-                                    }
-                                    if let Some(title) = self.frames[index]
-                                        .formatting
-                                        .as_ref()
-                                        .and_then(Formatting::hint)
-                                        .map(str::to_owned)
-                                    {
-                                        self.text(&format!("（{title}）"), false);
-                                    }
                                     self.frames.truncate(index);
                                 }
                             }
+
                             html::Event::Text(text) => self.text(&text, false),
                             html::Event::Break => self.rows.push(Vec::new()),
                             html::Event::Image(label, url) => {
@@ -370,10 +347,12 @@ impl Renderer {
                     self.text(&text, false);
                 }
             }
+
             Event::Rule => self.push(Span::styled(
                 "────────────────────────",
                 Style::default().fg(THEME.md_rule),
             )),
+
             Event::TaskListMarker(done) => {
                 let checkbox = format!("{} ", icons::checkbox(done));
                 let style = Style::default().fg(if done {
@@ -388,12 +367,14 @@ impl Renderer {
                                 !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
                             })
                     });
+
                 if let Some(marker) = marker {
                     marker.span = Span::styled(checkbox, style);
                 } else {
                     self.push(Span::styled(checkbox, style));
                 }
             }
+
             Event::HardBreak => self.rows.push(Vec::new()),
             Event::SoftBreak => self.text(" ", false),
             _ => {}
@@ -411,25 +392,23 @@ impl Renderer {
                     let mut end = start + 1;
                     while end < atoms.len()
                         && atoms[end].url == atoms[start].url
-                        && atoms[end].scripts == atoms[start].scripts
                         && atoms[end].media == atoms[start].media
                     {
                         end += 1;
                     }
+
                     let mut spans: Vec<_> = atoms[start..end]
                         .iter()
                         .map(|atom| atom.span.clone())
                         .collect();
                     super::recover_split_strong(&mut spans, 0, self.recover_strong);
                     let url = atoms[start].url.clone();
-                    let scripts = atoms[start].scripts.clone();
                     let media = atoms[start].media.clone();
                     let replacement: Vec<_> = spans
                         .into_iter()
                         .map(|span| Atom {
                             span,
                             url: url.clone(),
-                            scripts: scripts.clone(),
                             media: media.clone(),
                         })
                         .collect();
@@ -437,7 +416,7 @@ impl Renderer {
                     atoms.splice(start..end, replacement);
                     start = next;
                 }
-                let atoms = scripts(atoms);
+
                 let mut spans = vec![Span::raw(prefix.clone())];
                 let mut links: Vec<LinkTarget> = Vec::new();
                 let mut media: Vec<crate::tui::media::Target> = Vec::new();
@@ -459,6 +438,7 @@ impl Renderer {
                             });
                         }
                     }
+
                     if let Some(url) = atom.url
                         && offset < end
                     {
@@ -475,18 +455,24 @@ impl Renderer {
                             });
                         }
                     }
+
                     offset = end;
                     spans.push(atom.span);
                 }
+
                 let line = Line::from(spans);
                 for link in super::plain_links(&line.to_string()) {
                     if !links
                         .iter()
                         .any(|target| target.start < link.end && target.end > link.start)
+                        && !media.iter().any(|target| {
+                            target.range.start < link.end && target.range.end > link.start
+                        })
                     {
                         links.push(link);
                     }
                 }
+
                 let chrome = line
                     .spans
                     .iter()
@@ -513,85 +499,4 @@ impl Renderer {
             })
             .collect()
     }
-}
-
-fn scripts(mut atoms: Vec<Atom>) -> Vec<Atom> {
-    let depth = atoms
-        .iter()
-        .map(|atom| atom.scripts.len())
-        .max()
-        .unwrap_or(0);
-    // Work inside out without recursive calls, even for deeply nested input.
-    for depth in (0..depth).rev() {
-        let mut remaining = atoms.into_iter().peekable();
-        let mut out = Vec::new();
-        while let Some(atom) = remaining.next() {
-            let Some(script) = atom.scripts.get(depth).copied() else {
-                out.push(atom);
-                continue;
-            };
-            let path = atom.scripts[..=depth].to_vec();
-            let mut group = vec![atom];
-            while remaining
-                .peek()
-                .is_some_and(|atom| atom.scripts.get(..=depth) == Some(path.as_slice()))
-            {
-                group.push(remaining.next().unwrap());
-            }
-            let converted: Option<Vec<String>> = group
-                .iter()
-                .map(|atom| {
-                    atom.span
-                        .content
-                        .chars()
-                        .map(|ch| script_char(ch, script))
-                        .collect()
-                })
-                .collect();
-            if let Some(converted) = converted {
-                for (atom, text) in group.iter_mut().zip(converted) {
-                    atom.span.content = text.into();
-                }
-            } else {
-                let style = group[0].span.style;
-                let url = group[0].url.clone();
-                let outer = path[..depth].to_vec();
-                group.insert(
-                    0,
-                    Atom {
-                        span: Span::styled(
-                            if script == Script::Super { "^(" } else { "_(" },
-                            style,
-                        ),
-                        url: url.clone(),
-                        scripts: outer.clone(),
-                        media: None,
-                    },
-                );
-                group.push(Atom {
-                    span: Span::styled(")", style),
-                    url,
-                    scripts: outer,
-                    media: None,
-                });
-            }
-            out.extend(group);
-        }
-        atoms = out;
-    }
-    atoms
-}
-
-fn script_char(ch: char, script: Script) -> Option<char> {
-    let (source, target) = match script {
-        Script::Super => ("0123456789+-=()in", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁱⁿ"),
-        Script::Sub => (
-            "0123456789+-=()aehijklmnoprstuvx",
-            "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ",
-        ),
-    };
-    source
-        .chars()
-        .position(|value| value == ch)
-        .and_then(|index| target.chars().nth(index))
 }
