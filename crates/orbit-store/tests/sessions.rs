@@ -211,7 +211,12 @@ async fn rejects_a_database_from_a_newer_schema() {
     let store = Store::open(db.path()).await.unwrap();
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=23").unwrap();
+    let current: u32 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    connection
+        .pragma_update(None, "user_version", current + 1)
+        .unwrap();
     drop(connection);
 
     let error = Store::open(db.path())
@@ -1165,6 +1170,10 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
     for had_grants in [false, true] {
         let db = Database::new();
         let store = Store::open(db.path()).await.unwrap();
+        let latest: u32 = rusqlite::Connection::open(db.path())
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
         let mut writer = store
             .create(db.0.to_string_lossy().into_owned(), "mock".into(), false)
             .await
@@ -1231,7 +1240,7 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
                 .unwrap(),
-            22
+            latest
         );
     }
 }

@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use rusqlite::Connection;
 
-const CURRENT_SCHEMA_VERSION: u32 = 22;
+const CURRENT_SCHEMA_VERSION: u32 = 23;
 
 pub(crate) fn migrate(connection: &Connection) -> Result<()> {
     connection.execute_batch("BEGIN IMMEDIATE;")?;
@@ -314,6 +314,17 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
     }
     if version < 22 {
         crate::side_questions::migrate(connection)?;
+    }
+    if version < 23 {
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS workspace_requests (
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                request_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                error TEXT,
+                PRIMARY KEY(session_id, request_id)
+            ); PRAGMA user_version=23;",
+        )?;
     }
     connection.execute_batch("COMMIT;")?;
 
