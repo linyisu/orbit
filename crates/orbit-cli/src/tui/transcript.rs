@@ -606,7 +606,7 @@ impl Entry {
             return;
         }
 
-        let context = if text[self.parsed_bytes..].contains('[') {
+        let context = if text[self.parsed_bytes..].contains('[') || text.contains("[^") {
             let context = super::markdown::Context::new(text);
             let definitions = context.definitions();
             if definitions != self.references {
@@ -628,6 +628,27 @@ impl Entry {
         let mut can_commit = true;
 
         while consumed < text.len() {
+            if code.is_none()
+                && let Some((bytes, lines)) =
+                    context.footnote_block(consumed, width, &format!("body/{consumed}/note"), 0)
+            {
+                for line in lines {
+                    self.push_linked(
+                        if thinking {
+                            render::thinking_linked(line)
+                        } else {
+                            line
+                        },
+                        width,
+                    );
+                }
+
+                index += text[consumed..consumed + bytes].lines().count();
+                consumed += bytes;
+                // A following indented paragraph may extend this definition.
+                can_commit = false;
+                continue;
+            }
 
             if code.is_none()
                 && let Some((bytes, lines)) = context.math_block(&text[consumed..])
@@ -1432,6 +1453,23 @@ impl TranscriptLayout {
         self.link_hit(area, offset, point).map(|hit| hit.url)
     }
 
+    pub(super) fn footnote_at(
+        &self,
+        area: Rect,
+        offset: usize,
+        point: (u16, u16),
+    ) -> Option<usize> {
+        let hit = self.link_hit(area, offset, point)?;
+        if !super::markdown::footnotes::is_target(hit.url) {
+            return None;
+        }
+        let (entry, _, _) = self.row_at(area, offset, point)?;
+        entry
+            .rows
+            .iter()
+            .find(|row| row.anchors.iter().any(|anchor| anchor == hit.url))
+            .map(|row| entry.end - entry.height + row.start)
+    }
 
     /// One anchor per wrapped link or complete picture occurrence.
     /// Pointer movement within that anchor does not move its tooltip.

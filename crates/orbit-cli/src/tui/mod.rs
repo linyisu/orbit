@@ -807,7 +807,9 @@ pub async fn run(
                         {
                             state.selection.clear();
 
-                            if let Some(id) = subagent_link_id(&url) {
+                            if markdown::footnotes::is_target(&url) {
+                                jump_footnote_at(&mut state, (mouse.column, mouse.row));
+                            } else if let Some(id) = subagent_link_id(&url) {
                                 subagents::open(&mut state, id.to_owned());
                             } else if let Err(error) = open_link_in_browser(&url) {
                                 state.report_local(TranscriptItem::Error(format!(
@@ -826,7 +828,7 @@ pub async fn run(
                         continue;
                     }
                     if let Some((x, y)) = state.selection.click(&event)
-                        && (open_subagent_at(&mut state, (x,y)) || toggle_transcript_at(&mut state, (x, y))) {
+                        && (jump_footnote_at(&mut state, (x, y)) || open_subagent_at(&mut state, (x,y)) || toggle_transcript_at(&mut state, (x, y))) {
                         continue;
                     }
 
@@ -2978,6 +2980,34 @@ fn open_subagent_at(state: &mut UiState, point: (u16, u16)) -> bool {
     }
 }
 
+fn jump_footnote_at(state: &mut UiState, point: (u16, u16)) -> bool {
+    let offset = if state.follow_bottom {
+        state.max_scroll
+    } else {
+        state.max_scroll.saturating_sub(state.scroll)
+    };
+
+    if !state
+        .transcript_layout
+        .link_at(state.selection.viewport, offset, point)
+        .is_some_and(markdown::footnotes::is_target)
+    {
+        return false;
+    }
+
+    if let Some(destination) =
+        state
+            .transcript_layout
+            .footnote_at(state.selection.viewport, offset, point)
+    {
+        state.scroll = state.max_scroll.saturating_sub(destination);
+        state.follow_bottom = false;
+    }
+
+    state.selection.clear();
+    state.link_hovered = None;
+    true
+}
 
 fn subagent_link_id(value: &str) -> Option<&str> {
     let id = value.strip_prefix("orbit://session/")?;

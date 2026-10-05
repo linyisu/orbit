@@ -1,4 +1,66 @@
 #[test]
+fn footnote_targets_follow_streaming_definitions_wrapping_and_message_scope() {
+    let source = "较长的正文引用命名脚注[^note]，以及数字脚注[^1]。\n\n[^note]: **第一段**\n\n    第二段\n[^1]: 数字内容\n";
+    let mut layout = TranscriptLayout::default();
+    for end in source
+        .char_indices()
+        .map(|(index, ch)| index + ch.len_utf8())
+    {
+        let items = vec![TranscriptItem::Assistant(source[..end].into())];
+        layout.invalidate_from(0);
+        layout.update(&items, None, 24);
+        let mut fresh = TranscriptLayout::default();
+        fresh.update(&items, None, 24);
+        assert_eq!(layout.height(), fresh.height(), "{end}");
+        let rows = |layout: &TranscriptLayout| {
+            layout.entries[0]
+                .rows
+                .iter()
+                .flat_map(|row| row.wrapped.iter().map(ToString::to_string))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(rows(&layout), rows(&fresh), "{end}");
+    }
+
+    let items = vec![
+        TranscriptItem::Assistant(source.into()),
+        TranscriptItem::Assistant("另一条引用[^note]。\n\n[^note]: 不同会话消息的内容\n".into()),
+    ];
+
+    for width in [12, 24, 60] {
+        layout.update(&items, None, width);
+        let area = Rect::new(3, 2, width, layout.height() as u16);
+        for entry in &layout.entries {
+            let expected = entry
+                .rows
+                .iter()
+                .find(|row| {
+                    row.anchors
+                        .iter()
+                        .any(|anchor| anchor == "orbit://footnote/note")
+                })
+                .unwrap();
+            let destination = entry.end - entry.height + expected.start;
+            let point = (area.y..area.bottom())
+                .find_map(|y| {
+                    (area.x..area.right()).find_map(|x| {
+                        let (hit_entry, _, _) = layout.row_at(area, 0, (x, y))?;
+                        if !std::ptr::eq(hit_entry, entry) {
+                            return None;
+                        }
+                        (layout.link_at(area, 0, (x, y)) == Some("orbit://footnote/note"))
+                            .then_some((x, y))
+                    })
+                })
+                .unwrap();
+
+            assert_eq!(layout.footnote_at(area, 0, point), Some(destination));
+        }
+    }
+}
+
+#[test]
 fn html_details_toggle_independently_and_survive_streaming_and_resize() {
     let source = "<details>\n<summary>折叠内容</summary>\n\n**正文** [链接](https://orbit.example)\n<details open><summary>子块</summary>嵌套内容</details>\n</details>\n后文";
     let mut layout = TranscriptLayout::default();
@@ -12,6 +74,7 @@ fn html_details_toggle_independently_and_survive_streaming_and_resize() {
             .collect::<Vec<_>>()
             .join("\n")
     };
+
     assert!(!visible(&layout).contains("正文"));
     let area = Rect::new(0, 0, 80, 40);
     let (index, outer) = layout.html_disclosure_at(area, 0, (3, 0)).unwrap();
@@ -25,6 +88,7 @@ fn html_details_toggle_independently_and_survive_streaming_and_resize() {
         .find_map(|row| row.html_disclosure.as_ref().filter(|id| **id != outer))
         .unwrap()
         .clone();
+
     layout.toggle_html(index, inner);
     layout.update(&items, None, 14);
     assert!(!visible(&layout).contains("嵌套内容"));
@@ -41,12 +105,14 @@ fn html_details_toggle_independently_and_survive_streaming_and_resize() {
             80,
         );
     }
+
     let streamed_outer = streamed.entries[0]
         .rows
         .iter()
         .find_map(|row| row.html_disclosure.as_ref())
         .unwrap()
         .clone();
+
     assert_eq!(streamed_outer, outer);
     assert_eq!(
         visible(&streamed),
@@ -57,6 +123,7 @@ fn html_details_toggle_independently_and_survive_streaming_and_resize() {
         })
     );
 }
+
 #[test]
 fn markdown_rule_keeps_symmetric_body_margins_after_resize() {
     let items = vec![super::TranscriptItem::Assistant(
@@ -77,8 +144,9 @@ fn markdown_rule_keeps_symmetric_body_margins_after_resize() {
     }
 }
 
-use super::*;
 use ratatui::{Terminal, backend::TestBackend};
+
+use super::*;
 
 #[test]
 fn nested_thinking_code_gutter_is_recognized() {
@@ -107,11 +175,9 @@ fn hover_disclosure_only_active_within_text_width() {
 
     layout.update(&items, None, 80);
 
-    // Thinking line: (2, 0) is over text -> Some(0); (50, 0) is in trailing blank space -> None.
     assert_eq!(layout.disclosure_at(&items, area, 0, (2, 0)), Some(0));
     assert_eq!(layout.disclosure_at(&items, area, 0, (50, 0)), None);
 
-    // Tool line: (2, 2) is over text -> Some(1); (50, 2) is in trailing blank space -> None.
     let tool_y = layout.entries[0].height as u16;
     assert_eq!(layout.disclosure_at(&items, area, 0, (2, tool_y)), Some(1));
     assert_eq!(layout.disclosure_at(&items, area, 0, (50, tool_y)), None);
@@ -137,6 +203,7 @@ fn tool_title_and_output_are_clickable() {
             Some(0)
         );
     }
+
     let collapsed = layout.height();
     layout.update(&items, Some(0), 80);
 
@@ -182,6 +249,7 @@ fn paragraph_continuations_keep_their_left_margin() {
         assert!(gutter.width >= 2);
         assert_eq!(gutter.first.width(), gutter.continuation.width());
     }
+
     assert!(layout.entries[0].rows.iter().any(|row| row.height > 1));
 }
 
@@ -273,6 +341,7 @@ fn ctrl_click_targets_link_labels_and_urls_in_code_source() {
             })
         })
         .collect();
+
     assert_eq!(targets, HashSet::from(["https://example.com/no"]));
 }
 
@@ -288,6 +357,7 @@ fn plain_output_and_wrapped_table_cells_keep_their_own_link_targets() {
             }),
             TranscriptItem::Assistant("| 名称 | 地址 |\n| --- | --- |\n| [中文链接](https://example.com/one) | [中文链接](https://example.com/two) |\n".into()),
         ];
+
     for width in [10, 26, 80] {
         let mut layout = TranscriptLayout::default();
         layout.update(&items, Some(2), width);
@@ -300,12 +370,14 @@ fn plain_output_and_wrapped_table_cells_keep_their_own_link_targets() {
                 }
             }
         }
+
         for suffix in ["user", "command", "tool", "one", "two"] {
             assert!(
                 targets.contains(format!("https://example.com/{suffix}").as_str()),
                 "width {width}, missing {suffix}: {targets:?}"
             );
         }
+
         for row in &layout.entries.last().unwrap().rows {
             for link in &row.links {
                 let text = row.line.to_string();
@@ -343,6 +415,7 @@ fn markdown_file_links_remain_actionable_after_resize_and_scroll() {
                 }
             }
         }
+
         assert_eq!(
             targets,
             if width == 10 {
@@ -375,6 +448,7 @@ fn streamed_reference_definitions_update_prior_labels_without_reparsing_on_scrol
         layout.invalidate_from(0);
         layout.update(&items, None, 24);
     }
+
     let label = &layout.entries[0].rows[0];
     assert_eq!(label.line.to_string(), "阅读 Orbit 文档");
     assert_eq!(label.links.len(), 1);
@@ -727,6 +801,7 @@ fn streamed_math_matches_fresh_parser_at_every_character_boundary() {
             .iter()
             .map(|r| (&r.line, &r.media))
             .collect::<Vec<_>>();
+
         assert_eq!(actual, expected, "{observed:?}");
     }
 }
@@ -797,6 +872,7 @@ fn streamed_html_preserves_open_frames_breaks_and_click_targets_after_resize() {
             assert_eq!(actual.wrapped, expected.wrapped, "{end}");
         }
     }
+
     let items = [TranscriptItem::Assistant(source.to_owned())];
     let mut layout = TranscriptLayout::default();
     for width in [18, 80, 14] {
@@ -877,6 +953,97 @@ fn user_turns_use_a_framed_bubble_and_wrap_inside_its_side_rails() {
     }));
     assert!(rows.iter().any(|row| row.line.to_string().starts_with('╰')));
     assert!(rows.iter().all(|row| row.line.width() <= 24));
+}
+
+#[test]
+fn user_wrap_consumes_overflowing_spaces_and_keeps_fitting_whitespace() {
+    let first = "你好，请你在当前目录中将所有你能使用的工具依次使用一遍";
+    let second = "如果有对仓库造成影响的，则新建一个demo/，在内部执行。";
+    let source = format!("{first}{}{second}", " ".repeat(85));
+    let items = [TranscriptItem::User(source.clone())];
+    let mut layout = TranscriptLayout::default();
+    let body = |layout: &TranscriptLayout| {
+        layout.entries[0]
+            .rows
+            .iter()
+            .filter(|row| {
+                row.gutter
+                    .as_ref()
+                    .is_some_and(|gutter| gutter.first.to_string() == "│ ")
+            })
+            .map(|row| {
+                row.line
+                    .to_string()
+                    .strip_suffix(" │")
+                    .unwrap()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for width in [24, 48, 100, first.width() as u16 + 85 + 12 + 4] {
+        layout.update(&items, None, width);
+        let lines = body(&layout);
+        assert!(
+            lines.iter().any(|line| line.starts_with("如果")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.is_empty() && !line.contains("  "))
+        );
+        assert_eq!(lines.concat(), format!("{first}{second}"));
+        assert!(
+            layout.entries[0]
+                .rows
+                .iter()
+                .all(|row| row.line.width() <= usize::from(width))
+        );
+    }
+
+    // A line that fits still shows every space; the source passed to the
+    // model and stored in history is never rewritten by the layout.
+    layout.update(&items, None, source.width() as u16 + 4);
+    assert_eq!(body(&layout).as_slice(), std::slice::from_ref(&source));
+    assert!(matches!(&items[0], TranscriptItem::User(text) if text == &source));
+
+    let verbatim = wrap_line(&Line::from(source.clone()), 40).0;
+    assert_eq!(
+        verbatim.iter().map(Line::to_string).collect::<String>(),
+        source
+    );
+    let source = "    缩进  与列对齐\n\nword\u{a0}word";
+    layout.update(&[TranscriptItem::User(source.into())], None, 80);
+    assert_eq!(body(&layout).join("\n"), source);
+}
+
+#[test]
+fn user_links_remain_clickable_after_consuming_a_wrap_separator() {
+    let url = "https://orbit.example/demo";
+    let items = [TranscriptItem::User(format!(
+        "第一句{}{url}",
+        " ".repeat(85)
+    ))];
+
+    for width in [12, 40, 100] {
+        let mut layout = TranscriptLayout::default();
+        layout.update(&items, None, width);
+        let area = Rect::new(3, 2, width, layout.height() as u16);
+        let mut found = false;
+        for y in area.y..area.bottom() {
+            assert!(layout.link_at(area, 0, (area.x, y)).is_none());
+            for x in area.x..area.right() {
+                if let Some(target) = layout.link_at(area, 0, (x, y)) {
+                    assert_eq!(target, url);
+                    found = true;
+                }
+            }
+        }
+
+        assert!(found, "width {width}");
+    }
 }
 
 #[test]

@@ -102,6 +102,7 @@ struct Frame {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct State {
     frames: Vec<Frame>,
+    pub(super) footnotes: std::collections::BTreeMap<String, usize>,
 }
 
 #[derive(Clone)]
@@ -125,6 +126,7 @@ pub(super) fn render<'a>(
         recover_mark: !source.contains(r"\=="),
         semantic_html: false,
         image_starts: Vec::new(),
+        footnotes: state.footnotes.clone(),
     };
     for event in events {
         renderer.event(event);
@@ -157,6 +159,7 @@ struct Renderer {
     recover_mark: bool,
     semantic_html: bool,
     image_starts: Vec<usize>,
+    footnotes: std::collections::BTreeMap<String, usize>,
 }
 
 impl Renderer {
@@ -288,6 +291,18 @@ impl Renderer {
             }
 
             Event::Text(text) => self.text(&text, true),
+            Event::FootnoteReference(label) => {
+                if let Some(number) = self.footnotes.get(&super::footnotes::key(&label)) {
+                    self.push(Span::styled(
+                        format!("[{number}]"),
+                        super::footnotes::style(),
+                    ));
+                    self.rows.last_mut().unwrap().last_mut().unwrap().url =
+                        Some(super::footnotes::target(&label));
+                } else {
+                    self.text(&format!("[^{label}]"), false);
+                }
+            }
 
             Event::Code(text) => {
                 let style = Formatting::Code.style(self.style());
@@ -377,7 +392,6 @@ impl Renderer {
 
             Event::HardBreak => self.rows.push(Vec::new()),
             Event::SoftBreak => self.text(" ", false),
-            _ => {}
         }
     }
 

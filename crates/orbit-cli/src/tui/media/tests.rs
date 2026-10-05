@@ -1,15 +1,18 @@
-use super::*;
-use crate::tui::{
-    app::{TranscriptItem, UiState},
-    markdown,
-    selection::Selection,
-    transcript::TranscriptLayout,
-};
+use std::time::{Duration, Instant};
+
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::{Terminal, backend::TestBackend, buffer::CellWidth, style::Style, text::Span};
-use std::time::{Duration, Instant};
+use unicode_width::UnicodeWidthStr;
+
+use super::*;
+use crate::tui::{
+    app::{TranscriptItem, UiState},
+    markdown::{self, LinkedLine},
+    selection::Selection,
+    transcript::TranscriptLayout,
+};
 
 fn context(protocol: ProtocolType) -> Context {
     let mut picker = Picker::halfblocks();
@@ -18,20 +21,14 @@ fn context(protocol: ProtocolType) -> Context {
 }
 
 fn ready(context: &Context, source: Source, width: u16, height: u16) -> Arc<Prepared> {
-    let key = Key {
-            network: None,
-        source,
-        workspace: context.workspace.clone(),
-        width,
-        height,
-        large: false,
-    };
+    let key = context.key(&source, width, height, false);
     let shared = context.shared.as_ref().unwrap();
     let picture = Arc::new(
         decode::Decoder::default()
             .prepare(&key, &shared.picker)
             .unwrap(),
     );
+
     shared.cache.lock().unwrap().insert(
         key,
         Cached {
@@ -51,6 +48,81 @@ fn wait_for(context: &Context, source: &Source, width: u16, height: u16) -> Arc<
         assert!(context.error(source, width, height, false).is_none());
         assert!(Instant::now() < until, "media worker did not finish");
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn remote_previews_use_session_proxy_and_isolate_cache_after_rebind() {
+    use std::io::{Read, Write};
+
+    let proxies: Vec<_> = [[255, 0, 0, 255], [0, 255, 0, 255]]
+        .into_iter()
+        .map(|color| {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let client = Arc::new(orbit_tools::web_fetch::WebClient::new(
+                &orbit_tools::web_fetch::WebConfig {
+                    proxy: Some(format!("http://{}", listener.local_addr().unwrap())),
+                    ..Default::default()
+                },
+            ).unwrap());
+            let worker = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "preview did not use its proxy");
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut request = [0; 4096];
+                let count = stream.read(&mut request).unwrap();
+                assert!(String::from_utf8_lossy(&request[..count]).starts_with(
+                    "GET http://proxy-only.invalid/picture.png HTTP/1.1"
+                ));
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                    8, 8, image::Rgba(color),
+                )).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+                stream.write_all(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.get_ref().len()
+                ).as_bytes()).unwrap();
+                stream.write_all(bytes.get_ref()).unwrap();
+            });
+            (client, worker)
+        })
+        .collect();
+
+    let mut first = context(ProtocolType::Halfblocks);
+    first.set_client(proxies[0].0.clone());
+    let source = Source::Image("http://proxy-only.invalid/picture.png".into());
+    let first_picture = wait_for(&first, &source, 10, 4);
+    let mut second = first.clone();
+    second.set_client(proxies[1].0.clone());
+    assert!(Arc::ptr_eq(
+        first.shared.as_ref().unwrap(),
+        second.shared.as_ref().unwrap()
+    ));
+    assert!(!first.same_cache(&second));
+    assert!(second.cached_picture(&source, 10, 4).is_none());
+    let second_picture = wait_for(&second, &source, 10, 4);
+    assert!(!Arc::ptr_eq(&first_picture, &second_picture));
+    let math = Source::Math {
+        tex: "x^2".into(),
+        display: false,
+    };
+    assert_eq!(
+        first.key(&math, 10, 4, false),
+        second.key(&math, 10, 4, false)
+    );
+    for (_, worker) in proxies {
+        worker.join().unwrap();
     }
 }
 
@@ -88,6 +160,7 @@ fn assert_ui_graphics(state: &mut UiState) {
         {
             break;
         }
+
         assert!(
             Instant::now() < deadline,
             "new/resumed UI failed to render media: {:?}",
@@ -95,6 +168,7 @@ fn assert_ui_graphics(state: &mut UiState) {
         );
         std::thread::sleep(Duration::from_millis(5));
     }
+
     clear_layers();
 }
 
@@ -239,6 +313,7 @@ fn multiline_math_fallback_keeps_line_breaks_click_targets_and_copyable_tex() {
                 .chunks(80)
                 .map(|cells| cells.iter().map(|c| c.symbol()).collect::<String>())
                 .collect::<Vec<_>>();
+
             assert!(rows.iter().any(|row| row.contains(r"\frac{a}{b}")));
             assert!(rows.iter().any(|row| row.contains(r"\sqrt{x}")));
             assert!(
@@ -300,6 +375,7 @@ fn framed_tool_and_finished_thinking_keep_formula_targets_and_fallback_lines() {
             .chunks(36)
             .map(|cells| cells.iter().map(|c| c.symbol()).collect::<String>())
             .collect::<Vec<_>>();
+
         assert!(
             rows.iter().any(|row| row.contains(r"\frac{a}{b}")),
             "{rows:?}"
@@ -330,6 +406,7 @@ fn screenshot_formulas_render_through_the_full_async_ui_pipeline() {
                 panic!("{:?}: {error}", key.source);
             }
         }
+
         if cache.len() == 12 && cache.values().all(|v| matches!(v.value, Value::Ready(_))) {
             break;
         }
@@ -337,6 +414,7 @@ fn screenshot_formulas_render_through_the_full_async_ui_pipeline() {
         drop(cache);
         std::thread::sleep(Duration::from_millis(5));
     }
+
     draw_ui(&mut state, &mut terminal);
     assert!(
         terminal
@@ -390,6 +468,7 @@ fn ratex_embeds_fraction_integral_and_matrix_glyphs_on_transparent_pixels() {
                 .all(|p| p[0] >= 210 && p[2] >= 220)
         );
     }
+
     assert!(decode::math_svg(r"\unknownOrbitMacro{x}", false, 20, [255; 3]).is_err());
 }
 
@@ -437,6 +516,7 @@ fn parser_attaches_media_only_to_semantic_math_and_images() {
             assert!(text.get(target.range.clone()).is_some());
         }
     }
+
     assert!(
         markdown::document("```markdown\n$x$ ![a](b.png)\n```", 80)
             .iter()
@@ -662,6 +742,7 @@ fn selecting_one_slice_selects_the_entire_occurrence_and_restores_each_protocol(
             {
                 continue; // This protocol deliberately retains selectable TeX.
             }
+
             let picture = ready(&context, request.source, request.width, request.height);
             assert!(picture.size.height > 1);
             let mut layout = TranscriptLayout::default();
@@ -720,6 +801,7 @@ fn selecting_one_slice_selects_the_entire_occurrence_and_restores_each_protocol(
                             }
                             assert_ne!(f.buffer_mut()[(x - 1, row)].bg, THEME.selection);
                         }
+
                         LAYER.with(|layer| {
                             for p in &layer.borrow().current {
                                 assert_eq!(
@@ -757,6 +839,7 @@ fn selecting_one_slice_selects_the_entire_occurrence_and_restores_each_protocol(
                     .unwrap();
                 assert_eq!(terminal.backend().buffer()[(x, y)].bg, original.bg);
             }
+
             clear_layers();
         }
     }
@@ -976,6 +1059,7 @@ fn preview_consumes_input_and_closes_without_touching_the_composer() {
             })
         })
         .unwrap();
+
     preview.handle(&mouse(MouseEventKind::Moved, x - 1, y));
     terminal.draw(|f| preview.draw(f)).unwrap();
     let buffer = terminal.backend().buffer();
@@ -1001,6 +1085,7 @@ fn preview_consumes_input_and_closes_without_touching_the_composer() {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
         terminal.draw(|f| preview.draw(f)).unwrap();
     }
+
     clear_layers();
 }
 
@@ -1019,6 +1104,7 @@ fn scrolling_a_picture_clips_slices_and_keeps_the_rest_of_the_frame_clean() {
         request.width,
         request.height,
     );
+
     assert!(picture.size.height > 4);
     let mut layout = TranscriptLayout::default();
     layout.set_media(context);
@@ -1103,13 +1189,14 @@ fn every_formula_slice_keeps_its_allocated_columns_when_scrolled_and_resized() {
                     }
                 });
             }
+
             clear_layers();
         }
     }
 }
 
 #[test]
-fn linked_markdown_and_html_images_keep_their_destination_on_every_thumbnail_row() {
+fn remote_images_keep_the_source_or_outer_link_on_every_picture_row() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image.png");
     image::RgbaImage::from_pixel(40, 60, image::Rgba([230, 100, 50, 255]))
@@ -1117,14 +1204,22 @@ fn linked_markdown_and_html_images_keep_their_destination_on_every_thumbnail_row
         .unwrap();
     let url = "https://orbit.example/thumbnail.png";
     let destination = "https://orbit.example/document";
-    for source in [
-        format!("[![示意]({url})]({destination})"),
-        format!("<a href='{destination}'><img src='{url}' alt='示意'></a>"),
+    for (source, target) in [
+        (format!("![占位图片]({url} \"随机占位图\")"), url),
+        (
+            format!("<img src='{url}' alt='HTML 图片' width='400'>"),
+            url,
+        ),
+        (format!("[![示意]({url})]({destination})"), destination),
+        (
+            format!("<a href='{destination}'><img src='{url}' alt='示意'></a>"),
+            destination,
+        ),
     ] {
         let context = context(ProtocolType::Kitty);
         let line = markdown::document(&source, 80).remove(0);
         assert_eq!(line.media.len(), 1);
-        assert_eq!(line.links[0].url, destination);
+        assert_eq!(line.links[0].url, target);
         let request = requests(&line, 80).remove(0);
         let mut key = Key {
             network: None,
@@ -1142,6 +1237,7 @@ fn linked_markdown_and_html_images_keep_their_destination_on_every_thumbnail_row
         let height = picture.size.height;
         let column = (80 - picture.size.width) / 2;
         key.source = request.source.clone();
+        key.network = Some(context.network.clone());
         key.workspace = context.workspace.clone();
         shared.cache.lock().unwrap().insert(
             key,
@@ -1155,13 +1251,537 @@ fn linked_markdown_and_html_images_keep_their_destination_on_every_thumbnail_row
         layout.update(&[TranscriptItem::Assistant(source)], None, 80);
         let area = Rect::new(0, 0, 80, 20);
         for row in 0..height {
-            assert_eq!(layout.link_at(area, 0, (column, row)), Some(destination));
+            assert_eq!(layout.link_at(area, 0, (column, row)), Some(target));
             assert_eq!(
                 layout.media_at(area, 0, (column, row)),
                 Some(request.source.clone())
             );
         }
     }
+}
+
+#[test]
+fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image.png");
+    image::RgbaImage::from_pixel(40, 60, image::Rgba([230, 100, 50, 255]))
+        .save(&path)
+        .unwrap();
+    let destination = "https://orbit.example/document";
+
+    for (source, linked) in [
+        (format!("![示意]({})", path.display()), false),
+        (format!("<img src='{}' alt='示意'>", path.display()), false),
+        (
+            format!("[![示意]({})]({destination})", path.display()),
+            true,
+        ),
+        (
+            format!(
+                "<a href='{destination}'><img src='{}' alt='示意'></a>",
+                path.display()
+            ),
+            true,
+        ),
+    ] {
+        let mut state = UiState::new("mock");
+        state.media = context(ProtocolType::Kitty);
+        state.transcript.push(TranscriptItem::Assistant(source));
+        state.input.insert("未发送的草稿");
+        let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            draw_ui(&mut state, &mut terminal);
+            if terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|cell| cell.symbol().contains('\u{10eeee}'))
+            {
+                break;
+            }
+
+            assert!(Instant::now() < deadline, "image did not render inline");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let area = state.selection.viewport;
+        let point = (area.y..area.bottom())
+            .find_map(|y| {
+                (area.x..area.right()).find_map(|x| {
+                    state
+                        .transcript_layout
+                        .media_at(area, state.max_scroll, (x, y))
+                        .is_some()
+                        .then_some((x, y))
+                })
+            })
+            .expect("inline image has a hit area");
+        let target = state
+            .transcript_layout
+            .link_at(area, state.max_scroll, point);
+        assert_eq!(target, linked.then_some(destination));
+        crate::tui::render::handle_link_hover(
+            &mut state,
+            &mouse(MouseEventKind::Moved, point.0, point.1),
+        );
+        assert_eq!(state.link_hovered, linked.then_some(point));
+        draw_ui(&mut state, &mut terminal);
+        let tooltip = state.link_tooltip_area;
+        let mut shown = String::new();
+        let mut x = tooltip.x;
+        while x < tooltip.right() {
+            let cell = &terminal.backend().buffer()[(x, tooltip.y)];
+            shown.push_str(cell.symbol());
+            x += cell.cell_width().max(1);
+        }
+
+        assert_eq!(
+            shown.replace(' ', "").contains("Ctrl+Click跳转"),
+            linked,
+            "{shown:?}"
+        );
+        assert!(!shown.contains("单击预览"));
+
+        state
+            .selection
+            .handle(&mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                point.0,
+                point.1,
+            ))
+            .unwrap();
+        assert!(state.selection.dragging());
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0, point.1);
+        let clicked = state.selection.click(&release).unwrap();
+        assert!(crate::tui::toggle_transcript_at(&mut state, clicked));
+        assert!(!state.selection.dragging());
+        assert!(!state.selection.active());
+        assert!(state.media_preview.is_none());
+        assert_eq!(state.input.text, "未发送的草稿");
+        clear_layers();
+    }
+}
+
+#[test]
+fn linked_image_hints_stay_outside_pixels_while_the_pointer_moves() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image.png");
+    image::RgbaImage::from_pixel(600, 300, image::Rgba([230, 100, 50, 255]))
+        .save(&path)
+        .unwrap();
+    let target = "https://orbit.example/document";
+    let image = format!("[![示意]({})]({target})", path.display());
+    let documents = [
+        format!("before\n\n{image}\n\nbetween\n\n{image}\n\nafter"),
+        format!(
+            "<table><tr><td><a href='{target}'><img src='{}'></a></td><td><a href='{target}'><img src='{}'></a></td></tr></table>",
+            path.display(),
+            path.display()
+        ),
+    ];
+
+    for protocol in [
+        ProtocolType::Kitty,
+        ProtocolType::Sixel,
+        ProtocolType::Iterm2,
+        ProtocolType::Halfblocks,
+    ] {
+        for width in [34, 80, 140] {
+            for document in &documents {
+                let mut state = UiState::new("mock");
+                state.media = context(protocol);
+                state
+                    .transcript
+                    .push(TranscriptItem::Assistant(document.clone()));
+                let mut terminal = Terminal::new(TestBackend::new(width, 48)).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let origins = loop {
+                    draw_ui(&mut state, &mut terminal);
+                    let origins: Vec<_> = LAYER.with(|layer| {
+                        layer
+                            .borrow()
+                            .current
+                            .iter()
+                            .filter(|placement| placement.fragment.row == 0)
+                            .map(|placement| (placement.area.x, placement.area.y))
+                            .collect()
+                    });
+                    if origins.len() == 2 {
+                        break origins;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "pictures did not render: {protocol:?}, {width}, {document}"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                };
+                let placements = || {
+                    LAYER.with(|layer| {
+                        layer
+                            .borrow()
+                            .current
+                            .iter()
+                            .map(|placement| (placement.area, placement.fragment.row))
+                            .collect::<Vec<_>>()
+                    })
+                };
+                let original = placements();
+                let viewport = state.selection.viewport;
+                let pictures: Vec<_> = origins
+                    .iter()
+                    .map(|&point| {
+                        state
+                            .transcript_layout
+                            .picture_area_at(viewport, state.max_scroll, point)
+                            .unwrap()
+                    })
+                    .collect();
+
+                assert_ne!(pictures[0], pictures[1]);
+
+                for picture in &pictures {
+                    let mut tooltip = None;
+                    for (index, point) in [
+                        (picture.x, picture.y),
+                        (
+                            picture.x + picture.width / 2,
+                            picture.y + picture.height / 2,
+                        ),
+                        (picture.right() - 1, picture.bottom() - 1),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        assert_eq!(
+                            state
+                                .transcript_layout
+                                .link_at(viewport, state.max_scroll, point),
+                            Some(target)
+                        );
+                        assert_eq!(
+                            state.transcript_layout.picture_area_at(
+                                viewport,
+                                state.max_scroll,
+                                point
+                            ),
+                            Some(*picture)
+                        );
+                        assert_eq!(
+                            crate::tui::render::handle_link_hover(
+                                &mut state,
+                                &mouse(MouseEventKind::Moved, point.0, point.1)
+                            ),
+                            Some(index == 0)
+                        );
+                        draw_ui(&mut state, &mut terminal);
+                        let area = state.link_tooltip_area;
+                        assert!(
+                            !area.is_empty(),
+                            "no hint: {protocol:?}, {width}, {document}"
+                        );
+                        assert!(
+                            pictures
+                                .iter()
+                                .all(|picture| area.intersection(*picture).is_empty())
+                        );
+                        assert_eq!(area.y, picture.bottom());
+                        let mut column = area.x;
+                        while column < area.right() {
+                            let cell = &terminal.backend().buffer()[(column, area.y)];
+                            assert_eq!(cell.fg, crate::tui::theme::THEME.overlay_foreground);
+                            assert_eq!(cell.bg, crate::tui::theme::THEME.overlay_background);
+                            column += cell.cell_width().max(1);
+                        }
+
+                        if let Some(tooltip) = tooltip {
+                            assert_eq!(area, tooltip);
+                        }
+                        tooltip = Some(area);
+                        assert_eq!(placements(), original, "hover erased an image slice");
+                    }
+                }
+
+                assert_eq!(
+                    crate::tui::render::handle_link_hover(
+                        &mut state,
+                        &mouse(MouseEventKind::Moved, 0, 0)
+                    ),
+                    Some(true)
+                );
+                draw_ui(&mut state, &mut terminal);
+                assert!(state.link_tooltip_area.is_empty());
+                assert_eq!(placements(), original);
+                clear_layers();
+            }
+        }
+    }
+}
+
+#[test]
+fn cropped_image_hover_uses_current_bounds_after_scroll_and_resize() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tall.png");
+    image::RgbaImage::from_pixel(600, 600, image::Rgba([40, 150, 220, 255]))
+        .save(&path)
+        .unwrap();
+    let source = format!(
+        "[![图]({})](https://orbit.example/document)",
+        path.display()
+    );
+    let mut state = UiState::new("mock");
+    state.media = context(ProtocolType::Kitty);
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(source.clone()));
+    let mut terminal = Terminal::new(TestBackend::new(160, 14)).unwrap();
+    let draw = |state: &mut UiState, terminal: &mut Terminal<TestBackend>, area| {
+        begin_frame();
+        terminal
+            .draw(|frame| {
+                crate::tui::render::draw_transcript_in(frame, state, area, false);
+                state.selection.paint(frame);
+                paint(frame.buffer_mut());
+            })
+            .unwrap();
+    };
+
+    for width in [28, 140, 80] {
+        let request = requests(&markdown::document(&source, width).remove(0), width).remove(0);
+        ready(&state.media, request.source, request.width, request.height);
+        let area = Rect::new(4, 4, width, 3);
+        draw(&mut state, &mut terminal, area);
+        state.follow_bottom = false;
+        state.scroll = state.max_scroll.saturating_sub(2);
+        draw(&mut state, &mut terminal, area);
+        let origins: Vec<_> = LAYER.with(|layer| {
+            layer
+                .borrow()
+                .current
+                .iter()
+                .map(|placement| (placement.area, placement.fragment.row))
+                .collect()
+        });
+
+        assert_eq!(origins.len(), 3);
+        assert_eq!(origins[0].1, 2);
+        let point = (origins[0].0.x, area.y);
+        let picture = state
+            .transcript_layout
+            .picture_area_at(area, 2, point)
+            .unwrap();
+        assert_eq!(picture.y, area.y);
+        assert_eq!(picture.height, area.height);
+        for y in area.y..area.bottom() {
+            assert_eq!(
+                state
+                    .transcript_layout
+                    .picture_area_at(area, 2, (point.0, y)),
+                Some(picture)
+            );
+            crate::tui::render::handle_link_hover(
+                &mut state,
+                &mouse(MouseEventKind::Moved, point.0, y),
+            );
+            draw(&mut state, &mut terminal, area);
+            assert!(state.link_tooltip_area.intersection(picture).is_empty());
+            LAYER.with(|layer| {
+                assert_eq!(
+                    layer
+                        .borrow()
+                        .current
+                        .iter()
+                        .map(|placement| (placement.area, placement.fragment.row))
+                        .collect::<Vec<_>>(),
+                    origins
+                )
+            });
+        }
+
+        state.scroll = state.max_scroll.saturating_sub(4);
+        draw(&mut state, &mut terminal, area);
+        let next = state
+            .transcript_layout
+            .picture_area_at(area, 4, point)
+            .unwrap();
+        assert_eq!(next, picture);
+        assert!(state.link_tooltip_area.intersection(next).is_empty());
+        LAYER.with(|layer| {
+            assert_eq!(layer.borrow().current.len(), 3);
+            assert_eq!(layer.borrow().current[0].fragment.row, 4);
+        });
+        clear_layers();
+    }
+}
+
+#[test]
+fn image_alt_urls_are_not_implicit_navigation_targets() {
+    let label = "https://orbit.example/alt";
+    for source in [
+        format!("![{label}](image.png)"),
+        format!("<img src='image.png' alt='{label}'>"),
+        format!("![{label}][image]\n\n[image]: image.png"),
+    ] {
+        let lines = markdown::document(&source, 80);
+        let image = lines.iter().find(|line| !line.media.is_empty()).unwrap();
+        assert!(image.links.is_empty(), "{source}");
+        assert_eq!(image.media[0].source, Source::Image("image.png".into()));
+    }
+}
+
+#[test]
+fn table_formulas_share_cell_layout_keep_borders_links_and_copy_complete_tex() {
+    let tex = [r"e^{i\pi}", r"\frac{a}{b}"];
+    let sources = [
+        format!(
+            "| 左对齐 | 居中 | 右对齐 |\n| :--- | :---: | ---: |\n| 中文 | [链接](https://orbit.example/docs) | ${}$ |\n| `code` | ${}$ | 42 |\n",
+            tex[0], tex[1]
+        ),
+        format!(
+            "<table><tr><th>左</th><th>右</th></tr><tr><td>中文</td><td align='right'>${}$</td></tr><tr><td colspan='2' align='center'>[链接](https://orbit.example/docs) ${}$</td></tr></table>",
+            tex[0], tex[1]
+        ),
+    ];
+
+    for protocol in [
+        ProtocolType::Kitty,
+        ProtocolType::Sixel,
+        ProtocolType::Iterm2,
+    ] {
+        for source in &sources {
+            for width in [12, 34, 80] {
+                let context = context(protocol);
+                let document = markdown::document(source, width);
+                let pending = document
+                    .iter()
+                    .cloned()
+                    .flat_map(|line| layout(line, &context, width))
+                    .collect::<Vec<_>>();
+                let mut requested = std::collections::HashSet::new();
+                for request in pending.iter().flat_map(|line| &line.media_requests) {
+                    if requested.insert((request.source.clone(), request.width, request.height)) {
+                        ready(
+                            &context,
+                            request.source.clone(),
+                            request.width,
+                            request.height,
+                        );
+                    }
+                }
+
+                assert_eq!(requested.len(), 2, "width={width}, {source}");
+                let rendered = document
+                    .into_iter()
+                    .flat_map(|line| layout(line, &context, width))
+                    .collect::<Vec<_>>();
+                let text = rendered
+                    .iter()
+                    .map(LinkedLine::text)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                assert!(rendered.iter().any(|line| !line.graphics.is_empty()));
+                assert!(!text.contains(tex[0]) && !text.contains(tex[1]), "{text}");
+                assert!(
+                    rendered
+                        .iter()
+                        .all(|line| line.line.width() <= usize::from(width)),
+                    "{text}"
+                );
+                assert!(
+                    rendered
+                        .iter()
+                        .flat_map(|line| &line.links)
+                        .any(|link| link.url == "https://orbit.example/docs")
+                );
+                for line in &rendered {
+                    for graphic in &line.graphics {
+                        let text = line.text();
+                        let decorations = line
+                            .decorations
+                            .iter()
+                            .map(|range| text[..range.start].width()..text[..range.end].width())
+                            .collect::<Vec<_>>();
+
+                        for column in usize::from(graphic.x)
+                            ..usize::from(graphic.x + graphic.picture.size.width)
+                        {
+                            assert!(
+                                !decorations.iter().any(|range| range.contains(&column)),
+                                "formula overlaps table border"
+                            );
+                        }
+                    }
+                }
+
+                let mut transcript = TranscriptLayout::default();
+                transcript.set_media(context);
+                transcript.update(&[TranscriptItem::Assistant(source.clone())], None, width);
+                let mut selection = Selection::default();
+                let area = Rect::new(0, 0, width, transcript.height() as u16);
+                selection.viewport = area;
+                selection
+                    .handle(&mouse(MouseEventKind::Down(MouseButton::Left), 0, 0))
+                    .unwrap();
+                selection
+                    .handle(&mouse(
+                        MouseEventKind::Drag(MouseButton::Left),
+                        width - 1,
+                        area.bottom() - 1,
+                    ))
+                    .unwrap();
+                selection.transcript_view(0, &transcript);
+                let copied = selection.text();
+                for formula in tex {
+                    assert_eq!(copied.matches(formula).count(), 1, "{copied:?}");
+                }
+                assert!(!copied.contains(['┌', '│', '\x1b']));
+            }
+        }
+    }
+}
+
+#[test]
+fn table_math_decodes_automatically_and_only_requests_visible_rows() {
+    let mut state = UiState::new("mock");
+    state.media = context(ProtocolType::Kitty);
+    let mut source = "| 序号 | 公式 |\n| --- | ---: |\n".to_owned();
+    for row in 0..80 {
+        source.push_str(&format!("| {row} | $x_{{{row}}}$ |\n"));
+    }
+    state.transcript.push(TranscriptItem::Assistant(source));
+    let mut terminal = Terminal::new(TestBackend::new(60, 24)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        draw_ui(&mut state, &mut terminal);
+        if terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .any(|cell| cell.symbol().contains('\u{10eeee}'))
+        {
+            break;
+        }
+
+        assert!(
+            Instant::now() < deadline,
+            "visible table math did not decode"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let shared = state.media.shared.as_ref().unwrap();
+    let cache = shared.cache.lock().unwrap();
+    assert!(!cache.is_empty());
+    assert!(cache.len() < usize::from(state.selection.viewport.height));
+    assert!(
+        cache
+            .keys()
+            .all(|key| key.width < state.selection.viewport.width)
+    );
+    clear_layers();
 }
 
 #[test]
@@ -1195,9 +1815,11 @@ fn attachment_chips_decode_tiny_thumbnails_without_showing_filenames() {
         }) {
             break;
         }
+
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
     }
+
     let chip = state.attachment_areas[0];
     assert_eq!(chip.height, 2);
     assert!(chip.width <= 12);
@@ -1211,8 +1833,10 @@ fn attachment_chips_decode_tiny_thumbnails_without_showing_filenames() {
             text.push_str(cell.symbol());
             x += cell.cell_width().max(1);
         }
+
         text.push('\n');
     }
+
     assert!(text.contains("图片 1"));
     assert!(!text.contains("private-filename"));
     assert!(text.contains("说明这张图片"));
@@ -1245,5 +1869,6 @@ fn export_formula_gallery() {
         image::imageops::overlay(&mut gallery, &picture.to_rgba8(), 24, (n * 115 + 4) as i64);
         std::fs::write(format!("/tmp/orbit-formula-{n}.svg"), svg).unwrap();
     }
+
     gallery.save("/tmp/orbit-ratex-gallery.png").unwrap();
 }

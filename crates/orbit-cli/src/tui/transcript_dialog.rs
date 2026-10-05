@@ -355,6 +355,9 @@ impl TranscriptDialog {
                 }
 
                 if mouse.modifiers.contains(KeyModifiers::CONTROL) {
+                    if super::jump_footnote_at(&mut self.ui, (mouse.column, mouse.row)) {
+                        return Ok(Action::Redraw);
+                    }
                     let offset = self.ui.max_scroll.saturating_sub(self.ui.scroll);
                     if let Some(url) = self.ui.transcript_layout.link_at(
                         self.ui.selection.viewport,
@@ -398,7 +401,8 @@ impl TranscriptDialog {
         }
 
         if let Some(point) = self.ui.selection.click(event)
-            && super::toggle_transcript_at(&mut self.ui, point)
+            && (super::jump_footnote_at(&mut self.ui, point)
+                || super::toggle_transcript_at(&mut self.ui, point))
         {
             self.ui.selection.clear();
             return Ok(Action::Redraw);

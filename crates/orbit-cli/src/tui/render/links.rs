@@ -58,6 +58,9 @@ pub(super) fn draw_link_tooltip(
         state.link_hovered = None;
         return;
     };
+    if crate::tui::markdown::footnotes::is_target(hit.url) {
+        return;
+    }
 
     let text = if subagent_link_id(hit.url).is_some() {
         "单击查看子代理"

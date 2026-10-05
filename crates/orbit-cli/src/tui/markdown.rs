@@ -2,6 +2,7 @@
 //! CommonMark inline syntax is handled by pulldown-cmark, not regex replacements.
 pub(super) mod blocks;
 mod css;
+pub(super) mod footnotes;
 mod html;
 mod inline;
 mod table;
@@ -256,6 +257,7 @@ pub(super) fn slice_decorations(
 #[derive(Default)]
 pub(super) struct Context<'a> {
     parser: Option<Parser<'a>>,
+    footnotes: footnotes::Catalog,
 }
 
 impl<'a> Context<'a> {
@@ -305,8 +307,9 @@ impl<'a> Context<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
             parser: source.contains('[').then(|| {
-                Parser::new_ext(source, Options::ENABLE_TABLES)
+                Parser::new_ext(source, Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES)
             }),
+            footnotes: footnotes::Catalog::new(source),
         }
     }
 
@@ -326,9 +329,24 @@ impl<'a> Context<'a> {
         });
 
         definitions.sort();
+        definitions.extend(
+            self.footnotes
+                .numbers
+                .iter()
+                .map(|(label, number)| (footnotes::target(label), number.to_string(), None)),
+        );
         definitions
     }
 
+    pub(super) fn footnote_block(
+        &self,
+        offset: usize,
+        width: u16,
+        path: &str,
+        depth: usize,
+    ) -> Option<(usize, Vec<LinkedLine>)> {
+        self.footnotes.block(offset, width, path, depth, self)
+    }
 
     fn parse<'s>(
         &self,
@@ -404,12 +422,14 @@ impl Context<'_> {
 
         let trimmed = source.trim_start();
         let indent = source.len() - trimmed.len();
+        state.footnotes = self.footnotes.numbers.clone();
         inline::render(
             self.parse(
                 trimmed,
                 Options::ENABLE_STRIKETHROUGH
                     | Options::ENABLE_TASKLISTS
-                    | Options::ENABLE_MATH,
+                    | Options::ENABLE_MATH
+                    | Options::ENABLE_OLD_FOOTNOTES,
             ),
             trimmed,
             format!("  {}", &source[..indent]),
@@ -433,7 +453,7 @@ fn document_with_context(
     path: &str,
     depth: usize,
     context: &Context<'_>,
-    _source_offset: Option<usize>,
+    source_offset: Option<usize>,
 ) -> Vec<LinkedLine> {
     let mut out = Vec::new();
     let mut remaining = source;
@@ -441,6 +461,16 @@ fn document_with_context(
     let mut inline = InlineState::default();
     let mut index = 0;
     while !remaining.is_empty() {
+        if fence.is_none()
+            && let Some(offset) = source_offset
+            && let Some((bytes, lines)) =
+                context.footnote_block(offset + source.len() - remaining.len(), width, path, depth)
+        {
+            out.extend(lines);
+            index += remaining[..bytes].lines().count();
+            remaining = &remaining[bytes..];
+            continue;
+        }
 
         if fence.is_none()
             && let Some((bytes, lines)) = context.math_block(remaining)

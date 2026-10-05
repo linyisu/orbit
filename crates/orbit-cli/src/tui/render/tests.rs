@@ -1474,7 +1474,63 @@ fn details_code_block_retains_one_border_color_including_its_closing_corner() {
     );
 }
 
+#[test]
+fn footnote_click_jumps_within_its_message_without_a_hover_tooltip() {
+    let mut state = UiState::new("mock");
+    let body = format!(
+        "引用[^named]。\n\n{}\n[^named]: 正确脚注\n",
+        "正文\n".repeat(30)
+    );
+    state.transcript.push(TranscriptItem::Assistant(body));
+    state.transcript.push(TranscriptItem::Assistant(
+        "第二条[^named]。\n\n[^named]: 另一条脚注\n".into(),
+    ));
+    state.follow_bottom = false;
+    state.scroll = usize::MAX;
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    let area = state.selection.viewport;
+    let point = (area.y..area.bottom())
+        .find_map(|y| {
+            (area.x..area.right()).find_map(|x| {
+                state
+                    .transcript_layout
+                    .link_at(area, 0, (x, y))
+                    .filter(|url| super::super::markdown::footnotes::is_target(url))
+                    .map(|_| (x, y))
+            })
+        })
+        .unwrap();
 
+    state.link_hovered = Some(point);
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    assert!(state.link_tooltip_area.is_empty());
+    let target = state.transcript_layout.footnote_at(area, 0, point).unwrap();
+    assert!(super::super::jump_footnote_at(&mut state, point));
+    assert_eq!(
+        state.max_scroll - state.scroll,
+        target.min(state.max_scroll)
+    );
+    assert!(!state.follow_bottom);
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    let visible = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<String>();
+
+    assert!(
+        visible
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>()
+            .contains("正确脚注"),
+        "{visible}"
+    );
+    assert!(!visible.contains("无法打开链接"));
+}
 
 #[test]
 fn file_approval_keeps_conversation_and_draft_visible() {

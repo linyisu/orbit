@@ -20,6 +20,7 @@ fn basic_html_and_markdown_share_nested_semantic_styles() {
         let markdown = document(markdown, 80);
         assert_eq!(html[0].line, markdown[0].line);
     }
+
     let value = render("<u>下划线</u> 正常");
     assert!(value.spans.iter().any(
             |span| span.content == "下划线" && span.style.add_modifier == Modifier::UNDERLINED
@@ -52,6 +53,7 @@ fn html_tokenizer_handles_case_attributes_entities_and_retains_unsupported_sourc
     ] {
         assert_eq!(render(source).to_string(), format!("  {source}"));
     }
+
     assert_eq!(
         render("`<strong>原文</strong>`").to_string(),
         "  <strong>原文</strong>"
@@ -92,6 +94,7 @@ fn html_breaks_preserve_styles_links_and_physical_line_offsets() {
                     .contains(Modifier::BOLD | Modifier::UNDERLINED)
         }));
     }
+
     assert_eq!(
         document("甲<BR>乙<br/>丙", 80)
             .iter()
@@ -106,21 +109,47 @@ fn html_breaks_preserve_styles_links_and_physical_line_offsets() {
 }
 
 #[test]
-fn html_scripts_convert_complete_groups_and_keep_link_targets_after_conversion() {
+fn unsupported_html_tags_keep_source_attributes_and_link_targets() {
     let source = "H<sub>2</sub>O x<sup>2</sup> y<sup>任意文字</sup> z<sub>ABC</sub>";
-    assert_eq!(render(source).to_string(), "  H₂O x² y^(任意文字) z_(ABC)");
+    assert_eq!(render(source).to_string(), format!("  {source}"));
+    for (tag, value) in [
+        ("sup", "上标12"),
+        ("sub", "下标ab"),
+        ("small", "小字"),
+        ("abbr", "HTML"),
+        ("q", "行内引用"),
+        ("kbd", "Ctrl👩‍💻"),
+    ] {
+        let source = format!("<{tag} title='说明'>{value}</{tag}> 正常");
+        let rendered = render(&source);
+        assert_eq!(rendered.to_string(), format!("  {source}"));
+        assert!(
+            rendered
+                .spans
+                .iter()
+                .all(|span| span.style == Style::default())
+        );
+    }
+
     let rows = document(
         "<a href='https://orbit.example'>x<sup><b>12</b></sup>水<sub>AB</sub></a>",
         80,
     );
-    assert_eq!(rows[0].line.to_string(), "  x¹²水_(AB)");
+    assert_eq!(rows[0].line.to_string(), "  x<sup>12</sup>水<sub>AB</sub>");
     assert_eq!(rows[0].links.len(), 1);
     let link = &rows[0].links[0];
     assert_eq!(
         &rows[0].line.to_string()[link.start..link.end],
-        "x¹²水_(AB)"
+        "x<sup>12</sup>水<sub>AB</sub>"
     );
     assert_eq!(link.url, "https://orbit.example");
+    assert!(rows[0].line.spans.iter().any(|span| {
+        span.content == "12"
+            && span
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED)
+    }));
 }
 
 #[test]
@@ -129,6 +158,7 @@ fn html_styles_and_links_survive_source_lines_and_close_before_following_text() 
         "<a href='https://orbit.example'><strong>\n第一行\n第二行</strong></a> 正常",
         80,
     );
+
     for row in &rows[1..] {
         assert!(row.line.spans.iter().any(|span| {
             span.content.starts_with('第')
@@ -139,6 +169,7 @@ fn html_styles_and_links_survive_source_lines_and_close_before_following_text() 
         }));
         assert_eq!(row.links.len(), 1);
     }
+
     assert!(
         rows[2]
             .line
@@ -162,6 +193,7 @@ fn html_table_cells_break_into_rows_and_keep_links_on_narrow_and_wide_layouts() 
                 })
             })
             .collect();
+
         assert_eq!(labels, "第一第二");
         assert!(rows.iter().filter(|row| !row.links.is_empty()).count() >= 2);
         assert!(!rows.iter().any(|row| row.line.to_string().contains("<br>")));
@@ -367,6 +399,7 @@ fn code_highlighting_keeps_multiline_state_and_unknown_languages_readable() {
         "  │ 中文 **raw**"
     );
 }
+
 fn render(source: &str) -> Line<'static> {
     line(source, 1, &mut None)
 }
@@ -464,7 +497,7 @@ fn repeated_prose_does_not_steal_link_label_hits_when_destinations_are_hidden() 
 }
 
 #[test]
-fn reference_links_images_and_bare_definitions_keep_targets_without_printing_destinations() {
+fn reference_links_and_remote_images_keep_targets_and_sources() {
     let source = "[Orbit 文档][docs] 与 ![Orbit 图片](https://orbit.example/image)\n\n| 项 | 地址 |\n|---|---|\n| 文档 | [Orbit][DOCS] |\n\n[docs]: https://orbit.example/docs/ \"Orbit Guide\"\n";
     let lines = document(source, 80);
     assert_eq!(lines[0].line.to_string(), "  Orbit 文档 与 Orbit 图片");
@@ -477,6 +510,7 @@ fn reference_links_images_and_bare_definitions_keep_targets_without_printing_des
             })
         })
         .collect();
+
     for (label, target) in [
         ("Orbit 文档", "https://orbit.example/docs/"),
         ("Orbit 图片", "https://orbit.example/image"),
@@ -485,6 +519,11 @@ fn reference_links_images_and_bare_definitions_keep_targets_without_printing_des
     ] {
         assert!(targets.contains(&(label.to_owned(), target)), "{targets:?}");
     }
+
+    assert_eq!(
+        lines[0].media[0].source,
+        crate::tui::media::Source::Image("https://orbit.example/image".into())
+    );
     let definition = lines
         .iter()
         .find(|line| line.line.to_string().contains("[docs]:"))
