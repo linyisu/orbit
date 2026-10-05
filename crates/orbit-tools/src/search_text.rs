@@ -7,12 +7,11 @@ use globset::{Glob, GlobMatcher};
 use ignore::WalkBuilder;
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-
-use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 
 use crate::limits::{MAX_DIRECTORY_ENTRIES, MAX_TEXT_OUTPUT_BYTES, OUTPUT_METADATA_RESERVE_BYTES};
 
@@ -396,6 +395,7 @@ fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
 
             Ok(SearchScope::Workspace(relative))
         }
+
         Err(WorkspaceError::ProtectedPath) => {
             Err(invalid(WorkspaceError::ProtectedPath.to_string()))
         }
@@ -409,6 +409,7 @@ fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
                     Err(WorkspaceError::PermissionDenied(err)) => Err(failed(err)),
                     Err(_) => Err(invalid("path must name a readable file or directory")),
                 },
+
                 Err(WorkspaceError::PermissionDenied(err)) => Err(failed(err)),
                 Err(_) => Err(invalid("path must name a readable file or directory")),
             }

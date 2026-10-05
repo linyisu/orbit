@@ -1,9 +1,4 @@
-//! A small, strict MCP stdio client for registering external tools in Orbit.
-//!
-//! The first transport is deliberately local stdio. It is the interoperable
-//! configuration format used by Claude Code and Claude Desktop, and unlike a
-//! remote connector it neither needs an OAuth token store nor silently sends
-//! user credentials to a third party.
+//! Strict local stdio MCP client; external tools use the regular approval boundary.
 
 use std::{
     collections::BTreeMap,
@@ -75,11 +70,13 @@ impl McpConfig {
                     "MCP server name {name:?} must use ASCII letters, digits, _ or - and be at most 48 characters"
                 );
             }
+
             if server.transport != "stdio" {
                 bail!(
                     "MCP server {name:?}: only local stdio is supported currently; remote transports require explicit credential and OAuth handling"
                 );
             }
+
             if server.command.trim().is_empty() || server.timeout_seconds == 0 {
                 bail!("MCP server {name:?} must set a command and a positive timeout_seconds");
             }
@@ -117,9 +114,7 @@ pub struct McpServerStatus {
     pub connected: bool,
 }
 
-/// Start configured stdio servers, discover their tools, and add namespaced
-/// adapters to the regular Orbit tool registry. A broken optional integration
-/// is recorded as a status instead of making the TUI unusable.
+/// Register namespaced tools; report optional server failures without aborting the TUI.
 pub async fn register(
     registry: &mut ToolRegistry,
     config: &McpConfig,
@@ -139,6 +134,7 @@ pub async fn register(
             });
             continue;
         }
+
         let Some(approvals) = approvals.clone() else {
             statuses.push(McpServerStatus {
                 name: name.clone(),
@@ -148,6 +144,7 @@ pub async fn register(
             });
             continue;
         };
+
         if !allow_start {
             statuses.push(McpServerStatus {
                 name: name.clone(),
@@ -194,6 +191,7 @@ pub async fn register(
                     connected: true,
                 });
             }
+
             Err(error) => statuses.push(McpServerStatus {
                 name: name.clone(),
                 detail: error.to_string(),

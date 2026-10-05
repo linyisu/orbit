@@ -6,11 +6,10 @@ use std::{
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::execution::MAX_RETAINED_OUTPUT_PER_STREAM;
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-
-use orbit_runtime::execution::MAX_RETAINED_OUTPUT_PER_STREAM;
 
 pub type CommandOutputDirectory = Arc<RwLock<PathBuf>>;
 
@@ -213,6 +212,7 @@ fn read(
 
             end
         }
+
         _ => desired,
     };
 

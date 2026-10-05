@@ -56,6 +56,7 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
         ids.push(value["job_id"].as_str().unwrap().to_owned());
         outputs.push(value["output_id"].as_str().unwrap().to_owned());
     }
+
     tokio::time::timeout(Duration::from_secs(10), async {
         while !root.path().join("orbit-first.started").exists()
             || !root.path().join("orbit-second.started").exists()
@@ -85,6 +86,7 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
     .await
     .unwrap()
     .unwrap();
+
     for (index, job) in finished.iter().enumerate() {
         assert_eq!(job.status, JobStatus::Completed);
         assert_eq!(job.result.as_ref().unwrap()["exit_code"], 0);
@@ -106,9 +108,11 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
         } else {
             "orbit-first"
         };
+
         assert!(log.contains(own));
         assert!(!log.contains(other));
     }
+
     drop(command);
     approver.await.unwrap();
 }
@@ -252,6 +256,7 @@ async fn cancelling_a_live_sandbox_command_waits_for_process_cleanup() {
     .await
     .unwrap()
     .unwrap();
+
     assert_eq!(completed[0].status, JobStatus::Cancelled);
     assert_eq!(completed[0].result.as_ref().unwrap()["cancelled"], true);
     assert!(!root.path().join("orbit.finished").exists());
@@ -311,14 +316,17 @@ async fn background_completion_emits_original_verification_evidence() {
                 assert_eq!(evidence.output.unwrap().digest, evidence.input.digest);
                 evidence_seen = true;
             }
+
             AgentEvent::ToolFinished { call, content, .. } if call.id == "orbit-verify" => {
                 assert!(evidence_seen);
                 let value: Value = serde_json::from_str(&content).unwrap();
                 assert_eq!(value["exit_code"], 0);
                 finished = true;
             }
+
             _ => {}
         }
     }
+
     assert!(finished && evidence_seen);
 }

@@ -113,6 +113,7 @@ async fn reads_snapshot_but_cannot_write_project_or_read_protected_files() {
     )
     .await
     .unwrap_err();
+
     assert!(error.to_string().contains("workspace-relative"), "{error}");
     assert_eq!(
         fs::read_to_string(root.path().join("source.txt")).unwrap(),

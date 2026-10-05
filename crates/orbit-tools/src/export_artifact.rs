@@ -1,15 +1,17 @@
 //! Explicit export from a session's sandbox scratch or workspace to private host artifacts.
-use crate::run_command::ScratchDirectory;
+use std::{
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::filesystem::Workspace;
 use serde::Deserialize;
 use serde_json::json;
-use std::{
-    io::{Read, Write},
-    path::{Path, PathBuf},
-};
 use tokio_util::sync::CancellationToken;
+
+use crate::run_command::ScratchDirectory;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -18,6 +20,7 @@ pub struct ArtifactLimits {
     pub max_session_bytes: u64,
     pub max_files: usize,
 }
+
 impl Default for ArtifactLimits {
     fn default() -> Self {
         Self {
@@ -156,6 +159,7 @@ fn export_with_limits(
     {
         return Err(failed("path must point to a file, not /scratch directory"));
     }
+
     if raw_path == "/workspace"
         || raw_path == "/workspace/"
         || raw_path == "workspace"
@@ -282,6 +286,7 @@ fn export_with_limits(
         .write(true)
         .open(destination.join(".quota-lock"))
         .map_err(failed)?;
+
     acquire_quota_lock(&lock, &token, std::time::Duration::from_secs(10))?;
     let (count, total) = std::fs::read_dir(&destination)
         .map_err(failed)?
@@ -302,6 +307,7 @@ fn export_with_limits(
             "session artifact quota reached; existing artifacts were preserved",
         ));
     }
+
     let mut output = tempfile::Builder::new()
         .prefix("artifact-")
         .suffix(&format!("-{name}"))
@@ -326,6 +332,7 @@ fn export_with_limits(
         {
             return Err(failed("artifact grew beyond configured quota during copy"));
         }
+
         output.write_all(&buffer[..n]).map_err(failed)?;
         hash.update(&buffer[..n]);
     }
@@ -348,6 +355,7 @@ fn export_with_limits(
             "artifact changed during copy; retry after generation finishes",
         ));
     }
+
     output.as_file().sync_all().map_err(failed)?;
 
     if token.is_cancelled() {
@@ -383,8 +391,10 @@ fn acquire_quota_lock(
                         "artifact quota lock timed out; retry when the other export finishes",
                     ));
                 }
+
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
+
             Err(error) => return Err(failed(error)),
         }
     }
@@ -487,6 +497,7 @@ mod tests {
             .content,
         )
         .unwrap();
+
         assert_eq!(res1["name"], "demo-artifact.txt");
         assert_eq!(
             std::fs::read(res1["path"].as_str().unwrap()).unwrap(),
@@ -508,6 +519,7 @@ mod tests {
             .content,
         )
         .unwrap();
+
         assert_eq!(
             std::fs::read(res2["path"].as_str().unwrap()).unwrap(),
             b"scratch content"
@@ -528,6 +540,7 @@ mod tests {
             .content,
         )
         .unwrap();
+
         assert_eq!(res3["name"], "demo-artifact.txt");
         assert_eq!(
             std::fs::read(res3["path"].as_str().unwrap()).unwrap(),
@@ -549,11 +562,13 @@ mod tests {
             .content,
         )
         .unwrap();
+
         assert_eq!(
             std::fs::read(res4["path"].as_str().unwrap()).unwrap(),
             b"workspace content"
         );
     }
+
     #[test]
     fn quota_lock_wait_has_a_deadline_and_remains_cancellable() {
         let dir = tempfile::tempdir().unwrap();
@@ -599,6 +614,7 @@ mod tests {
             max_session_bytes: 66 * 1024 * 1024,
             max_files: 128,
         };
+
         assert!(
             export_with_limits(
                 &scratch,

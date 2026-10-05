@@ -8,6 +8,7 @@ use std::{
 
 use orbit_agent::tool::{FileChange, Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 use rustix::fs::{
     AtFlags, Mode, OFlags, RenameFlags, fchmod, openat, renameat, renameat_with, unlinkat,
 };
@@ -19,7 +20,6 @@ use tokio_util::sync::CancellationToken;
 use crate::approval::{
     ApprovalPreview, ApprovalRequest, ApprovalSender, DeletePreview, WritePreview,
 };
-use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 
 const MAX_BYTES: usize = 1024 * 1024;
 
@@ -72,6 +72,7 @@ impl WriteFile {
                     "edited content must be UTF-8 text without NUL, at most 1 MiB",
                 ));
             }
+
             if after == before {
                 return Err(failed("edit makes no change"));
             }

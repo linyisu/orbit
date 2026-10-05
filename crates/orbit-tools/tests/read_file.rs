@@ -27,6 +27,7 @@ impl Fixture {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+
         fs::create_dir(&path).unwrap();
 
         Self(path)
@@ -298,6 +299,7 @@ async fn actual_file_result_and_lifecycle_events_flow_through_agent() {
 
                 lifecycle.push("finished");
             }
+
             AgentEvent::Completed { .. } => lifecycle.push("completed"),
             _ => {}
         }
@@ -383,6 +385,7 @@ async fn reads_middle_of_large_files_and_resumes_versioned_cursor() {
             .unwrap(),
     )
     .unwrap();
+
     assert_eq!(first["content"], "200000: data\n200001: data\n");
     let second: Value = serde_json::from_str(
         &tool
@@ -394,6 +397,7 @@ async fn reads_middle_of_large_files_and_resumes_versioned_cursor() {
             .unwrap(),
     )
     .unwrap();
+
     assert_eq!(second["content"], "200002: data\n");
     fs::write(root.0.join("large.txt"), "changed").unwrap();
     assert!(

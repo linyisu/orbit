@@ -25,7 +25,6 @@ fn session_grants_are_isolated_and_ephemeral() {
         PolicyDecision::NeedsApproval(vec![cap.clone()])
     );
 
-    // User approves in session 1
     engine1.record_grant(FilesystemGrant::read_only(
         EnvironmentId::Local,
         resolved_external,
@@ -33,8 +32,6 @@ fn session_grants_are_isolated_and_ephemeral() {
 
     assert_eq!(engine1.check_filesystem(&cap), PolicyDecision::Granted);
 
-    // 2. New runtime session started (e.g. restart / new session)
-    // The previous SessionGrantStore is dropped. New engine must NOT inherit session 1 grants.
     let engine2 = PolicyEngine::new(workspace);
 
     assert_eq!(
@@ -93,18 +90,15 @@ fn symlink_pointing_outside_workspace_is_evaluated_against_target() {
     let outside_secret = tmp_outside.path().join("id_rsa");
     fs::write(&outside_secret, "PRIVATE KEY").unwrap();
 
-    // Create a symlink inside workspace pointing to outside secret
     let link_inside_ws = tmp_ws.path().join("stolen_key");
     symlink(&outside_secret, &link_inside_ws).unwrap();
 
     let workspace = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
     let engine = PolicyEngine::new(workspace);
 
-    // Reading through the symlink resolves to the external canonical target
     let cap = FilesystemCapability::local_read(&link_inside_ws);
     let decision = engine.check_filesystem(&cap);
 
-    // Must NOT be automatically granted as a workspace path!
     assert!(
         matches!(decision, PolicyDecision::NeedsApproval(_)),
         "symlink to outside file must require approval: {decision:?}"
@@ -120,7 +114,6 @@ fn remote_environment_capabilities_are_isolated_from_local() {
     let local_path = tmp_ws.path().join("file.txt");
     let remote_env = EnvironmentId::Remote("gpu-server".into());
 
-    // Even if path looks like a workspace path, a Remote capability is not Local workspace
     let remote_cap =
         FilesystemCapability::new(remote_env.clone(), &local_path, FilesystemAccess::Read);
 
@@ -129,7 +122,6 @@ fn remote_environment_capabilities_are_isolated_from_local() {
         PolicyDecision::NeedsApproval(_)
     ));
 
-    // Grant on remote environment
     let resolved = ResolvedPath::resolve(&local_path, None).unwrap();
     engine.record_grant(FilesystemGrant::read_only(remote_env, resolved));
 
@@ -138,7 +130,6 @@ fn remote_environment_capabilities_are_isolated_from_local() {
         PolicyDecision::Granted
     );
 
-    // Another remote server does not have access
     let other_remote_cap = FilesystemCapability::new(
         EnvironmentId::Remote("other-server".into()),
         &local_path,

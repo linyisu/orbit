@@ -14,13 +14,13 @@ async fn session_grants_are_ephemeral_and_clearable() {
 
     let mut workspace = Workspace::new(ws_temp.path()).unwrap();
 
-    // Configure persistent permissions (e.g. from orbit.toml)
     let permissions = WorkspacePermissions {
         read_templates: Vec::new(),
         write_templates: Vec::new(),
         read: vec![persistent_temp.path().to_path_buf()],
         read_write: vec![],
     };
+
     workspace
         .configure_policy(permissions, NetworkPolicy::Allow)
         .unwrap();

@@ -27,6 +27,7 @@ impl Fixture {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+
         fs::create_dir(&path).unwrap();
 
         Self(path)
@@ -153,6 +154,7 @@ async fn deny_cancel_and_closed_ui_never_write() {
                 token.cancel();
                 drop(approval);
             }
+
             _ => drop(approval),
         }
 
@@ -311,6 +313,7 @@ async fn refuses_changes_and_file_replacements_during_approval() {
                 fs::remove_file(&path).unwrap();
                 fs::write(&path, "same content, new inode").unwrap();
             }
+
             _ => {
                 fs::remove_file(&path).unwrap();
                 symlink("elsewhere", &path).unwrap();
@@ -392,6 +395,7 @@ async fn ordinary_config_filename_requires_approval_instead_of_a_blanket_ban() {
         "setting = true",
         CancellationToken::new(),
     );
+
     request(&mut approvals).await.decision.send(false).unwrap();
 
     assert!(task.await.unwrap().is_err());

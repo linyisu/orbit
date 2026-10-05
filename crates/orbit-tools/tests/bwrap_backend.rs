@@ -108,6 +108,7 @@ async fn backend_mounts_granted_external_path_with_read_or_write() {
         read: true,
         write: false,
     };
+
     policy.session_grants.write().unwrap().grant(ro_grant);
 
     let read_script = format!("cat {}", outside_file.display());
@@ -141,6 +142,7 @@ async fn backend_mounts_granted_external_path_with_read_or_write() {
         read: true,
         write: true,
     };
+
     policy_rw.session_grants.write().unwrap().grant(rw_grant);
 
     let write_script = format!("echo 'updated content' > {}", outside_file.display());

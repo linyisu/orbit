@@ -1,4 +1,11 @@
 //! Bounded, read-only repository orientation. Evidence, never executable policy.
+use std::{
+    collections::BTreeMap,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
+
 use ignore::WalkBuilder;
 use orbit_agent::{
     context::estimate_tokens,
@@ -9,12 +16,6 @@ use orbit_runtime::filesystem::Workspace;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{
-    collections::BTreeMap,
-    io::Read,
-    path::{Path, PathBuf},
-    sync::LazyLock,
-};
 use tokio_util::sync::CancellationToken;
 use tree_sitter::{Node, Parser};
 
@@ -86,6 +87,7 @@ impl Tool for ProjectOverview {
                     "path must be nonempty; max_tokens must be 512–8000; query at most 512 characters",
                 ));
             }
+
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
@@ -226,6 +228,7 @@ fn collect(
             scan_truncated = true;
             break;
         }
+
         let Ok(entry) = item else {
             skipped += 1;
             continue;
@@ -265,6 +268,7 @@ fn collect(
         .take(16)
         .map(str::to_lowercase)
         .collect();
+
     files.sort_by_key(|path| {
         (
             !manifest(path),
@@ -289,6 +293,7 @@ fn collect(
         "read_bytes": 0,
         "limitations": "Inventory covers visible nonignored files only. Symbols are sampled lexical candidates, not a parsed call graph. Verification entries are unexecuted candidates; inspect project rules and commands before running. Narrow path to inspect omitted areas."
     });
+
     result["inventory"]["directories"] = json!(
         directories
             .into_iter()
@@ -331,6 +336,7 @@ fn collect(
             result["truncated"]["content"] = json!(true);
             continue;
         }
+
         let Ok(file) = workspace.open_read(path) else {
             skipped += 1;
             continue;
@@ -356,10 +362,12 @@ fn collect(
             skipped += 1;
             continue;
         }
+
         let Ok(text) = String::from_utf8(bytes) else {
             skipped += 1;
             continue;
         };
+
         if text.contains('\0') {
             skipped += 1;
             continue;
@@ -601,6 +609,7 @@ fn bound_metadata(value: &mut Value, truncated: &mut bool) {
             *text = "[value omitted: read the manifest for full content]".into();
             *truncated = true;
         }
+
         Value::Array(items) => {
             if items.len() > 16 {
                 items.truncate(16);
@@ -611,6 +620,7 @@ fn bound_metadata(value: &mut Value, truncated: &mut bool) {
                 bound_metadata(item, truncated);
             }
         }
+
         Value::Object(items) => {
             let oversized: Vec<_> = items
                 .keys()
@@ -640,6 +650,7 @@ fn bound_metadata(value: &mut Value, truncated: &mut bool) {
                 bound_metadata(item, truncated);
             }
         }
+
         _ => {}
     }
 }
@@ -692,6 +703,7 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                             break;
                         }
                     }
+
                     let raw_sig = source
                         .get(start..sig_end)
                         .unwrap_or("")
@@ -706,6 +718,7 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "struct_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -722,6 +735,7 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                             break;
                         }
                     }
+
                     let raw_sig = source
                         .get(start..sig_end)
                         .unwrap_or("")
@@ -736,6 +750,7 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "enum_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -752,6 +767,7 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                             break;
                         }
                     }
+
                     let raw_sig = source
                         .get(start..sig_end)
                         .unwrap_or("")
@@ -766,6 +782,7 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "trait_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -782,6 +799,7 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                             break;
                         }
                     }
+
                     let raw_sig = source
                         .get(start..sig_end)
                         .unwrap_or("")
@@ -796,6 +814,7 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "type_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -813,12 +832,14 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "impl_item" => {
                 let body_node = node.child_by_field_name("body").or_else(|| {
                     let mut c = node.walk();
                     node.children(&mut c)
                         .find(|n| n.kind() == "declaration_list")
                 });
+
                 if let Some(body) = body_node {
                     let mut body_cursor = body.walk();
                     for child in body.children(&mut body_cursor) {
@@ -839,6 +860,7 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                                     break;
                                 }
                             }
+
                             let raw_sig = source
                                 .get(start..sig_end)
                                 .unwrap_or("")
@@ -855,9 +877,11 @@ fn extract_rust_symbols(source: &str) -> Vec<AstSymbol> {
                     }
                 }
             }
+
             _ => {}
         }
     }
+
     symbols
 }
 
@@ -869,6 +893,7 @@ fn extract_python_symbols(source: &str) -> Vec<AstSymbol> {
     {
         return Vec::new();
     }
+
     let Some(tree) = parser.parse(source, None) else {
         return Vec::new();
     };
@@ -895,6 +920,7 @@ fn extract_python_symbols(source: &str) -> Vec<AstSymbol> {
                     process_py_node(def, bytes, source, is_method, symbols);
                 }
             }
+
             "function_definition" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -908,6 +934,7 @@ fn extract_python_symbols(source: &str) -> Vec<AstSymbol> {
                         .trim()
                         .trim_end_matches(':')
                         .trim();
+
                     symbols.push(AstSymbol {
                         name: name.to_string(),
                         kind: if is_method {
@@ -920,6 +947,7 @@ fn extract_python_symbols(source: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "class_definition" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -933,6 +961,7 @@ fn extract_python_symbols(source: &str) -> Vec<AstSymbol> {
                         .trim()
                         .trim_end_matches(':')
                         .trim();
+
                     symbols.push(AstSymbol {
                         name: name.to_string(),
                         kind: "class".into(),
@@ -947,6 +976,7 @@ fn extract_python_symbols(source: &str) -> Vec<AstSymbol> {
                     }
                 }
             }
+
             _ => {}
         }
     }
@@ -1001,6 +1031,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     process_js_node(decl, bytes, source, true, symbols);
                 }
             }
+
             "function_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -1015,6 +1046,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     } else {
                         sig
                     };
+
                     symbols.push(AstSymbol {
                         name: name.to_string(),
                         kind: "function".into(),
@@ -1023,6 +1055,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "class_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -1037,6 +1070,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     } else {
                         sig
                     };
+
                     symbols.push(AstSymbol {
                         name: name.to_string(),
                         kind: "class".into(),
@@ -1068,6 +1102,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     }
                 }
             }
+
             "interface_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -1082,6 +1117,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     } else {
                         sig
                     };
+
                     symbols.push(AstSymbol {
                         name: name.to_string(),
                         kind: "interface".into(),
@@ -1090,6 +1126,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "type_alias_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -1105,6 +1142,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     } else {
                         sig
                     };
+
                     symbols.push(AstSymbol {
                         name: name.to_string(),
                         kind: "type".into(),
@@ -1113,6 +1151,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "lexical_declaration" => {
                 let mut decl_cursor = node.walk();
                 for child in node.children(&mut decl_cursor) {
@@ -1136,6 +1175,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                         } else {
                             sig
                         };
+
                         symbols.push(AstSymbol {
                             name: name.to_string(),
                             kind: "variable".into(),
@@ -1145,6 +1185,7 @@ fn extract_ts_js_symbols(source: &str, ext: &str) -> Vec<AstSymbol> {
                     }
                 }
             }
+
             _ => {}
         }
     }
@@ -1164,6 +1205,7 @@ fn extract_go_symbols(source: &str) -> Vec<AstSymbol> {
     {
         return Vec::new();
     }
+
     let Some(tree) = parser.parse(source, None) else {
         return Vec::new();
     };
@@ -1190,6 +1232,7 @@ fn extract_go_symbols(source: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "method_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = name_node.utf8_text(bytes).unwrap_or_default();
@@ -1206,6 +1249,7 @@ fn extract_go_symbols(source: &str) -> Vec<AstSymbol> {
                     });
                 }
             }
+
             "type_declaration" => {
                 let mut type_cursor = node.walk();
                 for child in node.children(&mut type_cursor) {
@@ -1240,9 +1284,11 @@ fn extract_go_symbols(source: &str) -> Vec<AstSymbol> {
                     }
                 }
             }
+
             _ => {}
         }
     }
+
     symbols
 }
 
@@ -1285,6 +1331,7 @@ fn extract_symbols(path: &Path, source: &str) -> Vec<AstSymbol> {
         "go" => extract_go_symbols(source),
         _ => Vec::new(),
     };
+
     if symbols.is_empty() {
         extract_fallback_symbols(path, source)
     } else {
@@ -1337,6 +1384,7 @@ fn bound(mut result: Value, budget: usize) -> Result<String, ToolError> {
             languages.remove(&name);
             continue;
         }
+
         let Some((largest, _)) = candidates.into_iter().max_by_key(|(_, bytes)| *bytes) else {
             return Err(ToolError::ExecutionFailed(
                 "overview metadata exceeds output budget; narrow the path".into(),
@@ -1356,8 +1404,9 @@ fn bound(mut result: Value, budget: usize) -> Result<String, ToolError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
+    use super::*;
 
     #[test]
     fn output_budget_can_trim_large_language_inventories() {
@@ -1380,6 +1429,7 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
+
     fn overview(root: &Path, path: &str, budget: usize) -> Value {
         let output = collect(
             Workspace::new(root).unwrap(),
@@ -1401,6 +1451,7 @@ mod tests {
 
         serde_json::from_str(&output).unwrap()
     }
+
     #[test]
     fn mixed_workspace_has_manifest_evidence_symbols_and_tests_without_running_scripts() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1476,6 +1527,7 @@ mod tests {
             "vitest run"
         );
     }
+
     #[test]
     fn ignore_protected_links_binary_and_budgets_are_enforced() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1543,6 +1595,7 @@ mod tests {
         assert_eq!(result["inventory"]["languages"]["Rust"], 101);
         assert_eq!(result["inventory"]["languages"]["Python"], 1);
     }
+
     #[test]
     fn fresh_scan_observes_edits_and_reports_invalid_manifests() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1571,6 +1624,7 @@ mod tests {
             .is_err()
         );
     }
+
     #[tokio::test]
     async fn tool_rejects_invalid_parameters_and_cancellation() {
         let tmp = tempfile::tempdir().unwrap();

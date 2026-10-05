@@ -74,8 +74,9 @@ done"#
     assert!(first.to_string().contains("timed out"), "{first}");
     assert!(second.to_string().contains("unusable"), "{second}");
 }
-use crate::approval::ApprovalPreview;
 use orbit_model::types::ToolCall;
+
+use crate::approval::ApprovalPreview;
 
 #[test]
 fn validates_stdio_configuration_and_namespaces_tools() {
@@ -88,6 +89,7 @@ fn validates_stdio_configuration_and_namespaces_tools() {
             "#,
     )
     .unwrap();
+
     config.validate().unwrap();
 
     assert!(!config.servers["files"].enabled);
@@ -182,6 +184,7 @@ done
         )
         .await
         .unwrap();
+
     approval.await.unwrap();
 
     assert!(output.content.contains("\"text\":\"ok\""));

@@ -15,6 +15,79 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
+async fn auto_literal_text_pipeline_creates_and_appends_workspace_files_without_a_dialog() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("existing")).unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(Workspace::new(root.path()).unwrap(), sender);
+    let task = tokio::spawn(async move {
+        tool.execute(ToolCall::function("text", "run_command", json!({
+            "command": "mkdir -p demo && echo 'literal $(touch unexpected) | >' > demo/text.txt && printf '%s\\n' 'second line' | tee -a demo/text.txt /workspace/mirror.txt > demo/output.txt && cat demo/text.txt | tee demo/copy.txt",
+            "cwd": "existing", "workspace_access": "read_write"
+        })), CancellationToken::new()).await
+    });
+    let request = receiver.recv().await.unwrap();
+    assert!(approval::auto_allows(&request.preview, root.path()));
+    request.decision.send(true).unwrap();
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(value["exit_code"], 0, "{value}");
+    let expected = "literal $(touch unexpected) | >\nsecond line\n";
+    assert_eq!(
+        fs::read_to_string(root.path().join("existing/demo/text.txt")).unwrap(),
+        expected
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("existing/demo/copy.txt")).unwrap(),
+        expected
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("mirror.txt")).unwrap(),
+        "second line\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("existing/demo/output.txt")).unwrap(),
+        "second line\n"
+    );
+    assert!(!root.path().join("existing/unexpected").exists());
+}
+
+#[tokio::test]
+async fn auto_local_mkdir_creates_nested_and_quoted_directories_in_the_requested_cwd() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("existing")).unwrap();
+    let workspace = Workspace::new(root.path()).unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(workspace, sender);
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "mkdir",
+                "run_command",
+                json!({
+                    "command": "mkdir -p 'demo folder/nested' /workspace/another",
+                    "cwd": "existing",
+                    "workspace_access": "read_write"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    let request = receiver.recv().await.unwrap();
+    // The shared CLI/TUI policy answers this request without showing a dialog.
+    assert!(approval::auto_allows(&request.preview, root.path()));
+    request.decision.send(true).unwrap();
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(value["exit_code"], 0, "{value}");
+    assert!(root.path().join("existing/demo folder/nested").is_dir());
+    assert!(root.path().join("another").is_dir());
+    assert!(!root.path().join("demo folder").exists());
+}
+
+#[tokio::test]
 async fn run_command_executes_directly_in_workspace_and_persists_changes() {
     let ws_temp = tempfile::tempdir().unwrap();
     let workspace = match Workspace::new(ws_temp.path()) {
@@ -102,6 +175,7 @@ async fn run_command_defaults_to_read_only_workspace() {
                 approval::CommandWorkspaceAccess::Read
             );
         }
+
         _ => panic!("expected command preview"),
     }
 
@@ -110,7 +184,6 @@ async fn run_command_defaults_to_read_only_workspace() {
     let output = task.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
 
-    // Writing to read-only workspace fails
     assert_ne!(value["exit_code"], 0);
 
     let created = ws_temp.path().join("readonly.txt");
@@ -203,7 +276,6 @@ async fn run_command_ignores_remote_session_grants_for_local_execution() {
     let outside_file = outside_temp.path().join("remote_target.txt");
     fs::write(&outside_file, "initial").unwrap();
 
-    // Grant is recorded for a remote environment, not local
     let resolved = ResolvedPath::resolve(&outside_file, None).unwrap();
     workspace.policy().record_grant(FilesystemGrant {
         environment: EnvironmentId::Remote("cluster-1".into()),
@@ -236,14 +308,15 @@ async fn run_command_ignores_remote_session_grants_for_local_execution() {
                 "remote session grants must not set local external_write"
             );
         }
+
         _ => panic!("expected command preview"),
     }
+
     request.decision.send(true).unwrap();
 
     let output = task.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
 
-    // Writing to outside file must fail because the grant was remote only
     assert_ne!(value["exit_code"], 0);
     assert_eq!(fs::read_to_string(&outside_file).unwrap().trim(), "initial");
 }
@@ -347,12 +420,12 @@ async fn run_command_allows_native_git_status_and_commit_in_sandbox() {
         Err(_) => return,
     };
 
-    // Initialize git repository on host
     let status = std::process::Command::new("git")
         .args(["init", "-q"])
         .current_dir(ws_temp.path())
         .status()
         .unwrap();
+
     assert!(status.success());
     let _ = std::process::Command::new("git")
         .args(["config", "user.name", "Orbit Tester"])
@@ -425,10 +498,7 @@ async fn run_command_succeeds_when_protecting_deep_opaque_runtime_root() {
         Err(_) => return,
     };
 
-    // Construct an external opaque runtime root whose directory depth (35) exceeds
-    // MAX_PROTECTED_DIR_DEPTH (32). If scanned recursively as a regular protected directory,
-    // collect_dir_inodes would fail closed. Because it is registered as an opaque runtime root,
-    // recursive descendant scanning is skipped, ensuring hermetic execution without host dependencies.
+    // This opaque root exceeds the regular scan depth; it is traversed only for possible aliases.
     let temp_storage = tempfile::tempdir().unwrap();
     let external_storage = temp_storage.path().join("orbit.workspaces");
     let mut curr = external_storage.clone();
@@ -499,6 +569,7 @@ async fn run_command_masks_hardlink_to_file_inside_external_opaque_root() {
         )
         .await
     });
+
     receiver.recv().await.unwrap().decision.send(true).unwrap();
     let output = task.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
@@ -529,6 +600,7 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
         )
         .await
     });
+
     receiver.recv().await.unwrap().decision.send(true).unwrap();
     let output = task.await.unwrap().unwrap();
     let result: serde_json::Value = serde_json::from_str(&output.content).unwrap();
@@ -678,6 +750,7 @@ async fn run_command_rejects_mount_overlapping_protected_path() {
                 "expected 'overlaps protected path' error, got: {msg}"
             );
         }
+
         other => panic!("expected ExecutionFailed error, got {:?}", other),
     }
 }
@@ -698,7 +771,6 @@ async fn run_command_rejects_mount_containing_hardlink_to_protected_path() {
 
     workspace.protect(&secret_file).unwrap();
 
-    // Create a hardlink in an entirely distinct directory (no path overlap)
     let alias_file = cache_temp.path().join("alias.key");
     fs::hard_link(&secret_file, &alias_file).unwrap();
 
@@ -742,6 +814,7 @@ async fn run_command_rejects_mount_containing_hardlink_to_protected_path() {
                 "expected 'contains hardlink to protected path' error, got: {msg}"
             );
         }
+
         other => panic!("expected ExecutionFailed error, got {:?}", other),
     }
 }
@@ -766,6 +839,7 @@ async fn network_request_defaults_offline_and_cannot_exceed_policy() {
     } else {
         panic!("command preview expected");
     }
+
     request.decision.send(false).unwrap();
     assert!(task.await.unwrap().is_err());
     let mut offline = workspace;
@@ -852,6 +926,7 @@ async fn git_config_symlink_cannot_expose_a_protected_host_file() {
         )
         .await
     });
+
     receiver.recv().await.unwrap().decision.send(true).unwrap();
     let error = task.await.unwrap().unwrap_err();
     assert!(error.to_string().contains("protected path"));

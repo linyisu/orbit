@@ -8,11 +8,10 @@ use std::{
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::filesystem::Workspace;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-
-use orbit_runtime::filesystem::Workspace;
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 /// A SWE prediction must contain the complete patch. Refuse a larger patch
@@ -55,9 +54,7 @@ pub struct GitInspect {
     workspace: Workspace,
 }
 
-/// Capture the initial Git state for a session. This is deliberately a small,
-/// read-only snapshot: it distinguishes pre-existing worktree changes from
-/// later Orbit write receipts without writing a repository-side marker.
+/// Read-only initial Git baseline, separate from later write receipts.
 pub fn capture_baseline(workspace: &Path) -> Option<Value> {
     if !workspace.join(".git").exists() {
         return None;
@@ -79,11 +76,8 @@ pub fn capture_baseline(workspace: &Path) -> Option<Value> {
     .ok()
 }
 
-/// Export the complete patch from the repository baseline to the current
-/// working tree. This is intentionally separate from the bounded
-/// `git_inspect` tool response: benchmark runners must never receive a
-/// truncated prediction. Untracked regular files are included as additions,
-/// which is required for fixes that introduce a new source or test file.
+/// Complete worktree patch, including untracked regular files.
+/// Refuse oversized output instead of truncating a benchmark prediction.
 pub fn working_tree_patch(workspace: &Path) -> Result<String, ToolError> {
     let workspace = Workspace::new(workspace).map_err(failed)?;
     let cancellation = CancellationToken::new();
@@ -320,10 +314,12 @@ fn status(
         }) {
             continue;
         }
+
         if skipped < args.offset {
             skipped += 1;
             continue;
         }
+
         if entries.len() == args.limit {
             has_more = true;
             break;
@@ -471,6 +467,7 @@ fn parse_branch(branch: &mut Value, record: &[u8]) -> Result<(), ToolError> {
                     .unwrap_or(0)
             );
         }
+
         _ => {}
     }
 
@@ -647,6 +644,7 @@ fn git_with_limit(
             "Git inspection failed; the workspace may not be a Git repository".into(),
         ));
     }
+
     if cancellation.is_cancelled() {
         return Err(ToolError::Cancelled);
     }

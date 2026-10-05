@@ -121,6 +121,7 @@ async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
                             .as_i64(),
                     )
                 }
+
                 AgentEvent::VerificationRecorded { evidence, .. } => {
                     snapshots.push(evidence.input.digest)
                 }

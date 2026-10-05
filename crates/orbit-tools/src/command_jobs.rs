@@ -68,10 +68,12 @@ impl Tool for CommandJobs {
                 "description": "Opaque job IDs returned by run_command; private to this session"
             }
         });
+
         if matches!(self.action, CommandJobAction::Wait) {
             properties["mode"] =
                 json!({ "type": "string", "enum": ["any", "all"], "default": "any" });
         }
+
         let required = if matches!(self.action, CommandJobAction::Cancel) {
             vec!["job_ids"]
         } else {
@@ -103,6 +105,7 @@ impl Tool for CommandJobs {
             {
                 return Err(invalid("mode is only supported by wait_commands".into()));
             }
+
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
@@ -119,12 +122,14 @@ impl Tool for CommandJobs {
                         )
                         .await?
                 }
+
                 CommandJobAction::Cancel => {
                     if args.job_ids.is_empty() {
                         return Err(invalid(
                             "job_ids must contain at least one command to cancel".into(),
                         ));
                     }
+
                     self.jobs.cancel(&args.job_ids)?
                 }
             };

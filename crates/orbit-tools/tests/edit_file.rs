@@ -1,3 +1,5 @@
+use std::{fs, time::Duration};
+
 use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_model::types::ToolCall;
 use orbit_runtime::filesystem::Workspace;
@@ -6,7 +8,6 @@ use orbit_tools::{
     edit_file::EditFile,
 };
 use serde_json::{Value, json};
-use std::{fs, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 fn start(
@@ -175,6 +176,7 @@ async fn edits_large_source_without_replacing_unrelated_content() {
         json!({ "path": "large", "old_text": "unique anchor", "new_text": "updated anchor" }),
         CancellationToken::new(),
     );
+
     rx.recv().await.unwrap().decision.send(true).unwrap();
     task.await.unwrap().unwrap();
 

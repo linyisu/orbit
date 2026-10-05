@@ -2,15 +2,17 @@ use std::{io::Read, path::Path};
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::filesystem::Workspace;
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use orbit_runtime::filesystem::Workspace;
-
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
-const DEFAULT_CHARS: usize = 20_000;
-const MAX_CHARS: usize = 60_000;
+const DEFAULT_PAGE_CHARS: usize = 20_000;
+const MAX_PAGE_CHARS: usize = 60_000;
+const CHAR_INDEX_STRIDE: usize = 4_096;
+const MAX_CACHE_ENTRIES: usize = 4;
+const MAX_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,26 +25,26 @@ struct Arguments {
 }
 
 fn default_chars() -> usize {
-    DEFAULT_CHARS
+    DEFAULT_PAGE_CHARS
 }
-
-const INDEX_STRIDE: usize = 4096;
 
 struct Converted {
     text: String,
     total_chars: usize,
     offsets: Vec<usize>,
 }
+
 impl Converted {
     fn new(text: String) -> Self {
         let mut offsets = Vec::new();
         let mut total_chars = 0;
         for (index, (offset, _)) in text.char_indices().enumerate() {
-            if index % INDEX_STRIDE == 0 {
+            if index % CHAR_INDEX_STRIDE == 0 {
                 offsets.push(offset);
             }
             total_chars += 1;
         }
+
         Self {
             text,
             total_chars,
@@ -83,7 +85,7 @@ impl Tool for ReadDocument {
                 "properties": {
                     "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" },
                     "start_char": { "type": "integer", "minimum": 0, "default": 0 },
-                    "max_chars": { "type": "integer", "minimum": 1, "maximum": MAX_CHARS, "default": DEFAULT_CHARS }
+                    "max_chars": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_CHARS, "default": DEFAULT_PAGE_CHARS }
                 },
                 "required": ["path"],
                 "additionalProperties": false
@@ -96,11 +98,14 @@ impl Tool for ReadDocument {
             let arguments: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|error| invalid(error.to_string()))?;
 
-            if arguments.path.trim().is_empty() || !(1..=MAX_CHARS).contains(&arguments.max_chars) {
+            if arguments.path.trim().is_empty()
+                || !(1..=MAX_PAGE_CHARS).contains(&arguments.max_chars)
+            {
                 return Err(invalid(format!(
-                    "path must be nonempty and max_chars must be between 1 and {MAX_CHARS}"
+                    "path must be nonempty and max_chars must be between 1 and {MAX_PAGE_CHARS}"
                 )));
             }
+
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
@@ -127,6 +132,7 @@ impl Tool for ReadDocument {
                         metadata.ctime_nsec()
                     )
                 }
+
                 None => env!("CARGO_PKG_VERSION").to_owned(),
             };
             let key = format!(
@@ -168,16 +174,17 @@ impl Tool for ReadDocument {
                     let format = format!("{format:?}").to_ascii_lowercase();
                     let markdown = std::sync::Arc::new(Converted::new(text));
                     while !cache.is_empty()
-                        && (cache.len() >= 4
+                        && (cache.len() >= MAX_CACHE_ENTRIES
                             || cache
                                 .iter()
                                 .map(|(_, _, text)| text.text.len())
                                 .sum::<usize>()
                                 + markdown.text.len()
-                                > 64 * 1024 * 1024)
+                                > MAX_CACHE_BYTES)
                     {
                         cache.pop_front();
                     }
+
                     cache.push_back((key, format.clone(), markdown.clone()));
                     (format, markdown)
                 };
@@ -223,6 +230,7 @@ fn read_source(
         }
         bytes.extend_from_slice(&buffer[..count]);
     }
+
     let after = file.metadata().map_err(failed)?;
     if (
         before.len(),
@@ -241,6 +249,7 @@ fn read_source(
             "document changed during read; retry after writing finishes",
         ));
     }
+
     let extension = Path::new(path)
         .extension()
         .and_then(|s| s.to_str())
@@ -293,6 +302,7 @@ async fn convert_worker(
             result.stderr
         )));
     }
+
     std::fs::read_to_string(scratch.path().join("document.md")).map_err(failed)
 }
 
@@ -323,12 +333,12 @@ fn page(arguments: Arguments, format: &str, markdown: &Converted) -> Result<Stri
 
     let offset = markdown
         .offsets
-        .get(arguments.start_char / INDEX_STRIDE)
+        .get(arguments.start_char / CHAR_INDEX_STRIDE)
         .copied()
         .unwrap_or(markdown.text.len());
     let content: String = markdown.text[offset..]
         .chars()
-        .skip(arguments.start_char % INDEX_STRIDE)
+        .skip(arguments.start_char % CHAR_INDEX_STRIDE)
         .take(arguments.max_chars)
         .collect();
     let next = arguments.start_char + content.chars().count();
@@ -348,8 +358,9 @@ fn page(arguments: Arguments, format: &str, markdown: &Converted) -> Result<Stri
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[tokio::test]
     async fn converts_and_pages_csv_without_writing_to_workspace() {
@@ -375,6 +386,7 @@ mod tests {
         assert!(first["next_start_char"].as_u64().unwrap() > 0);
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
+
     #[test]
     fn indexed_pages_preserve_unicode_across_sparse_index_boundaries() {
         let document = Converted::new("中a".repeat(10_000));
@@ -392,6 +404,7 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
+
             assert_eq!(
                 output["content"],
                 document

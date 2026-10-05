@@ -93,6 +93,7 @@ impl Tool for GitExportPatch {
                     .suffix(".patch")
                     .tempfile_in(&artifact_directory)
                     .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+
                 file.write_all(patch.as_bytes())
                     .and_then(|_| file.as_file().sync_all())
                     .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
@@ -119,8 +120,9 @@ impl Tool for GitExportPatch {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{fs, process::Command};
+
+    use super::*;
 
     #[tokio::test]
     async fn exports_complete_patch_without_changing_git_state() {
@@ -136,6 +138,7 @@ mod tests {
 
             assert!(status.success());
         };
+
         git(&["init", "-q"]);
         git(&[
             "-c",

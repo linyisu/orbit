@@ -141,7 +141,6 @@ async fn external_path_integration_across_all_tools() {
 
         let _ = request.decision.send(true);
 
-        // Expect second approval for edit_file below
         let edit_request = write_approval_rx.recv().await.unwrap();
 
         match edit_request.preview {

@@ -5,11 +5,10 @@ use std::{
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-
-use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 
 use crate::limits::{MAX_DIRECTORY_ENTRIES, MAX_TEXT_OUTPUT_BYTES, OUTPUT_METADATA_RESERVE_BYTES};
 
@@ -87,6 +86,7 @@ impl Tool for ListFiles {
                     "path must be nonempty; depth 1–8, limit 1–1000, offset 0–20000",
                 ));
             }
+
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
@@ -142,6 +142,7 @@ fn list(
                 workspace.open_directory(&rel).map_err(failed)?;
                 (rel, false)
             }
+
             Err(WorkspaceError::ProtectedPath) => {
                 return Err(failed(WorkspaceError::ProtectedPath));
             }
@@ -210,11 +211,13 @@ fn list(
 
                             "directory"
                         }
+
                         Err(_) => {
                             skipped += 1;
                             continue;
                         }
                     },
+
                     Err(_) => {
                         skipped += 1;
                         continue;
@@ -236,11 +239,13 @@ fn list(
 
                             "directory"
                         }
+
                         Err(_) => {
                             skipped += 1;
                             continue;
                         }
                     },
+
                     Err(_) => {
                         skipped += 1;
                         continue;

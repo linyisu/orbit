@@ -2,12 +2,12 @@ use std::{io::Read, path::Path};
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::filesystem::Workspace;
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use crate::image_assets::{ImageAssets, MAX_IMAGE_BYTES};
-use orbit_runtime::filesystem::Workspace;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,6 +85,7 @@ impl Tool for ReadImage {
                     "image exceeds the 20 MiB read limit".into(),
                 ));
             }
+
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
@@ -117,8 +118,9 @@ fn invalid(message: impl Into<String>) -> ToolError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[tokio::test]
     async fn loads_a_workspace_image_as_a_global_model_attachment() {
