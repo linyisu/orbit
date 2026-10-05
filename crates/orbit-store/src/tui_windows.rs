@@ -1,8 +1,5 @@
 //! Window-local tabs and an immutable restore snapshot for each group of live TUIs.
 //! OS leases detect crashed clients; one registry lock serializes joins and exits.
-use crate::store::{Store, private_file};
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -10,11 +7,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+use crate::store::{Store, private_file};
+
 #[derive(Default, Serialize, Deserialize)]
 struct Registry {
     previous: Vec<String>,
     windows: BTreeMap<String, Window>,
 }
+
 #[derive(Default, Serialize, Deserialize)]
 struct Window {
     tabs: Vec<String>,
@@ -36,9 +39,11 @@ fn read_registry(directory: &Path, legacy: &[String]) -> Result<Registry> {
             previous: legacy.to_vec(),
             ..Default::default()
         }),
+
         Err(e) => Err(e.into()),
     }
 }
+
 fn save(directory: &Path, registry: &Registry) -> Result<()> {
     let mut file = private_file(&directory.join("state.tmp"))?;
     file.set_len(0)?;
@@ -47,12 +52,14 @@ fn save(directory: &Path, registry: &Registry) -> Result<()> {
     std::fs::rename(directory.join("state.tmp"), directory.join("state.json"))?;
     Ok(())
 }
+
 fn registry_lock(directory: &Path) -> Result<File> {
     std::fs::create_dir_all(directory)?;
     let lock = private_file(&directory.join("registry.lock"))?;
     lock.lock()?;
     Ok(lock)
 }
+
 fn reap(directory: &Path, registry: &mut Registry) -> Result<()> {
     for (id, window) in &mut registry.windows {
         if window.closed {
@@ -65,6 +72,7 @@ fn reap(directory: &Path, registry: &mut Registry) -> Result<()> {
             Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
         }
     }
+
     if !registry.windows.is_empty() && registry.windows.values().all(|window| window.closed) {
         let mut seen = std::collections::HashSet::new();
         registry.previous = registry
@@ -79,8 +87,10 @@ fn reap(directory: &Path, registry: &mut Registry) -> Result<()> {
         }
         registry.windows.clear();
     }
+
     Ok(())
 }
+
 impl Store {
     pub async fn open_tui_window(&self) -> Result<TuiWindow> {
         let directory = self.path().with_extension("tui-windows");
@@ -113,10 +123,12 @@ impl Store {
         .await?
     }
 }
+
 impl TuiWindow {
     pub fn previous(&self) -> &[String] {
         &self.previous
     }
+
     pub async fn update(&self, tabs: Vec<String>) -> Result<()> {
         let directory = self.directory.clone();
         let id = self.id.clone();
@@ -131,6 +143,7 @@ impl TuiWindow {
         })
         .await?
     }
+
     fn finish(&mut self) -> Result<()> {
         if self.lease.is_none() {
             return Ok(());
@@ -144,10 +157,12 @@ impl TuiWindow {
         reap(&self.directory, &mut registry)?;
         save(&self.directory, &registry)
     }
+
     pub async fn close(mut self) -> Result<()> {
         tokio::task::spawn_blocking(move || self.finish()).await?
     }
 }
+
 impl Drop for TuiWindow {
     fn drop(&mut self) {
         let _ = self.finish();
@@ -179,6 +194,7 @@ mod tests {
         last.close().await.unwrap();
         assert!(store.open_tui_window().await.unwrap().previous().is_empty());
     }
+
     #[tokio::test]
     async fn abandoned_window_recovers_latest_tabs_when_next_client_joins() {
         let dir = tempfile::tempdir().unwrap();

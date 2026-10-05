@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use orbit_model::{client::ModelClient, types::ChatMessage};
 
-use crate::session::{PreparedResume, SessionState};
-
 use super::app::{SessionTab, UiState};
+use crate::session::{PreparedResume, SessionState};
 
 pub(super) struct ParkedTab {
     pub session: SessionState,
@@ -47,10 +46,12 @@ impl Tabs {
             })
             .cloned()
             .collect();
+
         if ids != self.remembered {
             self.window.as_ref().unwrap().update(ids.clone()).await?;
             self.remembered = ids;
         }
+
         Ok(())
     }
 
@@ -101,6 +102,7 @@ impl Tabs {
             )
             .await?;
         }
+
         Ok(changed)
     }
 
@@ -162,6 +164,13 @@ impl Tabs {
         self.target(next)
     }
 
+    pub fn close_target(&self, id: &str) -> Option<&str> {
+        let index = self.order.iter().position(|item| item == id)?;
+        // Closing the leftmost tab selects the first remaining tab, rather
+        // than wrapping to the other end as keyboard navigation does.
+        self.target(if index == 0 { 1 } else { index - 1 })
+    }
+
     pub fn contains(&self, id: &str) -> bool {
         self.order.iter().any(|item| item == id) || self.parked.contains_key(id)
     }
@@ -182,6 +191,7 @@ impl Tabs {
             model: std::mem::replace(model, next_model),
             history: std::mem::replace(history, next_history),
         };
+
         self.parked.insert(current_id, parked);
         state.cursor_motion.clear();
         state.input_dragging = false;
@@ -214,6 +224,7 @@ impl Tabs {
             model: std::mem::replace(model, parked.model),
             history: std::mem::replace(history, parked.history),
         };
+
         self.parked.insert(current_id, current);
         if !self.order.iter().any(|item| item == id) {
             self.order.push(id.to_owned());
@@ -256,25 +267,22 @@ impl Tabs {
         closed
     }
 
-    pub fn close_active(
+    pub fn close_tab(
         &mut self,
+        id: &str,
         session: &mut SessionState,
         state: &mut UiState,
         model: &mut ModelClient,
         history: &mut Vec<ChatMessage>,
     ) -> bool {
-        let current_id = session.id().to_owned();
-        let Some(next_id) = self.adjacent(&current_id, false).map(str::to_owned) else {
+        let Some(next_id) = self.close_target(id).map(str::to_owned) else {
             return false;
         };
-        if next_id == current_id {
+        if next_id != session.id() && !self.restore(&next_id, session, state, model, history) {
             return false;
         }
 
-        self.restore(&next_id, session, state, model, history);
-        self.close_parked(&current_id);
-
-        true
+        self.close_parked(id)
     }
 
     pub fn sync_ui(&self, state: &mut UiState, session: &SessionState) {
@@ -401,6 +409,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closing_any_tab_selects_its_left_neighbor_or_first_remaining_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        for (case, (active, closing, expected)) in [
+            (0, 0, 1),
+            (1, 1, 0),
+            (2, 2, 1),
+            (3, 3, 2),
+            (0, 3, 2),
+            (3, 0, 1),
+            (2, 3, 2),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut session =
+                SessionState::open(dir.path().join(format!("{case}.db")), None, "mock".into())
+                    .await
+                    .unwrap();
+            let mut ids = vec![session.id().to_owned()];
+            let mut tabs = Tabs::new(&session);
+            let mut state = UiState::new("mock");
+            state.input.set("draft 0".into());
+            let mut model = ModelClient::new(Default::default()).unwrap();
+            let mut history = vec![ChatMessage::user("message 0")];
+
+            // Only one tab: the caller creates a replacement home. This method
+            // must leave the existing session and draft intact until it succeeds.
+            assert!(tabs.close_target(&ids[0]).is_none());
+            assert!(!tabs.close_tab(&ids[0], &mut session, &mut state, &mut model, &mut history));
+            assert_eq!(session.id(), ids[0]);
+            assert_eq!(state.input.text, "draft 0");
+
+            for index in 1..4 {
+                let prepared = session.prepare_new("mock".into()).await.unwrap();
+                ids.push(prepared.snapshot.session.id.clone());
+                let mut next_state = UiState::new("mock");
+                next_state.input.set(format!("draft {index}"));
+                tabs.activate(
+                    &mut session,
+                    &mut state,
+                    &mut model,
+                    &mut history,
+                    (
+                        prepared,
+                        next_state,
+                        ModelClient::new(Default::default()).unwrap(),
+                        vec![ChatMessage::user(format!("message {index}"))],
+                    ),
+                );
+            }
+
+            if active != 3 {
+                assert!(tabs.restore(
+                    &ids[active],
+                    &mut session,
+                    &mut state,
+                    &mut model,
+                    &mut history
+                ));
+            }
+
+            assert_eq!(
+                tabs.close_target(&ids[closing]),
+                Some(ids[expected].as_str())
+            );
+            assert!(tabs.close_tab(
+                &ids[closing],
+                &mut session,
+                &mut state,
+                &mut model,
+                &mut history
+            ));
+            assert_eq!(session.id(), ids[expected]);
+            assert_eq!(state.input.text, format!("draft {expected}"));
+            assert_eq!(
+                history,
+                vec![ChatMessage::user(format!("message {expected}"))]
+            );
+            assert_eq!(
+                tabs.order,
+                ids.iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != closing)
+                    .map(|(_, id)| id.clone())
+                    .collect::<Vec<_>>()
+            );
+            tabs.sync_ui(&mut state, &session);
+            let focused: Vec<_> = state
+                .tabs
+                .iter()
+                .filter(|tab| tab.active)
+                .map(|tab| tab.id.as_str())
+                .collect();
+
+            assert_eq!(focused, [ids[expected].as_str()]);
+            assert_eq!(
+                tabs.prune_closed(&super::super::background::Runs::new()),
+                [ids[closing].clone()]
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn switching_preserves_each_tabs_draft_and_history_and_close_releases_lease() {
         let dir = tempfile::tempdir().unwrap();
         let mut session = SessionState::open(dir.path().join("sessions.db"), None, "mock".into())
@@ -455,7 +566,13 @@ mod tests {
         assert_eq!(state.input.text, "second draft");
         assert_eq!(history, vec![ChatMessage::user("second message")]);
 
-        assert!(tabs.close_active(&mut session, &mut state, &mut model, &mut history));
+        assert!(tabs.close_tab(
+            &second_id,
+            &mut session,
+            &mut state,
+            &mut model,
+            &mut history
+        ));
         assert_eq!(session.id(), first_id);
         assert_eq!(
             tabs.prune_closed(&super::super::background::Runs::new())

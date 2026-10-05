@@ -461,19 +461,30 @@ pub async fn run(
             }
 
             if let Some(id) = state.close_tab_request.take() {
-                if id != session.id() {
-                    tabs.close_parked(&id);
-                } else {
+                let closing_active = id == session.id();
+                let switching = closing_active
+                    || tabs.close_target(&id).is_some_and(|target| target != session.id());
+                if switching {
                     if let Some(task) = resume_task.take() { task.abort(); }
                     if history_replay.is_none() { state.resume_loading = None; }
                     park_run!();
-                    if !tabs.close_active(&mut session, &mut state, &mut model, &mut history) {
-                        match new_tab(&mut tabs, &mut session, &mut state, &mut model, &mut history, &options.initial_directory,
-                            CommandContext { tools: &tools, instructions: &instructions, skills: &skills,
-                                mcp_statuses: &mcp_statuses, model_options: &model_options }).await {
-                            Ok(()) => { tabs.close_parked(&id); }
-                            Err(error) => state.report_local(TranscriptItem::CommandError(error.to_string())),
-                        }
+                }
+
+                if !tabs.close_tab(&id, &mut session, &mut state, &mut model, &mut history)
+                    && closing_active
+                {
+                    match new_tab(
+                        &mut tabs, &mut session, &mut state, &mut model,
+                        &mut history, &options.initial_directory, CommandContext {
+                            tools: &tools,
+                            instructions: &instructions,
+                            skills: &skills,
+                            mcp_statuses: &mcp_statuses,
+                            model_options: &model_options,
+                        },
+                    ).await {
+                        Ok(()) => { tabs.close_parked(&id); }
+                        Err(error) => state.report_local(TranscriptItem::CommandError(error.to_string())),
                     }
                 }
                 for id in tabs.prune_closed(&background_runs) { background_runs.remove(&id); }

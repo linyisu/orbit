@@ -1,10 +1,11 @@
-use super::super::app::{self, UiState};
-use super::*;
-use crate::session::SessionState;
 use crossterm::event::{KeyCode, KeyModifiers};
 use orbit_model::{client::ModelClient, types::StreamEvent};
 use orbit_tools::approval::{ApprovalPreview, ApprovalRequest, McpPreview};
 use tokio::{select, sync::oneshot};
+
+use super::super::app::{self, UiState};
+use super::*;
+use crate::session::SessionState;
 
 fn options(dir: &std::path::Path) -> crate::TuiOptions {
     let config = dir.join("config.toml");
@@ -61,6 +62,7 @@ async fn running(
                 .await
                 .map_err(|_| AgentError::Cancelled)?;
         }
+
         select! {
             _ = wait => {},
             _ = token.cancelled() => return Err(AgentError::Cancelled),
@@ -158,6 +160,7 @@ async fn refreshed_capabilities_reach_parked_tabs_after_their_reply_finishes() {
             .await
             .unwrap();
     }
+
     let tab = tabs.parked_mut(&id).unwrap();
     assert_eq!(tab.model.config().reasoning_effort, None);
     assert_eq!(tab.state.reasoning_effort, None);
@@ -270,6 +273,7 @@ async fn two_background_runs_stream_finish_and_keep_resources_and_approvals_sepa
             .await
             .unwrap();
     }
+
     assert_eq!(session.id(), third_id);
     assert!(state.transcript.is_empty());
     assert_eq!(first_scope.session_id(), first_id);
@@ -360,6 +364,7 @@ async fn two_background_runs_stream_finish_and_keep_resources_and_approvals_sepa
         assert!(format!("{:?}", snapshot.history).contains(own));
         assert!(session.store.acquire(id).await.is_ok());
     }
+
     assert!(tabs.restore(
         &first_id,
         &mut session,
@@ -402,7 +407,14 @@ async fn closing_the_active_tab_keeps_its_run_until_completion() {
         ),
     );
     assert!(tabs.restore(&id, &mut session, &mut state, &mut model, &mut history));
-    assert!(tabs.close_active(&mut session, &mut state, &mut model, &mut history));
+    let closing_id = session.id().to_owned();
+    assert!(tabs.close_tab(
+        &closing_id,
+        &mut session,
+        &mut state,
+        &mut model,
+        &mut history
+    ));
     assert_ne!(session.id(), id);
     let mut runs = Runs::from([(id.clone(), run)]);
     assert!(tabs.prune_closed(&runs).is_empty());
