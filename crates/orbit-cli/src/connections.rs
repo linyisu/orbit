@@ -14,7 +14,8 @@ pub(crate) fn append_profile(
     format: ApiFormat,
     endpoint: &str,
 ) -> Result<Vec<ModelOption>> {
-    let catalog: serde_json::Value = serde_json::from_str(include_str!("tui/account_models.json"))?;
+    let catalog: serde_json::Value =
+        serde_json::from_str(include_str!("account_models/bootstrap.json"))?;
     let antigravity;
     let models = if credential == "antigravity" {
         antigravity = serde_json::to_value(crate::config::antigravity_profiles()?)?;

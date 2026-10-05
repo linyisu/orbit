@@ -187,6 +187,8 @@ TUI 每秒检测配置文件变化，并每 15 分钟异步刷新所有连接的
 
 各连接独立刷新，失败时保留对应缓存或现有目录；缓存按服务地址、协议和认证身份隔离。普通 API 会读取完整分页，并保留接口提供的能力信息；Claude 的容量、图像输入与 adaptive thinking 思考档位直接来自模型接口。Google Gemini CLI 从配额接口补充模型 ID，缺少某个配额项不会删除已配置模型。
 
+原 TUI 的 `account_models.json` 移至 [account_models/bootstrap.json](src/account_models/bootstrap.json)，仅作为 OAuth 账号首次连接时的离线起始目录；后续模型可用性由账号接口刷新，API 模型由对应服务的发现接口提供，不能用初始目录推断全部支持模型。
+
 通过 `/connect` 手动启用的列表（`managed_models = true`）保持模型选择与显式能力设置，仍同步这些模型缺少的能力；自动目录会同步新增与下线的模型。服务不提供模型目录时，可在对应 `[providers.<名称>]` 下设置 `auto_refresh_models = false`，继续使用手动配置。
 
 ---
