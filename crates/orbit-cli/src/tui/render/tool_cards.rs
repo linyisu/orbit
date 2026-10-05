@@ -100,18 +100,21 @@ fn tool_details(row: &ToolRow, expanded: bool, width: u16) -> Vec<LinkedLine> {
                             text.push_str(stdout);
                         }
                     }
+
                     if !stderr.is_empty() {
                         if !text.is_empty() && !text.ends_with('\n') {
                             text.push('\n');
                         }
                         text.push_str(stderr);
                     }
+
                     if !verification_detail.is_empty() {
                         if !text.is_empty() && !text.ends_with('\n') {
                             text.push('\n');
                         }
                         text.push_str(&verification_detail);
                     }
+
                     if let Some(output_id) = value["output_id"].as_str() {
                         if !text.is_empty() && !text.ends_with('\n') {
                             text.push('\n');
@@ -120,11 +123,13 @@ fn tool_details(row: &ToolRow, expanded: bool, width: u16) -> Vec<LinkedLine> {
                             "[完整输出已留存: {output_id} · 可使用 read_command_output 查询]"
                         ));
                     }
+
                     if text.is_empty()
                         && let Some(code) = value["exit_code"].as_i64().filter(|c| *c != 0)
                     {
                         text = format!("(exit {code})");
                     }
+
                     Some(text)
                 }
             } else if let Some(bytes) = value["written_bytes"].as_u64() {
@@ -233,6 +238,7 @@ fn tool_title_with_summary(
         ToolStatus::Finished => TOOL_FINISHED,
         ToolStatus::Failed => TOOL_FAILED,
     };
+
     if width < 6 {
         return vec![LinkedLine::plain(Line::styled(
             tool_display::clipped(&row.name, width as usize),
@@ -318,14 +324,17 @@ pub(in crate::tui) fn tool_body_with_links(row: &ToolRow, width: u16) -> Vec<Lin
                     .take_while(|c| *c == ' ')
                     .count()
                     .min(remaining);
+
                 span.content = span.content[count..].to_owned().into();
                 remaining -= count;
                 if remaining == 0 {
                     break;
                 }
             }
+
             linked.shift_offsets(-4);
         }
+
         sanitize_linked_line(&mut linked);
         let line = &mut linked.line;
         for span in &mut line.spans {
@@ -334,6 +343,7 @@ pub(in crate::tui) fn tool_body_with_links(row: &ToolRow, width: u16) -> Vec<Lin
                 span.style = span.style.fg(THEME.output_muted);
             }
         }
+
         line.spans.retain(|span| !span.content.is_empty());
         if markdown::expand_rule(line, width) {
             linked.decorations = std::iter::once(0..line.to_string().len()).collect();
@@ -342,6 +352,7 @@ pub(in crate::tui) fn tool_body_with_links(row: &ToolRow, width: u16) -> Vec<Lin
 
         lines.extend(linked.wrap(width));
     }
+
     lines
 }
 

@@ -1,5 +1,6 @@
-use super::*;
 use ratatui::style::Modifier;
+
+use super::*;
 
 fn text(lines: &[LinkedLine]) -> String {
     lines
@@ -14,10 +15,10 @@ fn inline_example_preserves_semantics_and_portable_css() {
     let source = r#"<em>斜体</em>、<strong>粗体</strong>、<u>下划线</u>、<mark>高亮</mark>、<sup>2</sup>、<sub>下标</sub>、<small>小字</small>、<del>删除线</del>、<q>引用</q>，<kbd>Ctrl</kbd> + <kbd>Enter</kbd>，<span style="color:#e74c3c; font-weight:bold">彩色</span>，<abbr title="HyperText Markup Language">HTML</abbr>。"#;
     let lines = super::super::document(source, 100);
     let visible = text(&lines);
-    assert!(!visible.contains('<'));
-    assert!(visible.contains("²、_(下标)"));
-    assert!(visible.contains("“引用”"));
-    assert!(visible.contains("HTML（HyperText Markup Language）"));
+    assert_eq!(
+        visible,
+        r#"  斜体、粗体、下划线、高亮、<sup>2</sup>、<sub>下标</sub>、<small>小字</small>、删除线、<q>引用</q>，<kbd>Ctrl</kbd> + <kbd>Enter</kbd>，彩色，<abbr title="HyperText Markup Language">HTML</abbr>。"#
+    );
     let spans = &lines[0].line.spans;
     let find = |value: &str| {
         spans
@@ -26,12 +27,9 @@ fn inline_example_preserves_semantics_and_portable_css() {
             .unwrap()
             .style
     };
-    assert!(find("小字").add_modifier.contains(Modifier::DIM));
-    assert!(
-        find("Ctrl")
-            .add_modifier
-            .contains(Modifier::UNDERLINED | Modifier::BOLD)
-    );
+    for value in ["2", "下标", "小字", "引用", "Ctrl", "Enter", "HTML"] {
+        assert_eq!(find(value), ratatui::style::Style::default());
+    }
     assert!(find("删除线").add_modifier.contains(Modifier::CROSSED_OUT));
     assert_eq!(
         find("彩色").fg,
@@ -139,6 +137,10 @@ fn block_styles_links_and_generated_rails_share_copy_metadata() {
         .find(|line| line.line.to_string().contains("HTML 图片"))
         .unwrap();
     assert_eq!(image.links[0].url, "https://orbit.example/image.png");
+    assert_eq!(
+        image.media[0].source,
+        crate::tui::media::Source::Image("https://orbit.example/image.png".into())
+    );
     let end = lines
         .iter()
         .find(|line| line.line.to_string().contains("文档结束"))
@@ -168,6 +170,7 @@ fn details_keep_markdown_and_literal_code_with_independent_nested_ids() {
         .iter()
         .filter_map(|line| line.disclosure.as_ref())
         .collect::<Vec<_>>();
+
     assert_eq!(headers.len(), 2);
     assert_ne!(headers[0].id, headers[1].id);
     assert!(!headers[0].open);
@@ -177,6 +180,7 @@ fn details_keep_markdown_and_literal_code_with_independent_nested_ids() {
         .iter()
         .find(|line| line.line.to_string().contains("子块内容"))
         .unwrap();
+
     assert_eq!(nested.folds.len(), 2);
 }
 

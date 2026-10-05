@@ -66,11 +66,13 @@ impl TokenSink for Sink {
                     }
                 }
             }
+
             Token::CharacterTokens(text) if state.root.is_none() && !text.trim().is_empty() => {
                 state.rejected = true
             }
             _ => {}
         }
+
         TokenSinkResult::Continue
     }
 }
@@ -86,6 +88,7 @@ pub(crate) fn render(source: &str, width: u16, path: &str, depth: usize) -> Opti
     {
         return None;
     }
+
     let tokenizer = Tokenizer::new(Sink(RefCell::new(Boundary::default())), Default::default());
     let input = BufferQueue::default();
     let mut bytes = 0;
@@ -99,6 +102,7 @@ pub(crate) fn render(source: &str, width: u16, path: &str, depth: usize) -> Opti
             input.push_back(StrTendril::from(protect_inline_code(part)));
             let _ = tokenizer.feed(&input);
         }
+
         let state = tokenizer.sink.0.borrow();
         if state.rejected {
             return None;
@@ -107,6 +111,7 @@ pub(crate) fn render(source: &str, width: u16, path: &str, depth: usize) -> Opti
             break;
         }
     }
+
     let boundary = tokenizer.sink.0.borrow();
     boundary.root.as_ref()?;
     let complete = boundary.complete;
@@ -123,6 +128,7 @@ pub(crate) fn render(source: &str, width: u16, path: &str, depth: usize) -> Opti
             protected.push_str(&protect_inline_code(line));
         }
     }
+
     let dom = html5ever::parse_fragment(
         RcDom::default(),
         Default::default(),
@@ -140,6 +146,7 @@ pub(crate) fn render(source: &str, width: u16, path: &str, depth: usize) -> Opti
             depth + 1,
         ));
     }
+
     Some(Block {
         bytes,
         complete,
@@ -164,6 +171,7 @@ fn protect_inline_code(source: &str) -> String {
         );
         offset = range.end;
     }
+
     out.push_str(&source[offset..]);
     out
 }
@@ -230,6 +238,7 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
             .flat_map(|(index, child)| node_lines(child, width, &format!("{path}/{index}"), depth))
             .collect();
     }
+
     let presentation = css::parse(&attribute(node, "style"));
     let body = children_source(node, None);
     let outer_margin = if matches!(name.as_str(), "div" | "p") {
@@ -276,19 +285,23 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
                     Vec::new(),
                 );
             }
+
             let mut content = super::document_at(
                 children_source(node, Some("summary")).trim(),
                 width.saturating_sub(2),
                 &format!("{path}/body"),
                 depth,
             );
+
             for line in &mut content {
                 line.folds.push(fold.clone());
                 *line = line.clone().framed(vec![Span::raw("  ")], Vec::new());
             }
+
             lines.extend(content);
             lines
         }
+
         "table" => table(node, width, path, depth),
         "hr" => vec![LinkedLine::chrome(super::rule_line(width))],
         "blockquote" => super::document_at(body.trim(), super::body_width(width), path, depth)
@@ -300,6 +313,7 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
                         span.style = span.style.fg(THEME.md_quote_text);
                     }
                 }
+
                 line.framed(
                     vec![
                         Span::raw("  "),
@@ -309,6 +323,7 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
                 )
             })
             .collect(),
+
         "div" | "p" => {
             let inset = usize::from(presentation.rail.is_some()) * 2
                 + usize::from(presentation.padding) * 2;
@@ -321,6 +336,7 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
                 content.insert(0, LinkedLine::chrome(Line::default()));
                 content.push(LinkedLine::chrome(Line::default()));
             }
+
             let mut out = Vec::new();
             if presentation.margin {
                 out.push(LinkedLine::plain(Line::default()));
@@ -342,16 +358,19 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
                     } else {
                         Vec::new()
                     };
+
                     line = line.framed(prefix, trailing);
                     line.line.alignment = presentation.alignment;
                     out.push(line);
                 }
             }
+
             if presentation.margin {
                 out.push(LinkedLine::plain(Line::default()));
             }
             out
         }
+
         _ => {
             // Inline tags, images and unsupported tags all go through the shared inline projection.
             let mut fence = None;
@@ -359,7 +378,11 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
             Context::default().linked_lines(&source(node), 0, &mut fence, &mut state)
         }
     };
+
     for line in &mut lines {
+        if let Some(table) = &mut line.table {
+            table.style = presentation.style.patch(table.style);
+        }
         for span in &mut line.line.spans {
             span.style = presentation.style.patch(span.style);
         }
@@ -376,12 +399,14 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
             } else {
                 Vec::new()
             };
+
             *line = line.clone().framed(
                 vec![Span::raw(" ".repeat(usize::from(outer_margin)))],
                 trailing,
             );
         }
     }
+
     lines
 }
 
@@ -413,6 +438,7 @@ fn table(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<LinkedLine>
                         &format!("{path}/{r}/{c}"),
                         depth,
                     );
+
                     for line in &mut lines {
                         if line
                             .line
@@ -424,6 +450,7 @@ fn table(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<LinkedLine>
                             line.shift_offsets(-2);
                         }
                     }
+
                     Cell {
                         lines,
                         colspan: attribute(cell, "colspan")

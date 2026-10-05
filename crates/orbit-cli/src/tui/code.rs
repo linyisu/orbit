@@ -71,6 +71,7 @@ impl Gutter {
                 format!("{}│ ", " ".repeat(*indent)),
                 Style::default().fg(*color),
             ),
+
             Self::Number {
                 number,
                 digits,
@@ -179,6 +180,7 @@ impl Renderer {
                 modifiers.push(syntax_modifiers(scopes.as_slice()));
             }
         }
+
         let highlighter = Highlighter::new(&CODE_THEME);
         Line::from(
             HighlightIterator::new(&mut self.state.0, &ops, text, &highlighter)
@@ -261,6 +263,7 @@ fn render_line_linked(line: &Line<'static>, options: Options) -> Vec<super::mark
                 start = offset;
             }
         }
+
         let budget = available.saturating_sub(usize::from(start > 0));
         let (length, truncated) = clipped_length(&text[start..], budget);
         return vec![styled_row(
@@ -313,12 +316,14 @@ fn marked_source(source: &str, highlights: &[Range<usize>]) -> (String, Vec<Rang
         else {
             continue;
         };
+
         text.push_str(&safe_output(before));
         let start = text.len();
         text.push_str(&safe_output(hit));
         ranges.push(start..text.len());
         offset = range.end;
     }
+
     text.push_str(&safe_output(&source[offset..]));
     (text, ranges)
 }
@@ -376,10 +381,12 @@ fn styled_row(
             ));
             position = mark_end;
         }
+
         if position < end {
             spans.push(Span::styled(text[position..end].to_owned(), style));
         }
     }
+
     if trailing {
         spans.push(Span::raw("…"));
     }
@@ -409,6 +416,7 @@ fn clipped_length(text: &str, width: usize) -> (usize, bool) {
         length += glyph.len();
         used += glyph.width();
     }
+
     (length, width > 0)
 }
 

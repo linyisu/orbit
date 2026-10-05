@@ -1,10 +1,11 @@
+use crossterm::event::MouseEvent;
+use ratatui::{Terminal, backend::TestBackend};
+
 use super::*;
 use crate::tui::{
     app::{TranscriptItem, UiState},
     render,
 };
-use crossterm::event::MouseEvent;
-use ratatui::{Terminal, backend::TestBackend};
 
 fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
     Event::Mouse(MouseEvent {
@@ -14,6 +15,7 @@ fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
         modifiers: KeyModifiers::NONE,
     })
 }
+
 fn draw(state: &mut UiState, terminal: &mut Terminal<TestBackend>) {
     terminal
         .draw(|frame| {
@@ -22,6 +24,7 @@ fn draw(state: &mut UiState, terminal: &mut Terminal<TestBackend>) {
         })
         .unwrap();
 }
+
 fn setup() -> (UiState, Terminal<TestBackend>) {
     let mut state = UiState::new("footer-model");
     state.transcript.push(TranscriptItem::Assistant(
@@ -53,6 +56,7 @@ fn select_transcript(items: &[TranscriptItem], width: u16, expanded: &[usize]) -
         moved: true,
         ..Default::default()
     };
+
     selection.transcript_view(0, &layout);
     selection
 }
@@ -65,9 +69,9 @@ fn copying_code_omits_generated_frame_but_keeps_source_indentation_and_blank_lin
         80,
         &[],
     );
+
     assert_eq!(selection.text().trim_end_matches('\n'), source);
 
-    // Selecting just the language badge and top border copies nothing.
     selection.end = Some((79, 0));
     assert_eq!(selection.text(), "");
 }
@@ -92,6 +96,7 @@ fn copying_thinking_and_nested_code_omits_both_rails_even_after_wrapping() {
                 "先检查你好 👩‍💻\n\n    保留缩进与正文 │─\n\n最后一行\n检查完成"
             );
         }
+
         assert!(copied.contains("    保留"));
         assert!(!copied.contains(['┊', '╭', '╰']));
         assert!(copied.contains("👩‍💻\n\n"));
@@ -100,13 +105,16 @@ fn copying_thinking_and_nested_code_omits_both_rails_even_after_wrapping() {
 }
 
 #[test]
-fn copying_rendered_html_uses_visible_text_and_breaks_without_tags_or_thinking_rails() {
+fn copying_html_keeps_unsupported_tags_and_omits_supported_tags_and_thinking_rails() {
     let source = "<b>中文 H<sub>2</sub>O<br>x<sup>2</sup></b>";
     for (item, expected) in [
-        (TranscriptItem::Assistant(source.into()), "  中文 H₂O\n  x²"),
+        (
+            TranscriptItem::Assistant(source.into()),
+            "  中文 H<sub>2</sub>O\n  x<sup>2</sup>",
+        ),
         (
             TranscriptItem::Thinking(source.to_owned().into()),
-            "中文 H₂O\nx²",
+            "中文 H<sub>2</sub>O\nx<sup>2</sup>",
         ),
     ] {
         let selection = select_transcript(&[item], 80, &[]);
@@ -135,15 +143,26 @@ fn partial_and_reversed_copy_include_whole_wide_glyphs_without_the_code_rail() {
         40,
         &[],
     );
-    // Both endpoints touch a half of a wide Chinese glyph.
+
     for (anchor, end) in [((5, 1), (7, 1)), ((7, 1), (5, 1))] {
         selection.anchor = Some(anchor);
         selection.end = Some(end);
         assert_eq!(selection.text(), "你好");
     }
+
     selection.anchor = Some((0, 1));
     selection.end = Some((7, 1));
     assert_eq!(selection.text(), "你好");
+}
+
+#[test]
+fn copying_wrapped_user_input_omits_consumed_spaces_and_frame() {
+    let source = format!("第一句{}https://orbit.example/demo", " ".repeat(85));
+    let user = select_transcript(&[TranscriptItem::User(source)], 46, &[]);
+    assert_eq!(
+        user.text().trim_end_matches('\n'),
+        "第一句\nhttps://orbit.example/demo"
+    );
 }
 
 #[test]
@@ -181,6 +200,7 @@ fn copying_tables_omits_grid_rows_and_keeps_columns_separate() {
         60,
         &[],
     );
+
     assert_eq!(
         selection
             .text()
@@ -260,6 +280,7 @@ fn selected_markdown_and_code_keep_colors_and_wide_glyphs_through_redraws() {
                         assert_eq!(green.cmp(&blue), selected_green.cmp(&selected_blue));
                         colored += 1;
                     }
+
                     for column in x + 1..(x + width).min(area.right()) {
                         assert_eq!(selected[(column, y)].bg, cell.bg);
                         assert_eq!(selected[(column, y)].fg, cell.fg);
@@ -269,9 +290,11 @@ fn selected_markdown_and_code_keep_colors_and_wide_glyphs_through_redraws() {
                 } else {
                     assert_eq!(cell, original);
                 }
+
                 x += width;
             }
         }
+
         assert!(colored > 10);
         assert!(wide >= 7);
         assert_eq!(state.selection.text(), copied);
@@ -350,6 +373,7 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
                         || cell.symbol() == "─"
                             && x + 1 < area.right()
                             && before[(x + 1, y)].symbol() == "\"";
+
                 if literal {
                     assert_eq!(painted.bg, THEME.selection);
                     literal_rails += 1;
@@ -364,6 +388,7 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
                     );
                     borders += 1;
                 }
+
                 if !cell.symbol().trim().is_empty() {
                     has_text = true;
                 }
@@ -372,6 +397,7 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
                     selected += 1;
                 }
             }
+
             for x in area.x + 1..area.right().saturating_sub(4) {
                 if ["r", "u", "s", "t"]
                     .iter()
@@ -385,6 +411,7 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
                     badges += 1;
                 }
             }
+
             for x in area.x..area.right().saturating_sub(5) {
                 if ["O", "r", "b", "i", "t"]
                     .iter()
@@ -400,11 +427,13 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
                     }
                 }
             }
+
             if !has_text {
                 for x in area.x..area.right() {
                     assert_eq!(after[(x, y)], before[(x, y)]);
                 }
             }
+
             let tail = area.right() - 1;
             if before[(tail, y)].symbol().trim().is_empty()
                 && before[(tail - 1, y)].symbol().width() <= 1
@@ -412,6 +441,7 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
                 assert_eq!(after[(tail, y)], before[(tail, y)]);
             }
         }
+
         assert!(borders > 50);
         assert!(literal_rails >= 2);
         assert!(selected > 20);
@@ -494,6 +524,7 @@ fn dismissing_a_selection_keeps_blocks_open_and_the_next_content_click_folds_the
             status: ToolStatus::Finished,
             output: "Orbit output\nsecond line".into(),
         };
+
         if kind == "thinking" {
             let mut thinking = ThinkingRow::from(tool.output);
             thinking.finished = true;
@@ -509,6 +540,7 @@ fn dismissing_a_selection_keeps_blocks_open_and_the_next_content_click_folds_the
                 state.expanded_tool_groups.insert(0);
             }
         }
+
         state.expanded.insert(0);
         state.follow_bottom = false;
         let mut terminal = Terminal::new(TestBackend::new(70, 24)).unwrap();
@@ -594,10 +626,12 @@ fn replacing_a_selection_by_drag_and_clicking_the_input_remain_immediate() {
             assert!(state.selection.click(&event).is_none());
             state.selection.handle(&event).unwrap();
         }
+
         draw(&mut state, &mut terminal);
         assert!(state.selection.active());
         assert!(!state.selection.text().is_empty());
     }
+
     assert_eq!(state.selection.text(), "ne00");
 
     let input = state.input_area;
@@ -685,6 +719,7 @@ fn held_wheel_extends_across_skipped_rows_and_release_stops_extension() {
         crate::tui::theme::THEME.selection
     );
 }
+
 #[test]
 fn boundary_timer_repeats_without_motion_and_stops_on_release() {
     let (mut state, mut terminal) = setup();
@@ -742,6 +777,7 @@ fn boundary_timer_repeats_without_motion_and_stops_on_release() {
 
     assert_eq!(state.selection.auto_scroll(now + Duration::from_secs(1)), 0);
 }
+
 #[test]
 fn selection_stays_in_starting_region_and_excludes_chrome() {
     let (mut state, mut terminal) = setup();
@@ -790,10 +826,12 @@ fn selection_stays_in_starting_region_and_excludes_chrome() {
                 assert!(!text.contains("footer-model"));
                 assert!(!text.contains("Orbit"));
             }
+
             Region::Footer => {
                 assert!(text.contains("/96k"));
                 assert!(!text.contains("draft"));
             }
+
             _ => unreachable!(),
         }
     }

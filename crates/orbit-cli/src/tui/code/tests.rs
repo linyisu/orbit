@@ -27,6 +27,7 @@ fn source_url_targets_survive_wrapping_clipping_and_numbered_gutters() {
                     ..Default::default()
                 },
             );
+
             assert!(
                 lines
                     .iter()
@@ -55,6 +56,7 @@ fn style_at(line: &Line<'_>, token: &str) -> Style {
             return span.style;
         }
     }
+
     panic!("missing token {token}");
 }
 
@@ -96,6 +98,7 @@ fn shared_layout_preserves_unicode_colors_and_only_overlays_search_hits() {
             assert!(prepared.iter().all(|row| row.width() <= usize::from(width)));
         }
     }
+
     let options = || Options {
         gutter: Gutter::Number {
             number: 1,
@@ -114,6 +117,7 @@ fn shared_layout_preserves_unicode_colors_and_only_overlays_search_hits() {
         .flat_map(|row| &row.spans[1..])
         .map(|span| span.content.as_ref())
         .collect();
+
     assert_eq!(collected, source);
     let marked: String = searched
         .iter()
@@ -125,6 +129,7 @@ fn shared_layout_preserves_unicode_colors_and_only_overlays_search_hits() {
         })
         .map(|span| span.content.as_ref())
         .collect();
+
     assert_eq!(marked, &source[hit]);
 
     let mut renderer = Renderer::new("rust");
@@ -162,6 +167,7 @@ fn diff_gutters_align_context_and_continuations_without_repeating_the_marker() {
                 ..Default::default()
             },
         );
+
         assert!(rows.len() > 1);
         assert!(rows.iter().all(|row| row.width() <= 23));
         assert_eq!(rows[0].spans[0].width(), rows[1].spans[0].width());
@@ -175,6 +181,7 @@ fn diff_gutters_align_context_and_continuations_without_repeating_the_marker() {
             .flat_map(|row| &row.spans[1..])
             .map(|span| span.content.as_ref())
             .collect();
+
         assert_eq!(text, source);
         for span in rows.iter().flat_map(|row| &row.spans[1..]) {
             assert_eq!(span.style.bg, change.and_then(|change| change.style().bg));
@@ -203,6 +210,7 @@ fn markdown_source_colors_syntax_without_rendering_it() {
         .map(Renderer::new)
         .into_iter()
         .chain(["README.md", "docs/Orbit.MARKDOWN"].map(Renderer::for_path));
+
     for mut renderer in renderers {
         for (source, token, foreground) in cases {
             highlight(&mut renderer, "");
@@ -233,6 +241,7 @@ fn markdown_source_keeps_symbols_and_composes_nested_effects_in_all_views() {
             Modifier::BOLD | Modifier::CROSSED_OUT,
         ),
     ];
+
     for label in ["md", "markdown", "gfm", "commonmark", "language-MD"] {
         for (source, token, effects) in cases {
             let line = highlight(&mut Renderer::new(label), source);
@@ -247,6 +256,7 @@ fn markdown_source_keeps_symbols_and_composes_nested_effects_in_all_views() {
             assert!(fenced.spans[0].style.add_modifier.is_empty());
         }
     }
+
     let nested = highlight(&mut Renderer::new("md"), "**外部*内部*恢复** 结束");
     assert_eq!(style_at(&nested, "内部").fg, Some(THEME.md_bold_italic));
     assert_eq!(style_at(&nested, "恢复").add_modifier, Modifier::BOLD);
@@ -274,12 +284,14 @@ fn source_effects_keep_literals_and_embedded_code_literal() {
                 .all(|span| span.style.add_modifier.is_empty())
         );
     }
+
     let mut renderer = Renderer::new("md");
     highlight(&mut renderer, "```rust");
     for source in ["// **注释** ~~原样~~", "let text = \"***原样***\";"] {
         let line = highlight(&mut renderer, source);
         assert_eq!(line, highlight(&mut Renderer::new("rust"), source));
     }
+
     highlight(&mut renderer, "```");
     let emphasis = highlight(&mut renderer, "***恢复***");
     assert_eq!(
@@ -326,6 +338,7 @@ fn source_effects_survive_wrapping_search_and_diff_overlays() {
         .flat_map(|row| &row.spans[1..])
         .map(|s| s.content.as_ref())
         .collect();
+
     assert_eq!(text, source);
     assert!(rows.len() > 1);
     let emphasis = rows
@@ -333,6 +346,7 @@ fn source_effects_survive_wrapping_search_and_diff_overlays() {
         .flat_map(|row| &row.spans)
         .find(|span| span.content.contains("强调"))
         .unwrap();
+
     assert!(
         emphasis
             .style
@@ -402,6 +416,7 @@ fn markdown_math_reuses_latex_tokens_and_preserves_multiline_state() {
         assert_eq!(fenced.to_string(), format!("  │ {source}"));
         assert_eq!(&fenced.spans[1..], raw.spans.as_slice(), "{source}");
     }
+
     super::super::markdown::line("````", 0, &mut fence);
     assert!(fence.is_none());
 }
@@ -419,6 +434,7 @@ fn markdown_math_preserves_literals_currency_and_embedded_code() {
         let line = highlight(&mut Renderer::new("md"), source);
         assert_eq!(style_at(&line, "$").fg, Some(foreground), "{source}");
     }
+
     let raw = highlight(&mut Renderer::new("md"), "`$x$`");
     assert_eq!(style_at(&raw, "$").fg, Some(Color::Rgb(126, 205, 208)));
 
@@ -462,6 +478,7 @@ fn code_comments_share_a_readable_foreground_across_languages_and_previews() {
         let fenced = super::super::markdown::line(source, 1, &mut fence);
         assert_eq!(style_at(&fenced, token), style_at(&line, token), "{label}");
     }
+
     let mut rust = Renderer::new("rust");
     highlight(&mut rust, "/* Orbit 注释");
     let continuation = highlight(&mut rust, "中文内容 */");

@@ -1,20 +1,17 @@
-//! Application-owned selection: endpoints use content coordinates, while each
-//! drag is constrained to the region in which it started. Edge scrolling runs
-//! on a timer so it continues when the pointer stops moving, as in tmux's
-//! window_copy_scroll_timer: https://github.com/tmux/tmux/blob/master/window-copy.c
-//! Textarea mouse interaction reference:
-//! https://github.com/ratatui/ratatui-textarea/blob/main/examples/minimal.rs
+//! Content-coordinate selection constrained to its starting region.
+//! Timer-driven edge scrolling follows tmux: https://github.com/tmux/tmux/blob/master/window-copy.c
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    io::{self, Write},
+    time::{Duration, Instant},
+};
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
     buffer::{Buffer, Cell},
     layout::Rect,
-};
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    io::{self, Write},
-    time::{Duration, Instant},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -247,6 +244,7 @@ impl Selection {
 
                     return Ok(true);
                 }
+
                 if self.active() && key.code == KeyCode::Esc {
                     self.clear();
                     return Ok(true);
@@ -400,6 +398,7 @@ impl Selection {
                     x = copy.block.columns.end;
                     continue;
                 }
+
                 let Some(cell) = cells.and_then(|cells| cells.get(x)) else {
                     x += 1;
                     continue;
@@ -451,6 +450,7 @@ impl Selection {
                 {
                     continue;
                 }
+
                 let top = row.saturating_sub(usize::from(copy.row));
                 blocks
                     .entry((top, copy.columns.start))
@@ -464,6 +464,7 @@ impl Selection {
                     });
             }
         }
+
         blocks.into_values().collect()
     }
 
@@ -504,6 +505,7 @@ impl Selection {
             .into_iter()
             .map(|m| m.block)
             .collect::<Vec<_>>();
+
         super::media::select(area, self.base(), &media);
         for block in &media {
             for row in block.rows.start.max(self.base())
@@ -520,6 +522,7 @@ impl Selection {
                 }
             }
         }
+
         let mut styles = HashMap::new();
 
         for y in area.y..area.bottom() {

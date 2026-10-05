@@ -39,13 +39,16 @@ pub(in crate::tui) fn parse_ansi_to_spans(text: &str) -> Vec<Span<'static>> {
                             seq.push(c);
                             break;
                         }
+
                         seq.push(c);
                     }
+
                     if seq.ends_with('m') {
                         if !current_chunk.is_empty() {
                             spans.push(Span::styled(current_chunk.clone(), current_style));
                             current_chunk.clear();
                         }
+
                         let code_part = &seq[..seq.len() - 1];
                         if code_part.is_empty() || code_part == "0" {
                             current_style = Style::default();
@@ -66,6 +69,7 @@ pub(in crate::tui) fn parse_ansi_to_spans(text: &str) -> Vec<Span<'static>> {
                                         current_style =
                                             current_style.add_modifier(Modifier::UNDERLINED)
                                     }
+
                                     Ok(39) => current_style = current_style.fg(Color::Reset),
                                     Ok(c) => {
                                         if let Some(color) = ansi_color(c) {
@@ -73,18 +77,22 @@ pub(in crate::tui) fn parse_ansi_to_spans(text: &str) -> Vec<Span<'static>> {
                                                 current_style.fg(desaturate_ansi_color(color));
                                         }
                                     }
+
                                     _ => {}
                                 }
                             }
                         }
                     }
+
                     continue;
                 }
+
                 Some('(' | ')' | '*' | '+') => {
                     chars.next();
                     chars.next();
                     continue;
                 }
+
                 Some(']') => {
                     chars.next();
                     while let Some(&c) = chars.peek() {
@@ -96,12 +104,15 @@ pub(in crate::tui) fn parse_ansi_to_spans(text: &str) -> Vec<Span<'static>> {
                             break;
                         }
                     }
+
                     continue;
                 }
+
                 Some(_) => {
                     chars.next();
                     continue;
                 }
+
                 None => continue,
             }
         }
@@ -142,6 +153,7 @@ pub(in crate::tui) fn sanitize_linked_line(linked: &mut LinkedLine) {
         link.start = offset(link.start);
         link.end = offset(link.end);
     }
+
     for range in linked
         .decorations
         .iter_mut()
@@ -150,6 +162,7 @@ pub(in crate::tui) fn sanitize_linked_line(linked: &mut LinkedLine) {
         range.start = offset(range.start);
         range.end = offset(range.end);
     }
+
     for span in &mut linked.line.spans {
         span.content = safe_multiline_output(&span.content).into();
     }

@@ -38,6 +38,7 @@ pub(super) fn parse(source: &str) -> Presentation {
     {
         result.style = result.style.fg(Color::Rgb(35, 40, 45));
     }
+
     result
 }
 
@@ -50,6 +51,7 @@ fn color(token: &Token<'_>) -> Option<Color> {
             }
             (r, g, b)
         }
+
         Token::Ident(value) => cssparser::color::parse_named_color(value).ok()?,
         _ => return None,
     };
@@ -62,17 +64,20 @@ fn apply(out: &mut Presentation, property: &str, tokens: &[Token<'_>]) {
         Some(Token::Ident(value)) => value.to_ascii_lowercase(),
         _ => String::new(),
     };
+
     match property {
         "color" => {
             if let Some(color) = first.and_then(color) {
                 out.style = out.style.fg(color);
             }
         }
+
         "background" | "background-color" => {
             if let Some(color) = first.and_then(color) {
                 out.style = out.style.bg(color);
             }
         }
+
         "font-weight" => {
             if matches!(ident.as_str(), "bold" | "bolder")
                 || matches!(first, Some(Token::Number { value, .. }) if *value >= 600.0)
@@ -84,6 +89,7 @@ fn apply(out: &mut Presentation, property: &str, tokens: &[Token<'_>]) {
                 out.style = out.style.remove_modifier(Modifier::BOLD);
             }
         }
+
         "font-style" if ident == "italic" || ident == "oblique" => {
             out.style = out.style.add_modifier(Modifier::ITALIC);
         }
@@ -98,6 +104,7 @@ fn apply(out: &mut Presentation, property: &str, tokens: &[Token<'_>]) {
                 }
             }
         }
+
         "text-align" => out.alignment = alignment(&ident),
         "border-left" | "border-left-color" => out.rail = tokens.iter().find_map(color),
         "padding" | "margin" => {
@@ -108,6 +115,7 @@ fn apply(out: &mut Presentation, property: &str, tokens: &[Token<'_>]) {
                 out.margin = nonzero;
             }
         }
+
         _ => {}
     }
 }

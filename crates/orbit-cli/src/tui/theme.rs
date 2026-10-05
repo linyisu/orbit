@@ -214,6 +214,7 @@ pub(super) fn selection_style(style: Style) -> Style {
     {
         foreground = badge;
     }
+
     let original = foreground;
     let light = color_rgb(THEME.selection_light_foreground).unwrap();
     for step in 1..=16 {
@@ -278,6 +279,7 @@ pub(super) fn color_rgb(color: Color) -> Option<(u8, u8, u8)> {
             (0, 255, 255),
             (255, 255, 255),
         ][usize::from(index)],
+
         16..=231 => {
             let value = index - 16;
             let channel = |level| if level == 0 { 0 } else { 55 + level * 40 };
@@ -287,6 +289,7 @@ pub(super) fn color_rgb(color: Color) -> Option<(u8, u8, u8)> {
                 channel(value % 6),
             )
         }
+
         _ => {
             let shade = 8 + (index - 232) * 10;
             (shade, shade, shade)
@@ -384,6 +387,7 @@ pub(super) fn desaturate_for_thinking(color: Option<Color>) -> Color {
 }
 
 use std::sync::LazyLock;
+
 use syntect::highlighting::{Color as SyntaxColor, StyleModifier, ThemeItem, ThemeSettings};
 use syntect::parsing::Scope;
 
@@ -504,6 +508,7 @@ fn control_hover_background(elapsed: std::time::Duration) -> Color {
     let shade = 48 + (elapsed.as_millis().min(240) / 10) as u8;
     Color::Rgb(shade, shade - 8, shade - 10)
 }
+
 pub(super) fn ansi_color(code: u16) -> Option<Color> {
     match code {
         30 => Some(Color::Black),
@@ -539,6 +544,7 @@ mod tests {
                 .fg(token)
                 .add_modifier(modifiers | Modifier::DIM),
         );
+
         assert_eq!(selected.bg, Some(THEME.selection));
         let foreground = color_rgb(selected.fg.unwrap()).unwrap();
         assert!(foreground.2 > foreground.1 && foreground.1 > foreground.0);
@@ -554,6 +560,7 @@ mod tests {
                     .bg(badge)
                     .add_modifier(Modifier::BOLD),
             );
+
             assert_eq!(selected.bg, Some(THEME.selection));
             let (red, green, blue) = color_rgb(badge).unwrap();
             let (selected_red, selected_green, selected_blue) =
@@ -594,6 +601,7 @@ mod tests {
             assert_eq!(selected.bg, Some(THEME.selection));
             assert!(!selected.add_modifier.contains(Modifier::REVERSED));
         }
+
         let source = Color::Rgb(16, 16, 16);
         let selected = selection_style(Style::default().fg(source));
         assert_ne!(selected.fg, Some(source));
