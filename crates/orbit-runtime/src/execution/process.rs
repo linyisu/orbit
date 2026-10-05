@@ -3,9 +3,10 @@ use std::{
     time::Duration,
 };
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{RuntimeError, failed};
 use crate::verification::{VerificationEvidence, WorkspaceFingerprint};
-use serde::{Deserialize, Serialize};
 
 pub use super::output::{
     MAX_OUTPUT, MAX_RETAINED_OUTPUT_PER_SESSION, MAX_RETAINED_OUTPUT_PER_STREAM, OutputLog,
@@ -14,6 +15,23 @@ pub use super::resources::{
     DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_MAX_MEMORY_BYTES, DEFAULT_MAX_OPEN_FILES,
     DEFAULT_MAX_PROCESSES, MIB, ProcessLimits, TMP_SIZE_BYTES,
 };
+
+/// Find a system program without consulting the inherited PATH. Command policy
+/// uses the same trusted locations as the sandbox launcher.
+pub fn system_executable(name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    ["/usr/bin", "/bin"]
+        .into_iter()
+        .map(|directory| Path::new(directory).join(name))
+        .filter_map(|path| path.canonicalize().ok())
+        .find(|path| {
+            path.starts_with("/usr/bin")
+                && path.metadata().is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o022 == 0
+                })
+        })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MountAccess {
@@ -120,12 +138,14 @@ pub fn normalize_mount_target(target: &Path) -> Result<PathBuf, RuntimeError> {
                 has_normal = true;
                 normalized.push(c);
             }
+
             std::path::Component::CurDir | std::path::Component::ParentDir => {
                 return Err(failed(format!(
                     "mount target '{}' must not contain '.' or '..' components",
                     target.display()
                 )));
             }
+
             std::path::Component::Prefix(_) => {
                 return Err(failed(format!(
                     "mount target '{}' contains unsupported prefix component",
@@ -182,38 +202,35 @@ pub fn is_reserved_mount_target(normalized_target: &Path) -> bool {
 
 /// Reserved host paths for external capabilities and mount sources. Unlike a
 /// sandbox mount target, a descendant of host /tmp may be granted explicitly.
+pub const RESERVED_CAPABILITY_PATHS: &[&str] =
+    &["/", "/tmp", "/orbit-command.sh", "/opt", "/opt/orbit-cache"];
+
+/// These host directories and all their descendants are reserved. Tool
+/// descriptions use the same lists as policy enforcement.
+pub const RESERVED_CAPABILITY_TREES: &[&str] = &[
+    "/proc",
+    "/dev",
+    "/sys",
+    "/etc",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/workspace",
+    "/scratch",
+    "/orbit-source",
+    "/opt/orbit-rust",
+    "/tmp/home",
+];
+
 pub fn is_reserved_system_path(path: &Path) -> bool {
-    const EXACT_RESERVED: &[&str] = &["/", "/tmp", "/orbit-command.sh", "/opt", "/opt/orbit-cache"];
-    const PREFIX_RESERVED: &[&str] = &[
-        "/proc",
-        "/dev",
-        "/sys",
-        "/etc",
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/lib",
-        "/lib64",
-        "/workspace",
-        "/scratch",
-        "/orbit-source",
-        "/opt/orbit-rust",
-        "/tmp/home",
-    ];
-
-    for exact in EXACT_RESERVED {
-        if path == Path::new(exact) {
-            return true;
-        }
-    }
-
-    for prefix in PREFIX_RESERVED {
-        if path.starts_with(Path::new(prefix)) {
-            return true;
-        }
-    }
-
-    false
+    RESERVED_CAPABILITY_PATHS
+        .iter()
+        .any(|exact| path == Path::new(exact))
+        || RESERVED_CAPABILITY_TREES
+            .iter()
+            .any(|prefix| path.starts_with(Path::new(prefix)))
 }
 
 #[derive(Clone, Debug)]

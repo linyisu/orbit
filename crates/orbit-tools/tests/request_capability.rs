@@ -8,6 +8,54 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
+async fn reserved_paths_never_prompt_and_nested_missing_paths_suggest_an_eligible_parent() {
+    let ws_temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RequestCapability::new(Workspace::new(ws_temp.path()).unwrap(), sender);
+
+    for path in ["/", "/tmp", "/etc", "/etc/passwd"] {
+        let error = tool
+            .execute(
+                ToolCall::function(
+                    "reserved",
+                    "request_capability",
+                    json!({
+                        "path": path, "access": "read", "reason": "test reserved paths"
+                    }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("permission permanently denied"),
+            "{path}: {error}"
+        );
+        assert!(error.contains("cannot be overridden by user approval"));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    let error = tool.execute(ToolCall::function("missing", "request_capability", json!({
+        "path": outside.path().join("missing/nested/file.txt"), "access": "read_write", "reason": "test missing parents"
+    })), CancellationToken::new()).await.unwrap_err().to_string();
+    assert!(error.contains(&format!(
+        "existing eligible parent '{}'",
+        outside.path().display()
+    )));
+    assert!(!error.contains(&format!(
+        "parent '{}'",
+        outside.path().join("missing/nested").display()
+    )));
+    assert!(receiver.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
     let ws_temp = tempfile::tempdir().unwrap();
     let outside_temp = tempfile::tempdir().unwrap();
@@ -60,6 +108,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
                 orbit_runtime::capability::FilesystemAccess::Read
             );
         }
+
         _ => panic!("unexpected preview type"),
     }
 
@@ -236,6 +285,7 @@ async fn request_capability_supports_read_write_access() {
             assert!(preview.access.allows_read());
             assert!(preview.access.allows_write());
         }
+
         _ => panic!("unexpected preview type"),
     }
 

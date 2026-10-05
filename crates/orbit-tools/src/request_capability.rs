@@ -1,16 +1,17 @@
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::{
+    capability::{EnvironmentId, FilesystemAccess, FilesystemCapability},
+    execution::process::{RESERVED_CAPABILITY_PATHS, RESERVED_CAPABILITY_TREES},
+    filesystem::{ResolvedPath, Workspace},
+    policy::{FilesystemGrant, PolicyDecision},
+};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, CapabilityPreview};
-use orbit_runtime::{
-    capability::{EnvironmentId, FilesystemAccess, FilesystemCapability},
-    filesystem::{ResolvedPath, Workspace},
-    policy::{FilesystemGrant, PolicyDecision},
-};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,9 +38,15 @@ impl RequestCapability {
 
 impl Tool for RequestCapability {
     fn definition(&self) -> ToolDefinition {
+        let description = format!(
+            "Request session permission for an existing file or directory outside the workspace. Only eligible paths prompt the user for approval. Existing workspace access needs no request. To create external files, request read_write for an existing eligible parent directory. Policy denials are permanent and never open an approval dialog: workspace ancestors, protected files/directories and these exact host paths: {}; these host directories and all descendants: {}. The whole host /tmp is reserved, but an existing specific /tmp child outside /tmp/home may be eligible. run_command already provides isolated /tmp and /scratch for temporary work; these are sandbox paths, not host capability requests. Approved grants last for this session.",
+            RESERVED_CAPABILITY_PATHS.join(", "),
+            RESERVED_CAPABILITY_TREES.join(", ")
+        );
+
         ToolDefinition::function(
             "request_capability",
-            "Request permission to access an existing file or directory outside the workspace. Path must exist; to create new files outside the workspace, request read_write permission for an existing parent directory. Prompts the user with an approval dialog with the requested path, access level ('read' or 'read_write'), and reason. If approved, access is granted for the remainder of this session.",
+            description,
             json!({
                 "type": "object",
                 "properties": {
@@ -87,14 +94,30 @@ impl Tool for RequestCapability {
                 })?;
 
             if !resolved.canonical().exists() {
-                let parent = resolved
-                    .canonical()
-                    .parent()
-                    .unwrap_or(std::path::Path::new("/"));
+                let parent = resolved.canonical().ancestors().skip(1).find(|parent| {
+                    parent.is_dir()
+                        && !matches!(
+                            self.workspace
+                                .policy()
+                                .check_filesystem(&FilesystemCapability {
+                                    environment: EnvironmentId::Local,
+                                    path: parent.to_path_buf(),
+                                    access,
+                                }),
+                            PolicyDecision::Denied(_)
+                        )
+                });
+                let guidance = match parent {
+                    Some(parent) => format!(
+                        "to create external files, request read_write permission for the existing eligible parent '{}'",
+                        parent.display()
+                    ),
+
+                    None => "no existing eligible parent is available; use the workspace or run_command's isolated /tmp or /scratch for temporary work".into(),
+                };
+
                 return Err(ToolError::ExecutionFailed(format!(
-                    "path '{}' does not exist. Sandbox capability mounts only attach existing resources; to create files outside the workspace, request read_write capability for the existing parent directory '{}'",
-                    expanded_path,
-                    parent.display()
+                    "path '{expanded_path}' does not exist. Capability mounts require existing resources; {guidance}"
                 )));
             }
 
@@ -116,7 +139,7 @@ impl Tool for RequestCapability {
                 )),
 
                 PolicyDecision::Denied(reason) => Err(ToolError::ExecutionFailed(format!(
-                    "permission permanently denied: {reason}"
+                    "permission permanently denied: {reason}. This policy denial cannot be overridden by user approval; do not retry the same request. Use an eligible external path, the workspace, or run_command's isolated temporary directories."
                 ))),
 
                 PolicyDecision::NeedsApproval(caps) => {
