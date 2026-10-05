@@ -14,6 +14,9 @@ use crate::{
 
 use super::{configuration::Config, controls};
 
+pub(super) const CANDIDATE_PANEL: usize = 9;
+const CLOSE: usize = 96;
+
 #[derive(Debug)]
 pub(crate) struct Wizard {
     pub form: Option<Config>,
@@ -25,6 +28,7 @@ pub(crate) struct Wizard {
     scroll: Option<usize>,
     last_offset: usize,
     selected: usize,
+    directory_offset: usize,
     hidden: bool,
     path: InputState,
     focus: usize,
@@ -54,6 +58,7 @@ impl Wizard {
             scroll: None,
             last_offset: 0,
             selected: 0,
+            directory_offset: 0,
             hidden: false,
             path: InputState::default(),
             focus: 8,
@@ -66,6 +71,7 @@ impl Wizard {
         self.path.set(listing.path.clone());
         self.listing = Some(listing);
         self.selected = 0;
+        self.directory_offset = 0;
         self.focus = 8;
         self.scroll = None;
         self.busy = false;
@@ -117,8 +123,17 @@ impl Wizard {
                 .iter()
                 .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
                 .map(|(_, id)| *id);
+            if mouse.kind == MouseEventKind::Moved
+                && let Some(choice) = self.hover.filter(|id| *id >= 100)
+            {
+                if let Some(config) = &mut self.form {
+                    config.suggestion = choice - 100;
+                } else if self.listing.is_some() && !self.busy && !self.failed {
+                    self.selected = choice - 100;
+                }
+            }
             if let Some(config) = &mut self.form
-                && config.picker
+                && config.has_candidates()
             {
                 let key = match mouse.kind {
                     MouseEventKind::ScrollUp => Some(KeyCode::Up),
@@ -155,7 +170,7 @@ impl Wizard {
                     .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
             {
                 let choice = *choice;
-                if choice == 99 {
+                if matches!(choice, 99 | CLOSE) {
                     return Action::Cancel;
                 }
                 if choice == 98 {
@@ -166,7 +181,7 @@ impl Wizard {
                 }
                 if let Some(config) = &mut self.form {
                     if choice == 6 {
-                        config.toggle_picker();
+                        config.open_picker();
                         return Action::None;
                     }
                     if choice < 5 {
@@ -203,10 +218,7 @@ impl Wizard {
         let Event::Key(key) = event else {
             if let Event::Paste(text) = event {
                 if let Some(config) = &mut self.form {
-                    if config.focus < 5 {
-                        config.edit_field(config.focus);
-                        form::paste(&mut config.fields[config.focus], text);
-                    }
+                    config.paste(text);
                 } else if self.focus == 7 {
                     form::paste(&mut self.path, text);
                 }
@@ -219,6 +231,7 @@ impl Wizard {
         if key.kind == KeyEventKind::Release {
             return Action::None;
         }
+        self.hover = None;
         if key.code == KeyCode::Esc && self.form.as_ref().is_some_and(|config| config.picker) {
             return self.form.as_mut().unwrap().handle(key);
         }
@@ -358,8 +371,8 @@ impl Wizard {
             Rect::new(inner.x, inner.y, inner.width, 1),
         );
         let close = Rect::new(area.right().saturating_sub(4), area.y, 3, 1);
-        frame.render_widget(Paragraph::new(" × "), close);
-        self.areas.push((close, 99));
+        controls::button(frame, close, "×", self.hover == Some(CLOSE));
+        self.areas.push((close, CLOSE));
         let body = Rect::new(
             inner.x,
             inner.y + 2,
@@ -376,6 +389,7 @@ impl Wizard {
                 "当前目录",
                 &self.path,
                 self.focus == 7,
+                self.hover == Some(7),
                 "输入路径后按 Enter 前往",
             );
             self.areas.push((path, 7));
@@ -388,7 +402,12 @@ impl Wizard {
 
             let entries = self.entries();
             let count = list.height as usize;
-            let start = self.selected.saturating_sub(count.saturating_sub(1));
+            self.directory_offset = self
+                .directory_offset
+                .min(self.selected)
+                .max(self.selected.saturating_sub(count.saturating_sub(1)))
+                .min(entries.len().saturating_sub(count));
+            let start = self.directory_offset;
             for (row, (index, name)) in entries
                 .iter()
                 .enumerate()
@@ -571,6 +590,103 @@ mod tests {
         assert!(
             matches!(wizard.handle(&key(KeyCode::Enter)), Action::Browse(path) if path == "/another")
         );
+    }
+
+    fn mouse(kind: MouseEventKind, area: Rect) -> Event {
+        Event::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn mouse_hover_and_click_share_candidate_hits_and_do_not_fall_through() {
+        let mut wizard = Wizard::new(Some(
+            Spec::parse("/ssh server.example --ssh-user alice").unwrap(),
+        ));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
+        wizard.form.as_mut().unwrap().suggestion = usize::MAX;
+        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        let (candidate, candidate_id) = *wizard
+            .areas
+            .iter()
+            .filter(|(_, id)| *id >= 100)
+            .max_by_key(|(_, id)| *id)
+            .unwrap();
+        let blank = Rect::new(candidate.right(), candidate.y, 1, 1);
+        wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), blank));
+        assert!(wizard.form.as_ref().unwrap().picker);
+        assert_eq!(
+            wizard.form.as_ref().unwrap().fields[0].text,
+            "server.example"
+        );
+        wizard.handle(&mouse(MouseEventKind::Moved, candidate));
+        assert_eq!(wizard.hover, Some(candidate_id));
+        wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), candidate));
+        let config = wizard.form.as_ref().unwrap();
+        assert!(!config.picker);
+        assert_eq!(config.focus, 0);
+        assert!(config.fields[..4].iter().all(|input| input.text.is_empty()));
+
+        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        let field = wizard.areas.iter().find(|(_, id)| *id == 1).unwrap().0;
+        wizard.handle(&mouse(MouseEventKind::Moved, field));
+        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(field.x, field.y)].fg,
+            THEME.dialog_accent
+        );
+        wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), field));
+        assert_eq!(wizard.form.as_ref().unwrap().focus, 1);
+        let button = wizard.areas.iter().find(|(_, id)| *id == 99).unwrap().0;
+        wizard.handle(&mouse(MouseEventKind::Moved, button));
+        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(button.x, button.y)].bg,
+            THEME.dialog_accent
+        );
+        assert!(matches!(
+            wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), button)),
+            Action::Cancel
+        ));
+    }
+
+    #[test]
+    fn directory_hover_preserves_the_viewport_and_clicks_the_highlighted_row() {
+        let mut wizard = Wizard::new(None);
+        wizard.set_listing(Listing {
+            path: "/work".into(),
+            directories: (0..40).map(|i| format!("child-{i}")).collect(),
+        });
+        wizard.selected = 30;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
+        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        let offset = wizard.directory_offset;
+        let id = 100 + offset;
+        let row = wizard
+            .areas
+            .iter()
+            .find(|(_, value)| *value == id)
+            .unwrap()
+            .0;
+        wizard.handle(&mouse(MouseEventKind::Moved, row));
+        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        assert_eq!(wizard.directory_offset, offset);
+        assert_eq!(wizard.selected, offset);
+        assert_eq!(
+            terminal.backend().buffer()[(row.x, row.y)].bg,
+            THEME.dialog_accent
+        );
+        let expected = format!("/work/child-{}", offset - 2);
+        assert!(
+            matches!(wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), row)), Action::Browse(path) if path == expected)
+        );
+        wizard.handle(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        assert_eq!(wizard.hover, None);
     }
 
     #[test]

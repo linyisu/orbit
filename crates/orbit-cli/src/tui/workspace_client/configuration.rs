@@ -3,7 +3,7 @@ use ratatui::{Frame, layout::Rect, style::Style, widgets::Paragraph};
 
 use super::{controls, wizard::Action};
 use crate::{
-    tui::{connect_custom::form, input::InputState, theme::THEME},
+    tui::{connect_custom::form, input::InputState, overlay, render, theme::THEME},
     workspace::{connect::Spec, discovery},
 };
 
@@ -13,9 +13,12 @@ pub(crate) struct Config {
     selected_host: Option<discovery::Host>,
     pending_alias: Option<String>,
     pub(super) picker: bool,
+    pub(super) alias: InputState,
     pub(super) fields: [InputState; 5],
     pub(super) focus: usize,
     pub(super) suggestion: usize,
+    offset: usize,
+    rendered_candidates: Vec<Candidate>,
     pub(super) error: Option<String>,
 }
 
@@ -30,10 +33,13 @@ impl Config {
             pending_alias: (!spec.is_wsl()).then(|| spec.target()),
             focus: if spec.is_wsl() { 0 } else { 6 },
             selected_host: None,
-            picker: false,
+            picker: !spec.is_wsl(),
+            alias: InputState::default(),
             spec,
             fields,
             suggestion: 0,
+            offset: 0,
+            rendered_candidates: Vec::new(),
             error: None,
         };
         config.refresh_alias();
@@ -65,12 +71,14 @@ impl Config {
         self.fields[1].set(host.user.clone());
         self.fields[2].set(host.port.clone());
         self.fields[3].set(host.identity.clone());
+        self.alias.set(host.name.clone());
         self.selected_host = Some(host.clone());
         self.pending_alias = None;
         self.error = None;
     }
 
     pub(super) fn edit_field(&mut self, index: usize) {
+        self.rendered_candidates.clear();
         self.pending_alias = None;
         if index == 0 {
             self.selected_host = None;
@@ -78,47 +86,68 @@ impl Config {
         self.error = None;
     }
 
-    pub(super) fn toggle_picker(&mut self) {
+    pub(super) fn open_picker(&mut self) {
+        self.rendered_candidates.clear();
         self.focus = 6;
-        self.picker = !self.picker;
-        self.suggestion = self
-            .selected_host
-            .as_ref()
-            .and_then(|host| self.choices().iter().position(|name| name == &host.name))
-            .unwrap_or(0);
+        self.picker = true;
+        self.suggestion = 0;
     }
 
-    fn choices(&self) -> Vec<String> {
+    fn candidates(&self) -> Vec<Candidate> {
         let (hosts, wsl) = discovery::snapshot();
         if self.spec.is_wsl() {
             wsl.into_iter()
-                .filter(|name| name.contains(self.fields[0].text.trim()))
+                .filter(|name| {
+                    name.to_lowercase()
+                        .contains(&self.fields[0].text.trim().to_lowercase())
+                })
+                .map(Candidate::Distribution)
                 .collect()
         } else {
-            std::iter::once("手动填写新服务器".into())
-                .chain(hosts.into_iter().map(|host| host.name))
-                .collect()
+            host_candidates(hosts, &self.alias.text)
         }
     }
 
+    pub(super) fn has_candidates(&self) -> bool {
+        self.picker || (self.spec.is_wsl() && self.focus == 0)
+    }
+
     pub(super) fn choose(&mut self) {
-        if self.spec.is_wsl() {
-            if let Some(name) = self.choices().get(self.suggestion) {
-                self.fields[0].set(name.clone());
+        let candidates = if self.rendered_candidates.is_empty() {
+            self.candidates()
+        } else {
+            self.rendered_candidates.clone()
+        };
+        let Some(candidate) = candidates.into_iter().nth(self.suggestion) else {
+            return;
+        };
+        match candidate {
+            Candidate::Distribution(name) => self.fields[0].set(name),
+            Candidate::Host(host) => self.fill(&host),
+            Candidate::Manual => {
+                for field in &mut self.fields[..4] {
+                    field.set(String::new());
+                }
+                self.alias.set(String::new());
+                self.selected_host = None;
+                self.pending_alias = None;
+                self.error = None;
             }
-        } else if self.suggestion == 0 {
-            for field in &mut self.fields[..4] {
-                field.set(String::new());
-            }
-            self.selected_host = None;
-            self.pending_alias = None;
-            self.error = None;
-        } else if let Some(host) = discovery::snapshot().0.get(self.suggestion - 1) {
-            self.fill(host);
         }
         self.picker = false;
-        self.focus = 0;
+        self.focus = if self.spec.is_wsl() { 1 } else { 0 };
         self.suggestion = 0;
+    }
+
+    pub(super) fn paste(&mut self, text: &str) {
+        if self.focus == 6 {
+            form::paste(&mut self.alias, text);
+            self.pending_alias = None;
+            self.open_picker();
+        } else if self.focus < 5 {
+            self.edit_field(self.focus);
+            form::paste(&mut self.fields[self.focus], text);
+        }
     }
 
     pub(super) fn start(&mut self) -> Action {
@@ -141,16 +170,24 @@ impl Config {
         if key.code == KeyCode::Enter && !key.modifiers.is_empty() {
             return Action::None;
         }
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            self.picker = false;
+        }
         if self.picker {
             match key.code {
                 KeyCode::Esc => self.picker = false,
                 KeyCode::Enter => self.choose(),
                 KeyCode::Down => {
                     self.suggestion =
-                        (self.suggestion + 1).min(self.choices().len().saturating_sub(1))
+                        (self.suggestion + 1).min(self.candidates().len().saturating_sub(1))
                 }
                 KeyCode::Up => self.suggestion = self.suggestion.saturating_sub(1),
-                _ => {}
+                _ => {
+                    form::edit(&mut self.alias, key.code, key.modifiers);
+                    self.rendered_candidates.clear();
+                    self.pending_alias = None;
+                    self.suggestion = 0;
+                }
             }
             return Action::None;
         }
@@ -164,11 +201,9 @@ impl Config {
             KeyCode::Enter if self.focus == 5 => {
                 return self.start();
             }
-            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Down if self.focus == 6 => {
-                self.toggle_picker()
-            }
+            KeyCode::Enter | KeyCode::Down if self.focus == 6 => self.open_picker(),
             KeyCode::Enter
-                if self.spec.is_wsl() && self.focus == 0 && !self.choices().is_empty() =>
+                if self.spec.is_wsl() && self.focus == 0 && !self.candidates().is_empty() =>
             {
                 self.choose();
                 self.focus = 1;
@@ -184,10 +219,16 @@ impl Config {
                 }];
             }
             KeyCode::Down if self.spec.is_wsl() && self.focus == 0 => {
-                self.suggestion = (self.suggestion + 1).min(self.choices().len().saturating_sub(1))
+                self.suggestion =
+                    (self.suggestion + 1).min(self.candidates().len().saturating_sub(1))
             }
             KeyCode::Up if self.spec.is_wsl() && self.focus == 0 => {
                 self.suggestion = self.suggestion.saturating_sub(1)
+            }
+            _ if self.focus == 6 => {
+                form::edit(&mut self.alias, key.code, key.modifiers);
+                self.pending_alias = None;
+                self.open_picker();
             }
             _ if self.focus < 5 => {
                 let before = self.fields[self.focus].text.clone();
@@ -213,17 +254,14 @@ impl Config {
         let mut y = area.y;
         let selector = if !self.spec.is_wsl() && y + 3 <= area.bottom() {
             let rect = Rect::new(area.x, y, area.width, 3);
-            let name = self
-                .selected_host
-                .as_ref()
-                .map(|host| host.name.as_str())
-                .unwrap_or("手动填写新服务器");
-            controls::select(
+            controls::field(
                 frame,
                 rect,
                 "SSH 配置 · ~/.ssh/config",
-                name,
-                self.focus == 6 || hover == Some(6),
+                &self.alias,
+                self.focus == 6,
+                hover == Some(6),
+                "输入别名筛选，或选择手动填写",
             );
             areas.push((rect, 6));
             y += 3;
@@ -277,6 +315,7 @@ impl Config {
                     labels[index],
                     &self.fields[index],
                     self.focus == index && !self.picker,
+                    hover == Some(index),
                     placeholders[index],
                 );
                 areas.push((rect, index));
@@ -296,61 +335,46 @@ impl Config {
                 })),
                 Rect::new(area.x, y, area.width, 1),
             );
-            y += 1;
         }
-        if self.spec.is_wsl() && self.focus == 0 {
-            let count = area.bottom().saturating_sub(y) as usize;
-            let start = self.suggestion.saturating_sub(count.saturating_sub(1));
-            for (row, (index, name)) in self
-                .choices()
+        let suggestions = if self.picker {
+            selector.map(|rect| rect.y + 2)
+        } else if self.spec.is_wsl() && self.focus == 0 {
+            areas
+                .iter()
+                .find(|(_, id)| *id == 0)
+                .map(|(rect, _)| rect.y + 2)
+        } else {
+            None
+        };
+        if let Some(y) = suggestions {
+            self.rendered_candidates = self.candidates();
+            let candidates = &self.rendered_candidates;
+            let count = (area.bottom().saturating_sub(y) as usize)
+                .min(render::MAX_COMPLETION_ITEMS)
+                .min(candidates.len());
+            self.suggestion = self.suggestion.min(candidates.len().saturating_sub(1));
+            self.offset = self
+                .offset
+                .min(self.suggestion)
+                .max(self.suggestion.saturating_sub(count.saturating_sub(1)))
+                .min(candidates.len().saturating_sub(count));
+            let start = self.offset;
+            let panel = Rect::new(area.x, y, area.width, count as u16);
+            overlay::clear(frame, panel);
+            areas.insert(0, (panel, super::wizard::CANDIDATE_PANEL));
+            for (row, (index, candidate)) in candidates
                 .iter()
                 .enumerate()
                 .skip(start)
                 .take(count)
                 .enumerate()
             {
-                let rect = Rect::new(area.x, y + row as u16, area.width, 1);
-                frame.render_widget(
-                    Paragraph::new(format!(
-                        "{} {name}",
-                        if index == self.suggestion { "›" } else { " " }
-                    )),
-                    rect,
-                );
-                areas.push((rect, 100 + index));
-            }
-        }
-        if self.picker
-            && let Some(selector) = selector
-        {
-            let count = area.bottom().saturating_sub(selector.bottom()) as usize;
-            let start = self.suggestion.saturating_sub(count.saturating_sub(1));
-            let (hosts, _) = discovery::snapshot();
-            for (row, (index, name)) in self
-                .choices()
-                .iter()
-                .enumerate()
-                .skip(start)
-                .take(count)
-                .enumerate()
-            {
-                let rect = Rect::new(area.x, selector.bottom() + row as u16, area.width, 1);
-                let detail = index
-                    .checked_sub(1)
-                    .and_then(|index| hosts.get(index))
-                    .map(|host| format!("  {}@{}  {}", host.user, host.hostname, host.port))
-                    .unwrap_or_default();
-                let style = if index == self.suggestion {
-                    Style::default().fg(THEME.on_accent).bg(THEME.dialog_accent)
-                } else {
-                    Style::default()
-                        .fg(THEME.overlay_foreground)
-                        .bg(THEME.overlay_background)
-                };
-                frame.render_widget(
-                    Paragraph::new(crate::tui::render::safe_output(&format!("{name}{detail}")))
-                        .style(style),
-                    rect,
+                let rect = render::completion_row(
+                    frame,
+                    Rect::new(area.x, y + row as u16, area.width, 1),
+                    candidate.label(),
+                    &candidate.description(),
+                    index == self.suggestion,
                 );
                 areas.insert(0, (rect, 100 + index));
             }
@@ -358,10 +382,96 @@ impl Config {
     }
 }
 
+#[derive(Clone, Debug)]
+enum Candidate {
+    Host(discovery::Host),
+    Distribution(String),
+    Manual,
+}
+
+impl Candidate {
+    fn label(&self) -> &str {
+        match self {
+            Self::Host(host) => &host.name,
+            Self::Distribution(name) => name,
+            Self::Manual => "手动填写新服务器",
+        }
+    }
+
+    fn description(&self) -> String {
+        match self {
+            Self::Host(host) => {
+                let address = if host.hostname.is_empty() {
+                    &host.name
+                } else {
+                    &host.hostname
+                };
+                let user = if host.user.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}@", host.user)
+                };
+                let port = if host.port.is_empty() {
+                    String::new()
+                } else {
+                    format!(":{}", host.port)
+                };
+                format!("{user}{address}{port}")
+            }
+            Self::Distribution(_) => "WSL".into(),
+            Self::Manual => "填写主机、用户名和端口".into(),
+        }
+    }
+}
+
+fn host_candidates(hosts: Vec<discovery::Host>, query: &str) -> Vec<Candidate> {
+    let query = query.trim().to_lowercase();
+    hosts
+        .into_iter()
+        .filter(|host| host.name.to_lowercase().contains(&query))
+        .map(Candidate::Host)
+        .chain(std::iter::once(Candidate::Manual))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
+
+    #[test]
+    fn alias_search_filters_saved_hosts_and_keeps_manual_entry_available() {
+        let hosts = vec![
+            discovery::Host {
+                name: "DevBox".into(),
+                hostname: "dev.example".into(),
+                user: "alice".into(),
+                port: "2222".into(),
+                ..Default::default()
+            },
+            discovery::Host {
+                name: "production".into(),
+                ..Default::default()
+            },
+        ];
+        let candidates = host_candidates(hosts.clone(), " dev ");
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].label(), "DevBox");
+        assert_eq!(candidates[0].description(), "alice@dev.example:2222");
+        assert!(matches!(candidates[1], Candidate::Manual));
+        assert!(matches!(
+            host_candidates(hosts, "missing").as_slice(),
+            [Candidate::Manual]
+        ));
+        let mut config = Config::new(Spec::parse("/ssh").unwrap());
+        config.handle(&KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        config.paste("ev");
+        assert_eq!(config.alias.text, "dev");
+        assert!(config.picker);
+        config.handle(&KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(config.focus, 0);
+        assert!(!config.picker);
+    }
 
     #[test]
     fn selecting_a_config_host_fills_fields_and_retains_its_ssh_alias() {
@@ -421,7 +531,7 @@ mod tests {
             port: "2222".into(),
             identity: "old-key".into(),
         });
-        config.suggestion = 0;
+        config.suggestion = config.candidates().len() - 1;
         config.choose();
         assert!(config.fields[..4].iter().all(|field| field.text.is_empty()));
         assert_eq!(config.fields[4].text, "/project");

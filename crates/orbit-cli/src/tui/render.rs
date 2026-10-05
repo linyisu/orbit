@@ -50,7 +50,7 @@ const TOOL_FAILED: Color = THEME.tool_failed;
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
 const BORDER: Color = THEME.border;
-const MAX_COMMAND_MENU_ITEMS: usize = 8;
+pub(super) const MAX_COMPLETION_ITEMS: usize = 8;
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let hover = state.pending_list_hover.take();
@@ -167,7 +167,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     let panel_height = if let Some(picker) = &state.restore_picker {
         picker.height()
     } else if !menu.is_empty() {
-        menu.len().min(MAX_COMMAND_MENU_ITEMS) as u16
+        menu.len().min(MAX_COMPLETION_ITEMS) as u16
     } else {
         0
     };
@@ -1653,32 +1653,47 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .enumerate()
     {
         let selected = index == state.menu_index.min(menu.len() - 1);
-        let style = if selected {
+        let row = completion_row(
+            frame,
+            Rect::new(area.x, area.y + row as u16, area.width, 1),
+            command.display.as_deref().unwrap_or(&command.name),
+            &command.description,
+            selected,
+        );
+        state.menu_rows.push((row, index));
+    }
+}
+
+pub(super) fn completion_row(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    label: &str,
+    description: &str,
+    selected: bool,
+) -> Rect {
+    let text = format!(
+        "{:<width$} {}",
+        safe_output(label),
+        safe_output(description),
+        width = super::commands::COMMAND_NAME_WIDTH,
+    );
+    let text = padded_label(text.trim_end(), area.width as usize, 3);
+    let row = Rect {
+        width: text.width().min(area.width as usize) as u16,
+        ..area
+    };
+    frame.render_widget(
+        Paragraph::new(text).style(if selected {
             Style::default()
-                .fg(crate::tui::theme::THEME.on_accent)
+                .fg(THEME.on_accent)
                 .bg(ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            background.fg(MUTED)
-        };
-        let text = format!(
-            "{:<width$} {}",
-            safe_output(command.display.as_deref().unwrap_or(&command.name)),
-            safe_output(&command.description),
-            width = super::commands::COMMAND_NAME_WIDTH,
-        );
-
-        let text = padded_label(text.trim_end(), area.width as usize, 3);
-        let width =
-            unicode_width::UnicodeWidthStr::width(text.as_str()).min(area.width as usize) as u16;
-        state
-            .menu_rows
-            .push((Rect::new(area.x, area.y + row as u16, width, 1), index));
-        frame.render_widget(
-            Paragraph::new(text).style(style),
-            Rect::new(area.x, area.y + row as u16, width, 1),
-        );
-    }
+            Style::default().fg(MUTED)
+        }),
+        row,
+    );
+    row
 }
 
 #[cfg(test)]

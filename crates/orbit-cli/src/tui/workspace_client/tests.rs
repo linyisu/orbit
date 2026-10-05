@@ -260,10 +260,16 @@ fn remote_modals_own_the_cursor_and_preserve_the_composer_draft() {
         .draw(|frame| crate::tui::render::draw(frame, &mut state))
         .unwrap();
     assert!(state.ime_cursor.is_none());
-    assert!(!terminal.backend().cursor_visible());
+    assert!(terminal.backend().cursor_visible());
+    assert!(
+        !state
+            .input_area
+            .contains(terminal.backend().cursor_position())
+    );
 
     let wizard = state.workspace_wizard.as_mut().unwrap();
     wizard.form.as_mut().unwrap().focus = 0;
+    wizard.form.as_mut().unwrap().picker = false;
     terminal
         .draw(|frame| crate::tui::render::draw(frame, &mut state))
         .unwrap();

@@ -30,9 +30,10 @@ pub(super) fn field(
     label: &str,
     input: &InputState,
     focused: bool,
+    hovered: bool,
     placeholder: &str,
 ) {
-    let inner = field_label(frame, area, label, focused);
+    let inner = field_label(frame, area, label, focused || hovered);
     frame.render_widget(
         Paragraph::new(form::input_line(
             input,
@@ -51,16 +52,6 @@ pub(super) fn field(
             inner.y,
         ));
     }
-}
-
-pub(super) fn select(frame: &mut Frame<'_>, area: Rect, label: &str, value: &str, focused: bool) {
-    let inner = field_label(frame, area, label, focused);
-    button(
-        frame,
-        inner,
-        &render::safe_output(&format!("{value}  ▾")),
-        focused,
-    );
 }
 
 fn field_label(frame: &mut Frame<'_>, area: Rect, label: &str, focused: bool) -> Rect {
