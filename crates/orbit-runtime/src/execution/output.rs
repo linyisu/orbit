@@ -50,7 +50,7 @@ impl RetainedOutput {
             (bytes.len() as u64).min(MAX_RETAINED_OUTPUT_PER_STREAM.saturating_sub(self.written));
         let used = &self.lease.budget.used;
         let prior = used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |prior| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |prior| {
                 Some(prior + requested.min(MAX_RETAINED_OUTPUT_PER_SESSION.saturating_sub(prior)))
             })
             .expect("output budget update always succeeds");
