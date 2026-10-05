@@ -1,4 +1,6 @@
 //! Frame orchestration. Component renderers live beside this facade.
+mod activity;
+pub(super) use thinking::thinking_header;
 mod links;
 mod text;
 mod thinking;
@@ -318,15 +320,48 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
     footer_layout(state, width).line
 }
 
-const PROGRESS_FRAMES: &[&str] = &[
-    "      ",
-    "█     ",
-    "██    ",
-    "███   ",
-    "████  ",
-    "█████ ",
-    "██████",
-];
+fn activity_spans(state: &UiState, width: usize) -> Vec<Span<'static>> {
+    let label: String = if state.status == RunStatus::Cancelling {
+        "正在取消".into()
+    } else if state.approval.is_some() {
+        "等待审批".into()
+    } else {
+        state.activity.label().unwrap_or_default().into()
+    };
+    let hint = if width < 26 {
+        ""
+    } else if label.is_empty() {
+        "Ctrl+C 取消"
+    } else {
+        " · Ctrl+C 取消"
+    };
+    let label = fit_label(
+        &safe_output(&label),
+        width.saturating_sub(hint.width()),
+        false,
+    );
+    let length = label.chars().count().max(1);
+    let animate = state.approval.is_none();
+    let mut spans: Vec<_> = label
+        .chars()
+        .enumerate()
+        .map(|(index, character)| {
+            let color = if animate {
+                super::theme::activity_color(THEME.secondary, state.active_elapsed(), index, length)
+            } else {
+                super::theme::THEME.secondary
+            };
+            Span::styled(character.to_string(), Style::default().fg(color))
+        })
+        .collect();
+    if !hint.is_empty() {
+        spans.push(Span::styled(
+            hint,
+            Style::default().fg(super::theme::THEME.muted_text),
+        ));
+    }
+    spans
+}
 
 fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let available = width.saturating_sub(4);
@@ -368,38 +403,10 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         )
     };
 
-    let (left_spans, left_width) = if state.status == RunStatus::Running {
-        let ms = state.active_elapsed().as_millis();
-        let bar = PROGRESS_FRAMES[(ms / 260) as usize % PROGRESS_FRAMES.len()];
-
-        if available >= 24 {
-            (
-                vec![
-                    Span::styled(
-                        bar.to_string(),
-                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        "  ·  ",
-                        Style::default().fg(crate::tui::theme::THEME.border_muted),
-                    ),
-                    Span::styled(
-                        "Ctrl+C",
-                        Style::default().fg(crate::tui::theme::THEME.muted_text),
-                    ),
-                    Span::styled(" 取消", Style::default().fg(crate::tui::theme::THEME.faint)),
-                ],
-                22,
-            )
-        } else {
-            (
-                vec![Span::styled(
-                    bar.to_string(),
-                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                )],
-                6,
-            )
-        }
+    let (left_spans, left_width) = if state.running() {
+        let spans = activity_spans(state, path_width);
+        let width = spans.iter().map(Span::width).sum();
+        (spans, width)
     } else {
         let w = path.width();
         (
@@ -1078,6 +1085,7 @@ pub(super) fn draw_transcript_in(
     state
         .transcript_layout
         .draw(frame, state.selection.viewport, offset);
+    activity::draw(frame, state, offset);
     if let Some(focus) = &state.footnote_focus {
         state.transcript_layout.paint_footnote_focus(
             frame,
@@ -1369,24 +1377,19 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
         return;
     }
 
-    let elapsed = state.active_elapsed();
-    let text = match state.status {
-        RunStatus::Idle | RunStatus::Completed | RunStatus::Cancelled => String::new(),
-        RunStatus::Running if state.approval.is_some() => "  等待审批".into(),
-        RunStatus::Running => {
-            let ms = elapsed.as_millis();
-            let bar = PROGRESS_FRAMES[(ms / 260) as usize % PROGRESS_FRAMES.len()];
-            format!("  {}  ·  Ctrl+C 取消", bar)
-        }
-
-        RunStatus::Cancelling => format!("  {} 正在取消…", icons::LOADING),
-        RunStatus::Failed => format!("  {} 操作未完成 · 请查看上方错误", icons::CLOSE),
+    let spans = if state.running() {
+        let mut spans = vec![Span::raw("  ")];
+        spans.extend(activity_spans(state, area.width.saturating_sub(4) as usize));
+        spans
+    } else if state.status == RunStatus::Failed {
+        vec![Span::styled(
+            format!("  {} 操作未完成 · 请查看上方错误", icons::CLOSE),
+            Style::default().fg(ACCENT),
+        )]
+    } else {
+        Vec::new()
     };
-
-    frame.render_widget(
-        Paragraph::new(Span::styled(text, Style::default().fg(ACCENT))),
-        area,
-    );
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_composer(

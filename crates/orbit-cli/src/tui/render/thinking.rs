@@ -46,6 +46,10 @@ pub(in crate::tui) fn thinking_card_at_width(
         }
     }
 
+    if !row.finished {
+        lines.push(thinking_header());
+    }
+
     let text = row.content.trim_end();
     lines.extend(
         markdown::document(text, width.saturating_sub(2))
@@ -56,6 +60,16 @@ pub(in crate::tui) fn thinking_card_at_width(
         lines.push(LinkedLine::plain(Line::from("")));
     }
     lines
+}
+
+pub(in crate::tui) fn thinking_header() -> LinkedLine {
+    LinkedLine {
+        chrome: true,
+        ..LinkedLine::plain(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("思考", Style::default().fg(THINKING_MUTED)),
+        ]))
+    }
 }
 
 #[cfg(test)]

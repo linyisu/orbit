@@ -1,3 +1,5 @@
+mod activity;
+
 use std::time::Instant;
 
 use orbit_agent::events::AgentEvent;
@@ -191,6 +193,7 @@ pub struct UiState {
     pub input: InputState,
     pub transcript: Vec<TranscriptItem>,
     pub status: RunStatus,
+    pub activity: activity::Activity,
     pub turn: usize,
     pub tool_calls: usize,
     pub scroll: usize,
@@ -382,6 +385,7 @@ impl UiState {
             input: InputState::default(),
             transcript: Vec::new(),
             status: RunStatus::Idle,
+            activity: activity::Activity::default(),
             turn: 0,
             tool_calls: 0,
             scroll: 0,
@@ -406,6 +410,7 @@ impl UiState {
 
     pub fn begin_run(&mut self) {
         self.status = RunStatus::Running;
+        self.activity = activity::Activity::default();
         self.show_help = false;
         self.info_dialog = None;
         self.elapsed = std::time::Duration::ZERO;
@@ -425,6 +430,7 @@ impl UiState {
     }
 
     pub fn apply(&mut self, event: AgentEvent) {
+        self.activity.apply(&event);
         match event {
             AgentEvent::TurnStarted { turn } => {
                 if self.background_waiting {
@@ -471,9 +477,6 @@ impl UiState {
                 self.pending_compaction_archive = record.archive;
             }
             AgentEvent::VerificationRecorded { .. } => {}
-            // Compaction is an implementation detail while it runs. Showing a
-            // second transcript row for it made every automatic checkpoint
-            // look like a noisy command result.
             AgentEvent::CompactionStarted => {}
 
             AgentEvent::ContextCompacted {

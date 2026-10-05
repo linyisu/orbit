@@ -268,6 +268,7 @@ fn compaction_uses_one_quiet_maintenance_row() {
     state.apply(AgentEvent::CompactionStarted);
 
     assert!(state.transcript.is_empty());
+    assert_eq!(state.activity.label(), Some("正在压缩上下文"));
 
     state.apply(AgentEvent::ContextCompacted {
         strategy: Default::default(),
@@ -361,4 +362,55 @@ fn context_indicator_tracks_each_model_request_during_a_run() {
     });
 
     assert_eq!(state.context_used_tokens, 13_000);
+}
+
+#[test]
+fn activity_tracks_compaction_and_concurrent_tools_without_background_completion_override() {
+    let mut state = UiState::new("mock");
+    state.submit("work".into());
+    assert_eq!(state.activity.label(), Some("等待模型响应"));
+    state.apply(AgentEvent::CompactionStarted);
+    assert_eq!(state.activity.label(), Some("正在压缩上下文"));
+    state.apply(AgentEvent::CompactionFailed {
+        kind: None,
+        error: "timeout".into(),
+    });
+    assert_eq!(state.activity.label(), Some("等待模型响应"));
+    state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
+        "reason".into(),
+    )));
+    assert_eq!(state.activity.label(), None);
+    let mut read = call("read");
+    read.function.name = "read_file".into();
+    let mut edit = call("edit");
+    edit.function.name = "edit_file".into();
+    state.apply(AgentEvent::ToolStarted { call: read.clone() });
+    state.apply(AgentEvent::ToolStarted { call: edit.clone() });
+    assert_eq!(state.activity.label(), None);
+    state.apply(AgentEvent::ToolFinished {
+        call: edit,
+        content: String::new(),
+        changes: vec![],
+    });
+    assert_eq!(state.activity.label(), None);
+    state.apply(AgentEvent::ToolBackgrounded {
+        call: read.clone(),
+        job_id: "job".into(),
+        content: String::new(),
+    });
+    state.apply(AgentEvent::WaitingForTasks {
+        job_ids: vec!["job".into()],
+    });
+    assert_eq!(state.activity.label(), None);
+    state.apply(AgentEvent::TurnStarted { turn: 2 });
+    state.apply(AgentEvent::Model(StreamEvent::TextDelta("answer".into())));
+    state.apply(AgentEvent::ToolFinished {
+        call: read,
+        content: String::new(),
+        changes: vec![],
+    });
+    assert_eq!(state.activity.label(), None);
+    state.apply(AgentEvent::Cancelled);
+    state.begin_run();
+    assert_eq!(state.activity.label(), Some("等待模型响应"));
 }

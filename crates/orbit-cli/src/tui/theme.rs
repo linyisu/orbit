@@ -238,6 +238,27 @@ pub(super) fn selection_style(style: Style) -> Style {
         .remove_modifier(Modifier::REVERSED | Modifier::DIM)
 }
 
+const ACTIVITY_SWEEP_SECONDS: f32 = 2.4;
+
+pub(super) fn activity_color(
+    base: Color,
+    elapsed: std::time::Duration,
+    index: usize,
+    length: usize,
+) -> Color {
+    let phase = elapsed.as_secs_f32() / ACTIVITY_SWEEP_SECONDS;
+    let position = index as f32 / length.max(1) as f32;
+    let glow = ((phase - position) * std::f32::consts::TAU)
+        .cos()
+        .max(0.0)
+        .powi(3);
+    let low = color_rgb(base).unwrap_or((170, 175, 185));
+    let brighten = |channel: u8| channel.saturating_add(((255 - channel) as f32 * 0.45) as u8);
+    let high = (brighten(low.0), brighten(low.1), brighten(low.2));
+    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * glow).round() as u8;
+    Color::Rgb(mix(low.0, high.0), mix(low.1, high.1), mix(low.2, high.2))
+}
+
 pub(super) fn color_rgb(color: Color) -> Option<(u8, u8, u8)> {
     let index = match color {
         Color::Reset => return None,

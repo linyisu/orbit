@@ -619,6 +619,10 @@ impl Entry {
 
         self.rows.truncate(self.stable_rows);
         self.height = self.rows.last().map_or(0, |row| row.start + row.height);
+        if thinking && self.rows.is_empty() {
+            self.push_linked(render::thinking_header(), width);
+            self.stable_rows = self.rows.len();
+        }
         let mut code = self.code.clone();
         let mut inline = self.inline.clone();
         let mut index = self.logical_index;
@@ -1331,6 +1335,14 @@ impl TranscriptLayout {
                         || matches!(items.get(index), Some(TranscriptItem::Thinking(row)) if row.finished)))
                 .then_some(index)
             })
+    }
+
+    pub(super) fn visible_items(&self, offset: usize, height: usize) -> Range<usize> {
+        let first = self.entries.partition_point(|entry| entry.end <= offset);
+        let end = self.entries.partition_point(|entry| {
+            entry.end.saturating_sub(entry.height) < offset.saturating_add(height)
+        });
+        first..end.max(first)
     }
 
     pub(super) fn item_offset(&self, index: usize) -> Option<usize> {

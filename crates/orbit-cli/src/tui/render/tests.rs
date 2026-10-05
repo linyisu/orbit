@@ -2472,3 +2472,99 @@ fn resize_preserves_the_current_source_anchor() {
     assert_eq!(state.max_scroll - state.scroll, expected);
     assert!(!state.follow_bottom);
 }
+
+#[test]
+fn activity_stays_readable_and_in_place_while_colors_animate() {
+    let mut state = UiState::new("mock");
+    state.submit("work".into());
+    state.started_at = None;
+    let first = footer(&state, 100);
+    assert!(first.to_string().contains("等待模型响应"));
+    state.elapsed = std::time::Duration::from_millis(800);
+    let second = footer(&state, 100);
+    assert_eq!(first.to_string(), second.to_string());
+    assert_ne!(first.spans, second.spans);
+    state.apply(orbit_agent::events::AgentEvent::CompactionStarted);
+    assert!(
+        render(&mut state, 100, 24)
+            .replace(' ', "")
+            .contains("正在压缩上下文")
+    );
+    for width in [12, 24, 40, 80] {
+        assert!(footer(&state, width).width() <= width);
+    }
+    state.cancel();
+    assert!(footer(&state, 100).to_string().contains("正在取消"));
+    state.apply(orbit_agent::events::AgentEvent::Cancelled);
+    assert!(!footer(&state, 100).to_string().contains("正在"));
+}
+
+#[test]
+fn live_tool_and_thinking_labels_animate_without_changing_body_or_layout() {
+    use orbit_agent::events::AgentEvent;
+    use orbit_model::types::{FunctionCall, StreamEvent, ToolCall};
+
+    let mut state = UiState::new("mock");
+    state.submit("work".into());
+    state.started_at = None;
+    state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
+        "stable reasoning".into(),
+    )));
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    let first = terminal.backend().buffer().clone();
+    state.elapsed = std::time::Duration::from_millis(800);
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    let second = terminal.backend().buffer();
+    let mut changed = 0;
+    for (a, b) in first.content.iter().zip(&second.content) {
+        assert_eq!(a.symbol(), b.symbol());
+        if a.fg != b.fg {
+            assert!(matches!(a.symbol(), "思" | "考"));
+            changed += 1;
+        }
+    }
+    assert!(changed > 0);
+
+    let call = ToolCall {
+        id: "command".into(),
+        kind: "function".into(),
+        metadata: None,
+        function: FunctionCall {
+            name: "run_command".into(),
+            arguments: r#"{"command":"echo stable"}"#.into(),
+        },
+    };
+    state.apply(AgentEvent::ToolStarted { call: call.clone() });
+    state.started_at = None;
+    state.elapsed = std::time::Duration::ZERO;
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    let first = terminal.backend().buffer().clone();
+    state.elapsed = std::time::Duration::from_millis(800);
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    let second = terminal.backend().buffer();
+    let mut changed = 0;
+    for (a, b) in first.content.iter().zip(&second.content) {
+        assert_eq!(a.symbol(), b.symbol());
+        if a.fg != b.fg {
+            assert!("run_command".contains(a.symbol()));
+            changed += 1;
+        }
+    }
+    assert!(changed > 0);
+    assert!(!footer(&state, 100).to_string().contains("执行命令"));
+    state.apply(AgentEvent::ToolFinished {
+        call,
+        content: "stable output".into(),
+        changes: vec![],
+    });
+    state.apply(AgentEvent::Completed {
+        turns: 1,
+        tool_calls: 1,
+    });
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    let first = terminal.backend().buffer().clone();
+    state.elapsed += std::time::Duration::from_millis(800);
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    assert_eq!(&first, terminal.backend().buffer());
+}

@@ -554,7 +554,11 @@ fn thinking_code_keeps_both_rails_when_wrapped() {
         None,
         22,
     );
-    let row = &layout.entries[0].rows[1];
+    let row = layout.entries[0]
+        .rows
+        .iter()
+        .find(|row| row.height > 1)
+        .unwrap();
     let gutter = row.gutter.as_ref().unwrap();
 
     assert_eq!(gutter.first.to_string(), "  ┊ │ ");
@@ -563,7 +567,7 @@ fn thinking_code_keeps_both_rails_when_wrapped() {
 
     let mut terminal = Terminal::new(TestBackend::new(22, 5)).unwrap();
     terminal
-        .draw(|frame| layout.draw(frame, frame.area(), 0))
+        .draw(|frame| layout.draw(frame, frame.area(), 1))
         .unwrap();
 
     for y in 1..5 {
