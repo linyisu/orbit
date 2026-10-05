@@ -1,6 +1,6 @@
 # orbit-model
 
-[项目总览](../../README.md) · [开发与整理说明](../../docs/development.md)
+[项目总览](../../README.md)
 
 `orbit-model` 是 Orbit 的多供应商模型接入与流式协议抽象库。它为上层 Agent 和 CLI 提供统一的消息格式、流式事件管道、思考推理控制以及工具调用协议适配，隔离各服务商底层 API 的格式差异。
 

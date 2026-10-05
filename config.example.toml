@@ -9,6 +9,11 @@ default_provider = "deepseek"
 # [tui]
 # cursor_trail = false
 
+# 网页、搜索与网络图片自动沿用 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY，遵守 NO_PROXY。
+# 通常无需额外配置。仅在需要覆盖环境代理时启用下方配置（端口按实际设置）。
+# [web]
+# proxy = "http://127.0.0.1:7897"
+
 # 子 Agent 独立运行，只提供探索和审查两个只读角色。
 [subagents]
 max_concurrent = 8 # 同一父会话的并行上限，可设为 1..128

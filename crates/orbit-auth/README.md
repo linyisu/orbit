@@ -1,6 +1,6 @@
 # orbit-auth
 
-[项目总览](../../README.md) · [开发与整理说明](../../docs/development.md)
+[项目总览](../../README.md)
 
 `orbit-auth` 是 Orbit 的独立认证与凭据管理库，支持 API Key 以及主流 AI 服务（Google Cloud Code Assist、Google Antigravity、ChatGPT Codex、Anthropic）的浏览器 OAuth 2.0 PKCE 授权登录、令牌自动刷新与本地退出。所有凭据由主机显式管理，不读取其他第三方客户端的未授权缓存。
 

@@ -1,6 +1,6 @@
 # orbit-runtime
 
-[项目总览](../../README.md) · [开发与整理说明](../../docs/development.md)
+[项目总览](../../README.md)
 
 `orbit-runtime` 是 Orbit 的底层执行与安全子系统，负责工作区安全抽象、细粒度权限控制、文件系统边界隔离、沙箱容器化执行以及工作区状态验证。
 
