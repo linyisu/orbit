@@ -1,4 +1,6 @@
 //! Tool titles, result bodies and their shared frame.
+use std::ops::Range;
+
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -179,11 +181,20 @@ pub(in crate::tui) fn tool_card_with_links(
     expanded: bool,
     width: u16,
 ) -> Vec<LinkedLine> {
+    tool_card_layout(row, expanded, width).lines
+}
+
+pub(in crate::tui) struct ToolCard {
+    pub lines: Vec<LinkedLine>,
+    pub header: Range<usize>,
+}
+
+pub(in crate::tui) fn tool_card_layout(row: &ToolRow, expanded: bool, width: u16) -> ToolCard {
     let width = if width == u16::MAX { 120 } else { width };
 
     if !expanded || width < 10 {
         let header = tool_title_with_links(row, false, width.saturating_sub(4));
-        return if width < 10 {
+        let lines: Vec<_> = if width < 10 {
             tool_title_with_links(row, false, width)
         } else {
             header
@@ -191,15 +202,17 @@ pub(in crate::tui) fn tool_card_with_links(
                 .map(|line| line.framed(vec![Span::raw("  ")], vec![]))
                 .collect()
         };
+        return ToolCard {
+            header: 0..lines.len(),
+            lines,
+        };
     }
 
     let inner_width = width - 4;
     let mut lines = vec![tool_border_line(width, ('╭', '╮'))];
-    lines.extend(
-        tool_title_with_links(row, true, inner_width)
-            .into_iter()
-            .map(|line| tool_frame_line(line, width)),
-    );
+    let title = tool_title_with_links(row, true, inner_width);
+    let header = lines.len()..lines.len() + title.len();
+    lines.extend(title.into_iter().map(|line| tool_frame_line(line, width)));
     lines.push(tool_frame_line(LinkedLine::chrome(Line::default()), width));
     lines.extend(
         tool_body_with_links(row, inner_width)
@@ -207,7 +220,7 @@ pub(in crate::tui) fn tool_card_with_links(
             .map(|line| tool_frame_line(line, width)),
     );
     lines.push(tool_border_line(width, ('╰', '╯')));
-    lines
+    ToolCard { lines, header }
 }
 
 pub(in crate::tui) fn tool_title_with_links(
@@ -441,11 +454,6 @@ pub(in crate::tui) fn default_tool_summary(arguments: &str) -> String {
     }
 
     summary
-}
-
-pub(super) fn tool_header_line_count(row: &ToolRow, expanded: bool, width: u16) -> usize {
-    let _ = (row, width);
-    if !expanded { 1 } else { 2 }
 }
 
 pub(in crate::tui) fn is_shell_preamble(line: &str) -> bool {

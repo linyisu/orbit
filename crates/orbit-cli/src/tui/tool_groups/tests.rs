@@ -659,7 +659,10 @@ fn framed_group_heading_keeps_its_borders_on_hover_and_closes_the_whole_group() 
     let area = state.selection.viewport;
     let offset = state.max_scroll.saturating_sub(state.scroll);
     assert_eq!(
-        state.transcript_layout.group_offset(0),
+        state
+            .transcript_layout
+            .tool_header_range(0, true)
+            .map(|range| range.start),
         Some(offset + usize::from(heading.1 - area.y))
     );
     state.transcript_pointer = Some(heading);

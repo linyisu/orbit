@@ -400,6 +400,7 @@ struct Entry {
     disclosures: Vec<usize>,
     tool_group: Option<Range<usize>>,
     group_header: Option<usize>,
+    tool_header: Option<Range<usize>>,
     height: usize,
     end: usize,
     spacing: bool,
@@ -1220,7 +1221,7 @@ impl TranscriptLayout {
                     }
 
                     if !grouped || group_open {
-                        let (lines, header, body) = if grouped {
+                        let (lines, header, body, title) = if grouped {
                             let section = super::tool_groups::section(
                                 row,
                                 is_expanded,
@@ -1228,13 +1229,15 @@ impl TranscriptLayout {
                                 item_index == group.start,
                                 item_index + 1 == group.end,
                             );
-                            (section.lines, Some(section.header), section.body)
-                        } else {
                             (
-                                render::tool_card_with_links(row, is_expanded, width),
-                                None,
-                                0..0,
+                                section.lines,
+                                Some(section.header),
+                                section.body,
+                                section.header..section.header + 1,
                             )
+                        } else {
+                            let card = render::tool_card_layout(row, is_expanded, width);
+                            (card.lines, None, 0..0, card.header)
                         };
 
                         for (index, line) in lines.into_iter().enumerate() {
@@ -1245,7 +1248,11 @@ impl TranscriptLayout {
                                 entry.disclosures.push(entry.rows.len());
                             }
 
+                            let start = entry.height;
                             entry.push_linked(line, width);
+                            if title.contains(&index) {
+                                entry.tool_header.get_or_insert(start..start).end = entry.height;
+                            }
                         }
                     }
                 }
@@ -1334,14 +1341,20 @@ impl TranscriptLayout {
         Some(entry.end - entry.height + row.start)
     }
 
-    pub(super) fn group_range(&self, index: usize) -> Option<Range<usize>> {
-        self.entries.get(index)?.tool_group.clone()
+    pub(super) fn tool_header_range(&self, index: usize, group: bool) -> Option<Range<usize>> {
+        let entry = self.entries.get(index)?;
+        let header = if group {
+            let row = entry.rows.get(entry.group_header?)?;
+            row.start..row.start + row.height
+        } else {
+            entry.tool_header.clone()?
+        };
+        let start = entry.end - entry.height;
+        Some(start + header.start..start + header.end)
     }
 
-    pub(super) fn group_offset(&self, index: usize) -> Option<usize> {
-        let entry = self.entries.get(index)?;
-        let row = entry.rows.get(entry.group_header?)?;
-        Some(entry.end - entry.height + row.start)
+    pub(super) fn group_range(&self, index: usize) -> Option<Range<usize>> {
+        self.entries.get(index)?.tool_group.clone()
     }
 
     pub(super) fn visible_group(&self, offset: usize, height: usize) -> Option<usize> {

@@ -973,6 +973,138 @@ fn hovering_expanded_thinking_content_preserves_its_syntax_style() {
 }
 
 #[test]
+fn hovering_wrapped_tool_titles_highlights_all_title_rows_without_changing_bodies() {
+    use super::super::app::ToolRow;
+
+    for (name, arguments) in [
+        (
+            "run_command",
+            serde_json::json!({"command": format!("cat <<'PYEOF' > /tmp/demo.py\n{}\nPYEOF", "中文 e\u{301} print('test') ".repeat(20))}),
+        ),
+        (
+            "read_file",
+            serde_json::json!({"path": format!("crates/{}/source.rs", "unicode-中文/".repeat(25))}),
+        ),
+        (
+            "search_text",
+            serde_json::json!({"query": "长搜索词 e\u{301} ".repeat(25)}),
+        ),
+    ] {
+        for width in [28, 70] {
+            let mut state = UiState::new("model");
+            state.transcript.push(TranscriptItem::Tool(ToolRow {
+                id: "wrapped-title".into(),
+                name: name.into(),
+                arguments: arguments.to_string(),
+                status: ToolStatus::Finished,
+                output: "RESULT_MARKER\nlast output".into(),
+            }));
+            state.expanded.insert(0);
+            state.follow_bottom = false;
+            state.scroll = usize::MAX;
+            let area = Rect::new(2, 1, width, 50);
+            let mut terminal = Terminal::new(TestBackend::new(width + 4, 52)).unwrap();
+            let mut painted = None;
+            terminal
+                .draw(|frame| {
+                    draw_transcript_in(frame, &mut state, area, false);
+                    painted = Some(frame.buffer_mut().clone());
+                })
+                .unwrap();
+            let before = painted.unwrap();
+            let text = |y| {
+                (area.x..area.right())
+                    .map(|x| before[(x, y)].symbol())
+                    .collect::<String>()
+            };
+            let start = (area.y..area.bottom())
+                .find(|&y| text(y).contains(name))
+                .unwrap();
+            let end = (start + 1..area.bottom())
+                .find(|&y| {
+                    text(y)
+                        .trim_matches(|c: char| c == '│' || c.is_whitespace())
+                        .is_empty()
+                })
+                .unwrap();
+            assert!(end - start > 2, "{name} at {width}");
+
+            let title_start = usize::from(start - area.y);
+            let title_end = usize::from(end - area.y);
+            for scrolled in [false, true] {
+                let viewport = if scrolled {
+                    Rect { height: 6, ..area }
+                } else {
+                    area
+                };
+                state.transcript_pointer = None;
+                state.scroll = usize::MAX;
+                terminal
+                    .draw(|frame| draw_transcript_in(frame, &mut state, viewport, false))
+                    .unwrap();
+                if scrolled {
+                    state.scroll = state.max_scroll.saturating_sub(2);
+                    terminal
+                        .draw(|frame| draw_transcript_in(frame, &mut state, viewport, false))
+                        .unwrap();
+                    assert_eq!(state.selection.offset, 2);
+                }
+                let offset = state.selection.offset;
+                let start = viewport.y + title_start.saturating_sub(offset) as u16;
+                let end =
+                    (viewport.y + title_end.saturating_sub(offset) as u16).min(viewport.bottom());
+                assert!(start < end);
+                // Terminal diffs skip cells covered by wide glyphs; inspect the frame.
+                let mut painted = None;
+                terminal
+                    .draw(|frame| {
+                        draw_transcript_in(frame, &mut state, viewport, false);
+                        painted = Some(frame.buffer_mut().clone());
+                    })
+                    .unwrap();
+                let before = painted.unwrap();
+                for hover_y in [start, end - 1] {
+                    state.transcript_pointer = Some((area.x + 3, hover_y));
+                    let mut painted = None;
+                    terminal
+                        .draw(|frame| {
+                            draw_transcript_in(frame, &mut state, viewport, false);
+                            painted = Some(frame.buffer_mut().clone());
+                        })
+                        .unwrap();
+                    let after = painted.unwrap();
+                    for y in viewport.y..viewport.bottom() {
+                        for x in viewport.x..viewport.right() {
+                            let cell = &after[(x, y)];
+                            let original = &before[(x, y)];
+                            if (start..end).contains(&y)
+                                && x > viewport.x
+                                && x < viewport.right() - 1
+                            {
+                                if !original.symbol().trim().is_empty() {
+                                    assert!(
+                                        cell.modifier.contains(Modifier::BOLD),
+                                        "{name} at {width}, scrolled {scrolled}: ({x}, {y}) from {hover_y}"
+                                    );
+                                    if original.fg == TOOL_FINISHED {
+                                        assert_eq!(cell.fg, THEME.tool_hover);
+                                    }
+                                }
+                            } else {
+                                assert_eq!(
+                                    cell, original,
+                                    "{name} at {width}, scrolled {scrolled}: ({x}, {y}) from {hover_y}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn command_preview_skips_a_shell_safety_preamble() {
     let summary = tool_summary(
         &serde_json::json!({ "command": "set -e\ncargo test --workspace --all-features" })

@@ -12,10 +12,9 @@ pub(super) use text::{
     sanitize_linked_line,
 };
 pub(super) use thinking::{thinking_card_at_width, thinking_linked};
-use tool_cards::tool_header_line_count;
 pub(super) use tool_cards::{
     default_tool_summary, read_file_summary, tool_body_with_links, tool_border_line, tool_card,
-    tool_card_with_links, tool_frame_line, tool_group_title_with_links,
+    tool_card_layout, tool_card_with_links, tool_frame_line, tool_group_title_with_links,
 };
 
 #[cfg(test)]
@@ -1134,51 +1133,37 @@ pub(super) fn draw_transcript_in(
                 }
             }
 
-            Some(TranscriptItem::Tool(row)) => {
+            Some(TranscriptItem::Tool(_)) => {
                 let group_header = state
                     .transcript_layout
                     .group_at(state.selection.viewport, offset, point)
                     .is_some();
-                let start = if group_header {
-                    state.transcript_layout.group_offset(index)
-                } else {
-                    state.transcript_layout.tool_offset(index)
-                }
-                .unwrap_or(0);
                 let absolute =
                     offset + usize::from(point.1.saturating_sub(state.selection.viewport.y));
-                let relative = absolute.saturating_sub(start);
-                let expanded = state.expanded.contains(&index);
-                let header_lines =
-                    if group_header || state.transcript_layout.group_range(index).is_some() {
-                        1
-                    } else {
-                        tool_header_line_count(row, expanded, state.selection.viewport.width)
-                    };
+                if let Some(header) = state
+                    .transcript_layout
+                    .tool_header_range(index, group_header)
+                    .filter(|header| header.contains(&absolute))
+                {
+                    let visible = header.start.max(offset)
+                        ..header
+                            .end
+                            .min(offset + usize::from(state.selection.viewport.height));
+                    for row_abs in visible {
+                        let y = state.selection.viewport.y + (row_abs - offset) as u16;
+                        let decorations = state.transcript_layout.decorations(row_abs);
+                        for x in state.selection.viewport.x..state.selection.viewport.right() {
+                            if decorations.iter().any(|range| {
+                                range.contains(&usize::from(x - state.selection.viewport.x))
+                            }) {
+                                continue;
+                            }
 
-                if relative < header_lines {
-                    for rel in 0..header_lines {
-                        let row_abs = start + rel;
-                        if row_abs >= offset {
-                            let y = state.selection.viewport.y + (row_abs - offset) as u16;
-                            if y < state.selection.viewport.bottom() {
-                                let decorations = state.transcript_layout.decorations(row_abs);
-                                for x in
-                                    state.selection.viewport.x..state.selection.viewport.right()
-                                {
-                                    if decorations.iter().any(|range| {
-                                        range.contains(&usize::from(x - state.selection.viewport.x))
-                                    }) {
-                                        continue;
-                                    }
-
-                                    let cell = &mut frame.buffer_mut()[(x, y)];
-                                    if cell.symbol() != " " {
-                                        cell.set_style(cell.style().add_modifier(Modifier::BOLD));
-                                        if cell.fg == TOOL_FINISHED {
-                                            cell.set_fg(crate::tui::theme::THEME.tool_hover);
-                                        }
-                                    }
+                            let cell = &mut frame.buffer_mut()[(x, y)];
+                            if cell.symbol() != " " {
+                                cell.set_style(cell.style().add_modifier(Modifier::BOLD));
+                                if cell.fg == TOOL_FINISHED {
+                                    cell.set_fg(THEME.tool_hover);
                                 }
                             }
                         }
