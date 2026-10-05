@@ -1,9 +1,10 @@
 //! Result URL identity and diversity; no relevance ranking or domain blacklist.
-use super::{SearchResult, checked_url};
+use std::collections::{HashMap, HashSet};
+
 use html2text::Handle;
 
 use super::dom::{attribute as attr, text};
-use std::collections::{HashMap, HashSet};
+use super::{SearchResult, checked_url};
 
 const MAX_PER_HOST: usize = 3;
 
@@ -17,6 +18,7 @@ fn canonical_url(value: &str) -> Option<String> {
         })
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
+
     url.set_query(None);
     if !query.is_empty() {
         url.query_pairs_mut().extend_pairs(query);
@@ -83,6 +85,7 @@ pub(super) fn duckduckgo(body: &str, limit: usize) -> Vec<SearchResult> {
                 };
                 url = target;
             }
+
             if let Ok(url) = checked_url(url.as_str()) {
                 let title = text(node);
                 let snippet = node
@@ -90,6 +93,7 @@ pub(super) fn duckduckgo(body: &str, limit: usize) -> Vec<SearchResult> {
                     .and_then(|p| p.get_parent())
                     .map(|p| find_snippet(&p))
                     .unwrap_or_default();
+
                 if !title.is_empty() {
                     results.push(SearchResult {
                         title,
@@ -99,6 +103,7 @@ pub(super) fn duckduckgo(body: &str, limit: usize) -> Vec<SearchResult> {
                 }
             }
         }
+
         for child in node.children.borrow().iter() {
             collect(child, results);
         }
@@ -108,6 +113,7 @@ pub(super) fn duckduckgo(body: &str, limit: usize) -> Vec<SearchResult> {
         {
             return text(node);
         }
+
         node.children
             .borrow()
             .iter()
@@ -148,6 +154,7 @@ mod tests {
         assert_eq!(selected[0].url, "https://example.com/a?x=1");
         assert_eq!(selected[3].url, "https://other.org/");
     }
+
     #[test]
     fn duckduckgo_extracts_safe_target_and_description() {
         let results = duckduckgo(

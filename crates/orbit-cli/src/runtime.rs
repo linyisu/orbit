@@ -15,6 +15,7 @@ pub struct WorkspaceRuntime {
     pub workspace: Workspace,
     pub command_limits: orbit_tools::run_command::CommandLimits,
     pub mcp_statuses: Vec<orbit_tools::mcp::McpServerStatus>,
+    pub web_client: std::sync::Arc<orbit_tools::web_fetch::WebClient>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -67,8 +68,14 @@ pub async fn workspace_tools(
         ));
     }
 
-    tools.register(orbit_tools::web_fetch::WebFetch::new(web.clone())?);
-    tools.register(orbit_tools::web_fetch::WebSearch::new(web)?);
+    let web_client = std::sync::Arc::new(orbit_tools::web_fetch::WebClient::new(&web)?);
+    tools.register(orbit_tools::web_fetch::WebFetch::with_client(
+        (*web_client).clone(),
+    ));
+    tools.register(orbit_tools::web_fetch::WebSearch::with_client(
+        (*web_client).clone(),
+        web.search_providers,
+    )?);
     let mcp_approvals = approvals.clone();
 
     if let Some(approvals) = approvals {
@@ -83,6 +90,7 @@ pub async fn workspace_tools(
                 action,
             ));
         }
+
         tools.register(
             orbit_tools::git_push::GitPush::new(workspace.clone(), approvals.clone())
                 .with_limits(&command_limits),
@@ -127,6 +135,7 @@ pub async fn workspace_tools(
     .await;
 
     Ok(WorkspaceRuntime {
+        web_client,
         workspace,
         command_limits,
         tools,

@@ -7,7 +7,6 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use config::FileConfig;
 use orbit_agent::{
     agent::Agent, error::AgentError, events::AgentEvent, memory::FileActivity,
     model::ModelClientBackend,
@@ -18,6 +17,8 @@ use orbit_model::{
 };
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
+
+use self::config::FileConfig;
 
 mod account_models;
 mod auth_cli;
@@ -137,7 +138,7 @@ struct ChatArgs {
     #[arg(long, value_name = "PROVIDER::MODEL")]
     model: Option<String>,
 
-    /// Execution policy. auto allows file edits and offline read-only commands; yolo approves all requests.
+    /// Execution policy: auto permits scoped workspace operations; yolo approves all requests.
     #[arg(long, value_enum, default_value_t = ChatMode::Auto)]
     mode: ChatMode,
 
@@ -192,9 +193,7 @@ impl ChatMode {
     }
 }
 
-/// A capability group that can be removed before Orbit creates the model
-/// request. Names are intentionally broad, so a CI caller can make a simple,
-/// auditable policy without needing to track individual tool names.
+/// Capability categories omitted from both tool registration and model requests.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
 enum ChatCapability {
     /// Every optional tool group below.
@@ -252,11 +251,13 @@ fn main() -> Result<()> {
         )
         .map_err(anyhow::Error::msg);
     }
+
     if std::env::args().nth(1).as_deref() == Some("--internal-git-push-worker") {
         let args: Vec<_> = std::env::args_os().skip(2).collect();
         anyhow::ensure!(args.len() == 1, "push worker requires request path");
         return orbit_tools::git_push::push_worker(Path::new(&args[0])).map_err(anyhow::Error::msg);
     }
+
     run_cli()
 }
 
@@ -291,6 +292,7 @@ async fn run_cli() -> Result<()> {
                         );
                     }
                 }
+
                 ProjectCommand::Link { id } => {
                     let project = store.link_project(&id, std::env::current_dir()?).await?;
                     println!(
@@ -320,6 +322,7 @@ async fn run_cli() -> Result<()> {
                         );
                     }
                 }
+
                 SessionCommand::Delete { id, yes } => {
                     anyhow::ensure!(yes, "永久删除会话需要 --yes；请先确认会话 ID。");
                     let deleted = store.delete_session(&id).await?;
@@ -337,14 +340,17 @@ async fn run_cli() -> Result<()> {
                         }
                     );
                 }
+
                 SessionCommand::Compactions { id } => println!(
                     "{}",
                     serde_json::to_string_pretty(&store.compactions(&id).await?)?
                 ),
+
                 SessionCommand::Diagnostics { id } => println!(
                     "{}",
                     orbit_store::diagnostics::text(&store.diagnostics(&id).await?)
                 ),
+
                 SessionCommand::Show { id } => {
                     println!("{}", serde_json::to_string_pretty(&store.load(&id).await?)?)
                 }
@@ -373,6 +379,7 @@ pub(crate) struct PreparedTui {
 }
 
 pub(crate) struct TuiResources {
+    web_client: std::sync::Arc<orbit_tools::web_fetch::WebClient>,
     cursor_trail: bool,
     model: ModelClient,
     model_name: String,
@@ -532,6 +539,7 @@ pub(crate) async fn prepare_tui_resources(
     .await?;
 
     Ok(TuiResources {
+        web_client: runtime.web_client,
         cursor_trail: file_config.tui.cursor_trail,
         moved: false,
         workspace: runtime.workspace,
@@ -831,6 +839,7 @@ async fn chat(
             eprintln!("已取消。");
             return Ok(());
         }
+
         Err(error) => {
             session.finish("failed", None).await?;
             return Err(error.into());
@@ -876,6 +885,7 @@ fn read_chat_prompt(args: &ChatArgs) -> Result<String> {
                 .context("failed to read prompt from standard input")?;
             prompt
         }
+
         (None, Some(path)) => fs::read_to_string(path)
             .with_context(|| format!("failed to read prompt file {}", path.display()))?,
         (None, None) => bail!("provide a prompt or --prompt-file"),
@@ -1019,6 +1029,7 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
                 print!("{text}");
                 io::stdout().flush()?;
             }
+
             AgentEvent::ToolStarted { call } => {
                 eprintln!("tool started: {}", call.function.name)
             }
@@ -1055,6 +1066,7 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
                 ""
             }
         ),
+
         AgentEvent::CompactionFailed { .. } => eprintln!("上下文整理未完成，原上下文已保留"),
         AgentEvent::Failed { error } => eprintln!("agent failed: {error}"),
         _ => {}

@@ -1,9 +1,3 @@
-use super::{Context, Fragment, Source};
-use crate::tui::{
-    icons,
-    render::{fit_label, safe_output},
-    theme::THEME,
-};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
@@ -13,6 +7,13 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
+
+use super::{Context, Fragment, Source};
+use crate::tui::{
+    icons,
+    render::{fit_label, safe_output},
+    theme::THEME,
+};
 
 #[derive(Debug)]
 pub(in crate::tui) struct Preview {
@@ -33,6 +34,7 @@ impl Preview {
             hovered: false,
         }
     }
+
     pub fn draw(&mut self, frame: &mut Frame<'_>) {
         let area = super::super::dialogs::transcript_area(frame.area());
         self.area = area;
@@ -90,6 +92,7 @@ impl Preview {
             inner.width.saturating_sub(2),
             inner.height.saturating_sub(3),
         );
+
         if let Some(picture) = self
             .context
             .picture(&self.source, body.width, body.height, true)
@@ -117,6 +120,7 @@ impl Preview {
             );
         }
     }
+
     /// Returns (consumed, close). Events do not leak into the underlying composer.
     pub fn handle(&mut self, event: &Event) -> (bool, bool) {
         match event {
@@ -126,6 +130,7 @@ impl Preview {
                     || (key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)),
             ),
+
             Event::Mouse(mouse) => {
                 let point = (mouse.column, mouse.row).into();
                 if mouse.kind == MouseEventKind::Moved {
@@ -137,6 +142,7 @@ impl Preview {
                         && (self.close.contains(point) || !self.area.contains(point)),
                 )
             }
+
             Event::Paste(_) => (true, false),
             _ => (false, false),
         }

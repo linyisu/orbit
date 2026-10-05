@@ -1,13 +1,15 @@
 //! Incremental event replay for sessions owned by another TUI process.
-use super::app::UiState;
-use crate::session::HistoryReplay;
-use anyhow::Result;
-use orbit_model::types::ChatMessage;
-use orbit_store::{store::Store, tui_sessions::SessionRevision, types::Snapshot};
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
+
+use anyhow::Result;
+use orbit_model::types::ChatMessage;
+use orbit_store::{store::Store, tui_sessions::SessionRevision, types::Snapshot};
+
+use super::app::UiState;
+use crate::session::HistoryReplay;
 
 pub(super) fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -31,6 +33,7 @@ pub(super) async fn sync_runtime(store: &Store, id: &str, state: &mut UiState) -
         state.apply_runtime(&runtime);
         return Ok(true);
     }
+
     Ok(false)
 }
 
@@ -45,6 +48,7 @@ pub(super) async fn publish(
             .publish_tui_runtime(session.id(), run, state.runtime_snapshot())
             .await?;
     }
+
     Ok(())
 }
 
@@ -127,13 +131,16 @@ impl SessionSync {
             drop(lease);
             revision = store.session_revision(&id).await?.unwrap_or(revision);
         }
+
         if previous.as_ref() == Some(&revision) {
             if *replaying {
                 *replaying = !replay.advance(snapshot, state, 2048, Duration::from_millis(4));
                 return Ok(true);
             }
+
             return Ok(false);
         }
+
         let incremental = previous.as_ref().is_some_and(|old| {
             old.run == revision.run && old.status == "running" && revision.status == "running"
         });
@@ -145,10 +152,12 @@ impl SessionSync {
                         .await?,
                 );
             }
+
             snapshot.session = store.session(&id).await?;
         } else {
             *snapshot = store.load(&id).await?;
         }
+
         let next = &*snapshot;
         // Keep local injected system instructions, editor drafts and scroll position.
         if !incremental {
@@ -157,6 +166,7 @@ impl SessionSync {
                 .filter(|message| matches!(message, ChatMessage::System { .. }))
                 .cloned()
                 .collect();
+
             *history = next
                 .history
                 .iter()
@@ -165,6 +175,7 @@ impl SessionSync {
                 .collect();
             history.splice(0..0, systems);
         }
+
         *replaying = !replay.advance(next, state, 2048, Duration::from_millis(4));
         if recover_writer {
             while *replaying {
@@ -172,6 +183,7 @@ impl SessionSync {
                 *replaying = !replay.advance(next, state, 2048, Duration::from_millis(4));
             }
         }
+
         *previous = Some(revision);
         Ok(true)
     }
@@ -179,11 +191,12 @@ impl SessionSync {
 
 #[cfg(test)]
 mod tests {
+    use orbit_agent::events::AgentEvent;
+    use orbit_model::types::StreamEvent;
+
     use super::super::app::{RunStatus, TranscriptItem};
     use super::*;
     use crate::session::SessionState;
-    use orbit_agent::events::AgentEvent;
-    use orbit_model::types::StreamEvent;
 
     #[tokio::test]
     async fn mode_context_and_clock_follow_the_owner_including_pauses_and_completion() {

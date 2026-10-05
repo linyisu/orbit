@@ -19,6 +19,7 @@ fn context(protocol: ProtocolType) -> Context {
 
 fn ready(context: &Context, source: Source, width: u16, height: u16) -> Arc<Prepared> {
     let key = Key {
+            network: None,
         source,
         workspace: context.workspace.clone(),
         width,
@@ -1126,6 +1127,7 @@ fn linked_markdown_and_html_images_keep_their_destination_on_every_thumbnail_row
         assert_eq!(line.links[0].url, destination);
         let request = requests(&line, 80).remove(0);
         let mut key = Key {
+            network: None,
             source: Source::Image(path.to_string_lossy().into_owned()),
             workspace: dir.path().into(),
             width: request.width,

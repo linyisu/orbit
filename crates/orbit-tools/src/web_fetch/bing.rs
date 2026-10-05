@@ -1,8 +1,8 @@
-use super::{SearchResult, checked_url};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use html2text::Handle;
 
 use super::dom::{attribute as attr, find, find_class, text};
+use super::{SearchResult, checked_url};
 
 pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
     let Ok(dom) = html2text::config::plain().parse_html(body.as_bytes()) else {
@@ -38,6 +38,7 @@ pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
             break;
         }
     }
+
     results
 }
 
@@ -47,6 +48,7 @@ fn collect(node: &Handle, cards: &mut Vec<Handle>) {
         cards.push(node.clone());
         return;
     }
+
     for child in node.children.borrow().iter() {
         collect(child, cards);
     }
@@ -61,6 +63,7 @@ fn target(href: &str) -> Option<String> {
         url.host_str()
             .is_some_and(|h| h == "bing.com" || h.ends_with(".bing.com"))
     };
+
     if bing(&url) {
         if url.path() != "/ck/a" {
             return None;
@@ -71,6 +74,7 @@ fn target(href: &str) -> Option<String> {
             .ok()?;
         url = url::Url::parse(std::str::from_utf8(&bytes).ok()?).ok()?;
     }
+
     if bing(&url) {
         return None;
     }
@@ -103,6 +107,7 @@ mod tests {
         assert_eq!(parse_results(body, 1).len(), 1);
         assert!(parse_results("<html>Verify you are human</html>", 10).is_empty());
     }
+
     #[test]
     fn decodes_tracking_links_and_validates_destination() {
         let encoded = URL_SAFE_NO_PAD.encode("https://github.com/linyisu/orbit");

@@ -32,7 +32,7 @@ pub(super) use flow::layout;
 pub(super) use flow::requests;
 pub(super) use preview::Preview;
 
-const MAX_ENTRIES: usize = 48;
+const MAX_CACHE_ENTRIES: usize = 48;
 const WORKER_QUEUE_CAPACITY: usize = 32;
 const MAX_CACHE_BYTES: usize = 96 * 1024 * 1024;
 
@@ -112,6 +112,7 @@ pub(super) fn delete_stale(writer: &mut impl std::io::Write) -> std::io::Result<
             write!(writer, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\")?;
         }
     }
+
     Ok(())
 }
 
@@ -130,8 +131,28 @@ pub(super) struct Fragment {
     pub row: u16,
 }
 
+/// Policy identity belongs in both decoded and raw-byte cache keys: a resumed
+/// session may have different proxy settings while sharing terminal workers.
+#[derive(Clone, Debug, Default)]
+struct Network(Arc<orbit_tools::web_fetch::WebClient>);
+
+impl PartialEq for Network {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Network {}
+
+impl std::hash::Hash for Network {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&Arc::as_ptr(&self.0), state);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Key {
+    network: Option<Network>,
     source: Source,
     workspace: PathBuf,
     width: u16,
@@ -155,6 +176,7 @@ impl Value {
                     * usize::from(picker.font_size().height)
                     * 16
             }
+
             _ => 0,
         }
     }
@@ -183,6 +205,7 @@ impl std::fmt::Debug for Shared {
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Context {
+    network: Network,
     shared: Option<Arc<Shared>>,
     pub workspace: PathBuf,
     seen: u64,
@@ -190,8 +213,8 @@ pub(super) struct Context {
 
 impl Context {
     /// Called before EventStream exists; capability replies must have one reader.
-    pub fn detect() -> Self {
-        Self::new(
+    pub fn detect(client: Arc<orbit_tools::web_fetch::WebClient>) -> Self {
+        let mut context = Self::new(
             Picker::from_query_stdio_with_options(
                 ratatui_image::picker::cap_parser::QueryStdioOptions {
                     terminal_background_color_osc: true,
@@ -199,7 +222,20 @@ impl Context {
                 },
             )
             .unwrap_or_else(|_| Picker::halfblocks()),
-        )
+        );
+
+        context.set_client(client);
+        context
+    }
+
+    pub fn set_client(&mut self, client: Arc<orbit_tools::web_fetch::WebClient>) {
+        if Arc::ptr_eq(&self.network.0, &client) {
+            return;
+        }
+        self.network = Network(client);
+        if let Some(shared) = &self.shared {
+            shared.revision.fetch_add(1, Ordering::Release);
+        }
     }
 
     fn new(picker: Picker) -> Self {
@@ -232,6 +268,7 @@ impl Context {
                                 Ok(picture) => Value::Ready(Arc::new(picture)),
                                 Err(error) => Value::Failed(error.to_string()),
                             };
+
                             while cache
                                 .values()
                                 .map(|c| c.value.bytes(&shared.picker))
@@ -246,12 +283,14 @@ impl Context {
                                     })
                                     .min_by_key(|(_, v)| v.touched)
                                     .map(|(k, _)| k.clone());
+
                                 if let Some(oldest) = oldest {
                                     cache.remove(&oldest);
                                 } else {
                                     break;
                                 }
                             }
+
                             if let Some(entry) = cache.get_mut(&key) {
                                 entry.value = value;
                             }
@@ -263,6 +302,7 @@ impl Context {
                 return Self::default();
             }
         }
+
         Self {
             shared: Some(shared),
             ..Self::default()
@@ -301,6 +341,7 @@ impl Context {
             (None, None) => true,
             _ => false,
         }) && self.workspace == other.workspace
+            && self.network == other.network
     }
 
     pub fn picture(
@@ -337,16 +378,11 @@ impl Context {
         {
             return None;
         }
+
         if width == 0 || height == 0 {
             return None;
         }
-        let key = Key {
-            source: source.clone(),
-            workspace: self.workspace.clone(),
-            width,
-            height,
-            large,
-        };
+        let key = self.key(source, width, height, large);
         let mut cache = shared.cache.lock().ok()?;
         let touched = shared.clock.fetch_add(1, Ordering::Relaxed);
         if let Some(entry) = cache.get_mut(&key) {
@@ -356,17 +392,20 @@ impl Context {
                 _ => None,
             };
         }
+
         if !request {
             return None;
         }
-        if cache.len() >= MAX_ENTRIES {
+        if cache.len() >= MAX_CACHE_ENTRIES {
             let oldest = cache
                 .iter()
                 .filter(|(_, v)| !matches!(v.value, Value::Pending))
                 .min_by_key(|(_, v)| v.touched)
                 .map(|(k, _)| k.clone());
+
             cache.remove(&oldest?);
         }
+
         let remote = matches!(source, Source::Image(url) if is_remote(url));
         if shared.requests[usize::from(remote)]
             .try_send(key.clone())
@@ -380,6 +419,7 @@ impl Context {
                 },
             );
         }
+
         None
     }
 
@@ -390,19 +430,23 @@ impl Context {
         {
             return Some("当前终端未提供像素图形，正文保留公式源码".into());
         }
+
         let cache = shared.cache.lock().ok()?;
-        match &cache
-            .get(&Key {
-                source: source.clone(),
-                workspace: self.workspace.clone(),
-                width,
-                height,
-                large,
-            })?
-            .value
-        {
+        match &cache.get(&self.key(source, width, height, large))?.value {
             Value::Failed(error) => Some(error.clone()),
             _ => None,
+        }
+    }
+
+    fn key(&self, source: &Source, width: u16, height: u16, large: bool) -> Key {
+        Key {
+            network: matches!(source, Source::Image(url) if is_remote(url))
+                .then(|| self.network.clone()),
+            source: source.clone(),
+            workspace: self.workspace.clone(),
+            width,
+            height,
+            large,
         }
     }
 }
@@ -496,6 +540,7 @@ pub(super) fn paint(buffer: &mut Buffer) {
                 .render(area, buffer);
             }
         }
+
         layer.previous = layer.current.clone();
     });
 }

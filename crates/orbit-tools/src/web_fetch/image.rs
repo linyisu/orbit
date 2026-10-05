@@ -3,12 +3,18 @@
 use super::*;
 
 pub async fn fetch_image(value: &str) -> Result<Vec<u8>, ToolError> {
-    tokio::time::timeout(Duration::from_secs(15), fetch(value))
-        .await
-        .map_err(|_| failed("图片请求超时"))?
+    WebClient::default().fetch_image(value).await
 }
 
-async fn fetch(value: &str) -> Result<Vec<u8>, ToolError> {
+impl WebClient {
+    pub async fn fetch_image(&self, value: &str) -> Result<Vec<u8>, ToolError> {
+        tokio::time::timeout(Duration::from_secs(15), fetch(value, self))
+            .await
+            .map_err(|_| failed("图片请求超时"))?
+    }
+}
+
+async fn fetch(value: &str, client: &WebClient) -> Result<Vec<u8>, ToolError> {
     let mut url = checked_url(value)?;
     let mut clients = RequestClients::default();
     let mut visited = std::collections::HashSet::new();
@@ -16,8 +22,9 @@ async fn fetch(value: &str) -> Result<Vec<u8>, ToolError> {
         if !visited.insert(url.to_string()) {
             return Err(failed("redirect loop detected"));
         }
+        let route = client.route(&url)?;
         let response = clients
-            .get(&url, None)
+            .get(&url, route.as_ref().map(|route| &route.proxy))
             .await?
             .get(url.clone())
             .header(
@@ -28,6 +35,7 @@ async fn fetch(value: &str) -> Result<Vec<u8>, ToolError> {
             .send()
             .await
             .map_err(|e| failed(e.without_url()))?;
+
         if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
             if hop == 5 {
                 return Err(failed("too many redirects (maximum 5)"));
@@ -37,9 +45,11 @@ async fn fetch(value: &str) -> Result<Vec<u8>, ToolError> {
                 .get(header::LOCATION)
                 .and_then(|v| v.to_str().ok())
                 .ok_or_else(|| failed("redirect has no valid Location header"))?;
+
             url = redirect_target(&url, location)?;
             continue;
         }
+
         if !response.status().is_success() {
             return Err(fetch_status_error(response.status(), response.headers()));
         }
@@ -52,12 +62,14 @@ async fn fetch(value: &str) -> Result<Vec<u8>, ToolError> {
             .next()
             .unwrap_or("")
             .trim();
+
         if !matches!(
             media,
             "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/svg+xml"
         ) {
             return Err(failed("响应不是受支持的图片类型"));
         }
+
         if response
             .headers()
             .get(header::CONTENT_ENCODING)
@@ -65,6 +77,7 @@ async fn fetch(value: &str) -> Result<Vec<u8>, ToolError> {
         {
             return Err(failed("压缩的图片响应不受支持"));
         }
+
         return read_body_limit(
             response,
             orbit_model::types::Attachment::MAX_IMAGE_BYTES,
@@ -72,6 +85,7 @@ async fn fetch(value: &str) -> Result<Vec<u8>, ToolError> {
         )
         .await;
     }
+
     Err(failed("too many redirects"))
 }
 

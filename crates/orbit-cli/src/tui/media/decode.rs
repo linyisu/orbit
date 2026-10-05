@@ -12,19 +12,19 @@ use ratex_layout::LayoutOptions;
 use ratex_types::{color::Color, math_style::MathStyle};
 use resvg::{tiny_skia, usvg};
 
-use super::{Key, Prepared, Source};
+use super::{Key, Network, Prepared, Source};
 
-const MAX_BYTES: usize = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
-const MAX_REMOTE_CACHE_BYTES: usize = 2 * MAX_BYTES;
+const MAX_SOURCE_BYTES: usize = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
+const MAX_REMOTE_CACHE_BYTES: usize = 2 * MAX_SOURCE_BYTES;
 const MAX_RENDER_EDGE_PIXELS: u32 = 2048;
 const MAX_DECODE_EDGE_PIXELS: u32 = 8192;
 const MAX_TEX_BYTES: usize = 8192;
-const MAX_PIXELS: u64 = 16 * 1024 * 1024;
+const MAX_SOURCE_PIXELS: u64 = 16 * 1024 * 1024;
 
 #[derive(Default)]
 pub(super) struct Decoder {
     fonts: Option<Arc<usvg::fontdb::Database>>,
-    remote_bytes: HashMap<String, Arc<Vec<u8>>>,
+    remote_bytes: HashMap<(Network, String), Arc<Vec<u8>>>,
     runtime: Option<tokio::runtime::Runtime>,
 }
 
@@ -38,7 +38,9 @@ impl Decoder {
         let image = match &key.source {
             Source::Image(source) => {
                 let bytes = if super::is_remote(source) {
-                    if let Some(bytes) = self.remote_bytes.get(source) {
+                    let network = key.network.as_ref().context("图片请求缺少网络配置")?;
+                    let remote_key = (network.clone(), source.clone());
+                    if let Some(bytes) = self.remote_bytes.get(&remote_key) {
                         bytes.clone()
                     } else {
                         if self.runtime.is_none() {
@@ -48,12 +50,14 @@ impl Decoder {
                                     .build()?,
                             );
                         }
+
                         let bytes = Arc::new(
                             self.runtime
                                 .as_ref()
                                 .unwrap()
-                                .block_on(orbit_tools::web_fetch::fetch_image(source))?,
+                                .block_on(network.0.fetch_image(source))?,
                         );
+
                         while self.remote_bytes.values().map(|b| b.len()).sum::<usize>()
                             + bytes.len()
                             > MAX_REMOTE_CACHE_BYTES
@@ -64,14 +68,15 @@ impl Decoder {
                                 break;
                             }
                         }
-                        self.remote_bytes.insert(source.clone(), bytes.clone());
+
+                        self.remote_bytes.insert(remote_key, bytes.clone());
                         bytes
                     }
                 } else {
                     let path = local_path(source, &key.workspace)?;
                     Arc::new(orbit_model::types::Attachment::read_image_bytes(&path)?)
                 };
-                if bytes.len() > MAX_BYTES {
+                if bytes.len() > MAX_SOURCE_BYTES {
                     bail!("图片超过 20 MiB");
                 }
                 let svg = image::guess_format(&bytes).is_err();
@@ -81,6 +86,7 @@ impl Decoder {
                         db.load_system_fonts();
                         self.fonts = Some(Arc::new(db));
                     }
+
                     raster_svg(&bytes, max_w, max_h, self.fonts.clone(), key.large)?
                 } else {
                     let mut reader =
@@ -88,15 +94,16 @@ impl Decoder {
                     let mut limits = image::Limits::default();
                     limits.max_image_width = Some(MAX_DECODE_EDGE_PIXELS);
                     limits.max_image_height = Some(MAX_DECODE_EDGE_PIXELS);
-                    limits.max_alloc = Some(MAX_PIXELS * 4);
+                    limits.max_alloc = Some(MAX_SOURCE_PIXELS * 4);
                     reader.limits(limits);
                     let image = reader.decode()?;
-                    if u64::from(image.width()) * u64::from(image.height()) > MAX_PIXELS {
+                    if u64::from(image.width()) * u64::from(image.height()) > MAX_SOURCE_PIXELS {
                         bail!("图片像素尺寸过大");
                     }
                     image.resize(max_w, max_h, image::imageops::FilterType::Triangle)
                 }
             }
+
             Source::Math { tex, display } => {
                 if tex.len() > MAX_TEX_BYTES {
                     bail!("公式超过 8192 字节");
@@ -111,6 +118,7 @@ impl Decoder {
                         {
                             Some([35, 40, 48])
                         }
+
                         _ => None,
                     })
                     .unwrap_or([220, 224, 232]);
@@ -203,8 +211,10 @@ fn selected_image(image: &RgbaImage) -> RgbaImage {
             *channel =
                 ((u32::from(*channel) * ink + u32::from(background) * (1020 - ink)) / 1020) as u8;
         }
+
         pixel[3] = 255;
     }
+
     selected
 }
 
@@ -215,8 +225,10 @@ fn local_path(source: &str, workspace: &std::path::Path) -> Result<PathBuf> {
                 .to_file_path()
                 .map_err(|_| anyhow::anyhow!("无效的文件地址"));
         }
+
         bail!("不支持的图片地址协议");
     }
+
     let path = PathBuf::from(source);
     Ok(if path.is_absolute() {
         path
@@ -283,7 +295,7 @@ pub(super) fn raster_svg(
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
     let resolver = usvg::ImageHrefResolver::default_data_resolver();
     options.image_href_resolver.resolve_data = Box::new(move |mime, data, opts| {
-        if data.len() > MAX_BYTES {
+        if data.len() > MAX_SOURCE_BYTES {
             return None;
         }
         // Embedded SVGs recurse through the same resolver. Raster images must
@@ -292,10 +304,11 @@ pub(super) fn raster_svg(
             && reader.format().is_some()
         {
             let (w, h) = reader.into_dimensions().ok()?;
-            if u64::from(w) * u64::from(h) > MAX_PIXELS {
+            if u64::from(w) * u64::from(h) > MAX_SOURCE_PIXELS {
                 return None;
             }
         }
+
         resolver(mime, data, opts)
     });
     let tree = usvg::Tree::from_data(bytes, &options).context("无法解析 SVG")?;

@@ -1,7 +1,7 @@
-use super::{SearchResult, checked_url};
 use html2text::Handle;
 
 use super::dom::{attribute, text};
+use super::{SearchResult, checked_url};
 
 pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
     let Ok(dom) = html2text::config::plain().parse_html(body.as_bytes()) else {
@@ -27,6 +27,7 @@ pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
         {
             continue;
         }
+
         let title = text(&heading);
         if title.is_empty()
             || results
@@ -35,6 +36,7 @@ pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
         {
             continue;
         }
+
         results.push(SearchResult {
             title,
             url: url.into(),
@@ -44,6 +46,7 @@ pub(super) fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
             break;
         }
     }
+
     results
 }
 
@@ -64,6 +67,7 @@ fn result_link(heading: &Handle) -> Option<Handle> {
         }
         parent = node.get_parent();
     }
+
     heading
         .children
         .borrow()
@@ -97,6 +101,7 @@ fn result_snippet(heading: &Handle) -> String {
         }
         parent = node.get_parent();
     }
+
     String::new()
 }
 
@@ -107,6 +112,7 @@ fn find_snippet(node: &Handle) -> Option<Handle> {
     ) {
         return None;
     }
+
     let classes = attribute(node, "class").unwrap_or_default();
     if attribute(node, "data-sncf").is_some()
         || classes
@@ -115,6 +121,7 @@ fn find_snippet(node: &Handle) -> Option<Handle> {
     {
         return Some(node.clone());
     }
+
     node.children.borrow().iter().find_map(find_snippet)
 }
 
@@ -130,6 +137,7 @@ mod tests {
         assert_eq!(results[0].snippet, "A snippet");
         assert!(parse_results("<html>Please verify</html>", 10).is_empty());
     }
+
     #[test]
     fn snippets_stay_inside_their_result_and_preserve_nested_text() {
         let html = r#"

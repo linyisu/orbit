@@ -1,7 +1,8 @@
 //! Decode declared legacy charsets without guessing arbitrary binary payloads.
-use super::{ToolError, failed};
 use encoding_rs::{Encoding, UTF_8};
 use regex::Regex;
+
+use super::{ToolError, failed};
 
 pub(super) fn text(body: &[u8], media: &str, html: bool) -> Result<String, ToolError> {
     let charset =
@@ -33,6 +34,7 @@ pub(super) fn text(body: &[u8], media: &str, html: bool) -> Result<String, ToolE
             "page contains invalid bytes for its declared charset",
         ));
     }
+
     if decoded.contains('\0') {
         return Err(failed("binary content is not supported"));
     }

@@ -17,6 +17,7 @@ fn numbered_links_are_available_before_document_footnotes() {
         .unwrap(),
     )
     .unwrap();
+
     assert_eq!(output["links"][0]["n"], 1);
     assert_eq!(output["links"][0]["url"], "https://example.org/path");
     assert!(
@@ -26,6 +27,7 @@ fn numbered_links_are_available_before_document_footnotes() {
             .contains("https://example.org/path")
     );
 }
+
 #[tokio::test]
 async fn redirect_loop_stops_before_replaying_a_seen_url() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -50,13 +52,14 @@ async fn redirect_loop_stops_before_replaying_a_seen_url() {
             max_chars: 100,
         },
         url,
-        Some(&proxy),
-        None,
+        &WebClient::for_test(Some(&proxy)),
     )
     .await;
+
     assert!(result.unwrap_err().to_string().contains("redirect loop"));
     server.await.unwrap();
 }
+
 #[tokio::test]
 async fn validated_clients_are_reused_only_for_the_same_origin() {
     let proxy = reqwest::Proxy::all("http://127.0.0.1:12345").unwrap();
@@ -78,6 +81,7 @@ async fn validated_clients_are_reused_only_for_the_same_origin() {
             .is_err()
     );
 }
+
 #[test]
 fn url_validation_reports_the_specific_constraint() {
     for (url, message) in [
@@ -115,6 +119,7 @@ async fn google_results_win_and_unreadable_pages_fall_back_to_bing() {
                 } else {
                     "bing.invalid"
                 };
+
                 assert!(request.starts_with(&format!("GET http://{host}/?q=paper&")));
                 let body = if index == 0 {
                     google_body
@@ -175,6 +180,7 @@ async fn trusted_proxy_resolves_domains_without_local_dns() {
         .send()
         .await
         .unwrap();
+
     assert_eq!(response.text().await.unwrap(), "ok");
     server.await.unwrap();
 }
@@ -220,10 +226,10 @@ async fn javascript_shell_without_browser_is_not_reported_as_page_content() {
             max_chars: 8000,
         },
         url,
-        Some(&proxy),
-        None,
+        &WebClient::for_test(Some(&proxy)),
     )
     .await;
+
     assert!(
         result
             .unwrap_err()
@@ -413,7 +419,7 @@ async fn body_limit_applies_even_without_content_length() {
             let header = if declared {
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-                    MAX_BODY + 1
+                    MAX_BODY_BYTES + 1
                 )
             } else {
                 "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".into()
@@ -422,7 +428,7 @@ async fn body_limit_applies_even_without_content_length() {
             let _ = socket.write_all(header.as_bytes()).await;
 
             if !declared {
-                let _ = socket.write_all(&vec![b'a'; MAX_BODY + 1]).await;
+                let _ = socket.write_all(&vec![b'a'; MAX_BODY_BYTES + 1]).await;
             }
         });
         let response = Client::builder()
@@ -603,7 +609,9 @@ async fn fetches_a_real_public_page() {
         result["content"]
             .as_str()
             .unwrap()
-            .contains("Example Domain")
+            .contains("documentation examples"),
+        "unexpected example.com body: {}",
+        result["content"]
     );
     assert_eq!(result["url"], "https://example.com/");
 

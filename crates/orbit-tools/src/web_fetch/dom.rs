@@ -41,6 +41,7 @@ pub(super) fn text(node: &Handle) -> String {
             return String::new();
         }
     }
+
     html2text::config::plain_no_decorate()
         .string_from_read(html.as_slice(), TEXT_PROJECTION_WIDTH)
         .unwrap_or_default()

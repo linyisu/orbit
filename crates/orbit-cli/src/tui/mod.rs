@@ -155,6 +155,7 @@ pub async fn run(
         resources,
     } = setup;
     let crate::TuiResources {
+        web_client,
         cursor_trail,
         mut model,
         model_name,
@@ -168,7 +169,7 @@ pub async fn run(
     let next_workspace: Option<crate::TuiResources> = None;
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut state = UiState::new(model_name);
-    state.media = media::Context::detect();
+    state.media = media::Context::detect(web_client);
     state.cursor_motion.enabled = cursor_trail;
     let RequestBudget {
         context_tokens,

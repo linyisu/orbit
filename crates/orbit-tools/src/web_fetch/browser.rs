@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
-use super::{MAX_BODY, ToolError, checked_url, failed};
+use super::{MAX_BODY_BYTES, ToolError, checked_url, failed};
 
 pub(super) struct BrowserPage {
     pub url: Url,
@@ -109,7 +109,7 @@ pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolErr
         let title = data["title"].as_str().unwrap_or("").to_owned();
         let text = data["text"].as_str().ok_or_else(|| failed("Firefox returned no page body"))?.to_owned();
 
-        if text.len() > MAX_BODY {
+        if text.len() > MAX_BODY_BYTES {
             return Err(failed("browser page exceeds 2 MiB text limit"));
         }
         if title.contains("请稍候") || title.contains("Just a moment") {

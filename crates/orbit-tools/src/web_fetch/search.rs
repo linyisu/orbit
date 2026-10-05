@@ -1,10 +1,11 @@
 //! Search routing, provider filters and bounded retry/cooldown policy.
-use super::*;
 use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,
     time::{Instant, SystemTime},
 };
+
+use super::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -13,6 +14,7 @@ pub enum SearchProvider {
     Bing,
     Duckduckgo,
 }
+
 #[derive(Clone, Copy, Debug, Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(super) enum Freshness {
@@ -21,6 +23,7 @@ pub(super) enum Freshness {
     Month,
     Year,
 }
+
 impl SearchProvider {
     fn name(self) -> &'static str {
         match self {
@@ -29,6 +32,7 @@ impl SearchProvider {
             Self::Duckduckgo => "DuckDuckGo",
         }
     }
+
     fn endpoint(self) -> &'static str {
         match self {
             Self::Google => "https://www.google.com/search?gbv=1",
@@ -58,6 +62,7 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
             message: "query must not be blank".into(),
         });
     }
+
     if let Some(language) = &mut args.language {
         let parts: Vec<_> = language.split('-').collect();
         if !(2..=3).contains(&parts[0].len())
@@ -71,8 +76,10 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
                 message: "language must be a language code such as en or zh-CN".into(),
             });
         }
+
         *language = language.to_ascii_lowercase();
     }
+
     if let Some(region) = &mut args.region {
         if region.len() != 2 || !region.bytes().all(|b| b.is_ascii_alphabetic()) {
             return Err(ToolError::InvalidArguments {
@@ -80,8 +87,10 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
                 message: "region must be a two-letter country code".into(),
             });
         }
+
         *region = region.to_ascii_uppercase();
     }
+
     Ok(())
 }
 
@@ -91,6 +100,7 @@ struct Failure {
     retry: Option<Duration>,
     limited: bool,
 }
+
 impl From<ToolError> for Failure {
     fn from(error: ToolError) -> Self {
         let message = match error {
@@ -106,6 +116,7 @@ impl From<ToolError> for Failure {
         }
     }
 }
+
 fn retry_after(value: Option<&header::HeaderValue>) -> Option<Duration> {
     let value = value?.to_str().ok()?;
     value
@@ -119,6 +130,7 @@ fn retry_after(value: Option<&header::HeaderValue>) -> Option<Duration> {
                 .ok()
         })
 }
+
 fn status_failure(status: reqwest::StatusCode, headers: &header::HeaderMap) -> Failure {
     let transient = status.as_u16() == 429 || status.is_server_error();
     Failure {
@@ -137,21 +149,22 @@ fn status_failure(status: reqwest::StatusCode, headers: &header::HeaderMap) -> F
 
 pub(super) async fn run(
     args: SearchArguments,
-    proxy: Option<&reqwest::Proxy>,
+    client: &WebClient,
     providers: &[SearchProvider],
     cooldown: &Mutex<HashMap<SearchProvider, Option<Instant>>>,
 ) -> Result<String, ToolError> {
     let endpoints: Vec<_> = providers.iter().map(|&p| (p, p.endpoint())).collect();
-    route(args, proxy, &endpoints, cooldown).await
+    route(args, client, &endpoints, cooldown).await
 }
+
 async fn route(
     args: SearchArguments,
-    proxy: Option<&reqwest::Proxy>,
+    client: &WebClient,
     providers: &[(SearchProvider, &str)],
     cooldown: &Mutex<HashMap<SearchProvider, Option<Instant>>>,
 ) -> Result<String, ToolError> {
     let mut reasons = Vec::new();
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
     for &(provider, endpoint) in providers {
         if cooldown
             .lock()
@@ -162,7 +175,8 @@ async fn route(
             reasons.push(format!("{}: provider cooldown", provider.name()));
             continue;
         }
-        let mut outcome = attempt(&args, proxy, provider, endpoint, deadline).await;
+
+        let mut outcome = attempt(&args, client, provider, endpoint, deadline).await;
         if let Err(error) = &outcome {
             // Rate-limited providers yield immediately to the next engine. Never
             // sleep through a long Retry-After or retry an authentication failure.
@@ -172,9 +186,10 @@ async fn route(
                 && Instant::now() + delay + Duration::from_secs(1) < deadline
             {
                 tokio::time::sleep(delay).await;
-                outcome = attempt(&args, proxy, provider, endpoint, deadline).await;
+                outcome = attempt(&args, client, provider, endpoint, deadline).await;
             }
         }
+
         match outcome {
             Ok(results) => {
                 let results = search_results::select(results, args.max_results);
@@ -196,6 +211,7 @@ async fn route(
                 }
                 return Ok(value.to_string());
             }
+
             Err(error) => {
                 if error.limited {
                     let delay = error
@@ -207,15 +223,18 @@ async fn route(
                         .map_err(|_| failed("search cooldown lock poisoned"))?
                         .insert(provider, Instant::now().checked_add(delay));
                 }
+
                 reasons.push(format!("{}: {}", provider.name(), error.message));
             }
         }
     }
+
     Err(failed(reasons.join("; ")))
 }
+
 async fn attempt(
     args: &SearchArguments,
-    proxy: Option<&reqwest::Proxy>,
+    client: &WebClient,
     provider: SearchProvider,
     endpoint: &str,
     deadline: Instant,
@@ -223,7 +242,7 @@ async fn attempt(
     let budget = deadline
         .saturating_duration_since(Instant::now())
         .min(Duration::from_secs(15));
-    match tokio::time::timeout(budget, request(args, proxy, provider, endpoint)).await {
+    match tokio::time::timeout(budget, request(args, client, provider, endpoint)).await {
         Ok(result) => result,
         Err(_) => Err(Failure {
             message: "search timed out".into(),
@@ -232,6 +251,7 @@ async fn attempt(
         }),
     }
 }
+
 fn duckduckgo_locale(region: &str, language: &str) -> String {
     // DuckDuckGo uses a few legacy identifiers rather than ISO/BCP-47.
     // https://duckduckgo.com/duckduckgo-help-pages/settings/params
@@ -281,6 +301,7 @@ fn provider_url(
                 );
             }
         }
+
         SearchProvider::Bing => {
             query
                 .append_pair("setlang", language)
@@ -298,6 +319,7 @@ fn provider_url(
                 );
             }
         }
+
         SearchProvider::Duckduckgo => {
             query.append_pair("kl", &duckduckgo_locale(region, lang));
             if let Some(freshness) = args.freshness {
@@ -313,12 +335,14 @@ fn provider_url(
             }
         }
     }
+
     drop(query);
     Ok(url)
 }
+
 async fn request(
     args: &SearchArguments,
-    proxy: Option<&reqwest::Proxy>,
+    client: &WebClient,
     provider: SearchProvider,
     endpoint: &str,
 ) -> Result<Vec<SearchResult>, Failure> {
@@ -337,8 +361,9 @@ async fn request(
             } else {
                 "zh-CN"
             });
+        let route = client.route(&url)?;
         let response = clients
-            .get(&url, proxy)
+            .get(&url, route.as_ref().map(|route| &route.proxy))
             .await?
             .get(url.clone())
             .header(
@@ -357,6 +382,7 @@ async fn request(
                 retry: Some(Duration::from_millis(500)),
                 limited: false,
             })?;
+
         if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
             if hop == 5 {
                 return Err(failed("too many redirects (maximum 5)").into());
@@ -366,9 +392,11 @@ async fn request(
                 .get(header::LOCATION)
                 .and_then(|v| v.to_str().ok())
                 .ok_or_else(|| failed("redirect has no valid Location header"))?;
+
             url = redirect_target(&url, location)?;
             continue;
         }
+
         if !response.status().is_success() {
             return Err(status_failure(response.status(), response.headers()));
         }
@@ -382,6 +410,7 @@ async fn request(
             )
             .into());
         }
+
         let media = response
             .headers()
             .get(header::CONTENT_TYPE)
@@ -395,14 +424,17 @@ async fn request(
             SearchProvider::Bing => bing::parse_results(&body, 50),
             SearchProvider::Duckduckgo => search_results::duckduckgo(&body, 50),
         };
+
         if results.is_empty() {
             return Err(failed(
                 "no readable search results (empty page, consent, challenge or unsupported layout)",
             )
             .into());
         }
+
         return Ok(results);
     }
+
     unreachable!()
 }
 
@@ -415,7 +447,7 @@ pub(super) async fn search_with_endpoints(
 ) -> Result<String, ToolError> {
     route(
         args,
-        proxy,
+        &WebClient::for_test(proxy),
         &[
             (SearchProvider::Google, google),
             (SearchProvider::Bing, bing),
@@ -424,19 +456,29 @@ pub(super) async fn search_with_endpoints(
     )
     .await
 }
+
+#[cfg(test)]
+pub(super) async fn route_for_test(
+    args: SearchArguments,
+    client: &WebClient,
+    endpoint: &str,
+) -> Result<String, ToolError> {
+    route(
+        args,
+        client,
+        &[(SearchProvider::Bing, endpoint)],
+        &Mutex::default(),
+    )
+    .await
+}
+
 #[cfg(test)]
 pub(super) async fn search_at(
     args: SearchArguments,
     proxy: Option<&reqwest::Proxy>,
     endpoint: &str,
 ) -> Result<String, ToolError> {
-    route(
-        args,
-        proxy,
-        &[(SearchProvider::Bing, endpoint)],
-        &Mutex::default(),
-    )
-    .await
+    route_for_test(args, &WebClient::for_test(proxy), endpoint).await
 }
 
 #[cfg(test)]
@@ -449,6 +491,7 @@ mod tests {
             max_results: 10,
             ..Default::default()
         };
+
         normalize_arguments(&mut args).unwrap();
         args.query.push('中');
         assert!(normalize_arguments(&mut args).is_err());
@@ -462,6 +505,7 @@ mod tests {
         args.language = Some("en\r\nInjected: x".into());
         assert!(normalize_arguments(&mut args).is_err());
     }
+
     #[test]
     fn provider_filters_and_counts_are_explicit() {
         let args = SearchArguments {
@@ -471,6 +515,7 @@ mod tests {
             region: Some("GB".into()),
             freshness: Some(Freshness::Week),
         };
+
         for provider in [
             SearchProvider::Google,
             SearchProvider::Bing,
@@ -486,11 +531,13 @@ mod tests {
                     assert_eq!(q["tbs"], "qdr:w");
                     assert_eq!(q["num"], "10");
                 }
+
                 SearchProvider::Bing => {
                     assert_eq!(q["mkt"], "en-GB");
                     assert_eq!(q["qft"], " filterui:age-lt10080");
                     assert_eq!(q["count"], "10");
                 }
+
                 SearchProvider::Duckduckgo => {
                     assert_eq!(q["kl"], "uk-en");
                     assert_eq!(q["df"], "w");
@@ -498,6 +545,7 @@ mod tests {
             }
         }
     }
+
     #[test]
     fn retries_only_transient_status_and_understands_retry_after_dates() {
         let mut headers = header::HeaderMap::new();
@@ -509,18 +557,21 @@ mod tests {
                     .is_none()
             );
         }
+
         for code in [429, 500, 503] {
             assert_eq!(
                 status_failure(reqwest::StatusCode::from_u16(code).unwrap(), &headers).retry,
                 Some(Duration::from_secs(3))
             );
         }
+
         let date = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(60));
         assert!(
             retry_after(Some(&header::HeaderValue::from_str(&date).unwrap())).unwrap()
                 > Duration::from_secs(58)
         );
     }
+
     #[tokio::test]
     async fn rate_limit_falls_back_and_next_call_skips_cooling_provider() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -551,10 +602,11 @@ mod tests {
             max_results: 8,
             ..Default::default()
         };
+
         for i in 0..2 {
             let result = route(
                 args.clone(),
-                Some(&proxy),
+                &WebClient::for_test(Some(&proxy)),
                 &[
                     (SearchProvider::Google, "http://google.invalid/"),
                     (SearchProvider::Bing, "http://bing.invalid/"),
@@ -579,8 +631,10 @@ mod tests {
                     .contains(if i == 0 { "429" } else { "cooldown" })
             );
         }
+
         server.await.unwrap();
     }
+
     #[tokio::test]
     async fn forbidden_is_not_replayed_and_transient_server_error_is_retried() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -596,6 +650,7 @@ mod tests {
                     assert!(s.read(&mut bytes).await.unwrap() > 0);
                     s.write_all(format!("HTTP/1.1 {code} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
                 }
+
                 assert!(
                     tokio::time::timeout(Duration::from_millis(100), listener.accept())
                         .await
@@ -608,11 +663,12 @@ mod tests {
                     max_results: 1,
                     ..Default::default()
                 },
-                Some(&proxy),
+                &WebClient::for_test(Some(&proxy)),
                 &[(SearchProvider::Bing, "http://bing.invalid/")],
                 &Mutex::default(),
             )
             .await;
+
             assert!(result.is_err());
             server.await.unwrap();
         }

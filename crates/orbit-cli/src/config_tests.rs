@@ -1,5 +1,6 @@
-use super::*;
 use orbit_agent::tool::{ClosureTool, ToolRegistry};
+
+use super::*;
 
 #[tokio::test]
 async fn project_resources_follow_the_destination_without_changing_process_cwd() {
@@ -147,6 +148,7 @@ models = [{ id = "test" }]
         )
         .await
         .unwrap();
+
     assert!(output.content.contains("launch workspace"));
     assert!(!output.content.contains("previous workspace"));
 }
@@ -184,6 +186,7 @@ fn chat_capability_filter_removes_groups_before_request_assembly() {
     ]
     .into_iter()
     .collect();
+
     disable_chat_capabilities(&mut tools, &disabled);
 
     assert!(!tools.contains("read_file"));
