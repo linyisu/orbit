@@ -101,6 +101,19 @@ impl Wizard {
 
     pub(super) fn handle(&mut self, event: &Event) -> Action {
         if let Event::Mouse(mouse) = event {
+            if let Some(config) = &mut self.form
+                && config.picker
+            {
+                let key = match mouse.kind {
+                    MouseEventKind::ScrollUp => Some(KeyCode::Up),
+                    MouseEventKind::ScrollDown => Some(KeyCode::Down),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    return config
+                        .handle(&crossterm::event::KeyEvent::new(key, KeyModifiers::NONE));
+                }
+            }
             if matches!(
                 mouse.kind,
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
@@ -140,7 +153,12 @@ impl Wizard {
                         config.switch(choice == 81);
                         return Action::None;
                     }
+                    if choice == 6 {
+                        config.toggle_picker();
+                        return Action::None;
+                    }
                     if choice < 5 {
+                        config.picker = false;
                         config.focus = choice;
                         return Action::None;
                     }
@@ -173,6 +191,7 @@ impl Wizard {
             if let Event::Paste(text) = event {
                 if let Some(config) = &mut self.form {
                     if config.focus < 5 {
+                        config.edit_field(config.focus);
                         form::paste(&mut config.fields[config.focus], text);
                     }
                 } else if self.editing_path {
@@ -183,6 +202,9 @@ impl Wizard {
         };
         if key.kind == KeyEventKind::Release {
             return Action::None;
+        }
+        if key.code == KeyCode::Esc && self.form.as_ref().is_some_and(|config| config.picker) {
+            return self.form.as_mut().unwrap().handle(key);
         }
         if key.code == KeyCode::Esc
             || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))

@@ -10,6 +10,9 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct Config {
     spec: Spec,
+    selected_host: Option<discovery::Host>,
+    pending_alias: Option<String>,
+    pub(super) picker: bool,
     pub(super) fields: [InputState; 5],
     pub(super) focus: usize,
     pub(super) suggestion: usize,
@@ -24,22 +27,16 @@ impl Config {
             input
         });
         let mut config = Self {
+            pending_alias: (!spec.is_wsl()).then(|| spec.target()),
+            focus: if spec.is_wsl() { 0 } else { 6 },
+            selected_host: None,
+            picker: false,
             spec,
             fields,
-            focus: 0,
             suggestion: 0,
             error: None,
         };
-        let (hosts, _) = discovery::snapshot();
-        if let Some(host) = hosts.iter().find(|host| host.name == config.fields[0].text) {
-            let explicit = config.fields.clone();
-            config.fill(host);
-            for (index, input) in explicit.into_iter().enumerate().skip(1) {
-                if !input.text.is_empty() {
-                    config.fields[index] = input;
-                }
-            }
-        }
+        config.refresh_alias();
         config
     }
 
@@ -51,43 +48,94 @@ impl Config {
         }
     }
 
+    fn refresh_alias(&mut self) {
+        let Some(alias) = &self.pending_alias else {
+            return;
+        };
+        let (hosts, _) = discovery::snapshot();
+        if let Some(host) = hosts.iter().find(|host| &host.name == alias) {
+            let explicit = self.fields.clone();
+            self.fill(host);
+            for (index, input) in explicit.into_iter().enumerate().skip(1) {
+                if !input.text.is_empty() {
+                    self.fields[index] = input;
+                }
+            }
+        }
+    }
+
     fn fill(&mut self, host: &discovery::Host) {
-        self.fields[0].set(host.name.clone());
+        self.fields[0].set(if host.hostname.is_empty() {
+            host.name.clone()
+        } else {
+            host.hostname.clone()
+        });
         self.fields[1].set(host.user.clone());
         self.fields[2].set(host.port.clone());
         self.fields[3].set(host.identity.clone());
+        self.selected_host = Some(host.clone());
+        self.pending_alias = None;
+        self.error = None;
+    }
+
+    pub(super) fn edit_field(&mut self, index: usize) {
+        self.pending_alias = None;
+        if index == 0 {
+            self.selected_host = None;
+        }
+        self.error = None;
+    }
+
+    pub(super) fn toggle_picker(&mut self) {
+        self.focus = 6;
+        self.picker = !self.picker;
+        self.suggestion = self
+            .selected_host
+            .as_ref()
+            .and_then(|host| self.choices().iter().position(|name| name == &host.name))
+            .unwrap_or(0);
     }
 
     fn choices(&self) -> Vec<String> {
         let (hosts, wsl) = discovery::snapshot();
-        let names = if self.spec.is_wsl() {
-            wsl
+        if self.spec.is_wsl() {
+            wsl.into_iter()
+                .filter(|name| name.contains(self.fields[0].text.trim()))
+                .collect()
         } else {
-            hosts.into_iter().map(|host| host.name).collect()
-        };
-        names
-            .into_iter()
-            .filter(|name| name.contains(self.fields[0].text.trim()))
-            .collect()
+            std::iter::once("手动填写新服务器".into())
+                .chain(hosts.into_iter().map(|host| host.name))
+                .collect()
+        }
     }
 
     pub(super) fn choose(&mut self) {
-        if let Some(name) = self.choices().get(self.suggestion) {
-            if self.spec.is_wsl() {
+        if self.spec.is_wsl() {
+            if let Some(name) = self.choices().get(self.suggestion) {
                 self.fields[0].set(name.clone());
-            } else if let Some(host) = discovery::snapshot()
-                .0
-                .iter()
-                .find(|host| &host.name == name)
-            {
-                self.fill(host);
             }
+        } else if self.suggestion == 0 {
+            for field in &mut self.fields[..4] {
+                field.set(String::new());
+            }
+            self.selected_host = None;
+            self.pending_alias = None;
+            self.error = None;
+        } else if let Some(host) = discovery::snapshot().0.get(self.suggestion - 1) {
+            self.fill(host);
         }
+        self.picker = false;
+        self.focus = 0;
         self.suggestion = 0;
     }
 
     pub(super) fn start(&mut self) -> Action {
-        let values = self.fields.clone().map(|input| input.text);
+        self.picker = false;
+        let mut values = self.fields.clone().map(|input| input.text);
+        if let Some(host) = &self.selected_host {
+            // Keep the alias so OpenSSH still applies ProxyJump and other host options.
+            values[0] = host.name.clone();
+        }
         match self.spec.update(&values) {
             Ok(()) => Action::Start(Box::new(self.spec.clone())),
             Err(error) => {
@@ -98,17 +146,35 @@ impl Config {
     }
 
     pub(super) fn handle(&mut self, key: &crossterm::event::KeyEvent) -> Action {
+        if self.picker {
+            match key.code {
+                KeyCode::Esc => self.picker = false,
+                KeyCode::Enter => self.choose(),
+                KeyCode::Down => {
+                    self.suggestion =
+                        (self.suggestion + 1).min(self.choices().len().saturating_sub(1))
+                }
+                KeyCode::Up => self.suggestion = self.suggestion.saturating_sub(1),
+                _ => {}
+            }
+            return Action::None;
+        }
         let indices: &[usize] = if self.spec.is_wsl() {
             &[0, 1, 4, 5]
         } else {
-            &[0, 1, 2, 3, 4, 5]
+            &[6, 0, 1, 2, 3, 4, 5]
         };
         match key.code {
             KeyCode::F(2) => self.switch(!self.spec.is_wsl()),
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) || self.focus == 5 => {
                 return self.start();
             }
-            KeyCode::Enter if self.focus == 0 && !self.choices().is_empty() => {
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Down if self.focus == 6 => {
+                self.toggle_picker()
+            }
+            KeyCode::Enter
+                if self.spec.is_wsl() && self.focus == 0 && !self.choices().is_empty() =>
+            {
                 self.choose();
                 self.focus = 1;
             }
@@ -122,12 +188,18 @@ impl Config {
                     (index + 1) % indices.len()
                 }];
             }
-            KeyCode::Down if self.focus == 0 => {
+            KeyCode::Down if self.spec.is_wsl() && self.focus == 0 => {
                 self.suggestion = (self.suggestion + 1).min(self.choices().len().saturating_sub(1))
             }
-            KeyCode::Up if self.focus == 0 => self.suggestion = self.suggestion.saturating_sub(1),
+            KeyCode::Up if self.spec.is_wsl() && self.focus == 0 => {
+                self.suggestion = self.suggestion.saturating_sub(1)
+            }
             _ if self.focus < 5 => {
+                let before = self.fields[self.focus].text.clone();
                 form::edit(&mut self.fields[self.focus], key.code, key.modifiers);
+                if before != self.fields[self.focus].text {
+                    self.edit_field(self.focus);
+                }
                 self.suggestion = 0;
             }
             _ => {}
@@ -141,6 +213,7 @@ impl Config {
         area: Rect,
         areas: &mut Vec<(Rect, usize)>,
     ) {
+        self.refresh_alias();
         let labels = if self.spec.is_wsl() {
             [
                 "WSL 发行版",
@@ -151,7 +224,7 @@ impl Config {
             ]
         } else {
             [
-                "SSH 主机／配置别名",
+                "主机（地址或 SSH 别名）",
                 "用户名（可选，或 user@host）",
                 "端口（留空沿用 SSH 配置）",
                 "私钥路径（可选；密码将在认证时询问）",
@@ -177,6 +250,32 @@ impl Config {
             areas.push((rect, 80 + index));
         }
         let mut y = area.y + 2;
+        let selector = if !self.spec.is_wsl() && y + 1 < area.bottom() {
+            frame.render_widget(
+                Paragraph::new("SSH 配置（~/.ssh/config，可选）")
+                    .style(Style::default().fg(THEME.dialog_accent)),
+                Rect::new(area.x, y, area.width, 1),
+            );
+            let rect = Rect::new(area.x, y + 1, area.width, 1);
+            let name = self
+                .selected_host
+                .as_ref()
+                .map(|host| host.name.as_str())
+                .unwrap_or("手动填写新服务器");
+            frame.render_widget(
+                Paragraph::new(format!("{name}  ▾")).style(if self.focus == 6 {
+                    Style::default().fg(THEME.on_accent).bg(THEME.dialog_accent)
+                } else {
+                    Style::default()
+                }),
+                rect,
+            );
+            areas.push((rect, 6));
+            y += 3;
+            Some(rect)
+        } else {
+            None
+        };
         if let Some(error) = &self.error {
             frame.render_widget(
                 Paragraph::new(error.as_str()).style(Style::default().fg(THEME.error)),
@@ -226,7 +325,7 @@ impl Config {
             }
             y += 3;
         }
-        if self.focus == 0 {
+        if self.spec.is_wsl() && self.focus == 0 {
             let count = area.bottom().saturating_sub(y) as usize;
             let start = self.suggestion.saturating_sub(count.saturating_sub(1));
             for (row, (index, name)) in self
@@ -248,5 +347,97 @@ impl Config {
                 areas.push((rect, 100 + index));
             }
         }
+        if self.picker
+            && let Some(selector) = selector
+        {
+            let count = area.bottom().saturating_sub(selector.bottom()) as usize;
+            let start = self.suggestion.saturating_sub(count.saturating_sub(1));
+            let (hosts, _) = discovery::snapshot();
+            for (row, (index, name)) in self
+                .choices()
+                .iter()
+                .enumerate()
+                .skip(start)
+                .take(count)
+                .enumerate()
+            {
+                let rect = Rect::new(area.x, selector.bottom() + row as u16, area.width, 1);
+                let detail = index
+                    .checked_sub(1)
+                    .and_then(|index| hosts.get(index))
+                    .map(|host| format!("  {}@{}  {}", host.user, host.hostname, host.port))
+                    .unwrap_or_default();
+                let style = if index == self.suggestion {
+                    Style::default().fg(THEME.on_accent).bg(THEME.dialog_accent)
+                } else {
+                    Style::default()
+                        .fg(THEME.overlay_foreground)
+                        .bg(THEME.overlay_background)
+                };
+                frame.render_widget(
+                    Paragraph::new(crate::tui::render::safe_output(&format!("{name}{detail}")))
+                        .style(style),
+                    rect,
+                );
+                areas.insert(0, (rect, 100 + index));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+
+    #[test]
+    fn selecting_a_config_host_fills_fields_and_retains_its_ssh_alias() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config");
+        std::fs::write(&path, "Host dev\n HostName server.example\n User alice\n Port 2222\n IdentityFile ~/.ssh/dev\n ProxyJump bastion\n").unwrap();
+        let hosts = discovery::hosts(&path, directory.path());
+        let mut config = Config::new(Spec::parse("/ssh").unwrap());
+        config.fill(&hosts[0]);
+        assert_eq!(
+            config.fields.clone().map(|field| field.text),
+            ["server.example", "alice", "2222", "~/.ssh/dev", ""]
+        );
+        let Action::Start(spec) = config.start() else {
+            panic!("valid connection")
+        };
+        assert_eq!(spec.target(), "dev");
+        config.focus = 0;
+        config.handle(&KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        assert!(config.selected_host.is_some());
+        config.handle(&KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let Action::Start(spec) = config.start() else {
+            panic!("custom connection")
+        };
+        assert_eq!(spec.target(), "xserver.example");
+    }
+
+    #[test]
+    fn manual_server_clears_inherited_credentials_and_does_not_replace_entered_host() {
+        let mut config = Config::new(Spec::parse("/ssh dev /project").unwrap());
+        config.fill(&discovery::Host {
+            name: "dev".into(),
+            hostname: "old.example".into(),
+            user: "old-user".into(),
+            port: "2222".into(),
+            identity: "old-key".into(),
+        });
+        config.suggestion = 0;
+        config.choose();
+        assert!(config.fields[..4].iter().all(|field| field.text.is_empty()));
+        assert_eq!(config.fields[4].text, "/project");
+        config.fields[0].set("new.example".into());
+        config.handle(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(config.fields[0].text, "new.example");
+        assert_eq!(config.focus, 1);
+        let Action::Start(spec) = config.start() else {
+            panic!("manual connection")
+        };
+        assert_eq!(spec.target(), "new.example");
+        assert_eq!(spec.fields()[1], "");
     }
 }
