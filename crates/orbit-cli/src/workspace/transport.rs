@@ -34,7 +34,7 @@ impl Target {
         }
     }
 
-    pub fn command(&self, arguments: &[String]) -> Result<Command> {
+    pub fn command(&self, arguments: &[String], unattended: bool) -> Result<Command> {
         let command = match self {
             Target::Local => {
                 let mut command = Command::new(&arguments[0]);
@@ -49,6 +49,9 @@ impl Target {
                     "invalid SSH host"
                 );
                 let mut command = Command::new("ssh");
+                if unattended {
+                    command.args(["-o", "BatchMode=yes"]);
+                }
                 command.args([
                     "-T",
                     "-o",
@@ -89,6 +92,7 @@ pub struct Connection {
     pub database: Option<PathBuf>,
     pub auth_dir: Option<PathBuf>,
     pub allow_mcp_start: bool,
+    pub unattended: bool,
 }
 
 impl Connection {
@@ -117,7 +121,7 @@ impl Connection {
         if self.allow_mcp_start {
             arguments.push("--allow-mcp-start".into());
         }
-        let mut command = self.target.command(&arguments)?;
+        let mut command = self.target.command(&arguments, self.unattended)?;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -273,7 +277,29 @@ mod tests {
             database: None,
             auth_dir: None,
             allow_mcp_start: false,
+            unattended: false,
         }
+    }
+
+    #[test]
+    fn embedded_ssh_never_prompts_on_the_tui_terminal() {
+        let mut config = connection(Target::Ssh { host: "dev".into() });
+        config.unattended = true;
+        let command = config.command().unwrap();
+        assert!(
+            command
+                .as_std()
+                .get_args()
+                .any(|arg| arg == "BatchMode=yes")
+        );
+        config.unattended = false;
+        let command = config.command().unwrap();
+        assert!(
+            !command
+                .as_std()
+                .get_args()
+                .any(|arg| arg == "BatchMode=yes")
+        );
     }
 
     #[test]

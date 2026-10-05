@@ -19,7 +19,7 @@ use transport::{Connection, Target};
 
 pub use server::serve;
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 pub struct ConnectArgs {
     /// System SSH destination or a Host alias from ~/.ssh/config.
     #[arg(long, conflicts_with = "wsl")]
@@ -69,28 +69,7 @@ pub async fn connect(
     database: Option<PathBuf>,
     auth_dir: Option<PathBuf>,
 ) -> Result<()> {
-    let target = match (args.ssh, args.wsl) {
-        (Some(host), None) => Target::Ssh { host },
-        (None, Some(distribution)) => Target::Wsl {
-            distribution,
-            user: args.wsl_user,
-        },
-        (None, None) => Target::Local,
-        _ => bail!("choose one workspace target"),
-    };
-    let executable = match args.server {
-        Some(executable) => executable,
-        None => bootstrap::executable(&target, args.upload_server).await?,
-    };
-    let connection = Arc::new(Connection {
-        target,
-        workspace: args.workspace,
-        executable,
-        config,
-        database,
-        auth_dir,
-        allow_mcp_start: args.allow_mcp_start,
-    });
+    let connection = prepare_connection(&args, config, database, auth_dir, false).await?;
     let mut client = connection.connect().await?;
     if args.stop {
         client.request(Request::Shutdown).await?;
@@ -130,6 +109,39 @@ pub async fn connect(
             "工作区会话 {id}；可使用相同连接参数加 --resume {id} 重新接入，断开连接不会取消任务"
         )
     })
+}
+
+async fn prepare_connection(
+    args: &ConnectArgs,
+    config: PathBuf,
+    database: Option<PathBuf>,
+    auth_dir: Option<PathBuf>,
+    unattended: bool,
+) -> Result<Arc<Connection>> {
+    let target = match (args.ssh.clone(), args.wsl.clone()) {
+        (Some(host), None) => Target::Ssh { host },
+        (None, Some(distribution)) => Target::Wsl {
+            distribution,
+            user: args.wsl_user.clone(),
+        },
+        (None, None) => Target::Local,
+        _ => bail!("choose one workspace target"),
+    };
+    let executable = match args.server.clone() {
+        Some(executable) => executable,
+        None => bootstrap::executable(&target, args.upload_server.clone(), unattended).await?,
+    };
+    let connection = Arc::new(Connection {
+        target,
+        workspace: args.workspace.clone(),
+        executable,
+        config,
+        database,
+        auth_dir,
+        allow_mcp_start: args.allow_mcp_start,
+        unattended,
+    });
+    Ok(connection)
 }
 
 pub(crate) fn request_id() -> String {

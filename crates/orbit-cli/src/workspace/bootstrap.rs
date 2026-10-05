@@ -13,7 +13,11 @@ use super::transport::Target;
 
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 
-pub async fn executable(target: &Target, upload: Option<PathBuf>) -> Result<String> {
+pub async fn executable(
+    target: &Target,
+    upload: Option<PathBuf>,
+    unattended: bool,
+) -> Result<String> {
     if matches!(target, Target::Local) {
         ensure!(
             upload.is_none(),
@@ -21,14 +25,15 @@ pub async fn executable(target: &Target, upload: Option<PathBuf>) -> Result<Stri
         );
         return Ok(std::env::current_exe()?.to_string_lossy().into_owned());
     }
-    tokio::time::timeout(BOOTSTRAP_TIMEOUT, prepare(target, upload))
+    tokio::time::timeout(BOOTSTRAP_TIMEOUT, prepare(target, upload, unattended))
         .await
         .context("workspace server deployment timed out")?
 }
 
-async fn prepare(target: &Target, upload: Option<PathBuf>) -> Result<String> {
+async fn prepare(target: &Target, upload: Option<PathBuf>, unattended: bool) -> Result<String> {
     let platform = shell(
         target,
+        unattended,
         "printf '%s\\n' \"$(uname -s)\" \"$(uname -m)\" \"$HOME\"".into(),
     )
     .await?;
@@ -66,15 +71,18 @@ async fn prepare(target: &Target, upload: Option<PathBuf>) -> Result<String> {
     let executable = format!("{directory}/orbit");
     let probe = shell(
         target,
+        unattended,
         format!("if test -x {}; then printf ready; fi", quote(&executable)),
     )
     .await?;
-    if probe.trim() == "ready" {
+    if probe.lines().last() == Some("ready") {
         return Ok(executable);
     }
-    eprintln!("正在为 {} 安装工作区服务…", target.label());
+    if !unattended {
+        eprintln!("正在为 {} 安装工作区服务…", target.label());
+    }
     let script = upload_script(&directory, &digest);
-    let mut command = target.command(&["sh".into(), "-c".into(), script])?;
+    let mut command = target.command(&["sh".into(), "-c".into(), script], unattended)?;
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -110,9 +118,9 @@ fn upload_script(directory: &str, digest: &str) -> String {
     )
 }
 
-async fn shell(target: &Target, script: String) -> Result<String> {
+async fn shell(target: &Target, unattended: bool, script: String) -> Result<String> {
     let output = target
-        .command(&["sh".into(), "-c".into(), script])?
+        .command(&["sh".into(), "-c".into(), script], unattended)?
         .stdin(Stdio::null())
         .kill_on_drop(true)
         .output()
