@@ -1,6 +1,10 @@
 use syntect::parsing::{SyntaxDefinition, SyntaxSetBuilder};
 
+#[path = "build/portable.rs"]
+mod portable;
+
 fn main() {
+    portable::bundle();
     println!("cargo:rerun-if-changed=assets/VisualBasic.sublime-syntax");
     println!("cargo:rerun-if-changed=assets/MarkdownInline.sublime-syntax");
     let bundled = two_face::syntax::extra_no_newlines().into_builder();

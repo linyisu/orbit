@@ -13,6 +13,39 @@ use super::transport::Target;
 
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 
+#[cfg(not(target_env = "musl"))]
+const EMBEDDED_SERVER: &[u8] = include_bytes!(env!("ORBIT_EMBEDDED_SERVER"));
+#[cfg(target_env = "musl")]
+const EMBEDDED_SERVER: &[u8] = &[];
+
+#[derive(Clone, Debug)]
+enum ServerBinary {
+    File(PathBuf),
+    Embedded(&'static [u8]),
+}
+
+impl ServerBinary {
+    fn identity(&self) -> Result<(u16, String)> {
+        match self {
+            Self::File(path) => binary_identity(std::fs::File::open(path)?),
+            Self::Embedded(bytes) => binary_identity(*bytes),
+        }
+    }
+
+    async fn reader(&self) -> Result<(Box<dyn tokio::io::AsyncRead + Send + Unpin>, u64)> {
+        match self {
+            Self::File(path) => {
+                let file = tokio::fs::File::open(path).await?;
+                let size = file.metadata().await?.len();
+                Ok((Box::new(file), size))
+            }
+            Self::Embedded(bytes) => {
+                Ok((Box::new(std::io::Cursor::new(*bytes)), bytes.len() as u64))
+            }
+        }
+    }
+}
+
 pub async fn executable(
     target: &Target,
     upload: Option<PathBuf>,
@@ -72,14 +105,14 @@ async fn prepare(
     }
     let binary = select_binary(upload, &std::env::current_exe()?, architecture)?;
     if let Some(progress) = progress {
-        progress.report(format!(
-            "准备服务程序：{}",
-            binary.file_name().unwrap_or_default().to_string_lossy()
-        ));
+        progress.report(match &binary {
+            ServerBinary::Embedded(_) => "准备内置的静态工作区服务".into(),
+            ServerBinary::File(path) => format!("准备服务程序：{}", path.display()),
+        });
     }
     let (machine, digest) = tokio::task::spawn_blocking({
         let binary = binary.clone();
-        move || binary_identity(&binary)
+        move || binary.identity()
     })
     .await??;
     let expected = match architecture {
@@ -129,8 +162,7 @@ async fn prepare(
         .kill_on_drop(true);
     let mut child = command.spawn()?;
     let mut input = child.stdin.take().context("missing server upload pipe")?;
-    let mut file = tokio::fs::File::open(binary).await?;
-    let size = file.metadata().await?.len();
+    let (mut file, size) = binary.reader().await?;
     let upload = async {
         let mut buffer = [0; 64 * 1024];
         let mut sent = 0;
@@ -166,20 +198,30 @@ async fn prepare(
     Ok(executable)
 }
 
-fn select_binary(upload: Option<PathBuf>, current: &Path, architecture: &str) -> Result<PathBuf> {
+fn select_binary(
+    upload: Option<PathBuf>,
+    current: &Path,
+    architecture: &str,
+) -> Result<ServerBinary> {
     if let Some(upload) = upload {
-        return Ok(upload);
+        return Ok(ServerBinary::File(upload));
     }
     ensure!(
         matches!(architecture, "x86_64" | "aarch64"),
         "unsupported target architecture: {architecture}"
     );
-    let companion = current.with_file_name(format!("orbit-server-{architecture}-linux-musl"));
-    Ok(if companion.is_file() {
-        companion
-    } else {
-        current.to_owned()
-    })
+    ensure!(
+        architecture == std::env::consts::ARCH,
+        "客户端未内置 {architecture} 架构的服务程序；请通过 --upload-server 指定匹配架构的 Linux 程序"
+    );
+    if !EMBEDDED_SERVER.is_empty() {
+        return Ok(ServerBinary::Embedded(EMBEDDED_SERVER));
+    }
+    ensure!(
+        cfg!(all(target_env = "musl", target_feature = "crt-static")),
+        "此构建缺少内置的静态工作区服务，无法自动部署"
+    );
+    Ok(ServerBinary::File(current.to_owned()))
 }
 
 pub(super) async fn verify(
@@ -223,9 +265,9 @@ pub(super) async fn verify(
 
 pub(super) fn runtime_error(diagnostics: &str) -> String {
     if diagnostics.contains("GLIBC_") && diagnostics.contains("not found") {
-        "目标系统的 glibc 版本低于服务程序的要求。请使用包含 musl 服务程序的 Orbit 构建，或通过 --upload-server 指定兼容的 Linux 程序；无需升级服务器 glibc。".into()
+        "指定的服务程序依赖目标系统未提供的 glibc 版本。请移除 --server / --upload-server，使用客户端内置的静态服务，或指定兼容目标系统的程序。".into()
     } else if diagnostics.contains("error while loading shared libraries") {
-        "目标系统缺少服务程序需要的动态库。请使用包含 musl 服务程序的 Orbit 构建，或通过 --upload-server 指定兼容的 Linux 程序。".into()
+        "指定的服务程序依赖目标系统未提供的动态库。请移除 --server / --upload-server，使用客户端内置的静态服务，或指定兼容目标系统的程序。".into()
     } else {
         format!("目标服务程序无法启动：{}", diagnostics.trim())
     }
@@ -237,7 +279,7 @@ fn quote(value: &str) -> String {
 
 fn upload_script(directory: &str, digest: &str) -> String {
     format!(
-        "set -eu; umask 077; directory={}; mkdir -p -- \"$directory\"; temporary=$(mktemp \"$directory/.orbit.XXXXXX\"); trap 'rm -f -- \"$temporary\"' EXIT HUP INT TERM; cat > \"$temporary\"; printf '%s  %s\\n' {} \"$temporary\" | sha256sum -c - >&2; chmod 700 \"$temporary\"; mv -f -- \"$temporary\" \"$directory/orbit\"",
+        "set -eu; umask 077; directory={}; mkdir -p -- \"$directory\"; temporary=$(mktemp \"$directory/.orbit.XXXXXX\"); trap 'rm -f -- \"$temporary\"' EXIT HUP INT TERM; cat > \"$temporary\"; printf '%s  %s\\n' {} \"$temporary\" | sha256sum -c - >/dev/null; chmod 700 \"$temporary\"; mv -f -- \"$temporary\" \"$directory/orbit\"",
         quote(directory),
         quote(digest)
     )
@@ -271,8 +313,7 @@ async fn shell(
     String::from_utf8(output.stdout).context("target environment response is not UTF-8")
 }
 
-fn binary_identity(path: &Path) -> Result<(u16, String)> {
-    let mut file = std::fs::File::open(path)?;
+fn binary_identity(mut file: impl Read) -> Result<(u16, String)> {
     let mut header = [0; 20];
     file.read_exact(&mut header)?;
     ensure!(
@@ -305,17 +346,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deployment_prefers_the_matching_portable_bundle_and_honors_overrides() {
+    fn deployment_uses_the_embedded_server_without_companion_files() {
         let root = tempfile::tempdir().unwrap();
         let current = root.path().join("orbit");
-        let portable = root.path().join("orbit-server-x86_64-linux-musl");
-        std::fs::write(&portable, b"test").unwrap();
-        assert_eq!(select_binary(None, &current, "x86_64").unwrap(), portable);
-        assert_eq!(select_binary(None, &current, "aarch64").unwrap(), current);
-        assert_eq!(
-            select_binary(Some("/explicit".into()), &current, "x86_64").unwrap(),
-            Path::new("/explicit")
-        );
+        std::fs::write(&current, b"not a portable executable").unwrap();
+        let selected = select_binary(None, &current, std::env::consts::ARCH).unwrap();
+        if cfg!(target_env = "musl") {
+            assert!(matches!(selected, ServerBinary::File(path) if path == current));
+        } else {
+            assert!(matches!(selected, ServerBinary::Embedded(_)));
+            assert!(selected.identity().is_ok());
+        }
+        let other = if std::env::consts::ARCH == "x86_64" {
+            "aarch64"
+        } else {
+            "x86_64"
+        };
+        assert!(select_binary(None, &current, other).is_err());
+        assert!(matches!(
+            select_binary(Some("/explicit".into()), &current, other).unwrap(),
+            ServerBinary::File(path) if path == Path::new("/explicit")
+        ));
     }
 
     #[tokio::test]

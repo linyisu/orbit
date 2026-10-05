@@ -20,7 +20,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap musl-tools
 
       - name: Enable unprivileged user namespaces
         run: |
@@ -59,6 +59,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -83,12 +84,12 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
-      - name: Build native client and portable workspace server
+      - name: Build client with embedded portable server
         run: scripts/build-bundle.sh
-      - name: Verify service on older Linux
+      - name: Verify standalone client on older Linux
         run: python3 scripts/test-remote-bundle.py target/bundle
-      - name: Package executables with permissions
-        run: tar -czf target/orbit-linux-x86_64.tar.gz -C target/bundle .
+      - name: Package executable with permissions
+        run: tar -czf target/orbit-linux-x86_64.tar.gz -C target/bundle orbit
       - uses: actions/upload-artifact@v4
         with:
           name: orbit-linux-x86_64
