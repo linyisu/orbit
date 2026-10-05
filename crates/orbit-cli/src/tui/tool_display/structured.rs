@@ -80,6 +80,7 @@ impl View {
                     break;
                 }
             }
+
             vec![Line::from(clipped_spans)]
         };
 
@@ -195,6 +196,7 @@ pub(super) fn summary(arguments: &str) -> String {
             "{label}  {}",
             super::super::render::compact_preview(path, 100)
         ),
+
         None => label.into(),
     }
 }
@@ -209,6 +211,7 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
         } else {
             view.note("无提交历史记录");
         }
+
         let limit = if expanded { commits.len() } else { 4 };
 
         for commit in commits.iter().take(limit) {
@@ -412,6 +415,7 @@ pub(super) fn command_output(
             let spans = super::super::render::parse_ansi_to_spans(line);
             view.push_spans(spans);
         }
+
         if !expanded && lines.len() > limit {
             view.omitted(lines.len().saturating_sub(limit), "行输出");
         }
@@ -601,6 +605,7 @@ pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
                 "read" => "只读 (read)",
                 other => other,
             };
+
             view.push(&format!("  路径: {path}"), theme.output_foreground);
             view.push(&format!("  模式: {access_label}"), theme.tool_detail);
         }
@@ -649,6 +654,7 @@ pub(super) fn export_artifact(
         } else {
             sha256
         };
+
         view.push(&format!("  哈希: sha256:{short_sha}…"), theme.output_muted);
     }
 

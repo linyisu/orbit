@@ -184,6 +184,7 @@ fn agent_read_detail(args: &Value, out: &Value) -> String {
             .map(|total| format!("{total} 个子任务"))
             .unwrap_or_else(|| "子任务列表".into());
     }
+
     let view = out["view"].as_str().or(args["view"].as_str());
     if out["result_available"] == false {
         return match out["status"].as_str() {
@@ -192,6 +193,7 @@ fn agent_read_detail(args: &Value, out: &Value) -> String {
         }
         .into();
     }
+
     let content = out["content"].as_str().unwrap_or_default();
     if content.is_empty() {
         return if out.is_null() {
@@ -201,6 +203,7 @@ fn agent_read_detail(args: &Value, out: &Value) -> String {
         }
         .into();
     }
+
     if view == Some("result") {
         return format!("最终结果 · {}", summary_line(content, 100));
     }
@@ -225,6 +228,7 @@ fn agent_read_detail(args: &Value, out: &Value) -> String {
                 return format!("工具调用 · {}", summary_line(&tools, 100));
             }
         }
+
         if let Some(text) = record["content"].as_str() {
             let label = match record["role"].as_str() {
                 Some("user") => "任务说明",
@@ -236,6 +240,7 @@ fn agent_read_detail(args: &Value, out: &Value) -> String {
             return format!("{label} · {}", summary_line(text, 100));
         }
     }
+
     if content.trim_start().starts_with('{') {
         format!("执行记录片段 · 读取了 {} 字", content.chars().count())
     } else {
@@ -265,6 +270,7 @@ pub(super) fn group_target_summary(row: &ToolRow) -> String {
         | "export_artifact" | "request_capability" => {
             safe_output(args["path"].as_str().unwrap_or_default())
         }
+
         "list_files" | "project_overview" => {
             safe_output(args["path"].as_str().unwrap_or("当前目录"))
         }
@@ -317,6 +323,7 @@ fn write_file_linked(arguments: &str, width: u16) -> Option<Vec<LinkedLine>> {
             Style::default().fg(SECONDARY),
         )))]);
     }
+
     let digits = total_lines.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
     let mut renderer = Renderer::for_path(path);
     let mut out = Vec::new();
@@ -333,6 +340,7 @@ fn write_file_linked(arguments: &str, width: u16) -> Option<Vec<LinkedLine>> {
             width,
         );
     }
+
     Some(out)
 }
 
@@ -370,6 +378,7 @@ pub(super) fn edit_file_preview(arguments: &str, width: u16) -> Option<Vec<Line<
             ));
         }
     }
+
     Some(out)
 }
 
@@ -421,6 +430,7 @@ fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
             ),
             Span::styled(url.to_owned(), Style::default().fg(theme.md_link)),
         ];
+
         if total > 0 {
             let end = start + content.chars().count() as u64;
             spans.push(Span::styled(
@@ -428,6 +438,7 @@ fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
                 Style::default().fg(theme.tool_detail),
             ));
         }
+
         (content, Some(spans))
     } else {
         (output.to_owned(), None)
@@ -445,6 +456,7 @@ fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
         ))));
         return Some(out);
     }
+
     out.extend(markdown_preview(trimmed, width));
     Some(out)
 }
@@ -471,6 +483,7 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
             });
             return Some(vec![line]);
         }
+
         "web_fetch" => return web_fetch_preview(&row.output, width),
         "read_document" => return structured::document_with_links(row, expanded, width),
         "read_file" => {
@@ -480,6 +493,7 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
                 width,
             );
         }
+
         "write_file" => return write_file_linked(&row.arguments, width),
         "search_text" => {
             return search_linked(
@@ -488,8 +502,10 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
                 width,
             );
         }
+
         _ => {}
     }
+
     lines(row, expanded, width).map(|lines| lines.into_iter().map(LinkedLine::plain).collect())
 }
 
@@ -508,21 +524,25 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
             expanded,
             width,
         ),
+
         "search_text" => search(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
             width,
         ),
+
         "read_file" => read(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
             width,
         ),
+
         "memory_save" => memory(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
             width,
         ),
+
         "web_fetch" => web_fetch_preview(&row.output, width)
             .map(|lines| lines.into_iter().map(|linked| linked.line).collect()),
         "web_search" => structured::web_search(row, expanded, width),
@@ -570,6 +590,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 note(&mut out, &format!("{path}{pkg}"), width);
             }
         }
+
         out.push(toggle_line(expanded, width));
         return Some(out);
     }
@@ -612,6 +633,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             }
         }
     }
+
     push_line(&mut raw_lines, 0, header_spans);
 
     if let Some(manifests) = value["manifests"].as_array().filter(|m| !m.is_empty()) {
@@ -634,6 +656,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             {
                 manifest_spans.push(Span::styled(format!(" [{system}]"), detail_style));
             }
+
             push_line(&mut raw_lines, 0, manifest_spans);
 
             if let Some(members) = manifest
@@ -650,6 +673,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 } else {
                     members.to_string()
                 };
+
                 if !member_strs.is_empty() {
                     push_line(
                         &mut raw_lines,
@@ -713,6 +737,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                         candidate_cmds.push(s.to_string());
                     }
                 }
+
                 if !candidate_cmds.is_empty() {
                     push_line(
                         &mut raw_lines,
@@ -744,6 +769,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 } else {
                     String::new()
                 };
+
                 push_line(
                     &mut raw_lines,
                     1,
@@ -799,6 +825,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 ],
             );
         }
+
         if dirs.len() > limit {
             push_line(
                 &mut raw_lines,
@@ -834,6 +861,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 vec![Span::styled(path.to_owned(), detail_style)],
             );
         }
+
         if tests.len() > limit {
             push_line(
                 &mut raw_lines,
@@ -962,6 +990,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
 
             push_line(&mut raw_lines, 1, spans);
         }
+
         if symbols.len() > limit {
             push_line(
                 &mut raw_lines,
@@ -1338,8 +1367,9 @@ mod tests;
 
 #[cfg(test)]
 mod subagent_tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn child_cards_expose_live_and_completed_session_links_at_narrow_widths() {
@@ -1363,6 +1393,7 @@ mod subagent_tests {
                 );
             }
         }
+
         assert!(agent_session_id("{\"agent_id\":\"../orbit.db\"}").is_none());
     }
 }

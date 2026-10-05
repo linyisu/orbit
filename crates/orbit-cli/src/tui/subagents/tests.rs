@@ -1,7 +1,8 @@
-use super::*;
 use crossterm::event::{KeyEvent, MouseEvent};
 use orbit_model::types::ToolCall;
 use ratatui::{Terminal, backend::TestBackend};
+
+use super::*;
 
 fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
     Event::Mouse(MouseEvent {
@@ -28,6 +29,7 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
             status:if status=="running" {ToolStatus::Running} else {ToolStatus::Finished},
             output:json!({"agent_id":"00000000000000000000000000000001","status":status,"model":"orbit::model","tool_calls":3,"elapsed_ms":12900,"_activity":{"current":"read_file crates/orbit-cli/src/tui/很长很长很长的文件名.rs"},"summary":"**检查完成**\n\n[证据](https://orbit.example/evidence)"}).to_string(),
         };
+
         for width in [10, 11, 12, 30, 80] {
             for expanded in [false, true] {
                 let lines = super::super::render::tool_card_with_links(&row, expanded, width);
@@ -73,6 +75,7 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
                             .any(|line| line.line.to_string().contains("3 次调用 · 12s"))
                     );
                 }
+
                 if expanded {
                     assert!(lines.first().unwrap().line.to_string().starts_with('╭'));
                     assert!(lines.last().unwrap().line.to_string().starts_with('╰'));
@@ -86,6 +89,7 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
                         assert!(text.contains("3 次调用 · 12s"));
                     }
                 }
+
                 if expanded {
                     assert!(lines.iter().any(|line| {
                         line.links
@@ -98,6 +102,7 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
                         .filter(|span| span.style.add_modifier.contains(Modifier::BOLD))
                         .map(|span| span.content.as_ref())
                         .collect::<String>();
+
                     assert!(bold.contains("检查完成"));
                 }
             }
@@ -136,6 +141,7 @@ fn subagent_results_and_rules_stay_inside_the_shared_tool_frame() {
                 }
             }
         }
+
         assert!(found, "width {width}");
     }
 }
@@ -163,6 +169,7 @@ async fn viewer_updates_live_keeps_parent_state_and_accepts_follow_up_drafts() {
         )
         .await
         .unwrap();
+
     child
         .begin("检查 Orbit".into(), "orbit::child".into())
         .await
@@ -250,6 +257,7 @@ async fn viewer_updates_live_keeps_parent_state_and_accepts_follow_up_drafts() {
     ] {
         viewer.handle(&event).unwrap();
     }
+
     assert!(viewer.view.ui.selection.active());
     assert!(!viewer.poll(&store, parent.id()).await);
     viewer.handle(&Event::Paste("Orbit 追问".into())).unwrap();
@@ -379,12 +387,14 @@ async fn viewer_replays_large_logs_in_batches_without_recovering_an_orphaned_wri
             })
             .sum::<usize>()
     };
+
     assert!(text_len(viewer) > 0 && text_len(viewer) < 5000);
     for _ in 0..100 {
         if !viewer.poll(&store, parent.id()).await {
             break;
         }
     }
+
     assert_eq!(text_len(viewer), 5000);
     assert_eq!(
         store.session_revision(&id).await.unwrap().unwrap().status,
@@ -416,6 +426,7 @@ async fn journal_progress_is_incremental_and_continuations_do_not_change_old_car
         )
         .await
         .unwrap();
+
     assert_eq!(
         store.subagent_parent(child.id()).await.unwrap().as_deref(),
         Some(parent.id())
@@ -534,6 +545,7 @@ fn parent_navigation_has_hover_respects_selection_and_does_not_cover_the_editor(
     ] {
         state.selection.handle(&event).unwrap();
     }
+
     assert!(state.selection.active());
     handle_parent(&mut state, &down);
     handle_parent(&mut state, &up);

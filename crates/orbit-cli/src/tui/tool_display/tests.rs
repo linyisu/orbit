@@ -1,5 +1,6 @@
-use super::*;
 use serde_json::json;
+
+use super::*;
 
 #[test]
 fn overview_preview_has_readable_evidence_and_expand_controls() {
@@ -70,6 +71,7 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
             "result_available":true
         }),
     );
+
     tool.arguments = args.clone();
     let original = tool.output.clone();
     assert_eq!(group_target_summary(&tool), "审查 Orbit 渲染逻辑");
@@ -126,6 +128,7 @@ fn memory_save_shows_title_and_scoped_preview_without_changing_the_result() {
             "source_kind": "session_memory"
         }),
     );
+
     tool.arguments =
         json!({ "title": "审查记录", "category": "fact", "content": content }).to_string();
     let original = tool.output.clone();
@@ -347,6 +350,7 @@ fn search_retains_syntax_state_in_context_and_resets_it_across_gaps() {
             .iter()
             .find(|span| span.content.starts_with("fn"))
             .unwrap();
+
         assert_eq!(keyword.style.fg, Some(expected));
     }
 }
@@ -392,7 +396,6 @@ fn file_preview_clips_by_cells_and_expansion_keeps_source_and_gutter() {
 
     assert_eq!(reconstructed, safe_output(&source));
 
-    // File length must not shift the rail between adjacent tool previews.
     for end in [4, 92, 168, 1024] {
         let file = self::row(
             "read_file",
@@ -486,6 +489,7 @@ fn edit_file_preview_shows_diff_lines() {
             Some(crate::tui::theme::THEME.diff_removed_bg)
         );
     }
+
     for span in &py_preview[1].spans {
         assert_eq!(span.style.bg, Some(crate::tui::theme::THEME.diff_added_bg));
     }
@@ -501,6 +505,7 @@ fn command_output_summary_displays_terminal_number_and_id() {
         "stream": "stdout"
     })
     .to_string();
+
     assert_eq!(
         command_output_summary(&args1),
         "终端 #1 (cmd-12345-67890-0)"
@@ -511,6 +516,7 @@ fn command_output_summary_displays_terminal_number_and_id() {
         "stream": "stderr"
     })
     .to_string();
+
     assert_eq!(
         command_output_summary(&args2),
         "终端 #2 [stderr] (cmd-12345-67890-1)"

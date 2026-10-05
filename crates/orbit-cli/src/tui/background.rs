@@ -78,6 +78,7 @@ pub(super) fn marketplace_result(
             market.plugins.len(),
             market.directory.display()
         )),
+
         Ok(Err(error)) => TranscriptItem::CommandError(format!("无法添加市场：{error}")),
         Err(error) => TranscriptItem::CommandError(format!("市场下载任务中断：{error}")),
     }
@@ -104,6 +105,7 @@ pub(super) fn model_refresh_result(
                 state.reasoning_effort,
             ));
         }
+
         Ok(Err(error)) => state.report_local(TranscriptItem::CommandError(format!(
             "模型刷新失败：{error}"
         ))),
@@ -127,6 +129,7 @@ pub(super) fn outcome(
                 None,
             )
         }
+
         Ok(Ok(result)) => (
             "completed",
             AgentEvent::Completed {
@@ -135,6 +138,7 @@ pub(super) fn outcome(
             },
             Some(result.history),
         ),
+
         Ok(Err(_)) if cancellation.is_some_and(CancellationToken::is_cancelled) => {
             ("cancelled", AgentEvent::Cancelled, None)
         }
@@ -146,6 +150,7 @@ pub(super) fn outcome(
             },
             None,
         ),
+
         Ok(Err(AgentError::Compaction(_))) => (
             "failed",
             AgentEvent::Failed {
@@ -153,6 +158,7 @@ pub(super) fn outcome(
             },
             None,
         ),
+
         Ok(Err(error)) => (
             "failed",
             AgentEvent::Failed {
@@ -160,6 +166,7 @@ pub(super) fn outcome(
             },
             None,
         ),
+
         Err(error) => (
             "failed",
             AgentEvent::Failed {
@@ -191,6 +198,7 @@ pub(super) async fn poll(
             tab.state.report_local(marketplace_result(result));
             changed = true;
         }
+
         if run
             .model_refresh
             .as_ref()
@@ -204,6 +212,7 @@ pub(super) async fn poll(
             }
             changed = true;
         }
+
         if run
             .local_task
             .as_ref()
@@ -214,6 +223,7 @@ pub(super) async fn poll(
             tab.state.report_local(local_result(result));
             changed = true;
         }
+
         if let Some(replay) = &mut run.history_replay {
             if replay.advance(
                 &tab.session.snapshot,
@@ -228,6 +238,7 @@ pub(super) async fn poll(
                     tab.state
                         .report_local(TranscriptItem::CommandResult(notice));
                 }
+
                 refresh_context_usage(&mut tab.state, &tab.history, &run.tools);
                 session_sync::sync_runtime(&tab.session.store, id, &mut tab.state).await?;
             } else {
@@ -237,8 +248,10 @@ pub(super) async fn poll(
                     tab.session.snapshot.runs.len()
                 ));
             }
+
             changed = true;
         }
+
         if run.task.is_none() {
             if run.local_task.is_none()
                 && run.history_replay.is_none()
@@ -251,8 +264,10 @@ pub(super) async fn poll(
                 refresh_context_usage(&mut tab.state, &tab.history, &run.tools);
                 changed = true;
             }
+
             continue;
         }
+
         if let Some(receiver) = &mut run.receiver {
             for _ in 0..256 {
                 let Ok(event) = receiver.try_recv() else {
@@ -262,6 +277,7 @@ pub(super) async fn poll(
                 changed = true;
             }
         }
+
         if run
             .pending
             .as_ref()
@@ -271,6 +287,7 @@ pub(super) async fn poll(
             tab.state.approval = None;
             tab.state.resume_clock();
         }
+
         if run.pending.is_none()
             && let Ok(request) = run.approvals.try_recv()
         {
@@ -278,12 +295,14 @@ pub(super) async fn poll(
             queue_approval(request, &mut tab.state, &tab.session, &mut run.pending);
             changed = true;
         }
+
         if run.last_publish.elapsed() >= Duration::from_millis(200) {
             tab.session.flush_events().await?;
             session_sync::publish(&tab.session, &tab.state, tab.session.active_run_id()).await?;
             run.last_publish = std::time::Instant::now();
             changed = true;
         }
+
         if !run.task.as_ref().is_some_and(|task| task.is_finished()) {
             continue;
         }
@@ -293,6 +312,7 @@ pub(super) async fn poll(
                 apply_live_event(event, &mut tab.state);
             }
         }
+
         run.pending = None;
         tab.state.approval = None;
         let (status, event, history) = outcome(result, run.cancellation.as_ref());
@@ -312,6 +332,7 @@ pub(super) async fn poll(
             )
             .await?;
         }
+
         tab.state.apply(event);
         super::model_catalog::reconcile(&mut tab.state, &mut tab.model, &run.model_options);
         refresh_context_usage(&mut tab.state, &tab.history, &run.tools);
@@ -345,6 +366,7 @@ pub(super) async fn poll(
                     run.receiver = Some(started.receiver);
                     run.cancellation = Some(started.cancellation);
                 }
+
                 Err(error) => {
                     tab.state.input.set(guidance);
                     tab.state
@@ -355,8 +377,10 @@ pub(super) async fn poll(
         } else {
             run.active_context = None;
         }
+
         changed = true;
     }
+
     let catalog_refreshed = refreshed_models.is_some();
     if let Some(models) = refreshed_models {
         super::model_catalog::publish_background(models, model_options, runs, tabs);
@@ -378,6 +402,7 @@ pub(super) async fn shutdown(runs: &mut Runs, tabs: &mut tabs::Tabs) -> Result<(
             token.cancel();
         }
     }
+
     for (id, run) in runs.iter_mut() {
         if let Some(mut task) = run.task.take()
             && time::timeout(Duration::from_millis(500), &mut task)
@@ -387,6 +412,7 @@ pub(super) async fn shutdown(runs: &mut Runs, tabs: &mut tabs::Tabs) -> Result<(
             task.abort();
             let _ = task.await;
         }
+
         if let Some(mut task) = run.local_task.take()
             && time::timeout(Duration::from_millis(500), &mut task)
                 .await
@@ -395,6 +421,7 @@ pub(super) async fn shutdown(runs: &mut Runs, tabs: &mut tabs::Tabs) -> Result<(
             task.abort();
             let _ = task.await;
         }
+
         if let Some(tab) = tabs.parked_mut(id) {
             tab.session.close().await?;
         }
@@ -407,6 +434,7 @@ pub(super) async fn shutdown(runs: &mut Runs, tabs: &mut tabs::Tabs) -> Result<(
             let _ = task.await;
         }
     }
+
     Ok(())
 }
 

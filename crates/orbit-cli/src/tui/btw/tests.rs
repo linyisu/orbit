@@ -120,6 +120,7 @@ fn tool_less_requests_preserve_context_without_unresolved_protocol_calls() {
         Some(ReasoningEffort::High),
         4096,
     );
+
     assert!(sent.tools.is_empty());
     assert_eq!(sent.reasoning_effort, Some(ReasoningEffort::High));
     assert_eq!(sent.max_tokens, Some(4096));
@@ -137,6 +138,7 @@ fn tool_less_requests_preserve_context_without_unresolved_protocol_calls() {
     ] {
         assert!(text.contains(expected));
     }
+
     assert_eq!(sent.messages.last(), Some(&ChatMessage::user("什么原因？")));
     assert_eq!(history.len(), 6);
 }
@@ -273,6 +275,7 @@ async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
         )]),
         ..completion("")
     }]);
+
     questions
         .ask_with_backend(
             &store,
@@ -328,6 +331,7 @@ async fn history_navigation_and_new_questions_do_not_import_other_side_answers()
             .unwrap();
         settle(&mut questions).await;
     }
+
     assert!(
         !serde_json::to_string(&backend.requests()[1])
             .unwrap()
@@ -378,6 +382,7 @@ async fn follow_ups_keep_their_thread_after_restart_and_leave_other_questions_in
             .unwrap();
         settle(&mut questions).await;
     }
+
     let mut restored = Questions::default();
     restored
         .ask_with_backend(
@@ -642,6 +647,7 @@ async fn a_side_dialog_stays_above_pending_approval_and_freezes_text_while_selec
         .iter()
         .map(|cell| cell.symbol())
         .collect();
+
     assert!(screen.replace(' ', "").contains("旁路提问"));
     assert!(!screen.contains("approval-body-marker"));
     let area = state
@@ -653,6 +659,7 @@ async fn a_side_dialog_stays_above_pending_approval_and_freezes_text_while_selec
         .ui
         .selection
         .viewport;
+
     for (kind, x) in [
         (MouseEventKind::Down(MouseButton::Left), area.x + 2),
         (MouseEventKind::Drag(MouseButton::Left), area.x + 8),
@@ -668,6 +675,7 @@ async fn a_side_dialog_stays_above_pending_approval_and_freezes_text_while_selec
             }))
             .unwrap();
     }
+
     assert!(
         state
             .btw

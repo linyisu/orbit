@@ -1,7 +1,8 @@
-use super::*;
 use orbit_tools::approval::WritePreview;
 use ratatui::{Terminal, backend::TestBackend};
 use unicode_width::UnicodeWidthStr;
+
+use super::*;
 
 #[test]
 fn approval_keeps_old_and_new_syntax_states_independent() {
@@ -22,6 +23,7 @@ fn approval_keeps_old_and_new_syntax_states_independent() {
             row.find("fn orbit").map(|x| (row[..x].width() as u16, y))
         })
         .expect("unchanged source line is visible");
+
     assert_eq!(buffer[point].fg, ratatui::style::Color::Rgb(198, 120, 221));
 
     let cache = super::super::approval_diff::Cache::new(
@@ -31,6 +33,7 @@ fn approval_keeps_old_and_new_syntax_states_independent() {
         true,
         "src/Orbit Code.rs",
     );
+
     for (side, expected) in [
         (&cache.left, ratatui::style::Color::Rgb(163, 173, 190)),
         (&cache.right, ratatui::style::Color::Rgb(198, 120, 221)),
@@ -44,6 +47,7 @@ fn approval_keeps_old_and_new_syntax_states_independent() {
             .iter()
             .find(|span| span.content.contains("fn"))
             .unwrap();
+
         assert_eq!(keyword.style.fg, Some(expected));
     }
 }

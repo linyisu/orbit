@@ -1,5 +1,6 @@
-use super::*;
 use serde_json::json;
+
+use super::*;
 
 fn tool(name: &str, value: Value) -> ToolRow {
     ToolRow {
@@ -10,6 +11,7 @@ fn tool(name: &str, value: Value) -> ToolRow {
         output: value.to_string(),
     }
 }
+
 fn text(lines: &[Line<'_>]) -> String {
     lines
         .iter()
@@ -17,6 +19,7 @@ fn text(lines: &[Line<'_>]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
 #[test]
 fn directory_preview_preserves_nested_paths_and_separates_paging_from_expansion() {
     let mut row = tool(
@@ -27,6 +30,7 @@ fn directory_preview_preserves_nested_paths_and_separates_paging_from_expansion(
             "next_offset": 7
         }),
     );
+
     row.arguments = json!({ "path": "src" }).to_string();
     let original = row.output.clone();
     let preview = text(&files(&row, false, 80).unwrap());
@@ -43,6 +47,7 @@ fn directory_preview_preserves_nested_paths_and_separates_paging_from_expansion(
     assert!(!expanded.contains("需再次查询"));
     assert_eq!(row.output, original);
 }
+
 #[test]
 fn git_views_show_evidence_instead_of_json_and_do_not_invent_repairs() {
     let history = tool(
@@ -113,6 +118,7 @@ fn git_views_show_evidence_instead_of_json_and_do_not_invent_repairs() {
             && l.spans.last().unwrap().style.fg == Some(REMOVED))
     );
 }
+
 #[test]
 fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload() {
     let long = format!("中文👩‍💻e\u{301}{}\u{1b}[31m", "很长的路径/".repeat(15));
@@ -197,6 +203,7 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
         assert_eq!(row.output, original);
     }
 }
+
 #[test]
 fn expansion_wraps_with_a_stable_gutter_and_preserves_text() {
     let original = "中文目录/很长的文件名称.rs".repeat(8);
@@ -210,6 +217,7 @@ fn expansion_wraps_with_a_stable_gutter_and_preserves_text() {
 
     assert_eq!(joined, original);
 }
+
 #[test]
 fn command_output_view_formats_stream_range_and_truncation() {
     let row = tool(
@@ -231,6 +239,7 @@ fn command_output_view_formats_stream_range_and_truncation() {
     assert!(rendered.contains("line 2"));
     assert!(rendered.contains("next_offset = 1024"));
 }
+
 #[test]
 fn web_search_view_formats_results_and_links() {
     let row = tool(
@@ -256,6 +265,7 @@ fn web_search_view_formats_results_and_links() {
     assert!(rendered.contains("https://www.rust-lang.org"));
     assert!(rendered.contains("Empowering everyone"));
 }
+
 #[test]
 fn document_view_formats_format_and_characters() {
     let row = tool(
@@ -274,6 +284,7 @@ fn document_view_formats_format_and_characters() {
     assert!(rendered.contains("col1,col2"));
     assert!(rendered.contains("val1,val2"));
 }
+
 #[test]
 fn capability_view_formats_granted_and_denied() {
     let granted_row = tool(
@@ -302,6 +313,7 @@ fn capability_view_formats_granted_and_denied() {
     assert!(rendered.contains(&format!("{} 外部目录访问授权被拒绝", icons::CLOSE)));
     assert!(rendered.contains("User denied permission"));
 }
+
 #[test]
 fn artifact_and_patch_and_image_views_format_cleanly() {
     let artifact_row = tool(

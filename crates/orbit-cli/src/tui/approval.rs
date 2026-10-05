@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
-use super::app::UiState;
+use super::{app::UiState, render::safe_output};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -42,8 +42,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                             };
                         }
                     }
+
                     _ => {}
                 }
+
                 return Action::None;
             }
 
@@ -93,14 +95,17 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                     state.approval_choice = (state.approval_choice + 1) % 3;
                     return Action::None;
                 }
+
                 KeyCode::Left => {
                     state.approval_choice = state.approval_choice.saturating_sub(1);
                     return Action::None;
                 }
+
                 KeyCode::Right => {
                     state.approval_choice = (state.approval_choice + 1).min(2);
                     return Action::None;
                 }
+
                 KeyCode::Enter if state.approval_shown => {
                     return match state.approval_choice {
                         0 => Action::Approve,
@@ -108,6 +113,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                         _ => Action::Deny,
                     };
                 }
+
                 KeyCode::Esc => return Action::Deny,
                 KeyCode::Up => -1,
                 KeyCode::Down => 1,
@@ -117,10 +123,12 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                     state.approval_scroll = 0;
                     return Action::None;
                 }
+
                 KeyCode::End => {
                     state.approval_scroll = state.approval_max_scroll;
                     return Action::None;
                 }
+
                 _ => 0,
             }
         }
@@ -134,20 +142,6 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
         .min(state.approval_max_scroll);
 
     Action::None
-}
-
-fn visible(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if c == '\t' {
-                "    ".into()
-            } else if c.is_control() {
-                c.escape_default().to_string()
-            } else {
-                c.to_string()
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -172,16 +166,20 @@ pub(super) fn needed_height(preview: &orbit_tools::approval::ApprovalPreview) ->
                     | orbit_runtime::git::GitOperationKind::ConfigMutation { .. } => {
                         extra += 1;
                     }
+
                     _ => {}
                 }
             }
+
             4 + extra + cmd_lines
         }
+
         orbit_tools::approval::ApprovalPreview::Write(_) => 10,
         orbit_tools::approval::ApprovalPreview::Delete(p) => {
             let lines = p.before.lines().count().clamp(1, 6) as u16;
             4 + lines
         }
+
         orbit_tools::approval::ApprovalPreview::Capability(_) => 7,
         orbit_tools::approval::ApprovalPreview::Mcp(p) => {
             let arg_lines = p.arguments.lines().count().clamp(1, 4) as u16;
@@ -259,6 +257,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 .to_string()
                 .len()
                 .max(4);
+
             for change in diff.iter_all_changes() {
                 let (index, source, change_style) = match change.tag() {
                     similar::ChangeTag::Delete => (
@@ -266,13 +265,16 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                         &old_lines,
                         Some(super::code::Change::Removed),
                     ),
+
                     similar::ChangeTag::Insert => (
                         change.new_index(),
                         &new_lines,
                         Some(super::code::Change::Added),
                     ),
+
                     similar::ChangeTag::Equal => (change.new_index(), &new_lines, None),
                 };
+
                 if let Some(index) = index
                     && let Some(source) = source.get(index)
                 {
@@ -366,6 +368,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                     Style::default().fg(crate::tui::theme::THEME.accent),
                 ),
             ];
+
             if preview.network_allowed {
                 title_spans.push(Span::raw(" "));
                 title_spans.push(Span::styled(
@@ -373,6 +376,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                     Style::default().fg(crate::tui::theme::THEME.accent),
                 ));
             }
+
             title_spans.push(Span::raw(" "));
             let title = Line::from(title_spans);
 
@@ -389,6 +393,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                             (Some(s), Some(t)) => format!("{s} -> {remote}/{t}"),
                             _ => remote.clone(),
                         };
+
                         header_lines.push(Line::from(vec![
                             Span::raw("  "),
                             Span::styled(
@@ -401,6 +406,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                             ),
                         ]));
                     }
+
                     orbit_runtime::git::GitOperationKind::Dangerous { subcommand, reason } => {
                         header_lines.push(Line::from(vec![
                             Span::raw("  "),
@@ -416,6 +422,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                             ),
                         ]));
                     }
+
                     orbit_runtime::git::GitOperationKind::BranchSwitchOrRebase {
                         subcommand,
                         target,
@@ -430,6 +437,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                             ),
                         ]));
                     }
+
                     orbit_runtime::git::GitOperationKind::LocalWrite {
                         subcommand,
                         description,
@@ -442,6 +450,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                             ),
                         ]));
                     }
+
                     orbit_runtime::git::GitOperationKind::ConfigMutation { key, .. } => {
                         let target_key = key.as_deref().unwrap_or("仓库配置/Hooks");
                         header_lines.push(Line::from(vec![
@@ -452,15 +461,17 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                             ),
                         ]));
                     }
+
                     _ => {}
                 }
             }
+
             if let Some(ref cwd) = preview.cwd {
                 header_lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled("cwd: ", Style::default().fg(crate::tui::theme::THEME.muted)),
                     Span::styled(
-                        visible(cwd),
+                        safe_output(cwd),
                         Style::default().fg(crate::tui::theme::THEME.description),
                     ),
                 ]));
@@ -477,7 +488,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        visible(line),
+                        safe_output(line),
                         Style::default()
                             .fg(crate::tui::theme::THEME.white)
                             .add_modifier(Modifier::BOLD),
@@ -515,7 +526,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 .split('\n')
                 .map(|line| {
                     Line::styled(
-                        format!("  {}", visible(line)),
+                        format!("  {}", safe_output(line)),
                         Style::default().fg(crate::tui::theme::THEME.approval_link),
                     )
                 })
@@ -560,6 +571,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                     ),
                 ]));
             }
+
             let body_lines = vec![Line::styled(
                 format!("  - {}/*", preview.path.display()),
                 Style::default().fg(crate::tui::theme::THEME.approval_foreground),
@@ -687,12 +699,14 @@ pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
                 "新建文件"
             },
         ),
+
         Some(orbit_tools::approval::ApprovalPreview::Delete(preview)) => (
             preview.path.as_str(),
             preview.before.as_str(),
             "",
             "删除文件",
         ),
+
         _ => return,
     };
 
@@ -716,10 +730,11 @@ pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
     ])
     .split(inner);
     let title = super::render::fit_label(
-        &format!("{operation} · {}", visible(path)),
+        &format!("{operation} · {}", safe_output(path)),
         sections[0].width as usize,
         true,
     );
+
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(title),
@@ -764,6 +779,7 @@ pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
             .take(height)
             .cloned()
             .collect();
+
         frame.render_widget(Paragraph::new(visible), pane);
     }
 
@@ -807,8 +823,9 @@ mod tests {
         assert_eq!(handle(&mut state, click(26)), Action::Deny);
     }
 
-    use super::*;
     use crossterm::event::KeyEvent;
+
+    use super::*;
 
     #[test]
     fn wheel_targets_chat_or_inline_preview_without_changing_input() {
@@ -825,6 +842,7 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             })
         };
+
         handle(&mut state, wheel(MouseEventKind::ScrollUp, 5));
 
         assert_eq!(state.scroll, super::super::wheel::LINES);

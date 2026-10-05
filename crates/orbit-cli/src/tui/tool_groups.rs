@@ -22,6 +22,7 @@ fn candidate(item: &TranscriptItem) -> Option<(&ToolRow, Value)> {
         {
             target(row).map(|target| (row, target))
         }
+
         _ => None,
     }
 }
@@ -55,10 +56,12 @@ fn target(row: &ToolRow) -> Option<Value> {
             args["depth"].as_u64().unwrap_or(1),
             args["include_hidden"].as_bool().unwrap_or(false)
         ]),
+
         "project_overview" => json!([
             args["path"].as_str().unwrap_or("."),
             args["query"].as_str().unwrap_or_default()
         ]),
+
         "search_text" => json!([
             args["path"].as_str().unwrap_or("."),
             args["query"].as_str()?,
@@ -67,18 +70,21 @@ fn target(row: &ToolRow) -> Option<Value> {
             args["case_sensitive"].as_bool().unwrap_or(false),
             args["include_hidden"].as_bool().unwrap_or(false)
         ]),
+
         "web_search" => {
             args["query"].as_str()?;
             let mut key = args;
             key.as_object_mut()?.remove("max_results");
             key
         }
+
         "web_fetch" => json!(args["url"].as_str()?),
         "read_agent" => match args.get("agent_id") {
             None | Some(Value::Null) => json!(["list"]),
             Some(Value::String(id)) if !id.is_empty() => json!(["agent", id]),
             _ => return None,
         },
+
         "wait_agents" | "cancel_agents" => {
             json!([ids("agent_ids")?, args["all"].as_bool().unwrap_or(false)])
         }
@@ -86,6 +92,7 @@ fn target(row: &ToolRow) -> Option<Value> {
             args["output_id"].as_str()?,
             args["stream"].as_str().unwrap_or("stdout")
         ]),
+
         "get_command_status" | "wait_commands" | "cancel_commands" => {
             json!([ids("job_ids")?, args["mode"].as_str().unwrap_or("any")])
         }
@@ -96,17 +103,20 @@ fn target(row: &ToolRow) -> Option<Value> {
             args["network"].as_str().unwrap_or("deny"),
             args["background"].as_bool().unwrap_or(false)
         ]),
+
         "git_inspect" => json!([
             args["view"].as_str().unwrap_or("status"),
             args["path"],
             args["staged"].as_bool().unwrap_or(false)
         ]),
+
         "git_export_patch" => args,
         "git_push" => json!([
             args["remote_url"].as_str()?,
             args["source_branch"].as_str()?,
             args["target_branch"].as_str()?
         ]),
+
         "read_history" => json!([args["archive_id"].as_i64()?, args["query"]]),
         "memory_search" => json!(args["query"].as_str()?),
         "memory_list" | "task_list" => args,
@@ -126,6 +136,7 @@ pub(super) fn start(items: &[TranscriptItem], index: usize) -> usize {
     {
         start -= 1;
     }
+
     start
 }
 
@@ -140,6 +151,7 @@ pub(super) fn range(items: &[TranscriptItem], index: usize) -> Range<usize> {
     {
         end += 1;
     }
+
     index..end
 }
 
@@ -176,6 +188,7 @@ pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> Link
             Style::default().fg(THEME.tool_running),
         ));
     }
+
     suffix.push(Span::styled(
         format!(" · {} 次调用", items.len()),
         Style::default().fg(THEME.tool_summary),
@@ -202,12 +215,14 @@ pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> Link
             Style::default().fg(THEME.tool_summary),
         ));
     }
+
     spans.extend(suffix);
     let header = LinkedLine::plain(Line::from(spans))
         .wrap(content_width)
         .into_iter()
         .next()
         .unwrap_or_else(|| LinkedLine::plain(Line::default()));
+
     if framed {
         super::render::tool_frame_line(header, width)
     } else {
@@ -244,6 +259,7 @@ pub(super) fn section(
             width,
         ));
     }
+
     let header = lines.len();
     lines.extend(
         super::render::tool_group_title_with_links(row, inner_width)

@@ -40,8 +40,10 @@ fn text(buffer: &Buffer) -> String {
             text.push_str(cell.symbol());
             x += cell.cell_width().max(1);
         }
+
         text.push('\n');
     }
+
     text
 }
 
@@ -62,6 +64,7 @@ fn point(state: &UiState, index: usize, group: bool) -> (u16, u16) {
             }
         }
     }
+
     panic!("Orbit disclosure {index} is not visible");
 }
 
@@ -317,6 +320,7 @@ fn grouping_compares_operation_targets_and_ignores_only_read_pagination() {
             false,
         ),
     ];
+
     for (name, first, second, grouped) in cases {
         let item = |args: Value| {
             TranscriptItem::Tool(ToolRow {
@@ -377,6 +381,7 @@ fn file_groups_keep_each_file_separate_and_name_their_targets() {
         };
         row.arguments = json!({"path":path}).to_string();
     }
+
     let header = header(&state.transcript[..2], 50, false);
     assert!(
         header
@@ -399,6 +404,7 @@ fn long_group_targets_leave_room_for_running_status_and_trailing_count() {
             output: String::new(),
         })
     });
+
     for width in [40, 60, 100] {
         for framed in [false, true] {
             let header = header(&items, width, framed);
@@ -437,6 +443,7 @@ fn appending_different_targets_and_editing_targets_match_a_fresh_layout() {
         fresh.update_expanded(&items, &Default::default(), &Default::default(), 100);
         assert_eq!(layout.height(), fresh.height(), "Orbit append {index}");
     }
+
     for (index, path) in [(0, "Orbit.rs"), (2, "Other.rs"), (1, "Split.rs")] {
         let TranscriptItem::Tool(row) = &mut items[index] else {
             unreachable!()
@@ -555,12 +562,14 @@ fn grouped_calls_share_one_frame_with_connected_separators() {
                         .contains("read_agent · 子代理 · 3 次调用")
                 );
             }
+
             for i in 0..3 {
                 assert_eq!(
                     screen.contains(&format!("Orbit 结果 {i}")),
                     expanded.contains(&i)
                 );
             }
+
             if expanded.is_empty() {
                 let titles = (0..area.bottom())
                     .filter(|&y| layout.disclosure_at(&items, area, 0, (2, y)).is_some())
@@ -591,6 +600,7 @@ fn grouped_calls_share_one_frame_with_connected_separators() {
                     }
                 }
             }
+
             for i in expanded {
                 let target = format!("https://orbit.test/result/{i}");
                 assert!((area.y..area.bottom()).any(|y| {
@@ -618,6 +628,7 @@ fn individual_call_headers_toggle_independently_inside_the_group() {
         super::super::toggle_transcript_at(&mut state, call);
         render(&mut state, 100, 60);
     }
+
     let expanded = text(&render(&mut state, 100, 60));
     assert_eq!(expanded.matches('╭').count(), 1);
     assert_eq!(expanded.matches('╰').count(), 1);
@@ -728,6 +739,7 @@ fn tool_frames_replace_adjacent_spacing_and_cached_toggles_match_fresh_layouts()
             } else {
                 second_start
             };
+
             for (start, end, gap) in [
                 (
                     row("Orbit before") + 1,
@@ -795,6 +807,7 @@ fn incremental_groups_match_fresh_layout_after_append_failure_recovery_and_resiz
             };
             layout.invalidate_from(4);
         }
+
         if step == 10 {
             expanded_groups.insert(0);
         }

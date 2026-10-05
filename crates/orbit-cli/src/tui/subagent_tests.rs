@@ -13,6 +13,7 @@ fn nested_html_clicks_do_not_collapse_the_enclosing_tool_or_thinking_item() {
         output: serde_json::json!({"url":"https://orbit.example/page", "content":source})
             .to_string(),
     };
+
     for item in [
         TranscriptItem::Assistant(source.into()),
         TranscriptItem::Thinking(thought),
@@ -38,6 +39,7 @@ fn nested_html_clicks_do_not_collapse_the_enclosing_tool_or_thinking_item() {
                 })
             })
             .unwrap();
+
         assert!(toggle_transcript_at(&mut state, point));
         assert!(state.expanded.contains(&0));
         let body_link = (0..80).any(|y| {
@@ -48,6 +50,7 @@ fn nested_html_clicks_do_not_collapse_the_enclosing_tool_or_thinking_item() {
                     == Some("https://orbit.example")
             })
         });
+
         assert!(body_link);
         assert!(toggle_transcript_at(&mut state, point));
         assert!(state.expanded.contains(&0));
@@ -59,6 +62,7 @@ fn nested_html_clicks_do_not_collapse_the_enclosing_tool_or_thinking_item() {
                     == Some("https://orbit.example")
             })
         });
+
         assert!(!body_link);
     }
 }
@@ -76,6 +80,7 @@ fn child_session_links_open_a_dialog_without_switching_tabs() {
     ] {
         assert!(subagent_link_id(target).is_none());
     }
+
     let mut state = UiState::new("orbit::model");
     let id = "00000000000000000000000000000001";
     state
@@ -98,6 +103,7 @@ fn child_session_links_open_a_dialog_without_switching_tabs() {
             })
         })
         .expect("live child view link is visible");
+
     assert!(open_subagent_at(&mut state, point));
     assert!(state.resume_request.is_none());
     assert!(state.subagent_dialog.is_some());

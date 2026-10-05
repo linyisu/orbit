@@ -80,6 +80,7 @@ impl Viewer {
                 self.view.ui.resume_loading = None;
                 self.snapshot = Some(snapshot);
             }
+
             let mut history = Vec::new();
             self.sync
                 .poll_read_only(
@@ -91,11 +92,13 @@ impl Viewer {
                 .await
         }
         .await;
+
         match result {
             Ok(changed) => {
                 self.view.block_submission(false);
                 changed
             }
+
             Err(error) => {
                 self.error = Some(format!("无法读取子代理记录：{error}"));
                 self.view.ui.resume_loading = None;
@@ -139,6 +142,7 @@ impl Viewer {
                 )
             }
         });
+
         self.view.draw(
             &format!("子代理 · {status}"),
             &metadata,
@@ -163,6 +167,7 @@ impl Viewer {
             "send_agent_message",
             json!({"agent_id":self.id,"message":message}),
         );
+
         match tools
             .execute(call, tokio_util::sync::CancellationToken::new())
             .await
@@ -268,6 +273,7 @@ pub(super) fn header(
             remaining.saturating_sub(8),
             false,
         );
+
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
             fit_label(
@@ -283,6 +289,7 @@ pub(super) fn header(
             Style::default().fg(THEME.tool_detail),
         ));
     }
+
     let mut header = LinkedLine::plain(Line::from(spans));
     header.links.clear();
     if let Some(id) = id {
@@ -302,6 +309,7 @@ pub(super) fn header(
             url: format!("orbit://session/{id}"),
         });
     }
+
     Some(header.decorate(&decoration))
 }
 
@@ -315,12 +323,14 @@ pub(super) fn details(row: &ToolRow, width: u16) -> Option<Vec<LinkedLine>> {
         activity(row, &value),
         Style::default().fg(THEME.tool_detail),
     ))];
+
     if let Some(model) = value["model"].as_str() {
         lines.push(LinkedLine::chrome(Line::styled(
             safe_output(model),
             Style::default().fg(THEME.tool_detail),
         )));
     }
+
     lines.extend(
         task(&args)
             .lines()
@@ -338,6 +348,7 @@ pub(super) fn details(row: &ToolRow, width: u16) -> Option<Vec<LinkedLine>> {
         lines.push(LinkedLine::plain(Line::default()));
         lines.extend(super::markdown::document(content, width));
     }
+
     Some(lines)
 }
 
@@ -367,6 +378,7 @@ impl Activity {
                     )
                 );
             }
+
             AgentEvent::CompactionStarted => self.current = "压缩上下文".into(),
             _ => {}
         }
@@ -427,6 +439,7 @@ impl Progress {
                     activity.revision = Some(revision);
                 }
             }
+
             let next = json!({"tool_calls":activity.tool_calls,"current":activity.current});
             if value["_activity"] != next {
                 value["_activity"] = next;
@@ -435,6 +448,7 @@ impl Progress {
                 changed = true;
             }
         }
+
         self.runs.retain(|key, _| retained.contains(key));
         Ok(changed)
     }
@@ -469,6 +483,7 @@ pub(super) fn handle_parent(state: &mut UiState, event: &Event) -> Option<bool> 
         state.subagent_parent_pressed = false;
         return None;
     }
+
     match event {
         Event::Key(key)
             if key.kind != KeyEventKind::Release
@@ -480,6 +495,7 @@ pub(super) fn handle_parent(state: &mut UiState, event: &Event) -> Option<bool> 
             state.resume_request = Some(parent.clone());
             Some(true)
         }
+
         Event::Mouse(mouse)
             if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                 && state
@@ -490,6 +506,7 @@ pub(super) fn handle_parent(state: &mut UiState, event: &Event) -> Option<bool> 
             state.selection.clear();
             Some(true)
         }
+
         Event::Mouse(mouse)
             if mouse.kind == MouseEventKind::Up(MouseButton::Left)
                 && state.subagent_parent_pressed =>
@@ -501,8 +518,10 @@ pub(super) fn handle_parent(state: &mut UiState, event: &Event) -> Option<bool> 
             {
                 state.resume_request = Some(parent.clone());
             }
+
             Some(true)
         }
+
         Event::Mouse(mouse)
             if matches!(
                 mouse.kind,
@@ -512,6 +531,7 @@ pub(super) fn handle_parent(state: &mut UiState, event: &Event) -> Option<bool> 
             state.subagent_parent_pressed = false;
             None
         }
+
         Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved => {
             let hovered = state
                 .subagent_parent_area
@@ -520,6 +540,7 @@ pub(super) fn handle_parent(state: &mut UiState, event: &Event) -> Option<bool> 
             state.subagent_parent_hovered = hovered;
             changed.then_some(true)
         }
+
         _ => None,
     }
 }

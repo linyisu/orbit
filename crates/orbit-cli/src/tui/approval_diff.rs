@@ -1,10 +1,11 @@
 //! Aligned, cached physical rows for side-by-side file approval.
+use std::time::Duration;
+
 use ratatui::{
     style::{Color, Style},
     text::Line,
 };
 use similar::{DiffTag, TextDiff};
-use std::time::Duration;
 
 use super::{code, render::fit_label};
 
