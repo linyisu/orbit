@@ -14,7 +14,7 @@ async fn reserved_paths_never_prompt_and_nested_missing_paths_suggest_an_eligibl
     let (sender, mut receiver) = approval::channel();
     let tool = RequestCapability::new(Workspace::new(ws_temp.path()).unwrap(), sender);
 
-    for path in ["/", "/tmp", "/etc", "/etc/passwd"] {
+    for path in ["/", "/tmp", "/proc", "/proc/cpuinfo"] {
         let error = tool
             .execute(
                 ToolCall::function(
@@ -296,4 +296,48 @@ async fn request_capability_supports_read_write_access() {
 
     assert_eq!(result_json["status"], "granted");
     assert_eq!(result_json["access"], "read and write");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn ordinary_system_file_requires_user_consent_and_grants_only_requested_access() {
+    use orbit_runtime::capability::FilesystemCapability;
+    use orbit_runtime::policy::PolicyDecision;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let workspace = Workspace::new(temporary.path()).unwrap();
+    let path = fs::canonicalize("/etc/os-release").unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RequestCapability::new(workspace.clone(), sender);
+    for allowed in [false, true] {
+        let request = ToolCall::function(
+            "system",
+            "request_capability",
+            json!({"path": path, "access": "read", "reason": "Inspect OS version"}),
+        );
+        let task = tokio::spawn({
+            let tool = tool.clone();
+            async move { tool.execute(request, CancellationToken::new()).await }
+        });
+        let approval = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            approval.preview,
+            approval::ApprovalPreview::Capability(_)
+        ));
+        approval.decision.send(allowed).unwrap();
+        assert_eq!(task.await.unwrap().is_ok(), allowed);
+        let read = workspace
+            .policy()
+            .check_filesystem(&FilesystemCapability::local_read(&path));
+        assert_eq!(matches!(read, PolicyDecision::Granted), allowed);
+        assert!(matches!(
+            workspace
+                .policy()
+                .check_filesystem(&FilesystemCapability::local_read_write(&path)),
+            PolicyDecision::NeedsApproval(_)
+        ));
+    }
 }

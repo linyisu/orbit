@@ -1286,7 +1286,7 @@ fn test_toolchain_mount_succeeds_with_large_opaque_runtime_root() {
 }
 
 #[test]
-fn test_system_rust_toolchain_in_usr_is_not_rejected_as_reserved() {
+fn system_toolchains_and_scoped_sources_keep_sandbox_targets_reserved() {
     let temp = tempfile::tempdir().unwrap();
     let ws = temp.path().join("workspace");
     std::fs::create_dir(&ws).unwrap();
@@ -1297,11 +1297,10 @@ fn test_system_rust_toolchain_in_usr_is_not_rejected_as_reserved() {
     };
     let policy = EffectivePolicy::new(base);
 
-    let err = validate_mount_source(Path::new("/usr"), &policy).unwrap_err();
-    assert!(
-        err.to_string().contains("is a reserved system path"),
-        "expected reserved system path error for /usr mount source, got: {err}"
-    );
+    let source = std::fs::canonicalize("/etc/os-release").unwrap();
+    assert!(validate_mount_source(&source, &policy).is_ok());
+    assert!(is_reserved_mount_target(Path::new("/etc")));
+    assert!(is_reserved_mount_target(Path::new("/usr")));
 
     let toolchain_res = validate_toolchain_source(Path::new("/usr"), &policy);
     assert!(

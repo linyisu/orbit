@@ -184,7 +184,6 @@ fn rejects_reserved_runtime_paths() {
         "/orbit-source/file",
         "/opt/orbit-rust/bin",
         "/tmp/home/user",
-        "/etc/shadow",
         "/proc/cpuinfo",
         "/dev/null",
     ] {
@@ -267,4 +266,37 @@ fn persistent_permissions_upfront_validation_and_overlap_rejection() {
         PolicyEngine::try_with_permissions(ws, perms_redundant, NetworkPolicy::Allow).unwrap();
 
     assert_eq!(engine.effective_policy().persistent_read_write.len(), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ordinary_system_files_can_receive_scoped_user_grants() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = PolicyEngine::new(ResolvedPath::resolve(tmp.path(), None).unwrap());
+    let path = std::fs::canonicalize("/etc/os-release").unwrap();
+    let read = FilesystemCapability::local_read(&path);
+    assert!(matches!(
+        engine.check_filesystem(&read),
+        PolicyDecision::NeedsApproval(_)
+    ));
+    engine.record_grant(FilesystemGrant {
+        environment: EnvironmentId::Local,
+        path: ResolvedPath::resolve(&path, None).unwrap(),
+        read: true,
+        write: false,
+    });
+    assert!(matches!(
+        engine.check_filesystem(&read),
+        PolicyDecision::Granted
+    ));
+    assert!(matches!(
+        engine.check_filesystem(&FilesystemCapability::local_read_write(&path)),
+        PolicyDecision::NeedsApproval(_)
+    ));
+    assert!(matches!(
+        engine.check_filesystem(&FilesystemCapability::local_read(Path::new(
+            "/proc/self/status"
+        ))),
+        PolicyDecision::Denied(_)
+    ));
 }
