@@ -1,5 +1,9 @@
 //! Parser-defined footnotes share numbering, styling and message-local targets.
-use std::{collections::BTreeMap, ops::Range};
+use std::{
+    collections::BTreeMap,
+    ops::Range,
+    time::{Duration, Instant},
+};
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
@@ -10,6 +14,21 @@ use ratatui::{
 use super::{Context, LinkedLine, THEME};
 
 const TARGET_PREFIX: &str = "orbit://footnote/";
+
+const FOCUS_DURATION: Duration = Duration::from_secs(2);
+
+#[derive(Debug)]
+pub(in crate::tui) struct Focus {
+    pub entry: usize,
+    pub target: String,
+    pub since: Instant,
+}
+
+impl Focus {
+    pub fn expired(&self) -> bool {
+        self.since.elapsed() >= FOCUS_DURATION
+    }
+}
 
 #[derive(Clone, Default)]
 pub(super) struct Catalog {
@@ -151,8 +170,8 @@ impl Catalog {
             };
 
             *line = line.clone().framed(prefix, Vec::new());
+            line.anchors.push(target(&definition.label));
             if index == 0 {
-                line.anchors.push(target(&definition.label));
                 // The label is semantic text, not generated border decoration.
                 line.decorations
                     .retain(|range| range.end <= 2 || range.start >= inset + 2);

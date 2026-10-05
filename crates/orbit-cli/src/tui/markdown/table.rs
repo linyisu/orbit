@@ -101,6 +101,7 @@ impl Part {
             }
 
             line.folds.extend(template.folds.clone());
+            line.anchors.extend(template.anchors.clone());
             line
         })
         .collect()

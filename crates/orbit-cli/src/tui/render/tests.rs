@@ -1478,7 +1478,7 @@ fn details_code_block_retains_one_border_color_including_its_closing_corner() {
 fn footnote_click_jumps_within_its_message_without_a_hover_tooltip() {
     let mut state = UiState::new("mock");
     let body = format!(
-        "引用[^named]。\n\n{}\n[^named]: 正确脚注\n",
+        "引用[^named]。\n\n{}\n[^named]: 正确脚注需要在窗口缩窄后仍然完整高亮，多行说明继续保持相同的脚注落点。\n\n    第二段补充说明\n",
         "正文\n".repeat(30)
     );
     state.transcript.push(TranscriptItem::Assistant(body));
@@ -1530,6 +1530,34 @@ fn footnote_click_jumps_within_its_message_without_a_hover_tooltip() {
         "{visible}"
     );
     assert!(!visible.contains("无法打开链接"));
+    for width in [40, 80] {
+        terminal.backend_mut().resize(width, 20);
+        terminal.resize(Rect::new(0, 0, width, 20)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let highlighted = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .filter(|cell| cell.bg == THEME.md_mark)
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(highlighted.contains("正确脚注"), "{highlighted}");
+        assert!(highlighted.contains("第二段补充说明"), "{highlighted}");
+        assert!(!highlighted.contains("另一条脚注"), "{highlighted}");
+    }
+    state.footnote_focus.as_mut().unwrap().since =
+        std::time::Instant::now() - std::time::Duration::from_secs(3);
+    assert!(state.expire_footnote_focus());
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    assert!(
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .all(|cell| cell.bg != THEME.md_mark)
+    );
 }
 
 #[test]

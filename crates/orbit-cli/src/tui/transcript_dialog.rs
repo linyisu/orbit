@@ -92,7 +92,8 @@ impl TranscriptDialog {
             .map_or(0, |since| since.elapsed().as_millis().min(240) / 40);
         let hover_changed = tick != self.close_hover_tick;
         self.close_hover_tick = tick;
-        direction != 0 || hover_changed
+        let focus_expired = self.ui.expire_footnote_focus();
+        direction != 0 || hover_changed || focus_expired
     }
 
     pub fn draw(

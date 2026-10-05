@@ -116,6 +116,7 @@ pub struct UiState {
     pub context_details_visible: bool,
     /// Pointer position while it rests on a clickable transcript link.
     pub link_hovered: Option<(u16, u16)>,
+    pub(super) footnote_focus: Option<super::markdown::footnotes::Focus>,
     pub thinking_hover_started: Option<Instant>,
     pub transcript_pointer: Option<(u16, u16)>,
     active_thinking: Option<usize>,
@@ -304,6 +305,7 @@ impl UiState {
             context_hovered: false,
             context_details_visible: false,
             link_hovered: None,
+            footnote_focus: None,
             thinking_hover_started: None,
             transcript_pointer: None,
             active_thinking: None,
@@ -593,6 +595,19 @@ impl UiState {
                 self.status = RunStatus::Cancelled;
                 self.finish_clock();
             }
+        }
+    }
+
+    pub fn expire_footnote_focus(&mut self) -> bool {
+        if self
+            .footnote_focus
+            .as_ref()
+            .is_some_and(|focus| focus.expired())
+        {
+            self.footnote_focus = None;
+            true
+        } else {
+            false
         }
     }
 

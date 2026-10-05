@@ -111,12 +111,9 @@ fn plain_rows(linked: LinkedLine, width: u16) -> Vec<LinkedLine> {
     let mut start = bounds.prefix;
     source[bounds.prefix..bounds.end]
         .split('\n')
-        .enumerate()
-        .map(|(index, text)| {
+        .map(|text| {
             let mut row = slice(&linked, start..start + text.len());
-            if index == 0 {
-                row.anchors = linked.anchors.clone();
-            }
+            row.anchors = linked.anchors.clone();
             row = row.framed(prefix.line.spans.clone(), Vec::new());
             if let Some(suffix) = &bounds.suffix {
                 let padding = usize::from(width).saturating_sub(row.line.width() + suffix.width());
@@ -231,11 +228,7 @@ fn slice(linked: &LinkedLine, range: Range<usize>) -> LinkedLine {
     let mut result = LinkedLine {
         folds: linked.folds.clone(),
         disclosure: linked.disclosure.clone(),
-        anchors: if range.start == 0 {
-            linked.anchors.clone()
-        } else {
-            Vec::new()
-        },
+        anchors: linked.anchors.clone(),
         chrome: linked.chrome,
         ..Default::default()
     };

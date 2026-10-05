@@ -1544,6 +1544,7 @@ pub async fn run(
                     dirty |= session.poll_title().await.unwrap_or(false);
                     dirty |= tabs.poll_titles().await;
                     dirty |= state.navigation.advance_preview();
+                    dirty |= state.expire_footnote_focus();
                     if let Some(picker) = &mut state.picker {
                         dirty |= picker.advance_title_scroll();
                     }
@@ -3000,6 +3001,10 @@ fn jump_footnote_at(state: &mut UiState, point: (u16, u16)) -> bool {
             .transcript_layout
             .footnote_at(state.selection.viewport, offset, point)
     {
+        state.footnote_focus =
+            state
+                .transcript_layout
+                .footnote_focus_at(state.selection.viewport, offset, point);
         state.scroll = state.max_scroll.saturating_sub(destination);
         state.follow_bottom = false;
     }

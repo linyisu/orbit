@@ -4,6 +4,7 @@ use std::{collections::HashSet, ops::Range};
 use ratatui::{
     Frame,
     layout::Rect,
+    style::Style,
     text::{Line, Span},
     widgets::{Paragraph, Widget},
 };
@@ -11,7 +12,7 @@ use unicode_linebreak::{BreakClass, break_property, linebreaks};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::{app::TranscriptItem, render};
+use super::{app::TranscriptItem, render, theme::THEME};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct Decorations {
@@ -355,11 +356,7 @@ fn wrap_linked_line_with(
                 chrome: linked.chrome,
                 folds: linked.folds.clone(),
                 disclosure: linked.disclosure.clone(),
-                anchors: if index == 0 {
-                    linked.anchors.clone()
-                } else {
-                    Vec::new()
-                },
+                anchors: linked.anchors.clone(),
                 media: linked
                     .media
                     .iter()
@@ -1459,16 +1456,65 @@ impl TranscriptLayout {
         offset: usize,
         point: (u16, u16),
     ) -> Option<usize> {
+        let focus = self.footnote_focus_at(area, offset, point)?;
+        let entry = self.entries.get(focus.entry)?;
+        entry
+            .rows
+            .iter()
+            .find(|row| row.anchors.contains(&focus.target))
+            .map(|row| entry.end - entry.height + row.start)
+    }
+
+    pub(super) fn footnote_focus_at(
+        &self,
+        area: Rect,
+        offset: usize,
+        point: (u16, u16),
+    ) -> Option<super::markdown::footnotes::Focus> {
         let hit = self.link_hit(area, offset, point)?;
         if !super::markdown::footnotes::is_target(hit.url) {
             return None;
         }
-        let (entry, _, _) = self.row_at(area, offset, point)?;
-        entry
+        let absolute = offset + usize::from(point.1 - area.y);
+        Some(super::markdown::footnotes::Focus {
+            entry: self.entries.partition_point(|entry| entry.end <= absolute),
+            target: hit.url.to_owned(),
+            since: std::time::Instant::now(),
+        })
+    }
+
+    pub(super) fn paint_footnote_focus(
+        &self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        offset: usize,
+        focus: &super::markdown::footnotes::Focus,
+    ) {
+        let Some(entry) = self.entries.get(focus.entry).filter(|_| !focus.expired()) else {
+            return;
+        };
+        let style = Style::default().bg(THEME.md_mark).fg(THEME.on_accent);
+        for row in entry
             .rows
             .iter()
-            .find(|row| row.anchors.iter().any(|anchor| anchor == hit.url))
-            .map(|row| entry.end - entry.height + row.start)
+            .filter(|row| row.anchors.contains(&focus.target))
+        {
+            let start = entry.end - entry.height + row.start;
+            let first = start.max(offset);
+            let end = (start + row.height).min(offset + usize::from(area.height));
+            for absolute in first..end {
+                let y = area.y + (absolute - offset) as u16;
+                let decorations = self.decorations(absolute);
+                for x in area.x..area.right() {
+                    if !decorations
+                        .iter()
+                        .any(|range| range.contains(&usize::from(x - area.x)))
+                    {
+                        frame.buffer_mut()[(x, y)].set_style(style);
+                    }
+                }
+            }
+        }
     }
 
     /// One anchor per wrapped link or complete picture occurrence.

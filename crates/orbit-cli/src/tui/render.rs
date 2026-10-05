@@ -1063,6 +1063,14 @@ pub(super) fn draw_transcript_in(
     state
         .transcript_layout
         .draw(frame, state.selection.viewport, offset);
+    if let Some(focus) = &state.footnote_focus {
+        state.transcript_layout.paint_footnote_focus(
+            frame,
+            state.selection.viewport,
+            offset,
+            focus,
+        );
+    }
     if !state.selection.dragging()
         && let Some(point) = state.transcript_pointer
         && state
