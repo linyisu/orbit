@@ -1,3 +1,4 @@
+use std::os::unix::fs::MetadataExt;
 use std::{
     collections::HashSet,
     fs::File,
@@ -5,8 +6,6 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
-
-use std::os::unix::fs::MetadataExt;
 
 use rustix::fs::{Mode, OFlags, openat};
 use thiserror::Error;
@@ -58,8 +57,10 @@ fn open_canonical_parent_stepwise(canonical_parent: &Path) -> Result<File, Works
                         WorkspaceError::Io(e.into())
                     }
                 })?;
+
                 current = File::from(next_fd);
             }
+
             _ => return Err(WorkspaceError::InvalidPath),
         }
     }
@@ -197,6 +198,7 @@ impl Workspace {
                     missing.push(ancestor.file_name().ok_or(WorkspaceError::InvalidPath)?);
                     ancestor = ancestor.parent().ok_or(WorkspaceError::InvalidPath)?;
                 }
+
                 Err(error) => return Err(error.into()),
             }
         };
@@ -282,6 +284,7 @@ impl Workspace {
 
                     parts.push(name);
                 }
+
                 Component::CurDir => {}
                 _ => return Err(WorkspaceError::InvalidPath),
             }
@@ -335,6 +338,7 @@ impl Workspace {
                 resolved.pop();
                 continue;
             }
+
             let candidate = resolved.join(&name);
             self.checked_relative(&candidate)?;
             let effective = self.policy.effective_policy();
@@ -345,6 +349,7 @@ impl Workspace {
             {
                 return Err(WorkspaceError::ProtectedPath);
             }
+
             let directory = stack.last().unwrap();
             match rustix::fs::readlinkat(directory, &name, Vec::new()) {
                 Ok(target) => {
@@ -354,6 +359,7 @@ impl Workspace {
                             "symlink loop or link depth exceeds 32",
                         )));
                     }
+
                     let target = PathBuf::from(std::ffi::OsString::from_vec(target.into_bytes()));
                     let target = if target.is_absolute() {
                         let relative_target = target
@@ -375,9 +381,11 @@ impl Workspace {
                             _ => Some(std::ffi::OsString::from("..")),
                         })
                         .collect();
+
                     components.append(&mut pending);
                     pending = components;
                 }
+
                 Err(rustix::io::Errno::INVAL | rustix::io::Errno::NOENT) => {
                     if pending.is_empty() {
                         return Ok((directory.try_clone()?, name));
@@ -391,13 +399,16 @@ impl Workspace {
                         )
                         .map_err(io::Error::from)?,
                     );
+
                     self.check_protected_metadata(&next.metadata()?)?;
                     stack.push(next);
                     resolved.push(name);
                 }
+
                 Err(error) => return Err(WorkspaceError::Io(error.into())),
             }
         }
+
         Ok((
             stack.last().unwrap().try_clone()?,
             std::ffi::OsString::from("."),
@@ -518,6 +529,7 @@ impl Workspace {
                             path.display()
                         )));
                     }
+
                     crate::policy::PolicyDecision::Denied(reason) => {
                         return Err(WorkspaceError::PermissionDenied(reason));
                     }
@@ -585,6 +597,7 @@ impl Workspace {
                             path.display()
                         )));
                     }
+
                     crate::policy::PolicyDecision::Denied(reason) => {
                         return Err(WorkspaceError::PermissionDenied(reason));
                     }
@@ -714,6 +727,7 @@ impl Workspace {
                             path.display()
                         )));
                     }
+
                     crate::policy::PolicyDecision::Denied(reason) => {
                         return Err(WorkspaceError::PermissionDenied(reason));
                     }
@@ -767,8 +781,9 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn missing_protected_paths_resolve_existing_symlinks_and_reject_dangling_ones() {
@@ -864,6 +879,7 @@ mod tests {
             read: vec![other_outside.path().to_path_buf()],
             read_write: Vec::new(),
         };
+
         ws2.configure_policy(perms2, NetworkPolicy::Allow).unwrap();
 
         let sub_secret = other_outside.path().join("secret.db");
@@ -889,6 +905,7 @@ mod tests {
             read: vec![valid_dir.path().to_path_buf()],
             read_write: Vec::new(),
         };
+
         ws.configure_policy(initial_perms, NetworkPolicy::Deny)
             .unwrap();
         let valid_canonical = valid_dir.path().canonicalize().unwrap();

@@ -1,5 +1,6 @@
-use super::*;
 use std::path::Path;
+
+use super::*;
 
 #[test]
 fn workspace_paths_are_always_granted() {
@@ -39,7 +40,6 @@ fn outside_paths_require_approval_until_granted() {
         PolicyDecision::NeedsApproval(_)
     ));
 
-    // Grant read access for this session
     let resolved_external = ResolvedPath::resolve(&external_file, None).unwrap();
     engine.record_grant(FilesystemGrant::read_only(
         EnvironmentId::Local,
@@ -48,7 +48,6 @@ fn outside_paths_require_approval_until_granted() {
 
     assert_eq!(engine.check_filesystem(&cap_read), PolicyDecision::Granted);
 
-    // Writing to the same file still requires approval
     let cap_write = FilesystemCapability::local_write(&external_file);
 
     assert!(matches!(
@@ -79,7 +78,6 @@ fn directory_grant_inherits_to_children_and_merges() {
         PolicyDecision::Granted
     );
 
-    // Child write still needs approval
     let child_write =
         FilesystemCapability::local_write(tmp_models.path().join("llama").join("weights.bin"));
 
@@ -88,13 +86,11 @@ fn directory_grant_inherits_to_children_and_merges() {
         PolicyDecision::NeedsApproval(_)
     ));
 
-    // Now grant write to parent: R + W -> RW
     engine.record_grant(FilesystemGrant::read_write(
         EnvironmentId::Local,
         resolved_models,
     ));
 
-    // Now child write is granted!
     assert_eq!(
         engine.check_filesystem(&child_write),
         PolicyDecision::Granted
@@ -134,7 +130,6 @@ fn rejects_ancestor_of_workspace_as_capability() {
     let workspace = ResolvedPath::resolve(&proj, None).unwrap();
     let engine = PolicyEngine::new(workspace);
 
-    // Requesting the parent / ancestor directory of workspace
     let cap = FilesystemCapability::local_read(tmp.path());
 
     match engine.check_filesystem(&cap) {

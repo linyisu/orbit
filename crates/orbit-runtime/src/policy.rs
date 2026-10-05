@@ -11,7 +11,6 @@ use crate::{
     filesystem::ResolvedPath,
 };
 
-/// A granted filesystem permission for a specific resolved path in an environment.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FilesystemGrant {
     pub environment: EnvironmentId,
@@ -38,7 +37,6 @@ impl FilesystemGrant {
         Self::new(environment, path, true, true)
     }
 
-    /// Merge another grant into this grant, combining access rights (R + W -> RW).
     pub fn merge(&mut self, other: &Self) {
         self.read |= other.read || other.write;
         self.write |= other.write;
@@ -49,7 +47,6 @@ impl FilesystemGrant {
     }
 }
 
-/// Temporary capability grants scoped to one runtime session.
 #[derive(Clone, Debug, Default)]
 pub struct SessionGrantStore {
     filesystem: Vec<FilesystemGrant>,
@@ -64,8 +61,7 @@ impl SessionGrantStore {
         &self.filesystem
     }
 
-    /// Add a grant to the session store, merging permissions for the same path
-    /// and normalizing redundant child grants.
+    /// Merge rights for the same path and remove redundant child grants.
     pub fn grant(&mut self, new_grant: FilesystemGrant) {
         let grant_to_check = if let Some(existing) = self.filesystem.iter_mut().find(|g| {
             g.environment == new_grant.environment
@@ -109,7 +105,6 @@ impl SessionGrantStore {
         self.filesystem.clear();
     }
 
-    /// Check whether the store grants access to the specified resolved path.
     pub fn check(
         &self,
         environment: &EnvironmentId,
@@ -133,8 +128,7 @@ impl SessionGrantStore {
     }
 }
 
-/// Baseline policy: workspace has full read/write, outside is denied by default,
-/// and network is allowed by default.
+/// Default workspace read/write and network access; external paths require grants.
 #[derive(Clone, Debug)]
 pub struct BasePolicy {
     pub workspace: ResolvedPath,
@@ -150,7 +144,6 @@ impl BasePolicy {
     }
 }
 
-/// Persistent workspace permissions loaded from project or user configuration.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorkspacePermissions {
     /// Exact environment template paths explicitly trusted by the user.
@@ -164,7 +157,6 @@ pub struct WorkspacePermissions {
     pub read_write: Vec<PathBuf>,
 }
 
-/// Baseline permissions, persistent permissions, session grants, and protected paths.
 #[derive(Clone, Debug)]
 pub struct EffectivePolicy {
     pub base: BasePolicy,
@@ -192,7 +184,6 @@ impl EffectivePolicy {
     }
 }
 
-/// Decision made by the policy engine when a capability is evaluated.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PolicyDecision {
     Granted,
@@ -200,7 +191,6 @@ pub enum PolicyDecision {
     Denied(String),
 }
 
-/// Unified capability decision engine. All tools query permissions through this engine.
 #[derive(Clone, Debug)]
 pub struct PolicyEngine {
     policy: Arc<EffectivePolicy>,
@@ -233,18 +223,21 @@ impl PolicyEngine {
                     p.display()
                 )));
             }
+
             if crate::execution::process::is_reserved_system_path(canon) {
                 return Err(failed(format!(
                     "persistent permission path '{}' is a reserved system path",
                     p.display()
                 )));
             }
+
             if base_dir.starts_with(canon) {
                 return Err(failed(format!(
                     "persistent permission path '{}' is an ancestor of the workspace",
                     p.display()
                 )));
             }
+
             if canon.starts_with(base_dir) {
                 return Err(failed(format!(
                     "persistent permission path '{}' is inside the workspace; persistent permissions are for external paths",
@@ -280,6 +273,7 @@ impl PolicyEngine {
                     p.display()
                 ))
             })?;
+
             validate_path(&p, &resolved)?;
             persistent_read.push(resolved);
         }
@@ -293,6 +287,7 @@ impl PolicyEngine {
                     p.display()
                 ))
             })?;
+
             validate_path(&p, &resolved)?;
             persistent_read_write.push(resolved);
         }
@@ -375,7 +370,6 @@ impl PolicyEngine {
             .clone()
     }
 
-    /// Record a granted capability into the current session store.
     pub fn record_grant(&self, grant: FilesystemGrant) {
         self.policy
             .session_grants
@@ -384,7 +378,6 @@ impl PolicyEngine {
             .grant(grant);
     }
 
-    /// Clear all temporary runtime session grants.
     pub fn clear_session_grants(&self) {
         self.policy
             .session_grants
@@ -393,7 +386,6 @@ impl PolicyEngine {
             .clear();
     }
 
-    /// Check whether a filesystem capability request is allowed under the current effective policy.
     pub fn check_filesystem(&self, capability: &FilesystemCapability) -> PolicyDecision {
         let base_dir = if capability.environment.is_local() {
             Some(self.policy.base.workspace.canonical())
@@ -410,7 +402,7 @@ impl PolicyEngine {
             let canon = resolved.canonical();
             let ws_canon = self.policy.base.workspace.canonical();
 
-            // Reject ancestor directories of the workspace (e.g. workspace is /home/user/project, capability is /home/user)
+            // Granting an ancestor would expose unrelated paths above the workspace.
             if ws_canon.starts_with(canon) && ws_canon != canon {
                 return PolicyDecision::Denied(format!(
                     "path '{}' is an ancestor of the workspace and cannot be granted as an external capability",
@@ -439,6 +431,7 @@ impl PolicyEngine {
                         p.display()
                     ));
                 }
+
                 if p.starts_with(canon) {
                     return PolicyDecision::Denied(format!(
                         "path '{}' contains protected path '{}' and cannot be granted as capability",
@@ -467,6 +460,7 @@ impl PolicyEngine {
                             {
                                 continue;
                             }
+
                             return PolicyDecision::Denied(format!(
                                 "path '{}' is protected metadata and cannot be granted",
                                 canon.display()

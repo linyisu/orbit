@@ -60,6 +60,7 @@ impl RetainedOutput {
             self.written += allowed;
             self.file.flush().await?;
         }
+
         Ok(())
     }
 
@@ -90,6 +91,7 @@ fn output_budget(directory: &Path) -> Result<Arc<OutputBudget>, RuntimeError> {
             used = used.saturating_add(metadata.len());
         }
     }
+
     let budget = Arc::new(OutputBudget {
         used: AtomicU64::new(used),
         ..Default::default()
@@ -98,7 +100,7 @@ fn output_budget(directory: &Path) -> Result<Arc<OutputBudget>, RuntimeError> {
     Ok(budget)
 }
 
-/// OutputLog manages persistent, paginatable stdout/stderr stream files on disk.
+/// Retained stdout/stderr files with bounded, paginated previews.
 pub struct OutputLog {
     id: String,
     stdout: tokio::fs::File,
@@ -304,7 +306,7 @@ mod tests {
     }
 }
 
-/// OutputPreview contains bounded slices of stdout and stderr suitable for model responses.
+/// Bounded stdout/stderr slices for model responses.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutputPreview {
     pub stdout: String,

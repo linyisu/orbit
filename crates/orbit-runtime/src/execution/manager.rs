@@ -1,4 +1,5 @@
 use std::{path::Path, sync::Arc};
+
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -12,8 +13,7 @@ use crate::{
     },
 };
 
-/// ExecutionManager orchestrates command launches, cancellation, logging, and cleanup
-/// across supported execution backends.
+/// Command lifecycle coordinator for an injected execution backend.
 pub struct ExecutionManager {
     backend: Arc<dyn ExecutionBackend>,
 }
@@ -23,7 +23,6 @@ impl ExecutionManager {
         Self { backend }
     }
 
-    /// Initializes an ExecutionManager using the default Linux Bubblewrap backend.
     pub fn linux() -> Result<Self, RuntimeError> {
         let backend = BwrapBackend::new()?;
         Ok(Self::new(Arc::new(backend)))
@@ -33,7 +32,6 @@ impl ExecutionManager {
         self.backend.as_ref()
     }
 
-    /// Runs a command synchronously or with foreground timeout, returning the execution result.
     pub async fn execute(
         &self,
         request: &ExecutionRequest,

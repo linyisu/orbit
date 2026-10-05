@@ -156,7 +156,6 @@ mod tests {
 
         assert_eq!(cap_write.access, FilesystemAccess::ReadWrite);
 
-        // Serde test: "read_write" and "write" alias
         let parsed_rw: FilesystemAccess = serde_json::from_str("\"read_write\"").unwrap();
 
         assert_eq!(parsed_rw, FilesystemAccess::ReadWrite);

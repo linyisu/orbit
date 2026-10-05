@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::verification::{VerificationEvidence, WorkspaceFingerprint};
 
-/// ExecutionRequest encapsulates a command execution request with its working
-/// directory, timeouts, and optional session scratch storage.
+/// A command request with timeouts and optional session scratch storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionRequest {
     pub command: String,
@@ -55,8 +54,7 @@ impl ExecutionRequest {
     }
 }
 
-/// ExecutionResult captures the outcome of a command execution, including
-/// exit status, timing, output streams, truncation, and optional verification evidence.
+/// Execution outcome with bounded output and optional verification evidence.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionResult {
     pub exit_code: Option<i32>,
@@ -79,7 +77,6 @@ pub struct ExecutionResult {
 }
 
 impl ExecutionResult {
-    /// Formats a concise human-readable summary without leaking redundant internal flags.
     pub fn display_summary(&self) -> String {
         let code_str = match self.exit_code {
             Some(code) => format!("exit {code}"),

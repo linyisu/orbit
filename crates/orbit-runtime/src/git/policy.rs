@@ -48,7 +48,6 @@ impl GitCommandAnalysis {
             return None;
         }
 
-        // Fast check: if it doesn't contain "git", it's not a git command.
         if !contains_git_word(trimmed) {
             return None;
         }
@@ -81,7 +80,6 @@ impl GitCommandAnalysis {
             return None;
         }
 
-        // Parse global options before the subcommand
         let mut idx = 1;
         let mut inline_config_keys = Vec::new();
 
@@ -102,6 +100,7 @@ impl GitCommandAnalysis {
                 | "--bare" => {
                     idx += 1;
                 }
+
                 "-C" | "--git-dir" | "--work-tree" | "--namespace" => {
                     return Some(Self {
                         raw_command: trimmed.into(),
@@ -111,6 +110,7 @@ impl GitCommandAnalysis {
                         },
                     });
                 }
+
                 "-c" => {
                     if idx + 1 < words.len() {
                         inline_config_keys.push(words[idx + 1].clone());
@@ -119,6 +119,7 @@ impl GitCommandAnalysis {
                         idx += 1;
                     }
                 }
+
                 _ if arg.starts_with("-C") => {
                     return Some(Self {
                         raw_command: trimmed.into(),
@@ -128,6 +129,7 @@ impl GitCommandAnalysis {
                         },
                     });
                 }
+
                 _ if arg.starts_with("--git-dir=") || arg.starts_with("--work-tree=") => {
                     return Some(Self {
                         raw_command: trimmed.into(),
@@ -137,10 +139,12 @@ impl GitCommandAnalysis {
                         },
                     });
                 }
+
                 _ if arg.starts_with("-c") => {
                     inline_config_keys.push(arg[2..].to_string());
                     idx += 1;
                 }
+
                 _ => {
                     return Some(Self {
                         raw_command: trimmed.into(),
@@ -160,6 +164,7 @@ impl GitCommandAnalysis {
                 .unwrap_or("")
                 .trim()
                 .to_lowercase();
+
             if !matches!(
                 key.as_str(),
                 "color.ui" | "color.diff" | "color.status" | "core.quotepath" | "core.abbrev"
@@ -271,12 +276,14 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                     reason: "删除分支".into(),
                 };
             }
+
             if args.iter().any(|a| a == "-m" || a == "-M" || a == "--move") {
                 return GitOperationKind::LocalWrite {
                     subcommand: "branch".into(),
                     description: "重命名分支".into(),
                 };
             }
+
             let is_listing = args.is_empty()
                 || args.iter().all(|a| {
                     a.starts_with('-')
@@ -289,6 +296,7 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                             || a == "-vv"
                             || a == "--show-current")
                 });
+
             if is_listing {
                 GitOperationKind::ReadOnlyQuery {
                     subcommand: "branch".into(),
@@ -308,6 +316,7 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                     reason: "删除标签".into(),
                 };
             }
+
             if args.is_empty() || args.iter().any(|a| a == "-l" || a == "--list") {
                 GitOperationKind::ReadOnlyQuery {
                     subcommand: "tag".into(),
@@ -364,12 +373,14 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                     reason: "强制检出 (checkout --force) 将丢弃未保存修改".into(),
                 };
             }
+
             if args.iter().any(|a| a == "-b") {
                 return GitOperationKind::LocalWrite {
                     subcommand: "checkout".into(),
                     description: format!("创建并切换新分支: git checkout {}", args.join(" ")),
                 };
             }
+
             let target = args
                 .iter()
                 .find(|a| !a.starts_with('-'))
@@ -396,6 +407,7 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                     reason: "强制切换分支将丢弃未保存修改".into(),
                 };
             }
+
             if args
                 .iter()
                 .any(|a| a == "-c" || a == "-C" || a == "--create")
@@ -405,6 +417,7 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                     description: format!("创建并切换新分支: git switch {}", args.join(" ")),
                 };
             }
+
             let target = args
                 .iter()
                 .find(|a| !a.starts_with('-'))
@@ -466,6 +479,7 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                     reason: "强制推送到远端仓库 (可能覆盖或丢失历史提交)".into(),
                 };
             }
+
             if is_delete {
                 return GitOperationKind::Dangerous {
                     subcommand: "push".into(),
@@ -499,7 +513,6 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                 };
             }
 
-            // Extract remote and branch refspec
             let non_flag_args: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
             let remote = non_flag_args
                 .first()
@@ -621,6 +634,7 @@ mod tests {
                 "{command}"
             );
         }
+
         assert!(matches!(
             GitCommandAnalysis::parse("git -c color.ui=false status")
                 .unwrap()
@@ -692,6 +706,7 @@ mod tests {
                 assert_eq!(source_branch.as_deref(), Some("main"));
                 assert_eq!(target_branch.as_deref(), Some("main"));
             }
+
             other => panic!("Unexpected kind: {other:?}"),
         }
 
@@ -706,6 +721,7 @@ mod tests {
                 assert_eq!(source_branch.as_deref(), Some("feat"));
                 assert_eq!(target_branch.as_deref(), Some("main"));
             }
+
             other => panic!("Unexpected kind: {other:?}"),
         }
     }
@@ -779,6 +795,7 @@ mod tests {
             GitOperationKind::ReadOnlyQuery { .. }
         ));
     }
+
     #[test]
     fn rejects_quoted_substitutions_and_classifies_destructive_variants() {
         for command in [
@@ -790,6 +807,7 @@ mod tests {
                 GitOperationKind::CompoundOrShell { .. }
             ));
         }
+
         for command in [
             "git push --force-with-lease=main origin main",
             "git push --mirror origin",
@@ -805,6 +823,7 @@ mod tests {
                 "{command}"
             );
         }
+
         assert!(matches!(
             GitCommandAnalysis::parse("git remote add -v origin https://example.com/repo")
                 .unwrap()

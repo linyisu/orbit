@@ -14,22 +14,18 @@ pub enum GitRepoKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitRepositoryInfo {
-    /// The working directory of the repository or worktree.
     pub worktree_root: PathBuf,
     /// Path to `.git` within the worktree (either a directory or file).
     pub dot_git: PathBuf,
-    /// True if `.git` is a gitfile (`gitdir: ...`) rather than a directory.
     pub is_gitfile: bool,
     /// The resolved git metadata directory (containing index, HEAD, etc.).
     pub git_dir: PathBuf,
     /// The common git metadata directory (containing objects, refs, config, etc.).
     pub common_dir: PathBuf,
-    /// The kind of repository structure.
     pub kind: GitRepoKind,
 }
 
 impl GitRepositoryInfo {
-    /// Discover Git repository layout starting at `workspace_root`.
     pub fn discover(workspace_root: &Path) -> io::Result<Option<Self>> {
         let dot_git = workspace_root.join(".git");
         if !dot_git.exists() {
@@ -126,17 +122,14 @@ impl GitRepositoryInfo {
         matches!(self.kind, GitRepoKind::Submodule { .. })
     }
 
-    /// Path to repository config file.
     pub fn config_path(&self) -> PathBuf {
         self.common_dir.join("config")
     }
 
-    /// Path to optional worktree-specific config file (`config.worktree`).
     pub fn worktree_config_path(&self) -> PathBuf {
         self.git_dir.join("config.worktree")
     }
 
-    /// Path to hooks directory.
     pub fn hooks_path(&self) -> PathBuf {
         self.common_dir.join("hooks")
     }
@@ -152,6 +145,7 @@ fn parse_gitdir_line(content: &str) -> Option<&str> {
             }
         }
     }
+
     None
 }
 
@@ -168,16 +162,19 @@ fn resolve_commondir(git_dir: &Path) -> Option<PathBuf> {
             } else {
                 git_dir.join(p)
             };
+
             return resolved.canonicalize().ok().or(Some(resolved));
         }
     }
+
     None
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn discovers_standard_git_repo() {

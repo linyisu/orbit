@@ -1,4 +1,5 @@
 use std::{pin::Pin, time::Duration};
+
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -16,7 +17,6 @@ use crate::{
     policy::{BasePolicy, EffectivePolicy},
 };
 
-/// BwrapBackend implements ExecutionBackend on Linux using Bubblewrap and user namespaces.
 pub struct BwrapBackend {
     inner: BwrapSandboxBackend,
 }
@@ -89,6 +89,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
         } else {
             env.cwd.join(&request.cwd)
         };
+
     spec.cwd = Some(effective_cwd);
 
     let mut merged_env = env.env_vars.clone();
@@ -116,6 +117,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
                 path.display()
             ))
         })?;
+
         external_paths.push(resolved.canonical().to_path_buf());
     }
 
@@ -157,6 +159,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
             .protected_paths
             .write()
             .map_err(|_| crate::error::failed("protected path policy lock is poisoned"))?;
+
         for path in &policy.protected_paths {
             let abs_path = if path.is_absolute() {
                 path.clone()
@@ -209,6 +212,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
                     path.display()
                 ))
             })?;
+
             for prot in protected_guard.iter() {
                 if resolved.canonical() == prot || resolved.canonical().starts_with(prot) {
                     return Err(crate::error::failed(format!(
@@ -218,8 +222,10 @@ pub(crate) fn prepare_execution_spec_and_policy(
                     )));
                 }
             }
+
             effective.persistent_read.push(resolved);
         }
+
         for path in &policy.external_read_write {
             let resolved = ResolvedPath::resolve(path, Some(&env.workspace_root)).map_err(|e| {
                 crate::error::failed(format!(
@@ -227,6 +233,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
                     path.display()
                 ))
             })?;
+
             for prot in protected_guard.iter() {
                 if resolved.canonical() == prot || resolved.canonical().starts_with(prot) {
                     return Err(crate::error::failed(format!(
@@ -236,6 +243,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
                     )));
                 }
             }
+
             effective.persistent_read_write.push(resolved);
         }
     }
@@ -316,10 +324,8 @@ mod tests {
         let req = ExecutionRequest::new("cargo check", &ws, Duration::from_secs(10));
         let (spec, effective) = prepare_execution_spec_and_policy(&req, &policy, &env).unwrap();
 
-        // Mounts remain in spec.mounts for bwrap container mounting
         assert_eq!(spec.mounts, vec![mount]);
 
-        // External grants are mapped to effective policy
         assert_eq!(
             effective.persistent_read,
             vec![ResolvedPath::from_canonical(&ext_read)]
@@ -329,7 +335,6 @@ mod tests {
             vec![ResolvedPath::from_canonical(&ext_write)]
         );
 
-        // Mount sources MUST NOT be duplicated into external grants
         assert!(
             !effective
                 .persistent_read
@@ -401,7 +406,6 @@ mod tests {
         env.set_var("CARGO_HOME", "/home/user/.cargo");
         env.set_var("RUSTUP_HOME", "/home/user/.rustup");
 
-        // Case 1: unmounted host paths are safely remapped to container home
         let policy_unmounted = ExecutionPolicy::dev_default();
         let req = ExecutionRequest::new("cargo build", &ws, Duration::from_secs(10));
         let (spec_unmounted, _) =
@@ -416,7 +420,6 @@ mod tests {
             Some(&"/tmp/home/.rustup".to_string())
         );
 
-        // Case 2: mounted cache path is remapped to container mount target
         let cache_mount = MountSpec::read_only("/home/user/.cargo", "/opt/orbit-cache/cargo");
         let policy_mounted = ExecutionPolicy::dev_default().with_mounts(vec![cache_mount]);
         let (spec_mounted, _) =
@@ -438,11 +441,9 @@ mod tests {
         let ws = ws_temp.path().canonicalize().unwrap();
         let env = ExecutionEnvironment::new(&ws, &ws).unwrap();
 
-        // Create a protected secret file inside workspace
         let secret = ws.join("secret.env");
         std::fs::write(&secret, "PASSWORD=123").unwrap();
 
-        // Create a symlink outside the workspace pointing to the protected secret
         let outside_temp = tempfile::tempdir().unwrap();
         let symlink_path = outside_temp.path().join("external_symlink");
         std::os::unix::fs::symlink(&secret, &symlink_path).unwrap();

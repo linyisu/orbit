@@ -5,16 +5,14 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-/// Reserved metadata names; exact configured templates are handled separately. Keep the
-/// file API, capability policy, inode guard, and sandbox masks in sync.
+/// Reserved names shared by file access, capability policy and sandbox masks.
 pub(crate) fn is_protected_workspace_name(name: &str) -> bool {
     matches!(name, ".git" | ".env")
         || name.starts_with(".env.")
         || name.starts_with(".orbit-write-")
 }
 
-/// A normalized and canonicalized path representation that defends against
-/// relative traversal, symlink spoofing, and directory aliasing.
+/// Requested spelling paired with its normalized canonical path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResolvedPath {
     requested: PathBuf,
@@ -22,12 +20,7 @@ pub struct ResolvedPath {
 }
 
 impl ResolvedPath {
-    /// Resolve a requested path against an optional base directory.
-    ///
-    /// If the path exists, it is fully canonicalized via `std::fs::canonicalize`.
-    /// If parts of the path do not exist yet (e.g. a new file to be created),
-    /// the closest existing ancestor directory is canonicalized, and the remaining
-    /// non-existing components are safely appended.
+    /// Resolve existing links; append missing components to the nearest canonical ancestor.
     pub fn resolve(requested: impl AsRef<Path>, base: Option<&Path>) -> io::Result<Self> {
         let requested_ref = requested.as_ref();
 
@@ -50,7 +43,7 @@ impl ResolvedPath {
         })
     }
 
-    /// Construct directly from an already canonical path.
+    /// The caller must supply an already canonical path.
     pub fn from_canonical(path: impl Into<PathBuf>) -> Self {
         let canonical = path.into();
         Self {
@@ -67,20 +60,16 @@ impl ResolvedPath {
         &self.canonical
     }
 
-    /// Check if this resolved path is equal to or a subpath of another resolved path.
     pub fn is_subpath_of(&self, parent: &ResolvedPath) -> bool {
         self.canonical.starts_with(&parent.canonical)
     }
 
-    /// Check if this resolved path is equal to or a subpath of a raw canonical path.
     pub fn is_subpath_of_canonical(&self, parent_canonical: &Path) -> bool {
         self.canonical.starts_with(parent_canonical)
     }
 }
 
-/// Best-effort canonicalization: if the target exists, canonicalize directly.
-/// If not, canonicalize the closest existing ancestor directory and append
-/// the normalized non-existent trailing components.
+/// Canonicalize the existing prefix and append the missing suffix.
 fn resolve_canonical_best_effort(path: &Path) -> io::Result<PathBuf> {
     if path.exists() {
         return std::fs::canonicalize(path);
@@ -116,8 +105,7 @@ fn resolve_canonical_best_effort(path: &Path) -> io::Result<PathBuf> {
     Ok(canonical_base)
 }
 
-/// Normalize path components lexically without touching the filesystem.
-/// Eliminates `.` and resolves `..` where possible.
+/// Normalize `.` and `..` lexically, without accessing the filesystem.
 fn normalize_lexical(path: &Path) -> PathBuf {
     let mut components = Vec::new();
 
@@ -136,6 +124,7 @@ fn normalize_lexical(path: &Path) -> PathBuf {
 
                 components.push(Component::ParentDir);
             }
+
             Component::Normal(name) => components.push(Component::Normal(name)),
         }
     }

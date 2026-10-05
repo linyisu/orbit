@@ -6,16 +6,13 @@ use crate::execution::process::MountSpec;
 
 #[derive(Clone, Debug, Default)]
 pub struct GitMountPlan {
-    /// Bwrap mounts to inject into the sandbox.
     pub mounts: Vec<MountSpec>,
-    /// Environment variables to set in the sandbox process (e.g. GIT_OPTIONAL_LOCKS=0).
     pub env_vars: Vec<(String, String)>,
     /// Whether the sandbox should leave .git unmasked (replacing the blanket empty mask).
     pub unmask_git: bool,
 }
 
 impl GitMountPlan {
-    /// Generate mount specification and environment variables for a Git repository.
     pub fn prepare(
         repo: &GitRepositoryInfo,
         workspace_container_root: &Path,
@@ -37,14 +34,12 @@ impl GitMountPlan {
         }
 
         if !repo.is_gitfile {
-            // Standard git repository (.git is a directory under workspace root)
             let container_dot_git = workspace_container_root.join(".git");
             if is_read_only {
                 mounts.push(MountSpec::read_only(&repo.git_dir, &container_dot_git));
             } else {
                 mounts.push(MountSpec::read_write(&repo.git_dir, &container_dot_git));
 
-                // Protect config files and hooks unless explicitly granted config mutation
                 if !allow_config_mutation {
                     let config = repo.config_path();
                     if config.exists() {
@@ -53,6 +48,7 @@ impl GitMountPlan {
                             container_dot_git.join("config"),
                         ));
                     }
+
                     let wt_config = repo.worktree_config_path();
                     if wt_config.exists() {
                         mounts.push(MountSpec::read_only(
@@ -60,6 +56,7 @@ impl GitMountPlan {
                             container_dot_git.join("config.worktree"),
                         ));
                     }
+
                     let hooks = repo.hooks_path();
                     if hooks.exists() {
                         mounts.push(MountSpec::read_only(
@@ -70,9 +67,7 @@ impl GitMountPlan {
                 }
             }
         } else {
-            // Worktree or Submodule (.git is a gitfile pointing to external git_dir / common_dir)
-            // The .git file inside workspace root is already visible via /workspace mount.
-            // But git_dir and common_dir might reside outside /workspace; mount them to their host paths!
+            // Gitfiles are visible in /workspace; their metadata may need external mounts.
             if is_read_only {
                 mounts.push(MountSpec::read_only(&repo.git_dir, &repo.git_dir));
                 if repo.common_dir != repo.git_dir {
@@ -111,10 +106,12 @@ impl GitMountPlan {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
     use super::*;
     use crate::git::discovery::GitRepositoryInfo;
-    use std::fs;
-    use tempfile::tempdir;
 
     #[test]
     fn read_only_mount_sets_optional_locks_zero() {
@@ -165,7 +162,6 @@ mod tests {
         );
 
         assert!(plan.unmask_git);
-        // Does not force GIT_OPTIONAL_LOCKS=0 in RW mode
         assert!(!plan.env_vars.iter().any(|(k, _)| k == "GIT_OPTIONAL_LOCKS"));
 
         assert!(

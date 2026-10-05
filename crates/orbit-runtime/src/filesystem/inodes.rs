@@ -1,9 +1,8 @@
+use std::os::unix::fs::MetadataExt;
 use std::{
     collections::{HashSet, VecDeque},
     path::Path,
 };
-
-use std::os::unix::fs::MetadataExt;
 
 use crate::error::{RuntimeError, failed};
 
@@ -38,6 +37,7 @@ pub(crate) fn collect_dir_inodes(
                     curr.display()
                 ))
             })?;
+
             visited += 1;
 
             if visited > MAX_PROTECTED_DIR_ENTRIES {
@@ -53,6 +53,7 @@ pub(crate) fn collect_dir_inodes(
                     entry.path().display()
                 ))
             })?;
+
             protected_inodes.insert((meta.dev(), meta.ino()));
 
             if meta.is_dir() && !meta.file_type().is_symlink() {
@@ -122,6 +123,7 @@ pub(crate) fn is_reserved_workspace_inode_with_templates(
             }) {
                 return false;
             }
+
             for ancestor in path.ancestors().take_while(|path| *path != root) {
                 if ancestor != path
                     && !std::fs::symlink_metadata(ancestor)
@@ -129,6 +131,7 @@ pub(crate) fn is_reserved_workspace_inode_with_templates(
                 {
                     return false;
                 }
+
                 if ancestor.file_name().is_some_and(|name| {
                     super::path_security::is_protected_workspace_name(&name.to_string_lossy())
                 }) && !read.iter().any(|allowed| ancestor.starts_with(allowed))
@@ -137,6 +140,7 @@ pub(crate) fn is_reserved_workspace_inode_with_templates(
                     return false;
                 }
             }
+
             true
         })
     {
@@ -234,6 +238,7 @@ mod tests {
                 )
                 .unwrap()
             };
+
             assert!(!check());
             assert!(!check());
             match change {
@@ -245,6 +250,7 @@ mod tests {
                 }
                 _ => std::fs::hard_link(&source, root.join(".env")).unwrap(),
             }
+
             assert!(check(), "{change} must invalidate the safe alias set");
         }
     }

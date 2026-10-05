@@ -1,6 +1,7 @@
 pub mod linux;
 
 use std::pin::Pin;
+
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -15,8 +16,7 @@ use crate::{
 
 pub use linux::BwrapBackend;
 
-/// ExecutionBackend defines the interface for low-level process isolation backends.
-/// Implementations must fail closed and never perform unisolated execution silently.
+/// Isolation backends must fail closed rather than fall back to host execution.
 pub trait ExecutionBackend: Send + Sync {
     fn name(&self) -> &'static str;
 

@@ -1,6 +1,8 @@
-use crate::filesystem::WorkspaceError;
 use std::io;
+
 use thiserror::Error;
+
+use crate::filesystem::WorkspaceError;
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {

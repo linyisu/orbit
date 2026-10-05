@@ -5,8 +5,7 @@ use crate::{
     execution::{process::MountSpec, resources::ResourceLimits},
 };
 
-/// ExecutionPolicy defines the resolved effective execution boundaries for a command.
-/// It separates sandbox mount capabilities, network access, and resource constraints.
+/// Resolved mount, network and resource boundaries for one command.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionPolicy {
     pub read_only_workspace: bool,
@@ -26,7 +25,7 @@ pub struct ExecutionPolicy {
 }
 
 impl ExecutionPolicy {
-    /// Creates a default development policy with read-write workspace access.
+    /// Read-write workspace policy; external writes still require grants.
     pub fn dev_default() -> Self {
         Self {
             read_only_workspace: false,
@@ -46,7 +45,7 @@ impl ExecutionPolicy {
         }
     }
 
-    /// Creates a read-only review policy.
+    /// Read-only workspace policy.
     pub fn read_only() -> Self {
         Self {
             read_only_workspace: true,
