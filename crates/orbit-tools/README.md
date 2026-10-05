@@ -10,7 +10,7 @@
 
 [web_fetch/dom.rs](src/web_fetch/dom.rs) 为 Google、Bing 和 DuckDuckGo 共用 DOM 属性、节点查找与文本投影；各引擎的结果定位、跳转及过滤规则保留在对应模块。
 
-[image_assets.rs](src/image_assets.rs) 复用 `Attachment::MAX_IMAGE_BYTES` 与有界图片文件读取，导入前不再无界读取整个文件。[web_fetch/image.rs](src/web_fetch/image.rs) 的 `fetch_image` 是 TUI 使用的内部网络图片接口，复用 URL、DNS 与重定向检查；它没有注册成额外的模型工具。
+[image_assets.rs](src/image_assets.rs) 复用 `Attachment::MAX_IMAGE_BYTES` 与有界图片文件读取，导入前不再无界读取整个文件。[web_fetch/resource.rs](src/web_fetch/resource.rs) 的 `fetch_image` 是 TUI 使用的内部网络图片接口，复用 URL、DNS 与重定向检查；同一模块的 `WebClient::fetch_json` 为公开模型规格提供有大小限制的 JSON 下载，不发送模型账号凭据。这些内部接口没有注册成额外的模型工具。
 
 ## 架构与核心设计
 
