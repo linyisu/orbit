@@ -8,6 +8,7 @@ use crate::{
     skills, subagents, verification,
 };
 
+#[derive(Clone)]
 pub(crate) struct WorkspaceOptions {
     pub(crate) initial_directory: PathBuf,
     pub(crate) auth_directory: PathBuf,

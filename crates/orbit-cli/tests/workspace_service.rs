@@ -42,7 +42,7 @@ impl Client {
         client.output.read_exact(&mut marker).await.unwrap();
         assert_eq!(marker, b"\0ORBIT-WORKSPACE/1\n");
         assert_eq!(
-            client.request(json!({"method":"hello","version":1})).await["type"],
+            client.request(json!({"method":"hello","version":2})).await["type"],
             "hello"
         );
         client
@@ -84,6 +84,11 @@ async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
                 request.push(byte[0]);
             }
             let header = String::from_utf8(request).unwrap();
+            assert!(
+                header
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer test-only")
+            );
             let length: usize = header
                 .lines()
                 .find_map(|line| {
@@ -265,30 +270,9 @@ models = [{{ id = "mock" }}]
 
 #[tokio::test]
 async fn ssh_and_wsl_launchers_use_the_same_service_and_ignore_shell_banners() {
-    use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let bin = root.join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    for program in ["ssh", "wsl.exe"] {
-        let path = bin.join(program);
-        std::fs::write(
-            &path,
-            r#"#!/usr/bin/python3
-import os,sys
-print('test login banner', flush=True)
-if os.path.basename(sys.argv[0]) == 'ssh':
-    assert sys.argv[-2] == 'test-alias'
-    os.execvp('sh', ['sh', '-c', sys.argv[-1]])
-else:
-    assert sys.argv[1:3] == ['--distribution', 'Test Distro']
-    args = sys.argv[sys.argv.index('--exec')+1:]
-    os.execvp(args[0], args)
-"#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
+    let bin = transport_launchers(root);
     let workspace = root.join("project 'quoted' $(touch unexpected)");
     std::fs::create_dir(&workspace).unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
@@ -387,4 +371,120 @@ models = [{{ id = "mock" }}]
         client.request(json!({"method":"shutdown"})).await["type"],
         "ok"
     );
+}
+
+fn transport_launchers(root: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = root.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    for program in ["ssh", "wsl.exe"] {
+        let path = bin.join(program);
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/python3
+import os,sys
+print('test login banner', flush=True)
+if os.path.basename(sys.argv[0]) == 'ssh':
+    assert sys.argv[-2] == 'test-alias'
+    os.execvp('sh', ['sh', '-c', sys.argv[-1]])
+else:
+    assert sys.argv[1:3] == ['--distribution', 'Test Distro']
+    args = sys.argv[sys.argv.index('--exec')+1:]
+    os.execvp(args[0], args)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    bin
+}
+
+#[tokio::test]
+async fn remote_prompt_uses_local_configuration_and_credentials_in_an_unconfigured_project() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let bin = transport_launchers(root);
+    for target in [vec!["--ssh", "test-alias"], vec!["--wsl", "Test Distro"]] {
+        let project = tempfile::tempdir_in(root).unwrap();
+        let local = tempfile::tempdir_in(root).unwrap();
+        let (url, model) = mock_model().await;
+        let auth = local.path().join("auth");
+        orbit_auth::AuthStore::new(auth.clone())
+            .unwrap()
+            .set_api_key("local-only", "test-only".into(), &url)
+            .await
+            .unwrap();
+        let config = local.path().join("local.toml");
+        std::fs::write(
+            &config,
+            format!(
+                r#"default_provider = "test"
+[providers.test]
+base_url = "{url}"
+credential = "local-only"
+auto_refresh_models = false
+models = [{{ id = "mock" }}]
+"#
+            ),
+        )
+        .unwrap();
+        let output = tokio::time::timeout(
+            Duration::from_secs(30),
+            Command::new(env!("CARGO_BIN_EXE_orbit"))
+                .arg("connect")
+                .args(&target)
+                .arg("--server")
+                .arg(env!("CARGO_BIN_EXE_orbit"))
+                .arg("--workspace")
+                .arg(project.path())
+                .arg("--config")
+                .arg(&config)
+                .arg("--auth-dir")
+                .arg(&auth)
+                .arg("--database")
+                .arg(project.path().join("sessions.db"))
+                .args(["--prompt", "write a file"])
+                .env(
+                    "PATH",
+                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                )
+                .env("HOME", root)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("result.txt")).unwrap(),
+            "written remotely"
+        );
+        assert!(!project.path().join("config.toml").exists());
+        assert!(!project.path().join("auth").exists());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("test-only"));
+        model.await.unwrap();
+        Command::new(env!("CARGO_BIN_EXE_orbit"))
+            .arg("connect")
+            .args(&target)
+            .arg("--server")
+            .arg(env!("CARGO_BIN_EXE_orbit"))
+            .arg("--workspace")
+            .arg(project.path())
+            .arg("--database")
+            .arg(project.path().join("sessions.db"))
+            .arg("--stop")
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            )
+            .env("HOME", root)
+            .output()
+            .await
+            .unwrap();
+    }
 }

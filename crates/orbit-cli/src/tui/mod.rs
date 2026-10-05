@@ -570,7 +570,9 @@ pub async fn run(
                                 RemoteAction::Close => state.close_tab_request = Some(id),
                                 RemoteAction::Local => state.new_tab_request = true,
                                 RemoteAction::Open(spec) => {
-                                    let next = workspace_client::Tab::connecting(*spec, state.media.clone());
+                                    let mut spec = *spec;
+                                    spec.inherit(&options.config, &options.auth_directory, Some(&state.model));
+                                    let next = workspace_client::Tab::connecting(spec, state.media.clone());
                                     tabs.add_remote(next);
                                 }
                                 RemoteAction::SameTarget(resume) => { let next = tab.sibling(resume); tabs.add_remote(next); }
@@ -1011,7 +1013,10 @@ pub async fn run(
                         Action::Submit(prompt) => {
                             if crate::workspace::connect::Spec::is_command(&prompt) {
                                 match crate::workspace::connect::Spec::parse(&prompt) {
-                                    Ok(spec) => tabs.add_remote(workspace_client::Tab::connecting(spec, state.media.clone())),
+                                    Ok(mut spec) => {
+                                        spec.inherit(&options.config, &options.auth_directory, Some(&state.model));
+                                        tabs.add_remote(workspace_client::Tab::connecting(spec, state.media.clone()));
+                                    }
                                     Err(error) => { state.input.set(prompt); state.report_local(TranscriptItem::CommandError(error.to_string())); }
                                 }
                                 dirty = true;

@@ -5,7 +5,8 @@ use orbit_tools::approval::ApprovalPreview;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+// Keep framing stable so Hello can report incompatible schema versions.
 pub const PREAMBLE: &[u8] = b"\0ORBIT-WORKSPACE/1\n";
 pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 pub const PAGE_BYTES: usize = 1024 * 1024;
@@ -38,6 +39,8 @@ pub enum Request {
     },
     Open {
         resume: Option<String>,
+        #[serde(default)]
+        configuration: Option<super::configuration::Configuration>,
     },
     Sessions,
     Start {
@@ -170,6 +173,7 @@ mod tests {
             write(
                 &mut writer,
                 &Request::Open {
+                    configuration: None,
                     resume: Some("中文\n会话".into()),
                 },
             )
@@ -180,7 +184,7 @@ mod tests {
                 .unwrap();
         });
         assert!(
-            matches!(read::<Request>(&mut reader).await.unwrap(), Request::Open { resume: Some(id) } if id == "中文\n会话")
+            matches!(read::<Request>(&mut reader).await.unwrap(), Request::Open { resume: Some(id), .. } if id == "中文\n会话")
         );
         assert!(matches!(
             read::<Request>(&mut reader).await.unwrap(),

@@ -43,7 +43,11 @@ pub(super) async fn run(opened: Opened) -> Result<()> {
                     Action::SameTarget(resume) => { let next = tabs.remote[&id].sibling(resume); tabs.add_remote(next); }
                     Action::Local => {
                         let media = tabs.remote[&id].state.media.clone();
-                        tabs.add_remote(Tab::connecting(Spec::local(), media));
+                        let mut spec = Spec::local();
+                        if let Some(configuration) = tabs.remote[&id].connection.as_ref().and_then(|connection| connection.local_configuration.as_ref()) {
+                            spec.inherit(&configuration.config, &configuration.auth, None);
+                        }
+                        tabs.add_remote(Tab::connecting(spec, media));
                     }
                     Action::None | Action::Redraw => {}
                 }

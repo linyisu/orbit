@@ -179,6 +179,11 @@ impl Tab {
                 self.state.workspace.clone(),
                 self.state.media.clone(),
             );
+            let mut connection = (**connection).clone();
+            if let Some(configuration) = &mut connection.local_configuration {
+                configuration.model = Some(self.state.model.clone());
+            }
+            let connection = Arc::new(connection);
             tab.connection = Some(connection.clone());
             tab.state.workspace_wizard = Some(wizard::Wizard::new(None));
             let connection = connection.clone();

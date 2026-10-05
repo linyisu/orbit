@@ -113,6 +113,7 @@ impl Target {
 
 #[derive(Clone)]
 pub struct Connection {
+    pub local_configuration: Option<super::configuration::Local>,
     pub target: Target,
     pub workspace: String,
     pub executable: String,
@@ -125,6 +126,13 @@ pub struct Connection {
 }
 
 impl Connection {
+    pub async fn configuration(&self) -> Result<Option<super::configuration::Configuration>> {
+        match &self.local_configuration {
+            Some(configuration) => Ok(Some(configuration.snapshot().await?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn command(&self) -> Result<Command> {
         ensure!(!self.workspace.is_empty(), "workspace must not be empty");
         ensure!(
@@ -137,11 +145,22 @@ impl Connection {
             "--workspace".into(),
             self.workspace.clone(),
             "--config".into(),
-            self.config.to_string_lossy().into_owned(),
+            if self.local_configuration.is_some() {
+                "config.toml".into()
+            } else {
+                self.config.to_string_lossy().into_owned()
+            },
         ];
         for (flag, path) in [
             ("--database", &self.database),
-            ("--auth-dir", &self.auth_dir),
+            (
+                "--auth-dir",
+                if self.local_configuration.is_some() {
+                    &None
+                } else {
+                    &self.auth_dir
+                },
+            ),
         ] {
             if let Some(path) = path {
                 arguments.extend([flag.into(), path.to_string_lossy().into_owned()]);
@@ -321,6 +340,7 @@ mod tests {
 
     fn connection(target: Target) -> Connection {
         Connection {
+            local_configuration: None,
             target,
             workspace: "/tmp/project '中文';$(touch nope)".into(),
             executable: "orbit".into(),

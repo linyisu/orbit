@@ -14,12 +14,14 @@ use super::{
 pub(crate) struct Spec {
     #[command(flatten)]
     args: ConnectArgs,
-    #[arg(long, default_value = "config.toml")]
-    config: PathBuf,
+    #[arg(long)]
+    config: Option<PathBuf>,
     #[arg(long)]
     database: Option<PathBuf>,
     #[arg(long)]
     auth_dir: Option<PathBuf>,
+    #[arg(skip)]
+    model: Option<String>,
 }
 
 pub(crate) struct Opened {
@@ -29,6 +31,19 @@ pub(crate) struct Opened {
 }
 
 impl Spec {
+    pub fn inherit(
+        &mut self,
+        config: &std::path::Path,
+        auth: &std::path::Path,
+        model: Option<&str>,
+    ) {
+        self.config.get_or_insert_with(|| config.to_owned());
+        self.auth_dir.get_or_insert_with(|| auth.to_owned());
+        if self.model.is_none() {
+            self.model = model.map(str::to_owned);
+        }
+    }
+
     pub fn is_command(prompt: &str) -> bool {
         matches!(prompt.split_whitespace().next(), Some("/ssh" | "/wsl"))
     }
@@ -88,14 +103,18 @@ impl Spec {
     }
 
     pub async fn prepare(&self, progress: super::interaction::Progress) -> Result<Arc<Connection>> {
-        super::prepare_connection(
+        let mut connection = super::prepare_connection(
             &self.args,
-            self.config.clone(),
+            self.config.clone().unwrap_or_else(|| "config.toml".into()),
             self.database.clone(),
             self.auth_dir.clone(),
             Some(progress),
         )
-        .await
+        .await?;
+        if let Some(configuration) = &mut Arc::make_mut(&mut connection).local_configuration {
+            configuration.model = self.model.clone();
+        }
+        Ok(connection)
     }
 
     pub fn remote(&self) -> bool {
@@ -162,14 +181,7 @@ impl Spec {
     }
 
     pub async fn open(self, progress: super::interaction::Progress) -> Result<Opened> {
-        let connection = super::prepare_connection(
-            &self.args,
-            self.config,
-            self.database,
-            self.auth_dir,
-            Some(progress.clone()),
-        )
-        .await?;
+        let connection = self.prepare(progress.clone()).await?;
         Opened::connect_progress(connection, self.args.resume, progress).await
     }
 }
@@ -183,7 +195,15 @@ impl Opened {
         progress.report("启动工作区服务并等待握手");
         let mut client = connection.connect_progress(Some(&progress)).await?;
         progress.report("已完成握手，正在打开工作区会话");
-        let Response::Opened(info) = client.request(Request::Open { resume }).await? else {
+        progress.report("应用本地配置并打开工作区会话");
+        let configuration = connection.configuration().await?;
+        let Response::Opened(info) = client
+            .request(Request::Open {
+                resume,
+                configuration,
+            })
+            .await?
+        else {
             anyhow::bail!("unexpected workspace response");
         };
         let opened = Self {
@@ -219,7 +239,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tui_commands_preserve_target_paths_and_do_not_inherit_local_credentials() {
+    fn remote_commands_inherit_local_settings_without_overwriting_explicit_paths() {
+        let mut spec = Spec::parse("/ssh dev").unwrap();
+        spec.inherit(
+            std::path::Path::new("/local/config.toml"),
+            std::path::Path::new("/local/auth"),
+            Some("provider::model"),
+        );
+        assert_eq!(
+            spec.config.as_deref(),
+            Some(std::path::Path::new("/local/config.toml"))
+        );
+        assert_eq!(
+            spec.auth_dir.as_deref(),
+            Some(std::path::Path::new("/local/auth"))
+        );
+        assert_eq!(spec.model.as_deref(), Some("provider::model"));
+        let mut explicit =
+            Spec::parse("/wsl Ubuntu --config /other/settings.toml --auth-dir /other/auth")
+                .unwrap();
+        explicit.inherit(
+            std::path::Path::new("/local/config.toml"),
+            std::path::Path::new("/local/auth"),
+            None,
+        );
+        assert_eq!(
+            explicit.config.as_deref(),
+            Some(std::path::Path::new("/other/settings.toml"))
+        );
+        assert_eq!(
+            explicit.auth_dir.as_deref(),
+            Some(std::path::Path::new("/other/auth"))
+        );
+    }
+
+    #[test]
+    fn tui_commands_preserve_explicit_local_configuration_and_target_paths() {
         let spec = Spec::parse(
             "/ssh dev '/home/me/project with spaces' --resume saved --config custom.toml",
         )
@@ -227,7 +282,7 @@ mod tests {
         assert_eq!(spec.label(), "SSH dev");
         assert_eq!(spec.workspace(), "/home/me/project with spaces");
         assert_eq!(spec.args.resume.as_deref(), Some("saved"));
-        assert_eq!(spec.config, PathBuf::from("custom.toml"));
+        assert_eq!(spec.config, Some(PathBuf::from("custom.toml")));
         assert!(spec.auth_dir.is_none() && spec.database.is_none());
         let spec = Spec::parse("/wsl Ubuntu --workspace ~/project --wsl-user dev").unwrap();
         assert_eq!(spec.args.wsl_user.as_deref(), Some("dev"));

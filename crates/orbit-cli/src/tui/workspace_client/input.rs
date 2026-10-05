@@ -176,7 +176,20 @@ impl Tab {
         let command = prompt.trim();
         if Spec::is_command(command) {
             match Spec::parse(command) {
-                Ok(spec) => return Ok(Action::Open(Box::new(spec))),
+                Ok(mut spec) => {
+                    if let Some(configuration) = self
+                        .connection
+                        .as_ref()
+                        .and_then(|connection| connection.local_configuration.as_ref())
+                    {
+                        spec.inherit(
+                            &configuration.config,
+                            &configuration.auth,
+                            Some(&self.state.model),
+                        );
+                    }
+                    return Ok(Action::Open(Box::new(spec)));
+                }
                 Err(error) => {
                     self.state.input.set(prompt);
                     self.state

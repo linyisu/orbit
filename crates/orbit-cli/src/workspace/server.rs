@@ -152,7 +152,7 @@ pub async fn serve(
     Ok(())
 }
 
-fn runtime_directory() -> Result<PathBuf> {
+pub(crate) fn runtime_directory() -> Result<PathBuf> {
     let uid = unsafe { libc::geteuid() };
     let directory = std::env::temp_dir().join(format!("orbit-workspace-{uid}"));
     match fs::DirBuilder::new().mode(0o700).create(&directory) {
@@ -325,7 +325,10 @@ impl Service {
     async fn dispatch(&self, request: Request) -> Result<Response> {
         match request {
             Request::Hello { .. } => bail!("workspace handshake already completed"),
-            Request::Open { resume } => {
+            Request::Open {
+                resume,
+                configuration,
+            } => {
                 let _opening = self.opening.lock().await;
                 ensure!(
                     !self.closing.load(Ordering::Acquire),
@@ -340,7 +343,14 @@ impl Service {
                     self.sessions.lock().await.len() < MAX_SESSIONS,
                     "workspace session limit reached; reconnect after idle service shutdown"
                 );
-                let mut setup = super::setup::prepare_service(&self.options, resume).await?;
+                let configuration = match configuration {
+                    Some(configuration) => Some(configuration.install(&self.options).await?),
+                    None => None,
+                };
+                let options = configuration
+                    .as_ref()
+                    .map_or(&self.options, |configuration| &configuration.options);
+                let mut setup = super::setup::prepare_service(options, resume).await?;
                 let saved = setup.session.snapshot.session.model.clone();
                 if let Some(model) = setup
                     .resources
@@ -356,7 +366,7 @@ impl Service {
                     setup.resources.budget.input_context_tokens = model.input_context_tokens;
                     setup.resources.budget.max_output_tokens = model.max_output_tokens;
                 }
-                let handle = Arc::new(Handle::spawn(setup));
+                let handle = Arc::new(Handle::spawn(setup, configuration));
                 let info = handle.info.clone();
                 self.sessions.lock().await.insert(info.id.clone(), handle);
                 Ok(Response::Opened(info))

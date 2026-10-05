@@ -1,5 +1,6 @@
 mod bootstrap;
 mod command;
+pub(crate) mod configuration;
 pub(crate) mod connect;
 pub(crate) mod directories;
 pub(crate) mod discovery;
@@ -22,6 +23,7 @@ use orbit_model::types::StreamEvent;
 use protocol::{Mode, Request, Response, Update};
 use transport::{Connection, Target};
 
+pub(crate) use server::runtime_directory;
 pub use server::serve;
 
 #[derive(Clone, Debug, Args)]
@@ -104,6 +106,7 @@ pub async fn connect(
     let Response::Opened(info) = client
         .request(Request::Open {
             resume: args.resume,
+            configuration: connection.configuration().await?,
         })
         .await?
     else {
@@ -180,6 +183,19 @@ async fn prepare_connection(
         }
     };
     let connection = Arc::new(Connection {
+        local_configuration: if matches!(target, Target::Local) {
+            None
+        } else {
+            Some(configuration::Local {
+                config: std::path::absolute(&config)?,
+                auth: crate::auth_cli::directory(
+                    auth_dir.clone(),
+                    std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+                    std::env::var_os("HOME").map(PathBuf::from),
+                )?,
+                model: None,
+            })
+        },
         target,
         workspace: args.workspace.clone(),
         executable,

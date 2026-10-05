@@ -173,6 +173,7 @@ fn protected_workspace(
     network: orbit_runtime::capability::NetworkPolicy,
 ) -> Result<Workspace> {
     let mut workspace = Workspace::new(directory)?;
+    workspace.protect_opaque_runtime_root(crate::workspace::runtime_directory()?)?;
     workspace.protect(config)?;
     workspace.protect(auth_directory)?;
 

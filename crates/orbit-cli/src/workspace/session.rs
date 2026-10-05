@@ -16,6 +16,7 @@ use super::protocol::{Approval, Mode, PAGE_BYTES, PAGE_EVENTS, Page, SessionInfo
 const COMMAND_CAPACITY: usize = 16;
 
 pub struct Handle {
+    _configuration: Option<super::configuration::Installed>,
     pub info: SessionInfo,
     pub view: Arc<Mutex<View>>,
     requests: mpsc::Sender<Envelope>,
@@ -93,7 +94,10 @@ impl View {
 }
 
 impl Handle {
-    pub fn spawn(mut setup: crate::PreparedWorkspace) -> Self {
+    pub fn spawn(
+        mut setup: crate::PreparedWorkspace,
+        configuration: Option<super::configuration::Installed>,
+    ) -> Self {
         let budget = &setup.resources.budget;
         let info = SessionInfo {
             id: setup.session.id().into(),
@@ -349,6 +353,7 @@ impl Handle {
             }
         });
         Self {
+            _configuration: configuration,
             info,
             view,
             requests,
