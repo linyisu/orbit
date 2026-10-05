@@ -75,6 +75,7 @@ fn fixture(names: &[&str]) -> (ToolRegistry, Vec<oneshot::Sender<String>>) {
         gates.insert((*name).into(), gate);
         releases.push(release);
     }
+
     tools.register(GatedCommand {
         jobs: tools.background_jobs().clone(),
         gates: Mutex::new(gates),
@@ -89,6 +90,7 @@ async fn waiting(receiver: &mut mpsc::Receiver<AgentEvent>) {
                 return;
             }
         }
+
         panic!("Agent ended before waiting for commands");
     })
     .await
@@ -117,6 +119,7 @@ async fn idle_agent_waits_without_model_polling_and_receives_completion_once() {
             )
             .await
     });
+
     waiting(&mut receiver).await;
     assert_eq!(model.requests().len(), 2);
     assert!(!run.is_finished());
@@ -130,6 +133,7 @@ async fn idle_agent_waits_without_model_polling_and_receives_completion_once() {
         .unwrap()
         .unwrap()
         .unwrap();
+
     assert_eq!(model.requests().len(), 3);
     let notifications = result.history.iter().filter(|message| matches!(message, ChatMessage::User {content, ..} if content.contains("background_command_completion"))).count();
     assert_eq!(notifications, 1);
@@ -141,6 +145,7 @@ async fn idle_agent_waits_without_model_polling_and_receives_completion_once() {
             finished += 1;
         }
     }
+
     assert_eq!(finished, 1);
 }
 
@@ -211,6 +216,7 @@ async fn commands_overlap_other_work_and_wait_all_does_not_duplicate_results() {
             )
             .await
     });
+
     tokio::time::timeout(Duration::from_secs(5), waiting_receiver)
         .await
         .unwrap()
@@ -234,6 +240,7 @@ async fn commands_overlap_other_work_and_wait_all_does_not_duplicate_results() {
         .unwrap()
         .unwrap()
         .unwrap();
+
     assert_eq!(model.requests().len(), 4);
     assert!(!result.history.iter().any(|message| matches!(message, ChatMessage::User {content, ..} if content.contains("background_command_completion"))));
     assert!(model.requests()[3].messages.iter().any(|message| matches!(message, ChatMessage::Tool {tool_call_id, content} if tool_call_id == "wait" && content.contains("ORBIT TEST PASSED") && content.contains("ORBIT BUILD PASSED"))));
@@ -263,6 +270,7 @@ async fn cancellation_while_idle_reaps_jobs_without_another_model_request() {
             )
             .await
     });
+
     waiting(&mut receiver).await;
     let id = jobs.snapshots(&[], false).unwrap()[0].job_id.clone();
     token.cancel();

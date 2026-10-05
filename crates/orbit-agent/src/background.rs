@@ -101,6 +101,7 @@ impl RunGuard {
                 .state
                 .lock()
                 .expect("background jobs lock poisoned");
+
             for job in state
                 .jobs
                 .values()
@@ -126,6 +127,7 @@ impl RunGuard {
                 {
                     return;
                 }
+
                 notified.await;
             }
         };
@@ -141,6 +143,7 @@ impl Drop for RunGuard {
             .state
             .lock()
             .expect("background jobs lock poisoned");
+
         for job in state
             .jobs
             .values_mut()
@@ -152,6 +155,7 @@ impl Drop for RunGuard {
                 job.cancellation.cancel();
             }
         }
+
         state.active = false;
         state.notices.clear();
         self.jobs.0.changed.notify_waiters();
@@ -175,6 +179,7 @@ impl BackgroundJobs {
                 .notices
                 .push_back((next_id(), bounded(&content, 8192)));
         }
+
         drop(state);
         self.0.changed.notify_waiters();
     }
@@ -205,6 +210,7 @@ impl BackgroundJobs {
                 "background task capacity must be between 1 and 128".into(),
             ));
         }
+
         Ok(Self(Arc::new(Inner {
             capacity,
             ..Default::default()
@@ -229,6 +235,7 @@ impl BackgroundJobs {
                 "restore task results before starting an Agent run".into(),
             ));
         }
+
         let id = next_id();
         let job = Job {
             call,
@@ -255,6 +262,7 @@ impl BackgroundJobs {
                 "this session already has an active Agent run".into(),
             ));
         }
+
         state.generation += 1;
         state.active = true;
         let generation = state.generation;
@@ -318,6 +326,7 @@ impl BackgroundJobs {
                     self.0.capacity
                 )));
             }
+
             while state.jobs.len() >= MAX_RETAINED_JOBS {
                 let oldest = state
                     .jobs
@@ -331,8 +340,10 @@ impl BackgroundJobs {
                             .into(),
                     ));
                 };
+
                 state.jobs.remove(&oldest);
             }
+
             let job = Job {
                 call,
                 label: bounded(&label, 512),
@@ -366,6 +377,7 @@ impl BackgroundJobs {
                 job.cancelled = job.cancellation.is_cancelled();
                 job.result = Some(result);
             }
+
             drop(state);
             jobs.0.changed.notify_waiters();
         });
@@ -393,6 +405,7 @@ impl BackgroundJobs {
                 state.jobs[id].cancellation.cancel();
             }
         }
+
         self.0.changed.notify_waiters();
         Ok(ids
             .iter()
@@ -423,6 +436,7 @@ impl BackgroundJobs {
                 selected_ids(&state, ids, self.0.capacity)?
             }
         };
+
         loop {
             let notified = self.0.changed.notified();
             tokio::pin!(notified);
@@ -436,6 +450,7 @@ impl BackgroundJobs {
                     .iter()
                     .filter(|id| state.jobs.get(*id).is_some_and(|job| job.result.is_some()))
                     .count();
+
                 if ids.is_empty()
                     || (all && ready == ids.len())
                     || (!all && ready > 0)
@@ -449,8 +464,10 @@ impl BackgroundJobs {
                         }
                         snapshots.push(job.snapshot(id, true));
                     }
+
                     return Ok(snapshots);
                 }
+
                 if ids.iter().any(|id| !state.jobs.contains_key(id)) {
                     return Err(ToolError::ExecutionFailed(
                         "a waited command result was evicted".into(),
@@ -595,16 +612,19 @@ fn selected_ids(state: &State, ids: &[String], capacity: usize) -> Result<Vec<St
             .map(|(id, _)| id.clone())
             .collect());
     }
+
     if ids.len() > capacity || ids.iter().collect::<HashSet<_>>().len() != ids.len() {
         return Err(ToolError::ExecutionFailed(format!(
             "specify up to {capacity} distinct task IDs"
         )));
     }
+
     for id in ids {
         if !state.jobs.contains_key(id) {
             return Err(unknown(id));
         }
     }
+
     Ok(ids.to_vec())
 }
 
@@ -650,13 +670,15 @@ fn compact_output(content: &str) -> serde_json::Value {
             value[field] = preview.into();
         }
     }
+
     value
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tokio::sync::oneshot;
+
+    use super::*;
 
     fn gated(jobs: &BackgroundJobs, name: &str) -> (JobSnapshot, oneshot::Sender<()>) {
         let (release, gate) = oneshot::channel();
@@ -697,6 +719,7 @@ mod tests {
             let ids = ids.clone();
             async move { jobs.wait(&ids, true, CancellationToken::new()).await }
         });
+
         tokio::task::yield_now().await;
         assert!(!waiting.is_finished());
         second_release.send(()).unwrap();
@@ -752,6 +775,7 @@ mod tests {
             let ids = ids.clone();
             async move { jobs.wait(&ids, true, CancellationToken::new()).await }
         });
+
         tokio::task::yield_now().await;
         assert!(!waiting.is_finished());
         release.send(()).unwrap();
@@ -818,6 +842,7 @@ mod tests {
             ids.push(job.job_id);
             releases.push(release);
         }
+
         assert!(
             jobs.start(
                 ToolCall::function("overflow", "run_command", serde_json::json!({})),
@@ -866,6 +891,7 @@ mod tests {
             })
             .to_string(),
         );
+
         assert_eq!(value["exit_code"], 7);
         assert_eq!(value["output_id"], "cmd-orbit");
         assert_eq!(value["completion_preview_truncated"], true);

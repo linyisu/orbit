@@ -69,6 +69,7 @@ fn assert_paired(history: &[ChatMessage]) {
                     assert!(pending.insert(call.id.clone()));
                 }
             }
+
             ChatMessage::Tool { tool_call_id, .. } => assert!(pending.remove(tool_call_id)),
             _ => assert!(pending.is_empty()),
         }
@@ -393,6 +394,7 @@ async fn transient_summary_failure_below_the_emergency_threshold_uses_the_saved_
         &settings,
     )
     .unwrap();
+
     assert!(before < (limit - 1000) * 92 / 100);
     let backend = MockModel::from_results([Err(ModelError::Http {
         status: 429,
@@ -414,6 +416,7 @@ async fn transient_summary_failure_below_the_emergency_threshold_uses_the_saved_
     )
     .await
     .unwrap();
+
     assert!(result.record.fallback);
     assert_eq!(
         result.record.strategy,
@@ -997,6 +1000,7 @@ async fn tool_heavy_history_reclaims_over_seventy_percent_without_a_model_call()
     )
     .await
     .unwrap();
+
     println!(
         "tool-heavy replay: {} -> {} estimated tokens; {} model requests; {:?}",
         compacted.before_tokens,

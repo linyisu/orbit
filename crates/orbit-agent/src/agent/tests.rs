@@ -1,10 +1,11 @@
+use orbit_model::types::{Attachment, FunctionCall, ToolCall, Usage};
+use serde_json::json;
+
 use super::*;
 use crate::{
     model::MockModel,
     tool::{ClosureTool, Tool, ToolError, ToolFuture, ToolOutput},
 };
-use orbit_model::types::{Attachment, FunctionCall, ToolCall, Usage};
-use serde_json::json;
 
 fn assistant_text(text: &str) -> ChatCompletion {
     ChatCompletion {
@@ -101,6 +102,7 @@ async fn compaction_without_an_archive_keeps_the_original_history() {
         }
     ));
 }
+
 impl crate::checkpoint::ExecutionJournal for FailingJournal {
     fn record(&self, _: AgentEvent) {}
 
@@ -236,6 +238,7 @@ async fn durability_failure_stops_before_next_side_effect_on_all_adapters() {
                         .run_with_events(request(), CancellationToken::new(), |_| {})
                         .await
                 }
+
                 _ => {
                     let (tx, _rx) = mpsc::channel(128);
                     agent
@@ -423,18 +426,15 @@ async fn scenario_1_text_only_model_removes_read_image_and_fails_fast_on_invocat
         .await
         .unwrap();
 
-    // The assistant called read_image, which agent intercepted as unsupported, returning tool error
     assert_eq!(result.turns, 2);
 
     let requests = backend.requests();
 
     assert_eq!(requests.len(), 2);
-    // The tool result in the next request should contain the informative error
     assert!(matches!(
         &requests[1].messages[2],
         ChatMessage::Tool { content, .. } if content.contains("current model does not support image input")
     ));
-    // No user_with_attachments was pushed with image
     assert!(!requests[1].messages.iter().any(|m| match m {
         ChatMessage::User { attachments, .. } => !attachments.is_empty(),
         _ => false,
@@ -500,7 +500,6 @@ async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
         .with_execution_journal(journal.clone());
     let _ = agent.run(request(), CancellationToken::new()).await;
 
-    // Recover history from the checkpoint
     let restored_history = {
         let checkpoints = journal.checkpoints.lock().unwrap();
         checkpoints.last().unwrap().history.clone()
@@ -511,7 +510,6 @@ async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
         _ => false,
     }));
 
-    // Retry / follow-up with working vision model succeeds and sends the image
     let follow_up_backend =
         MockModel::new(vec![assistant_text("I see the image and help you")]).with_vision(true);
     let follow_up_agent = Agent::new(follow_up_backend.clone(), tools, AgentConfig::default());
@@ -533,7 +531,6 @@ async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
 
 #[tokio::test]
 async fn scenario_4_resuming_failed_conversation_with_text_only_model() {
-    // Conversation has a poisoned historical image attachment (e.g. created prior to fix)
     let historical_poison = vec![
         ChatMessage::system("system"),
         ChatMessage::user("look at 1.jpg"),
@@ -628,7 +625,6 @@ async fn scenario_5_switching_conversation_with_historical_images_to_text_only_a
 
     assert_eq!(requests.len(), 1);
 
-    // Ensure no image attachment was sent to the text-only model
     for msg in &requests[0].messages {
         if let ChatMessage::User { attachments, .. } = msg {
             assert!(attachments.is_empty());
@@ -804,6 +800,7 @@ impl ModelBackend for SparseToolModel {
                         delta.index = delta.index * 3 + 2;
                         StreamEvent::ToolCallDelta(delta)
                     }
+
                     other => other,
                 })
             })) as orbit_model::types::ModelStream)

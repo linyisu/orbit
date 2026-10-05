@@ -41,6 +41,7 @@ async fn auxiliary_completion_wakes_parent_without_polling_or_duplicate_tool_res
         )
         .await
         .unwrap();
+
     assert_eq!(model.requests().len(), 1);
     assert!(result.history.iter().any(
         |m| matches!(m,ChatMessage::User{content,..} if content.contains("subagent_completion"))
@@ -106,6 +107,7 @@ async fn inbox_wakes_waiting_agent_and_cancellation_reaps_auxiliary_jobs() {
             )
             .await
     });
+
     while let Some(event) = receiver.recv().await {
         if matches!(event, AgentEvent::WaitingForTasks { .. }) {
             if first {
@@ -122,6 +124,7 @@ async fn inbox_wakes_waiting_agent_and_cancellation_reaps_auxiliary_jobs() {
             }
         }
     }
+
     let result = run.await.unwrap();
     job_done.notified().await;
     assert!(matches!(
@@ -192,6 +195,7 @@ async fn progress_reminders_wake_parent_and_idle_launched_children_join_the_next
             )
             .await
     });
+
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while let Some(event) = events.recv().await {
             if matches!(event, AgentEvent::WaitingForTasks { .. }) {
@@ -199,6 +203,7 @@ async fn progress_reminders_wake_parent_and_idle_launched_children_join_the_next
                 return;
             }
         }
+
         panic!("idle-launched child was not adopted");
     })
     .await
@@ -208,6 +213,7 @@ async fn progress_reminders_wake_parent_and_idle_launched_children_join_the_next
         .unwrap()
         .unwrap()
         .unwrap();
+
     assert_eq!(model.requests().len(), 3);
     assert!(model.requests()[1].messages.iter().any(|message| matches!(message, ChatMessage::User{content,..} if content.contains("needs a progress check"))));
     assert_eq!(result.history.iter().filter(|message| matches!(message, ChatMessage::User{content,..} if content.contains("needs a progress check"))).count(), 1);

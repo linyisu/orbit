@@ -1,5 +1,6 @@
-use crate::tool::FileChange;
 use orbit_model::types::{StreamEvent, ToolCall};
+
+use crate::tool::FileChange;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum AgentEvent {

@@ -41,11 +41,13 @@ impl AgentInbox {
                 "Agent is finishing; wait for its result before continuing it".into(),
             ));
         }
+
         if state.messages.len() >= 32 {
             return Err(ToolError::ExecutionFailed(
                 "Agent inbox is full; wait for queued messages to be received".into(),
             ));
         }
+
         state.messages.push_back(persist().await?);
         drop(state);
         self.changed.notify_waiters();
@@ -104,6 +106,7 @@ mod tests {
                 })
                 .await
         });
+
         ready.await.unwrap();
         let finishing = inbox.clone();
         let close = tokio::spawn(async move { finishing.close_if_empty().await });

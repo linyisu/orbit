@@ -200,11 +200,13 @@ fn plan_for(
                     }
                 }
             }
+
             ChatMessage::Tool { tool_call_id, .. } => {
                 if !pending.remove(tool_call_id) {
                     return None;
                 }
             }
+
             _ if !pending.is_empty() => return None,
             _ => {}
         }
@@ -279,6 +281,7 @@ fn summary_request(previous: &str, records: &[Value], tokens: usize) -> ChatRequ
         )),
         ChatMessage::user(json!({ "previous_summary": previous, "records": records }).to_string()),
     ]);
+
     request.max_tokens = Some(tokens as u32);
 
     request
@@ -295,6 +298,7 @@ fn parse_summary_completion(response: ChatCompletion) -> Result<TaskSummary, Age
             "summary response contains no text; original context preserved",
         ));
     };
+
     if text.trim().is_empty()
         || !tool_calls.is_empty()
         || text.len() > 128 * 1024
@@ -556,6 +560,7 @@ fn archive_projection(
             progress.summary.render()
         )
     });
+
     history.insert(
         system_end,
         ChatMessage::user(format!(
@@ -587,6 +592,7 @@ fn archive_projection(
         attempts.requests,
         attempts.input_tokens,
     )?;
+
     result.record.fallback = true;
     result.record.fallback_reason = Some(error.to_string());
 
@@ -675,6 +681,7 @@ fn project_archived_evidence(
                         }
                     }
                 }
+
                 _ => {}
             }
         }
@@ -752,6 +759,7 @@ fn records(messages: &[ChatMessage], pinned: Option<usize>) -> (String, Vec<Valu
 
             continue;
         }
+
         if pinned == Some(i) {
             continue;
         }
@@ -768,6 +776,7 @@ fn records(messages: &[ChatMessage], pinned: Option<usize>) -> (String, Vec<Valu
                 "text": content,
                 "attachments": attachments
             })),
+
             ChatMessage::Assistant {
                 content,
                 tool_calls,
@@ -787,6 +796,7 @@ fn records(messages: &[ChatMessage], pinned: Option<usize>) -> (String, Vec<Valu
                     }));
                 }
             }
+
             ChatMessage::Tool {
                 tool_call_id,
                 content,
@@ -1033,9 +1043,11 @@ async fn model_summary(
                     &[],
                 )
                 .saturating_add(256);
+
                 batch_limit = (batch_limit / 2).max(minimum);
                 continue;
             }
+
             Err(_) => {
                 return Err(failure(
                     if Instant::now() >= deadline {
@@ -1046,6 +1058,7 @@ async fn model_summary(
                     "summary request timed out; original context preserved",
                 ));
             }
+
             Ok(Err(orbit_model::error::ModelError::Cancelled)) => {
                 return Err(AgentError::Cancelled);
             }
@@ -1055,6 +1068,7 @@ async fn model_summary(
                     "summary request timed out; original context preserved",
                 ));
             }
+
             Ok(Err(error)) => return Err(failure(Failure::Upstream, error.to_string())),
         };
 
@@ -1156,6 +1170,7 @@ async fn model_summary(
                         record["byte_offset"].as_u64().unwrap_or(0) as usize,
                     )
                 });
+
             archive
                 .save_progress(&SummaryProgress {
                     version: 1,

@@ -164,9 +164,7 @@ where
         self
     }
 
-    /// Run the one Agent execution loop while delivering every lifecycle event
-    /// to an adapter. `run`, `run_with_events`, and the TUI channel API all
-    /// delegate here so they cannot develop different tool or recovery rules.
+    /// Canonical execution loop shared by all adapters; forward every lifecycle event.
     pub async fn run(
         &self,
         request: ChatRequest,
@@ -274,11 +272,13 @@ where
             futures_util::future::join_all(background_runs.iter().map(|run| run.cancel_and_wait()))
                 .await;
         }
+
         let terminal = match &result {
             Ok(agent_result) => AgentEvent::Completed {
                 turns: agent_result.turns,
                 tool_calls: agent_result.tool_calls,
             },
+
             Err(AgentError::Cancelled) => AgentEvent::Cancelled,
             Err(error) => AgentEvent::Failed {
                 error: error.to_string(),
@@ -353,6 +353,7 @@ where
                     emit(event).await?;
                 }
             }
+
             self.deliver_background(&mut history, turns, tool_calls, &mut files, emit)
                 .await?;
             if self.config.max_turns > 0 && turns >= self.config.max_turns {
@@ -380,6 +381,7 @@ where
                             .saturating_add(output),
                         limit: self.config.context_tokens,
                     },
+
                     other => other,
                 });
 
@@ -474,6 +476,7 @@ where
                     .task_groups()
                     .flat_map(|jobs| jobs.pending_ids())
                     .collect::<Vec<_>>();
+
                 if !job_ids.is_empty() {
                     let event = if self
                         .tools
@@ -485,6 +488,7 @@ where
                     } else {
                         AgentEvent::WaitingForCommands { job_ids }
                     };
+
                     emit(event).await?;
                     let waits = self
                         .tools
@@ -501,11 +505,13 @@ where
                     }
                     continue;
                 }
+
                 if let Some(inbox) = &self.inbox
                     && !inbox.close_if_empty().await
                 {
                     continue;
                 }
+
                 return Ok(AgentResult {
                     final_message: completion.message,
                     history,
@@ -578,6 +584,7 @@ where
                                 job_id,
                                 content: output.content.clone(),
                             },
+
                             None => AgentEvent::ToolFinished {
                                 call: call.clone(),
                                 content: output.content.clone(),
@@ -670,6 +677,7 @@ where
                     .await?;
                 jobs.acknowledge_notice(&id);
             }
+
             let completions = jobs.completions();
             if completions.is_empty() {
                 continue;
@@ -686,6 +694,7 @@ where
                         journal.record_message(message);
                     }
                 }
+
                 let event = match &completion.result {
                     Ok(output) => {
                         files.observe(&completion.call, &output.content);
@@ -696,23 +705,27 @@ where
                             })
                             .await?;
                         }
+
                         AgentEvent::ToolFinished {
                             call: completion.call.clone(),
                             content: output.content.clone(),
                             changes: output.changes.clone(),
                         }
                     }
+
                     Err(error) => AgentEvent::ToolFailed {
                         call: completion.call.clone(),
                         error: error.to_string(),
                     },
                 };
+
                 self.checkpoint(history, turns, tool_calls, None, &[], Some(event.clone()))
                     .await?;
                 emit(event).await?;
                 jobs.acknowledge(&completion.snapshot.job_id);
             }
         }
+
         Ok(())
     }
 
@@ -771,6 +784,7 @@ where
                     })
                     .await?;
                 }
+
                 Ok(None) => thresholds.prune_after = estimated.saturating_add(local_limit / 10),
                 Err(AgentError::Cancelled) => return Err(AgentError::Cancelled),
                 Err(error) => {
@@ -843,6 +857,7 @@ where
                         fallback,
                         fallback_reason,
                     };
+
                     *history = result.history;
                     thresholds.compact_after = result
                         .after_tokens
@@ -913,6 +928,7 @@ where
                         reasoning_active = true;
                     }
                 }
+
                 StreamEvent::ReasoningDelta(_) => {}
                 StreamEvent::TextDelta(text) if text.is_empty() => {}
                 _ => {
@@ -927,9 +943,11 @@ where
                         .await?;
                         reasoning_active = false;
                     }
+
                     reasoning_start = std::time::Instant::now();
                 }
             }
+
             emit(AgentEvent::Model(event.clone())).await?;
 
             match event {
@@ -1006,10 +1024,8 @@ where
     }
 }
 
-/// Keep persisted history lossless, but bound binary payloads assembled for one
-/// provider request. Older images remain represented by their name in text.
-/// If the model does not support native vision input, all image attachments are
-/// omitted from the request payload and represented as text notes.
+/// Bound image payloads per request while preserving stored history.
+/// Text-only models receive attachment names instead of image bytes.
 pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<ChatMessage> {
     if !supports_vision {
         let mut messages = history.to_vec();
@@ -1031,6 +1047,7 @@ pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<Cha
                 .map(|attachment| attachment.name())
                 .collect::<Vec<_>>()
                 .join(", ");
+
             content.push_str(&format!(
                 "\n\n[Image omitted: current model does not support image input: {omitted}]"
             ));
@@ -1053,6 +1070,7 @@ pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<Cha
         else {
             continue;
         };
+
         if attachments.len() <= remaining {
             remaining -= attachments.len();
             continue;
@@ -1064,6 +1082,7 @@ pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<Cha
             .map(|attachment| attachment.name())
             .collect::<Vec<_>>()
             .join(", ");
+
         content.push_str(&format!(
             "\n\n[Earlier image attachment omitted from this request to limit context size: {omitted}]"
         ));
@@ -1087,6 +1106,7 @@ fn append_loaded_attachments(
         .map(|attachment| attachment.name())
         .collect::<Vec<_>>()
         .join(", ");
+
     history.push(ChatMessage::user_with_attachments(
         format!(
             "The read_image tool loaded the following local image into this model request: {names}. Analyze the actual image content directly."

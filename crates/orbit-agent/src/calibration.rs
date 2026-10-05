@@ -29,6 +29,7 @@ impl TokenCalibration {
             .iter()
             .map(|(local, actual)| *actual as f64 / *local as f64)
             .collect();
+
         ratios.sort_by(f64::total_cmp);
 
         ratios.get(ratios.len() / 2).copied().unwrap_or(1.0)

@@ -173,13 +173,14 @@ pub async fn compact_configured(
 
 #[cfg(test)]
 mod tests {
+    use orbit_model::types::{ChatCompletion, ChatRequest, ToolCall};
+
     use super::*;
     use crate::{
         agent::{Agent, AgentConfig},
         model::MockModel,
         tool::ToolRegistry,
     };
-    use orbit_model::types::{ChatCompletion, ChatRequest, ToolCall};
 
     fn history() -> Vec<ChatMessage> {
         vec![
@@ -201,6 +202,7 @@ mod tests {
             ChatMessage::assistant("latest answer"),
         ]
     }
+
     fn model(summary: &str, reason: &str) -> MockModel {
         MockModel::new(vec![ChatCompletion {
             id: None,
@@ -306,6 +308,7 @@ mod tests {
             .is_err()
         );
     }
+
     #[tokio::test]
     async fn budget_is_checked_again_after_tool_output_before_next_model_call() {
         use crate::tool::ClosureTool;

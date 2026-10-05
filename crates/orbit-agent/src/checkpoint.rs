@@ -1,8 +1,10 @@
 //! Host-acknowledged recovery checkpoints. A failed write stops execution before
 //! the next side effect; an event channel alone is not a durability guarantee.
-use crate::{error::AgentError, events::AgentEvent};
-use orbit_model::types::{Attachment, ChatMessage};
 use std::{future::Future, pin::Pin};
+
+use orbit_model::types::{Attachment, ChatMessage};
+
+use crate::{error::AgentError, events::AgentEvent};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionCheckpoint {

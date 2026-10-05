@@ -1,7 +1,9 @@
 //! Shared summary configuration for manual, automatic and recovery compaction.
-use crate::model::ModelBackend;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+
+use crate::model::ModelBackend;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -40,6 +42,7 @@ impl CompactionSettings {
                 "compaction max_input_tokens must be 1024..1000000 and max_output_tokens 256..32768",
             );
         }
+
         if self.request_timeout_seconds == 0
             || self.request_timeout_seconds > self.total_timeout_seconds
             || self.total_timeout_seconds > 3600
@@ -51,6 +54,7 @@ impl CompactionSettings {
                 "compaction timeouts must satisfy 1 <= request_timeout_seconds <= total_timeout_seconds <= 3600 and 1 <= manual_request_timeout_seconds <= manual_total_timeout_seconds <= 3600",
             );
         }
+
         if self.model.as_ref().is_some_and(|m| {
             m.split_once("::")
                 .is_none_or(|(p, m)| p.is_empty() || m.is_empty())

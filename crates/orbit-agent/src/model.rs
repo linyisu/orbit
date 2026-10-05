@@ -55,6 +55,7 @@ impl<T: ModelBackend + ?Sized> ModelBackend for Arc<T> {
     fn supports_vision(&self) -> bool {
         (**self).supports_vision()
     }
+
     fn stream_with_retries<'a>(
         &'a self,
         request: ChatRequest,
@@ -62,6 +63,7 @@ impl<T: ModelBackend + ?Sized> ModelBackend for Arc<T> {
     ) -> ObservedStreamFuture<'a> {
         (**self).stream_with_retries(request, cancellation)
     }
+
     fn complete<'a>(
         &'a self,
         request: ChatRequest,
@@ -69,6 +71,7 @@ impl<T: ModelBackend + ?Sized> ModelBackend for Arc<T> {
     ) -> CompletionFuture<'a> {
         (**self).complete(request, cancellation)
     }
+
     fn stream<'a>(
         &'a self,
         request: ChatRequest,
@@ -203,6 +206,7 @@ impl ModelBackend for MockModel {
                     content,
                     tool_calls,
                 } => (content.unwrap_or_default(), tool_calls),
+
                 _ => (String::new(), Vec::new()),
             };
 

@@ -1,8 +1,10 @@
 //! Auditable compaction data, separate from model-authored prose.
-use crate::{error::AgentError, events::AgentEvent};
+use std::collections::{BTreeMap, BTreeSet};
+
 use orbit_model::types::{ChatMessage, ToolCall};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+
+use crate::{error::AgentError, events::AgentEvent};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileActivity {
@@ -28,11 +30,13 @@ impl FileActivity {
             {
                 self.read.insert(path.into());
             }
+
             "write_file" | "edit_file"
                 if value.get("written_bytes").is_some_and(|v| v.is_u64()) =>
             {
                 self.written.insert(path.into());
             }
+
             _ => {}
         }
     }
@@ -55,6 +59,7 @@ impl FileActivity {
                         calls.insert(call.id.clone(), call);
                     }
                 }
+
                 ChatMessage::Tool {
                     tool_call_id,
                     content,
@@ -63,6 +68,7 @@ impl FileActivity {
                         files.observe(call, content);
                     }
                 }
+
                 _ => {
                     calls.clear();
                 }

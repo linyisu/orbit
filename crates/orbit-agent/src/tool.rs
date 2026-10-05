@@ -135,9 +135,6 @@ impl ToolRegistry {
         self.tools = Arc::new(tools);
     }
 
-    /// Remove one registered tool before the agent sees its definitions.
-    /// This lets an adapter expose a deliberate capability subset instead of
-    /// advertising tools that will fail later at execution time.
     pub fn remove(&mut self, name: &str) -> bool {
         let mut tools = (*self.tools).clone();
         let removed = tools.remove(name).is_some();
@@ -149,7 +146,6 @@ impl ToolRegistry {
         removed
     }
 
-    /// Remove all tools in a namespaced integration, such as one MCP server.
     pub fn remove_prefix(&mut self, prefix: &str) -> usize {
         let mut tools = (*self.tools).clone();
         let before = tools.len();
@@ -169,6 +165,7 @@ impl ToolRegistry {
             .values()
             .map(|tool| tool.definition())
             .collect::<Vec<_>>();
+
         definitions.sort_by(|left, right| left.function.name.cmp(&right.function.name));
 
         definitions
@@ -270,9 +267,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use orbit_model::types::FunctionCall;
     use serde_json::json;
+
+    use super::*;
 
     fn call(id: &str, name: &str, arguments: &str) -> ToolCall {
         ToolCall {
