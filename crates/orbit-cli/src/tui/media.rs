@@ -380,7 +380,8 @@ impl Context {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (None, None) => true,
             _ => false,
-        }) && self.workspace == other.workspace
+        }) && self.files == other.files
+            && self.workspace == other.workspace
             && self.network == other.network
     }
 

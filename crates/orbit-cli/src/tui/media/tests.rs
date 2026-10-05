@@ -2218,3 +2218,23 @@ fn thinking_formulas_keep_combined_rails_on_every_wrapped_and_graphic_row() {
         }
     }
 }
+
+#[test]
+fn identical_paths_in_different_workspaces_keep_separate_media_layout_caches() {
+    let (first_requests, _) = tokio::sync::mpsc::channel(1);
+    let (second_requests, _) = tokio::sync::mpsc::channel(1);
+    let first = Context {
+        files: Some(crate::workspace::Files {
+            requests: std::sync::Arc::new(first_requests),
+            session: "same-id".into(),
+        }),
+        ..Context::default()
+    };
+    let mut second = first.clone();
+    second.files = Some(crate::workspace::Files {
+        requests: std::sync::Arc::new(second_requests),
+        session: "same-id".into(),
+    });
+    assert!(!first.same_cache(&second));
+    assert!(first.same_cache(&first.clone()));
+}
