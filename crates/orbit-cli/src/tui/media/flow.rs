@@ -170,15 +170,25 @@ struct Bounds {
 
 impl Bounds {
     fn new(linked: &LinkedLine, width: u16, margin: u16) -> Self {
-        let prefix = linked
-            .line
-            .spans
-            .iter()
-            .take_while(|s| {
-                s.content.chars().all(char::is_whitespace)
-                    || matches!(s.content.as_ref(), "┊ " | "│ " | "▎ ")
-            })
-            .collect::<Vec<_>>();
+        let mut prefix_bytes = 0;
+        let mut prefix_columns = 0;
+        for span in &linked.line.spans {
+            let end = prefix_bytes + span.content.len();
+            let rail = span.content.ends_with(' ')
+                && span
+                    .content
+                    .chars()
+                    .all(|c| c.is_whitespace() || matches!(c, '┊' | '│' | '▎'))
+                && linked
+                    .decorations
+                    .iter()
+                    .any(|range| range.start <= prefix_bytes && range.end >= end);
+            if !rail && !span.content.chars().all(char::is_whitespace) {
+                break;
+            }
+            prefix_bytes = end;
+            prefix_columns += span.width();
+        }
         let bytes = linked
             .line
             .spans
@@ -210,13 +220,11 @@ impl Bounds {
             0
         };
         Self {
-            prefix: prefix.iter().map(|s| s.content.len()).sum(),
+            prefix: prefix_bytes,
             end: bytes.saturating_sub(padding),
             available: width
                 .saturating_sub(
-                    (prefix.iter().map(|s| s.width()).sum::<usize>()
-                        + suffix.as_ref().map_or(0, Span::width)) as u16
-                        + margin,
+                    (prefix_columns + suffix.as_ref().map_or(0, Span::width)) as u16 + margin,
                 )
                 .min(80),
             suffix,

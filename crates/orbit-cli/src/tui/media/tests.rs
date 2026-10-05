@@ -2181,3 +2181,40 @@ fn export_formula_gallery() {
 
     gallery.save("/tmp/orbit-ratex-gallery.png").unwrap();
 }
+
+#[test]
+fn thinking_formulas_keep_combined_rails_on_every_wrapped_and_graphic_row() {
+    let source = r"Analyzing prefix trees for carry calculation with $G_{HL}=G_H+P_H G_L$ and $P_{HL}=P_H P_L$. Considering $\frac{C_{in}}{2}$ as a special case before scripting the circuit for verification.";
+    for width in [32, 64, 100] {
+        for prefix in ["  ┊ ", "  ┊ │ "] {
+            let context = context(ProtocolType::Kitty);
+            let mut line = markdown::document(source, width).remove(0);
+            line.strip_body_margin();
+            let line = line.framed(
+                vec![Span::styled(
+                    prefix,
+                    Style::new().fg(crate::tui::theme::THEME.thinking_rail),
+                )],
+                Vec::new(),
+            );
+            for request in requests(&line, width) {
+                ready(&context, request.source, request.width, request.height);
+            }
+            let rows = layout(line, &context, width);
+            assert!(rows.len() > 2);
+            assert!(rows.iter().any(|line| !line.graphics.is_empty()));
+            for row in rows {
+                assert!(
+                    row.text().starts_with(prefix),
+                    "width={width}: {:?}",
+                    row.text()
+                );
+                assert!(row.line.width() <= usize::from(width));
+                for graphic in &row.graphics {
+                    assert!(usize::from(graphic.x) >= prefix.width());
+                    assert!(graphic.x + graphic.picture.size.width <= width);
+                }
+            }
+        }
+    }
+}
