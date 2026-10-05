@@ -97,7 +97,7 @@ impl Skills {
             roots.push((root, SkillSource::MarketplacePlugin));
         }
 
-        if let Some(root) = project_root(cwd) {
+        if let Some(root) = crate::instructions::project_root(cwd) {
             roots.push((root.join(".claude/skills"), SkillSource::ClaudeProject));
             roots.push((root.join(".orbit/skills"), SkillSource::OrbitProject));
         }
@@ -344,11 +344,7 @@ fn truncate_chars(value: &str, limit: usize) -> String {
     result
 }
 
-fn project_root(cwd: &Path) -> Option<PathBuf> {
-    cwd.ancestors()
-        .find(|directory| directory.join(".git").symlink_metadata().is_ok())
-        .map(Path::to_path_buf)
-}
+
 
 #[cfg(test)]
 mod tests {

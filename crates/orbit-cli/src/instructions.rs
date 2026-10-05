@@ -229,7 +229,7 @@ pub(crate) fn default_user_instruction_dir() -> Option<PathBuf> {
     }
 }
 
-fn project_root(cwd: &Path) -> Option<PathBuf> {
+pub(crate) fn project_root(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors()
         .find(|directory| directory.join(".git").symlink_metadata().is_ok())
         .map(Path::to_path_buf)
