@@ -18,6 +18,7 @@ mod editor;
 mod frames;
 mod icons;
 pub mod input;
+mod input_events;
 mod languages;
 mod markdown;
 mod media;
@@ -52,7 +53,6 @@ use anyhow::{Context, Result};
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
-use futures_util::StreamExt;
 use orbit_agent::{
     agent::{Agent, AgentConfig, AgentResult},
     error::AgentError,
@@ -246,6 +246,7 @@ pub async fn run(
     let mut sync_checked = std::time::Instant::now();
     let editor = editor::Editor::new(options.editor_command.clone());
     let mut events = EventStream::new();
+    let mut pending_event = None;
     let mut ticks = time::interval(Duration::from_millis(33));
     ticks.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let mut command_ticks = time::interval(Duration::from_millis(50));
@@ -560,7 +561,7 @@ pub async fn run(
                     if retry_submit {
                         Some(Ok(Event::Key(crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))))
                     } else {
-                        events.next().await
+                        input_events::next(&mut events, &mut pending_event).await
                     }
                 } => {
                     retry_submit = false;
