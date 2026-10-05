@@ -1274,6 +1274,8 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
     let destination = "https://orbit.example/document";
 
     let image = format!("![示意]({})", path.display());
+    let mut thinking = crate::tui::app::ThinkingRow::from(image.clone());
+    thinking.finished = true;
     for (item, linked, expanded) in [
         (TranscriptItem::Assistant(image.clone()), false, false),
         (
@@ -1294,7 +1296,7 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
             true,
             false,
         ),
-        (TranscriptItem::Thinking(image.into()), false, true),
+        (TranscriptItem::Thinking(thinking), false, true),
         (
             TranscriptItem::Tool(ToolRow {
                 id: "read-image".into(),
@@ -1403,6 +1405,39 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
         );
         assert_eq!(state.link_hovered, linked.then_some(point));
         assert_eq!(state.input.text, "未发送的草稿");
+        if expanded {
+            let bounds = state
+                .transcript_layout
+                .picture_area_at(area, state.max_scroll, point)
+                .unwrap();
+            assert!(bounds.height > 1);
+            for y in bounds.y..bounds.bottom() {
+                for x in [area.x + 2, area.right() - 3] {
+                    assert!(
+                        state
+                            .transcript_layout
+                            .media_at(area, state.max_scroll, (x, y))
+                            .is_none()
+                    );
+                    assert_eq!(
+                        state.transcript_layout.disclosure_at(
+                            &state.transcript,
+                            area,
+                            state.max_scroll,
+                            (x, y),
+                        ),
+                        Some(0),
+                        "blank space beside every image row must remain collapsible"
+                    );
+                }
+            }
+            assert!(crate::tui::toggle_transcript_at(
+                &mut state,
+                (area.right() - 3, bounds.bottom() - 1),
+            ));
+            assert!(!state.expanded.contains(&0));
+            assert!(state.media_preview.is_none());
+        }
         clear_layers();
     }
 }

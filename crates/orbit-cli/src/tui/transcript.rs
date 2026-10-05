@@ -1175,10 +1175,12 @@ impl TranscriptLayout {
                     }
 
                     for line in lines {
-                        if is_expanded || !line.line.to_string().trim().is_empty() {
-                            entry.disclosures.push(entry.rows.len());
-                        }
+                        let collapsible = is_expanded || !line.line.to_string().trim().is_empty();
+                        let start = entry.rows.len();
                         entry.push_linked(line, width);
+                        if collapsible {
+                            entry.disclosures.extend(start..entry.rows.len());
+                        }
                     }
                 }
 
@@ -1241,15 +1243,17 @@ impl TranscriptLayout {
                         };
 
                         for (index, line) in lines.into_iter().enumerate() {
-                            if header.map_or_else(
+                            let collapsible = header.map_or_else(
                                 || !line.line.to_string().is_empty(),
                                 |header| header == index || body.contains(&index),
-                            ) {
-                                entry.disclosures.push(entry.rows.len());
-                            }
+                            );
 
                             let start = entry.height;
+                            let first_row = entry.rows.len();
                             entry.push_linked(line, width);
+                            if collapsible {
+                                entry.disclosures.extend(first_row..entry.rows.len());
+                            }
                             if title.contains(&index) {
                                 entry.tool_header.get_or_insert(start..start).end = entry.height;
                             }
