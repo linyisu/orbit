@@ -1,10 +1,4 @@
-use super::{
-    app::{TranscriptItem, UiState},
-    icons, render,
-    theme::THEME,
-};
 use std::time::Instant;
-use unicode_width::UnicodeWidthStr;
 
 use crossterm::event::{Event, MouseButton, MouseEventKind};
 use ratatui::{
@@ -13,6 +7,13 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
+};
+use unicode_width::UnicodeWidthStr;
+
+use super::{
+    app::{TranscriptItem, UiState},
+    icons, render,
+    theme::THEME,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +106,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
         }
         return Some(changed);
     }
+
     if !inside {
         nav.clear_hover();
         return None;
@@ -138,6 +140,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
 
             Some(true)
         }
+
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             nav.manual_scroll = true;
             let slots = nav.area.height.saturating_sub(1) as usize;
@@ -150,6 +153,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
 
             Some(old != nav.first)
         }
+
         MouseEventKind::Down(_) | MouseEventKind::Up(_) | MouseEventKind::Drag(_) => Some(false),
         _ => None,
     }
@@ -299,7 +303,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     let tooltip = if nav.hovered == Some(Target::Current) {
         Some((
             bottom - 1,
-            format!("当前第 {}/{} 轮 · 点击定位圆点", active + 1, anchors.len()),
+            format!("当前第 {}/{} 轮 · 点击定位", active + 1, anchors.len()),
         ))
     } else if nav.show_latest && nav.hovered == Some(Target::Latest) {
         Some((bottom - 1, "回到最新 · 继续跟随输出".to_owned()))
@@ -334,6 +338,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
                 nav.preview_scroll = Some((text.clone(), width, Instant::now()));
                 nav.preview_tick = 0;
             }
+
             nav.preview_scroll
                 .as_ref()
                 .map(|(_, _, since)| since.elapsed())

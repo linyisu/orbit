@@ -1,5 +1,6 @@
 //! Multi-select restore, drawn in the command completion area rather than a modal.
-use super::{app::UiState, icons, theme::THEME};
+use std::time::{Duration, Instant};
+
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
@@ -7,8 +8,9 @@ use ratatui::{
     style::{Modifier, Style},
     widgets::{Clear, Paragraph},
 };
-use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
+
+use super::{app::UiState, icons, theme::THEME};
 
 #[derive(Clone, Debug)]
 struct Entry {
@@ -16,6 +18,7 @@ struct Entry {
     title: String,
     selected: bool,
 }
+
 #[derive(Clone, Debug)]
 pub struct RestorePicker {
     entries: Vec<Entry>,
@@ -30,6 +33,7 @@ pub struct RestorePicker {
     title_scroll: Option<(usize, usize, Instant)>,
     title_scroll_tick: u128,
 }
+
 impl RestorePicker {
     pub async fn load(store: &orbit_store::store::Store, ids: &[String]) -> anyhow::Result<Self> {
         let mut entries = Vec::new();
@@ -48,6 +52,7 @@ impl RestorePicker {
                 selected: true,
             });
         }
+
         Ok(Self {
             entries,
             query: String::new(),
@@ -62,14 +67,17 @@ impl RestorePicker {
             title_scroll_tick: 0,
         })
     }
+
     fn filtered(&self) -> Vec<usize> {
         super::search::ranked(0..self.entries.len(), |index| {
             super::search::rank(&self.entries[*index].title, &self.query)
         })
     }
+
     pub fn height(&self) -> u16 {
         self.filtered().len().clamp(1, 8) as u16 + 1
     }
+
     fn selected(&self) -> Vec<String> {
         self.entries
             .iter()
@@ -77,6 +85,7 @@ impl RestorePicker {
             .map(|entry| entry.id.clone())
             .collect()
     }
+
     fn hover(&mut self) {
         if let Some(point) = self.pointer
             && let Some((_, index)) = self
@@ -88,6 +97,7 @@ impl RestorePicker {
             self.cursor = position;
         }
     }
+
     fn prepare_title_scroll(&mut self, width: usize) -> Option<Duration> {
         let focused = self.filtered().get(self.cursor).copied().filter(|index| {
             self.rows.iter().any(|(_, row)| row == index)
@@ -98,6 +108,7 @@ impl RestorePicker {
             self.title_scroll = None;
             return None;
         };
+
         if !self
             .title_scroll
             .as_ref()
@@ -108,10 +119,12 @@ impl RestorePicker {
             self.title_scroll = Some((index, width, Instant::now()));
             self.title_scroll_tick = 0;
         }
+
         self.title_scroll
             .as_ref()
             .map(|(_, _, since)| since.elapsed() / 2)
     }
+
     pub fn advance_title_scroll(&mut self) -> bool {
         let Some((_, _, since)) = &self.title_scroll else {
             return false;
@@ -122,6 +135,7 @@ impl RestorePicker {
         self.title_scroll_tick = tick;
         changed
     }
+
     pub fn draw(&mut self, frame: &mut Frame<'_>, area: Rect) {
         self.rows.clear();
         self.all = Rect::default();
@@ -131,6 +145,7 @@ impl RestorePicker {
             self.title_scroll = None;
             return;
         }
+
         frame.render_widget(Clear, area);
         let inner = Rect::new(
             area.x + 2,
@@ -138,6 +153,7 @@ impl RestorePicker {
             area.width.saturating_sub(4),
             area.height,
         );
+
         self.all = Rect::new(inner.x, inner.y, 6.min(inner.width), 1);
         self.none = Rect::new(
             inner.x + 8.min(inner.width),
@@ -156,8 +172,10 @@ impl RestorePicker {
             } else {
                 Style::default().fg(THEME.accent)
             };
+
             frame.render_widget(Paragraph::new(label).style(style), *hit);
         }
+
         let total = self.entries.len();
         let selected = self.entries.iter().filter(|entry| entry.selected).count();
         let count = format!(
@@ -173,6 +191,7 @@ impl RestorePicker {
                 Rect::new(inner.x + 16, inner.y, count_width, 1),
             );
         }
+
         let ids = self.filtered();
         let slots = inner.height.saturating_sub(1) as usize;
         self.offset = self.offset.min(ids.len().saturating_sub(slots));
@@ -185,8 +204,10 @@ impl RestorePicker {
                 (4 + entry.title.width()).min(inner.width as usize) as u16,
                 1,
             );
+
             self.rows.push((hit, index));
         }
+
         self.hover();
         let title_width = inner.width.saturating_sub(4) as usize;
         let title_elapsed = self.prepare_title_scroll(title_width);
@@ -208,8 +229,10 @@ impl RestorePicker {
             } else {
                 Style::default().fg(THEME.foreground)
             };
+
             frame.render_widget(Paragraph::new(text).style(style), *hit);
         }
+
         if ids.is_empty() {
             frame.render_widget(
                 Paragraph::new(if self.entries.is_empty() {
@@ -239,6 +262,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
             state.input.set(String::new());
             return true;
         }
+
         Event::Key(key) => {
             picker.pointer = None;
             let ids = picker.filtered();
@@ -250,8 +274,10 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
                         state.restore_picker = None;
                         state.input.set(String::new());
                     }
+
                     return true;
                 }
+
                 KeyCode::Up => picker.cursor = picker.cursor.saturating_sub(1),
                 KeyCode::Down => {
                     picker.cursor = (picker.cursor + 1).min(ids.len().saturating_sub(1))
@@ -261,14 +287,17 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
                         picker.entries[index].selected ^= true;
                     }
                 }
+
                 KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => picker
                     .entries
                     .iter_mut()
                     .for_each(|entry| entry.selected = true),
+
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => picker
                     .entries
                     .iter_mut()
                     .for_each(|entry| entry.selected = false),
+
                 KeyCode::Char(c)
                     if !key
                         .modifiers
@@ -279,14 +308,17 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
                     picker.offset = 0;
                     picker.title_scroll = None;
                 }
+
                 KeyCode::Backspace => {
                     picker.query.pop();
                     picker.cursor = 0;
                     picker.offset = 0;
                     picker.title_scroll = None;
                 }
+
                 _ => {}
             }
+
             let slots = picker.area.height.saturating_sub(1).max(1) as usize;
             picker.offset = picker
                 .offset
@@ -294,6 +326,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
                 .max(picker.cursor.saturating_sub(slots - 1));
             state.input.set(format!("/restore {}", picker.query));
         }
+
         Event::Mouse(mouse) => {
             let point = (mouse.column, mouse.row);
             picker.pointer = Some(point);
@@ -317,6 +350,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
                         picker.entries[*index].selected ^= true;
                     }
                 }
+
                 MouseEventKind::ScrollDown if picker.area.contains(point.into()) => {
                     picker.offset = (picker.offset + 3).min(
                         picker
@@ -325,13 +359,16 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
                             .saturating_sub(picker.area.height.saturating_sub(1) as usize),
                     )
                 }
+
                 MouseEventKind::ScrollUp if picker.area.contains(point.into()) => {
                     picker.offset = picker.offset.saturating_sub(3)
                 }
                 _ => {}
             }
+
             picker.hover();
         }
+
         Event::Paste(text) => {
             picker.query.push_str(&text.replace(['\n', '\r'], " "));
             picker.cursor = 0;
@@ -339,19 +376,22 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
             picker.title_scroll = None;
             state.input.set(format!("/restore {}", picker.query));
         }
+
         Event::Resize(_, _) => {
             picker.pointer = None;
         }
         _ => {}
     }
+
     true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crossterm::event::{KeyEvent, MouseEvent};
     use ratatui::{Terminal, backend::TestBackend};
+
+    use super::*;
 
     fn state() -> UiState {
         let mut state = UiState::new("test");
@@ -376,9 +416,11 @@ mod tests {
         });
         state
     }
+
     fn key(state: &mut UiState, code: KeyCode) {
         handle(state, &Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
     }
+
     fn mouse(state: &mut UiState, kind: MouseEventKind, column: u16, row: u16) {
         handle(
             state,
@@ -390,6 +432,7 @@ mod tests {
             }),
         );
     }
+
     fn draw(state: &mut UiState, terminal: &mut Terminal<TestBackend>) -> ratatui::buffer::Buffer {
         let mut buffer = ratatui::buffer::Buffer::empty(Rect::default());
         terminal
@@ -472,6 +515,7 @@ mod tests {
                     "{width}x{height}"
                 );
             }
+
             assert_eq!(picker.height(), 2);
         }
     }
@@ -619,6 +663,7 @@ mod tests {
         assert!(!selected.contains(&"0".into()));
         assert!(!selected.contains(&"14".into()));
     }
+
     #[test]
     fn wheel_scrolls_rows_and_recomputes_hover_without_mouse_motion() {
         let mut state = state();
@@ -631,6 +676,7 @@ mod tests {
                 })
                 .unwrap();
         };
+
         draw(&mut state, &mut terminal);
         let mouse = |kind, column| {
             Event::Mouse(MouseEvent {
@@ -640,6 +686,7 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             })
         };
+
         handle(&mut state, &mouse(MouseEventKind::Moved, 4));
         handle(&mut state, &mouse(MouseEventKind::ScrollDown, 4));
         draw(&mut state, &mut terminal);

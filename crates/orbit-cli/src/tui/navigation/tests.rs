@@ -1,6 +1,7 @@
-use super::*;
 use crossterm::event::{KeyModifiers, MouseEvent};
 use ratatui::{Terminal, backend::TestBackend};
+
+use super::*;
 
 fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
     Event::Mouse(MouseEvent {
@@ -20,6 +21,7 @@ fn row_text(buffer: &ratatui::buffer::Buffer, area: Rect) -> String {
         text.push_str(cell.symbol());
         x += cell.cell_width().max(1);
     }
+
     text
 }
 
@@ -282,6 +284,7 @@ fn navigation_auto_follows_latest_rounds_when_crowded() {
         handle(&mut state, &mouse(MouseEventKind::ScrollUp, area.x, area.y));
         terminal.draw(|f| render::draw(f, &mut state)).unwrap();
     }
+
     assert_eq!(state.navigation.first, 0);
     assert!(
         state
@@ -309,6 +312,7 @@ fn active_dot_is_always_visible_in_navigation_targets() {
         .targets
         .iter()
         .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == icons::CIRCLE);
+
     assert!(has_active, "Active dot must be visible at bottom");
 
     state.follow_bottom = false;
@@ -320,6 +324,7 @@ fn active_dot_is_always_visible_in_navigation_targets() {
         .targets
         .iter()
         .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == icons::CIRCLE);
+
     assert!(
         has_active,
         "Active dot must be visible when scrolled to middle"
@@ -333,6 +338,7 @@ fn active_dot_is_always_visible_in_navigation_targets() {
         .targets
         .iter()
         .any(|(y, _, _)| buffer[(state.navigation.area.x, *y)].symbol() == icons::CIRCLE);
+
     assert!(
         has_active,
         "Active dot must be visible when scrolled to top"
@@ -364,6 +370,7 @@ fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving
             assert_eq!(original[(x, y)], scrolled[(x, y)]);
         }
     }
+
     let old_caption = row_text(&original, caption);
     let new_caption = row_text(scrolled, state.navigation.current_area);
     assert_ne!(old_caption, new_caption);
@@ -380,6 +387,7 @@ fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving
             assert_eq!(original[(rail.x, *old_row)].fg, scrolled[(rail.x, *row)].fg);
         }
     }
+
     for pair in state.navigation.targets.windows(2) {
         let a = scrolled[(rail.x, pair[0].0)].fg;
         let b = scrolled[(rail.x, pair[1].0)].fg;
@@ -390,6 +398,7 @@ fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving
             assert!(ar.abs_diff(br).max(ag.abs_diff(bg)).max(ab.abs_diff(bb)) <= 24);
         }
     }
+
     for _ in 0..400 {
         handle(&mut state, &mouse(MouseEventKind::ScrollUp, rail.x, rail.y));
     }
