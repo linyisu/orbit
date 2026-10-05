@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 use std::{collections::HashSet, ops::Range};
-use unicode_linebreak::linebreaks;
+use unicode_linebreak::{BreakClass, break_property, linebreaks};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -179,12 +179,22 @@ fn slice_line(line: &Line<'static>, range: Range<usize>) -> Line<'static> {
     }
 }
 
-fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
-    wrap_ranges_from(text, width, width)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WrapMode {
+    Verbatim,
+    Prose,
 }
 
 /// The same Unicode breaker also lays out prose following an inline picture.
 pub(super) fn wrap_ranges_from(text: &str, width: u16, first_width: u16) -> Vec<Range<usize>> {
+    wrap_ranges_with(text, width, first_width, WrapMode::Verbatim)
+}
+
+fn wrapping_space(c: char) -> bool {
+    c.is_whitespace() && break_property(c as u32) != BreakClass::NonBreakingGlue
+}
+
+fn wrap_ranges_with(text: &str, width: u16, first_width: u16, mode: WrapMode) -> Vec<Range<usize>> {
     if text.is_empty() || width == 0 {
         return std::iter::once_with(|| 0..0).collect();
     }
@@ -205,8 +215,25 @@ pub(super) fn wrap_ranges_from(text: &str, width: u16, first_width: u16) -> Vec<
         let mut hard_end = start;
         let mut allowed = None;
         let mut overflowed = false;
+        let mut separator = None;
+        let mut in_space = false;
+        let mut has_content = false;
 
         for (relative, grapheme) in text[start..].grapheme_indices(true) {
+            if mode == WrapMode::Prose {
+                let space = grapheme.chars().all(wrapping_space);
+                if space && !in_space && has_content {
+                    let from = start + relative;
+                    let end = text.len() - text[from..].trim_start_matches(wrapping_space).len();
+                    if opportunities.contains(&end) {
+                        separator = Some(from..end);
+                    }
+                }
+
+                in_space = space;
+                has_content |= !space;
+            }
+
             let end = start + relative + grapheme.len();
             let size = grapheme.width();
 
@@ -228,9 +255,16 @@ pub(super) fn wrap_ranges_from(text: &str, width: u16, first_width: u16) -> Vec<
             break;
         }
 
-        let end = allowed.filter(|end| *end > start).unwrap_or(hard_end);
-        ranges.push(start..end);
-        start = end;
+        if let Some(separator) = separator {
+            // Consume the whole separator on a soft wrap. Keep indentation,
+            // spaces within a fitting line, and the original prompt unchanged.
+            ranges.push(start..separator.start);
+            start = separator.end;
+        } else {
+            let end = allowed.filter(|end| *end > start).unwrap_or(hard_end);
+            ranges.push(start..end);
+            start = end;
+        }
     }
 
     ranges
@@ -240,8 +274,16 @@ pub(super) fn wrap_line(
     line: &Line<'static>,
     width: u16,
 ) -> (Vec<Line<'static>>, Vec<Range<usize>>) {
+    wrap_line_with(line, width, WrapMode::Verbatim)
+}
+
+fn wrap_line_with(
+    line: &Line<'static>,
+    width: u16,
+    mode: WrapMode,
+) -> (Vec<Line<'static>>, Vec<Range<usize>>) {
     let text = line.to_string();
-    let ranges = wrap_ranges(&text, width);
+    let ranges = wrap_ranges_with(&text, width, width, mode);
     let lines = ranges
         .iter()
         .cloned()
@@ -252,8 +294,16 @@ pub(super) fn wrap_line(
 }
 
 pub(super) fn wrap_linked_line(
+    linked: super::markdown::LinkedLine,
+    width: u16,
+) -> Vec<super::markdown::LinkedLine> {
+    wrap_linked_line_with(linked, width, WrapMode::Verbatim)
+}
+
+fn wrap_linked_line_with(
     mut linked: super::markdown::LinkedLine,
     width: u16,
+    mode: WrapMode,
 ) -> Vec<super::markdown::LinkedLine> {
     // Mixed media must be wrapped once, after images have their cell sizes.
     // Wrapping here would split formulas and lose their complete target range.
@@ -267,7 +317,7 @@ pub(super) fn wrap_linked_line(
     }
     let removed = original.to_string().len() - linked.line.to_string().len();
     let available = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
-    let (lines, ranges) = wrap_line(&linked.line, available);
+    let (lines, ranges) = wrap_line_with(&linked.line, available, mode);
     lines
         .into_iter()
         .zip(ranges)
@@ -744,7 +794,7 @@ impl Entry {
                 ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
             )));
 
-            for line in content.wrap(inner_width) {
+            for line in wrap_linked_line_with(content, inner_width, WrapMode::Prose) {
                 let padding = usize::from(inner_width).saturating_sub(line.line.width());
                 self.push_linked(
                     line.framed(
