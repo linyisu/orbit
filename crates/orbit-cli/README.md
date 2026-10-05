@@ -189,7 +189,7 @@ TUI 每秒检测配置文件变化，并每 15 分钟异步刷新所有连接的
 
 公开模型规格来自 [models.dev](https://models.dev/)，由 [model_metadata.rs](src/model_metadata.rs) 补齐 API 模型缺少的上下文、输入与输出容量、视觉能力，以及已支持的官方思考档位。服务地址和模型 ID 必须精确匹配；共用地址的目录若对同一模型给出冲突规格，则不自动采用。优先级为显式配置、账号或 API 返回的能力、公共规格；公共规格不会新增可用模型，也不代表订阅额度或访问权限。输出容量仅作为上限，不提高用户设置的输出预算。
 
-公共规格缓存位于认证目录下的 `model-metadata/catalog.json`，有效期 24 小时。刷新复用网页工具的代理和地址检查，不发送账号凭据，等待最多三秒；失败时使用旧缓存或 [内置快照](src/model_metadata.json)。所有 API 连接均关闭 `auto_refresh_models` 时不联网更新规格。
+公共规格缓存位于认证目录下的 `model-metadata/catalog.json`，有效期 24 小时。刷新复用网页工具的代理和地址检查，不发送账号凭据，等待最多三秒；失败时使用旧缓存或 [内置快照](src/model_metadata.json)。所有 API 连接均关闭 `auto_refresh_models` 时不联网更新规格。维护者可运行 `orbit model-metadata crates/orbit-cli/src/model_metadata.json` 更新内置快照；导出命令遵循 `[web]` 配置，保留来源信息；MIT 许可见 [LICENSE.models-dev](assets/LICENSE.models-dev)，不需要登录。快照按模型逐行保存，方便审查数据差异。
 
 原 TUI 的 `account_models.json` 移至 [account_models/bootstrap.json](src/account_models/bootstrap.json)，仅作为 OAuth 账号首次连接时的离线起始目录；后续模型可用性由账号接口刷新，API 模型由对应服务的发现接口提供，不能用初始目录推断全部支持模型。
 

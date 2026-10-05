@@ -23,6 +23,7 @@ orbit chat "审查当前项目的代码并说明发现的问题"
 orbit tui --resume <SESSION_ID>
 orbit sessions list
 orbit sessions diagnostics <SESSION_ID>
+orbit model-metadata crates/orbit-cli/src/model_metadata.json
 ```
 
 TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel 或 iTerm2 协议；不支持像素图形时图片使用字符预览，公式保留 TeX。Markdown、HTML、代码、图片和 RaTeX 数学公式的支持范围见 [CLI 文档](crates/orbit-cli/README.md)。

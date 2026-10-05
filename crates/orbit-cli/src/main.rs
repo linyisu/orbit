@@ -67,6 +67,10 @@ enum Command {
         #[command(subcommand)]
         command: auth_cli::AuthCommand,
     },
+    /// Export the latest public model specifications for an offline build.
+    ModelMetadata {
+        output: PathBuf,
+    },
     Chat(ChatArgs),
     Tui(TuiArgs),
     /// List projects or reconnect a moved directory without connecting to an API.
@@ -304,6 +308,21 @@ async fn run_cli() -> Result<()> {
                 }
             }
 
+            Ok(())
+        }
+
+        Command::ModelMetadata { output } => {
+            let web = match std::fs::read_to_string(&cli.config) {
+                Ok(text) => toml::from_str::<toml::Table>(&text)?
+                    .remove("web")
+                    .map(toml::Value::try_into)
+                    .transpose()?
+                    .unwrap_or_default(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Default::default(),
+                Err(error) => return Err(error.into()),
+            };
+            model_metadata::export(&output, &web).await?;
+            println!("已更新模型规格快照：{}", output.display());
             Ok(())
         }
 

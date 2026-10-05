@@ -176,6 +176,10 @@ async fn download(web: &WebConfig) -> Result<Catalog> {
     )
 }
 
+pub(crate) async fn export(output: &Path, web: &WebConfig) -> Result<()> {
+    save(output, &download(web).await?)
+}
+
 pub(crate) async fn supplement(config: &mut FileConfig, force: bool) -> Option<String> {
     if !config.providers.values().any(|p| api_format(p.api_format)) {
         return None;
