@@ -157,8 +157,9 @@ fn nested_thinking_code_gutter_is_recognized() {
 }
 
 #[test]
-fn hover_disclosure_only_active_within_text_width() {
-    let mut row = super::super::app::ThinkingRow::from("some thinking content".to_owned());
+fn collapsed_disclosures_use_text_width_and_expanded_thinking_uses_the_full_area() {
+    let mut row =
+        super::super::app::ThinkingRow::from("some thinking content\n\nlast line".to_owned());
     row.finished = true;
     row.elapsed = Some(std::time::Duration::from_secs(1));
     let thinking = TranscriptItem::Thinking(row);
@@ -181,6 +182,39 @@ fn hover_disclosure_only_active_within_text_width() {
     let tool_y = layout.entries[0].height as u16;
     assert_eq!(layout.disclosure_at(&items, area, 0, (2, tool_y)), Some(1));
     assert_eq!(layout.disclosure_at(&items, area, 0, (50, tool_y)), None);
+
+    for width in [24, 80] {
+        layout.update(&items, Some(0), width);
+        let area = Rect::new(3, 2, width, 40);
+        let thinking = &layout.entries[0];
+        let end = thinking.end - usize::from(thinking.spacing);
+        for y in 0..end {
+            for x in [area.x, area.x + width / 2, area.right() - 1] {
+                assert_eq!(
+                    layout.disclosure_at(&items, area, 0, (x, area.y + y as u16)),
+                    Some(0)
+                );
+            }
+        }
+        assert_eq!(
+            layout.disclosure_at(&items, area, 0, (area.right(), area.y)),
+            None
+        );
+        assert_eq!(
+            layout.disclosure_at(&items, area, 0, (area.x - 1, area.y)),
+            None
+        );
+        assert_eq!(
+            layout.disclosure_at(&items, area, 0, (area.x, area.y + end as u16)),
+            None
+        );
+
+        let offset = 2;
+        assert_eq!(
+            layout.disclosure_at(&items, area, offset, (area.right() - 1, area.y)),
+            Some(0)
+        );
+    }
 }
 
 #[test]

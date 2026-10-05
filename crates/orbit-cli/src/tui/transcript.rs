@@ -1174,7 +1174,7 @@ impl TranscriptLayout {
                     }
 
                     for line in lines {
-                        if !line.line.to_string().trim().is_empty() {
+                        if is_expanded || !line.line.to_string().trim().is_empty() {
                             entry.disclosures.push(entry.rows.len());
                         }
                         entry.push_linked(line, width);
@@ -1414,6 +1414,13 @@ impl TranscriptLayout {
             .iter()
             .filter_map(|i| entry.rows.get(*i))
             .find(|row| row.start <= relative && relative < row.start + row.height)?;
+
+        if self.expanded.contains(&index)
+            && matches!(items.get(index), Some(TranscriptItem::Thinking(_)))
+        {
+            return Some(index);
+        }
+
         let column = usize::from(point.0 - area.x);
         let gutter_width = row
             .gutter

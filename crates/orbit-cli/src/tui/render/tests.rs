@@ -68,7 +68,7 @@ fn completed_thinking_drops_trailing_blank_rows_without_changing_content() {
 
 #[test]
 fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
-    use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+    use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use orbit_agent::events::AgentEvent;
     use orbit_model::types::StreamEvent;
 
@@ -131,7 +131,37 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
 
     assert!(super::super::toggle_transcript_at(&mut state, point));
     assert!(render(&mut state, 90, 30).contains("private working text"));
-    assert!(super::super::toggle_transcript_at(&mut state, point));
+    let blank = (state.selection.viewport.right() - 1, point.1 + 1);
+    let mouse = |kind, (column, row)| {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    state
+        .selection
+        .handle(&mouse(MouseEventKind::Down(MouseButton::Left), blank))
+        .unwrap();
+    let released = mouse(MouseEventKind::Up(MouseButton::Left), blank);
+    state
+        .selection
+        .handle(&mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            (blank.0 - 1, blank.1),
+        ))
+        .unwrap();
+    assert!(state.selection.click(&released).is_none());
+    assert!(state.expanded.contains(&0));
+    state.selection.clear();
+
+    state
+        .selection
+        .handle(&mouse(MouseEventKind::Down(MouseButton::Left), blank))
+        .unwrap();
+    let clicked = state.selection.click(&released).unwrap();
+    assert!(super::super::toggle_transcript_at(&mut state, clicked));
     assert!(!render(&mut state, 90, 30).contains("private working text"));
 
     let leave = Event::Mouse(MouseEvent {
