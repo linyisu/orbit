@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
@@ -12,7 +15,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     Context, Fragment, Prepared, Source, View,
-    view::{PAN_RANGE, PAN_STEP, ZOOM_LEVELS},
+    jobs::PreviewJobs,
+    view::{MAX_ZOOM, MIN_ZOOM, PAN_RANGE, PAN_STEP, Quality, ZOOM_RATIO},
 };
 use crate::tui::{
     icons,
@@ -22,6 +26,8 @@ use crate::tui::{
 
 #[cfg(test)]
 mod tests;
+
+const QUALITY_SETTLE_TIME: Duration = Duration::from_millis(140);
 
 #[derive(Debug)]
 pub(in crate::tui) struct Preview {
@@ -35,6 +41,9 @@ pub(in crate::tui) struct Preview {
     view: View,
     picture: Option<Arc<Prepared>>,
     drag: Option<Drag>,
+    jobs: Arc<PreviewJobs>,
+    changed_at: Option<Instant>,
+    requested_quality: Option<Quality>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,7 +74,18 @@ impl Preview {
             view: View::default(),
             picture: None,
             drag: None,
+            jobs: Arc::new(PreviewJobs::default()),
+            changed_at: None,
+            requested_quality: None,
         }
+    }
+
+    pub fn tick(&self) -> bool {
+        self.requested_quality == Some(Quality::Interactive)
+            && self.drag.is_none()
+            && self
+                .changed_at
+                .is_some_and(|at| at.elapsed() >= QUALITY_SETTLE_TIME)
     }
 
     pub fn draw(&mut self, frame: &mut Frame<'_>) {
@@ -149,15 +169,32 @@ impl Preview {
         if body.is_empty() {
             return;
         }
+        if let Some(picture) = self.jobs.take_ready() {
+            self.picture = Some(picture);
+        }
+        let quality = if self.drag.is_some()
+            || self
+                .changed_at
+                .is_some_and(|at| at.elapsed() < QUALITY_SETTLE_TIME)
+        {
+            Quality::Interactive
+        } else {
+            Quality::Full
+        };
+        self.requested_quality = Some(quality);
+        let view = View {
+            quality,
+            ..self.view
+        };
         if let Some(picture) =
             self.context
-                .preview_picture(&self.source, body.width, body.height, self.view)
+                .request_preview(&self.jobs, &self.source, body.width, body.height, view)
         {
             self.picture = Some(picture);
         }
         let error = self
             .context
-            .preview_error(&self.source, body.width, body.height, self.view);
+            .preview_error(&self.source, body.width, body.height, view);
         if error.is_none()
             && let Some(picture) = &self.picture
             && picture.size.width <= body.width
@@ -218,21 +255,16 @@ impl Preview {
     }
 
     fn zoom(&mut self, increase: bool) {
-        let next = if increase {
-            ZOOM_LEVELS
-                .iter()
-                .copied()
-                .find(|level| *level > self.view.zoom)
+        let scaled = if increase {
+            f32::from(self.view.zoom) * ZOOM_RATIO
         } else {
-            ZOOM_LEVELS
-                .iter()
-                .copied()
-                .rev()
-                .find(|level| *level < self.view.zoom)
+            f32::from(self.view.zoom) / ZOOM_RATIO
         };
-        if let Some(next) = next {
+        let next = (scaled.round() as u16).clamp(MIN_ZOOM, MAX_ZOOM);
+        if next != self.view.zoom {
             self.view.zoom = next;
             self.drag = None;
+            self.changed_at = Some(Instant::now());
         }
     }
 
@@ -244,12 +276,14 @@ impl Preview {
             Control::Fit => {
                 self.view = View::default();
                 self.drag = None;
+                self.changed_at = Some(Instant::now());
             }
         }
         false
     }
 
     fn pan(&mut self, delta: (i16, i16)) {
+        let before = self.view.pan;
         if let Some(picture) = &self.picture {
             for (position, change, extent) in [
                 (&mut self.view.pan.0, delta.0, picture.pan_extent.0),
@@ -259,6 +293,9 @@ impl Preview {
                     *position = (*position + change).clamp(-PAN_RANGE, PAN_RANGE);
                 }
             }
+        }
+        if before != self.view.pan {
+            self.changed_at = Some(Instant::now());
         }
     }
 
@@ -334,9 +371,14 @@ impl Preview {
                                 shift(drag.origin.0, point.0, drag.pan.0, drag.extent.0),
                                 shift(drag.origin.1, point.1, drag.pan.1, drag.extent.1),
                             );
+                            self.changed_at = Some(Instant::now());
                         }
                     }
-                    MouseEventKind::Up(MouseButton::Left) => self.drag = None,
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        if self.drag.take().is_some() {
+                            self.changed_at = Some(Instant::now());
+                        }
+                    }
                     MouseEventKind::ScrollUp if self.area.contains(point.into()) => self.zoom(true),
                     MouseEventKind::ScrollDown if self.area.contains(point.into()) => {
                         self.zoom(false)
@@ -354,5 +396,11 @@ impl Preview {
             Event::Paste(_) | Event::Key(_) => (true, false),
             _ => (false, false),
         }
+    }
+}
+
+impl Drop for Preview {
+    fn drop(&mut self) {
+        self.jobs.close();
     }
 }

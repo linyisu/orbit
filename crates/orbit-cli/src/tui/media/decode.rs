@@ -1,7 +1,7 @@
 use std::{collections::HashMap, io::Cursor, path::PathBuf, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
-use image::{DynamicImage, ImageReader, RgbaImage};
+use image::{DynamicImage, GenericImage, ImageReader, RgbaImage};
 use ratatui::layout::Size;
 use ratatui_image::{
     picker::{Picker, ProtocolType},
@@ -18,15 +18,16 @@ const MAX_SOURCE_BYTES: usize = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
 const MAX_REMOTE_CACHE_BYTES: usize = 2 * MAX_SOURCE_BYTES;
 const MAX_RENDER_EDGE_PIXELS: u32 = 2048;
 const MAX_PREVIEW_PIXELS: u64 = super::MAX_CACHE_BYTES as u64 / 8;
-const MAX_DECODE_EDGE_PIXELS: u32 = 8192;
+pub(super) const MAX_DECODE_EDGE_PIXELS: u32 = 8192;
 const MAX_TEX_BYTES: usize = 8192;
-const MAX_SOURCE_PIXELS: u64 = 16 * 1024 * 1024;
+pub(super) const MAX_SOURCE_PIXELS: u64 = 16 * 1024 * 1024;
 
 #[derive(Default)]
 pub(super) struct Decoder {
     fonts: Option<Arc<usvg::fontdb::Database>>,
     remote_bytes: HashMap<(Network, String), Arc<Vec<u8>>>,
     runtime: Option<tokio::runtime::Runtime>,
+    assets: super::assets::Assets,
 }
 
 impl Decoder {
@@ -83,7 +84,7 @@ impl Decoder {
                     }
                 } else {
                     let path = local_path(source, &key.workspace)?;
-                    Arc::new(orbit_model::types::Attachment::read_image_bytes(&path)?)
+                    self.assets.bytes(&path)?
                 };
                 if bytes.len() > MAX_SOURCE_BYTES {
                     bail!("图片超过 20 MiB");
@@ -96,28 +97,12 @@ impl Decoder {
                         self.fonts = Some(Arc::new(db));
                     }
 
-                    let (image, overflow) = raster_svg_view(
-                        &bytes,
-                        max_w,
-                        max_h,
-                        self.fonts.clone(),
-                        key.large,
-                        key.view,
-                    )?;
+                    let tree = self.assets.svg(&bytes, self.fonts.clone())?;
+                    let (image, overflow) = raster_tree(&tree, max_w, max_h, key.large, key.view)?;
                     pan_extent = overflow;
                     image
                 } else {
-                    let mut reader =
-                        ImageReader::new(Cursor::new(bytes.as_slice())).with_guessed_format()?;
-                    let mut limits = image::Limits::default();
-                    limits.max_image_width = Some(MAX_DECODE_EDGE_PIXELS);
-                    limits.max_image_height = Some(MAX_DECODE_EDGE_PIXELS);
-                    limits.max_alloc = Some(MAX_SOURCE_PIXELS * 4);
-                    reader.limits(limits);
-                    let image = reader.decode()?;
-                    if u64::from(image.width()) * u64::from(image.height()) > MAX_SOURCE_PIXELS {
-                        bail!("图片像素尺寸过大");
-                    }
+                    let image = self.assets.raster(&bytes)?;
                     if let Some(view) = key.view {
                         let geometry = view.geometry(
                             image.width() as f32,
@@ -127,7 +112,7 @@ impl Decoder {
                         );
                         check_preview_size(geometry.width, geometry.height)?;
                         pan_extent = geometry.overflow;
-                        geometry.crop(image)
+                        geometry.crop(&image)
                     } else {
                         image.resize(max_w, max_h, image::imageops::FilterType::Triangle)
                     }
@@ -210,7 +195,7 @@ impl Decoder {
             u32::from(size.width) * u32::from(cell.width),
             u32::from(size.height) * u32::from(cell.height),
         );
-        image::imageops::overlay(&mut padded, &image.to_rgba8(), 0, 0);
+        padded.copy_from(&image.into_rgba8(), 0, 0)?;
         let (selected_protocol, selected_kitty_id) = if key.view.is_none() {
             let (protocol, id) = encode(picker, selected_image(&padded), size)?;
             (Some(protocol), id)
@@ -248,7 +233,15 @@ fn encode(picker: &Picker, image: RgbaImage, size: Size) -> Result<(SlicedProtoc
     if picker.protocol_type() == ProtocolType::Kitty {
         let id = super::image_id();
         Ok((
-            SlicedProtocol::Kitty(Kitty::new(image, size, id, picker.tmux_detected(), false)?),
+            SlicedProtocol::Kitty(Kitty::new(
+                image,
+                size,
+                id,
+                picker.tmux_detected(),
+                picker
+                    .capabilities()
+                    .contains(&ratatui_image::picker::Capability::KittyCompression),
+            )?),
             Some(id),
         ))
     } else {
@@ -357,6 +350,14 @@ fn raster_svg_view(
     upscale: bool,
     view: Option<View>,
 ) -> Result<(DynamicImage, (f32, f32))> {
+    let tree = parse_svg(bytes, fonts)?;
+    raster_tree(&tree, max_w, max_h, upscale, view)
+}
+
+pub(super) fn parse_svg(
+    bytes: &[u8],
+    fonts: Option<Arc<usvg::fontdb::Database>>,
+) -> Result<usvg::Tree> {
     let mut options = usvg::Options::default();
     if let Some(fonts) = fonts {
         options.fontdb = fonts;
@@ -381,7 +382,16 @@ fn raster_svg_view(
 
         resolver(mime, data, opts)
     });
-    let tree = usvg::Tree::from_data(bytes, &options).context("无法解析 SVG")?;
+    usvg::Tree::from_data(bytes, &options).context("无法解析 SVG")
+}
+
+fn raster_tree(
+    tree: &usvg::Tree,
+    max_w: u32,
+    max_h: u32,
+    upscale: bool,
+    view: Option<View>,
+) -> Result<(DynamicImage, (f32, f32))> {
     let size = tree.size();
     let (width, height, transform, overflow) = if let Some(view) = view {
         let geometry = view.geometry(size.width(), size.height(), max_w, max_h);
@@ -404,7 +414,7 @@ fn raster_svg_view(
         )
     };
     let mut pixmap = tiny_skia::Pixmap::new(width, height).context("SVG 尺寸过大")?;
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    resvg::render(tree, transform, &mut pixmap.as_mut());
     // tiny-skia is premultiplied; image/Kitty require straight RGBA.
     let bytes = pixmap
         .pixels()
@@ -433,6 +443,7 @@ mod selection_tests {
             let view = View {
                 zoom: 800,
                 pan: (pan, 0),
+                ..Default::default()
             };
             let (image, overflow) = raster_svg_view(svg, 40, 20, None, true, Some(view)).unwrap();
             assert_eq!((image.width(), image.height()), (40, 20));

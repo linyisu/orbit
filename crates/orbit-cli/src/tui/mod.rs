@@ -1477,6 +1477,7 @@ pub async fn run(
                 }
                 _ = ticks.tick() => {
                     dirty |= state.media.changed();
+                    if let Some(preview) = &state.media_preview { dirty |= preview.tick(); }
                     if let Some(result) = catalog_watcher.poll().await {
                         match result {
                             Ok((models, diagnostics)) => {

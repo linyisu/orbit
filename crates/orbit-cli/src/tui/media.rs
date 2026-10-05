@@ -1,7 +1,9 @@
 //! Shared, asynchronous picture/TeX pipeline. Layout and copy retain source text;
 //! protocol bytes are painted only after text selection has captured the frame.
+mod assets;
 mod decode;
 mod flow;
+mod jobs;
 mod preview;
 #[cfg(test)]
 mod tests;
@@ -30,6 +32,7 @@ use ratatui_image::{
 };
 
 pub(super) use flow::{layout, layout_in_cell, requests, requests_in_cell};
+use jobs::{PreviewJobs, Ticket, Work};
 pub(super) use preview::Preview;
 use view::View;
 
@@ -164,7 +167,7 @@ struct Key {
 }
 
 enum Value {
-    Pending,
+    Pending(Option<Ticket>),
     Ready(Arc<Prepared>),
     Failed(String),
 }
@@ -193,7 +196,7 @@ struct Cached {
 struct Shared {
     picker: Picker,
     cache: Mutex<HashMap<Key, Cached>>,
-    requests: [mpsc::SyncSender<Key>; 2],
+    requests: [mpsc::SyncSender<Work>; 2],
     revision: AtomicU64,
     clock: AtomicU64,
 }
@@ -221,6 +224,7 @@ impl Context {
             Picker::from_query_stdio_with_options(
                 ratatui_image::picker::cap_parser::QueryStdioOptions {
                     terminal_background_color_osc: true,
+                    kitty_compression: true,
                     ..Default::default()
                 },
             )
@@ -242,8 +246,8 @@ impl Context {
     }
 
     fn new(picker: Picker) -> Self {
-        let (local_send, local_receive) = mpsc::sync_channel::<Key>(WORKER_QUEUE_CAPACITY);
-        let (remote_send, remote_receive) = mpsc::sync_channel::<Key>(WORKER_QUEUE_CAPACITY);
+        let (local_send, local_receive) = mpsc::sync_channel::<Work>(WORKER_QUEUE_CAPACITY);
+        let (remote_send, remote_receive) = mpsc::sync_channel::<Work>(WORKER_QUEUE_CAPACITY);
         let shared = Arc::new(Shared {
             picker,
             cache: Mutex::new(HashMap::new()),
@@ -263,12 +267,31 @@ impl Context {
                 .name(name.into())
                 .spawn(move || {
                     let mut decoder = decode::Decoder::default();
-                    while let Ok(key) = receive.recv() {
+                    while let Ok(work) = receive.recv() {
                         let Some(shared) = weak.upgrade() else { break };
+                        let Work { key, ticket } = work;
+                        if ticket.as_ref().is_some_and(|ticket| !ticket.current()) {
+                            if let Some(ticket) = &ticket
+                                && let Ok(mut cache) = shared.cache.lock()
+                                && cache.get(&key).is_some_and(|entry| {
+                                    matches!(&entry.value, Value::Pending(Some(pending)) if ticket.same_request(pending))
+                                })
+                            {
+                                cache.remove(&key);
+                            }
+                            shared.revision.fetch_add(1, Ordering::Release);
+                            continue;
+                        }
                         let result = decoder.prepare(&key, &shared.picker);
                         if let Ok(mut cache) = shared.cache.lock() {
                             let value = match result {
-                                Ok(picture) => Value::Ready(Arc::new(picture)),
+                                Ok(picture) => {
+                                    let picture = Arc::new(picture);
+                                    if let Some(ticket) = &ticket {
+                                        ticket.publish(picture.clone());
+                                    }
+                                    Value::Ready(picture)
+                                }
                                 Err(error) => Value::Failed(error.to_string()),
                             };
 
@@ -354,7 +377,7 @@ impl Context {
         height: u16,
         large: bool,
     ) -> Option<Arc<Prepared>> {
-        self.lookup(self.key(source, width, height, large), true)
+        self.lookup(self.key(source, width, height, large), true, None)
     }
 
     pub fn cached_picture(
@@ -363,11 +386,12 @@ impl Context {
         width: u16,
         height: u16,
     ) -> Option<Arc<Prepared>> {
-        self.lookup(self.key(source, width, height, false), false)
+        self.lookup(self.key(source, width, height, false), false, None)
     }
 
-    fn preview_picture(
+    fn request_preview(
         &self,
+        jobs: &Arc<PreviewJobs>,
         source: &Source,
         width: u16,
         height: u16,
@@ -375,10 +399,11 @@ impl Context {
     ) -> Option<Arc<Prepared>> {
         let mut key = self.key(source, width, height, true);
         key.view = Some(view);
-        self.lookup(key, true)
+        let ticket = jobs.request(&key);
+        self.lookup(key, true, Some(ticket))
     }
 
-    fn lookup(&self, key: Key, request: bool) -> Option<Arc<Prepared>> {
+    fn lookup(&self, key: Key, request: bool, ticket: Option<Ticket>) -> Option<Arc<Prepared>> {
         let shared = self.shared.as_ref()?;
         // Pixel math is illegible in halfblocks. Keep selectable TeX in that case.
         if matches!(key.source, Source::Math { .. })
@@ -406,7 +431,7 @@ impl Context {
         if cache.len() >= MAX_CACHE_ENTRIES {
             let oldest = cache
                 .iter()
-                .filter(|(_, v)| !matches!(v.value, Value::Pending))
+                .filter(|(_, v)| !matches!(v.value, Value::Pending(_)))
                 .min_by_key(|(_, v)| v.touched)
                 .map(|(k, _)| k.clone());
 
@@ -415,13 +440,16 @@ impl Context {
 
         let remote = matches!(&key.source, Source::Image(url) if is_remote(url));
         if shared.requests[usize::from(remote)]
-            .try_send(key.clone())
+            .try_send(Work {
+                key: key.clone(),
+                ticket: ticket.clone(),
+            })
             .is_ok()
         {
             cache.insert(
                 key,
                 Cached {
-                    value: Value::Pending,
+                    value: Value::Pending(ticket),
                     touched,
                 },
             );

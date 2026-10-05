@@ -25,12 +25,18 @@ fn draw_ready(preview: &mut Preview, terminal: &mut Terminal<TestBackend>) {
                 super::super::paint(frame.buffer_mut());
             })
             .unwrap();
-        if let Some(picture) = preview.context.preview_picture(
+        let view = View {
+            quality: preview.requested_quality.unwrap(),
+            ..preview.view
+        };
+        let mut key = preview.context.key(
             &preview.source,
             preview.body.width,
             preview.body.height,
-            preview.view,
-        ) {
+            true,
+        );
+        key.view = Some(view);
+        if let Some(picture) = preview.context.lookup(key, false, None) {
             preview.picture = Some(picture);
             break;
         }
@@ -41,7 +47,7 @@ fn draw_ready(preview: &mut Preview, terminal: &mut Terminal<TestBackend>) {
                     &preview.source,
                     preview.body.width,
                     preview.body.height,
-                    preview.view
+                    view
                 )
                 .is_none()
         );
@@ -98,7 +104,10 @@ fn image_previews_zoom_pan_reset_and_clip_on_every_protocol() {
                 (true, false)
             );
         }
-        assert_eq!(preview.view.zoom, 300);
+        assert_eq!(preview.view.zoom, 126);
+        while preview.view.zoom < 300 {
+            preview.handle(&mouse(MouseEventKind::ScrollUp, point));
+        }
         draw_ready(&mut preview, &mut terminal);
         let picture = preview.picture.as_ref().unwrap();
         assert!(picture.pan_extent.0 > 0.0 && picture.pan_extent.1 > 0.0);
@@ -125,20 +134,20 @@ fn image_previews_zoom_pan_reset_and_clip_on_every_protocol() {
         assert!(preview.drag.is_none());
         draw_ready(&mut preview, &mut terminal);
 
-        for _ in 0..20 {
+        for _ in 0..100 {
             preview.handle(&Event::Key(KeyEvent::new(
                 KeyCode::Char('+'),
                 KeyModifiers::NONE,
             )));
         }
-        assert_eq!(preview.view.zoom, *ZOOM_LEVELS.last().unwrap());
-        for _ in 0..20 {
+        assert_eq!(preview.view.zoom, MAX_ZOOM);
+        for _ in 0..100 {
             preview.handle(&Event::Key(KeyEvent::new(
                 KeyCode::Char('-'),
                 KeyModifiers::NONE,
             )));
         }
-        assert_eq!(preview.view.zoom, ZOOM_LEVELS[0]);
+        assert_eq!(preview.view.zoom, MIN_ZOOM);
         preview.handle(&Event::Key(KeyEvent::new(
             KeyCode::Char('0'),
             KeyModifiers::NONE,
@@ -146,7 +155,7 @@ fn image_previews_zoom_pan_reset_and_clip_on_every_protocol() {
         assert_eq!(preview.view, View::default());
 
         for (control, expected) in [
-            (Control::ZoomIn, 125),
+            (Control::ZoomIn, 106),
             (Control::ZoomOut, 100),
             (Control::Fit, 100),
         ] {
@@ -235,4 +244,49 @@ fn large_pixel_cells_use_the_entire_preview_width_before_clipping() {
         }
         super::super::clear_layers();
     }
+}
+
+#[test]
+fn interaction_keeps_the_last_frame_and_idle_requests_full_quality_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("picture.png");
+    image::RgbaImage::from_pixel(200, 200, image::Rgba([100, 150, 200, 255]))
+        .save(&path)
+        .unwrap();
+    let mut preview = Preview::new(
+        Context::new(Picker::halfblocks()),
+        Source::Image(path.to_string_lossy().into()),
+    );
+    let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    draw_ready(&mut preview, &mut terminal);
+    assert_eq!(preview.requested_quality, Some(Quality::Full));
+    assert!(!preview.tick());
+
+    preview.zoom(true);
+    draw_ready(&mut preview, &mut terminal);
+    assert_eq!(preview.requested_quality, Some(Quality::Interactive));
+    assert!(!preview.tick());
+    let previous = preview.picture.as_ref().unwrap().clone();
+    preview.zoom(true);
+    terminal.draw(|frame| preview.draw(frame)).unwrap();
+    assert!(Arc::ptr_eq(&previous, preview.picture.as_ref().unwrap()));
+
+    preview.changed_at = Some(Instant::now() - QUALITY_SETTLE_TIME);
+    assert!(preview.tick());
+    draw_ready(&mut preview, &mut terminal);
+    assert_eq!(preview.requested_quality, Some(Quality::Full));
+    assert!(!preview.tick());
+    assert!(!Arc::ptr_eq(&previous, preview.picture.as_ref().unwrap()));
+
+    let point = (preview.body.x, preview.body.y);
+    preview.handle(&mouse(MouseEventKind::Down(MouseButton::Left), point));
+    terminal.draw(|frame| preview.draw(frame)).unwrap();
+    assert_eq!(preview.requested_quality, Some(Quality::Interactive));
+    assert!(!preview.tick());
+    preview.handle(&mouse(MouseEventKind::Up(MouseButton::Left), point));
+    preview.changed_at = Some(Instant::now() - QUALITY_SETTLE_TIME);
+    assert!(preview.tick());
+    draw_ready(&mut preview, &mut terminal);
+    assert!(!preview.tick());
+    super::super::clear_layers();
 }
