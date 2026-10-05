@@ -13,7 +13,9 @@ use orbit_model::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::config::{FileConfig, ModelProfile, ProviderConfig, ReasoningProfile};
+use crate::config::{
+    FileConfig, MIN_CONTEXT_TOKENS, ModelProfile, ProviderConfig, ReasoningProfile,
+};
 
 pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
     let Some(directory) = config.auth_directory.as_ref() else {
@@ -274,10 +276,12 @@ pub(crate) fn normalize(
             }
 
             ensure!(
-                model.context_tokens.is_none_or(|tokens| tokens >= 8192)
+                model
+                    .context_tokens
+                    .is_none_or(|tokens| tokens >= MIN_CONTEXT_TOKENS)
                     && model
                         .input_context_tokens
-                        .is_none_or(|tokens| tokens >= 8192)
+                        .is_none_or(|tokens| tokens >= MIN_CONTEXT_TOKENS)
                     && model.max_output_tokens.is_none_or(|tokens| tokens > 0),
                 "模型容量无效：{}",
                 model.id
@@ -467,7 +471,7 @@ fn profile(
         !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control),
         "无效模型 ID"
     );
-    ensure!(context >= 8192, "模型上下文容量过小：{id}");
+    ensure!(context >= MIN_CONTEXT_TOKENS, "模型上下文容量过小：{id}");
     Ok(serde_json::from_value(
         json!({ "id": id, "context_tokens": context,
         "supports_vision": vision, "reasoning": reasoning }),

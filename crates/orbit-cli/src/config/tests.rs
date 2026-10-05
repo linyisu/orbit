@@ -448,3 +448,28 @@ id = "deepseek-flash"
         assert_eq!(options[0].config.supports_vision, expected);
     }
 }
+
+#[test]
+fn discovered_output_limits_do_not_raise_the_configured_request_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = FileConfig::parse(
+        r#"default_provider = "test"
+max_output_tokens = 32000
+[providers.test]
+api_format = "openai_responses"
+base_url = "https://api.openai.com/v1"
+models = [{id = "fixture"}]
+"#,
+        directory.path(),
+    )
+    .unwrap();
+    let provider = config.providers.get_mut("test").unwrap();
+    provider.configured_models = Some(provider.models.clone());
+    provider.models[0].max_output_tokens = Some(64000);
+    assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 32000);
+    let provider = config.providers.get_mut("test").unwrap();
+    provider.configured_models.as_mut().unwrap()[0].max_output_tokens = Some(48000);
+    assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 48000);
+    config.providers.get_mut("test").unwrap().models[0].max_output_tokens = Some(16000);
+    assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 16000);
+}

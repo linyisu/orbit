@@ -16,6 +16,8 @@ use serde::Deserialize;
 
 use crate::tui;
 
+pub(crate) const MIN_CONTEXT_TOKENS: usize = 8192;
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct FileConfig {
     #[serde(skip)]
@@ -272,8 +274,8 @@ impl FileConfig {
         config.merge_account_models()?;
         config.subagents.validate()?;
 
-        if config.context_tokens < 8192 {
-            bail!("context_tokens must be at least 8192");
+        if config.context_tokens < MIN_CONTEXT_TOKENS {
+            bail!("context_tokens must be at least {MIN_CONTEXT_TOKENS}");
         }
         if config.max_output_tokens == 0
             || config.max_output_tokens as usize >= config.context_tokens
@@ -374,9 +376,9 @@ impl FileConfig {
                         .saturating_sub(output as usize)
                 });
 
-                if input_context_tokens < 8192 {
+                if input_context_tokens < MIN_CONTEXT_TOKENS {
                     bail!(
-                        "model {:?}: input context window must be at least 8192 tokens",
+                        "model {:?}: input context window must be at least {MIN_CONTEXT_TOKENS} tokens",
                         model.id
                     );
                 }
@@ -450,7 +452,18 @@ impl FileConfig {
 
         for (name, provider) in &self.providers {
             for (index, model) in provider.models.iter().enumerate() {
-                let max_output_tokens = model.max_output_tokens.unwrap_or(self.max_output_tokens);
+                let requested_output = provider
+                    .configured_models
+                    .as_ref()
+                    .map_or(model.max_output_tokens, |models| {
+                        models
+                            .iter()
+                            .find(|entry| entry.id == model.id)
+                            .and_then(|entry| entry.max_output_tokens)
+                    })
+                    .unwrap_or(self.max_output_tokens);
+                let max_output_tokens =
+                    requested_output.min(model.max_output_tokens.unwrap_or(u32::MAX));
                 let input_context_tokens = model.input_context_tokens.unwrap_or_else(|| {
                     model
                         .context_tokens
