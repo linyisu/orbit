@@ -1,9 +1,10 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use orbit_agent::events::AgentEvent;
 use orbit_agent::tool::FileChange;
 use orbit_model::types::{ChatMessage, StreamEvent, ToolCall};
 use orbit_store::store::Store;
 use orbit_store::types::{MemoryCategory, ProjectPlugin, TaskStatus};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -660,6 +661,7 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
         },
         files: FileActivity::default(),
     };
+
     writer
         .begin("long work".into(), "mock".into())
         .await
@@ -792,6 +794,7 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
         )
         .await
         .unwrap();
+
     store
         .remember_in_session(
             &second_session,
@@ -913,6 +916,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
         },
         ChatMessage::tool("0", "saved first file"),
     ];
+
     journal.record(text("plan"));
     journal
         .save(
@@ -1067,6 +1071,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         persistent_scratch: true,
         mounts: Vec::new(),
     };
+
     writer
         .finish(
             "failed",
@@ -1188,6 +1193,7 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
                 .execute_batch("DROP TABLE tui_file_grants;")
                 .unwrap();
         }
+
         connection.execute_batch("PRAGMA user_version=19;").unwrap();
         drop(connection);
 
@@ -1258,6 +1264,7 @@ async fn write_transactions_serialize_across_independent_store_connections() {
             }
         });
     }
+
     while let Some(result) = writers.join_next().await {
         result.unwrap();
     }

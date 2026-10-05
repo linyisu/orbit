@@ -118,7 +118,6 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use orbit_agent::{
         agent::{Agent, AgentConfig},
         checkpoint::ExecutionCheckpoint,
@@ -127,6 +126,8 @@ mod tests {
     };
     use orbit_model::types::{ChatCompletion, ChatRequest, ToolCall};
     use tokio_util::sync::CancellationToken;
+
+    use super::*;
 
     #[tokio::test]
     async fn canonical_messages_survive_projection_replacement_and_resume() {
@@ -231,6 +232,7 @@ mod tests {
             )
             .await
             .unwrap();
+
         writer
             .finish("completed", vec![], Some(result.history))
             .await
@@ -368,6 +370,7 @@ mod tests {
             )
             .await
             .unwrap();
+
         writer
             .finish("completed", vec![], Some(result.history))
             .await

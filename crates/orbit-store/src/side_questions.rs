@@ -104,6 +104,7 @@ impl Store {
                 } else {
                     history.push(ChatMessage::user(prompt));
                 }
+
                 let mut text = String::new();
                 let mut finished = false;
                 let mut failure = None;
@@ -117,6 +118,7 @@ impl Store {
                         _ => {}
                     }
                 }
+
                 let already_saved = finished && history.iter().rev().find_map(|message| {
                     if let ChatMessage::Assistant { content, .. } = message { Some(content.as_deref().unwrap_or_default() == text) } else { None }
                 }).unwrap_or(false);
@@ -125,6 +127,7 @@ impl Store {
                 }
                 if let Some(error) = failure { history.push(ChatMessage::user(format!("[Main task failed] {error}"))); }
             }
+
             Ok(history)
         }).await
     }

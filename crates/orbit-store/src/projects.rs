@@ -1,10 +1,12 @@
+use std::path::Path;
+
+use anyhow::{Context, Result, ensure};
+use rusqlite::{OptionalExtension, params};
+
 use crate::{
     project::{Directory, Project, same_directory_identity},
     store::Store,
 };
-use anyhow::{Context, Result, ensure};
-use rusqlite::{OptionalExtension, params};
-use std::path::Path;
 
 pub(crate) fn migrate(conn: &rusqlite::Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE projects (
@@ -224,6 +226,7 @@ impl Store {
                         params![link_path, link_id],
                         |row| row.get(0),
                     )?;
+
                     ensure!(others == 0, "this directory already has another project's conversations; refusing to merge histories");
 
                     tx.execute("UPDATE projects SET path=NULL,identity=NULL,strong=0 WHERE path=?1 AND id<>?2", params![link_path,link_id])?;
@@ -234,6 +237,7 @@ impl Store {
                     Ok(Some(Project { id: link_id, path: Some(link_path) }))
                 })
                 .await?;
+
             drop(leases);
 
             if let Some(project) = linked {

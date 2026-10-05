@@ -136,11 +136,8 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
     }
 
     if version < 10 {
-        // Project memories from older Orbit builds were unsafe: every
-        // session for a project received them. Preserve the legacy
-        // table for auditability, but migrate only records with a
-        // known owner or exactly one possible owner. Ambiguous
-        // records must never leak into a new session.
+        // Legacy memories were shared across a project. Migrate only unambiguous owners;
+        // retain ambiguous records for audit without exposing them to another session.
         connection.execute_batch(
             "CREATE TABLE session_memories (
                 id INTEGER PRIMARY KEY,

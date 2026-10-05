@@ -179,7 +179,6 @@ impl Store {
         .await
     }
 
-    /// Read identity and display metadata without deserializing the event log.
     pub async fn session(&self, id: &str) -> Result<Session> {
         let id = id.to_owned();
 
@@ -321,6 +320,7 @@ impl Store {
                 .collect()
         })
         .await??;
+
         session_ids.push(id.clone());
 
         let sidecar_path = self.path.clone();
@@ -388,6 +388,7 @@ impl Store {
 
                 std::fs::remove_file(cleanup_path.with_extension("session-locks").join(id))?;
             }
+
             Ok(())
         })
         .await??;
@@ -397,7 +398,6 @@ impl Store {
         Ok(deleted)
     }
 
-    /// Reclaim free SQLite pages after an explicit session deletion.
     pub async fn reclaim_unused_space(&self) -> Result<()> {
         self.access(|conn| {
             conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
@@ -406,9 +406,7 @@ impl Store {
         .await
     }
 
-    /// Return only actual successful `write_file` / `edit_file` commits. This
-    /// reads the central event ledger rather than Git, so it remains useful in
-    /// non-Git directories and does not mix in pre-existing user changes.
+    /// Successful file-tool receipts from the event ledger, independent of Git state.
     pub async fn workspace_changes(&self, session_id: &str) -> Result<Vec<WorkspaceChange>> {
         let session_id = session_id.to_owned();
 
@@ -469,9 +467,7 @@ impl Store {
         .await
     }
 
-    /// Mark an exact write receipt as restored after `/undo` commits. This is
-    /// kept separate from agent events because local commands are not model
-    /// turns, while preserving the original append-only write audit.
+    /// Record a local undo separately from the immutable original write receipt.
     pub async fn record_workspace_undo(
         &self,
         session_id: &str,
@@ -522,6 +518,7 @@ impl Store {
                     evidence_by_call.insert((run_id, call_id), evidence);
                     continue;
                 }
+
                 let AgentEvent::ToolFinished { call, content, .. } = event else {
                     continue;
                 };
@@ -708,6 +705,7 @@ impl Store {
                 [&project_id],
                 |row| row.get(0),
             )?;
+
             ensure!(project_exists, "project not found");
 
             if let Some(parent_id) = parent_id {
@@ -716,6 +714,7 @@ impl Store {
                     params![parent_id, project_id],
                     |row| row.get(0),
                 )?;
+
                 ensure!(valid_parent, "parent task does not belong to this project");
             }
 
@@ -729,6 +728,7 @@ impl Store {
                 [id],
                 task_row,
             )?;
+
             transaction.commit()?;
 
             Ok(task)
@@ -775,6 +775,7 @@ impl Store {
                  WHERE id=?1 AND project_id=?2",
                 params![id, project_id, title, details, status.map(TaskStatus::as_str), priority],
             )?;
+
             ensure!(changed == 1, "task not found in this project");
 
             let task = transaction.query_row(
@@ -782,15 +783,14 @@ impl Store {
                 [id],
                 task_row,
             )?;
+
             transaction.commit()?;
 
             Ok(task)
         }).await
     }
 
-    /// Return packages enabled for a stable project. Enabling a package only
-    /// records intent here; package declarations still require an explicit
-    /// runtime integration before any command, hook, or MCP server can run.
+    /// Enabled package declarations; execution still requires runtime integration.
     pub async fn project_plugins(&self, project_id: &str) -> Result<Vec<ProjectPlugin>> {
         let project_id = project_id.to_owned();
 
@@ -809,8 +809,6 @@ impl Store {
         .await
     }
 
-    /// Persist the user's decision to enable a catalog package for this stable
-    /// project. Re-enabling the same package refreshes its package metadata.
     pub async fn enable_project_plugin(&self, plugin: ProjectPlugin) -> Result<ProjectPlugin> {
         validate_project_plugin(&plugin)?;
 
@@ -821,6 +819,7 @@ impl Store {
                 [&plugin.project_id],
                 |row| row.get(0),
             )?;
+
             ensure!(project_exists, "project not found");
 
             transaction.execute(
@@ -846,6 +845,7 @@ impl Store {
                 params![plugin.project_id, plugin.marketplace_source, plugin.plugin_name],
                 project_plugin_row,
             )?;
+
             transaction.commit()?;
 
             Ok(saved)
@@ -897,10 +897,7 @@ impl Store {
         .await
     }
 
-    /// Search active session memories locally. This deliberately uses a small,
-    /// transparent lexical ranker instead of sending project facts to an
-    /// embedding service. Exact phrase matches rank first, followed by
-    /// individual query terms; ties preserve most recently updated records.
+    /// Local lexical search: exact phrases, then terms, with newest records breaking ties.
     pub async fn search_session_memories(
         &self,
         session_id: &str,
@@ -950,6 +947,7 @@ impl Store {
                 (score > 0).then_some((score, memory))
             })
             .collect::<Vec<_>>();
+
         matches.sort_by(|(left_score, left), (right_score, right)| {
             right_score
                 .cmp(left_score)
@@ -981,6 +979,7 @@ impl Store {
                 [&session_id],
                 |row| row.get(0),
             )?;
+
             ensure!(session_exists, "session not found");
 
             transaction.execute(
@@ -993,6 +992,7 @@ impl Store {
                 [id],
                 memory_row,
             )?;
+
             transaction.commit()?;
 
             Ok(memory)
@@ -1020,6 +1020,7 @@ impl Store {
                 [id],
                 memory_row,
             )?;
+
             transaction.commit()?;
 
             Ok(memory)
@@ -1178,6 +1179,7 @@ fn ensure_real_directory_if_present(path: &Path) -> Result<bool> {
 
             Ok(true)
         }
+
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error.into()),
     }
@@ -1225,6 +1227,7 @@ mod tests {
                     .await
             })
         };
+
         ready.await.unwrap();
 
         let written = tokio::time::timeout(
@@ -1235,6 +1238,7 @@ mod tests {
             }),
         )
         .await;
+
         release.send(()).unwrap();
 
         written.unwrap().unwrap();

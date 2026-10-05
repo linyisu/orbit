@@ -177,6 +177,7 @@ impl Store {
                 [&id],
                 |r| r.get(0),
             )?;
+
             ensure!(count < 32, "subagent message queue is full");
             tx.execute(
                 "INSERT INTO agent_messages(session_id,content) VALUES(?1,?2)",
@@ -203,9 +204,10 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use orbit_agent::{checkpoint::ExecutionCheckpoint, events::AgentEvent};
     use orbit_model::types::ChatMessage;
+
+    use super::*;
 
     #[tokio::test]
     async fn children_are_scoped_hidden_and_deleted_with_closed_parent() {
@@ -288,6 +290,7 @@ mod tests {
             )
             .await
             .unwrap();
+
         parent
             .begin("root".into(), "orbit-model".into())
             .await
@@ -366,6 +369,7 @@ mod tests {
             content: result.to_string(),
             changes: vec![],
         };
+
         parent
             .execution_journal()
             .unwrap()

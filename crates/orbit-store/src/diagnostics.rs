@@ -1,8 +1,4 @@
-//! Local execution diagnostics derived from durable run events.
-//!
-//! Orbit does not export telemetry. This view distinguishes model/API failure,
-//! tool failure, cancellation, and context-compaction problems from the local
-//! event log already retained for each session.
+//! Local execution diagnostics derived from the durable event log; no telemetry export.
 
 use anyhow::{Context, Result};
 use orbit_agent::events::AgentEvent;
@@ -33,9 +29,7 @@ pub struct RunDiagnostic {
     pub tool_failed: usize,
     pub compactions: usize,
     pub compaction_failures: usize,
-    /// Why the latest successful compaction in this run used its local
-    /// checkpoint instead of a model-authored summary, when the event format
-    /// recorded a sanitized reason.
+    /// Sanitized fallback reason, when recorded by the original run.
     pub compaction_fallback: Option<String>,
     pub event_decode_failures: usize,
     pub usage: Option<Usage>,
@@ -78,6 +72,7 @@ impl Store {
                         Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
+
                 diagnostics.push(summarize(run_id, status, elapsed_ms, events));
             }
 
@@ -150,6 +145,7 @@ fn summarize(
                             result.usage = usage;
                         }
                     }
+
                     StreamEvent::ToolCallDelta(_) => {}
                 }
             }
@@ -188,6 +184,7 @@ fn summarize(
                 result.compaction_failures += 1;
                 result.failure = Some(error);
             }
+
             AgentEvent::Failed { error } => result.failure = Some(error),
 
             AgentEvent::RequestMetrics {
@@ -322,10 +319,11 @@ fn format_duration(milliseconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use orbit_model::types::{ChatMessage, ToolCall};
     use serde_json::json;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[tokio::test]
     async fn diagnostics_distinguish_model_tool_and_compaction_events() {

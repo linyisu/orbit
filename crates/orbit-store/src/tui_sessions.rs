@@ -1,7 +1,8 @@
 //! Project-scoped open tabs and inexpensive change detection for TUI readers.
-use crate::store::Store;
 use anyhow::Result;
 use rusqlite::{OptionalExtension, params};
+
+use crate::store::Store;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionRevision {

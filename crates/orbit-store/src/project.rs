@@ -1,7 +1,8 @@
 //! Project identity is stored only in the central database. Never writes markers.
+use std::{fs, path::Path, time::UNIX_EPOCH};
+
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path, time::UNIX_EPOCH};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {

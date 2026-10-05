@@ -1,4 +1,5 @@
-use crate::store::Store;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
 use anyhow::ensure;
 use orbit_agent::{
     checkpoint::{CheckpointFuture, ExecutionCheckpoint, ExecutionJournal},
@@ -8,7 +9,8 @@ use orbit_agent::{
 use orbit_model::types::ChatMessage;
 use rusqlite::params;
 use sha2::{Digest, Sha256};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+
+use crate::store::Store;
 
 fn journal_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -83,6 +85,7 @@ impl Journal {
                             transaction.execute("UPDATE agent_invocations SET delivered=1 WHERE id=?1 AND parent_session_id=?2 AND result IS NOT NULL",params![id,session])?;
                         }
                     }
+
                     _ => {}
                 }
 

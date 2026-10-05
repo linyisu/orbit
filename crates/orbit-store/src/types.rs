@@ -73,9 +73,7 @@ pub struct VerificationRecord {
     pub evidence: Option<orbit_runtime::verification::VerificationEvidence>,
 }
 
-/// A durable, user-visible unit of project work. Tasks live on the stable
-/// project identity rather than a single conversation so a resumed or new
-/// session can continue the same plan after a directory rename.
+/// Project-scoped work that survives directory moves and conversation changes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectTask {
     pub id: i64,
@@ -140,9 +138,7 @@ pub struct SessionMemory {
     pub updated_at: i64,
 }
 
-/// A plugin package deliberately enabled for a stable project. Package files
-/// remain in Orbit's private data directory; this record never writes markers
-/// into the user's workspace. Git revisions are pinned when the package is enabled.
+/// Enabled project package with a pinned revision; files stay in private storage.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectPlugin {
     pub project_id: String,

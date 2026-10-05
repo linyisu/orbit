@@ -35,6 +35,7 @@ impl SessionWriter {
                     [&id],
                     |row| row.get(0),
                 )?;
+
                 ensure!(!running, "cannot move a running session");
 
                 tx.execute(
@@ -130,6 +131,7 @@ impl SessionWriter {
 
             Ok(run)
         }).await?;
+
         self.active_run = Some(run);
         self.active_started = Some(std::time::Instant::now());
 
@@ -238,6 +240,7 @@ impl SessionWriter {
                            AND result IS NULL",
                         params![invocation, parent, id, serde_json::to_string(&result)?],
                     )?;
+
                     ensure!(
                         updated == 1,
                         "subagent invocation is unavailable or already finished"
@@ -255,6 +258,7 @@ impl SessionWriter {
                         [run],
                     )?;
                 }
+
                 if let Some(history) = history {
                     transaction.execute(
                         "UPDATE sessions SET history=?2 WHERE id=?1",

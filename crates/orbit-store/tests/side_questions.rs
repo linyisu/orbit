@@ -25,6 +25,7 @@ async fn side_records_survive_restart_are_session_scoped_and_do_not_change_main_
         .find(|s| s.id == id)
         .unwrap()
         .payload_bytes;
+
     for status in ["completed", "failed", "cancelled"] {
         store
             .save_side_question(
@@ -41,6 +42,7 @@ async fn side_records_survive_restart_are_session_scoped_and_do_not_change_main_
             .await
             .unwrap();
     }
+
     assert!(store.side_questions(other.id()).await.unwrap().is_empty());
     let after = store.load(&id).await.unwrap();
     assert_eq!(before.history, after.history);
@@ -87,6 +89,7 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
         ChatMessage::assistant_tool_calls(vec![call]),
         ChatMessage::tool("orbit-call", "已读取 Orbit 文件"),
     ];
+
     journal
         .save(
             ExecutionCheckpoint {
@@ -141,6 +144,7 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
             serde_json::json!({"path":"orbit.rs"}),
         )]),
     ];
+
     journal
         .save(
             ExecutionCheckpoint {

@@ -114,8 +114,9 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use orbit_agent::memory::TaskSummary;
+
+    use super::*;
 
     #[tokio::test]
     async fn progress_is_durable_session_scoped_and_monotonic() {
@@ -155,6 +156,7 @@ mod tests {
             requests: 1,
             input_tokens: 1000,
         };
+
         store
             .save_compaction_progress(owner.id(), &progress)
             .await
