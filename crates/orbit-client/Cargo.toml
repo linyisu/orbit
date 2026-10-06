@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+url.workspace = true
 orbit-config.workspace = true
 anyhow.workspace = true
 globset.workspace = true

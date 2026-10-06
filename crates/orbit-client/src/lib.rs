@@ -8,6 +8,7 @@ pub mod connect;
 pub mod directories;
 pub mod discovery;
 pub mod interaction;
+pub mod platform;
 pub mod prompt;
 pub mod protocol;
 pub mod pump;
