@@ -174,6 +174,7 @@ fn command_approval_card_renders_rounded_frame_and_buttons() {
     state.approval = Some(orbit_tools::approval::ApprovalPreview::Command(
         CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "mkdir -p demo".into(),
             workspace_access: CommandWorkspaceAccess::ReadWrite,
             network_allowed: true,
@@ -241,6 +242,7 @@ fn git_dangerous_card_shows_risk_and_badges() {
     state.approval = Some(orbit_tools::approval::ApprovalPreview::Command(
         CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "git reset --hard HEAD~1".into(),
             workspace_access: CommandWorkspaceAccess::ReadWrite,
             network_allowed: false,

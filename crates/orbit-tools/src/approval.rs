@@ -1,6 +1,8 @@
 mod commands;
 
-pub(crate) use commands::{local_workspace_command, pinned_local_command};
+pub(crate) use commands::{
+    local_workspace_command, native_workspace_command, pinned_local_command,
+};
 
 use std::path::Path;
 
@@ -31,6 +33,8 @@ pub enum CommandWorkspaceAccess {
 pub struct CommandPreview {
     #[serde(default = "sandbox_default")]
     pub sandbox: bool,
+    #[serde(default)]
+    pub native_workspace_scoped: bool,
     pub command: String,
     pub cwd: Option<String>,
     pub timeout_seconds: u64,
@@ -160,8 +164,12 @@ pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
                 && ((command.sandbox
                     && command.workspace_access == CommandWorkspaceAccess::Read
                     && command.external_capabilities.is_empty())
-                    || local_workspace_command(&command.command, command.cwd.as_deref(), workspace)
-                        .is_some())
+                    || if command.sandbox {
+                        local_workspace_command(&command.command, command.cwd.as_deref(), workspace)
+                            .is_some()
+                    } else {
+                        command.native_workspace_scoped
+                    })
         }
 
         ApprovalPreview::Write(write) => workspace_local_file(&write.path, workspace),
@@ -244,6 +252,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut command = CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "git status".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -282,6 +291,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut command = CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "mkdir -p demo/nested".into(),
             cwd: None,
             timeout_seconds: 30,

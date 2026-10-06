@@ -393,15 +393,20 @@ impl Tool for RunCommand {
             }
 
             let git_analysis = orbit_runtime::git::GitCommandAnalysis::parse(&args.command);
-            let command = if self.limits.sandbox {
-                pinned_local_command(&args.command).unwrap_or_else(|| args.command.clone())
-            } else {
-                args.command.clone()
-            };
+            let command =
+                pinned_local_command(&args.command).unwrap_or_else(|| args.command.clone());
+            let native_workspace_scoped = !self.limits.sandbox
+                && crate::approval::native_workspace_command(
+                    &args.command,
+                    args.cwd.as_deref(),
+                    &self.workspace,
+                )
+                .is_some();
 
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     sandbox: self.limits.sandbox,
+                    native_workspace_scoped,
                     command: args.command.clone(),
                     cwd: args.cwd.clone().filter(|s| !s.is_empty()),
                     workspace_access,

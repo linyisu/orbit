@@ -73,6 +73,7 @@ mod tests {
         let root = workspace.path();
         let cmd_read = ApprovalPreview::Command(CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "pwd".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -84,6 +85,7 @@ mod tests {
         });
         let cmd_rw = ApprovalPreview::Command(CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "cargo build".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -132,6 +134,7 @@ mod tests {
         assert!(Mode::Auto.allows(&offline_read, root));
         let mkdir = ApprovalPreview::Command(CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "mkdir -p demo".into(),
             workspace_access: CommandWorkspaceAccess::ReadWrite,
             ..match offline_read.clone() {
@@ -145,6 +148,7 @@ mod tests {
         assert!(Mode::Yolo.allows(&mkdir, root));
         let text_write = ApprovalPreview::Command(CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "echo hello | tee demo.txt".into(),
             ..match mkdir.clone() {
                 ApprovalPreview::Command(command) => command,
@@ -182,6 +186,7 @@ mod tests {
 
         let external_command = ApprovalPreview::Command(CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "write outside".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -196,6 +201,7 @@ mod tests {
 
         let git_status = ApprovalPreview::Command(CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "git status".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -210,6 +216,7 @@ mod tests {
 
         let git_push = ApprovalPreview::Command(CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "git push origin main".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -224,6 +231,7 @@ mod tests {
 
         let git_reset_hard = ApprovalPreview::Command(CommandPreview {
             sandbox: true,
+            native_workspace_scoped: false,
             command: "git reset --hard".into(),
             cwd: None,
             timeout_seconds: 30,
