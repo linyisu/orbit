@@ -10,7 +10,7 @@
 
 [web_fetch/dom.rs](src/web_fetch/dom.rs) 为 Google、Bing 和 DuckDuckGo 共用 DOM 属性、节点查找与文本投影；各引擎的结果定位、跳转及过滤规则保留在对应模块。
 
-[image_assets.rs](src/image_assets.rs) 复用 `Attachment::MAX_IMAGE_BYTES` 与有界图片文件读取，导入前不再无界读取整个文件。[web_fetch/resource.rs](src/web_fetch/resource.rs) 的 `fetch_image` 是 TUI 使用的内部网络图片接口，复用 URL、DNS 与重定向检查；同一模块的 `WebClient::fetch_json` 为公开模型规格提供有大小限制的 JSON 下载，不发送模型账号凭据。这些内部接口没有注册成额外的模型工具。
+[image_assets.rs](src/image_assets.rs) 复用 `Attachment::MAX_IMAGE_BYTES` 与有界图片文件读取，导入前使用有界读取。[web_fetch/resource.rs](src/web_fetch/resource.rs) 的 `fetch_image` 是 TUI 使用的内部网络图片接口，复用 URL、DNS 与重定向检查；同一模块的 `WebClient::fetch_json` 为公开模型规格提供有大小限制的 JSON 下载，不发送模型账号凭据。这些内部接口没有注册成额外的模型工具。
 
 ## 架构与核心设计
 
@@ -38,7 +38,7 @@
 #### `read_file`
 - **功能**：以安全方式读取工作区或已授权外部目录内的 UTF-8 文本文件。
 - **参数**：`path`（相对或已授权绝对路径）、`start_line`（从 1 起始）、`start_char`（所选行内从 0 起始的 Unicode 字符偏移）、`max_lines`（默认 200，范围 1–500）、`cursor`（原样传回 `next_cursor`）。
-- **约束与安全**：分块读取，单次扫描预算默认 64 MiB（`command.read_file_scan_bytes` 可调整，`0` 表示不限扫描量）、返回内容上限 32 KiB，不再按文件总大小拒绝；可读取指定的中间行。优先用返回的 `next_cursor` 续读，避免重新扫描开头；文件版本变化时游标失效。`total_lines` 在到达文件末尾前为 `null`。内部链接经描述符解析，越界、循环及保护目标被拒绝；超长行仍可使用 `next_start_line`、`next_start_char` 续读。TUI 的 `[start..=end]` 行号范围包含两端。
+- **约束与安全**：分块读取，单次扫描预算默认 64 MiB（`command.read_file_scan_bytes` 可调整，`0` 表示不限扫描量）、返回内容上限 32 KiB，扫描预算按实际读取量计算；可读取指定的中间行。优先用返回的 `next_cursor` 续读，避免重新扫描开头；文件版本变化时游标失效。`total_lines` 在到达文件末尾前为 `null`。内部链接经描述符解析，越界、循环及保护目标被拒绝；超长行仍可使用 `next_start_line`、`next_start_char` 续读。TUI 的 `[start..=end]` 行号范围包含两端。
 
 #### `list_files`
 - **功能**：以广度优先遍历浏览目录树结构，无需启动外部 Shell。
@@ -60,7 +60,7 @@
 #### `edit_file`
 - **功能**：对已有文件执行基于上下文锚点的精确局部替换，推荐日常代码修改使用。
 - **参数**：`path`、`old_text`（精确待替换旧文本）、`new_text`（替换新文本）、`replace_all`（是否替换所有非重叠匹配）。
-- **约束与安全**：建议先读取当前文件再提供上下文锚点；实现检查当前文本的精确匹配，未强制验证模型是否此前读过；默认强制唯一性检查，歧义多处匹配直接拒绝；需要人工审批时，TUI 显示差异预览；通过同父目录的临时文件写入、刷盘并原子重命名（atomic rename），避免直接覆盖时暴露半写入内容。
+- **约束与安全**：建议先读取当前文件再提供上下文锚点；实现检查当前文本与锚点的精确匹配；默认强制唯一性检查，歧义多处匹配直接拒绝；需要人工审批时，TUI 显示差异预览；通过同父目录的临时文件写入、刷盘并原子重命名（atomic rename），避免直接覆盖时暴露半写入内容。
 
 #### `write_file`
 - **功能**：用于创建新文件或有意整体重写完整文件。
@@ -71,7 +71,7 @@
 
 #### 原生 Git 与内部 `git_inspect`
 - **Agent 入口**：通过 `run_command` 执行原生 Git。命令分类参与审批；普通本地写入和远端写入可获得绑定具体请求、仓库与配置版本的 TUI 会话授权，危险或未分类命令进入相应审批路径。
-- **内部工具**：`git_inspect` 实现仍保留用于内部核验、补丁与测试，但不再注册为 Agent 常规工具。提供结构化只读状态、差异与历史。
+- **内部工具**：`git_inspect` 用于内部核验、补丁与测试，通过库接口提供。提供结构化只读状态、差异与历史。
 - **参数**：`view`（`status` / `diff` / `history`）、`limit`、`offset`、`staged`（查看暂存区）。
 - **约束与安全**：工作区必须为 Git 根目录；显式剥离所有 pager、hooks、fsmonitor、外部 diff 及系统环境变量；`diff` 受 256 KiB 原始输出上限约束并支持分页；不修改任何索引或工作树。
 
@@ -94,7 +94,7 @@
 
 #### `read_document`
 - **功能**：基于 AnyDoc 在本地将各种文档格式（PDF、Word、PowerPoint、Excel、OpenDocument、RTF、EPUB、CSV）转换为 Markdown 文本。
-- **约束与安全**：CLI 在独立离线 Bubblewrap 进程中转换，可取消并设 60 秒超时、512 MiB 地址空间与 64 MiB 输出限制；单个源文档上限 32 MiB。每次读取仍重新授权、读取并校验源内容哈希；相同内容、扩展名和 worker 文件版本复用进程内缓存（最多 4 项、64 MiB），工具实例释放后清空；转换时建立每 4096 字符一个定位点的索引，翻页不再扫描整个转换结果。按 Unicode 字符分页（默认 20,000，上限 60,000 字符）。库嵌入方应通过 `with_worker` 指定支持私有转换入口的可执行文件（如配套 `orbit-document-worker`）。
+- **约束与安全**：文档 worker 在独立离线 Bubblewrap 进程中转换，可取消并设 60 秒超时、512 MiB 地址空间与 64 MiB 输出限制；单个源文档上限 32 MiB。每次读取仍重新授权、读取并校验源内容哈希；相同内容、扩展名和 worker 文件版本复用进程内缓存（最多 4 项、64 MiB），工具实例释放后清空；转换时建立每 4096 字符一个定位点的索引，翻页使用索引定位转换结果。按 Unicode 字符分页（默认 20,000，上限 60,000 字符）。库嵌入方应通过 `with_worker` 指定支持私有转换入口的可执行文件（如配套 `orbit-document-worker`）。
 
 ### 5. 命令执行与输出管理
 

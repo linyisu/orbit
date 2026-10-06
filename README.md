@@ -22,11 +22,11 @@ orbit connect --ssh my-host --workspace /home/me/project
 orbit connect --wsl Ubuntu --workspace /home/me/project
 ```
 
-`/ssh`、`/wsl` 可打开连接弹窗，提供别名补全、认证提示、连接日志与远端目录选择；指定主机和目录则直接连接。SSH 沿用系统 OpenSSH 配置；SSH/WSL 首次连接自动上传匹配架构的 Linux 服务二进制。远端会话默认沿用本地配置和所引用的认证，无需在目标项目创建 `config.toml`；目标仍需工具执行依赖。本仓库目前仍是 Linux 客户端，WSL 适配器需要调用环境能运行 `wsl.exe`，不代表已支持 Windows 原生构建。断开连接不会取消任务，可用相同参数加 `--resume <ID>` 接回。支持范围、配置路径和恢复行为见 [工作区连接说明](crates/orbit-cli/README.md#统一工作区连接实验性)。
+`/ssh`、`/wsl` 可打开连接弹窗，提供别名补全、认证提示、连接日志与远端目录选择；指定主机和目录则直接连接。SSH 沿用系统 OpenSSH 配置；SSH/WSL 首次连接自动上传匹配架构的 Linux 服务二进制。远端会话默认沿用本地配置和所引用的认证，无需在目标项目创建 `config.toml`；目标仍需工具执行依赖。本仓库目前仍是 Linux 客户端，WSL 适配器需要调用环境能运行 `wsl.exe`，不代表已支持 Windows 原生构建。断开连接不会取消任务，可用相同参数加 `--resume <ID>` 接回。支持范围、配置路径和恢复行为见 [工作区连接说明](crates/orbit-app/README.md#工作区服务)。
 
 用 TUI 的 `/connect` 配置连接，或参考 [config.example.toml](config.example.toml) 编写 `config.toml`。可用 `--config <路径>` 指定配置文件，API Key 也可通过 `orbit auth set-key` 保存，再用配置中的 `credential` 引用。示例中的模型 ID 和能力需要与实际服务一致。
 
-API 模型的可用列表由服务接口发现；公共模型规格补齐缺失能力，缓存与离线快照保证更新失败后仍可使用。用户配置和服务返回的能力优先，详见 [模型连接说明](crates/orbit-cli/README.md)。
+API 模型的可用列表由服务接口发现；公共模型规格补齐缺失能力，缓存与离线快照保证更新失败后仍可使用。用户配置和服务返回的能力优先，详见 [模型目录说明](crates/orbit-app/README.md#模型目录)。
 
 网页读取、搜索与网络图片自动沿用启动环境中的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`（也支持小写）和 `NO_PROXY`，通常无需为 Orbit 再配置代理。可选的 `[web].proxy` 用于显式覆盖环境路由；直连目标仍须通过公网地址校验。
 
@@ -35,16 +35,19 @@ orbit chat "审查当前项目的代码并说明发现的问题"
 orbit tui --resume <SESSION_ID>
 orbit sessions list
 orbit sessions diagnostics <SESSION_ID>
-orbit model-metadata crates/orbit-cli/src/model_metadata.json
+orbit model-metadata crates/orbit-app/src/models/model_metadata.json
 ```
 
-TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel 或 iTerm2 协议；不支持像素图形时图片使用字符预览，公式保留 TeX。Markdown、HTML、代码、图片和 RaTeX 数学公式的支持范围见 [CLI 文档](crates/orbit-cli/README.md)。
+TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel 或 iTerm2 协议；不支持像素图形时图片使用字符预览，公式保留 TeX。Markdown、HTML、代码、图片和 RaTeX 数学公式的支持范围见 [TUI 文档](crates/orbit-tui/README.md)。
 
 ## 工作区结构
 
 | Crate | 职责 | 文档 |
 | --- | --- | --- |
-| `orbit-cli` | 配置、工具组装、会话协调、子代理调度与 TUI | [README](crates/orbit-cli/README.md) |
+| `orbit-cli` | 命令行参数、入口分发、输出与信号 | [README](crates/orbit-cli/README.md) |
+| `orbit-tui` | 终端绘制、排版、键鼠交互、标签与弹窗 | [README](crates/orbit-tui/README.md) |
+| `orbit-app` | 配置、模型目录、会话、工具装配、任务与工作区服务 | [README](crates/orbit-app/README.md) |
+| `orbit-server` | 无界面服务可执行入口 | [README](crates/orbit-server/README.md) |
 | `orbit-agent` | 模型/工具执行循环、消息边界、后台等待、上下文整理 | [README](crates/orbit-agent/README.md) |
 | `orbit-model` | 通用消息类型、供应商协议、模型目录与思考参数适配 | [README](crates/orbit-model/README.md) |
 | `orbit-auth` | 凭据存储、OAuth 回调、令牌刷新与服务地址绑定 | [README](crates/orbit-auth/README.md) |
@@ -52,7 +55,25 @@ TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel �
 | `orbit-tools` | 文件、命令、网页、文档、交付与 MCP 工具 | [README](crates/orbit-tools/README.md) |
 | `orbit-store` | SQLite 会话、规范日志、执行检查点和子任务持久化 | [README](crates/orbit-store/README.md) |
 
-CLI 负责把这些库组装成一次运行。Agent 依赖模型与工具接口；工具通过 runtime 授权和执行，store 实现持久化接口。TUI 的合并、折叠与渲染只影响展示，模型历史仍保留各次原始调用。
+CLI 和 TUI 调用应用服务，`orbit-server` 提供目标端的无界面入口。应用服务组装领域库，Agent 依赖模型与工具接口，工具通过 runtime 授权和执行，store 保存会话与运行证据。
+
+```mermaid
+flowchart TD
+    CLI[orbit-cli] --> TUI[orbit-tui]
+    CLI --> APP[orbit-app]
+    TUI --> APP
+    SERVER[orbit-server] --> APP
+    APP --> AGENT[orbit-agent]
+    APP --> TOOLS[orbit-tools]
+    APP --> STORE[orbit-store]
+    APP --> MODEL[orbit-model]
+    APP --> AUTH[orbit-auth]
+    TOOLS --> RUNTIME[orbit-runtime]
+    AGENT --> MODEL
+    MODEL --> AUTH
+```
+
+界面持有布局、选区和显示状态，应用层持有运行资源和执行任务。依赖向领域库流动，领域库独立于前端。`scripts/check-architecture.py` 检查包依赖与前端执行边界。
 
 ## 任务与会话
 
@@ -66,6 +87,7 @@ CLI 负责把这些库组装成一次运行。Agent 依赖模型与工具接口�
 ## 开发与验证
 
 ```sh
+python3 scripts/check-architecture.py
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

@@ -8,7 +8,7 @@
 
 - [agent.rs](src/agent.rs)：运行循环、取消边界、工具配对、后台完成通知与 journal 刷盘；大段运行回归位于 [agent/tests.rs](src/agent/tests.rs)。
 - [context.rs](src/context.rs)、[autocompact.rs](src/autocompact.rs)、[compaction.rs](src/compaction.rs)：输入估算、结构化摘要和整理生命周期。
-- [background.rs](src/background.rs)、[inbox.rs](src/inbox.rs)、[checkpoint.rs](src/checkpoint.rs)：任务组、补充消息与持久化接口。子代理宿主及模型选择在 `orbit-cli/src/subagents.rs`，库不直接管理 UI 或数据库连接。
+- [background.rs](src/background.rs)、[inbox.rs](src/inbox.rs)、[checkpoint.rs](src/checkpoint.rs)：任务组、补充消息与持久化接口。子代理宿主及模型选择在 [orbit-app/src/subagents.rs](../orbit-app/src/subagents.rs)，库不直接管理 UI 或数据库连接。
 
 Journal 批量和间隔由 `agent.rs` 的具名常量维护；UI 帧间隔属于 CLI，不与数据库刷盘间隔混用。
 
@@ -25,7 +25,7 @@ Journal 批量和间隔由 `agent.rs` 的具名常量维护；UI 帧间隔属于
 
 ## 上下文预算与分层整理
 
-在每次发起模型请求前，Agent 均会严密核算上下文预算。`context_tokens` 代表模型声明的总窗口；若模型声明了独立的 `input_context_tokens`，则以此作为输入基准，不再双重扣除 `max_output_tokens`。
+在每次发起模型请求前，Agent 均会严密核算上下文预算。`context_tokens` 代表模型声明的总窗口；若模型声明了独立的 `input_context_tokens`，则以此作为输入基准，输入预算按该独立窗口计算。
 
 当估算输入占用达到输入预算阈值或用户显式执行 `/compact` 时，触发分层上下文压缩策略：
 

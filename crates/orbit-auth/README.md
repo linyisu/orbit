@@ -6,7 +6,7 @@
 
 ## 实现入口与复用边界
 
-- [oauth.rs](src/oauth.rs) / [anthropic.rs](src/anthropic.rs)：供应商授权参数与 token 交换；两条路径共用 [callback.rs](src/callback.rs) 的 `authorization_code` 校验，不再分别维护 URL、state、code 规则。
+- [oauth.rs](src/oauth.rs) / [anthropic.rs](src/anthropic.rs)：供应商授权参数与 token 交换；[callback.rs](src/callback.rs) 负责回调 URL、state 与授权码的统一校验。
 - [http.rs](src/http.rs)：认证请求的 30 秒超时、64 KiB token 回执上限与通用响应处理。各供应商的请求形状仍在其适配器中。
 - [store.rs](src/store.rs)：私有凭据存储、刷新互斥与目标服务绑定；模型目录发现由 `orbit-model` 负责，不属于凭据存储。
 
