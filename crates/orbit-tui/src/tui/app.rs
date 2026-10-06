@@ -213,10 +213,7 @@ pub struct UiState {
 
 impl UiState {
     pub(super) fn is_home(&self) -> bool {
-        !self.has_conversation()
-            && self.subagent_parent.is_none()
-            && self.resume_loading.is_none()
-            && self.connection_label.is_none()
+        !self.has_conversation() && self.subagent_parent.is_none() && self.resume_loading.is_none()
     }
 
     pub(super) fn dialog_open(&self) -> bool {

@@ -57,7 +57,7 @@ impl Tab {
                     self.state.input.set(text);
                 } else {
                     self.state
-                        .report_local(TranscriptItem::Notice(format!("尚未确认的输入：{text}")));
+                        .report_local(TranscriptItem::Error(format!("尚未确认的输入：{text}")));
                 }
                 self.state
                     .report_local(TranscriptItem::Error(error.to_string()));

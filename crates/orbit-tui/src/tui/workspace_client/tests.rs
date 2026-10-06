@@ -494,10 +494,13 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
     assert_eq!(tab.state.input.text, "new draft");
     assert!(
         tab.state
-            .transcript
-            .iter()
-            .any(|item| matches!(item, TranscriptItem::Notice(text) if text.contains("previous")))
+            .info_dialog
+            .as_ref()
+            .unwrap()
+            .content
+            .contains("previous")
     );
+    assert!(tab.state.transcript.is_empty());
 }
 
 #[test]

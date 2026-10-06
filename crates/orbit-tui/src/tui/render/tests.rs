@@ -1499,6 +1499,46 @@ fn welcome_commands_and_small_terminal_render() {
 }
 
 #[test]
+fn connected_workspaces_keep_the_home_screen_until_a_conversation_starts() {
+    for label in ["本地", "SSH 204", "WSL Ubuntu"] {
+        let mut state = UiState::new("mock-model");
+        state.connection_label = Some(label.into());
+        state.workspace = "/project".into();
+        state.tabs.push(SessionTab {
+            id: "workspace:home".into(),
+            title: label.into(),
+            status: RunStatus::Idle,
+            elapsed: std::time::Duration::ZERO,
+            waiting_approval: false,
+            active: true,
+        });
+
+        let screen = render(&mut state, 140, 40);
+        assert!(state.is_home(), "{label}");
+        assert!(screen.contains("████"), "{label}");
+        assert!(screen.contains("mock-model"));
+        assert!(state.input_area.x > 15);
+        assert!(state.input_area.y < 30);
+        assert_eq!(state.selection.viewport.height, 0);
+
+        state.input.insert("/");
+        assert!(render(&mut state, 140, 40).contains("/new"));
+        state.input.set(String::new());
+        state.show_output("命令", "首页命令提示".into());
+        assert!(state.info_dialog.is_some());
+        assert!(state.transcript.is_empty());
+        state.info_dialog = None;
+
+        state.submit("hello Orbit".into());
+        let screen = render(&mut state, 140, 40);
+        assert!(!state.is_home());
+        assert!(!screen.contains("████"));
+        assert!(screen.contains("hello Orbit"));
+        assert!(state.input_area.y >= 30);
+    }
+}
+
+#[test]
 fn running_status_shows_the_actual_cancel_shortcut() {
     let mut state = UiState::new("mock-model");
     state.begin_run();

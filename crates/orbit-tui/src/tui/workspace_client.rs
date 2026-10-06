@@ -298,10 +298,6 @@ impl Tab {
             Mode::Yolo => super::permissions::Mode::Yolo,
         };
         self.offline = false;
-        self.state.report_local(TranscriptItem::Notice(format!(
-            "工作区会话 {} · /help 查看连接命令",
-            opened.info.id
-        )));
     }
 
     fn profile(&mut self, info: &SessionInfo) {
@@ -658,7 +654,7 @@ impl Tab {
                 self.state.input.set(prompt);
             } else {
                 self.state
-                    .report_local(TranscriptItem::Notice(format!("尚未确认的输入：{prompt}")));
+                    .report_local(TranscriptItem::Error(format!("尚未确认的输入：{prompt}")));
             }
         }
     }
