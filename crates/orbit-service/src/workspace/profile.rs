@@ -10,6 +10,11 @@ pub(super) fn describe(setup: &PreparedWorkspace) -> SessionInfo {
     SessionInfo {
         mode: resources.mode,
         branch: None,
+        home: resources
+            .options
+            .home
+            .as_ref()
+            .map(|home| home.to_string_lossy().into_owned()),
         cursor_trail: resources.cursor_trail,
         auto_compact: budget.auto_compact,
         skills: budget.skills.completions(),

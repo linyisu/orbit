@@ -77,6 +77,56 @@ pub struct View {
     pub busy: bool,
     pub model: String,
     approvals: BTreeMap<u64, ApprovalPreview>,
+    clock: Option<Clock>,
+}
+
+struct Clock {
+    started: std::time::Instant,
+    paused: Option<std::time::Instant>,
+    pauses: std::time::Duration,
+}
+
+impl Clock {
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            paused: None,
+            pauses: std::time::Duration::ZERO,
+        }
+    }
+    fn pause(&mut self) {
+        self.paused.get_or_insert_with(std::time::Instant::now);
+    }
+    fn resume(&mut self) {
+        if let Some(since) = self.paused.take() {
+            self.pauses += since.elapsed();
+        }
+    }
+    fn snapshot(&self) -> orbit_protocol::RunTiming {
+        let elapsed = self
+            .paused
+            .unwrap_or_else(std::time::Instant::now)
+            .duration_since(self.started)
+            .saturating_sub(self.pauses);
+        orbit_protocol::RunTiming {
+            elapsed_ms: elapsed.as_millis().min(u64::MAX as u128) as u64,
+            paused: self.paused.is_some(),
+        }
+    }
+}
+
+fn presentation(run: &orbit_store::types::Run) -> orbit_protocol::RunPresentation {
+    orbit_protocol::RunPresentation {
+        compact: run.prompt == "/compact",
+        queued_input: run
+            .events
+            .iter()
+            .take_while(|event| {
+                !matches!(event, orbit_agent::events::AgentEvent::TurnStarted { .. })
+            })
+            .any(|event| matches!(event, orbit_agent::events::AgentEvent::InputReceived { .. })),
+        ..Default::default()
+    }
 }
 
 impl View {
@@ -105,6 +155,7 @@ impl View {
             .collect();
         let next = after + updates.len();
         Ok(Page {
+            timing: self.clock.as_ref().map(Clock::snapshot),
             next,
             more: next < self.updates.len(),
             busy: self.busy,
@@ -142,14 +193,21 @@ impl Handle {
                 .is_some_and(|run| run.status == "running"),
             model: snapshot.session.model,
             approvals: BTreeMap::new(),
+            clock: None,
         };
         for run in snapshot.runs {
-            view.push(Update::Started { prompt: run.prompt });
+            view.push(Update::Started {
+                presentation: presentation(&run),
+                prompt: run.prompt,
+            });
             for event in run.events {
                 view.push(Update::agent(event));
             }
             if run.status != "running" {
-                view.push(Update::Finished { status: run.status });
+                view.push(Update::Finished {
+                    elapsed_ms: run.elapsed_ms,
+                    status: run.status,
+                });
             }
         }
         view.page(after)
@@ -177,15 +235,18 @@ impl Handle {
             busy: false,
             model: info.model.clone(),
             approvals: BTreeMap::new(),
+            clock: None,
         };
         for run in &setup.session.snapshot.runs {
             view.push(Update::Started {
+                presentation: presentation(run),
                 prompt: run.prompt.clone(),
             });
             for event in &run.events {
                 view.push(Update::agent(event.clone()));
             }
             view.push(Update::Finished {
+                elapsed_ms: run.elapsed_ms,
                 status: run.status.clone(),
             });
         }
@@ -278,3 +339,6 @@ fn request_fingerprint(
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

@@ -127,6 +127,7 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     call.reply
         .unwrap()
         .send(Ok(Response::Subagent(Page {
+            timing: None,
             next: 3,
             more: false,
             busy: false,
@@ -134,12 +135,14 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
             approvals: vec![],
             updates: vec![
                 Update::Started {
+                    presentation: Default::default(),
                     prompt: "child task".into(),
                 },
                 Update::agent(orbit_agent::events::AgentEvent::Model(
                     orbit_model::types::StreamEvent::TextDelta("child answer".into()),
                 )),
                 Update::Finished {
+                    elapsed_ms: None,
                     status: "completed".into(),
                 },
             ],
@@ -167,6 +170,7 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
 
 fn page(updates: Vec<Update>, approvals: Vec<Approval>) -> Response {
     Response::Page(Page {
+        timing: None,
         next: updates.len(),
         more: false,
         busy: true,
@@ -237,6 +241,7 @@ async fn concurrent_tabs_keep_drafts_events_models_and_requests_separate() {
     sender
         .send(Ok(page(
             vec![Update::Started {
+                presentation: Default::default(),
                 prompt: "first target".into(),
             }],
             vec![],
@@ -908,6 +913,7 @@ fn directory_profile_updates_workspace_media_connection_and_empty_tab_title() {
     .unwrap();
     tab.apply(Response::Ok);
     tab.apply(Response::Page(Page {
+        timing: None,
         next: 1,
         more: false,
         busy: false,

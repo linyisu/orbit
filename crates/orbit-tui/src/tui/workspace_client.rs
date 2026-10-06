@@ -64,6 +64,7 @@ pub(super) struct Tab {
     incoming: Option<mpsc::Receiver<Result<Response>>>,
     busy: bool,
     starting: Option<String>,
+    starting_attachments: Vec<orbit_model::types::Attachment>,
     approval_id: Option<u64>,
     mode: Mode,
     offline: bool,
@@ -218,6 +219,7 @@ impl Tab {
             incoming: None,
             busy: false,
             starting: None,
+            starting_attachments: Vec::new(),
             approval_id: None,
             mode: Mode::Auto,
             offline: false,
@@ -312,12 +314,16 @@ impl Tab {
 
     fn install(&mut self, opened: Opened) {
         let draft = self.state.input.text.clone();
+        let attachments = std::mem::take(&mut self.state.attachments);
+        let attachment_cursor = self.state.attachment_cursor;
         let media = self.state.media.clone();
         let cursor_trail = self.state.cursor_motion.enabled;
         self.state = UiState::new(&opened.info.model);
         self.state.media = media;
         self.state.cursor_motion.enabled = cursor_trail;
         self.state.input.set(draft);
+        self.state.attachments = attachments;
+        self.state.attachment_cursor = attachment_cursor;
         self.state.connection_label = Some(opened.connection.target.label());
         self.state.workspace = opened.info.workspace.clone();
         self.profile(&opened.info);
@@ -359,6 +365,7 @@ impl Tab {
             self.completion_input.clear();
         }
         self.state.media.workspace = info.workspace.clone().into();
+        self.state.completion_home = info.home.as_ref().map(Into::into);
         self.state.branch = info.branch.clone();
         self.state.branch_workspace = info.workspace.clone();
         self.state.cursor_motion.enabled = info.cursor_trail;
@@ -389,6 +396,13 @@ impl Tab {
         self.state.model = info.model.clone();
         self.state.model_completions = info.models.clone();
         self.model_catalog = info.model_catalog.clone();
+        if !info.supports_vision && !self.state.attachments.is_empty() {
+            self.state.attachments.clear();
+            self.state.attachment_cursor = None;
+            self.state.report_local(TranscriptItem::Notice(
+                "所选模型不支持图片输入，已清除待发送的图片附件。".into(),
+            ));
+        }
         self.state.supports_vision = info.supports_vision;
         self.state.reasoning_effort = info
             .reasoning_effort
@@ -648,10 +662,12 @@ impl Tab {
                         Update::Report(report) => {
                             self.state.show_output(&report.title, report.text)
                         }
-                        Update::Started { prompt } => {
-                            if self.starting.take().is_some() {
-                                self.state.attachments.clear();
-                            }
+                        Update::Started {
+                            prompt,
+                            presentation,
+                        } => {
+                            self.starting.take();
+                            self.starting_attachments.clear();
                             if self.session_title.is_empty() {
                                 self.title = format!(
                                     "{} · {}",
@@ -659,16 +675,11 @@ impl Tab {
                                     prompt.lines().next().unwrap_or_default()
                                 );
                             }
-                            self.state.submit(prompt);
+                            self.state.start_remote(prompt, presentation);
                         }
                         Update::Agent(event) => self.state.apply(*event),
-                        Update::Finished { status } => {
-                            self.state.finish_clock();
-                            self.state.status = match status.as_str() {
-                                "completed" => RunStatus::Completed,
-                                "cancelled" => RunStatus::Cancelled,
-                                _ => RunStatus::Failed,
-                            };
+                        Update::Finished { status, elapsed_ms } => {
+                            self.state.finish_remote(&status, elapsed_ms);
                         }
                     }
                 }
@@ -686,6 +697,11 @@ impl Tab {
                     } else if self.busy {
                         self.state.resume_clock();
                     }
+                }
+                if !page.more
+                    && let Some(timing) = page.timing
+                {
+                    self.state.sync_clock(timing);
                 }
             }
             Response::Plugins(catalog) => {
@@ -712,6 +728,9 @@ impl Tab {
 
     fn restore_submission(&mut self) {
         if let Some(prompt) = self.starting.take() {
+            let mut attachments = std::mem::take(&mut self.starting_attachments);
+            attachments.append(&mut self.state.attachments);
+            self.state.attachments = attachments;
             if self.state.input.text.is_empty() {
                 self.state.input.set(prompt);
             } else {

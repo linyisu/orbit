@@ -547,7 +547,7 @@ impl Tab {
                 self.state
                     .show_output("审批模式", self.state.permission_mode.description().into());
             }
-            text if matches!(name, "/mode" | "/permissions") && !argument.trim().is_empty() => {
+            _ if matches!(name, "/mode" | "/permissions") && !argument.trim().is_empty() => {
                 match tui::permissions::Mode::parse(argument.trim()) {
                     Some(mode) => self.set_mode(mode),
                     None => self
@@ -572,7 +572,12 @@ impl Tab {
                 ));
             }
             _ => {
-                let images = match workspace::attachments::uploads(&self.state.attachments) {
+                let compact = command == "/compact";
+                let images = match workspace::attachments::uploads(if compact {
+                    &[]
+                } else {
+                    &self.state.attachments
+                }) {
                     Ok(images) => images,
                     Err(error) => {
                         self.state.input.set(prompt);
@@ -583,7 +588,7 @@ impl Tab {
                 };
                 if self.send(Request::Start {
                     images,
-                    compact: command == "/compact",
+                    compact,
                     session,
                     request_id: workspace::request_id(),
                     prompt: prompt.clone(),
@@ -591,6 +596,10 @@ impl Tab {
                     model: None,
                 }) {
                     self.starting = Some(prompt);
+                    if !compact {
+                        self.starting_attachments = std::mem::take(&mut self.state.attachments);
+                        self.state.attachment_cursor = None;
+                    }
                 } else {
                     self.state.input.set(prompt);
                 }

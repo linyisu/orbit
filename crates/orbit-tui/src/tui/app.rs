@@ -277,6 +277,66 @@ impl UiState {
         self.transcript_layout.invalidate_from(first);
     }
 
+    pub(super) fn start_remote(
+        &mut self,
+        prompt: String,
+        presentation: orbit_protocol::RunPresentation,
+    ) {
+        if !prompt.is_empty() && self.input.history.last() != Some(&prompt) {
+            self.input.history.push(prompt.clone());
+        }
+        if presentation.compact || prompt == "/compact" || presentation.queued_input {
+            self.begin_run();
+            return;
+        }
+        let images = presentation
+            .images
+            .iter()
+            .map(|name| format!("[图片：{name}]"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let display = match (prompt.is_empty(), images.is_empty()) {
+            (_, true) => prompt,
+            (true, false) => images,
+            (false, false) => format!("{prompt}\n{images}"),
+        };
+        self.submit(display);
+    }
+
+    pub(super) fn finish_remote(&mut self, status: &str, elapsed_ms: Option<u64>) {
+        self.finish_clock();
+        if let Some(elapsed_ms) = elapsed_ms {
+            self.elapsed = std::time::Duration::from_millis(elapsed_ms);
+        }
+        self.status = match status {
+            "completed" => RunStatus::Completed,
+            "cancelled" => RunStatus::Cancelled,
+            _ => RunStatus::Failed,
+        };
+        let first = self
+            .transcript
+            .iter()
+            .rposition(|item| matches!(item, TranscriptItem::User(_)))
+            .unwrap_or(0);
+        for item in &mut self.transcript[first..] {
+            if let TranscriptItem::Tool(tool) = item
+                && tool.status == ToolStatus::Running
+            {
+                tool.status = ToolStatus::Failed;
+                tool.output = "运行已结束或中断，未保存工具结果；不会自动重试。".into();
+            }
+        }
+        self.invalidate_transcript(first);
+    }
+
+    pub(super) fn sync_clock(&mut self, timing: orbit_protocol::RunTiming) {
+        let now = Instant::now();
+        self.elapsed = std::time::Duration::from_millis(timing.elapsed_ms);
+        self.started_at = Some(now.checked_sub(self.elapsed).unwrap_or(now));
+        self.paused_at = timing.paused.then_some(now);
+        self.paused_elapsed = std::time::Duration::ZERO;
+    }
+
     pub fn calibration(&self) -> orbit_agent::calibration::TokenCalibration {
         self.calibrations
             .get(&self.model)

@@ -148,18 +148,21 @@ impl Viewer {
         self.view.ui.resume_loading = None;
         for update in page.updates {
             match update {
-                Update::Started { prompt } => self.view.ui.submit(prompt),
+                Update::Started {
+                    prompt,
+                    presentation,
+                } => self.view.ui.start_remote(prompt, presentation),
                 Update::Agent(event) => self.view.ui.apply(*event),
-                Update::Finished { status } => {
-                    self.view.ui.finish_clock();
-                    self.view.ui.status = match status.as_str() {
-                        "completed" => RunStatus::Completed,
-                        "cancelled" => RunStatus::Cancelled,
-                        _ => RunStatus::Failed,
-                    };
+                Update::Finished { status, elapsed_ms } => {
+                    self.view.ui.finish_remote(&status, elapsed_ms)
                 }
                 Update::Profile(_) | Update::Report(_) => {}
             }
+        }
+        if !page.more
+            && let Some(timing) = page.timing
+        {
+            self.view.ui.sync_clock(timing);
         }
         self.view.block_submission(false);
     }

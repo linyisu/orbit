@@ -105,7 +105,7 @@ pub async fn execute(
                         return Err(error);
                     }
                 }
-                Update::Finished { status } => {
+                Update::Finished { status, .. } => {
                     cancelled = status == "cancelled";
                     failed |= status != "completed" && !cancelled;
                 }

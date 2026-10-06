@@ -305,7 +305,15 @@ impl Actor {
                 {
                     self.remembered.insert(key);
                 }
-                self.view.lock().await.approvals.remove(&id);
+                {
+                    let mut view = self.view.lock().await;
+                    view.approvals.remove(&id);
+                    if view.approvals.is_empty()
+                        && let Some(clock) = &mut view.clock
+                    {
+                        clock.resume();
+                    }
+                }
                 request
                     .decision
                     .send(allow)
@@ -323,7 +331,7 @@ impl Actor {
                 ensure!(
                     !request_id.is_empty()
                         && request_id.len() <= 128
-                        && !prompt.trim().is_empty()
+                        && (!prompt.trim().is_empty() || !images.is_empty())
                         && prompt.len() <= 1024 * 1024,
                     "invalid workspace request"
                 );
@@ -346,6 +354,11 @@ impl Actor {
                     RequestClaim::Accepted => return Ok(()),
                     RequestClaim::Rejected(error) => anyhow::bail!("{error}"),
                 }
+                let presentation = orbit_protocol::RunPresentation {
+                    images: images.iter().map(|image| image.name.clone()).collect(),
+                    compact,
+                    queued_input: false,
+                };
                 let started = crate::workspace::run::start(
                     &mut self.setup,
                     prompt.clone(),
@@ -383,7 +396,11 @@ impl Actor {
                 {
                     let mut view = self.view.lock().await;
                     view.busy = true;
-                    view.push(Update::Started { prompt });
+                    view.clock = Some(super::Clock::new());
+                    view.push(Update::Started {
+                        prompt,
+                        presentation,
+                    });
                 }
                 self.setup
                     .session
@@ -419,6 +436,9 @@ impl Actor {
             .await
             .approvals
             .insert(self.approval_id, request.preview.clone());
+        if let Some(clock) = &mut self.view.lock().await.clock {
+            clock.pause();
+        }
         self.pending.insert(self.approval_id, request);
     }
 
@@ -441,7 +461,15 @@ impl Actor {
         if let Some(error) = error.or_else(|| saved.err().map(|error| error.to_string())) {
             view.push(Update::agent(AgentEvent::Failed { error }));
         }
+        view.clock = None;
         view.push(Update::Finished {
+            elapsed_ms: self
+                .setup
+                .session
+                .snapshot
+                .runs
+                .last()
+                .and_then(|run| run.elapsed_ms),
             status: status.into(),
         });
         view.busy = false;

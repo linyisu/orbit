@@ -160,6 +160,8 @@ pub struct SessionInfo {
     pub id: String,
     pub title: String,
     pub workspace: String,
+    #[serde(default)]
+    pub home: Option<String>,
     pub model: String,
     pub models: Vec<String>,
     #[serde(default)]
@@ -197,13 +199,37 @@ impl ModelSummary {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RunPresentation {
+    #[serde(default)]
+    pub images: Vec<String>,
+    #[serde(default)]
+    pub compact: bool,
+    #[serde(default)]
+    pub queued_input: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RunTiming {
+    pub elapsed_ms: u64,
+    pub paused: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Update<E> {
     Profile(Box<SessionInfo>),
     Report(Report),
-    Started { prompt: String },
+    Started {
+        prompt: String,
+        #[serde(default)]
+        presentation: RunPresentation,
+    },
     Agent(Box<E>),
-    Finished { status: String },
+    Finished {
+        status: String,
+        #[serde(default)]
+        elapsed_ms: Option<u64>,
+    },
 }
 
 impl<E> Update<E> {
@@ -220,6 +246,8 @@ pub struct Approval<A> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Page<E, A> {
+    #[serde(default)]
+    pub timing: Option<RunTiming>,
     pub next: usize,
     pub more: bool,
     pub busy: bool,

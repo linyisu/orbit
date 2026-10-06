@@ -51,7 +51,10 @@ pub async fn pump(
                         .map(|approval| approval.id)
                         .collect::<Vec<_>>(),
                 );
-                if page.updates.is_empty() && last_status.as_ref() == Some(&status) {
+                if page.updates.is_empty()
+                    && page.timing.is_none()
+                    && last_status.as_ref() == Some(&status)
+                {
                     continue;
                 }
                 last_status = Some(status);
