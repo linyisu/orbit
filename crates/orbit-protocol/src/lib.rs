@@ -1,3 +1,7 @@
+pub mod admin;
+pub mod plugins;
+pub mod project;
+
 use std::io;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};

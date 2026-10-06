@@ -1,35 +1,15 @@
 use anyhow::{Result, ensure};
 use orbit_model::types::ChatMessage;
-use orbit_store::types::{MemoryCategory, ProjectTask, SessionMemory, TaskStatus};
+use orbit_store::types::{ProjectTask, SessionMemory};
 
 use crate::session::SessionState;
 
-pub enum TaskAction {
-    List { include_completed: bool },
-    Add { title: String },
-    SetStatus { id: i64, status: TaskStatus },
-}
+pub use orbit_protocol::project::{MemoryAction, TaskAction};
 
 pub enum TaskResult {
     List(Vec<ProjectTask>),
     Added(ProjectTask),
     Updated(ProjectTask),
-}
-
-pub enum MemoryAction {
-    List {
-        include_inactive: bool,
-    },
-    Add {
-        category: MemoryCategory,
-        content: String,
-    },
-    Search {
-        query: String,
-    },
-    Forget {
-        id: i64,
-    },
 }
 
 pub enum MemoryResult {

@@ -14,41 +14,7 @@ use tokio::process::Command;
 
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Marketplace {
-    pub name: String,
-    pub source: String,
-    pub directory: PathBuf,
-    /// The immutable commit acquired for a Git source. Local directories have
-    /// no revision because their owner can edit them in place.
-    #[serde(default)]
-    pub revision: Option<String>,
-    pub plugins: Vec<Plugin>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Plugin {
-    pub name: String,
-    pub description: String,
-    /// Relative package path declared by the marketplace. Older stored
-    /// catalogues may not have it, so it remains optional until refreshed.
-    #[serde(default)]
-    pub source: Option<String>,
-}
-
-/// Package declarations only; inspection never starts hooks, commands or MCP servers.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PluginPackage {
-    pub name: String,
-    pub version: Option<String>,
-    pub description: Option<String>,
-    pub directory: PathBuf,
-    pub skills: Vec<String>,
-    pub commands: Vec<String>,
-    pub agents: Vec<String>,
-    pub declares_hooks: bool,
-    pub declares_mcp: bool,
-}
+pub use orbit_protocol::plugins::{Marketplace, Plugin, PluginPackage};
 
 #[derive(Default, Serialize, Deserialize)]
 struct StoredMarketplaces {
