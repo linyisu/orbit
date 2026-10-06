@@ -16,6 +16,39 @@ fn tab(label: &str) -> (Tab, mpsc::Receiver<Call>) {
 }
 
 #[test]
+fn help_is_discoverable_and_opens_the_same_dialog_on_home_and_during_a_run() {
+    for label in ["本地", "SSH dev", "WSL Ubuntu"] {
+        for running in [false, true] {
+            let (mut tab, mut requests) = tab(label);
+            if running {
+                tab.state.submit("existing conversation".into());
+            }
+            let history_len = tab.state.transcript.len();
+            tab.state.input.set("/he".into());
+            assert!(tab.state.menu().iter().any(|entry| entry.name == "/help"));
+            tab.state.input.set("keep this draft".into());
+            tab.submit("/help".into()).unwrap();
+            assert!(tab.state.show_help);
+            assert!(!tab.state.help_keys);
+            assert_eq!(tab.state.transcript.len(), history_len);
+            assert!(requests.try_recv().is_err());
+            tab.handle(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))
+                .unwrap();
+            assert_eq!(tab.state.help_scroll, 1);
+            tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+                .unwrap();
+            assert!(!tab.state.show_help);
+            assert_eq!(tab.state.input.text, "keep this draft");
+            assert_eq!(tab.state.is_home(), !running);
+            assert!(matches!(
+                tab.submit("/restore".into()).unwrap(),
+                Action::Restore
+            ));
+        }
+    }
+}
+
+#[test]
 fn target_completions_apply_only_to_the_input_that_requested_them() {
     let (mut tab, _) = tab("SSH dev");
     tab.state.connection_label = Some("SSH dev".into());

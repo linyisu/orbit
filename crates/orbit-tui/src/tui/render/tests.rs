@@ -1168,7 +1168,7 @@ fn command_menu_limits_visible_items_and_tracks_selection() {
     state.input.set("/".into());
     let first_page = render(&mut state, 100, 20);
 
-    assert!(first_page.contains("/new"));
+    assert!(first_page.contains("/btw"));
     assert!(!first_page.contains("/tasks"));
 
     assert!(!first_page.contains("Tab 补全"));
@@ -1176,15 +1176,15 @@ fn command_menu_limits_visible_items_and_tracks_selection() {
     state.menu_index = 6;
     let middle_page = render(&mut state, 100, 20);
 
-    assert!(middle_page.contains("  /resume"));
-    assert!(middle_page.contains("/new"));
+    assert!(middle_page.contains("  /context"));
+    assert!(middle_page.contains("/btw"));
     assert_eq!(state.menu_offset, 0);
 
     state.menu_index = state.menu().len() - 1;
     let last_page = render(&mut state, 100, 20);
 
-    assert!(last_page.contains("/exit"));
-    assert!(!last_page.contains("/new"));
+    assert!(last_page.contains("/wsl"));
+    assert!(!last_page.contains("/btw"));
     assert!(!last_page.contains("Esc 关闭"));
 }
 
@@ -1491,7 +1491,7 @@ fn welcome_commands_and_small_terminal_render() {
 
     state.input.insert("/");
 
-    assert!(render(&mut state, 100, 30).contains("/new"));
+    assert!(render(&mut state, 100, 30).contains("/btw"));
 
     for (width, height) in [(20, 5), (10, 3), (1, 1)] {
         assert!(!render(&mut state, width, height).contains("请放大终端"));
@@ -1522,7 +1522,7 @@ fn connected_workspaces_keep_the_home_screen_until_a_conversation_starts() {
         assert_eq!(state.selection.viewport.height, 0);
 
         state.input.insert("/");
-        assert!(render(&mut state, 140, 40).contains("/new"));
+        assert!(render(&mut state, 140, 40).contains("/btw"));
         state.input.set(String::new());
         state.show_output("命令", "首页命令提示".into());
         assert!(state.info_dialog.is_some());

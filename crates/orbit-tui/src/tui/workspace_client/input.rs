@@ -417,13 +417,10 @@ impl Tab {
             "/editor" => return Ok(Action::Editor),
             "/model refresh" => return Ok(Action::RefreshModels),
             "/help" => {
-                let commands = tui::commands::COMMANDS
-                    .iter()
-                    .filter(|command| tui::commands::available_in_workspace(command.name))
-                    .map(|command| format!("{}  {}", command.name, command.description))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.state.show_output("命令", commands);
+                self.state.selection = Default::default();
+                self.state.show_help = true;
+                self.state.help_keys = false;
+                self.state.help_scroll = 0;
             }
             text if text == "/undo" || text.starts_with("/undo ") => {
                 let path = text

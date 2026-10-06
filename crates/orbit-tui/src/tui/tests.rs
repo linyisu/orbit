@@ -372,7 +372,7 @@ fn menu_selects_commands_and_busy_enter_routes_commands_locally() {
 
     assert_eq!(
         press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
-        Action::Submit("/rename".into())
+        Action::Submit("/changes".into())
     );
 
     state.input.insert("next question");
