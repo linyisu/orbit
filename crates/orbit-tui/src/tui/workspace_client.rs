@@ -86,6 +86,27 @@ impl Tab {
             .or_else(|| self.spec.as_ref().map(Spec::target_identity))
     }
 
+    pub(super) fn display_title(&self, show_target: bool) -> String {
+        if show_target {
+            return self.title.clone();
+        }
+        let Some(label) = &self.state.connection_label else {
+            return self.title.clone();
+        };
+        if self.title == *label {
+            return if self.id.is_some() {
+                "新会话"
+            } else {
+                "连接中"
+            }
+            .into();
+        }
+        self.title
+            .strip_prefix(&format!("{label} · "))
+            .unwrap_or(&self.title)
+            .to_owned()
+    }
+
     pub(super) fn ready_for_restore(&self) -> bool {
         self.id.is_some() && self.connection.is_some() && self.connecting.is_none() && !self.offline
     }

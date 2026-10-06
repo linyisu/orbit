@@ -134,10 +134,11 @@ pub(super) mod live {
             &self,
             id: &str,
             tab: &super::super::workspace_client::Tab,
+            show_target: bool,
         ) -> SessionTab {
             SessionTab {
                 id: id.into(),
-                title: tab.title.clone(),
+                title: tab.display_title(show_target),
                 status: tab.state.status.clone(),
                 elapsed: tab.state.active_elapsed(),
                 waiting_approval: tab.state.approval.is_some(),
@@ -145,13 +146,19 @@ pub(super) mod live {
             }
         }
         pub fn sync_remote_ui(&mut self) {
+            let targets: std::collections::HashSet<_> = self
+                .remote
+                .values()
+                .filter_map(|tab| tab.target_identity())
+                .collect();
+            let show_target = targets.len() > 1;
             let entries: Vec<_> = self
                 .order
                 .iter()
                 .filter_map(|id| {
                     self.remote
                         .get(id)
-                        .map(|tab| self.remote_descriptor(id, tab))
+                        .map(|tab| self.remote_descriptor(id, tab, show_target))
                 })
                 .collect();
             for tab in self.remote.values_mut() {

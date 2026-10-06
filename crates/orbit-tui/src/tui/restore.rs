@@ -37,6 +37,8 @@ pub struct RestorePicker {
 
 impl RestorePicker {
     pub fn from_tabs(tabs: &[crate::workspace::windows::SavedTab]) -> Self {
+        let targets: std::collections::HashSet<_> = tabs.iter().map(|tab| &tab.target).collect();
+        let show_target = targets.len() > 1;
         Self {
             entries: tabs
                 .iter()
@@ -47,7 +49,11 @@ impl RestorePicker {
                         let label = tab.target.label();
                         let prefix = format!("{label} · ");
                         let title = tab.title.strip_prefix(&prefix).unwrap_or(&tab.title);
-                        format!("{label} · {title}")
+                        if show_target {
+                            format!("{label} · {title}")
+                        } else {
+                            title.to_owned()
+                        }
                     },
                     selected: true,
                 })
@@ -743,11 +749,12 @@ mod tests {
     }
 
     #[test]
-    fn saved_titles_show_the_connection_once() {
+    fn saved_titles_show_the_connection_only_for_mixed_targets() {
         use crate::workspace::{
             transport::{SshOptions, Target},
             windows::SavedTab,
         };
+        let mut tabs = Vec::new();
         for target in [
             Target::Local,
             Target::Ssh {
@@ -766,9 +773,15 @@ mod tests {
                 database: None,
                 allow_mcp_start: false,
             };
-            let picker = RestorePicker::from_tabs(&[saved]);
-            assert_eq!(picker.entries[0].title, title);
+            let picker = RestorePicker::from_tabs(std::slice::from_ref(&saved));
+            assert_eq!(picker.entries[0].title, "会话标题");
+            let picker = RestorePicker::from_tabs(&[saved.clone(), saved.clone()]);
+            assert!(picker.entries.iter().all(|entry| entry.title == "会话标题"));
+            tabs.push(saved);
         }
+        let picker = RestorePicker::from_tabs(&tabs);
+        assert_eq!(picker.entries[0].title, "本地 · 会话标题");
+        assert_eq!(picker.entries[1].title, "SSH dev · 会话标题");
     }
 
     #[test]

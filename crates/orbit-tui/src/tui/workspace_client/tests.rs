@@ -738,6 +738,79 @@ async fn restore_keeps_drafts_and_reuses_already_open_sessions() {
     assert_eq!(tabs.active_remote.as_ref(), Some(&restored));
 }
 
+#[test]
+fn tab_titles_show_targets_only_while_different_environments_are_open() {
+    use workspace::transport::{SshOptions, Target};
+    let ssh = |host: &str| Target::Ssh {
+        host: host.into(),
+        options: SshOptions::default(),
+    };
+    for target in [
+        Target::Local,
+        ssh("dev"),
+        Target::Wsl {
+            distribution: "Ubuntu".into(),
+            user: None,
+        },
+    ] {
+        let mut tabs = crate::tui::tabs::live::Tabs::default();
+        let label = target.label();
+        for title in ["first", "second"] {
+            let mut tab = connected_tab(target.clone());
+            tab.title = format!("{label} · {title}");
+            tabs.add_remote(tab);
+        }
+        tabs.sync_remote_ui();
+        let active = tabs.active_remote.clone().unwrap();
+        assert_eq!(
+            tabs.remote[&active]
+                .state
+                .tabs
+                .iter()
+                .map(|tab| tab.title.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        let mut other = connected_tab(ssh("other"));
+        other.title = "SSH other · third".into();
+        let other = tabs.add_remote(other);
+        tabs.sync_remote_ui();
+        assert_eq!(
+            tabs.remote[&active].state.tabs[0].title,
+            format!("{label} · first")
+        );
+        tabs.remove_remote(&other);
+        tabs.active_remote = Some(active.clone());
+        tabs.sync_remote_ui();
+        assert_eq!(tabs.remote[&active].state.tabs[0].title, "first");
+        assert_eq!(tabs.remote[&active].title, format!("{label} · second"));
+        assert_eq!(
+            tabs.remote[&active].state.connection_label.as_deref(),
+            Some(label.as_str())
+        );
+    }
+}
+
+#[tokio::test]
+async fn connecting_targets_also_participate_in_tab_labels() {
+    use workspace::transport::Target;
+    let mut tabs = crate::tui::tabs::live::Tabs::default();
+    let mut local = connected_tab(Target::Local);
+    local.title = "本地 · project".into();
+    let local = tabs.add_remote(local);
+    let remote = tabs.add_remote(Tab::connecting(
+        Spec::parse("/ssh dev").unwrap(),
+        media::Context::default(),
+    ));
+    tabs.sync_remote_ui();
+    assert_eq!(tabs.remote[&local].state.tabs[0].title, "本地 · project");
+    assert_eq!(tabs.remote[&local].state.tabs[1].title, "SSH dev");
+    tabs.remove_remote(&remote);
+    tabs.active_remote = Some(local.clone());
+    tabs.sync_remote_ui();
+    assert_eq!(tabs.remote[&local].state.tabs[0].title, "project");
+}
+
 #[tokio::test]
 async fn resume_reuses_empty_tab_in_place_for_every_target() {
     use workspace::transport::{SshOptions, Target};
