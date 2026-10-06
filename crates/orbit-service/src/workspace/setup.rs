@@ -27,6 +27,7 @@ pub struct PreparedWorkspace {
 }
 
 pub struct WorkspaceResources {
+    pub policy: orbit_protocol::SessionPolicy,
     pub diagnostics: Vec<String>,
     pub web_client: std::sync::Arc<orbit_tools::web_fetch::WebClient>,
     pub cursor_trail: bool,
@@ -46,14 +47,23 @@ pub async fn prepare_workspace(
     directory: &std::path::Path,
     resume: Option<String>,
 ) -> Result<PreparedWorkspace> {
-    prepare(options, directory, resume, true).await
+    prepare(options, directory, resume, true, Default::default()).await
 }
 
+#[cfg(test)]
 pub(super) async fn prepare_service(
     options: &WorkspaceOptions,
     resume: Option<String>,
 ) -> Result<PreparedWorkspace> {
-    prepare(options, &options.initial_directory, resume, false).await
+    prepare_service_with_policy(options, resume, Default::default()).await
+}
+
+pub(super) async fn prepare_service_with_policy(
+    options: &WorkspaceOptions,
+    resume: Option<String>,
+    policy: orbit_protocol::SessionPolicy,
+) -> Result<PreparedWorkspace> {
+    prepare(options, &options.initial_directory, resume, false, policy).await
 }
 
 async fn prepare(
@@ -61,6 +71,7 @@ async fn prepare(
     directory: &std::path::Path,
     resume: Option<String>,
     shared: bool,
+    policy: orbit_protocol::SessionPolicy,
 ) -> Result<PreparedWorkspace> {
     let config = FileConfig::load(&options.config, &options.auth_directory)?;
     let model = config.default_model_option()?.qualified_name();
@@ -70,7 +81,7 @@ async fn prepare(
     } else {
         session::SessionState::open_in(options.database.clone(), resume, model, directory).await?
     };
-    let mut resources = prepare_workspace_resources(options, directory, &session).await?;
+    let mut resources = prepare_resources(options, directory, &session, policy).await?;
     let (saved_model, effort) = session.saved_model_profile();
     if let Some(choice) = resources
         .budget
@@ -96,6 +107,16 @@ pub async fn prepare_workspace_resources(
     directory: &std::path::Path,
     session: &session::SessionState,
 ) -> Result<WorkspaceResources> {
+    prepare_resources(options, directory, session, Default::default()).await
+}
+
+async fn prepare_resources(
+    options: &WorkspaceOptions,
+    directory: &std::path::Path,
+    session: &session::SessionState,
+    policy: orbit_protocol::SessionPolicy,
+) -> Result<WorkspaceResources> {
+    use orbit_protocol::Capability;
     let config_path = &options.config;
     let instructions = instructions::load_for(
         directory,
@@ -113,7 +134,11 @@ pub async fn prepare_workspace_resources(
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
-    let mcp = file_config.mcp.clone();
+    let mcp = if policy.disabled(Capability::Mcp) {
+        Default::default()
+    } else {
+        file_config.mcp.clone()
+    };
     let max_output_tokens = default_model.max_output_tokens;
     let model_name = default_model.qualified_name();
     let context_tokens = default_model.context_tokens;
@@ -122,12 +147,15 @@ pub async fn prepare_workspace_resources(
     let target_project = session.store.resolve_project(directory).await?;
     let enabled_plugins = session.store.project_plugins(&target_project.id).await?;
     let plugin_skill_roots = crate::marketplaces::enabled_skill_roots(&enabled_plugins);
-    let skills = skills::Skills::discover_with_plugin_roots(
+    let mut skills = skills::Skills::discover_with_plugin_roots(
         directory,
         options.home.clone(),
         options.config_home.clone(),
         plugin_skill_roots.roots,
     );
+    if policy.disabled(Capability::Skills) {
+        skills = Default::default();
+    }
     let undo_writer = runtime::workspace_writer(
         directory,
         config_path,
@@ -141,7 +169,7 @@ pub async fn prepare_workspace_resources(
         config_path,
         &options.auth_directory,
         Some(session.store.path()),
-        Some(approvals),
+        (!policy.read_only).then_some(approvals),
         command_limits,
         web,
         mcp,
@@ -164,18 +192,25 @@ pub async fn prepare_workspace_resources(
     history::register(&mut tools, session.store.clone(), memory_scope.clone());
     project_state::register(&mut tools, session.store.clone(), memory_scope.clone());
     skills.register_tool(&mut tools);
-    subagents::register(
-        &mut tools,
-        session.store.clone(),
-        session.id().into(),
-        config_path.clone(),
-        options.auth_directory.clone(),
-        instructions.clone(),
-        file_config.subagents.clone(),
-    )
-    .await?;
+    crate::chat::disable_chat_capabilities(&mut tools, &policy.disabled.iter().copied().collect());
+    if !policy.disabled(Capability::Subagents) {
+        subagents::register(
+            &mut tools,
+            session.store.clone(),
+            session.id().into(),
+            config_path.clone(),
+            options.auth_directory.clone(),
+            instructions.clone(),
+            file_config.subagents.clone(),
+        )
+        .await?;
+    }
+    if policy.disabled(Capability::Files) {
+        tools.remove("verification_status");
+    }
 
     Ok(WorkspaceResources {
+        policy,
         diagnostics,
         web_client: runtime.web_client,
         cursor_trail: file_config.tui.cursor_trail,
@@ -219,4 +254,65 @@ pub struct RequestBudget {
     pub model_options: Vec<ModelOption>,
     pub compaction: orbit_agent::compaction::CompactionRuntime,
     pub memory_scope: crate::project_state::MemoryScope,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orbit_protocol::{Capability, SessionPolicy};
+
+    #[tokio::test]
+    async fn service_policy_filters_tools_before_delegation_and_blocks_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("config.toml"), "default_provider = \"test\"\n[providers.test]\nbase_url = \"http://127.0.0.1:1/v1\"\napi_key = \"test\"\nauto_refresh_models = false\nmodels = [{ id = \"mock\" }]\n").unwrap();
+        let options = WorkspaceOptions {
+            initial_directory: root.into(),
+            config: root.join("config.toml"),
+            auth_directory: root.join("auth"),
+            database: root.join("sessions.db"),
+            allow_mcp_start: false,
+            home: None,
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        let setup = prepare_service_with_policy(
+            &options,
+            None,
+            SessionPolicy {
+                read_only: true,
+                disabled: vec![Capability::Web, Capability::Skills],
+            },
+        )
+        .await
+        .unwrap();
+        let tools = &setup.resources.tools;
+        assert!(tools.contains("read_file"));
+        for name in [
+            "write_file",
+            "edit_file",
+            "run_command",
+            "git_push",
+            "request_capability",
+            "web_fetch",
+            "web_search",
+            "load_skill",
+        ] {
+            assert!(!tools.contains(name), "unexpected tool: {name}");
+        }
+        assert!(!setup.resources.command_limits.sandbox);
+        drop(setup);
+        let setup = prepare_service_with_policy(
+            &options,
+            None,
+            SessionPolicy {
+                read_only: false,
+                disabled: vec![Capability::All],
+            },
+        )
+        .await
+        .unwrap();
+        assert!(setup.resources.tools.definitions().is_empty());
+    }
 }

@@ -32,13 +32,18 @@ pub(super) async fn start(
     let mut messages = session.snapshot.history.clone();
     crate::instructions::inject(&mut messages, &resources.budget.instructions);
     resources.budget.skills.inject(&mut messages);
-    crate::project_state::inject(
-        &mut messages,
-        &session.store,
-        &session.snapshot.session.project_id,
-        session.id(),
-    )
-    .await?;
+    if !resources
+        .policy
+        .disabled(orbit_protocol::Capability::ProjectState)
+    {
+        crate::project_state::inject(
+            &mut messages,
+            &session.store,
+            &session.snapshot.session.project_id,
+            session.id(),
+        )
+        .await?;
+    }
     let mut tools = resources.tools.clone();
     if !resources.model.supports_vision() {
         tools.remove("read_image");
@@ -51,6 +56,10 @@ pub(super) async fn start(
     anyhow::ensure!(
         uploads.is_empty() || resources.model.supports_vision(),
         "selected model does not support images"
+    );
+    anyhow::ensure!(
+        uploads.is_empty() || !resources.policy.disabled(orbit_protocol::Capability::Image),
+        "image capability is disabled"
     );
     let assets = orbit_tools::image_assets::ImageAssets::for_database(session.store.path());
     let attachments =

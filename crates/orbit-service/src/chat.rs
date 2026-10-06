@@ -70,38 +70,7 @@ impl ChatMode {
     }
 }
 
-/// Capability categories omitted from both tool registration and model requests.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum ChatCapability {
-    /// Every optional tool group below.
-    All,
-    /// Independent read-only delegated sessions.
-    Subagents,
-    /// web_search and web_fetch.
-    Web,
-    /// Configured local MCP processes and their tools.
-    Mcp,
-    /// Installed skill catalogue and load_skill.
-    Skills,
-    /// Native image attachments and read_image.
-    Image,
-    /// read_document.
-    Document,
-    /// read_file, list_files, search_text and project_overview.
-    Files,
-    /// git_inspect and git_export_patch.
-    Git,
-    /// write_file and edit_file.
-    Write,
-    /// request_capability for paths outside the workspace.
-    Capability,
-    /// run_command, read_command_output, verification_status and export_artifact.
-    Command,
-    /// Archived context retrieval and tool-output pruning.
-    History,
-    /// task and durable-memory tools.
-    ProjectState,
-}
+pub use orbit_protocol::Capability as ChatCapability;
 
 fn capability_is_disabled(disabled: &BTreeSet<ChatCapability>, capability: ChatCapability) -> bool {
     disabled.contains(&ChatCapability::All) || disabled.contains(&capability)
@@ -446,6 +415,10 @@ pub(crate) fn disable_chat_capabilities(
     tools: &mut orbit_agent::tool::ToolRegistry,
     disabled: &BTreeSet<ChatCapability>,
 ) {
+    if disabled.contains(&ChatCapability::All) {
+        tools.remove_prefix("");
+        return;
+    }
     if capability_is_disabled(disabled, ChatCapability::Subagents) {
         for name in [
             "spawn_agent",
@@ -498,6 +471,7 @@ pub(crate) fn disable_chat_capabilities(
     if capability_is_disabled(disabled, ChatCapability::Git) {
         tools.remove("git_inspect");
         tools.remove("git_export_patch");
+        tools.remove("git_push");
     }
 
     if capability_is_disabled(disabled, ChatCapability::Write) {

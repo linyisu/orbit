@@ -24,6 +24,7 @@ impl Opened {
         let configuration = connection.configuration().await?;
         let Response::Opened(info) = client
             .request(Request::Open {
+                policy: Default::default(),
                 resume,
                 configuration,
             })

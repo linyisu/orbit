@@ -42,6 +42,7 @@ pub async fn connect(
     }
     let Response::Opened(info) = client
         .request(Request::Open {
+            policy: Default::default(),
             resume: args.resume,
             configuration: connection.configuration().await?,
         })

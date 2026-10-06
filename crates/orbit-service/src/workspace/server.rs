@@ -327,6 +327,7 @@ impl Service {
         match request {
             Request::Hello { .. } => bail!("workspace handshake already completed"),
             Request::Open {
+                policy,
                 resume,
                 configuration,
             } => {
@@ -338,6 +339,10 @@ impl Service {
                 if let Some(id) = &resume
                     && let Some(handle) = self.sessions.lock().await.get(id)
                 {
+                    ensure!(
+                        handle.policy == policy,
+                        "open session has a different capability policy"
+                    );
                     return Ok(Response::Opened(handle.current_info().await));
                 }
                 ensure!(
@@ -354,7 +359,8 @@ impl Service {
                 let options = configuration
                     .as_ref()
                     .map_or(&self.options, |configuration| &configuration.options);
-                let mut setup = super::setup::prepare_service(options, resume).await?;
+                let mut setup =
+                    super::setup::prepare_service_with_policy(options, resume, policy).await?;
                 let saved = setup.session.snapshot.session.model.clone();
                 if let Some(model) = setup
                     .resources

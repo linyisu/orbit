@@ -46,12 +46,19 @@ pub(super) fn apply(
     name: &str,
     effort: Option<ReasoningEffort>,
 ) -> Result<()> {
-    let selected = resources
+    let candidates = resources
         .budget
         .model_options
         .iter()
-        .find(|option| option.qualified_name() == name)
-        .ok_or_else(|| anyhow::anyhow!("model is not configured: {name}"))?;
+        .filter(|option| {
+            option.qualified_name() == name || (!name.contains("::") && option.model == name)
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        candidates.len() == 1,
+        "model is missing or ambiguous; use provider::model: {name}"
+    );
+    let selected = candidates[0];
     ensure!(
         effort.is_none_or(|effort| selected.reasoning_efforts.contains(&effort)),
         "reasoning effort is not supported by this model"

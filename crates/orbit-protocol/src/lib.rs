@@ -36,6 +36,8 @@ pub enum Request {
         version: u32,
     },
     Open {
+        #[serde(default)]
+        policy: SessionPolicy,
         resume: Option<String>,
         #[serde(default)]
         configuration: Option<Configuration>,
@@ -227,6 +229,7 @@ mod tests {
             write(
                 &mut writer,
                 &Request::Open {
+                    policy: Default::default(),
                     configuration: None,
                     resume: Some("中文\n会话".into()),
                 },
@@ -357,6 +360,7 @@ pub enum SessionAction {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "section", rename_all = "snake_case")]
 pub enum Inspection {
+    ExportPatch,
     Status,
     Context,
     Skills,
@@ -370,4 +374,53 @@ pub enum Inspection {
 pub struct Report {
     pub title: String,
     pub text: String,
+}
+/// Capability categories omitted from both tool registration and model requests.
+#[derive(
+    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    /// Every optional tool group below.
+    All,
+    /// Independent read-only delegated sessions.
+    Subagents,
+    /// web_search and web_fetch.
+    Web,
+    /// Configured local MCP processes and their tools.
+    Mcp,
+    /// Installed skill catalogue and load_skill.
+    Skills,
+    /// Native image attachments and read_image.
+    Image,
+    /// read_document.
+    Document,
+    /// read_file, list_files, search_text and project_overview.
+    Files,
+    /// git_inspect and git_export_patch.
+    Git,
+    /// write_file and edit_file.
+    Write,
+    /// request_capability for paths outside the workspace.
+    Capability,
+    /// run_command, read_command_output, verification_status and export_artifact.
+    Command,
+    /// Archived context retrieval and tool-output pruning.
+    History,
+    /// task and durable-memory tools.
+    ProjectState,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionPolicy {
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub disabled: Vec<Capability>,
+}
+
+impl SessionPolicy {
+    pub fn disabled(&self, capability: Capability) -> bool {
+        self.disabled.contains(&Capability::All) || self.disabled.contains(&capability)
+    }
 }

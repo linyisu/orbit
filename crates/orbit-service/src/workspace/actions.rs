@@ -27,7 +27,7 @@ pub(super) async fn execute(
                 .skills
                 .get(&name)
                 .ok_or_else(|| anyhow::anyhow!("未找到 Skill {name:?}"))?;
-            let content = tokio::fs::read_to_string(&skill.path).await?;
+            let content = crate::skills::read_skill(&skill.path).map_err(anyhow::Error::msg)?;
             let command = skill.command.clone();
             let message = ChatMessage::user(format!(
                 "请在后续工作中使用已载入的 Skill /{}：\n{content}",
@@ -51,6 +51,12 @@ async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> Result<Repor
     let resources = &setup.resources;
     let budget = &resources.budget;
     Ok(match section {
+        Inspection::ExportPatch => report(
+            "Git patch",
+            orbit_tools::git_inspect::working_tree_patch(std::path::Path::new(
+                &session.snapshot.session.workspace,
+            ))?,
+        ),
         Inspection::Skills => report("Skills", budget.skills.render()),
         Inspection::Mcp => report(
             "MCP 状态",

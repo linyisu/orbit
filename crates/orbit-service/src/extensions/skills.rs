@@ -286,7 +286,7 @@ fn discover_directory(directory: &Path, source: SkillSource) -> Vec<Skill> {
         .collect()
 }
 
-fn read_skill(path: &Path) -> Result<String, String> {
+pub(crate) fn read_skill(path: &Path) -> Result<String, String> {
     let metadata =
         fs::symlink_metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
 

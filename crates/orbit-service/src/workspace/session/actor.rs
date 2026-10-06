@@ -333,6 +333,10 @@ impl Actor {
     }
 
     async fn undo(&mut self, path: Option<String>) -> Result<()> {
+        ensure!(
+            !self.setup.resources.policy.read_only,
+            "read-only sessions cannot undo files"
+        );
         ensure!(!self.busy(), "请在当前任务结束后撤销文件写入");
         let change = self
             .setup

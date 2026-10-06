@@ -15,6 +15,7 @@ pub struct Handle {
     pub(super) questions: super::questions::Questions,
     _configuration: Option<super::configuration::Installed>,
     pub info: SessionInfo,
+    pub policy: orbit_protocol::SessionPolicy,
     pub view: Arc<Mutex<View>>,
     requests: mpsc::Sender<Envelope>,
     pub workspace: orbit_runtime::filesystem::Workspace,
@@ -149,6 +150,7 @@ impl Handle {
             eprintln!("{diagnostic}");
         }
         let info = super::profile::describe(&setup);
+        let policy = setup.resources.policy.clone();
         let mut view = View {
             updates: Vec::new(),
             busy: false,
@@ -183,6 +185,7 @@ impl Handle {
             questions,
             _configuration: configuration,
             info,
+            policy,
             view,
             requests,
             workspace,
