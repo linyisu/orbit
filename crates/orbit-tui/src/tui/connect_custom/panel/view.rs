@@ -180,7 +180,7 @@ pub(super) fn draw(
             }
         } else {
             let width = if matches!(row.target, Some(Target::Action(Action::Toggle(_)))) {
-                rect.width.saturating_sub(18)
+                rect.width.saturating_sub(10)
             } else {
                 rect.width
             };
@@ -207,33 +207,29 @@ pub(super) fn draw(
                 hits.push((hit, target));
             }
             if let Some(Target::Action(Action::Toggle(i))) = row.target {
-                for (label, action, back) in [
-                    ("设置", Action::Expand(i), 16),
-                    ("默认", Action::Default(i), 8),
-                ] {
-                    let mut button = Rect::new(
-                        rect.x + rect.width.saturating_sub(back),
-                        rect.y,
-                        6.min(rect.width),
-                        1,
-                    )
-                    .intersection(rect);
-                    let label = crate::tui::render::padded_label(label, button.width as usize, 1);
-                    button.width = label.width() as u16;
-                    let active = panel.pointer.is_some_and(|p| button.contains(p))
-                        || panel.pointer.is_none() && panel.focus == Target::Action(action);
-                    frame.render_widget(
-                        Paragraph::new(label).style(if active {
-                            Style::default()
-                                .fg(crate::tui::theme::THEME.on_accent)
-                                .bg(ACCENT)
-                        } else {
-                            Style::default().fg(ACCENT)
-                        }),
-                        button,
-                    );
-                    hits.push((button, Target::Action(action)));
-                }
+                let action = Action::Expand(i);
+                let mut button = Rect::new(
+                    rect.x + rect.width.saturating_sub(8),
+                    rect.y,
+                    6.min(rect.width),
+                    1,
+                )
+                .intersection(rect);
+                let label = crate::tui::render::padded_label("设置", button.width as usize, 1);
+                button.width = label.width() as u16;
+                let active = panel.pointer.is_some_and(|p| button.contains(p))
+                    || panel.pointer.is_none() && panel.focus == Target::Action(action);
+                frame.render_widget(
+                    Paragraph::new(label).style(if active {
+                        Style::default()
+                            .fg(crate::tui::theme::THEME.on_accent)
+                            .bg(ACCENT)
+                    } else {
+                        Style::default().fg(ACCENT)
+                    }),
+                    button,
+                );
+                hits.push((button, Target::Action(action)));
             }
         }
     }

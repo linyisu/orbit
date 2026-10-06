@@ -37,7 +37,6 @@ enum Action {
     All,
     Toggle(usize),
     Expand(usize),
-    Default(usize),
     Effort(usize, usize),
     Save,
     Cancel,
@@ -68,7 +67,6 @@ struct Panel {
     query: Field,
     models: Vec<ModelDraft>,
     expanded: Option<usize>,
-    default: Option<usize>,
     focus: Target,
     offset: usize,
     pointer: Option<Position>,
@@ -88,7 +86,6 @@ impl Panel {
             query: Field::text("筛选模型", "", "搜索模型"),
             models: Vec::new(),
             expanded: None,
-            default: None,
             focus: Target::Field(FieldId::Service(0)),
             offset: 0,
             pointer: None,
@@ -99,7 +96,6 @@ impl Panel {
         for profile in &draft.models {
             panel.add(profile.clone(), true);
         }
-        panel.default = (!panel.models.is_empty()).then_some(0);
 
         Ok(panel)
     }
@@ -182,18 +178,13 @@ impl Panel {
             let model = &self.models[i];
             rows.push(Row {
                 label: format!(
-                    "{} {}{}",
+                    "{} {}",
                     icons::checkbox(model.entry.enabled),
                     if model.fields[0].value().is_empty() {
                         "新模型"
                     } else {
                         model.fields[0].value()
                     },
-                    if self.default == Some(i) {
-                        " · 默认"
-                    } else {
-                        ""
-                    }
                 ),
                 target: Some(Target::Action(Action::Toggle(i))),
                 indent: 0,
@@ -285,7 +276,6 @@ impl Panel {
 
                 if let Target::Action(Action::Toggle(i)) = target {
                     targets.push((line, Target::Action(Action::Expand(i))));
-                    targets.push((line, Target::Action(Action::Default(i))));
                 }
             }
         }
@@ -408,12 +398,7 @@ impl Panel {
 
     fn apply_models(&self, draft: &mut ConnectionDraft) -> Result<()> {
         let mut profiles = Vec::new();
-        for (i, entry) in self
-            .models
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| m.entry.enabled)
-        {
+        for entry in self.models.iter().filter(|model| model.entry.enabled) {
             let mut profile = model::read(
                 &entry.fields,
                 &entry.entry.profile,
@@ -427,17 +412,14 @@ impl Panel {
                 draft.format,
             )?;
             ensure!(
-                !profiles
-                    .iter()
-                    .any(|(_, p): &(usize, ModelProfile)| p.id == profile.id),
+                !profiles.iter().any(|p: &ModelProfile| p.id == profile.id),
                 "模型 ID 重复：{}",
                 profile.id
             );
-            profiles.push((i, profile));
+            profiles.push(profile);
         }
 
-        profiles.sort_by_key(|(i, _)| Some(*i) != self.default);
-        draft.models = profiles.into_iter().map(|(_, p)| p).collect();
+        draft.models = profiles;
 
         Ok(())
     }
@@ -576,11 +558,6 @@ pub(super) async fn run(
 
                 Action::Effort(i, j) => panel.toggle_effort(i, j),
                 Action::Toggle(i) => panel.models[i].entry.enabled = !panel.models[i].entry.enabled,
-                Action::Default(i) => {
-                    panel.default = Some(i);
-                    panel.models[i].entry.enabled = true;
-                }
-
                 Action::All => {
                     let enabled = panel.models.iter().any(|m| {
                         !m.entry.enabled

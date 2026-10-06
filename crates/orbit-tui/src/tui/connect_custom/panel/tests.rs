@@ -17,7 +17,7 @@ fn setup() -> (tempfile::TempDir, ConnectionDraft, Panel) {
 }
 
 #[test]
-fn inline_edits_survive_collapsing_filtering_and_default_change() {
+fn inline_edits_survive_collapsing_and_filtering() {
     let (directory, mut draft, mut panel) = setup();
     panel.add(model::blank("first"), true);
     panel.add(model::blank("second"), true);
@@ -28,14 +28,14 @@ fn inline_edits_survive_collapsing_filtering_and_default_change() {
 
     panel.expanded = Some(1);
     panel.query.input.set("second".into());
-    panel.default = Some(1);
     panel.service_draft(&mut draft).unwrap();
     panel.apply_models(&mut draft).unwrap();
 
-    assert_eq!(draft.models[0].id, "second");
-    assert_eq!(draft.models[1].max_output_tokens, Some(4096));
-    assert_eq!(draft.models[1].context_tokens, Some(65536));
-    assert_eq!(draft.models[1].supports_vision, Some(true));
+    assert_eq!(draft.models[0].id, "first");
+    assert_eq!(draft.models[1].id, "second");
+    assert_eq!(draft.models[0].max_output_tokens, Some(4096));
+    assert_eq!(draft.models[0].context_tokens, Some(65536));
+    assert_eq!(draft.models[0].supports_vision, Some(true));
     assert!(!directory.path().join("config.toml").exists());
 }
 
