@@ -1,6 +1,6 @@
 //! Application services for configuration, sessions, tools and workspace execution.
 
-pub mod chat;
+mod policy;
 pub use orbit_config::config;
 pub mod context;
 pub mod execution;

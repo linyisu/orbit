@@ -344,7 +344,7 @@ impl Service {
                     .as_deref()
                     .or(role_model)
                     .unwrap_or(&parent.model);
-                let mut model = crate::chat::select_chat_model(&config, Some(requested))?;
+                let mut model = crate::policy::select_model(&config, Some(requested))?;
                 let inherited = if args.model.is_none() && role_model.is_none() {
                     parent
                         .reasoning_effort
@@ -458,7 +458,7 @@ impl Service {
                 let config =
                     crate::config::FileConfig::load(&self.config_path, &self.auth_directory)?;
                 let session = self.store.session(&agent.id).await?;
-                let mut model = crate::chat::select_chat_model(&config, Some(&session.model))?;
+                let mut model = crate::policy::select_model(&config, Some(&session.model))?;
                 if let Some(effort) = session
                     .reasoning_effort
                     .as_deref()

@@ -192,7 +192,7 @@ async fn prepare_resources(
     history::register(&mut tools, session.store.clone(), memory_scope.clone());
     project_state::register(&mut tools, session.store.clone(), memory_scope.clone());
     skills.register_tool(&mut tools);
-    crate::chat::disable_chat_capabilities(&mut tools, &policy.disabled.iter().copied().collect());
+    crate::policy::filter_tools(&mut tools, &policy.disabled.iter().copied().collect());
     if !policy.disabled(Capability::Subagents) {
         subagents::register(
             &mut tools,

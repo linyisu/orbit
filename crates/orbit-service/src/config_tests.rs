@@ -2,8 +2,8 @@ use orbit_agent::tool::{ClosureTool, ToolRegistry};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::chat::{ChatCapability, disable_chat_capabilities, select_chat_model};
 use crate::config::FileConfig;
+use crate::policy::{Capability, filter_tools, select_model};
 
 #[tokio::test]
 async fn project_resources_follow_the_destination_without_changing_process_cwd() {
@@ -180,17 +180,17 @@ fn chat_capability_filter_removes_groups_before_request_assembly() {
     }
 
     let disabled = [
-        ChatCapability::Files,
-        ChatCapability::Web,
-        ChatCapability::Mcp,
-        ChatCapability::ProjectState,
-        ChatCapability::History,
-        ChatCapability::Capability,
+        Capability::Files,
+        Capability::Web,
+        Capability::Mcp,
+        Capability::ProjectState,
+        Capability::History,
+        Capability::Capability,
     ]
     .into_iter()
     .collect();
 
-    disable_chat_capabilities(&mut tools, &disabled);
+    filter_tools(&mut tools, &disabled);
 
     assert!(!tools.contains("read_file"));
     assert!(!tools.contains("project_overview"));
@@ -221,7 +221,7 @@ fn disabled_commands_hide_audit_and_export_tools() {
         ));
     }
 
-    disable_chat_capabilities(&mut tools, &[ChatCapability::Command].into_iter().collect());
+    filter_tools(&mut tools, &[Capability::Command].into_iter().collect());
 
     assert!(tools.definitions().is_empty());
 }
@@ -239,7 +239,7 @@ fn disabled_git_hides_patch_export_as_well_as_inspection() {
         ));
     }
 
-    disable_chat_capabilities(&mut tools, &[ChatCapability::Git].into_iter().collect());
+    filter_tools(&mut tools, &[Capability::Git].into_iter().collect());
 
     assert!(tools.definitions().is_empty());
 }
@@ -266,16 +266,16 @@ id = "shared"
     .unwrap();
 
     assert_eq!(
-        select_chat_model(&config, Some("two::shared"))
+        select_model(&config, Some("two::shared"))
             .unwrap()
             .qualified_name(),
         "two::shared"
     );
     assert_eq!(
-        select_chat_model(&config, Some("one-only"))
+        select_model(&config, Some("one-only"))
             .unwrap()
             .qualified_name(),
         "one::one-only"
     );
-    assert!(select_chat_model(&config, Some("shared")).is_err());
+    assert!(select_model(&config, Some("shared")).is_err());
 }
