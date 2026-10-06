@@ -741,6 +741,21 @@ models = [{{ id = "mock" }}, {{ id = "other" }}]
         completion["value"]["entries"][0]["display"],
         "next project/"
     );
+    for name in ["Tests", "Templates", "T_e_s"] {
+        std::fs::create_dir(root.join(name)).unwrap();
+    }
+    let completion = client
+        .request(json!({"method":"complete","session":id,"input":"/cd ~/Tes"}))
+        .await;
+    assert_eq!(
+        completion["value"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["display"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["Tests/", "Templates/", "T_e_s/"]
+    );
     for request in [
         json!({"method":"set_mode","session":id,"mode":"ask"}),
         json!({"method":"set_model","session":id,"model":"test::other","effort":null}),

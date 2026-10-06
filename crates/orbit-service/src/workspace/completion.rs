@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use orbit_protocol::Completion;
+use orbit_protocol::{Completion, search};
 use orbit_store::store::Store;
 
 pub(super) async fn complete(
@@ -64,19 +64,22 @@ pub(super) async fn complete(
         _ => Vec::new(),
     };
     let query = argument.trim().to_lowercase();
-    let mut entries: Vec<_> = values
-        .into_iter()
-        .filter(|(value, description)| {
-            value.to_lowercase().contains(&query) || description.to_lowercase().contains(&query)
-        })
-        .map(|(value, description)| Completion {
-            name: format!("{prefix} {value}"),
-            display: None,
-            description,
-            continue_input: false,
-        })
-        .collect();
-    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut values = values;
+    values.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut entries: Vec<_> = search::ranked(values, |(value, description)| {
+        search::rank(value, &query)
+            .into_iter()
+            .chain(search::rank(description, &query))
+            .min()
+    })
+    .into_iter()
+    .map(|(value, description)| Completion {
+        name: format!("{prefix} {value}"),
+        display: None,
+        description,
+        continue_input: false,
+    })
+    .collect();
     entries.dedup_by(|left, right| left.name == right.name);
     entries.truncate(100);
     Ok(entries)
@@ -113,13 +116,13 @@ fn directories(workspace: &Path, home: Option<&Path>, argument: &str) -> Result<
         .filter(|name| {
             (!name.starts_with('.') || partial.starts_with('.'))
                 && !name.chars().any(char::is_control)
-                && name.to_lowercase().contains(&partial.to_lowercase())
         })
         .collect();
     if prefix.is_empty() && "..".starts_with(partial) {
         names.push("..".into());
     }
     names.sort();
+    let mut names = search::ranked(names, |name| search::rank(name, partial));
     names.truncate(100);
     Ok(names
         .into_iter()
@@ -164,5 +167,37 @@ mod tests {
                 .as_deref(),
             Some(".hidden/")
         );
+    }
+
+    #[test]
+    fn directories_rank_prefix_substring_and_subsequence_before_limiting_results() {
+        let root = tempfile::tempdir().unwrap();
+        for name in [
+            "Tests",
+            "ATests",
+            "Templates",
+            "T_e_s",
+            ".Tests",
+            "unrelated",
+        ] {
+            std::fs::create_dir(root.path().join(name)).unwrap();
+        }
+        for input in ["tes", "~/Tes", "'~/TES"] {
+            let entries = directories(root.path(), Some(root.path()), input).unwrap();
+            assert_eq!(
+                entries
+                    .iter()
+                    .map(|entry| entry.display.as_deref().unwrap())
+                    .collect::<Vec<_>>(),
+                ["Tests/", "ATests/", "Templates/", "T_e_s/"]
+            );
+            assert_eq!(shlex::split(&entries[0].name).unwrap().len(), 2);
+        }
+        for index in 0..110 {
+            std::fs::create_dir(root.path().join(format!("ATests{index:03}"))).unwrap();
+        }
+        let entries = directories(root.path(), None, "tes").unwrap();
+        assert_eq!(entries.len(), 100);
+        assert_eq!(entries[0].display.as_deref(), Some("Tests/"));
     }
 }

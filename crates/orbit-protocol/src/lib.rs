@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod plugins;
 pub mod project;
+pub mod search;
 
 use std::io;
 
