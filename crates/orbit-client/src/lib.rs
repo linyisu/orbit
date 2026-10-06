@@ -13,6 +13,7 @@ pub mod prompt;
 pub mod protocol;
 pub mod pump;
 pub mod transport;
+pub mod windows;
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail};
@@ -38,6 +39,23 @@ pub struct ConnectionOptions {
     /// Upload a Linux Orbit binary matching the target architecture.
     pub upload_server: Option<PathBuf>,
     pub allow_mcp_start: bool,
+}
+
+impl ConnectionOptions {
+    pub fn local(workspace: String) -> Self {
+        Self {
+            ssh: None,
+            ssh_user: None,
+            ssh_port: None,
+            identity: None,
+            wsl: None,
+            wsl_user: None,
+            workspace,
+            server: None,
+            upload_server: None,
+            allow_mcp_start: false,
+        }
+    }
 }
 
 pub async fn prepare_connection(
@@ -112,7 +130,15 @@ pub async fn prepare_connection(
         executable,
         config,
         database,
-        auth_dir,
+        auth_dir: if args.ssh.is_none() && args.wsl.is_none() {
+            Some(orbit_auth::directory(
+                auth_dir,
+                std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+                std::env::var_os("HOME").map(PathBuf::from),
+            )?)
+        } else {
+            auth_dir
+        },
         allow_mcp_start: args.allow_mcp_start,
         unattended,
         interactive,
