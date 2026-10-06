@@ -21,8 +21,17 @@ impl Opened {
         let mut client = connection.connect_progress(Some(&progress)).await?;
         progress.report("已完成握手，正在打开工作区会话");
         progress.report("应用本地配置并打开工作区会话");
+        let desired_model = resume
+            .is_none()
+            .then(|| {
+                connection
+                    .local_configuration
+                    .as_ref()
+                    .and_then(|local| local.model.clone())
+            })
+            .flatten();
         let configuration = connection.configuration().await?;
-        let Response::Opened(info) = client
+        let Response::Opened(mut info) = client
             .request(Request::Open {
                 policy: Default::default(),
                 resume,
@@ -32,6 +41,29 @@ impl Opened {
         else {
             anyhow::bail!("unexpected workspace response");
         };
+        if let Some(model) = desired_model.filter(|model| model != &info.model) {
+            let response = client
+                .request(Request::SetModel {
+                    session: info.id.clone(),
+                    model,
+                    effort: None,
+                })
+                .await?;
+            if !matches!(response, Response::Ok) {
+                anyhow::bail!("model selection was not confirmed");
+            }
+            let Response::Opened(updated) = client
+                .request(Request::Open {
+                    policy: Default::default(),
+                    resume: Some(info.id.clone()),
+                    configuration: None,
+                })
+                .await?
+            else {
+                anyhow::bail!("workspace profile missing");
+            };
+            info = updated;
+        }
         let opened = Self {
             client,
             connection,

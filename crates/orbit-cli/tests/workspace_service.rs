@@ -74,6 +74,19 @@ impl Drop for Client {
 }
 
 async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
+    mock_tool_model(
+        "write_file",
+        json!({"path":"result.txt","content":"written remotely"}),
+        None,
+    )
+    .await
+}
+
+async fn mock_tool_model(
+    name: &'static str,
+    arguments: Value,
+    expected: Option<&'static str>,
+) -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
@@ -110,8 +123,19 @@ async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
             }
             assert_eq!(request["stream"], true);
             let delta = if index == 0 {
-                json!({"tool_calls":[{"index":0,"id":"write","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"result.txt\",\"content\":\"written remotely\"}"}}]})
+                json!({"tool_calls":[{"index":0,"id":"write","type":"function","function":{"name":name,"arguments":arguments.to_string()}}]})
             } else {
+                if let Some(expected) = expected {
+                    assert!(
+                        request["messages"].as_array().unwrap().iter().any(
+                            |message| message["role"] == "tool"
+                                && message["content"]
+                                    .as_str()
+                                    .is_some_and(|text| text.contains(expected))
+                        ),
+                        "tool result missing expected output"
+                    );
+                }
                 json!({"content":"任务完成。"})
             };
             let finish = if index == 0 { "tool_calls" } else { "stop" };
@@ -698,10 +722,161 @@ models = [{ id = "mock" }, { id = "other" }]
             .iter()
             .any(|session| session["id"] == id)
     );
+    let store = orbit_store::store::Store::open(root.join("sessions.db"))
+        .await
+        .unwrap();
+    let legacy_window = store.open_tui_window().await.unwrap();
+    legacy_window.update(vec![id.clone()]).await.unwrap();
+    legacy_window.close().await.unwrap();
+    let restored = client.request(json!({"method":"restore_sessions"})).await;
+    assert!(
+        restored["value"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["id"] == id),
+        "{restored}"
+    );
     let deletion = client
         .request(json!({"method":"admin","action":{"action":"delete_session","id":id}}))
         .await;
     assert_eq!(deletion["type"], "report", "{deletion}");
+    assert_eq!(
+        client.request(json!({"method":"shutdown"})).await["type"],
+        "ok"
+    );
+}
+
+#[tokio::test]
+async fn native_execution_and_model_inheritance_use_the_packaged_local_service() {
+    use orbit_client::{
+        configuration::Local,
+        connect::Opened,
+        interaction,
+        transport::{Connection, Target},
+    };
+    use orbit_protocol::{Mode, Request, Response};
+    use std::sync::Arc;
+    if std::env::var_os("ORBIT_TEST_REQUIRE_NO_SANDBOX").is_some() {
+        assert!(!Path::new("/usr/bin/bwrap").exists());
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let (url, model) = mock_tool_model(
+        "run_command",
+        json!({"command":"echo native-command-ok; pwd"}),
+        Some("native-command-ok"),
+    )
+    .await;
+    let config = root.join("config.toml");
+    std::fs::write(&config, format!("default_provider = \"test\"\n[providers.test]\nbase_url = \"{url}\"\napi_key = \"test-only\"\nauto_refresh_models = false\nmodels = [{{ id = \"first\" }}, {{ id = \"selected\" }}]\n")).unwrap();
+    let auth = root.join("auth");
+    let connection = Arc::new(Connection {
+        local_configuration: Some(Local {
+            config: config.clone(),
+            auth: auth.clone(),
+            model: Some("test::selected".into()),
+        }),
+        target: Target::Local,
+        workspace: root.to_string_lossy().into(),
+        executable: env!("ORBIT_EMBEDDED_SERVER").into(),
+        config,
+        database: Some(root.join("sessions.db")),
+        auth_dir: Some(auth),
+        allow_mcp_start: false,
+        unattended: true,
+        interactive: None,
+    });
+    let mut opened = Opened::connect_progress(connection, None, interaction::channel().0)
+        .await
+        .unwrap();
+    assert_eq!(opened.info.model, "test::selected");
+    let id = opened.info.id.clone();
+    assert!(matches!(
+        opened
+            .client
+            .request(Request::Start {
+                session: id.clone(),
+                request_id: "native-command".into(),
+                prompt: "execute command".into(),
+                images: vec![],
+                compact: false,
+                mode: Mode::Yolo,
+                model: None
+            })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let Response::Page(page) = opened
+                .client
+                .request(Request::Poll {
+                    session: id.clone(),
+                    after: 0,
+                })
+                .await
+                .unwrap()
+            else {
+                panic!("expected events")
+            };
+            if !page.busy {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    model.await.unwrap();
+    let store = orbit_store::store::Store::open(root.join("sessions.db"))
+        .await
+        .unwrap();
+    let snapshot = store.load(&id).await.unwrap();
+    let history = serde_json::to_string(&snapshot.history).unwrap();
+    assert!(history.contains("native-command-ok"));
+    assert!(history.contains(root.to_str().unwrap()));
+    assert!(matches!(
+        opened.client.request(Request::Shutdown).await.unwrap(),
+        Response::Ok
+    ));
+}
+
+#[tokio::test]
+async fn native_execution_refuses_an_explicit_unavailable_sandbox() {
+    if orbit_runtime::execution::capabilities::check_sandbox()
+        .await
+        .is_ok()
+    {
+        assert!(
+            std::env::var_os("ORBIT_TEST_REQUIRE_NO_SANDBOX").is_none(),
+            "this CI scenario must not provide a sandbox"
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("config.toml"),
+        r#"default_provider = "test"
+[command]
+sandbox = true
+[providers.test]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "test-only"
+auto_refresh_models = false
+models = [{ id = "mock" }]
+"#,
+    )
+    .unwrap();
+    let mut client = Client::connect(root).await;
+    let opened = client.request(json!({"method":"open"})).await;
+    assert_eq!(opened["type"], "error", "{opened}");
+    assert!(
+        opened["value"].as_str().unwrap().contains("sandbox"),
+        "{opened}"
+    );
     assert_eq!(
         client.request(json!({"method":"shutdown"})).await["type"],
         "ok"
