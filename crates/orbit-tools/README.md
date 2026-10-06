@@ -143,10 +143,10 @@
 #### `web_fetch`
 - **功能**：直接获取公网已知 URL 的网页正文并转为结构化 Markdown。
 - **约束与安全**：
-  - 仅开放公网 80/443 端口，严格防范 SSRF，严禁访问内网及保留地址。
+  - 默认访问公网 80/443；`[web].allowed_origins` 可授权精确的 HTTP(S) 来源，例如 `http://docs.internal:8080`。协议、主机和端口必须匹配，重定向的每一跳分别验证。
   - 自动沿用启动环境的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 与 `NO_PROXY`（均支持小写），复用 Hyper 的标准匹配规则，支持 HTTP(S) 与 SOCKS 代理；没有匹配代理时直连并校验 DNS。`[web].proxy` 可显式指定 HTTP(S) 代理，优先于环境变量和 `NO_PROXY`，无需为已有代理环境重复设置。
-  - 网页、搜索、网络图片与浏览器回退共用 `WebClient` 路由，每次重定向重新匹配。代理承担目标域名解析及出口限制；网页结果用 `trusted_proxy_resolved` 标明这一边界。内网字面地址、私有主机名和危险重定向仍被拒绝，代理凭据不进入调试输出与错误信息。
-  - 当遇到 Cloudflare 浏览器挑战且当前路由有可用的无认证 HTTP 代理时，可使用独立 Bubblewrap 沙箱中的无头 Firefox 提取正文，仅挂载系统文件与临时 profile，进程退出/取消时 PID 命名空间一并清理。
+  - 网页、搜索、网络图片与浏览器回退共用 `WebClient` 路由，每次重定向重新匹配。代理承担目标域名解析及出口限制；网页结果用 `trusted_proxy_resolved` 标明这一边界。未授权的内网地址、私有主机名和危险重定向被拒绝，代理凭据不进入调试输出与错误信息。
+  - 当遇到 Cloudflare 浏览器挑战且当前路由有可用的无认证 HTTP 代理时，可使用无头 Firefox 和独立临时 profile 提取正文。`[command].sandbox = true` 时应用 Bubblewrap 隔离；显式授权的内部来源使用直接 HTTP 获取。
   - 单次响应体上限 2 MiB，总超时 60 秒，最多 5 次重定向；按 Unicode 字符分页。
 
 #### `web_search`

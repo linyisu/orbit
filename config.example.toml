@@ -13,6 +13,7 @@ default_provider = "deepseek"
 # 通常无需额外配置。仅在需要覆盖环境代理时启用下方配置（端口按实际设置）。
 # [web]
 # proxy = "http://127.0.0.1:7897"
+# allowed_origins = ["http://docs.internal:8080", "http://127.0.0.1:3000"]
 
 # 子 Agent：explore/review 只读；develop 默认使用独立 Git worktree，继承父会话审批。
 [subagents]

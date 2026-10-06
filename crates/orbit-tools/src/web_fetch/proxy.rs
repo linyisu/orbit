@@ -10,6 +10,7 @@ use super::*;
 #[derive(Clone)]
 pub struct WebClient {
     pub(super) sandbox: bool,
+    pub(super) allowed_origins: Vec<String>,
     explicit: Option<ProxyRoute>,
     automatic: Arc<Matcher>,
 }
@@ -32,6 +33,7 @@ impl Default for WebClient {
     fn default() -> Self {
         Self {
             sandbox: false,
+            allowed_origins: Vec::new(),
             explicit: None,
             automatic: Arc::new(Matcher::from_env()),
         }
@@ -48,7 +50,7 @@ impl WebClient {
     /// share this client, including image previews and browser fallback.
     pub fn new(config: &WebConfig) -> Result<Self, ToolError> {
         let Some(value) = &config.proxy else {
-            return Ok(Self::default());
+            return Self::default().with_origins(&config.allowed_origins);
         };
         let url = Url::parse(value).map_err(|_| failed("invalid web.proxy URL"))?;
         if !matches!(url.scheme(), "http" | "https")
@@ -64,14 +66,59 @@ impl WebClient {
 
         let proxy =
             reqwest::Proxy::all(value).map_err(|_| failed("invalid web.proxy configuration"))?;
-        Ok(Self {
+        Self {
             sandbox: false,
+            allowed_origins: Vec::new(),
             explicit: Some(ProxyRoute {
                 proxy,
                 browser_proxy: browser_proxy(&url),
             }),
             automatic: Arc::new(Matcher::builder().build()),
-        })
+        }
+        .with_origins(&config.allowed_origins)
+    }
+
+    fn with_origins(mut self, origins: &[String]) -> Result<Self, ToolError> {
+        for origin in origins {
+            let url =
+                Url::parse(origin).map_err(|_| invalid("invalid web.allowed_origins entry"))?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(invalid(
+                    "web.allowed_origins entries must be HTTP(S) origins without credentials, paths, queries or fragments",
+                ));
+            }
+            self.allowed_origins
+                .push(url.origin().ascii_serialization());
+        }
+        self.allowed_origins.sort();
+        self.allowed_origins.dedup();
+        Ok(self)
+    }
+
+    pub(super) fn allows(&self, url: &Url) -> bool {
+        self.allowed_origins
+            .contains(&url.origin().ascii_serialization())
+    }
+
+    pub(super) fn checked_url(&self, value: &str) -> Result<Url, ToolError> {
+        checked_url_with_origins(value, &self.allowed_origins)
+    }
+
+    pub(super) fn redirect_target(&self, current: &Url, location: &str) -> Result<Url, ToolError> {
+        let next = current
+            .join(location)
+            .map_err(|_| failed("invalid redirect URL"))?;
+        if current.scheme() == "https" && next.scheme() == "http" {
+            return Err(failed("HTTPS downgrade redirect blocked"));
+        }
+        self.checked_url(next.as_str())
     }
 
     pub(super) fn route(&self, url: &Url) -> Result<Option<ProxyRoute>, ToolError> {
@@ -109,6 +156,7 @@ impl WebClient {
     pub(super) fn for_test(proxy: Option<&reqwest::Proxy>) -> Self {
         Self {
             sandbox: false,
+            allowed_origins: Vec::new(),
             explicit: proxy.map(|proxy| ProxyRoute {
                 proxy: proxy.clone(),
                 browser_proxy: None,
