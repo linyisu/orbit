@@ -70,6 +70,9 @@ jobs:
       - name: Check architecture
         run: python3 scripts/check-architecture.py
 
+      - name: Test CI scripts
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -101,8 +104,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install musl compiler
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install bundle test dependencies
+        run: sudo apt-get update && sudo apt-get install -y musl-tools ca-certificates
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl

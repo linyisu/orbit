@@ -15,6 +15,29 @@ import tempfile
 import threading
 
 
+SYSTEM_CA_BUNDLES = (
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/cert.pem",
+)
+
+
+def system_ca_bundle():
+    candidates = (
+        os.environ.get("SSL_CERT_FILE"),
+        ssl.get_default_verify_paths().cafile,
+        *SYSTEM_CA_BUNDLES,
+    )
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file() and Path(candidate).stat().st_size:
+            return Path(candidate).resolve()
+    checked = ", ".join(str(path) for path in candidates if path)
+    raise RuntimeError(
+        f"No system CA bundle found (checked: {checked}); "
+        "install ca-certificates or set SSL_CERT_FILE to a PEM bundle"
+    )
+
+
 def run(*arguments, **kwargs):
     return subprocess.run(arguments, check=True, capture_output=True, text=True, timeout=120, **kwargs)
 
@@ -65,12 +88,11 @@ models = [{ id = "local-model" }]
 
 def main():
     bundle = Path(sys.argv[1] if len(sys.argv) > 1 else "target/bundle").resolve()
-    certificates = ssl.get_default_verify_paths().cafile
-    assert certificates, "The test host must provide its system CA bundle"
+    certificates = system_ca_bundle()
     container = run(
         "docker", "run", "--detach", "--rm", "--network", "none", "--read-only",
         "--tmpfs", "/tmp", "--tmpfs", "/root:exec",
-        "--mount", f"type=bind,source={Path(certificates).resolve()},target=/etc/ssl/certs/ca-certificates.crt,readonly",
+        "--mount", f"type=bind,source={certificates},target=/etc/ssl/certs/ca-certificates.crt,readonly",
         "--env", "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
         "ubuntu:20.04", "sleep", "300",
     ).stdout.strip()
