@@ -1,8 +1,9 @@
+mod inspection;
 mod project;
 
 use anyhow::{Context, Result, ensure};
 use orbit_model::types::ChatMessage;
-use orbit_protocol::{Inspection, Report, SessionAction};
+use orbit_protocol::{Report, SessionAction};
 
 use crate::PreparedWorkspace;
 
@@ -112,7 +113,7 @@ pub(super) async fn execute(
                 crate::project_state::actions::memory(&setup.session, &mut history, memory).await?;
             Ok(project::memory_report(result))
         }
-        SessionAction::Inspect { section } => inspect(setup, section).await,
+        SessionAction::Inspect { section } => inspection::inspect(setup, section).await,
         SessionAction::Rename { title } => {
             ensure!(
                 !title.trim().is_empty() && title.chars().count() <= 120,
@@ -148,116 +149,10 @@ fn report(title: &str, text: String) -> Report {
     }
 }
 
-async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> Result<Report> {
-    let session = &setup.session;
-    let resources = &setup.resources;
-    let budget = &resources.budget;
-    Ok(match section {
-        Inspection::ExportPatch => report(
-            "Git patch",
-            orbit_tools::git_inspect::working_tree_patch(std::path::Path::new(
-                &session.snapshot.session.workspace,
-            ))?,
-        ),
-        Inspection::Skills => report("Skills", budget.skills.render()),
-        Inspection::Mcp => report(
-            "MCP 状态",
-            budget
-                .mcp_statuses
-                .iter()
-                .map(|status| {
-                    format!(
-                        "{} · {} · {} 个工具",
-                        status.name, status.detail, status.tool_count
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        Inspection::Diagnostics => report(
-            "诊断记录",
-            orbit_store::diagnostics::text(&session.store.diagnostics(session.id()).await?),
-        ),
-        Inspection::Changes => {
-            let listing =
-                super::changes::list(&session.store.workspace_changes(session.id()).await?);
-            report(
-                "文件改动",
-                format!(
-                    "{listing}{}",
-                    crate::verification::changes_text(session).await
-                ),
-            )
-        }
-        Inspection::Diff { path } => {
-            let changes = session.store.workspace_changes(session.id()).await?;
-            let text = match path {
-                Some(path) => super::changes::diff(&changes, &path),
-                None => super::changes::list(&changes),
-            };
-            report("文件差异", text)
-        }
-        Inspection::Status => report(
-            "会话状态",
-            format!(
-                "会话：{}\n工作目录：{}\n数据库：{}\n模型：{}\n执行：{}\n工具：{}\n{}",
-                session.id(),
-                session.snapshot.session.workspace,
-                session.store.path().display(),
-                resources.model_name,
-                if resources.command_limits.sandbox {
-                    "沙箱"
-                } else {
-                    "普通执行"
-                },
-                resources
-                    .tools
-                    .definitions()
-                    .iter()
-                    .map(|tool| tool.function.name.clone())
-                    .collect::<Vec<_>>()
-                    .join(" / "),
-                crate::verification::summary(session).await
-            ),
-        ),
-        Inspection::Context => {
-            let mut history = session.store.side_question_context(session.id()).await?;
-            crate::instructions::inject(&mut history, &budget.instructions);
-            budget.skills.inject(&mut history);
-            crate::project_state::inject(
-                &mut history,
-                &session.store,
-                &session.snapshot.session.project_id,
-                session.id(),
-            )
-            .await?;
-            let estimated =
-                orbit_agent::context::estimate_tokens(&history, &resources.tools.definitions());
-            let calibration = session.calibration(&resources.model_name);
-            report(
-                "上下文预算",
-                format!(
-                    "原始估算：{estimated} tokens\n校准估算：{} tokens\n输入窗口：{} · 输出上限：{} · 请求预算：{}\n自动整理：{}\n项目指令：{}\nSkills：{}",
-                    calibration.estimate(estimated),
-                    budget.input_context_tokens,
-                    budget.max_output_tokens,
-                    budget.context_tokens,
-                    if budget.auto_compact {
-                        "开启"
-                    } else {
-                        "关闭"
-                    },
-                    budget.instructions.source_summary(),
-                    budget.skills.len()
-                ),
-            )
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbit_protocol::Inspection;
 
     #[tokio::test]
     async fn actions_use_target_state_and_skill_context_survives_reopening() {
@@ -298,6 +193,45 @@ mod tests {
         .await
         .unwrap();
         assert!(status.text.contains("普通执行"));
+        for field in [
+            "Scratch：",
+            "命令输出目录：",
+            "Git 基线：",
+            "模型流空闲",
+            "审批：",
+            "上下文：",
+        ] {
+            assert!(status.text.contains(field), "{field}: {}", status.text);
+        }
+        let context = execute(
+            &mut setup,
+            SessionAction::Inspect {
+                section: Inspection::Context,
+            },
+            false,
+        )
+        .await
+        .unwrap();
+        for field in [
+            "系统提示：",
+            "历史消息：",
+            "工具定义：",
+            "任务与会话记忆：",
+            "服务端样本",
+            "系数",
+        ] {
+            assert!(context.text.contains(field), "{field}: {}", context.text);
+        }
+        let mcp = execute(
+            &mut setup,
+            SessionAction::Inspect {
+                section: Inspection::Mcp,
+            },
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(mcp.text, "未配置 MCP server。");
         execute(
             &mut setup,
             SessionAction::Rename {
