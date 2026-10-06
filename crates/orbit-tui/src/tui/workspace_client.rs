@@ -30,7 +30,6 @@ use crate::workspace::{
 };
 
 const CHANNEL_CAPACITY: usize = 16;
-const HELP: &str = "/ssh HOST [PATH]、/wsl DISTRO [PATH] 连接新环境；/new 新建当前环境会话，/local 新建本地标签，/sessions 查看目标历史，/resume ID 在新标签恢复，/reconnect 重连，/close 断开当前标签。/model、/mode 切换模型与权限。";
 
 pub(super) enum Action {
     Restore,
@@ -578,6 +577,7 @@ impl Tab {
         match response {
             Response::Completions { input, entries } => {
                 if input == self.state.input.text {
+                    self.state.completion_query = Some(input);
                     self.state.stored_completions = entries;
                 }
             }

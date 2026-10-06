@@ -16,6 +16,30 @@ fn tab(label: &str) -> (Tab, mpsc::Receiver<Call>) {
 }
 
 #[test]
+fn target_completions_apply_only_to_the_input_that_requested_them() {
+    let (mut tab, _) = tab("SSH dev");
+    tab.state.connection_label = Some("SSH dev".into());
+    tab.state.input.set("/cd pro".into());
+    tab.apply(Response::Completions {
+        input: "/cd pro".into(),
+        entries: vec![crate::tui::completion::Candidate {
+            name: "/cd project/".into(),
+            display: Some("project/".into()),
+            description: String::new(),
+            continue_input: true,
+        }],
+    });
+    assert_eq!(tab.state.menu()[0].name, "/cd project/");
+    tab.state.input.set("/cd different".into());
+    assert!(
+        tab.state
+            .menu()
+            .iter()
+            .all(|entry| entry.name != "/cd project/")
+    );
+}
+
+#[test]
 fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     use crate::tui::app::{ToolRow, ToolStatus};
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};

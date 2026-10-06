@@ -416,7 +416,15 @@ impl Tab {
             "/connect" => return Ok(Action::Connect),
             "/editor" => return Ok(Action::Editor),
             "/model refresh" => return Ok(Action::RefreshModels),
-            "/help" => self.state.report_local(TranscriptItem::Notice(HELP.into())),
+            "/help" => {
+                let commands = tui::commands::COMMANDS
+                    .iter()
+                    .filter(|command| tui::commands::available_in_workspace(command.name))
+                    .map(|command| format!("{}  {}", command.name, command.description))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.state.show_output("命令", commands);
+            }
             text if text == "/undo" || text.starts_with("/undo ") => {
                 let path = text
                     .strip_prefix("/undo ")

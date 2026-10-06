@@ -156,6 +156,7 @@ pub struct UiState {
     pub workspace_wizard: Option<super::workspace_client::wizard::Wizard>,
     pub ssh_prompt: Option<super::workspace_client::auth::Prompt>,
     pub stored_completions: Vec<super::completion::Candidate>,
+    pub completion_query: Option<String>,
     pub menu_area: ratatui::layout::Rect,
     pub menu_rows: Vec<(ratatui::layout::Rect, usize)>,
     pub dialog_rows: Vec<(ratatui::layout::Rect, usize)>,
@@ -355,6 +356,7 @@ impl UiState {
             workspace_wizard: None,
             ssh_prompt: None,
             stored_completions: Vec::new(),
+            completion_query: None,
             menu_area: Default::default(),
             menu_rows: Vec::new(),
             dialog_rows: Vec::new(),
@@ -694,7 +696,9 @@ impl UiState {
             .collect();
         }
 
-        if !self.stored_completions.is_empty() {
+        if self.completion_query.as_deref() == Some(&self.input.text)
+            && !self.stored_completions.is_empty()
+        {
             return self.stored_completions.clone();
         }
 
