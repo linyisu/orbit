@@ -216,6 +216,21 @@ impl Tab {
         }
     }
 
+    pub(super) fn can_replace_with_resumed(&self) -> bool {
+        self.connection.is_some()
+            && !self.offline
+            && !self.busy
+            && self.starting.is_none()
+            && self.connecting.is_none()
+            && self.attachment_task.is_none()
+            && self.submissions.is_empty()
+            && self.state.is_home()
+            && self.session_title.is_empty()
+            && !self.state.btw.has_records()
+            && self.state.input.text.is_empty()
+            && self.state.attachments.is_empty()
+    }
+
     pub fn sibling(&self, resume: Option<String>) -> Self {
         if let Some(connection) = &self.connection {
             let mut tab = Self::empty(

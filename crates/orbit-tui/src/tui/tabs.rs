@@ -5,8 +5,7 @@ mod legacy;
 #[cfg(test)]
 pub(super) use legacy::*;
 
-#[cfg(not(test))]
-mod live {
+pub(super) mod live {
     use super::super::app::SessionTab;
     use std::collections::HashMap;
     #[derive(Default)]
@@ -22,6 +21,34 @@ mod live {
             self.order.push(id.clone());
             self.remote.insert(id.clone(), tab);
             self.active_remote = Some(id);
+        }
+        pub fn open_session(&mut self, source: &str, resume: Option<String>) {
+            let current = &self.remote[source];
+            let replace = resume.is_some() && current.can_replace_with_resumed();
+            let existing = resume.as_ref().and_then(|session| {
+                self.remote
+                    .iter()
+                    .find(|(_, tab)| {
+                        tab.id.as_ref() == Some(session)
+                            && tab.connection.as_ref().map(|c| &c.target)
+                                == current.connection.as_ref().map(|c| &c.target)
+                    })
+                    .map(|(id, _)| id.clone())
+            });
+            if let Some(existing) = existing {
+                if replace && existing != source {
+                    self.remove_remote(source);
+                }
+                self.active_remote = Some(existing);
+            } else {
+                let next = current.sibling(resume);
+                if replace {
+                    self.remote.insert(source.into(), next);
+                    self.active_remote = Some(source.into());
+                } else {
+                    self.add_remote(next);
+                }
+            }
         }
         pub fn remove_remote(&mut self, id: &str) -> bool {
             if self.remote.remove(id).is_none() {
@@ -81,5 +108,3 @@ mod live {
         }
     }
 }
-#[cfg(not(test))]
-pub(super) use live::Tabs;

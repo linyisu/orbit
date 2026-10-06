@@ -2,7 +2,9 @@ use crossterm::event::EventStream;
 use tokio::time;
 
 use super::*;
-use crate::tui::{self, TabAction, frames::Frames, input_events, render, tabs::Tabs, terminal};
+use crate::tui::{
+    self, TabAction, frames::Frames, input_events, render, tabs::live::Tabs, terminal,
+};
 
 pub(super) async fn run(mut opened: Opened) -> Result<()> {
     let settings = opened
@@ -58,9 +60,7 @@ pub(super) async fn run(mut opened: Opened) -> Result<()> {
                         tabs.add_remote(Tab::connecting(*spec, media));
                     }
                     Action::SameTarget(resume) => {
-                        let existing = resume.as_ref().and_then(|session| tabs.remote.iter().find(|(_, tab)| tab.id.as_ref() == Some(session) && tab.connection.as_ref().map(|c| &c.target) == tabs.remote[&id].connection.as_ref().map(|c| &c.target)).map(|(id, _)| id.clone()));
-                        if let Some(existing) = existing { tabs.active_remote = Some(existing); }
-                        else { let next = tabs.remote[&id].sibling(resume); tabs.add_remote(next); }
+                        tabs.open_session(&id, resume);
                     }
                     Action::Restore => {
                         tabs.remote.get_mut(&id).unwrap().state.restore_picker = Some(tui::restore::RestorePicker::from_tabs(&previous));

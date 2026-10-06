@@ -599,3 +599,106 @@ fn side_question_receipts_open_the_existing_modal_and_keep_main_draft() {
     assert!(!tab.state.btw.visible());
     assert_eq!(tab.state.input.text, "main draft");
 }
+
+fn connected_tab(target: workspace::transport::Target) -> Tab {
+    let (mut tab, _) = tab(&target.label());
+    tab.connection = Some(Arc::new(Connection {
+        target,
+        workspace: "/project".into(),
+        executable: "/nonexistent-orbit-test-server".into(),
+        config: "/config.toml".into(),
+        local_configuration: None,
+        database: None,
+        auth_dir: None,
+        allow_mcp_start: false,
+        unattended: true,
+        interactive: None,
+    }));
+    tab
+}
+
+#[tokio::test]
+async fn resume_reuses_empty_tab_in_place_for_every_target() {
+    use workspace::transport::{SshOptions, Target};
+    for target in [
+        Target::Local,
+        Target::Ssh {
+            host: "dev".into(),
+            options: SshOptions::default(),
+        },
+        Target::Wsl {
+            distribution: "Ubuntu".into(),
+            user: None,
+        },
+    ] {
+        let mut tabs = crate::tui::tabs::live::Tabs::default();
+        tabs.add_remote(connected_tab(target));
+        let source = tabs.active_remote.clone().unwrap();
+        tabs.open_session(&source, Some("history".into()));
+        assert_eq!(tabs.remote.len(), 1);
+        assert_eq!(tabs.target(0), Some(source.as_str()));
+        assert_eq!(tabs.active_remote.as_deref(), Some(source.as_str()));
+        assert!(tabs.remote[&source].connecting.is_some());
+    }
+}
+
+#[tokio::test]
+async fn resume_preserves_nonempty_tabs_and_new_always_adds_a_tab() {
+    use workspace::transport::Target;
+    let changes: [fn(&mut Tab); 6] = [
+        |tab| tab.state.input.set("unsent draft".into()),
+        |tab| {
+            tab.state
+                .attachments
+                .push(orbit_model::types::Attachment::Image {
+                    name: "draft.png".into(),
+                    mime_type: "image/png".into(),
+                    path: "/draft.png".into(),
+                })
+        },
+        |tab| tab.busy = true,
+        |tab| tab.starting = Some("pending".into()),
+        |tab| {
+            tab.state
+                .transcript
+                .push(TranscriptItem::User("existing conversation".into()))
+        },
+        |tab| {
+            tab.attachment_task = Some(AbortOnDropHandle::new(tokio::spawn(std::future::pending())))
+        },
+    ];
+    for change in changes {
+        let mut tabs = crate::tui::tabs::live::Tabs::default();
+        let mut tab = connected_tab(Target::Local);
+        change(&mut tab);
+        tabs.add_remote(tab);
+        let source = tabs.active_remote.clone().unwrap();
+        tabs.open_session(&source, Some("history".into()));
+        assert_eq!(tabs.remote.len(), 2);
+        assert!(tabs.remote.contains_key(&source));
+    }
+    let mut tabs = crate::tui::tabs::live::Tabs::default();
+    tabs.add_remote(connected_tab(Target::Local));
+    let source = tabs.active_remote.clone().unwrap();
+    tabs.open_session(&source, None);
+    assert_eq!(tabs.remote.len(), 2);
+}
+
+#[test]
+fn resume_focuses_open_conversation_and_removes_only_empty_source() {
+    use workspace::transport::Target;
+    for draft in ["", "keep this draft"] {
+        let mut tabs = crate::tui::tabs::live::Tabs::default();
+        let mut history = connected_tab(Target::Local);
+        history.id = Some("history".into());
+        tabs.add_remote(history);
+        let history_tab = tabs.active_remote.clone().unwrap();
+        let mut source = connected_tab(Target::Local);
+        source.state.input.set(draft.into());
+        tabs.add_remote(source);
+        let source = tabs.active_remote.clone().unwrap();
+        tabs.open_session(&source, Some("history".into()));
+        assert_eq!(tabs.active_remote.as_ref(), Some(&history_tab));
+        assert_eq!(tabs.remote.contains_key(&source), !draft.is_empty());
+    }
+}
