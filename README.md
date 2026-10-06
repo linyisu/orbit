@@ -4,7 +4,7 @@ Orbit 是用 Rust 编写的终端编码 Agent。它提供交互式 TUI 和单次
 
 ## 启动
 
-使用 stable Rust 工具链构建，源码构建还需要 `musl-tools`（含 `musl-gcc`）、`binutils` 和同架构 Rust musl target（x86-64：`rustup target add x86_64-unknown-linux-musl`；AArch64：`rustup target add aarch64-unknown-linux-musl`）；依赖版本由 `Cargo.lock` 固定。目前命令执行后端需要 Linux、Bubblewrap（`bwrap`）、`prlimit` 和可用的用户命名空间。文件工具使用 Unix 文件描述符接口；其他系统尚未提供完整的等价执行后端。
+使用 stable Rust 工具链构建，源码构建还需要 `musl-tools`（含 `musl-gcc`）、`binutils` 和同架构 Rust musl target（x86-64：`rustup target add x86_64-unknown-linux-musl`；AArch64：`rustup target add aarch64-unknown-linux-musl`）；依赖版本由 `Cargo.lock` 固定。命令默认使用目标用户的 shell 与真实开发环境；在 `[command]` 中设置 `sandbox = true` 可启用 Linux Bubblewrap 隔离，此时需要 `bwrap`、`prlimit` 和可用的用户命名空间。审批模式独立于沙箱设置。文件工具使用 Unix 文件描述符接口；其他系统尚未提供完整的等价执行后端。
 
 ```sh
 cargo build --release -p orbit-cli

@@ -23,7 +23,7 @@ fn fixture() -> (tempfile::TempDir, Workspace) {
 async fn command_denial_and_cancellation_do_not_start_a_process() {
     let (_root, workspace) = fixture();
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace.clone(), sender);
+    let tool = RunCommand::with_limits(workspace.clone(), sender, sandbox_limits());
     let task = tokio::spawn(async move {
         tool.execute(
             ToolCall::function("run", "run_command", json!({ "command": "echo no" })),
@@ -49,7 +49,7 @@ async fn command_denial_and_cancellation_do_not_start_a_process() {
     );
 
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = RunCommand::with_limits(workspace, sender, sandbox_limits());
     let token = CancellationToken::new();
     let clone = token.clone();
     let task = tokio::spawn(async move {
@@ -69,7 +69,7 @@ async fn command_denial_and_cancellation_do_not_start_a_process() {
 async fn validates_command_parameters_before_approval() {
     let (_root, workspace) = fixture();
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = RunCommand::with_limits(workspace, sender, sandbox_limits());
 
     for args in [
         json!({ "command": "" }),
@@ -494,7 +494,7 @@ async fn infinite_output_is_bounded_and_still_obeys_timeout() {
 async fn large_commands_reach_approval_without_an_arbitrary_tool_size_limit() {
     let (_root, workspace) = fixture();
     let (tx, mut rx) = approval::channel();
-    let tool = RunCommand::new(workspace, tx);
+    let tool = RunCommand::with_limits(workspace, tx, sandbox_limits());
     let command = format!("# {}\nprintf ok", "x".repeat(200_000));
     let expected = command.clone();
     let task = tokio::spawn(async move {
@@ -669,4 +669,11 @@ async fn configured_caches_are_read_only_and_limits_fail_before_execution() {
     .unwrap_err();
 
     assert!(error.to_string().contains("exceeds 1 MiB"));
+}
+
+fn sandbox_limits() -> orbit_tools::run_command::CommandLimits {
+    orbit_tools::run_command::CommandLimits {
+        sandbox: true,
+        ..Default::default()
+    }
 }

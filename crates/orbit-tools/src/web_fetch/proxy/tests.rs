@@ -4,6 +4,7 @@ use super::*;
 
 fn automatic(matcher: Matcher) -> WebClient {
     WebClient {
+        sandbox: false,
         explicit: None,
         automatic: Arc::new(matcher),
     }

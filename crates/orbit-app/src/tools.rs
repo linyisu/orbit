@@ -48,7 +48,11 @@ pub async fn workspace_tools(
     tools.register(
         ReadFile::new(workspace.clone()).with_scan_budget(command_limits.read_file_scan_bytes),
     );
-    tools.register(ReadDocument::new(workspace.clone()).with_worker(std::env::current_exe()?));
+    tools.register(
+        ReadDocument::new(workspace.clone())
+            .with_sandbox(command_limits.sandbox)
+            .with_worker(std::env::current_exe()?),
+    );
 
     if let Some(database) = database {
         tools.register(ReadImage::new(
@@ -71,7 +75,9 @@ pub async fn workspace_tools(
         ));
     }
 
-    let web_client = std::sync::Arc::new(orbit_tools::web_fetch::WebClient::new(&web)?);
+    let web_client = std::sync::Arc::new(
+        orbit_tools::web_fetch::WebClient::new(&web)?.with_sandbox(command_limits.sandbox),
+    );
     tools.register(orbit_tools::web_fetch::WebFetch::with_client(
         (*web_client).clone(),
     ));

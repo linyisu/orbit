@@ -52,6 +52,8 @@ reasoning = { adapter = "openai_responses", efforts = ["none", "low", "medium", 
 
 # --- 命令与交付预算 ---
 [command]
+# Enable OS isolation for commands and helper processes.
+sandbox = false
 network = "allow" # 允许显式申请联网；run_command 单次请求默认 network="deny"
 read_file_scan_bytes = 67108864 # 每次文件读取最多扫描 64 MiB；0 表示不限扫描量
 

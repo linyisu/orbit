@@ -72,6 +72,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let root = workspace.path();
         let cmd_read = ApprovalPreview::Command(CommandPreview {
+            sandbox: true,
             command: "pwd".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -82,6 +83,7 @@ mod tests {
             git: None,
         });
         let cmd_rw = ApprovalPreview::Command(CommandPreview {
+            sandbox: true,
             command: "cargo build".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -129,6 +131,7 @@ mod tests {
 
         assert!(Mode::Auto.allows(&offline_read, root));
         let mkdir = ApprovalPreview::Command(CommandPreview {
+            sandbox: true,
             command: "mkdir -p demo".into(),
             workspace_access: CommandWorkspaceAccess::ReadWrite,
             ..match offline_read.clone() {
@@ -141,6 +144,7 @@ mod tests {
         assert!(!Mode::Ask.allows(&mkdir, root));
         assert!(Mode::Yolo.allows(&mkdir, root));
         let text_write = ApprovalPreview::Command(CommandPreview {
+            sandbox: true,
             command: "echo hello | tee demo.txt".into(),
             ..match mkdir.clone() {
                 ApprovalPreview::Command(command) => command,
@@ -177,6 +181,7 @@ mod tests {
         assert!(!Mode::Auto.allows(&outside, root));
 
         let external_command = ApprovalPreview::Command(CommandPreview {
+            sandbox: true,
             command: "write outside".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -190,6 +195,7 @@ mod tests {
         assert!(!Mode::Auto.allows(&external_command, root));
 
         let git_status = ApprovalPreview::Command(CommandPreview {
+            sandbox: true,
             command: "git status".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -203,6 +209,7 @@ mod tests {
         assert!(Mode::Auto.allows(&git_status, root));
 
         let git_push = ApprovalPreview::Command(CommandPreview {
+            sandbox: true,
             command: "git push origin main".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -216,6 +223,7 @@ mod tests {
         assert!(!Mode::Auto.allows(&git_push, root));
 
         let git_reset_hard = ApprovalPreview::Command(CommandPreview {
+            sandbox: true,
             command: "git reset --hard".into(),
             cwd: None,
             timeout_seconds: 30,

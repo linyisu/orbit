@@ -9,6 +9,7 @@ use super::*;
 
 #[derive(Clone)]
 pub struct WebClient {
+    pub(super) sandbox: bool,
     explicit: Option<ProxyRoute>,
     automatic: Arc<Matcher>,
 }
@@ -30,6 +31,7 @@ impl fmt::Debug for WebClient {
 impl Default for WebClient {
     fn default() -> Self {
         Self {
+            sandbox: false,
             explicit: None,
             automatic: Arc::new(Matcher::from_env()),
         }
@@ -37,6 +39,11 @@ impl Default for WebClient {
 }
 
 impl WebClient {
+    pub fn with_sandbox(mut self, sandbox: bool) -> Self {
+        self.sandbox = sandbox;
+        self
+    }
+
     /// Capture proxy routing for a runtime. All of its web consumers should
     /// share this client, including image previews and browser fallback.
     pub fn new(config: &WebConfig) -> Result<Self, ToolError> {
@@ -58,6 +65,7 @@ impl WebClient {
         let proxy =
             reqwest::Proxy::all(value).map_err(|_| failed("invalid web.proxy configuration"))?;
         Ok(Self {
+            sandbox: false,
             explicit: Some(ProxyRoute {
                 proxy,
                 browser_proxy: browser_proxy(&url),
@@ -100,6 +108,7 @@ impl WebClient {
     #[cfg(test)]
     pub(super) fn for_test(proxy: Option<&reqwest::Proxy>) -> Self {
         Self {
+            sandbox: false,
             explicit: proxy.map(|proxy| ProxyRoute {
                 proxy: proxy.clone(),
                 browser_proxy: None,

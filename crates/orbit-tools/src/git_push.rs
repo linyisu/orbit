@@ -9,8 +9,7 @@ use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::{
     execution::{
-        BwrapBackend, ExecutionBackend, ExecutionEnvironment, ExecutionPolicy, ExecutionRequest,
-        MountSpec,
+        ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, MountSpec, execution_backend,
     },
     filesystem::Workspace,
 };
@@ -32,6 +31,7 @@ pub struct GitPush {
     approvals: ApprovalSender,
     process_limits: orbit_runtime::execution::ProcessLimits,
     timeout: Duration,
+    sandbox: bool,
 }
 
 impl GitPush {
@@ -41,10 +41,12 @@ impl GitPush {
             approvals,
             process_limits: Default::default(),
             timeout: DEFAULT_PUSH_TIMEOUT,
+            sandbox: false,
         }
     }
 
     pub fn with_limits(mut self, limits: &crate::run_command::CommandLimits) -> Self {
+        self.sandbox = limits.sandbox;
         self.process_limits = limits.process_limits.clone();
         self.timeout = Duration::from_secs(
             limits
@@ -164,6 +166,7 @@ impl Tool for GitPush {
             );
             let approval = self.approvals.send(ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
+                    sandbox: self.sandbox,
                     command: description.clone(),
                     cwd: Some(self.workspace.root().display().to_string()),
                     timeout_seconds: self.timeout.as_secs(),
@@ -195,6 +198,9 @@ impl Tool for GitPush {
             let private = tempfile::tempdir().map_err(failed)?;
             let scratch = tempfile::tempdir().map_err(failed)?;
             let map_path = |path: &Path| {
+                if !self.sandbox {
+                    return path.to_owned();
+                }
                 path.strip_prefix(self.workspace.root())
                     .map(|rel| Path::new("/workspace").join(rel))
                     .unwrap_or_else(|_| path.to_owned())
@@ -246,10 +252,26 @@ impl Tool for GitPush {
                 self.timeout,
             )
             .with_scratch(scratch.path());
+            let request = if self.sandbox {
+                request
+            } else {
+                let worker = std::env::current_exe().map_err(failed)?;
+                let command = shlex::try_join([
+                    worker
+                        .to_str()
+                        .ok_or_else(|| failed("non-UTF-8 worker path"))?,
+                    "--internal-git-push-worker",
+                    secret
+                        .to_str()
+                        .ok_or_else(|| failed("non-UTF-8 request path"))?,
+                ])
+                .map_err(failed)?;
+                ExecutionRequest::new(command, self.workspace.root(), self.timeout)
+            };
             let environment =
                 ExecutionEnvironment::new(self.workspace.root(), self.workspace.root())
                     .map_err(failed)?;
-            let result = BwrapBackend::new()
+            let result = execution_backend(self.sandbox)
                 .map_err(failed)?
                 .execute(&request, &policy, &environment, None, cancellation)
                 .await

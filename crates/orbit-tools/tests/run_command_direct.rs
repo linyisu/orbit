@@ -14,12 +14,23 @@ use orbit_tools::{
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+fn sandbox_command(workspace: Workspace, sender: approval::ApprovalSender) -> RunCommand {
+    RunCommand::with_limits(
+        workspace,
+        sender,
+        CommandLimits {
+            sandbox: true,
+            ..Default::default()
+        },
+    )
+}
+
 #[tokio::test]
 async fn auto_literal_text_pipeline_creates_and_appends_workspace_files_without_a_dialog() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("existing")).unwrap();
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(Workspace::new(root.path()).unwrap(), sender);
+    let tool = sandbox_command(Workspace::new(root.path()).unwrap(), sender);
     let task = tokio::spawn(async move {
         tool.execute(ToolCall::function("text", "run_command", json!({
             "command": "mkdir -p demo && echo 'literal $(touch unexpected) | >' > demo/text.txt && printf '%s\\n' 'second line' | tee -a demo/text.txt /workspace/mirror.txt > demo/output.txt && cat demo/text.txt | tee demo/copy.txt",
@@ -58,7 +69,7 @@ async fn auto_local_mkdir_creates_nested_and_quoted_directories_in_the_requested
     fs::create_dir(root.path().join("existing")).unwrap();
     let workspace = Workspace::new(root.path()).unwrap();
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
     let task = tokio::spawn(async move {
         tool.execute(
             ToolCall::function(
@@ -96,7 +107,7 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
     };
 
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace.clone(), sender);
+    let tool = sandbox_command(workspace.clone(), sender);
 
     let task = tokio::spawn(async move {
         tool.execute(
@@ -152,7 +163,7 @@ async fn run_command_defaults_to_read_only_workspace() {
     };
 
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
 
     let task = tokio::spawn(async move {
         tool.execute(
@@ -205,7 +216,7 @@ async fn run_command_respects_session_grants_for_outside_paths() {
     fs::write(&outside_file, "initial").unwrap();
 
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace.clone(), sender);
+    let tool = sandbox_command(workspace.clone(), sender);
 
     let script_fail = format!("echo 'should fail' > {}", outside_file.display());
     let task_fail = tokio::spawn({
@@ -237,7 +248,7 @@ async fn run_command_respects_session_grants_for_outside_paths() {
     });
 
     let (sender2, mut receiver2) = approval::channel();
-    let tool2 = RunCommand::new(workspace, sender2);
+    let tool2 = sandbox_command(workspace, sender2);
 
     let script_ok = format!("echo 'granted write' > {}", outside_file.display());
     let task_ok = tokio::spawn(async move {
@@ -285,7 +296,7 @@ async fn run_command_ignores_remote_session_grants_for_local_execution() {
     });
 
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
 
     let script = format!("echo 'attempt write' > {}", outside_file.display());
     let task = tokio::spawn(async move {
@@ -330,7 +341,7 @@ async fn run_command_rejects_deprecated_writable_snapshot_flag() {
     };
 
     let (sender, _receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
 
     let err = tool
         .execute(
@@ -370,7 +381,7 @@ async fn run_command_masks_sensitive_files_and_protects_git_config_even_with_rea
     workspace.protect(&config_file).unwrap();
 
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
 
     let task = tokio::spawn(async move {
         tool.execute(
@@ -439,7 +450,7 @@ async fn run_command_allows_native_git_status_and_commit_in_sandbox() {
     fs::write(ws_temp.path().join("initial.txt"), "hello git\n").unwrap();
 
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
 
     let call = ToolCall::function(
         "test",
@@ -515,7 +526,7 @@ async fn run_command_succeeds_when_protecting_deep_opaque_runtime_root() {
         .unwrap();
 
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
 
     let task = tokio::spawn(async move {
         tool.execute(
@@ -557,7 +568,7 @@ async fn run_command_masks_hardlink_to_file_inside_external_opaque_root() {
     let mut workspace = Workspace::new(ws_temp.path()).unwrap();
     workspace.protect_opaque_runtime_root(&opaque).unwrap();
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
     let task = tokio::spawn(async move {
         tool.execute(
             ToolCall::function(
@@ -588,6 +599,7 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
     .unwrap();
     let workspace = Workspace::new(ws_temp.path()).unwrap();
     let limits = CommandLimits {
+        sandbox: true,
         max_scan_mib: 1,
         ..CommandLimits::default()
     };
@@ -626,7 +638,7 @@ async fn run_command_executes_in_specified_cwd() {
     };
 
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace.clone(), sender);
+    let tool = sandbox_command(workspace.clone(), sender);
 
     let task = tokio::spawn(async move {
         tool.execute(
@@ -670,7 +682,7 @@ async fn run_command_rejects_nonexistent_cwd() {
     };
 
     let (sender, _receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
 
     let result = tool
         .execute(
@@ -824,7 +836,7 @@ async fn network_request_defaults_offline_and_cannot_exceed_policy() {
     let root = tempfile::tempdir().unwrap();
     let workspace = Workspace::new(root.path()).unwrap();
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace.clone(), sender);
+    let tool = sandbox_command(workspace.clone(), sender);
     let task = tokio::spawn(async move {
         tool.execute(
             ToolCall::function("network", "run_command", json!({"command":"pwd"})),
@@ -850,7 +862,7 @@ async fn network_request_defaults_offline_and_cannot_exceed_policy() {
         )
         .unwrap();
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(offline, sender);
+    let tool = sandbox_command(offline, sender);
     assert!(
         tool.execute(
             ToolCall::function(
@@ -884,7 +896,7 @@ async fn read_only_templates_and_their_aliases_stay_read_only_in_commands() {
         )
         .unwrap();
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
     let task = tokio::spawn(async move {
         tool.execute(ToolCall::function("template", "run_command", json!({"command":"cat /workspace/.env.example; echo changed > /workspace/alias; echo changed > /workspace/.env.example", "workspace_access":"read_write"})), CancellationToken::new()).await
     });
@@ -914,7 +926,7 @@ async fn git_config_symlink_cannot_expose_a_protected_host_file() {
     let mut workspace = Workspace::new(root.path()).unwrap();
     workspace.protect(&secret).unwrap();
     let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace, sender);
+    let tool = sandbox_command(workspace, sender);
     let task = tokio::spawn(async move {
         tool.execute(
             ToolCall::function(

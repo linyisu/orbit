@@ -29,6 +29,8 @@ pub enum CommandWorkspaceAccess {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CommandPreview {
+    #[serde(default = "sandbox_default")]
+    pub sandbox: bool,
     pub command: String,
     pub cwd: Option<String>,
     pub timeout_seconds: u64,
@@ -40,17 +42,22 @@ pub struct CommandPreview {
     pub git: Option<orbit_runtime::git::GitCommandAnalysis>,
 }
 
+fn sandbox_default() -> bool {
+    true
+}
+
 impl CommandPreview {
     pub fn request_grant_key(&self, workspace: &Path) -> String {
         format!(
-            "{}:{:?}:{}:{:?}:{}:{}:{:?}",
+            "{}:{:?}:{}:{:?}:{}:{}:{:?}:{}",
             workspace.display(),
             self.cwd,
             self.command,
             self.workspace_access,
             self.network_allowed,
             self.external_write,
-            self.external_capabilities
+            self.external_capabilities,
+            self.sandbox
         )
     }
 
@@ -92,14 +99,15 @@ impl CommandPreview {
         }
 
         Some(format!(
-            "{}:{:?}:{}:{:?}:{}:{:?}:{}",
+            "{}:{:?}:{}:{:?}:{}:{:?}:{}:{}",
             repo.git_dir.display(),
             self.cwd,
             self.command,
             self.workspace_access,
             self.network_allowed,
             self.external_capabilities,
-            orbit_runtime::execution::content_hash(&bytes)
+            orbit_runtime::execution::content_hash(&bytes),
+            self.sandbox
         ))
     }
 }
@@ -149,7 +157,8 @@ pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
 
             !command.network_allowed
                 && !command.external_write
-                && ((command.workspace_access == CommandWorkspaceAccess::Read
+                && ((command.sandbox
+                    && command.workspace_access == CommandWorkspaceAccess::Read
                     && command.external_capabilities.is_empty())
                     || local_workspace_command(&command.command, command.cwd.as_deref(), workspace)
                         .is_some())
@@ -234,6 +243,7 @@ mod tests {
     fn git_query_does_not_override_network_or_filesystem_permissions() {
         let root = tempfile::tempdir().unwrap();
         let mut command = CommandPreview {
+            sandbox: true,
             command: "git status".into(),
             cwd: None,
             timeout_seconds: 30,
@@ -271,6 +281,7 @@ mod tests {
     fn auto_directory_creation_checks_targets_and_keeps_other_permissions() {
         let root = tempfile::tempdir().unwrap();
         let mut command = CommandPreview {
+            sandbox: true,
             command: "mkdir -p demo/nested".into(),
             cwd: None,
             timeout_seconds: 30,

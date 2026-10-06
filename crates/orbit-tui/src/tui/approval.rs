@@ -364,7 +364,11 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 ),
                 Span::raw("  "),
                 Span::styled(
-                    format!("[{access}]"),
+                    if preview.sandbox {
+                        format!("[沙箱 · {access}]")
+                    } else {
+                        "[普通执行]".into()
+                    },
                     Style::default().fg(crate::tui::theme::THEME.accent),
                 ),
             ];
