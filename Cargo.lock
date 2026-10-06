@@ -2841,6 +2841,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "orbit-app",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "orbit-store"
 version = "0.1.0"
 dependencies = [

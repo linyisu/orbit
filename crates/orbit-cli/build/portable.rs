@@ -33,9 +33,9 @@ pub fn bundle() {
             "--locked",
             "--release",
             "--bin",
-            "orbit",
+            "orbit-workspace-server",
             "-p",
-            "orbit-cli",
+            "orbit-server",
             "--target",
             &target,
             "--target-dir",
@@ -67,7 +67,7 @@ pub fn bundle() {
          `rustup target add {target}`; CC_<target> can select a musl compiler."
     );
 
-    let server = cache.join(&target).join("release/orbit");
+    let server = cache.join(&target).join("release/orbit-workspace-server");
     let inspection = Command::new("readelf")
         .args(["-l", "-d"])
         .arg(&server)
