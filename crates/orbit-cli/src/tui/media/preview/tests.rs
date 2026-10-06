@@ -16,7 +16,9 @@ fn mouse(kind: MouseEventKind, point: (u16, u16)) -> Event {
 }
 
 fn draw_ready(preview: &mut Preview, terminal: &mut Terminal<TestBackend>) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // CI runners share limited cores with the whole suite; only a real
+    // deadlock needs to trip this bound, so keep it generous.
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         super::super::begin_frame();
         terminal
