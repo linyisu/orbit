@@ -6,6 +6,8 @@ members = [
     "crates/orbit-agent",
     "crates/orbit-runtime",
     "crates/orbit-cli",
+    "crates/orbit-app",
+    "crates/orbit-tui",
     "crates/orbit-tools",
     "crates/orbit-store",
 ]
@@ -20,6 +22,8 @@ edition = "2024"
 
 [workspace.dependencies]
 # Internal workspace crates
+orbit-app = { path = "crates/orbit-app" }
+orbit-tui = { path = "crates/orbit-tui" }
 orbit-agent = { path = "crates/orbit-agent" }
 orbit-auth = { path = "crates/orbit-auth" }
 orbit-model = { path = "crates/orbit-model" }

@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -7,40 +6,19 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use orbit_agent::{
-    agent::Agent, error::AgentError, events::AgentEvent, memory::FileActivity,
-    model::ModelClientBackend,
-};
-use orbit_model::{
-    client::ModelClient,
-    types::{ChatMessage, ChatRequest, StreamEvent},
-};
+use orbit_agent::events::AgentEvent;
+use orbit_model::types::StreamEvent;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use self::config::FileConfig;
-pub(crate) use workspace::setup::{
-    PreparedWorkspace, WorkspaceOptions, WorkspaceResources, prepare_workspace,
-    prepare_workspace_resources,
-};
+use orbit_app::context::instructions;
+use orbit_app::models::model_metadata;
+use orbit_app::{WorkspaceOptions, prepare_workspace, session, workspace};
+use orbit_tui as tui;
 
-mod account_models;
 mod auth_cli;
-mod config;
-mod connections;
-mod history;
-mod instructions;
-mod marketplaces;
-mod model_metadata;
-mod project_state;
-mod runtime;
-mod session;
-mod session_title;
-mod skills;
-mod subagents;
-mod tui;
-mod verification;
-mod workspace;
+mod connect;
+mod connect_args;
 
 #[derive(Debug, Parser)]
 #[command(name = "orbit")]
@@ -79,9 +57,9 @@ enum Command {
     Chat(ChatArgs),
     Tui(TuiArgs),
     /// Connect to a local, SSH, or WSL workspace service.
-    Connect(workspace::ConnectArgs),
+    Connect(connect_args::ConnectArgs),
     #[command(hide = true)]
-    WorkspaceService(workspace::ServiceArgs),
+    WorkspaceService(connect_args::ServiceArgs),
     /// List projects or reconnect a moved directory without connecting to an API.
     Projects {
         #[command(subcommand)]
@@ -193,20 +171,6 @@ enum ChatMode {
     Yolo,
 }
 
-impl ChatMode {
-    fn allows(
-        self,
-        preview: &orbit_tools::approval::ApprovalPreview,
-        workspace: &std::path::Path,
-    ) -> bool {
-        match self {
-            Self::ReadOnly => false,
-            Self::Auto => orbit_tools::approval::auto_allows(preview, workspace),
-            Self::Yolo => true,
-        }
-    }
-}
-
 /// Capability categories omitted from both tool registration and model requests.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
 enum ChatCapability {
@@ -241,10 +205,6 @@ enum ChatCapability {
     ProjectState,
 }
 
-fn capability_is_disabled(disabled: &BTreeSet<ChatCapability>, capability: ChatCapability) -> bool {
-    disabled.contains(&ChatCapability::All) || disabled.contains(&capability)
-}
-
 #[derive(Serialize)]
 struct SwePrediction<'a> {
     instance_id: &'a str,
@@ -253,26 +213,11 @@ struct SwePrediction<'a> {
 }
 
 fn main() -> Result<()> {
-    if std::env::args().nth(1).as_deref() == Some("--internal-ssh-askpass") {
-        return workspace::interaction::askpass();
-    }
-    if std::env::args().nth(1).as_deref() == Some("--internal-document-worker") {
-        let args: Vec<_> = std::env::args_os().skip(2).collect();
-        anyhow::ensure!(
-            args.len() == 2,
-            "document worker requires input and output paths"
-        );
-        return orbit_tools::read_document::document_worker(
-            Path::new(&args[0]),
-            Path::new(&args[1]),
-        )
-        .map_err(anyhow::Error::msg);
-    }
+    #[cfg(not(target_env = "musl"))]
+    workspace::register_server_bundle(include_bytes!(env!("ORBIT_EMBEDDED_SERVER")))?;
 
-    if std::env::args().nth(1).as_deref() == Some("--internal-git-push-worker") {
-        let args: Vec<_> = std::env::args_os().skip(2).collect();
-        anyhow::ensure!(args.len() == 1, "push worker requires request path");
-        return orbit_tools::git_push::push_worker(Path::new(&args[0])).map_err(anyhow::Error::msg);
+    if orbit_app::platform::workers::run()? {
+        return Ok(());
     }
 
     run_cli()
@@ -283,7 +228,7 @@ async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
 
     let auth_directory = || {
-        auth_cli::directory(
+        orbit_app::platform::directory(
             cli.auth_dir.clone(),
             std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
             std::env::var_os("HOME").map(PathBuf::from),
@@ -295,10 +240,10 @@ async fn run_cli() -> Result<()> {
         Command::Chat(args) => chat(cli.config, cli.database, args, auth_directory()?).await,
         Command::Tui(args) => run_tui(cli.config, cli.database, args, auth_directory()?).await,
         Command::Connect(args) => {
-            workspace::connect(args, cli.config, cli.database, cli.auth_dir).await
+            connect::connect(args, cli.config, cli.database, cli.auth_dir).await
         }
         Command::WorkspaceService(args) => {
-            workspace::serve(args, cli.config, cli.database, auth_directory()?).await
+            workspace::serve(args.into(), cli.config, cli.database, auth_directory()?).await
         }
 
         Command::Projects { command } => {
@@ -442,309 +387,74 @@ async fn run_tui(
 }
 
 async fn chat(
-    config_path: PathBuf,
+    config: PathBuf,
     database: Option<PathBuf>,
     args: ChatArgs,
-    auth_directory: PathBuf,
+    auth: PathBuf,
 ) -> Result<()> {
-    let prompt = read_chat_prompt(&args)?;
-    let disabled = args.disabled.iter().copied().collect::<BTreeSet<_>>();
-
-    if capability_is_disabled(&disabled, ChatCapability::Image) && !args.images.is_empty() {
-        bail!("--image cannot be used when the image capability is disabled");
-    }
-
-    let mut file_config = FileConfig::load(&config_path, &auth_directory)?;
-    for diagnostic in account_models::refresh(&mut file_config, false).await {
-        eprintln!("{diagnostic}");
-    }
-    let database = session::database_path(database)?;
-
-    // Open the persistent conversation before choosing a resumed model. A new
-    // run starts with the configured default, while a resumed run keeps its
-    // prior configured provider/model unless the caller explicitly overrides it.
-    let default_model = file_config.default_model_option()?;
-    let mut session = session::SessionState::open(
-        database,
-        args.resume.clone(),
-        default_model.qualified_name(),
-    )
-    .await?;
-    let saved_model = args
-        .resume
-        .as_ref()
-        .map(|_| session.snapshot.session.model.clone());
-    let selected_model = select_chat_model(
-        &file_config,
-        args.model.as_deref().or(saved_model.as_deref()),
-    )?;
-
-    if !selected_model.supports_vision && !args.images.is_empty() {
-        bail!(
-            "--image cannot be used because model {:?} does not support image input",
-            selected_model.qualified_name()
-        );
-    }
-
-    let model_name = selected_model.qualified_name();
-    let agent_config = file_config.agent_config_for(selected_model.context_tokens);
-    let client = ModelClient::new(selected_model.config.clone())?;
-    session
-        .set_model_profile(model_name.clone(), client.config().reasoning_effort)
-        .await?;
-
-    let skills = if capability_is_disabled(&disabled, ChatCapability::Skills) {
-        skills::Skills::default()
-    } else {
-        let enabled_plugins = session
-            .store
-            .project_plugins(&session.snapshot.session.project_id)
-            .await?;
-        let plugin_skill_roots = marketplaces::enabled_skill_roots(&enabled_plugins);
-
-        skills::Skills::discover_current_with_plugin_roots(plugin_skill_roots.roots)
+    let options = orbit_app::chat::ChatOptions {
+        workspace: std::env::current_dir()?,
+        prompt: read_chat_prompt(&args)?,
+        model: args.model.clone(),
+        mode: args.mode.into(),
+        resume: args.resume.clone(),
+        allow_mcp_start: args.allow_mcp_start,
+        images: args.images.clone(),
+        disabled: args.disabled.iter().copied().map(Into::into).collect(),
+        export_patch: args.swe_instance_id.is_some(),
     };
-
-    let instructions = instructions::load_current();
-    let attachments = args
-        .images
-        .iter()
-        .map(|path| session.import_image(path))
-        .collect::<Result<Vec<_>>>()?;
-
-    let (approvals, approval_task) = match args.mode {
-        ChatMode::ReadOnly => (None, None),
-        mode => {
-            let (sender, mut receiver) = orbit_tools::approval::channel();
-            let approval_workspace = std::path::PathBuf::from(&session.snapshot.session.workspace);
-            let task = tokio::spawn(async move {
-                while let Some(request) = receiver.recv().await {
-                    let _ = request
-                        .decision
-                        .send(mode.allows(&request.preview, &approval_workspace));
-                }
-            });
-
-            (Some(sender), Some(task))
-        }
-    };
-
-    let runtime = runtime::workspace_tools(
-        &std::env::current_dir()?,
-        &config_path,
-        &auth_directory,
-        Some(session.store.path()),
-        approvals,
-        file_config.command.clone(),
-        file_config.web.clone(),
-        if capability_is_disabled(&disabled, ChatCapability::Mcp) {
-            orbit_tools::mcp::McpConfig::default()
-        } else {
-            file_config.mcp.clone()
-        },
-        args.allow_mcp_start,
-        Some(session.scratch.clone()),
-        Some(session.command_output.clone()),
-        Some(file_config.permissions.clone()),
-    )
-    .await?;
-
-    if !capability_is_disabled(&disabled, ChatCapability::Files)
-        && !capability_is_disabled(&disabled, ChatCapability::Command)
-    {
-        session
-            .initialize_audit(runtime.workspace.clone(), runtime.command_limits.clone())
-            .await?;
-    }
-
-    let audit_workspace = runtime.workspace;
-    let mut tools = runtime.tools;
-    verification::register(
-        &mut tools,
-        session.store.clone(),
-        project_state::MemoryScope::new(session.id().into()),
-        audit_workspace,
-        runtime.command_limits,
-    );
-
-    if !capability_is_disabled(&disabled, ChatCapability::History) {
-        history::register(
-            &mut tools,
-            session.store.clone(),
-            project_state::MemoryScope::new(session.id().into()),
-        );
-    }
-
-    if !capability_is_disabled(&disabled, ChatCapability::ProjectState) {
-        let memory_scope = project_state::MemoryScope::new(session.id().into());
-        project_state::register(&mut tools, session.store.clone(), memory_scope);
-    }
-
-    if !capability_is_disabled(&disabled, ChatCapability::Skills) {
-        skills.register_tool(&mut tools);
-    }
-
-    disable_chat_capabilities(&mut tools, &disabled);
-
-    if !selected_model.supports_vision {
-        tools.remove("read_image");
-    }
-
-    if capability_is_disabled(&disabled, ChatCapability::Files) {
-        tools.remove("verification_status");
-    }
-
-    if session.store.is_subagent(session.id()).await? {
-        subagents::restrict_child_tools(&mut tools);
-    } else if !capability_is_disabled(&disabled, ChatCapability::Subagents) {
-        subagents::register(
-            &mut tools,
-            session.store.clone(),
-            session.id().into(),
-            config_path.clone(),
-            auth_directory.clone(),
-            instructions.clone(),
-            file_config.subagents.clone(),
-        )
-        .await?;
-    }
-
-    let mut messages = session.snapshot.history.clone();
-    instructions::inject(&mut messages, &instructions);
-
-    if !capability_is_disabled(&disabled, ChatCapability::Skills) {
-        skills.inject(&mut messages);
-    }
-
-    if !capability_is_disabled(&disabled, ChatCapability::ProjectState) {
-        project_state::inject(
-            &mut messages,
-            &session.store,
-            &session.snapshot.session.project_id,
-            session.id(),
-        )
-        .await?;
-    }
-
-    messages.push(ChatMessage::user_with_attachments(
-        prompt.clone(),
-        attachments,
-    ));
-    let mut request = ChatRequest::new(messages);
-    request.max_tokens = Some(selected_model.max_output_tokens);
-    request.reasoning_effort = client.config().reasoning_effort;
-
-    let files = FileActivity::from_events(
-        session
-            .snapshot
-            .runs
-            .iter()
-            .flat_map(|run| run.events.iter()),
-    );
-    let archive_enabled = tools.contains("read_history");
-    let mut agent = Agent::new(ModelClientBackend::new(client), tools, agent_config)
-        .with_file_activity(files)
-        .with_compaction(file_config.compaction_runtime()?);
-
-    if archive_enabled {
-        agent = agent.with_context_archive(std::sync::Arc::new(history::SessionArchive::new(
-            session.store.clone(),
-            session.id().into(),
-        )));
-    }
-
-    session.begin(prompt, model_name.clone()).await?;
-    agent = agent
-        .with_calibration(model_name.clone(), session.calibration(&model_name))
-        .with_execution_journal(session.execution_journal()?);
-
     let cancellation = CancellationToken::new();
-    let task_cancellation = cancellation.clone();
-    let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
-    let task = tokio::spawn(async move {
-        agent
-            .run_with_agent_events(request, task_cancellation, sender)
-            .await
+    let token = cancellation.clone();
+    let signals = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            token.cancel();
+            eprintln!("正在取消…");
+            if tokio::signal::ctrl_c().await.is_ok() {
+                std::process::exit(130);
+            }
+        }
     });
-
-    let mut interrupted = false;
-
-    loop {
-        let event = tokio::select! {
-            event = receiver.recv() => event,
-            signal = tokio::signal::ctrl_c() => {
-                signal.context("failed to listen for Ctrl+C")?;
-
-                if interrupted {
-                    std::process::exit(130);
+    let signals = tokio_util::task::AbortOnDropHandle::new(signals);
+    let outcome =
+        orbit_app::chat::run(
+            config,
+            database,
+            options,
+            auth,
+            cancellation,
+            |update| match update {
+                orbit_app::chat::ChatUpdate::Agent(event) => report_chat_event(event, args.stream),
+                orbit_app::chat::ChatUpdate::Diagnostic(message) => {
+                    eprintln!("{message}");
+                    Ok(())
                 }
-
-                interrupted = true;
-                cancellation.cancel();
-                eprintln!("正在取消…");
-                continue;
+            },
+        )
+        .await?;
+    drop(signals);
+    match outcome {
+        orbit_app::chat::ChatOutcome::Cancelled => eprintln!("已取消。"),
+        orbit_app::chat::ChatOutcome::Completed {
+            answer,
+            model_name,
+            patch,
+        } => {
+            if let Some(instance_id) = &args.swe_instance_id {
+                println!(
+                    "{}",
+                    serde_json::to_string(&SwePrediction {
+                        instance_id,
+                        model_name_or_path: &model_name,
+                        model_patch: patch.unwrap_or_default()
+                    })?
+                );
+            } else if args.stream {
+                println!();
+            } else {
+                println!("{answer}");
             }
-        };
-        let Some(event) = event else { break };
-
-        report_chat_event(&event, args.stream)?;
-    }
-
-    let outcome = match task.await {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            if let Some(task) = approval_task {
-                task.abort();
-            }
-
-            session.finish("failed", None).await?;
-            return Err(error.into());
         }
-    };
-
-    if let Some(task) = approval_task {
-        task.abort();
     }
-
-    let result = match outcome {
-        Ok(result) => result,
-        Err(AgentError::Cancelled) if interrupted => {
-            session.finish("cancelled", None).await?;
-            eprintln!("已取消。");
-            return Ok(());
-        }
-
-        Err(error) => {
-            session.finish("failed", None).await?;
-            return Err(error.into());
-        }
-    };
-
-    let answer = match &result.final_message {
-        ChatMessage::Assistant { content, .. } => content.clone().unwrap_or_default(),
-        _ => String::new(),
-    };
-
-    session.finish("completed", Some(result.history)).await?;
-
-    if let Some(instance_id) = &args.swe_instance_id {
-        let patch = orbit_tools::git_inspect::working_tree_patch(Path::new(
-            &session.snapshot.session.workspace,
-        ))?;
-        println!(
-            "{}",
-            serde_json::to_string(&SwePrediction {
-                instance_id,
-                model_name_or_path: &model_name,
-                model_patch: patch,
-            })?
-        );
-    } else if args.stream {
-        println!();
-    } else {
-        println!("{answer}");
-    }
-
     Ok(())
 }
 
@@ -770,129 +480,6 @@ fn read_chat_prompt(args: &ChatArgs) -> Result<String> {
     }
 
     Ok(prompt)
-}
-
-fn select_chat_model(config: &FileConfig, requested: Option<&str>) -> Result<tui::ModelOption> {
-    let Some(requested) = requested else {
-        return config.default_model_option();
-    };
-
-    let requested = requested.trim();
-
-    if requested.is_empty() {
-        bail!("model must not be empty");
-    }
-
-    let options = config.model_options()?;
-
-    if requested.contains("::") {
-        return options
-            .into_iter()
-            .find(|option| option.qualified_name() == requested)
-            .ok_or_else(|| anyhow::anyhow!("model {requested:?} is not configured"));
-    }
-
-    let matches = options
-        .into_iter()
-        .filter(|option| option.model == requested)
-        .collect::<Vec<_>>();
-
-    match matches.as_slice() {
-        [option] => Ok(option.clone()),
-        [] => bail!("model {requested:?} is not configured"),
-        _ => bail!("model {requested:?} is configured by multiple providers; use provider::model"),
-    }
-}
-
-fn disable_chat_capabilities(
-    tools: &mut orbit_agent::tool::ToolRegistry,
-    disabled: &BTreeSet<ChatCapability>,
-) {
-    if capability_is_disabled(disabled, ChatCapability::Subagents) {
-        for name in [
-            "spawn_agent",
-            "send_agent_message",
-            "wait_agents",
-            "read_agent",
-            "cancel_agents",
-        ] {
-            tools.remove(name);
-        }
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::History) {
-        tools.remove("read_history");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Web) {
-        tools.remove("web_search");
-        tools.remove("web_fetch");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Mcp) {
-        tools.remove_prefix("mcp__");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Skills) {
-        tools.remove("load_skill");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Image) {
-        tools.remove("read_image");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Document) {
-        tools.remove("read_document");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Files) {
-        for name in [
-            "read_file",
-            "list_files",
-            "search_text",
-            "project_overview",
-            "verification_status",
-        ] {
-            tools.remove(name);
-        }
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Git) {
-        tools.remove("git_inspect");
-        tools.remove("git_export_patch");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Write) {
-        tools.remove("write_file");
-        tools.remove("edit_file");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Capability) {
-        tools.remove("request_capability");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::Command) {
-        tools.remove("run_command");
-        tools.remove("read_command_output");
-        tools.remove("get_command_status");
-        tools.remove("wait_commands");
-        tools.remove("cancel_commands");
-        tools.remove("export_artifact");
-        tools.remove("verification_status");
-    }
-
-    if capability_is_disabled(disabled, ChatCapability::ProjectState) {
-        for name in [
-            "task_list",
-            "task_update",
-            "memory_list",
-            "memory_search",
-            "memory_save",
-            "memory_forget",
-        ] {
-            tools.remove(name);
-        }
-    }
 }
 
 fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
@@ -949,5 +536,33 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod config_tests;
+impl From<ChatMode> for orbit_app::chat::ChatMode {
+    fn from(value: ChatMode) -> Self {
+        match value {
+            ChatMode::ReadOnly => Self::ReadOnly,
+            ChatMode::Auto => Self::Auto,
+            ChatMode::Yolo => Self::Yolo,
+        }
+    }
+}
+
+impl From<ChatCapability> for orbit_app::chat::ChatCapability {
+    fn from(value: ChatCapability) -> Self {
+        match value {
+            ChatCapability::All => Self::All,
+            ChatCapability::Subagents => Self::Subagents,
+            ChatCapability::Web => Self::Web,
+            ChatCapability::Mcp => Self::Mcp,
+            ChatCapability::Skills => Self::Skills,
+            ChatCapability::Image => Self::Image,
+            ChatCapability::Document => Self::Document,
+            ChatCapability::Files => Self::Files,
+            ChatCapability::Git => Self::Git,
+            ChatCapability::Write => Self::Write,
+            ChatCapability::Capability => Self::Capability,
+            ChatCapability::Command => Self::Command,
+            ChatCapability::History => Self::History,
+            ChatCapability::ProjectState => Self::ProjectState,
+        }
+    }
+}

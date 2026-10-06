@@ -1,0 +1,198 @@
+mod bootstrap;
+pub use bootstrap::register_server_bundle;
+mod command;
+pub mod configuration;
+pub mod connect;
+pub mod directories;
+pub mod discovery;
+pub mod interaction;
+pub mod project;
+pub mod prompt;
+pub mod protocol;
+pub mod pump;
+mod run;
+mod server;
+mod session;
+pub mod setup;
+pub mod transport;
+
+use std::{path::PathBuf, sync::Arc};
+
+use anyhow::{Context, Result, bail};
+use base64::Engine;
+
+use protocol::{Request, Response};
+use transport::{Connection, Target};
+
+pub use server::runtime_directory;
+pub use server::serve;
+
+#[derive(Clone, Debug)]
+pub struct ConnectionOptions {
+    /// System SSH destination or a Host alias from ~/.ssh/config.
+    pub ssh: Option<String>,
+    pub ssh_user: Option<String>,
+    pub ssh_port: Option<u16>,
+    pub identity: Option<String>,
+    /// WSL distribution. Omit both --ssh and --wsl for a local workspace.
+    pub wsl: Option<String>,
+    pub wsl_user: Option<String>,
+    /// Directory on the target; ~/ is expanded by the target service.
+    pub workspace: String,
+    /// Use an installed target executable instead of automatically deploying the server.
+    pub server: Option<String>,
+    /// Upload a Linux Orbit binary matching the target architecture.
+    pub upload_server: Option<PathBuf>,
+    pub allow_mcp_start: bool,
+}
+
+#[derive(Debug)]
+pub struct ServiceOptions {
+    pub workspace: String,
+    pub daemon: bool,
+    pub allow_mcp_start: bool,
+}
+
+pub async fn prepare_connection(
+    args: &ConnectionOptions,
+    config: PathBuf,
+    database: Option<PathBuf>,
+    auth_dir: Option<PathBuf>,
+    progress: Option<interaction::Progress>,
+) -> Result<Arc<Connection>> {
+    let target = match (args.ssh.clone(), args.wsl.clone()) {
+        (Some(host), None) => Target::Ssh {
+            host,
+            options: transport::SshOptions {
+                user: args.ssh_user.clone(),
+                port: args.ssh_port,
+                identity: args.identity.clone(),
+            },
+        },
+        (None, Some(distribution)) => Target::Wsl {
+            distribution,
+            user: args.wsl_user.clone(),
+        },
+        (None, None) => Target::Local,
+        _ => bail!("choose one workspace target"),
+    };
+    let unattended = progress.is_some();
+    let interactive = if matches!(target, Target::Ssh { .. }) {
+        match &progress {
+            Some(progress) => Some(Arc::new(
+                interaction::Interaction::new(progress.clone(), None).await?,
+            )),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let executable = match args.server.clone() {
+        Some(executable) => {
+            bootstrap::verify(
+                &target,
+                &executable,
+                unattended,
+                interactive.as_deref(),
+                progress.as_ref(),
+            )
+            .await?;
+            executable
+        }
+        None => {
+            bootstrap::executable(
+                &target,
+                args.upload_server.clone(),
+                unattended,
+                interactive.as_deref(),
+                progress.as_ref(),
+            )
+            .await?
+        }
+    };
+    let connection = Arc::new(Connection {
+        local_configuration: if matches!(target, Target::Local) {
+            None
+        } else {
+            Some(configuration::Local {
+                config: std::path::absolute(&config)?,
+                auth: crate::platform::directory(
+                    auth_dir.clone(),
+                    std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+                    std::env::var_os("HOME").map(PathBuf::from),
+                )?,
+                model: None,
+            })
+        },
+        target,
+        workspace: args.workspace.clone(),
+        executable,
+        config,
+        database,
+        auth_dir,
+        allow_mcp_start: args.allow_mcp_start,
+        unattended,
+        interactive,
+    });
+    Ok(connection)
+}
+
+pub fn request_id() -> String {
+    use std::hash::BuildHasher;
+    let state = std::collections::hash_map::RandomState::new();
+    format!(
+        "{:016x}{:016x}",
+        state.hash_one(std::time::SystemTime::now()),
+        state.hash_one(std::process::id())
+    )
+}
+
+pub struct Call {
+    pub request: Request,
+    pub reply: Option<tokio::sync::oneshot::Sender<Result<Response>>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Files {
+    pub requests: Arc<tokio::sync::mpsc::Sender<Call>>,
+    pub session: String,
+}
+
+impl PartialEq for Files {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.requests, &other.requests) && self.session == other.session
+    }
+}
+
+impl Eq for Files {}
+
+impl std::hash::Hash for Files {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&Arc::as_ptr(&self.requests), state);
+        std::hash::Hash::hash(&self.session, state);
+    }
+}
+
+impl Files {
+    pub async fn read(&self, path: &str) -> Result<Vec<u8>> {
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.requests
+            .send(Call {
+                request: Request::ReadFile {
+                    session: self.session.clone(),
+                    path: path.into(),
+                },
+                reply: Some(reply),
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("workspace connection closed"))?;
+        match response
+            .await
+            .context("workspace file transfer interrupted")??
+        {
+            Response::File(bytes) => Ok(base64::engine::general_purpose::STANDARD.decode(bytes)?),
+            Response::Error(error) => bail!("{error}"),
+            _ => bail!("unexpected workspace file response"),
+        }
+    }
+}

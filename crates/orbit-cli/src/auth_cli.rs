@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Subcommand, ValueEnum};
+use orbit_app::{config::FileConfig, models::account_models, platform::launch_browser};
 use orbit_auth::{AuthStore, CallbackFlow, CallbackListener, OAuthLogin, OAuthProvider};
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -55,31 +56,12 @@ pub(crate) enum AuthCommand {
     Logout { name: String },
 }
 
-pub(crate) fn directory(
-    explicit: Option<PathBuf>,
-    config_home: Option<PathBuf>,
-    home: Option<PathBuf>,
-) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(std::path::absolute(path)?);
-    }
-    let config = config_home
-        .filter(|path| !path.as_os_str().is_empty())
-        .or_else(|| home.map(|home| home.join(".config")))
-        .context("无法确定凭据目录，请设置 --auth-dir")?;
-    if !config.is_absolute() {
-        bail!("XDG_CONFIG_HOME 必须是绝对路径，或通过 --auth-dir 指定凭据目录");
-    }
-
-    Ok(config.join("orbit/auth"))
-}
-
 pub(crate) async fn run(command: AuthCommand, directory: PathBuf) -> Result<()> {
     let store = AuthStore::new(directory.clone())?;
     match command {
         AuthCommand::Models { config } => {
-            let mut config = crate::config::FileConfig::load(&config, &directory)?;
-            for diagnostic in crate::account_models::refresh(&mut config, true).await {
+            let mut config = FileConfig::load(&config, &directory)?;
+            for diagnostic in account_models::refresh(&mut config, true).await {
                 eprintln!("{diagnostic}");
             }
             for model in config.model_options()? {
@@ -230,51 +212,5 @@ fn read_secret(from_stdin: bool) -> Result<String> {
                 _ => {}
             }
         }
-    }
-}
-
-pub(crate) async fn launch_browser(url: &str) {
-    #[cfg(target_os = "linux")]
-    let command = "xdg-open";
-    #[cfg(target_os = "macos")]
-    let command = "open";
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = url;
-        return;
-    }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        let _ = tokio::time::timeout(
-            Duration::from_secs(3),
-            tokio::process::Command::new(command)
-                .arg(url)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .kill_on_drop(true)
-                .status(),
-        )
-        .await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn injected_home_controls_the_store_without_reading_host_environment() {
-        let root = tempfile::tempdir().unwrap();
-        let actual = directory(
-            None,
-            Some(root.path().join("config")),
-            Some(root.path().join("home")),
-        )
-        .unwrap();
-
-        assert_eq!(actual, root.path().join("config/orbit/auth"));
-        assert!(directory(None, None, None).is_err());
-        assert!(directory(None, Some("relative".into()), None).is_err());
     }
 }
