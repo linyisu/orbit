@@ -6,6 +6,10 @@
 
 它为命令执行提供操作系统级隔离，为文件工具提供路径与文件描述符校验。具体可访问资源取决于执行策略、挂载与授权；这些机制不等于对任意命令或外部程序的行为保证。
 
+## 执行后端
+
+`execution_backend(false)` 选择普通用户进程，`execution_backend(true)` 选择 Bubblewrap。调用方根据用户配置选择后端，默认关闭沙箱。普通进程继承经过敏感变量过滤的目标环境，使用真实路径，支持进程组取消、超时、资源配额和有界输出；文件与网络访问使用目标用户权限。Bubblewrap 后端落实工作区、挂载与网络隔离策略。显式启用的沙箱失败时直接返回错误。
+
 ## 隔离实现与测试组织
 
 [sandbox.rs](src/execution/sandbox.rs) 负责真实挂载授权、保护路径和 inode 校验；[sandbox/isolation.rs](src/execution/sandbox/isolation.rs) 共用命名空间、系统只读挂载及 Seccomp 构造，普通命令与浏览器读取都调用这些隔离部件。公共执行入口保持一致。
@@ -80,7 +84,7 @@ orbit-runtime/
 - 单个文件写入上限：默认 `0`（不限）；可通过 `ProcessLimits.max_file_size_bytes` 设置。
 - 虚拟内存地址空间：默认 `0`（不限）；可通过 `ProcessLimits.max_memory_bytes` 设置。
 - 最大打开文件描述符：默认 1024。
-- 最大并发进程/线程数：默认 1024。
+- 沙箱进程/线程数限制：默认 1024。普通执行继承宿主的进程数限制，因为 `RLIMIT_NPROC` 统计整个目标用户的进程与线程；普通执行仍应用文件大小、地址空间和文件描述符限制。
 - 针对用户显式设置的无限制模式（0），进行精确的单向与往返转换，杜绝静默回退。
 
 ---
@@ -150,3 +154,5 @@ cargo clippy -p orbit-runtime --all-targets -- -D warnings
 ```
 
 对含硬链接的文件，仅缓存已找到全部链接的安全路径集合；复用前重新核对链接数量、inode 和所有父目录。新增链接或重命名会使缓存失效，仍拒绝受保护路径的别名。
+
+Ubuntu 开启 `kernel.apparmor_restrict_unprivileged_userns=1` 时，需要管理员安装并启用 Bubblewrap 专用 AppArmor profile。`Failed RTM_NEWADDR`、uid map 权限错误表示隔离环境尚未建立，命令没有执行；Orbit 会明确报告系统策略问题。可先运行 `bwrap --unshare-user --unshare-net --ro-bind / / -- /bin/true` 检查目标环境。专用 profile 的设计见 [AppArmor 官方配置](https://gitlab.com/apparmor/apparmor/-/blob/master/profiles/apparmor/profiles/extras/bwrap-userns-restrict)。

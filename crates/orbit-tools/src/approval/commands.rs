@@ -17,9 +17,24 @@ pub(crate) fn local_workspace_command(
     cwd: Option<&str>,
     root: &Path,
 ) -> Option<String> {
-    let plan = shell::plan(command)?;
+    workspace_command(command, cwd, &Workspace::new(root).ok()?, true)
+}
 
-    let workspace = Workspace::new(root).ok()?;
+pub(crate) fn native_workspace_command(
+    command: &str,
+    cwd: Option<&str>,
+    workspace: &Workspace,
+) -> Option<String> {
+    workspace_command(command, cwd, workspace, false)
+}
+
+fn workspace_command(
+    command: &str,
+    cwd: Option<&str>,
+    workspace: &Workspace,
+    sandbox: bool,
+) -> Option<String> {
+    let plan = shell::plan(command)?;
     let root = workspace.root();
     let cwd = root.join(cwd.unwrap_or(".")).canonicalize().ok()?;
     if !cwd.starts_with(root) || !cwd.is_dir() {
@@ -29,7 +44,7 @@ pub(crate) fn local_workspace_command(
     if !plan
         .paths
         .iter()
-        .all(|path| local_target(path, &cwd, &workspace))
+        .all(|path| local_target(path, &cwd, workspace, sandbox))
     {
         return None;
     }
@@ -37,17 +52,21 @@ pub(crate) fn local_workspace_command(
     Some(plan.script)
 }
 
-fn local_target(word: &str, cwd: &Path, workspace: &Workspace) -> bool {
+fn local_target(word: &str, cwd: &Path, workspace: &Workspace, sandbox: bool) -> bool {
     if word.is_empty() {
         return false;
     }
     let root = workspace.root();
     let path = Path::new(word);
     let requested = if path.is_absolute() {
-        let Ok(relative) = path.strip_prefix("/workspace") else {
-            return false;
-        };
-        root.join(relative)
+        if sandbox {
+            let Ok(relative) = path.strip_prefix("/workspace") else {
+                return false;
+            };
+            root.join(relative)
+        } else {
+            path.to_owned()
+        }
     } else {
         cwd.join(path)
     };
@@ -126,6 +145,30 @@ mod tests {
     use orbit_runtime::execution::process::system_executable;
 
     use super::*;
+
+    #[test]
+    fn native_paths_use_the_real_workspace_and_its_protected_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let mut workspace = Workspace::new(root).unwrap();
+        std::fs::write(root.join("private.toml"), "secret").unwrap();
+        workspace.protect(root.join("private.toml")).unwrap();
+        assert!(
+            native_workspace_command("mkdir -p demo && echo hi | tee demo/out", None, &workspace)
+                .is_some()
+        );
+        assert!(
+            native_workspace_command(
+                &format!("echo hi > {}/out", root.display()),
+                None,
+                &workspace
+            )
+            .is_some()
+        );
+        assert!(native_workspace_command("echo hi > /workspace/out", None, &workspace).is_none());
+        assert!(native_workspace_command("cat private.toml", None, &workspace).is_none());
+        assert!(native_workspace_command("echo hi > private.toml", None, &workspace).is_none());
+    }
 
     #[test]
     fn local_text_commands_check_all_pipeline_inputs_outputs_and_and_stages() {

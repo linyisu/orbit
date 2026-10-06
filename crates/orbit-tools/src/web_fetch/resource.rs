@@ -36,7 +36,7 @@ enum Resource {
 }
 
 async fn fetch(value: &str, client: &WebClient, resource: Resource) -> Result<Vec<u8>, ToolError> {
-    let mut url = checked_url(value)?;
+    let mut url = client.checked_url(value)?;
     let mut clients = RequestClients::default();
     let mut visited = std::collections::HashSet::new();
     for hop in 0..=5 {
@@ -45,7 +45,11 @@ async fn fetch(value: &str, client: &WebClient, resource: Resource) -> Result<Ve
         }
         let route = client.route(&url)?;
         let response = clients
-            .get(&url, route.as_ref().map(|route| &route.proxy))
+            .get_authorized(
+                &url,
+                route.as_ref().map(|route| &route.proxy),
+                client.allows(&url),
+            )
             .await?
             .get(url.clone())
             .header(
@@ -79,7 +83,7 @@ async fn fetch(value: &str, client: &WebClient, resource: Resource) -> Result<Ve
                 .and_then(|v| v.to_str().ok())
                 .ok_or_else(|| failed("redirect has no valid Location header"))?;
 
-            url = redirect_target(&url, location)?;
+            url = client.redirect_target(&url, location)?;
             continue;
         }
 

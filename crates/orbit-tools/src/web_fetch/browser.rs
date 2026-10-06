@@ -23,7 +23,7 @@ pub(super) fn is_browser_challenge(headers: &header::HeaderMap) -> bool {
         .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"challenge"))
 }
 
-pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolError> {
+pub(super) async fn fetch(url: &Url, proxy: &Url, sandbox: bool) -> Result<BrowserPage, ToolError> {
     if proxy.scheme() != "http" || !proxy.username().is_empty() || proxy.password().is_some() {
         return Err(failed(
             "browser verification requires an unauthenticated HTTP [web].proxy",
@@ -53,10 +53,29 @@ pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolErr
     file.flush().await.map_err(failed)?;
     drop(file);
 
-    let mut child = orbit_runtime::execution::sandbox::browser_reader_command(profile.path())
-        .map_err(failed)?
+    let mut launcher = if sandbox {
+        orbit_runtime::execution::sandbox::browser_reader_command(profile.path()).map_err(failed)?
+    } else {
+        let mut command = tokio::process::Command::new("/usr/bin/firefox");
+        command
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", profile.path())
+            .env("XDG_CONFIG_HOME", profile.path())
+            .env("XDG_CACHE_HOME", profile.path())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        command
+    };
+    let mut child = launcher
         .args(["--headless", "--no-remote", "--profile"])
-        .arg("/orbit-browser")
+        .arg(if sandbox {
+            std::path::Path::new("/orbit-browser")
+        } else {
+            profile.path()
+        })
         .args(["--remote-debugging-port", "0"])
         .spawn()
         .map_err(|error| {

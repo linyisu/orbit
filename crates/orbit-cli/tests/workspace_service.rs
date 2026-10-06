@@ -15,7 +15,7 @@ struct Client {
 
 impl Client {
     async fn connect(root: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_orbit"))
+        let mut child = Command::new(env!("ORBIT_EMBEDDED_SERVER"))
             .arg("workspace-service")
             .arg("--workspace")
             .arg(root)
@@ -42,7 +42,9 @@ impl Client {
         client.output.read_exact(&mut marker).await.unwrap();
         assert_eq!(marker, b"\0ORBIT-WORKSPACE/1\n");
         assert_eq!(
-            client.request(json!({"method":"hello","version":1})).await["type"],
+            client
+                .request(json!({"method":"hello","version":orbit_protocol::VERSION}))
+                .await["type"],
             "hello"
         );
         client
@@ -72,10 +74,24 @@ impl Drop for Client {
 }
 
 async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
+    mock_tool_model(
+        "write_file",
+        json!({"path":"result.txt","content":"written remotely"}),
+        None,
+    )
+    .await
+}
+
+async fn mock_tool_model(
+    name: &'static str,
+    arguments: Value,
+    expected: Option<&'static str>,
+) -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
-        for index in 0..2 {
+        let mut index = 0;
+        while index < 2 {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
             let mut byte = [0; 1];
@@ -84,6 +100,11 @@ async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
                 request.push(byte[0]);
             }
             let header = String::from_utf8(request).unwrap();
+            assert!(
+                header
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer test-only")
+            );
             let length: usize = header
                 .lines()
                 .find_map(|line| {
@@ -95,10 +116,26 @@ async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
             let mut body = vec![0; length];
             socket.read_exact(&mut body).await.unwrap();
             let request: Value = serde_json::from_slice(&body).unwrap();
+            if request["stream"] == false {
+                let response = json!({"id":"title","model":"mock","choices":[{"index":0,"message":{"role":"assistant","content":"test title"},"finish_reason":"stop"}]}).to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+                continue;
+            }
             assert_eq!(request["stream"], true);
             let delta = if index == 0 {
-                json!({"tool_calls":[{"index":0,"id":"write","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"result.txt\",\"content\":\"written remotely\"}"}}]})
+                json!({"tool_calls":[{"index":0,"id":"write","type":"function","function":{"name":name,"arguments":arguments.to_string()}}]})
             } else {
+                if let Some(expected) = expected {
+                    assert!(
+                        request["messages"].as_array().unwrap().iter().any(
+                            |message| message["role"] == "tool"
+                                && message["content"]
+                                    .as_str()
+                                    .is_some_and(|text| text.contains(expected))
+                        ),
+                        "tool result missing expected output"
+                    );
+                }
                 json!({"content":"任务完成。"})
             };
             let finish = if index == 0 { "tool_calls" } else { "stop" };
@@ -108,6 +145,7 @@ async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
                 json!({"choices":[{"index":0,"delta":{},"finish_reason":finish}]})
             );
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{events}", events.len()).as_bytes()).await.unwrap();
+            index += 1;
         }
     });
     (format!("http://{address}/v1"), task)
@@ -135,6 +173,64 @@ models = [{{ id = "mock" }}]
     let opened = client.request(json!({"method":"open","resume":null})).await;
     assert_eq!(opened["type"], "opened", "{opened}");
     let id = opened["value"]["id"].as_str().unwrap().to_owned();
+    let store = orbit_store::store::Store::open(root.join("sessions.db"))
+        .await
+        .unwrap();
+    let mut child = store
+        .create_subagent(
+            &id,
+            "child-model".into(),
+            "explore".into(),
+            "child task".into(),
+        )
+        .await
+        .unwrap();
+    child
+        .begin("child task".into(), "child-model".into())
+        .await
+        .unwrap();
+    child
+        .append(
+            (0..140)
+                .map(|_| {
+                    orbit_agent::events::AgentEvent::Model(
+                        orbit_model::types::StreamEvent::TextDelta("child answer\n".into()),
+                    )
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+    let child_page = client
+        .request(json!({"method":"read_subagent","session":id,"agent":child.id(),"after":0}))
+        .await;
+    assert_eq!(child_page["type"], "subagent");
+    assert_eq!(child_page["value"]["more"], true);
+    let cursor = child_page["value"]["next"].as_u64().unwrap();
+    child
+        .finish("completed", vec![], Some(vec![]))
+        .await
+        .unwrap();
+    let child_page = client
+        .request(json!({"method":"read_subagent","session":id,"agent":child.id(),"after":cursor}))
+        .await;
+    assert_eq!(child_page["value"]["busy"], false);
+    assert_eq!(
+        child_page["value"]["updates"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["Finished"]["status"],
+        "completed"
+    );
+    for method in ["read_subagent", "send_subagent"] {
+        let response = client
+            .request(
+                json!({"method":method,"session":id,"agent":id,"after":0,"message":"unrelated"}),
+            )
+            .await;
+        assert_eq!(response["type"], "error");
+    }
     let start = json!({"method":"start","session":id,"request_id":"stable-request","prompt":"write a file","mode":"ask","model":null});
     assert_eq!(client.request(start.clone()).await["type"], "ok");
     let approval = tokio::time::timeout(Duration::from_secs(15), async {
@@ -197,7 +293,11 @@ models = [{{ id = "mock" }}]
         1
     );
     assert_eq!(
-        updates.last().unwrap()["Finished"]["status"],
+        updates
+            .iter()
+            .rev()
+            .find(|update| update.get("Finished").is_some())
+            .unwrap()["Finished"]["status"],
         "completed",
         "{page}"
     );
@@ -224,7 +324,14 @@ models = [{{ id = "mock" }}]
     let empty = client
         .request(json!({"method":"poll","session":id,"after":cursor}))
         .await;
-    assert!(empty["value"]["updates"].as_array().unwrap().is_empty());
+    assert!(
+        empty["value"]["updates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|update| update.get("Profile").is_some())
+    );
+    let cursor = empty["value"]["next"].as_u64().unwrap();
     assert_eq!(
         client
             .request(json!({"method":"poll","session":id,"after":cursor+1}))
@@ -256,6 +363,54 @@ models = [{{ id = "mock" }}]
             .count(),
         1
     );
+    assert_eq!(client.request(json!({"method":"session_action","session":id,"action":{"action":"rename","title":"restored title"}})).await["type"], "report");
+    let profile = client.request(json!({"method":"open","resume":id})).await;
+    assert_eq!(profile["value"]["title"], "restored title");
+    assert_eq!(
+        client
+            .request(json!({"method":"undo","session":id,"path":"result.txt"}))
+            .await["type"],
+        "ok"
+    );
+    let approval = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let page = client
+                .request(json!({"method":"poll","session":id,"after":0}))
+                .await;
+            if let Some(approval) = page["value"]["approvals"].as_array().unwrap().first() {
+                break approval["id"].as_u64().unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(root.join("result.txt").exists());
+    drop(client);
+    let mut client = Client::connect(root).await;
+    assert_eq!(client.request(json!({"method":"approve","session":id,"approval":approval,"allow":true,"remember":false})).await["type"], "ok");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let page = client
+                .request(json!({"method":"poll","session":id,"after":0}))
+                .await;
+            if page["value"]["busy"] == false {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!root.join("result.txt").exists());
+    assert!(
+        store
+            .workspace_changes(&id)
+            .await
+            .unwrap()
+            .iter()
+            .all(|change| change.undone)
+    );
     assert_eq!(
         client.request(json!({"method":"shutdown"})).await["type"],
         "ok"
@@ -265,30 +420,9 @@ models = [{{ id = "mock" }}]
 
 #[tokio::test]
 async fn ssh_and_wsl_launchers_use_the_same_service_and_ignore_shell_banners() {
-    use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let bin = root.join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    for program in ["ssh", "wsl.exe"] {
-        let path = bin.join(program);
-        std::fs::write(
-            &path,
-            r#"#!/usr/bin/python3
-import os,sys
-print('test login banner', flush=True)
-if os.path.basename(sys.argv[0]) == 'ssh':
-    assert sys.argv[-2] == 'test-alias'
-    os.execvp('sh', ['sh', '-c', sys.argv[-1]])
-else:
-    assert sys.argv[1:3] == ['--distribution', 'Test Distro']
-    args = sys.argv[sys.argv.index('--exec')+1:]
-    os.execvp(args[0], args)
-"#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
+    let bin = transport_launchers(root);
     let workspace = root.join("project 'quoted' $(touch unexpected)");
     std::fs::create_dir(&workspace).unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
@@ -298,11 +432,11 @@ else:
         vec!["--wsl", "Test Distro", "--wsl-user", "dev"],
     ] {
         for operation in ["--list", "--stop"] {
-            let output = Command::new(env!("CARGO_BIN_EXE_orbit"))
+            let output = Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
                 .arg("connect")
                 .args(&target)
                 .arg("--server")
-                .arg(env!("CARGO_BIN_EXE_orbit"))
+                .arg(env!("ORBIT_EMBEDDED_SERVER"))
                 .arg("--workspace")
                 .arg(&workspace)
                 .arg("--database")
@@ -373,16 +507,376 @@ models = [{{ id = "mock" }}]
     );
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let page = client.request(json!({"method":"poll","session":id,"after":0})).await;
+            let page = client
+                .request(json!({"method":"poll","session":id,"after":0}))
+                .await;
             if page["value"]["busy"] == false {
-                assert_eq!(page["value"]["updates"].as_array().unwrap().last().unwrap()["Finished"]["status"], "cancelled");
+                assert_eq!(
+                    page["value"]["updates"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .rev()
+                        .find(|update| update.get("Finished").is_some())
+                        .unwrap()["Finished"]["status"],
+                    "cancelled"
+                );
                 assert!(page["value"]["approvals"].as_array().unwrap().is_empty());
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     assert!(!root.join("result.txt").exists());
+    assert_eq!(
+        client.request(json!({"method":"shutdown"})).await["type"],
+        "ok"
+    );
+}
+
+fn transport_launchers(root: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = root.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    for program in ["ssh", "wsl.exe"] {
+        let path = bin.join(program);
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/python3
+import os,sys
+print('test login banner', flush=True)
+if os.path.basename(sys.argv[0]) == 'ssh':
+    assert sys.argv[-2] == 'test-alias'
+    os.execvp('sh', ['sh', '-c', sys.argv[-1]])
+else:
+    assert sys.argv[1:3] == ['--distribution', 'Test Distro']
+    args = sys.argv[sys.argv.index('--exec')+1:]
+    os.execvp(args[0], args)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    bin
+}
+
+#[tokio::test]
+async fn remote_prompt_uses_local_configuration_and_credentials_in_an_unconfigured_project() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let bin = transport_launchers(root);
+    for target in [vec!["--ssh", "test-alias"], vec!["--wsl", "Test Distro"]] {
+        let project = tempfile::tempdir_in(root).unwrap();
+        let local = tempfile::tempdir_in(root).unwrap();
+        let (url, model) = mock_model().await;
+        let auth = local.path().join("auth");
+        orbit_auth::AuthStore::new(auth.clone())
+            .unwrap()
+            .set_api_key("local-only", "test-only".into(), &url)
+            .await
+            .unwrap();
+        let config = local.path().join("local.toml");
+        std::fs::write(
+            &config,
+            format!(
+                r#"default_provider = "test"
+[providers.test]
+base_url = "{url}"
+credential = "local-only"
+auto_refresh_models = false
+models = [{{ id = "mock" }}]
+"#
+            ),
+        )
+        .unwrap();
+        let output = tokio::time::timeout(
+            Duration::from_secs(30),
+            Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
+                .arg("connect")
+                .args(&target)
+                .arg("--server")
+                .arg(env!("ORBIT_EMBEDDED_SERVER"))
+                .arg("--workspace")
+                .arg(project.path())
+                .arg("--config")
+                .arg(&config)
+                .arg("--auth-dir")
+                .arg(&auth)
+                .arg("--database")
+                .arg(project.path().join("sessions.db"))
+                .args(["--prompt", "write a file"])
+                .env(
+                    "PATH",
+                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                )
+                .env("HOME", root)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("result.txt")).unwrap(),
+            "written remotely"
+        );
+        assert!(!project.path().join("config.toml").exists());
+        assert!(!project.path().join("auth").exists());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("test-only"));
+        model.await.unwrap();
+        Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
+            .arg("connect")
+            .args(&target)
+            .arg("--server")
+            .arg(env!("ORBIT_EMBEDDED_SERVER"))
+            .arg("--workspace")
+            .arg(project.path())
+            .arg("--database")
+            .arg(project.path().join("sessions.db"))
+            .arg("--stop")
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            )
+            .env("HOME", root)
+            .output()
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("config.toml"),
+        r#"default_provider = "test"
+[providers.test]
+base_url = "http://127.0.0.1:1"
+api_key = "test-only"
+auto_refresh_models = false
+models = [{ id = "mock" }, { id = "other" }]
+"#,
+    )
+    .unwrap();
+    let project = root.join("next project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("proof.txt"), "target directory").unwrap();
+    let mut client = Client::connect(root).await;
+    let opened = client.request(json!({"method":"open"})).await;
+    assert_eq!(opened["type"], "opened", "{opened}");
+    let id = opened["value"]["id"].as_str().unwrap().to_owned();
+    let completion = client
+        .request(json!({"method":"complete","session":id,"input":"/cd next"}))
+        .await;
+    assert_eq!(completion["type"], "completions", "{completion}");
+    assert_eq!(
+        completion["value"]["entries"][0]["display"],
+        "next project/"
+    );
+    for request in [
+        json!({"method":"set_mode","session":id,"mode":"ask"}),
+        json!({"method":"set_model","session":id,"model":"test::other","effort":null}),
+        json!({"method":"configure_models","session":id,"configuration":null}),
+    ] {
+        let response = client.request(request).await;
+        assert_eq!(response["type"], "ok", "{response}");
+    }
+    let moved = client.request(json!({"method":"session_action","session":id,"action":{"action":"change_directory","path":project}})).await;
+    assert_eq!(moved["type"], "report", "{moved}");
+    let info = client.request(json!({"method":"open","resume":id})).await;
+    assert_eq!(
+        info["value"]["workspace"],
+        project.to_string_lossy().as_ref()
+    );
+    assert_eq!(info["value"]["mode"], "ask");
+    assert_eq!(info["value"]["model"], "test::other");
+    let file = client
+        .request(json!({"method":"read_file","session":id,"path":"proof.txt"}))
+        .await;
+    assert_eq!(file["type"], "file", "{file}");
+    let task = client.request(json!({"method":"session_action","session":id,"action":{"action":"task","task":{"action":"add","title":"service task"}}})).await;
+    assert_eq!(task["type"], "report", "{task}");
+    let task_completion = client
+        .request(json!({"method":"complete","session":id,"input":"/tasks done "}))
+        .await;
+    assert_eq!(
+        task_completion["value"]["entries"][0]["description"], "service task",
+        "{task_completion}"
+    );
+    let list = client
+        .request(json!({"method":"list_sessions","session":id}))
+        .await;
+    assert!(
+        list["value"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["id"] == id)
+    );
+    let store = orbit_store::store::Store::open(root.join("sessions.db"))
+        .await
+        .unwrap();
+    let legacy_window = store.open_tui_window().await.unwrap();
+    legacy_window.update(vec![id.clone()]).await.unwrap();
+    legacy_window.close().await.unwrap();
+    let restored = client.request(json!({"method":"restore_sessions"})).await;
+    assert!(
+        restored["value"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["id"] == id),
+        "{restored}"
+    );
+    let deletion = client
+        .request(json!({"method":"admin","action":{"action":"delete_session","id":id}}))
+        .await;
+    assert_eq!(deletion["type"], "report", "{deletion}");
+    assert_eq!(
+        client.request(json!({"method":"shutdown"})).await["type"],
+        "ok"
+    );
+}
+
+#[tokio::test]
+async fn native_execution_and_model_inheritance_use_the_packaged_local_service() {
+    use orbit_client::{
+        configuration::Local,
+        connect::Opened,
+        interaction,
+        transport::{Connection, Target},
+    };
+    use orbit_protocol::{Mode, Request, Response};
+    use std::sync::Arc;
+    if std::env::var_os("ORBIT_TEST_REQUIRE_NO_SANDBOX").is_some() {
+        assert!(!Path::new("/usr/bin/bwrap").exists());
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let (url, model) = mock_tool_model(
+        "run_command",
+        json!({"command":"echo native-command-ok; pwd"}),
+        Some("native-command-ok"),
+    )
+    .await;
+    let config = root.join("config.toml");
+    std::fs::write(&config, format!("default_provider = \"test\"\n[providers.test]\nbase_url = \"{url}\"\napi_key = \"test-only\"\nauto_refresh_models = false\nmodels = [{{ id = \"first\" }}, {{ id = \"selected\" }}]\n")).unwrap();
+    let auth = root.join("auth");
+    let connection = Arc::new(Connection {
+        local_configuration: Some(Local {
+            config: config.clone(),
+            auth: auth.clone(),
+            model: Some("test::selected".into()),
+        }),
+        target: Target::Local,
+        workspace: root.to_string_lossy().into(),
+        executable: env!("ORBIT_EMBEDDED_SERVER").into(),
+        config,
+        database: Some(root.join("sessions.db")),
+        auth_dir: Some(auth),
+        allow_mcp_start: false,
+        unattended: true,
+        interactive: None,
+    });
+    let mut opened = Opened::connect_progress(connection, None, interaction::channel().0)
+        .await
+        .unwrap();
+    assert_eq!(opened.info.model, "test::selected");
+    let id = opened.info.id.clone();
+    assert!(matches!(
+        opened
+            .client
+            .request(Request::Start {
+                session: id.clone(),
+                request_id: "native-command".into(),
+                prompt: "execute command".into(),
+                images: vec![],
+                compact: false,
+                mode: Mode::Yolo,
+                model: None
+            })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let Response::Page(page) = opened
+                .client
+                .request(Request::Poll {
+                    session: id.clone(),
+                    after: 0,
+                })
+                .await
+                .unwrap()
+            else {
+                panic!("expected events")
+            };
+            if !page.busy {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    model.await.unwrap();
+    let store = orbit_store::store::Store::open(root.join("sessions.db"))
+        .await
+        .unwrap();
+    let snapshot = store.load(&id).await.unwrap();
+    let history = serde_json::to_string(&snapshot.history).unwrap();
+    assert!(history.contains("native-command-ok"));
+    assert!(history.contains(root.to_str().unwrap()));
+    assert!(matches!(
+        opened.client.request(Request::Shutdown).await.unwrap(),
+        Response::Ok
+    ));
+}
+
+#[tokio::test]
+async fn native_execution_refuses_an_explicit_unavailable_sandbox() {
+    if orbit_runtime::execution::capabilities::check_sandbox()
+        .await
+        .is_ok()
+    {
+        assert!(
+            std::env::var_os("ORBIT_TEST_REQUIRE_NO_SANDBOX").is_none(),
+            "this CI scenario must not provide a sandbox"
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("config.toml"),
+        r#"default_provider = "test"
+[command]
+sandbox = true
+[providers.test]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "test-only"
+auto_refresh_models = false
+models = [{ id = "mock" }]
+"#,
+    )
+    .unwrap();
+    let mut client = Client::connect(root).await;
+    let opened = client.request(json!({"method":"open"})).await;
+    assert_eq!(opened["type"], "error", "{opened}");
+    assert!(
+        opened["value"].as_str().unwrap().contains("sandbox"),
+        "{opened}"
+    );
     assert_eq!(
         client.request(json!({"method":"shutdown"})).await["type"],
         "ok"

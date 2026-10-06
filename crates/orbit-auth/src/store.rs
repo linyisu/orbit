@@ -34,6 +34,22 @@ impl AuthStore {
         &self.directory
     }
 
+    pub async fn snapshot(&self, name: &str) -> Result<crate::CredentialSnapshot> {
+        let _lock = self.lock(name).await?;
+        Ok(crate::CredentialSnapshot(self.load(name)?))
+    }
+
+    pub async fn import_snapshot(
+        &self,
+        name: &str,
+        snapshot: &crate::CredentialSnapshot,
+    ) -> Result<()> {
+        if snapshot.0.version != 1 || snapshot.0.access.0.is_empty() {
+            return Err(AuthError::Storage);
+        }
+        self.save(name, &snapshot.0).await
+    }
+
     pub async fn set_api_key(&self, name: &str, key: String, base_url: &str) -> Result<()> {
         let endpoint = endpoint_scope(base_url)?;
         if key.trim().is_empty() || key.len() > 16_384 || key.chars().any(char::is_control) {

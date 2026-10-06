@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: "2"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   ci:
@@ -20,7 +24,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap musl-tools
 
       - name: Enable unprivileged user namespaces
         run: |
@@ -59,6 +63,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -66,8 +71,63 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      - name: Check architecture
+        run: python3 scripts/check-architecture.py
+
+      - name: Test CI scripts
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
         run: cargo test --workspace
+
+      - name: Report build resources on failure
+        if: failure()
+        run: |
+          df -h
+          free -h
+          du -sh target/* 2>/dev/null || true
+
+  native-execution:
+    name: Execution without Bubblewrap
+    runs-on: ubuntu-latest
+    env:
+      ORBIT_TEST_REQUIRE_NO_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare host without sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          sudo apt-get remove -y bubblewrap
+          test ! -e /usr/bin/bwrap
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify native execution and explicit sandbox failure
+        run: cargo test -p orbit-cli --test workspace_service native_execution
+
+  linux-bundle:
+    name: Portable Linux bundle
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bundle test dependencies
+        run: sudo apt-get update && sudo apt-get install -y musl-tools ca-certificates
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Build client with embedded portable server
+        run: scripts/build-bundle.sh
+      - name: Verify standalone client on older Linux
+        run: python3 scripts/test-remote-bundle.py target/bundle
+      - name: Package executable with permissions
+        run: tar -czf target/orbit-linux-x86_64.tar.gz -C target/bundle orbit orbit-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orbit-linux-x86_64
+          path: target/orbit-linux-x86_64.tar.gz

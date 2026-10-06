@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod capabilities;
 pub mod environment;
 pub mod manager;
 pub mod output;
@@ -7,8 +8,10 @@ pub mod process;
 pub mod request;
 pub mod resources;
 pub mod sandbox;
+pub mod shell_environment;
+mod supervisor;
 
-pub use backend::{BwrapBackend, ExecutionBackend};
+pub use backend::{BwrapBackend, ExecutionBackend, execution_backend};
 pub use environment::ExecutionEnvironment;
 pub use manager::ExecutionManager;
 pub use output::OutputPreview;

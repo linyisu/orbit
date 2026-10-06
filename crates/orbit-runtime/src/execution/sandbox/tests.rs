@@ -112,43 +112,6 @@ async fn isolated_firefox_starts_its_debugger_and_can_be_reaped() {
     assert!(ready, "Firefox failed to start in isolation: {diagnostic}");
 }
 
-#[tokio::test]
-async fn capture_keeps_bounded_unicode_tail_and_counts_all_output() {
-    let data = format!("{}FINAL", "中文".repeat(20_000));
-    let result = capture(data.as_bytes(), None).await.unwrap();
-
-    assert_eq!(result.total, data.len() as u64);
-    assert!(result.bytes.len() <= MAX_OUTPUT);
-
-    let tail = String::from_utf8(result.bytes).unwrap();
-
-    assert!(tail.ends_with("FINAL"));
-    assert!(data.ends_with(&tail));
-
-    let short = capture(b"small".as_slice(), None).await.unwrap();
-
-    assert_eq!(short.bytes, b"small");
-    assert_eq!(short.total, 5);
-}
-
-#[tokio::test]
-async fn capture_retains_a_paginated_log_with_a_hard_limit() {
-    let directory = tempfile::tempdir().unwrap();
-    let log = OutputLog::create(directory.path()).await.unwrap();
-    let id = log.id().to_owned();
-    let (_, stdout, _) = log.split();
-    let result = capture(b"first\nsecond\n".as_slice(), Some(stdout))
-        .await
-        .unwrap();
-
-    assert!(!result.retained_truncated);
-    assert_eq!(result.total, 13);
-    assert_eq!(
-        std::fs::read_to_string(directory.path().join(format!("{id}.stdout"))).unwrap(),
-        "first\nsecond\n"
-    );
-}
-
 #[test]
 fn test_normalize_mount_target() {
     assert_eq!(

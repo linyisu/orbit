@@ -3,19 +3,7 @@ use orbit_agent::tool::FileChange;
 use orbit_model::types::ChatMessage;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Session {
-    pub id: String,
-    pub workspace: String,
-    pub project_id: String,
-    pub model: String,
-    /// The selected reasoning setting, stored independently from provider
-    /// configuration so a resumed conversation keeps its own preference.
-    pub reasoning_effort: Option<String>,
-    pub demo: bool,
-    pub title: String,
-    pub updated_at: i64,
-}
+pub use orbit_protocol::Session;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
@@ -74,112 +62,6 @@ pub struct VerificationRecord {
 }
 
 /// Project-scoped work that survives directory moves and conversation changes.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProjectTask {
-    pub id: i64,
-    pub project_id: String,
-    pub parent_id: Option<i64>,
-    pub title: String,
-    pub details: String,
-    pub status: TaskStatus,
-    pub priority: i64,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
-    Pending,
-    InProgress,
-    Blocked,
-    Completed,
-    Cancelled,
-}
-
-impl TaskStatus {
-    pub const ALL: [Self; 5] = [
-        Self::Pending,
-        Self::InProgress,
-        Self::Blocked,
-        Self::Completed,
-        Self::Cancelled,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::InProgress => "in_progress",
-            Self::Blocked => "blocked",
-            Self::Completed => "completed",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|status| status.as_str() == value)
-    }
-}
-
-/// A concise, session-scoped fact deliberately saved for the current
-/// conversation. This is separate from conversation compression: memories
-/// are never an implicit replacement for historical messages.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionMemory {
-    pub id: i64,
-    pub session_id: String,
-    pub category: MemoryCategory,
-    pub title: String,
-    pub content: String,
-    pub active: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-/// Enabled project package with a pinned revision; files stay in private storage.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProjectPlugin {
-    pub project_id: String,
-    pub marketplace_source: String,
-    pub plugin_name: String,
-    pub package_source: String,
-    pub version: Option<String>,
-    #[serde(default)]
-    pub marketplace_revision: Option<String>,
-    pub enabled_at: i64,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryCategory {
-    Constraint,
-    Decision,
-    Fact,
-    Preference,
-}
-
-impl MemoryCategory {
-    pub const ALL: [Self; 4] = [
-        Self::Constraint,
-        Self::Decision,
-        Self::Fact,
-        Self::Preference,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Constraint => "constraint",
-            Self::Decision => "decision",
-            Self::Fact => "fact",
-            Self::Preference => "preference",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|category| category.as_str() == value)
-    }
-}
+pub use orbit_protocol::project::{
+    MemoryCategory, ProjectPlugin, ProjectTask, SessionMemory, TaskStatus,
+};

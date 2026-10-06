@@ -17,9 +17,14 @@ mod store;
 pub use anthropic::AnthropicLogin;
 pub use api_key::{ApiKeyProvider, DEEPSEEK_BASE, ZHIPU_CODING_BASE, verify_deepseek};
 pub use callback::CallbackListener;
-pub use credential::{AuthTarget, CredentialInfo, CredentialKind, CredentialRef, RequestAuth};
+pub use credential::{
+    AuthTarget, CredentialInfo, CredentialKind, CredentialRef, CredentialSnapshot, RequestAuth,
+};
 pub use error::{AuthError, Result};
 pub use oauth::{CallbackFlow, LoginOutcome, OAuthLogin, OAuthProvider, PendingGoogleLogin};
 pub use store::AuthStore;
 
 pub use antigravity::refresh_client_version as refresh_antigravity_client_version;
+
+mod directory;
+pub use directory::directory;

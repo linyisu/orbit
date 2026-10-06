@@ -669,10 +669,94 @@ async fn browser_challenge_reads_the_requested_wiki_page() {
     let browser_page = browser::fetch(
         &checked_url("https://isaac.huijiwiki.com/wiki/%E9%81%93%E5%85%B7").unwrap(),
         &Url::parse(&proxy).unwrap(),
+        true,
     )
     .await
     .unwrap();
 
     assert!(browser_page.title.contains("道具"));
     assert!(browser_page.text.contains("道具"));
+}
+
+#[test]
+fn internal_access_is_limited_to_configured_origins() {
+    let client = WebClient::new(&WebConfig {
+        allowed_origins: vec!["http://docs.internal:8080".into()],
+        ..Default::default()
+    })
+    .unwrap();
+    let current = client
+        .checked_url("http://docs.internal:8080/guide")
+        .unwrap();
+    assert!(client.allows(&current));
+    assert!(client.redirect_target(&current, "/next").is_ok());
+    for target in [
+        "http://docs.internal:8081/",
+        "http://other.internal:8080/",
+        "http://127.0.0.1:8080/",
+        "http://docs.internal.evil:8080/",
+    ] {
+        assert!(
+            client.redirect_target(&current, target).is_err(),
+            "{target}"
+        );
+    }
+    for origin in [
+        "http://user:secret@docs.internal",
+        "http://docs.internal/path",
+        "file:///tmp",
+        "http://docs.internal?secret",
+    ] {
+        assert!(
+            WebClient::new(&WebConfig {
+                allowed_origins: vec![origin.into()],
+                ..Default::default()
+            })
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn authorized_internal_resource_does_not_authorize_redirected_origins() {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for response in [
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        ] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+                assert!(request.len() < 4096);
+            }
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    let mut client = WebClient::for_test(None);
+    client.allowed_origins = vec![origin.clone()];
+    assert_eq!(
+        client
+            .fetch_json(&format!("{origin}/ok"), 1024)
+            .await
+            .unwrap(),
+        json!({"ok":true})
+    );
+    let error = client
+        .fetch_json(&format!("{origin}/redirect"), 1024)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("port must be 80 or 443"),
+        "{error}"
+    );
+    server.await.unwrap();
 }
