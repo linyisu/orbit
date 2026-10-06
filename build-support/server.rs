@@ -12,7 +12,10 @@ pub fn bundle() {
     }
     let architecture = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let target = format!("{architecture}-unknown-linux-musl");
-    let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
+    let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap())
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root");
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     // A separate target directory avoids waiting on the parent Cargo build lock.
     let cache = output.ancestors().nth(4).unwrap().join("workspace-server");
@@ -26,8 +29,30 @@ pub fn bundle() {
         }
     });
 
-    for path in ["Cargo.toml", "Cargo.lock", "crates", "vendor"] {
+    for path in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "build-support/server.rs",
+        "vendor",
+    ] {
         println!("cargo:rerun-if-changed={}", root.join(path).display());
+    }
+    for package in [
+        "orbit-server",
+        "orbit-service",
+        "orbit-protocol",
+        "orbit-config",
+        "orbit-agent",
+        "orbit-auth",
+        "orbit-model",
+        "orbit-runtime",
+        "orbit-store",
+        "orbit-tools",
+    ] {
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("crates").join(package).display()
+        );
     }
     println!("cargo:rerun-if-env-changed={compiler_variable}");
 
