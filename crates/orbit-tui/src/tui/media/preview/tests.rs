@@ -16,8 +16,7 @@ fn mouse(kind: MouseEventKind, point: (u16, u16)) -> Event {
 }
 
 fn draw_ready(preview: &mut Preview, terminal: &mut Terminal<TestBackend>) {
-    // CI runners share limited cores with the whole suite; only a real
-    // deadlock needs to trip this bound, so keep it generous.
+    // Allow scheduling headroom on busy CI runners.
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         super::super::begin_frame();
@@ -35,8 +34,7 @@ fn draw_ready(preview: &mut Preview, terminal: &mut Terminal<TestBackend>) {
             break;
         }
         if preview.requested_quality.is_none() {
-            assert!(Instant::now() < deadline, "preview worker did not finish");
-            std::thread::sleep(Duration::from_millis(5));
+            wait_for_worker(preview, deadline);
             continue;
         }
         let view = View {
@@ -54,19 +52,7 @@ fn draw_ready(preview: &mut Preview, terminal: &mut Terminal<TestBackend>) {
             preview.picture = Some(picture);
             break;
         }
-        assert!(
-            preview
-                .context
-                .preview_error(
-                    &preview.source,
-                    preview.body.width,
-                    preview.body.height,
-                    view
-                )
-                .is_none()
-        );
-        assert!(Instant::now() < deadline, "preview worker did not finish");
-        std::thread::sleep(Duration::from_millis(5));
+        wait_for_worker(preview, deadline);
     }
     super::super::begin_frame();
     terminal
@@ -75,6 +61,50 @@ fn draw_ready(preview: &mut Preview, terminal: &mut Terminal<TestBackend>) {
             super::super::paint(frame.buffer_mut());
         })
         .unwrap();
+}
+
+fn wait_for_worker(preview: &Preview, deadline: Instant) {
+    let view = View {
+        quality: preview.requested_quality.unwrap_or(preview.view.quality),
+        ..preview.view
+    };
+    let error = preview
+        .context
+        .preview_error(
+            &preview.source,
+            preview.body.width,
+            preview.body.height,
+            view,
+        )
+        .or_else(|| {
+            preview.context.error(
+                &preview.source,
+                preview.body.width,
+                preview.body.height,
+                true,
+            )
+        });
+    let describe = || {
+        format!(
+            "protocol={:?}, source={:?}, body={:?}, view={:?}, requested_quality={:?}, error={error:?}",
+            preview
+                .context
+                .shared
+                .as_ref()
+                .map(|shared| shared.picker.protocol_type()),
+            preview.source,
+            preview.body,
+            preview.view,
+            preview.requested_quality,
+        )
+    };
+    assert!(error.is_none(), "preview worker failed: {}", describe());
+    assert!(
+        Instant::now() < deadline,
+        "preview worker did not finish within 60 seconds: {}",
+        describe()
+    );
+    std::thread::sleep(Duration::from_millis(5));
 }
 
 #[test]
