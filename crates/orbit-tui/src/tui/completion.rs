@@ -5,13 +5,7 @@ use std::{
 
 use super::commands;
 
-#[derive(Clone, Debug)]
-pub struct Candidate {
-    pub name: String,
-    pub display: Option<String>,
-    pub description: String,
-    pub continue_input: bool,
-}
+pub use orbit_protocol::Completion as Candidate;
 
 #[derive(Clone, Debug, Default)]
 pub struct DirectoryCache {
@@ -248,80 +242,6 @@ fn options(_argument: &str, values: &[(&str, &str, bool)]) -> Vec<(String, Strin
         .iter()
         .map(|(value, description, more)| (value.to_string(), description.to_string(), *more))
         .collect()
-}
-
-pub async fn stored(
-    input: &str,
-    session: &crate::session::SessionState,
-) -> anyhow::Result<Vec<Candidate>> {
-    let words = input.split_whitespace().collect::<Vec<_>>();
-    let prefix = match words.as_slice() {
-        ["/diff" | "/undo" | "/resume", ..] => words[0].to_owned(),
-        ["/tasks", "start" | "done" | "block" | "cancel", ..] => words[..2].join(" "),
-        ["/memory", "forget", ..] => words[..2].join(" "),
-        _ => return Ok(Vec::new()),
-    };
-    if !input.starts_with(&format!("{prefix} ")) {
-        return Ok(Vec::new());
-    }
-
-    let values: Vec<(String, String)> = match words[0] {
-        "/diff" | "/undo" => session
-            .store
-            .workspace_changes(session.id())
-            .await?
-            .into_iter()
-            .filter(|change| words[0] != "/undo" || !change.undone)
-            .map(|change| (change.change.path, "会话文件变更".into()))
-            .collect(),
-
-        "/resume" => session
-            .resumable()
-            .await?
-            .into_iter()
-            .map(|entry| (entry.id, entry.title))
-            .collect(),
-
-        "/tasks" => session
-            .store
-            .tasks(&session.snapshot.session.project_id, true)
-            .await?
-            .into_iter()
-            .map(|task| (task.id.to_string(), task.title))
-            .collect(),
-
-        "/memory" => session
-            .store
-            .session_memories(session.id(), false)
-            .await?
-            .into_iter()
-            .map(|memory| (memory.id.to_string(), memory.title))
-            .collect(),
-
-        _ => Vec::new(),
-    };
-    let argument = input[prefix.len()..].trim_start();
-    let mut candidates = values
-        .into_iter()
-        .map(|(value, description)| Candidate {
-            name: format!("{prefix} {value}"),
-            display: None,
-            description,
-            continue_input: false,
-        })
-        .collect::<Vec<_>>();
-
-    candidates.sort_by(|left, right| left.name.cmp(&right.name));
-    candidates.dedup_by(|left, right| left.name == right.name);
-    Ok(super::search::ranked(candidates, |candidate| {
-        [
-            &candidate.name[prefix.len() + 1..],
-            candidate.description.as_str(),
-        ]
-        .into_iter()
-        .filter_map(|text| super::search::rank(text, argument))
-        .min()
-    }))
 }
 
 pub fn select_with_mouse(state: &mut super::app::UiState, mouse: &crossterm::event::MouseEvent) {

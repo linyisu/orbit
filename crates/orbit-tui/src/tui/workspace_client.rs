@@ -3,6 +3,7 @@ pub(crate) mod auth;
 mod configuration;
 mod controls;
 mod input;
+mod project;
 mod submissions;
 use crate::workspace::pump;
 mod standalone;
@@ -32,6 +33,10 @@ const CHANNEL_CAPACITY: usize = 16;
 const HELP: &str = "/ssh HOST [PATH]、/wsl DISTRO [PATH] 连接新环境；/new 新建当前环境会话，/local 新建本地标签，/sessions 查看目标历史，/resume ID 在新标签恢复，/reconnect 重连，/close 断开当前标签。/model、/mode 切换模型与权限。";
 
 pub(super) enum Action {
+    Restore,
+    Connect,
+    Editor,
+    RefreshModels,
     None,
     Close,
     Quit,
@@ -45,6 +50,7 @@ pub(super) struct Tab {
     pub state: UiState,
     pub title: String,
     session_title: String,
+    model_catalog: Vec<orbit_protocol::ModelSummary>,
     pub id: Option<String>,
     pub connection: Option<Arc<Connection>>,
     spec: Option<Spec>,
@@ -66,7 +72,10 @@ pub(super) struct Tab {
     question_revision: Option<u64>,
     question_poll: Option<tokio::sync::oneshot::Receiver<Result<Response>>>,
     submissions: Vec<submissions::Submission>,
+    completion_input: String,
+    next_completion: std::time::Instant,
     next_questions: std::time::Instant,
+    model_refresh: Option<AbortOnDropHandle<Result<orbit_protocol::Configuration>>>,
     attachment_task: Option<AbortOnDropHandle<Result<Vec<orbit_model::types::Attachment>>>>,
 }
 
@@ -151,6 +160,7 @@ impl Tab {
             state,
             title: label,
             session_title: String::new(),
+            model_catalog: Vec::new(),
             id: None,
             connection: None,
             spec: None,
@@ -172,8 +182,11 @@ impl Tab {
             question_revision: None,
             question_poll: None,
             submissions: Vec::new(),
+            completion_input: String::new(),
+            next_completion: std::time::Instant::now(),
             next_questions: std::time::Instant::now(),
             attachment_task: None,
+            model_refresh: None,
         }
     }
 
@@ -185,6 +198,23 @@ impl Tab {
         );
         tab.install(opened);
         tab
+    }
+
+    pub fn reload_models(&mut self) {
+        if self.model_refresh.is_some() {
+            return;
+        }
+        if let Some(local) = self
+            .connection
+            .as_ref()
+            .and_then(|connection| connection.local_configuration.clone())
+        {
+            self.state
+                .report_local(TranscriptItem::Notice("正在刷新模型目录…".into()));
+            self.model_refresh = Some(AbortOnDropHandle::new(tokio::spawn(async move {
+                local.snapshot_with_refresh(true).await
+            })));
+        }
     }
 
     pub fn sibling(&self, resume: Option<String>) -> Self {
@@ -276,6 +306,20 @@ impl Tab {
     }
 
     fn profile(&mut self, info: &SessionInfo) {
+        self.state.branch = info.branch.clone();
+        self.state.branch_workspace = info.workspace.clone();
+        self.state.cursor_motion.enabled = info.cursor_trail;
+        self.state.auto_compact = info.auto_compact;
+        self.state.skill_completions = info.skills.clone();
+        self.mode = info.mode;
+        self.state.permission_mode = match info.mode {
+            Mode::Ask => super::permissions::Mode::Ask,
+            Mode::Auto => super::permissions::Mode::Auto,
+            Mode::Yolo => super::permissions::Mode::Yolo,
+        };
+        if let Some(connection) = &mut self.connection {
+            Arc::make_mut(connection).workspace = info.workspace.clone();
+        }
         self.session_title = info.title.clone();
         if !info.title.is_empty() {
             self.title = format!(
@@ -286,6 +330,7 @@ impl Tab {
         }
         self.state.model = info.model.clone();
         self.state.model_completions = info.models.clone();
+        self.model_catalog = info.model_catalog.clone();
         self.state.supports_vision = info.supports_vision;
         self.state.reasoning_effort = info
             .reasoning_effort
@@ -302,6 +347,52 @@ impl Tab {
     }
 
     pub async fn poll(&mut self) -> bool {
+        let input = self.state.input.text.clone();
+        if self.completion_input != input
+            && self.commands.is_some()
+            && std::time::Instant::now() >= self.next_completion
+        {
+            self.completion_input = input.clone();
+            self.state.stored_completions.clear();
+            self.next_completion = std::time::Instant::now() + Duration::from_millis(150);
+            if [
+                "/cd ", "/diff ", "/undo ", "/resume ", "/tasks ", "/memory ",
+            ]
+            .iter()
+            .any(|prefix| input.starts_with(prefix))
+            {
+                self.send(Request::Complete {
+                    session: self.id.clone().unwrap_or_default(),
+                    input,
+                });
+            }
+        }
+        if self
+            .model_refresh
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            match self.model_refresh.take().unwrap().await {
+                Ok(Ok(configuration)) => {
+                    self.send(Request::ConfigureModels {
+                        session: self.id.clone().unwrap_or_default(),
+                        configuration: if self.connection.as_ref().is_some_and(|connection| {
+                            matches!(connection.target, workspace::transport::Target::Local)
+                        }) {
+                            None
+                        } else {
+                            Some(configuration)
+                        },
+                    });
+                }
+                Ok(Err(error)) => self
+                    .state
+                    .report_local(TranscriptItem::CommandError(error.to_string())),
+                Err(error) => self
+                    .state
+                    .report_local(TranscriptItem::CommandError(error.to_string())),
+            }
+        }
         let mut changed = self.state.btw.tick() | self.poll_submissions() | self.poll_questions();
         if self
             .attachment_task
@@ -472,12 +563,24 @@ impl Tab {
             .is_some_and(|start| start.elapsed() < Duration::from_millis(160));
         changed |= super::advance_tab_hover(&mut self.state);
         changed |= self.state.expire_footnote_focus();
+        changed |= self.state.navigation.advance_preview();
+        if let Some(picker) = &mut self.state.picker {
+            changed |= picker.advance_title_scroll();
+        }
+        if let Some(picker) = &mut self.state.restore_picker {
+            changed |= picker.advance_title_scroll();
+        }
         changed |= self.poll_subagent();
         changed || self.state.running()
     }
 
     fn apply(&mut self, response: Response) {
         match response {
+            Response::Completions { input, entries } => {
+                if input == self.state.input.text {
+                    self.state.stored_completions = entries;
+                }
+            }
             Response::Page(page) => {
                 self.busy = page.busy;
                 self.state.model = page.model;
@@ -526,6 +629,10 @@ impl Tab {
                         self.state.resume_clock();
                     }
                 }
+            }
+            Response::Plugins(catalog) => {
+                self.state.marketplace_dialog =
+                    Some(super::dialogs::MarketplaceDialog::from_catalog(catalog));
             }
             Response::Questions(questions) => {
                 self.question_revision = Some(questions.revision);

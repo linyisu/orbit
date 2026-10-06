@@ -18,7 +18,7 @@ type VerificationTask = AbortOnDropHandle<Result<(String, Vec<String>)>>;
 pub(super) async fn run(
     terminal: &mut terminal::AppTerminal,
     events: &mut EventStream,
-    options: &crate::WorkspaceOptions,
+    options: &crate::ConnectionSettings,
     provider: orbit_auth::ApiKeyProvider,
 ) -> Result<Option<Vec<ModelOption>>> {
     let mut key = InputState::default();

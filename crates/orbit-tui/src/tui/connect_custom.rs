@@ -31,7 +31,7 @@ fn format_name(format: ApiFormat) -> &'static str {
 pub(super) async fn run(
     terminal: &mut terminal::AppTerminal,
     events: &mut EventStream,
-    options: &crate::WorkspaceOptions,
+    options: &crate::ConnectionSettings,
     existing: Option<&str>,
 ) -> Result<Option<Vec<ModelOption>>> {
     let mut draft = ConnectionDraft::load(&options.config, existing)?;
@@ -70,7 +70,7 @@ pub(super) async fn run(
 pub(super) async fn manage(
     terminal: &mut terminal::AppTerminal,
     events: &mut EventStream,
-    options: &crate::WorkspaceOptions,
+    options: &crate::ConnectionSettings,
 ) -> Result<Option<Vec<ModelOption>>> {
     let names = crate::connections::edit::saved_connections(&options.config)?;
     if names.is_empty() {

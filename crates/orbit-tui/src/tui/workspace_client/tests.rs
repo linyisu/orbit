@@ -148,6 +148,13 @@ async fn concurrent_tabs_keep_drafts_events_models_and_requests_separate() {
         matches!(wsl_requests.try_recv().unwrap().request, Request::SetModel { model, .. } if model == "wsl-model")
     );
     ssh.submit("/mode ask".into()).unwrap();
+    assert!(matches!(
+        ssh_requests.try_recv().unwrap().request,
+        Request::SetMode {
+            mode: Mode::Ask,
+            ..
+        }
+    ));
     ssh.submit("first target".into()).unwrap();
     wsl.submit("second target".into()).unwrap();
     assert!(
@@ -248,21 +255,25 @@ fn approvals_and_cancellation_only_reach_the_selected_target() {
 }
 
 #[test]
-fn workspace_completion_does_not_offer_local_filesystem_commands() {
+fn workspace_completion_offers_shared_commands_without_local_directory_reads() {
     let (mut tab, _) = tab("SSH dev");
     tab.state.input.set("/".into());
     let menu = tab.state.menu();
-    for command in ["/ssh", "/wsl", "/local", "/new", "/reconnect"] {
+    for command in [
+        "/ssh",
+        "/wsl",
+        "/local",
+        "/new",
+        "/reconnect",
+        "/cd",
+        "/connect",
+        "/undo",
+    ] {
         assert!(
             menu.iter().any(|candidate| candidate.name == command),
             "{command}"
         );
     }
-    assert!(
-        !menu
-            .iter()
-            .any(|candidate| matches!(candidate.name.as_str(), "/cd" | "/connect" | "/undo"))
-    );
     tab.state.input.set("/cd /".into());
     assert!(tab.state.menu().is_empty());
 }

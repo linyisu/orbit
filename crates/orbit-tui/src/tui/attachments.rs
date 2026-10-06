@@ -3,9 +3,13 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use super::app::{TranscriptItem, UiState};
+#[cfg(test)]
+use super::app::TranscriptItem;
+use super::app::UiState;
+#[cfg(test)]
 use crate::session::SessionState;
 
+#[cfg(test)]
 const VISION_DISABLED_MESSAGE: &str = "当前模型未启用图片输入，未添加图片附件。可切换支持图片的模型，或在 /connect 中调整自定义模型的图片输入设置。";
 
 pub(super) fn attachment_path(argument: &str) -> std::path::PathBuf {
@@ -134,6 +138,7 @@ pub(super) fn remove_focused_attachment(state: &mut UiState, backwards: bool) ->
     true
 }
 
+#[cfg(test)]
 pub(super) fn attach_paths(
     state: &mut UiState,
     session: &SessionState,
@@ -184,61 +189,4 @@ pub(super) fn read_clipboard() -> Result<ClipboardPayload> {
     }
 
     anyhow::bail!("剪贴板中没有可用的图片、文件或文本")
-}
-
-pub(super) async fn paste_clipboard(state: &mut UiState, session: &SessionState) -> Result<()> {
-    let payload = tokio::task::spawn_blocking(read_clipboard).await??;
-
-    match payload {
-        ClipboardPayload::Image {
-            width,
-            height,
-            bytes,
-        } => {
-            if !state.supports_vision {
-                state.report_local(TranscriptItem::CommandError(VISION_DISABLED_MESSAGE.into()));
-                state.menu_dismissed = false;
-                return Ok(());
-            }
-
-            let attachment = session.import_clipboard_image(width, height, bytes)?;
-            queue_attachment(state, attachment);
-        }
-
-        ClipboardPayload::Files(files) => {
-            let images = files
-                .iter()
-                .filter_map(|path| {
-                    resolved_image_path(
-                        &path.to_string_lossy(),
-                        std::path::Path::new(&state.workspace),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            if images.len() == files.len() {
-                attach_paths(state, session, images)?;
-            } else {
-                state.input.insert(
-                    &files
-                        .iter()
-                        .map(|path| path.to_string_lossy())
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                );
-            }
-        }
-
-        ClipboardPayload::Text(text) => {
-            if let Some(paths) = pasted_image_paths(&text, std::path::Path::new(&state.workspace)) {
-                attach_paths(state, session, paths)?;
-            } else {
-                state.input.insert(&text);
-            }
-        }
-    }
-
-    state.menu_dismissed = false;
-
-    Ok(())
 }

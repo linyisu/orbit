@@ -21,12 +21,11 @@ futures-util.workspace = true
 html2text.workspace = true
 html5ever.workspace = true
 image.workspace = true
-orbit-service.workspace = true
+orbit-config.workspace = true
 orbit-agent.workspace = true
 orbit-auth.workspace = true
 orbit-model.workspace = true
 orbit-runtime.workspace = true
-orbit-store.workspace = true
 orbit-tools.workspace = true
 pulldown-cmark.workspace = true
 ratatui-image.workspace = true
@@ -54,3 +53,7 @@ url.workspace = true
 [build-dependencies]
 syntect.workspace = true
 two-face.workspace = true
+
+[dev-dependencies]
+orbit-service.workspace = true
+orbit-store.workspace = true

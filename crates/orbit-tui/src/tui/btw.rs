@@ -1,9 +1,14 @@
+#[cfg(test)]
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+#[cfg(test)]
+use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+#[cfg(test)]
 use orbit_agent::model::{ModelBackend, ModelClientBackend};
+#[cfg(test)]
 use orbit_model::{client::ModelClient, types::ChatMessage};
+#[cfg(test)]
 use orbit_store::store::Store;
 use ratatui::{Frame, layout::Rect};
 
@@ -30,8 +35,9 @@ struct Dialog {
 
 #[derive(Default)]
 pub(super) struct Questions {
+    #[cfg(test)]
     service: orbit_service::side_questions::SideQuestions,
-    records: Vec<orbit_store::side_questions::SideQuestion>,
+    records: Vec<orbit_protocol::SideQuestion>,
     running: bool,
     remote: bool,
     cancel_request: Option<usize>,
@@ -49,13 +55,13 @@ impl std::fmt::Debug for Questions {
 
 impl Questions {
     #[cfg(test)]
-    fn records(&self) -> &[orbit_store::side_questions::SideQuestion] {
+    fn records(&self) -> &[orbit_protocol::SideQuestion] {
         self.records.as_slice()
     }
 
     pub fn receive(
         &mut self,
-        records: Option<Vec<orbit_store::side_questions::SideQuestion>>,
+        records: Option<Vec<orbit_protocol::SideQuestion>>,
         running: bool,
         selected: Option<usize>,
     ) {
@@ -98,6 +104,7 @@ impl Questions {
         self.dialog.is_some()
     }
 
+    #[cfg(test)]
     pub async fn ask(
         &mut self,
         store: &Store,
@@ -119,30 +126,8 @@ impl Questions {
         .await
     }
 
-    pub async fn follow_up(
-        &mut self,
-        store: &Store,
-        session: &str,
-        model: &ModelClient,
-        history: &[ChatMessage],
-        question: &str,
-        max_tokens: u32,
-    ) -> Result<()> {
-        let index = self.dialog.as_ref().context("旁路窗口已关闭")?.index;
-        self.start(
-            store,
-            session,
-            model,
-            history,
-            question,
-            max_tokens,
-            Arc::new(ModelClientBackend::new(model.clone())),
-            Some(index),
-        )
-        .await
-    }
-
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     async fn ask_with_backend(
         &mut self,
         store: &Store,
@@ -160,6 +145,7 @@ impl Questions {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     async fn start(
         &mut self,
         store: &Store,
@@ -207,6 +193,9 @@ impl Questions {
     }
 
     pub fn poll(&mut self) -> bool {
+        #[cfg(not(test))]
+        let changed = false;
+        #[cfg(test)]
         let changed = if self.remote {
             false
         } else {
@@ -294,7 +283,14 @@ impl Questions {
                     }
                     self.running
                 } else {
-                    self.service.cancel(dialog.index)
+                    #[cfg(test)]
+                    {
+                        self.service.cancel(dialog.index)
+                    }
+                    #[cfg(not(test))]
+                    {
+                        false
+                    }
                 }
             {
                 return Ok(Action::Redraw);

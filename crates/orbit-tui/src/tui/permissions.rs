@@ -1,5 +1,7 @@
+#[cfg(test)]
 use std::path::Path;
 
+#[cfg(test)]
 use orbit_tools::approval::ApprovalPreview;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -36,6 +38,7 @@ impl Mode {
         }
     }
 
+    #[cfg(test)]
     pub fn allows(self, preview: &ApprovalPreview, workspace: &Path) -> bool {
         match self {
             Self::Ask => false,
@@ -46,11 +49,11 @@ impl Mode {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Ask => "ask：文件修改、沙箱命令、MCP 调用和外部权限逐次确认",
+            Self::Ask => "ask：文件修改、命令、MCP 调用和外部权限逐次确认",
             Self::Auto => {
                 "auto：工作区文件工具、简单文本写入、建目录和离线只读命令自动执行；其他脚本、联网、MCP 和外部权限需确认"
             }
-            Self::Yolo => "YOLO：全部操作自动确认通过（沙箱和权限边界限制不变）",
+            Self::Yolo => "YOLO：全部操作自动确认通过（隔离方式由工作区配置决定）",
         }
     }
 }

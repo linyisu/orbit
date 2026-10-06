@@ -321,7 +321,11 @@ fn session(id: &str, title: &str) -> Session {
 #[test]
 fn model_picker_draws_on_a_terminal_too_short_for_body_rows() {
     let mut state = UiState::new("model");
-    state.model_picker = Some(ModelPicker::new(Vec::new(), "model".into(), None));
+    state.model_picker = Some(ModelPicker::new(
+        Vec::<ModelOption>::new(),
+        "model".into(),
+        None,
+    ));
     let mut terminal = Terminal::new(TestBackend::new(12, 6)).unwrap();
 
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
@@ -329,7 +333,7 @@ fn model_picker_draws_on_a_terminal_too_short_for_body_rows() {
 
 #[test]
 fn grouped_models_keep_last_row_visible_and_support_mouse_selection() {
-    let models = (0..30)
+    let models: Vec<_> = (0..30)
         .map(|index| ModelOption {
             max_output_tokens: 32_000,
             provider: format!("provider-{}", index / 3),
@@ -408,7 +412,7 @@ fn grouped_models_keep_last_row_visible_and_support_mouse_selection() {
 
 #[test]
 fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
-    let models = (0..30)
+    let models: Vec<_> = (0..30)
         .map(|index| ModelOption {
             max_output_tokens: 32_000,
             provider: "provider".into(),

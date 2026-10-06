@@ -1,9 +1,14 @@
+#[cfg(test)]
 use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+#[cfg(test)]
 use orbit_agent::events::AgentEvent;
+#[cfg(test)]
 use orbit_model::types::StreamEvent;
+#[cfg(test)]
 use orbit_store::types::Snapshot;
+#[cfg(test)]
 use orbit_store::{store::Store, tui_sessions::SessionRevision};
 use ratatui::{
     Frame,
@@ -12,7 +17,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use unicode_width::UnicodeWidthStr;
 
 use super::{
@@ -28,7 +35,9 @@ pub(super) use super::transcript_dialog::Action as ViewerAction;
 pub(super) struct Viewer {
     id: String,
     view: super::transcript_dialog::TranscriptDialog,
+    #[cfg(test)]
     snapshot: Option<Snapshot>,
+    #[cfg(test)]
     sync: super::session_sync::SessionSync,
     error: Option<String>,
 }
@@ -52,7 +61,9 @@ pub(super) fn open(state: &mut UiState, id: String) {
     state.subagent_dialog = Some(Box::new(Viewer {
         id,
         view,
+        #[cfg(test)]
         snapshot: None,
+        #[cfg(test)]
         sync: Default::default(),
         error: None,
     }));
@@ -60,6 +71,7 @@ pub(super) fn open(state: &mut UiState, id: String) {
 
 impl Viewer {
     /// Read saved events without acquiring a writer or changing the active parent session.
+    #[cfg(test)]
     pub async fn poll(&mut self, store: &Store, parent: &str) -> bool {
         if self.error.is_some() || self.view.ui.selection.active() {
             return false;
@@ -204,6 +216,7 @@ impl Viewer {
         self.view.handle(event)
     }
 
+    #[cfg(test)]
     pub async fn send(&mut self, tools: &orbit_agent::tool::ToolRegistry, message: String) {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -399,6 +412,7 @@ pub(super) fn details(row: &ToolRow, width: u16) -> Option<Vec<LinkedLine>> {
     Some(lines)
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct Activity {
     revision: Option<SessionRevision>,
@@ -407,6 +421,7 @@ struct Activity {
     current: String,
 }
 
+#[cfg(test)]
 impl Activity {
     fn apply(&mut self, event: AgentEvent) {
         match event {
@@ -433,6 +448,7 @@ impl Activity {
 }
 
 /// Read journal changes for child runs without retaining their message bodies.
+#[cfg(test)]
 #[derive(Default)]
 pub(super) struct Progress {
     runs: HashMap<(String, i64), Activity>,
@@ -441,7 +457,9 @@ pub(super) struct Progress {
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
 impl Progress {
+    #[cfg(test)]
     pub async fn poll(&mut self, store: &Store, state: &mut UiState) -> anyhow::Result<bool> {
         let mut retained = HashSet::new();
         let mut changed = false;

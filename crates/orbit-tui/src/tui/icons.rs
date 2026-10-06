@@ -8,8 +8,11 @@ pub(super) const CLOSE_THICK: &str = "󱎘";
 pub(super) const ALERT_OUTLINE: &str = "󰀪";
 pub(super) const CIRCLE: &str = "󰝥";
 pub(super) const CIRCLE_OUTLINE: &str = "󰝦";
+#[cfg(test)]
 pub(super) const PLAY: &str = "󰐊";
+#[cfg(test)]
 pub(super) const BLOCK_HELPER: &str = "󰂭";
+#[cfg(test)]
 pub(super) const CANCEL: &str = "󰜺";
 pub(super) const LOADING: &str = "󰝲";
 pub(super) const CHEVRON_RIGHT: &str = "󰅂";

@@ -85,8 +85,9 @@ pub struct UiState {
     pub(super) media_preview: Option<super::media::Preview>,
     pub tabs: Vec<SessionTab>,
     pub new_tab_area: ratatui::layout::Rect,
+    #[cfg(test)]
     pub new_tab_request: bool,
-    pub close_tab_request: Option<String>,
+
     pub tab_close_areas: Vec<(ratatui::layout::Rect, String)>,
     pub(super) tab_hover: Option<(super::TabAction, Instant)>,
     pub(super) tab_hover_tick: u128,
@@ -100,8 +101,11 @@ pub struct UiState {
     pub(super) approval_diff: Option<super::approval_diff::Cache>,
     pub approval_shown: bool,
     pub approval_choice: usize,
+    #[cfg(test)]
     pub session_allowed_files: std::collections::HashSet<String>,
+    #[cfg(test)]
     pub session_commands: std::collections::HashSet<String>,
+    #[cfg(test)]
     pub session_git_commands: std::collections::HashSet<String>,
     pub permission_mode: super::permissions::Mode,
     pub selection: super::selection::Selection,
@@ -175,6 +179,7 @@ pub struct UiState {
     pub(super) subagent_parent_hovered: bool,
     pub(super) subagent_parent_pressed: bool,
     pub delete_request: Option<String>,
+    #[cfg(test)]
     pub compact_after_model_switch: bool,
     pub resume_loading: Option<String>,
     pub model_picker: Option<super::dialogs::ModelPicker>,
@@ -287,8 +292,9 @@ impl UiState {
             media_preview: None,
             tabs: Vec::new(),
             new_tab_area: Default::default(),
+            #[cfg(test)]
             new_tab_request: false,
-            close_tab_request: None,
+
             tab_close_areas: Vec::new(),
             tab_hover: None,
             tab_hover_tick: 0,
@@ -302,8 +308,11 @@ impl UiState {
             approval_diff: None,
             approval_shown: false,
             approval_choice: 0,
+            #[cfg(test)]
             session_allowed_files: std::collections::HashSet::new(),
+            #[cfg(test)]
             session_commands: Default::default(),
+            #[cfg(test)]
             session_git_commands: Default::default(),
             permission_mode: super::permissions::Mode::default(),
             selection: super::selection::Selection::default(),
@@ -369,6 +378,7 @@ impl UiState {
             subagent_parent_hovered: false,
             subagent_parent_pressed: false,
             delete_request: None,
+            #[cfg(test)]
             compact_after_model_switch: false,
             resume_loading: None,
             model_picker: None,
@@ -427,6 +437,7 @@ impl UiState {
         self.follow_bottom = true;
     }
 
+    #[cfg(test)]
     pub fn cancel(&mut self) {
         if self.status == RunStatus::Running {
             self.status = RunStatus::Cancelling;
@@ -695,10 +706,9 @@ impl UiState {
         .into_iter()
         .filter(|candidate| {
             if self.connection_label.is_some() {
-                candidate.name != "/model refresh"
-                    && super::commands::available_in_workspace(
-                        candidate.name.split_whitespace().next().unwrap_or(""),
-                    )
+                super::commands::available_in_workspace(
+                    candidate.name.split_whitespace().next().unwrap_or(""),
+                )
             } else {
                 candidate.name != "/reconnect"
             }
@@ -712,6 +722,7 @@ impl UiState {
         .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn runtime_snapshot(&self) -> orbit_store::tui_sessions::TuiRuntime {
         orbit_store::tui_sessions::TuiRuntime {
             model: self.model.clone(),
@@ -739,6 +750,7 @@ impl UiState {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn apply_runtime(&mut self, runtime: &orbit_store::tui_sessions::TuiRuntime) {
         if self.model == runtime.model
             && self.reasoning_effort.map(|e| e.as_str()) == runtime.effort.as_deref()
@@ -859,6 +871,7 @@ impl UiState {
     }
 
     /// Historical events have no reasoning timestamps. Never time their replay.
+    #[cfg(test)]
     pub fn apply_replayed(&mut self, event: AgentEvent) {
         let has_timing = matches!(event, AgentEvent::ReasoningFinished { .. });
         self.apply(event);

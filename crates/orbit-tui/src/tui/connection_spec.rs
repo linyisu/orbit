@@ -106,6 +106,30 @@ impl Spec {
         Ok(spec)
     }
 
+    pub fn restored(tab: &crate::workspace::windows::SavedTab) -> Self {
+        let mut spec = Self::local();
+        match &tab.target {
+            crate::workspace::transport::Target::Local => {}
+            crate::workspace::transport::Target::Ssh { host, options } => {
+                spec.args.ssh = Some(host.clone());
+                spec.args.ssh_user = options.user.clone();
+                spec.args.ssh_port = options.port;
+                spec.args.identity = options.identity.clone();
+            }
+            crate::workspace::transport::Target::Wsl { distribution, user } => {
+                spec.args.wsl = Some(distribution.clone());
+                spec.args.wsl_user = user.clone();
+            }
+        }
+        spec.args.workspace = tab.workspace.clone();
+        spec.args.resume = Some(tab.id.clone());
+        spec.args.allow_mcp_start = tab.allow_mcp_start;
+        spec.config = Some(tab.config.clone());
+        spec.auth_dir = Some(tab.auth.clone());
+        spec.database = tab.database.clone();
+        spec
+    }
+
     pub fn local() -> Self {
         Self::parse_from(["workspace"])
     }

@@ -446,7 +446,7 @@ impl Panel {
 pub(super) async fn run(
     terminal: &mut terminal::AppTerminal,
     events: &mut EventStream,
-    options: &crate::WorkspaceOptions,
+    options: &crate::ConnectionSettings,
     draft: &mut ConnectionDraft,
     service: Vec<Field>,
 ) -> Result<Option<Vec<ModelOption>>> {

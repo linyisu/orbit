@@ -168,8 +168,6 @@ pub(super) fn resume_ui_shell(state: &UiState) -> UiState {
     restored
 }
 
-pub(super) use orbit_service::tools::command_output::read_command_stdout;
-
 pub(super) fn restore_model_profile(
     state: &mut UiState,
     model: &mut ModelClient,

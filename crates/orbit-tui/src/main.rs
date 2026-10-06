@@ -1,7 +1,5 @@
 use anyhow::Result;
 use clap::{Args, Parser};
-use orbit_service::context::instructions;
-use orbit_service::{WorkspaceOptions, prepare_workspace, session};
 use orbit_tui as tui;
 use std::path::PathBuf;
 
@@ -35,9 +33,6 @@ fn main() -> Result<()> {
         orbit_client::interaction::askpass()?;
         return Ok(());
     }
-    if orbit_service::platform::workers::run()? {
-        return Ok(());
-    }
     run()
 }
 
@@ -58,38 +53,23 @@ async fn run_tui(
     args: TuiArgs,
     auth_directory: PathBuf,
 ) -> Result<()> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let options = WorkspaceOptions {
-        initial_directory: std::env::current_dir()?,
-        auth_directory,
-        config: std::path::absolute(config_path)?,
-        database: session::database_path(database)?,
-        allow_mcp_start: args.allow_mcp_start,
-        config_home: std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| home.as_ref().map(|path| path.join(".config"))),
-        home,
-        instruction_dir: instructions::default_user_instruction_dir(),
-        editor_command: std::env::var("VISUAL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-                std::env::var("EDITOR")
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            })
-            .unwrap_or_else(|| "vi".into()),
+    let config = std::path::absolute(config_path)?;
+    let settings = tui::ConnectionSettings {
+        config: config.clone(),
+        auth_directory: auth_directory.clone(),
     };
-    if !options.config.try_exists()? && !tui::setup_connection(&options).await? {
+    if !config.try_exists()? && !tui::setup_connection(&settings).await? {
         return Ok(());
     }
-
-    let mut prepared = prepare_workspace(&options, &options.initial_directory, args.resume).await?;
-
-    while let Some(next) = tui::run(prepared, &options).await? {
-        prepared = next;
-    }
-
-    Ok(())
+    let mut options = orbit_client::ConnectionOptions::local(
+        std::env::current_dir()?.to_string_lossy().into_owned(),
+    );
+    options.allow_mcp_start = args.allow_mcp_start;
+    let connection =
+        orbit_client::prepare_connection(&options, config, database, Some(auth_directory), None)
+            .await?;
+    let (progress, _updates) = orbit_client::interaction::channel();
+    let opened =
+        orbit_client::connect::Opened::connect_progress(connection, args.resume, progress).await?;
+    tui::run_workspace(opened.client, opened.connection, opened.info).await
 }

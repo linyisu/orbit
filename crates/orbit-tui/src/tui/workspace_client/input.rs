@@ -84,10 +84,67 @@ impl Tab {
             }
             return Ok(Action::Redraw);
         }
+        if tui::subagents::handle_parent(&mut self.state, &event).is_some() {
+            if let Some(parent) = self.state.resume_request.take() {
+                return Ok(Action::SameTarget(Some(parent)));
+            }
+            if !matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) {
+                return Ok(Action::Redraw);
+            }
+        }
+        if tui::restore::handle(&mut self.state, &event) {
+            return Ok(Action::Redraw);
+        }
         if self.state.dialog_open() {
             if let Some(id) = tui::dialogs::handle(&mut self.state, event) {
                 self.state.picker = None;
                 return Ok(Action::SameTarget(Some(id)));
+            }
+            let plugin_action = if let Some(source) = self.state.pending_marketplace_source.take() {
+                Some(orbit_protocol::plugins::Action::Add { source })
+            } else {
+                self.state
+                    .pending_project_plugin_change
+                    .take()
+                    .map(|change| match change {
+                        tui::dialogs::ProjectPluginChange::Enable(plugin) => {
+                            orbit_protocol::plugins::Action::Enable { plugin }
+                        }
+                        tui::dialogs::ProjectPluginChange::Disable {
+                            marketplace_source,
+                            plugin_name,
+                            ..
+                        } => orbit_protocol::plugins::Action::Disable {
+                            marketplace_source,
+                            plugin_name,
+                        },
+                    })
+            };
+            if let Some(action) = plugin_action {
+                self.send(Request::Plugins {
+                    session: self.id.clone().unwrap_or_default(),
+                    action,
+                });
+            }
+            if let Some(id) = self.state.delete_request.take() {
+                self.send(Request::Admin {
+                    action: orbit_protocol::admin::Action::DeleteSession { id },
+                });
+                self.send(Request::ListSessions {
+                    session: self.id.clone().unwrap_or_default(),
+                });
+            }
+            if let Some(model) = self.state.chosen_model.take() {
+                let effort = self
+                    .state
+                    .chosen_effort
+                    .take()
+                    .map(|effort| effort.as_str().into());
+                self.send(Request::SetModel {
+                    session: self.id.clone().unwrap_or_default(),
+                    model,
+                    effort,
+                });
             }
             return Ok(Action::Redraw);
         }
@@ -117,6 +174,8 @@ impl Tab {
             return Ok(Action::None);
         }
         if !self.state.selection.dragging() {
+            render::handle_context_hover(&mut self.state, &event);
+            tui::handle_list_hover(&mut self.state, &event);
             render::handle_link_hover(&mut self.state, &event);
             render::handle_transcript_hover(&mut self.state, &event);
             tui::navigation::handle(&mut self.state, &event);
@@ -152,6 +211,13 @@ impl Tab {
                 return Ok(Action::None);
             }
         }
+        if let Event::Mouse(mouse) = &event
+            && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && tui::attachments::focus_attachment_at(&mut self.state, mouse.column, mouse.row)
+        {
+            self.state.selection.clear();
+            return Ok(Action::Redraw);
+        }
         if let Some(point) = self.state.selection.click(&event)
             && (tui::jump_footnote_at(&mut self.state, point)
                 || tui::open_subagent_at(&mut self.state, point)
@@ -174,6 +240,11 @@ impl Tab {
                 return Ok(Action::None);
             }
             return self.paste();
+        }
+        if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release)
+        {
+            self.set_mode(self.state.permission_mode.next());
+            return Ok(Action::Redraw);
         }
         let busy = self.busy || self.starting.is_some();
         match tui::keyboard_action(&mut self.state, event, busy) {
@@ -208,6 +279,25 @@ impl Tab {
                 Ok(Action::None)
             }
             tui::Action::None => Ok(Action::None),
+        }
+    }
+
+    fn set_mode(&mut self, mode: tui::permissions::Mode) {
+        let mode = match mode {
+            tui::permissions::Mode::Ask => Mode::Ask,
+            tui::permissions::Mode::Auto => Mode::Auto,
+            tui::permissions::Mode::Yolo => Mode::Yolo,
+        };
+        if self.send(Request::SetMode {
+            session: self.id.clone().unwrap_or_default(),
+            mode,
+        }) {
+            self.mode = mode;
+            self.state.permission_mode = match mode {
+                Mode::Ask => tui::permissions::Mode::Ask,
+                Mode::Auto => tui::permissions::Mode::Auto,
+                Mode::Yolo => tui::permissions::Mode::Yolo,
+            };
         }
     }
 
@@ -302,12 +392,30 @@ impl Tab {
             self.ask(question.into(), None);
             return Ok(Action::Redraw);
         }
+        let (name, argument) = command
+            .split_once(char::is_whitespace)
+            .unwrap_or((command, ""));
+        if matches!(name, "/tasks" | "/memory") {
+            match project::parse(name, argument) {
+                Ok(action) => {
+                    self.send(Request::SessionAction { session, action });
+                }
+                Err(error) => self
+                    .state
+                    .report_local(TranscriptItem::CommandError(error.to_string())),
+            }
+            return Ok(Action::Redraw);
+        }
         match command {
             "/quit" | "/exit" => return Ok(Action::Quit),
             "/close" => return Ok(Action::Close),
             "/local" => return Ok(Action::Local),
             "/new" => return Ok(Action::SameTarget(None)),
             "/reconnect" => self.reconnect(),
+            "/restore" => return Ok(Action::Restore),
+            "/connect" => return Ok(Action::Connect),
+            "/editor" => return Ok(Action::Editor),
+            "/model refresh" => return Ok(Action::RefreshModels),
             "/help" => self.state.report_local(TranscriptItem::Notice(HELP.into())),
             text if text == "/undo" || text.starts_with("/undo ") => {
                 let path = text
@@ -316,6 +424,20 @@ impl Tab {
                     .filter(|path| !path.is_empty())
                     .map(str::to_owned);
                 self.send(Request::Undo { session, path });
+            }
+            "/plugins" => {
+                self.send(Request::Plugins {
+                    session,
+                    action: orbit_protocol::plugins::Action::List,
+                });
+            }
+            text if text.starts_with("/cd ") => {
+                self.send(Request::SessionAction {
+                    session,
+                    action: orbit_protocol::SessionAction::ChangeDirectory {
+                        path: text[4..].trim().into(),
+                    },
+                });
             }
             "/status" => self.inspect(orbit_protocol::Inspection::Status),
             "/context" => self.inspect(orbit_protocol::Inspection::Context),
@@ -344,14 +466,20 @@ impl Tab {
                 });
             }
             "/sessions" | "/resume" => {
-                self.send(Request::Sessions);
+                self.send(Request::ListSessions {
+                    session: self.id.clone().unwrap_or_default(),
+                });
             }
             text if text.starts_with("/resume ") => {
                 return Ok(Action::SameTarget(Some(text[8..].trim().into())));
             }
-            "/model" => self.state.report_local(TranscriptItem::CommandResult(
-                self.state.model_completions.join("\n"),
-            )),
+            "/model" => {
+                self.state.model_picker = Some(tui::dialogs::ModelPicker::new(
+                    self.model_catalog.clone(),
+                    self.state.model.clone(),
+                    self.state.reasoning_effort,
+                ));
+            }
             text if text.starts_with("/model ") => {
                 let model = text[7..].trim();
                 if self
@@ -379,27 +507,23 @@ impl Tab {
                     effort: Some(text[11..].trim().into()),
                 });
             }
+            "/mode" | "/permissions" => {
+                self.state
+                    .show_output("审批模式", self.state.permission_mode.description().into());
+            }
             text if text.starts_with("/mode ") => {
-                match text[6..].trim().to_ascii_lowercase().as_str() {
-                    "auto" => {
-                        self.mode = Mode::Auto;
-                        self.state.permission_mode = tui::permissions::Mode::Auto;
-                    }
-                    "ask" => {
-                        self.mode = Mode::Ask;
-                        self.state.permission_mode = tui::permissions::Mode::Ask;
-                    }
-                    "yolo" => {
-                        self.mode = Mode::Yolo;
-                        self.state.permission_mode = tui::permissions::Mode::Yolo;
-                    }
-                    _ => self
+                match tui::permissions::Mode::parse(text[6..].trim()) {
+                    Some(mode) => self.set_mode(mode),
+                    None => self
                         .state
-                        .report_local(TranscriptItem::Error("模式：auto、ask、yolo".into())),
+                        .report_local(TranscriptItem::CommandError("模式：auto、ask、yolo".into())),
                 }
             }
             text if text.starts_with('/') && text != "/compact" => self.state.report_local(
-                TranscriptItem::Error("此命令尚未接入工作区服务；/help 查看支持的命令。".into()),
+                TranscriptItem::CommandError(tui::commands::suggestion(text).map_or_else(
+                    || "未知命令；输入 / 查看可用命令。".into(),
+                    |command| format!("是否想输入 {}？", command.name),
+                )),
             ),
             _ if self.busy
                 || self.starting.is_some()

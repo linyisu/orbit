@@ -151,7 +151,12 @@ pub fn matching(input: &str) -> Vec<&'static Command> {
 pub fn available_while_running(name: &str) -> bool {
     matches!(
         name,
-        "/ssh"
+        "/connect"
+            | "/restore"
+            | "/editor"
+            | "/tasks"
+            | "/memory"
+            | "/ssh"
             | "/wsl"
             | "/local"
             | "/reconnect"
@@ -224,7 +229,14 @@ fn edit_distance(left: &str, right: &str) -> usize {
 pub fn available_in_workspace(name: &str) -> bool {
     matches!(
         name,
-        "/ssh"
+        "/cd"
+            | "/connect"
+            | "/restore"
+            | "/editor"
+            | "/tasks"
+            | "/memory"
+            | "/plugins"
+            | "/ssh"
             | "/wsl"
             | "/local"
             | "/new"

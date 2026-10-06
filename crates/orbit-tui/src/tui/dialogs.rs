@@ -1,5 +1,5 @@
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
-use orbit_store::types::{ProjectPlugin, Session};
+use orbit_protocol::{Session, project::ProjectPlugin};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -25,10 +25,56 @@ pub struct SessionPicker {
     pending_delete: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ModelChoice {
+    provider: String,
+    model: String,
+    supports_vision: bool,
+    default_for_provider: bool,
+    reasoning_effort: Option<orbit_model::types::ReasoningEffort>,
+    reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
+}
+
+impl ModelChoice {
+    fn qualified_name(&self) -> String {
+        format!("{}::{}", self.provider, self.model)
+    }
+}
+
+impl From<ModelOption> for ModelChoice {
+    fn from(model: ModelOption) -> Self {
+        Self {
+            provider: model.provider,
+            model: model.model,
+            supports_vision: model.supports_vision,
+            default_for_provider: model.default_for_provider,
+            reasoning_effort: model.config.reasoning_effort,
+            reasoning_efforts: model.reasoning_efforts,
+        }
+    }
+}
+
+impl From<orbit_protocol::ModelSummary> for ModelChoice {
+    fn from(model: orbit_protocol::ModelSummary) -> Self {
+        Self {
+            provider: model.provider,
+            model: model.model,
+            supports_vision: model.supports_vision,
+            default_for_provider: model.default_for_provider,
+            reasoning_effort: model.reasoning_effort.and_then(|value| value.parse().ok()),
+            reasoning_efforts: model
+                .reasoning_efforts
+                .into_iter()
+                .filter_map(|value| value.parse().ok())
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ModelPicker {
     offset: usize,
-    models: Vec<ModelOption>,
+    models: Vec<ModelChoice>,
     query: String,
     selected: usize,
     current: String,
@@ -37,6 +83,7 @@ pub struct ModelPicker {
 
 #[derive(Debug)]
 pub struct MarketplaceDialog {
+    inspections: Option<Vec<orbit_protocol::plugins::Inspection>>,
     market_offset: usize,
     plugin_offset: usize,
     marketplaces: Vec<Marketplace>,
@@ -61,12 +108,19 @@ pub(crate) enum ProjectPluginChange {
 }
 
 impl MarketplaceDialog {
+    pub fn from_catalog(catalog: orbit_protocol::plugins::Catalog) -> Self {
+        let mut dialog = Self::new(catalog.marketplaces, catalog.project_id, catalog.enabled);
+        dialog.inspections = Some(catalog.inspections);
+        dialog
+    }
+
     pub fn new(
         marketplaces: Vec<Marketplace>,
         project_id: String,
         enabled: Vec<ProjectPlugin>,
     ) -> Self {
         Self {
+            inspections: None,
             market_offset: 0,
             plugin_offset: 0,
             marketplaces,
@@ -167,8 +221,24 @@ impl MarketplaceDialog {
         });
 
         self.inspection = Some(match selected {
-            Some((market, plugin)) => crate::marketplaces::inspect_plugin(&market, &plugin)
-                .map_err(|error| error.to_string()),
+            Some((market, plugin)) => match &self.inspections {
+                Some(inspections) => inspections
+                    .iter()
+                    .find(|entry| entry.source == market.source && entry.name == plugin.name)
+                    .map(|entry| entry.package.clone())
+                    .unwrap_or_else(|| Err("插件检查结果缺失，请刷新市场".into())),
+                None => {
+                    #[cfg(test)]
+                    {
+                        crate::marketplaces::inspect_plugin(&market, &plugin)
+                            .map_err(|error| error.to_string())
+                    }
+                    #[cfg(not(test))]
+                    {
+                        Err("请刷新插件目录后重试".into())
+                    }
+                }
+            },
             None => Err("没有可检查的插件。".into()),
         });
     }
@@ -186,10 +256,11 @@ fn move_selection(selected: usize, count: usize, down: bool) -> usize {
 
 impl ModelPicker {
     pub fn new(
-        models: Vec<ModelOption>,
+        models: impl IntoIterator<Item = impl Into<ModelChoice>>,
         current: String,
         effort: Option<orbit_model::types::ReasoningEffort>,
     ) -> Self {
+        let models: Vec<ModelChoice> = models.into_iter().map(Into::into).collect();
         let selected = models
             .iter()
             .position(|model| model.qualified_name() == current)
@@ -226,7 +297,7 @@ impl ModelPicker {
         first
     }
 
-    fn matches(&self) -> Vec<&ModelOption> {
+    fn matches(&self) -> Vec<&ModelChoice> {
         super::search::ranked(self.models.iter(), |model| {
             [
                 model.qualified_name().as_str(),
@@ -267,7 +338,7 @@ impl ModelPicker {
             let matches = self.matches();
             let default = matches
                 .get(self.selected)
-                .and_then(|m| m.config.reasoning_effort)
+                .and_then(|m| m.reasoning_effort)
                 .filter(|d| efforts.contains(d));
             self.effort = default.or_else(|| Some(efforts[0]));
         }
@@ -340,13 +411,6 @@ impl SessionPicker {
         } else {
             self.selected.saturating_sub(1)
         };
-    }
-
-    pub fn remove_session(&mut self, id: &str) {
-        self.sessions.retain(|s| s.id != id);
-        self.selected = self.selected.min(self.sessions.len().saturating_sub(1));
-        self.pending_delete = None;
-        self.error = None;
     }
 }
 

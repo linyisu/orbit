@@ -35,26 +35,17 @@ pub struct RestorePicker {
 }
 
 impl RestorePicker {
-    pub async fn load(store: &orbit_store::store::Store, ids: &[String]) -> anyhow::Result<Self> {
-        let mut entries = Vec::new();
-        for id in ids {
-            // A session deleted since the snapshot should not prevent restoring the rest.
-            let Some(title) = store.tui_tab_title(id).await? else {
-                continue;
-            };
-            entries.push(Entry {
-                id: id.clone(),
-                title: if title.is_empty() {
-                    "未命名会话".into()
-                } else {
-                    super::render::safe_output(&title).replace(['\n', '\r'], " ")
-                },
-                selected: true,
-            });
-        }
-
-        Ok(Self {
-            entries,
+    pub fn from_tabs(tabs: &[crate::workspace::windows::SavedTab]) -> Self {
+        Self {
+            entries: tabs
+                .iter()
+                .enumerate()
+                .map(|(index, tab)| Entry {
+                    id: index.to_string(),
+                    title: format!("{} · {}", tab.target.label(), tab.title),
+                    selected: true,
+                })
+                .collect(),
             query: String::new(),
             cursor: 0,
             offset: 0,
@@ -65,7 +56,7 @@ impl RestorePicker {
             pointer: None,
             title_scroll: None,
             title_scroll_tick: 0,
-        })
+        }
     }
 
     fn filtered(&self) -> Vec<usize> {
