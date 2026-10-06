@@ -4,7 +4,7 @@ use super::*;
 use crate::tui::{self, approval, render, selection};
 
 impl Tab {
-    pub fn handle(&mut self, event: Event) -> Result<Action> {
+    pub fn handle(&mut self, mut event: Event) -> Result<Action> {
         if let Some(prompt) = &mut self.state.ssh_prompt {
             if prompt.handle(&event) {
                 self.cancel_connect();
@@ -151,10 +151,6 @@ impl Tab {
             }
             return Ok(Action::Redraw);
         }
-        if matches!(&event, Event::Key(key) if key.kind != KeyEventKind::Release && key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL) && self.state.input.text.is_empty())
-        {
-            return Ok(Action::Quit);
-        }
         if let Some(approval) = self.approval_id {
             let action = approval::handle(&mut self.state, event);
             let session = self.id.clone().unwrap_or_default();
@@ -176,12 +172,41 @@ impl Tab {
             }
             return Ok(Action::None);
         }
+        if let Event::Mouse(mouse) = &event
+            && self
+                .state
+                .menu_area
+                .contains((mouse.column, mouse.row).into())
+            && !self.state.menu().is_empty()
+        {
+            tui::completion::select_with_mouse(&mut self.state, mouse);
+            let clicked = mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && self
+                    .state
+                    .menu_rows
+                    .iter()
+                    .any(|(area, _)| area.contains((mouse.column, mouse.row).into()));
+            if !clicked {
+                return Ok(Action::Redraw);
+            }
+            let code = if self.state.menu()[self.state.menu_index]
+                .name
+                .starts_with("/cd ")
+            {
+                KeyCode::Tab
+            } else {
+                KeyCode::Enter
+            };
+            event = Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE));
+        }
         if !self.state.selection.dragging() {
             render::handle_context_hover(&mut self.state, &event);
             tui::handle_list_hover(&mut self.state, &event);
             render::handle_link_hover(&mut self.state, &event);
             render::handle_transcript_hover(&mut self.state, &event);
-            tui::navigation::handle(&mut self.state, &event);
+            if tui::navigation::handle(&mut self.state, &event).is_some() {
+                return Ok(Action::Redraw);
+            }
         }
         if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved)
             || tui::handle_input_mouse(&mut self.state, &event)
@@ -234,7 +259,7 @@ impl Tab {
         if let Event::Paste(text) = event {
             if !text.is_empty() {
                 if let Some(paths) =
-                    tui::attachments::pasted_image_paths(&text, &std::env::current_dir()?)
+                    tui::attachments::pasted_image_paths(&text, &self.local_directory()?)
                 {
                     self.attach(paths);
                 } else {
@@ -353,7 +378,7 @@ impl Tab {
             ClipboardPayload::Files(paths) => self.attach(paths),
             ClipboardPayload::Text(text) => {
                 if let Some(paths) =
-                    tui::attachments::pasted_image_paths(&text, &std::env::current_dir()?)
+                    tui::attachments::pasted_image_paths(&text, &self.local_directory()?)
                 {
                     self.attach(paths);
                 } else {
@@ -485,13 +510,17 @@ impl Tab {
                 ));
             }
             text if text.starts_with("/model ") => {
-                let model = text[7..].trim();
-                if self
-                    .state
-                    .model_completions
-                    .iter()
-                    .any(|choice| choice == model)
-                {
+                let requested = text[7..].trim();
+                let qualified = if requested.contains("::") {
+                    requested.to_owned()
+                } else {
+                    self.state.model.split_once("::").map_or_else(
+                        || requested.to_owned(),
+                        |(provider, _)| format!("{provider}::{requested}"),
+                    )
+                };
+                if self.state.model_completions.contains(&qualified) {
+                    let model = qualified.as_str();
                     self.submit_with_receipt(
                         Request::SetModel {
                             session: session.clone(),
@@ -518,8 +547,8 @@ impl Tab {
                 self.state
                     .show_output("审批模式", self.state.permission_mode.description().into());
             }
-            text if text.starts_with("/mode ") => {
-                match tui::permissions::Mode::parse(text[6..].trim()) {
+            text if matches!(name, "/mode" | "/permissions") && !argument.trim().is_empty() => {
+                match tui::permissions::Mode::parse(argument.trim()) {
                     Some(mode) => self.set_mode(mode),
                     None => self
                         .state

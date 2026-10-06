@@ -79,6 +79,16 @@ pub(super) struct Tab {
 }
 
 impl Tab {
+    fn local_directory(&self) -> Result<std::path::PathBuf> {
+        match self.target_identity() {
+            Some(
+                workspace::transport::Target::Ssh { .. } | workspace::transport::Target::Wsl { .. },
+            ) => std::env::current_dir().map_err(Into::into),
+            _ if !self.state.workspace.is_empty() => Ok(self.state.workspace.clone().into()),
+            _ => std::env::current_dir().map_err(Into::into),
+        }
+    }
+
     pub(super) fn target_identity(&self) -> Option<workspace::transport::Target> {
         self.connection
             .as_ref()

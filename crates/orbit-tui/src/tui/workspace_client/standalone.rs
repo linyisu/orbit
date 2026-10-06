@@ -83,7 +83,7 @@ pub(super) async fn run(mut opened: Opened) -> Result<()> {
                         let draft = tabs.remote[&id].state.input.text.clone();
                         let command = std::env::var("VISUAL").ok().filter(|value| !value.trim().is_empty()).or_else(|| std::env::var("EDITOR").ok()).unwrap_or_else(|| "vi".into());
                         terminal::suspend();
-                        let result = workspace::platform::editor::Editor::new(command).edit(&draft, &std::env::current_dir()?).await;
+                        let result = workspace::platform::editor::Editor::new(command).edit(&draft, &tabs.remote[&id].local_directory()?).await;
                         terminal::resume(&mut terminal)?;
                         let state = &mut tabs.remote.get_mut(&id).unwrap().state;
                         state.media.invalidate();
