@@ -41,16 +41,6 @@ pub struct ConnectArgs {
     pub(crate) allow_mcp_start: bool,
 }
 
-#[derive(Debug, Args)]
-pub struct ServiceArgs {
-    #[arg(long)]
-    pub(crate) workspace: String,
-    #[arg(long)]
-    pub(crate) daemon: bool,
-    #[arg(long)]
-    pub(crate) allow_mcp_start: bool,
-}
-
 impl ConnectArgs {
     pub fn options(&self) -> orbit_client::ConnectionOptions {
         orbit_client::ConnectionOptions {
@@ -64,16 +54,6 @@ impl ConnectArgs {
             server: self.server.clone(),
             upload_server: self.upload_server.clone(),
             allow_mcp_start: self.allow_mcp_start,
-        }
-    }
-}
-
-impl From<ServiceArgs> for orbit_service::workspace::ServiceOptions {
-    fn from(args: ServiceArgs) -> Self {
-        Self {
-            workspace: args.workspace,
-            daemon: args.daemon,
-            allow_mcp_start: args.allow_mcp_start,
         }
     }
 }

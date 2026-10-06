@@ -12,8 +12,7 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use orbit_client as workspace;
-use orbit_service::models::model_metadata;
-use orbit_service::session;
+use orbit_config::models::model_metadata;
 
 mod auth_cli;
 mod connect;
@@ -56,8 +55,6 @@ enum Command {
     Chat(ChatArgs),
     /// Connect to a local, SSH, or WSL workspace service.
     Connect(connect_args::ConnectArgs),
-    #[command(hide = true)]
-    WorkspaceService(connect_args::ServiceArgs),
     /// List projects or reconnect a moved directory without connecting to an API.
     Projects {
         #[command(subcommand)]
@@ -206,9 +203,6 @@ fn main() -> Result<()> {
         orbit_client::interaction::askpass()?;
         return Ok(());
     }
-    if orbit_service::platform::workers::run()? {
-        return Ok(());
-    }
 
     run_cli()
 }
@@ -218,7 +212,7 @@ async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
 
     let auth_directory = || {
-        orbit_service::platform::directory(
+        orbit_auth::directory(
             cli.auth_dir.clone(),
             std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
             std::env::var_os("HOME").map(PathBuf::from),
@@ -231,42 +225,13 @@ async fn run_cli() -> Result<()> {
         Command::Connect(args) => {
             connect::connect(args, cli.config, cli.database, cli.auth_dir).await
         }
-        Command::WorkspaceService(args) => {
-            orbit_service::workspace::serve(
-                args.into(),
-                cli.config,
-                cli.database,
-                auth_directory()?,
-            )
-            .await
-        }
-
         Command::Projects { command } => {
-            let store =
-                orbit_store::store::Store::open(session::database_path(cli.database)?).await?;
-
-            match command {
-                ProjectCommand::List => {
-                    for project in store.projects().await? {
-                        println!(
-                            "{}  {}",
-                            project.id,
-                            project.path.as_deref().unwrap_or("（未关联目录）")
-                        );
-                    }
-                }
-
-                ProjectCommand::Link { id } => {
-                    let project = store.link_project(&id, std::env::current_dir()?).await?;
-                    println!(
-                        "已关联项目 {} → {}。重新打开 TUI 后用 /resume 恢复会话。",
-                        project.id,
-                        project.path.unwrap_or_default()
-                    );
-                }
-            }
-
-            Ok(())
+            use orbit_protocol::admin::Action;
+            let action = match command {
+                ProjectCommand::List => Action::Projects,
+                ProjectCommand::Link { id } => Action::LinkProject { id },
+            };
+            admin(cli.config, cli.database, cli.auth_dir, action).await
         }
 
         Command::ModelMetadata { output } => {
@@ -285,58 +250,57 @@ async fn run_cli() -> Result<()> {
         }
 
         Command::Sessions { command } => {
-            let store =
-                orbit_store::store::Store::open(session::database_path(cli.database)?).await?;
-
-            match command {
-                SessionCommand::List => println!("{}", session::list_text(&store).await?),
-                SessionCommand::Storage => {
-                    for usage in store.session_storage_usage().await? {
-                        println!(
-                            "{}  {:>12} B  {}",
-                            usage.id,
-                            usage.payload_bytes,
-                            usage.title.replace(['\n', '\r', '\t'], " ")
-                        );
-                    }
-                }
-
+            use orbit_protocol::admin::{Action, SessionSection};
+            let action = match command {
+                SessionCommand::List => Action::Sessions,
+                SessionCommand::Storage => Action::SessionStorage,
                 SessionCommand::Delete { id, yes } => {
                     anyhow::ensure!(yes, "永久删除会话需要 --yes；请先确认会话 ID。");
-                    let deleted = store.delete_session(&id).await?;
-
-                    if let Err(error) = store.reclaim_unused_space().await {
-                        eprintln!("会话已删除，但数据库空间回收失败：{error}");
-                    }
-
-                    println!(
-                        "{}",
-                        if deleted {
-                            "会话及私有文件已删除。"
-                        } else {
-                            "会话不存在；同 ID 的私有残留文件已清理。"
-                        }
-                    );
+                    Action::DeleteSession { id }
                 }
-
-                SessionCommand::Compactions { id } => println!(
-                    "{}",
-                    serde_json::to_string_pretty(&store.compactions(&id).await?)?
-                ),
-
-                SessionCommand::Diagnostics { id } => println!(
-                    "{}",
-                    orbit_store::diagnostics::text(&store.diagnostics(&id).await?)
-                ),
-
-                SessionCommand::Show { id } => {
-                    println!("{}", serde_json::to_string_pretty(&store.load(&id).await?)?)
-                }
-            }
-
-            Ok(())
+                SessionCommand::Show { id } => Action::InspectSession {
+                    id,
+                    section: SessionSection::History,
+                },
+                SessionCommand::Compactions { id } => Action::InspectSession {
+                    id,
+                    section: SessionSection::Compactions,
+                },
+                SessionCommand::Diagnostics { id } => Action::InspectSession {
+                    id,
+                    section: SessionSection::Diagnostics,
+                },
+            };
+            admin(cli.config, cli.database, cli.auth_dir, action).await
         }
     }
+}
+
+async fn admin(
+    config: PathBuf,
+    database: Option<PathBuf>,
+    auth: Option<PathBuf>,
+    action: orbit_protocol::admin::Action,
+) -> Result<()> {
+    let connection = workspace::prepare_connection(
+        &workspace::ConnectionOptions::local(
+            std::env::current_dir()?.to_string_lossy().into_owned(),
+        ),
+        config,
+        database,
+        auth,
+        None,
+    )
+    .await?;
+    let mut client = connection.connect().await?;
+    let workspace::protocol::Response::Report(report) = client
+        .request(workspace::protocol::Request::Admin { action })
+        .await?
+    else {
+        bail!("unexpected workspace management response");
+    };
+    println!("{}", report.text);
+    Ok(())
 }
 
 async fn chat(

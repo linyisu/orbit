@@ -2,7 +2,7 @@
 
 [项目总览](../../README.md)
 
-`orbit-cli` 提供 `orbit-cli` 可执行文件，负责命令行参数、输入输出、信号处理与入口分发。应用功能由 [orbit-service](../orbit-service/README.md) 提供。
+`orbit-cli` 提供 `orbit-cli` 可执行文件，负责命令行参数、输入输出、信号处理与入口分发。通过 [orbit-client](../orbit-client/README.md) 调用目标端服务，任务、项目和历史管理共用会话协议。
 
 ## 命令
 

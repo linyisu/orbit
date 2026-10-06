@@ -7,7 +7,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::{Subcommand, ValueEnum};
 use orbit_auth::{AuthStore, CallbackFlow, CallbackListener, OAuthLogin, OAuthProvider};
-use orbit_service::{config::FileConfig, models::account_models, platform::launch_browser};
+use orbit_client::platform::launch_browser;
+use orbit_config::{config::FileConfig, models::account_models};
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum LoginProvider {
