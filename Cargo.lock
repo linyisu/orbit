@@ -2762,6 +2762,7 @@ dependencies = [
  "orbit-auth",
  "orbit-client",
  "orbit-model",
+ "orbit-protocol",
  "orbit-runtime",
  "orbit-service",
  "orbit-store",

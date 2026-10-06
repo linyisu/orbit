@@ -345,17 +345,66 @@ async fn chat(
     args: ChatArgs,
     auth: PathBuf,
 ) -> Result<()> {
-    let options = orbit_service::chat::ChatOptions {
-        workspace: std::env::current_dir()?,
-        prompt: read_chat_prompt(&args)?,
-        model: args.model.clone(),
-        mode: args.mode.into(),
-        resume: args.resume.clone(),
-        allow_mcp_start: args.allow_mcp_start,
-        images: args.images.clone(),
-        disabled: args.disabled.iter().copied().map(Into::into).collect(),
-        export_patch: args.swe_instance_id.is_some(),
+    use workspace::{
+        prompt::{PromptOptions, PromptUpdate},
+        protocol::{Mode, Request, Response},
     };
+    let prompt = read_chat_prompt(&args)?;
+    let policy = orbit_protocol::SessionPolicy {
+        read_only: matches!(args.mode, ChatMode::ReadOnly),
+        disabled: args.disabled.iter().copied().map(Into::into).collect(),
+    };
+    anyhow::ensure!(
+        args.images.is_empty() || !policy.disabled(orbit_protocol::Capability::Image),
+        "--image cannot be used when the image capability is disabled"
+    );
+    let options = workspace::ConnectionOptions {
+        ssh: None,
+        ssh_user: None,
+        ssh_port: None,
+        identity: None,
+        wsl: None,
+        wsl_user: None,
+        workspace: std::env::current_dir()?.to_string_lossy().into_owned(),
+        server: None,
+        upload_server: None,
+        allow_mcp_start: args.allow_mcp_start,
+    };
+    let connection =
+        workspace::prepare_connection(&options, config, database, Some(auth), None).await?;
+    let mut client = connection.connect().await?;
+    let Response::Opened(mut info) = client
+        .request(Request::Open {
+            resume: args.resume.clone(),
+            configuration: connection.configuration().await?,
+            policy: policy.clone(),
+        })
+        .await?
+    else {
+        bail!("unexpected workspace session response");
+    };
+    if let Some(model) = &args.model {
+        client
+            .request(Request::SetModel {
+                session: info.id.clone(),
+                model: model.clone(),
+                effort: None,
+            })
+            .await?;
+        let Response::Opened(updated) = client
+            .request(Request::Open {
+                resume: Some(info.id.clone()),
+                configuration: None,
+                policy,
+            })
+            .await?
+        else {
+            bail!("unexpected model response");
+        };
+        info = updated;
+    }
+    let images = workspace::attachments::paths(args.images.clone())?;
+    let images = workspace::attachments::uploads(&images)?;
     let cancellation = CancellationToken::new();
     let token = cancellation.clone();
     let signals = tokio::spawn(async move {
@@ -368,43 +417,58 @@ async fn chat(
         }
     });
     let signals = tokio_util::task::AbortOnDropHandle::new(signals);
-    let outcome =
-        orbit_service::chat::run(config, database, options, auth, cancellation, |update| {
-            match update {
-                orbit_service::chat::ChatUpdate::Agent(event) => {
-                    report_chat_event(event, args.stream)
-                }
-                orbit_service::chat::ChatUpdate::Diagnostic(message) => {
-                    eprintln!("{message}");
-                    Ok(())
-                }
-            }
-        })
-        .await?;
-    drop(signals);
-    match outcome {
-        orbit_service::chat::ChatOutcome::Cancelled => eprintln!("已取消。"),
-        orbit_service::chat::ChatOutcome::Completed {
-            answer,
-            model_name,
-            patch,
-        } => {
-            if let Some(instance_id) = &args.swe_instance_id {
-                println!(
-                    "{}",
-                    serde_json::to_string(&SwePrediction {
-                        instance_id,
-                        model_name_or_path: &model_name,
-                        model_patch: patch.unwrap_or_default()
-                    })?
-                );
-            } else if args.stream {
-                println!();
+    let outcome = workspace::prompt::execute(
+        &mut client,
+        &info.id,
+        PromptOptions {
+            prompt,
+            images,
+            model: None,
+            mode: if matches!(args.mode, ChatMode::Yolo) {
+                Mode::Yolo
             } else {
-                println!("{answer}");
+                Mode::Auto
+            },
+        },
+        cancellation,
+        |update| match update {
+            PromptUpdate::Agent(event) => report_chat_event(event, args.stream),
+            PromptUpdate::ApprovalDenied => {
+                eprintln!("审批已拒绝：非交互模式需要在 TUI 中确认这项操作。");
+                Ok(())
             }
-        }
+        },
+    )
+    .await?;
+    drop(signals);
+    if outcome.cancelled {
+        eprintln!("已取消。");
+    } else if let Some(instance_id) = &args.swe_instance_id {
+        let Response::Report(patch) = client
+            .request(Request::SessionAction {
+                session: info.id.clone(),
+                action: orbit_protocol::SessionAction::Inspect {
+                    section: orbit_protocol::Inspection::ExportPatch,
+                },
+            })
+            .await?
+        else {
+            bail!("unexpected patch response");
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&SwePrediction {
+                instance_id,
+                model_name_or_path: &info.model,
+                model_patch: patch.text
+            })?
+        );
+    } else if args.stream {
+        println!();
+    } else {
+        println!("{}", outcome.answer);
     }
+
     Ok(())
 }
 
@@ -486,17 +550,7 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
     Ok(())
 }
 
-impl From<ChatMode> for orbit_service::chat::ChatMode {
-    fn from(value: ChatMode) -> Self {
-        match value {
-            ChatMode::ReadOnly => Self::ReadOnly,
-            ChatMode::Auto => Self::Auto,
-            ChatMode::Yolo => Self::Yolo,
-        }
-    }
-}
-
-impl From<ChatCapability> for orbit_service::chat::ChatCapability {
+impl From<ChatCapability> for orbit_protocol::Capability {
     fn from(value: ChatCapability) -> Self {
         match value {
             ChatCapability::All => Self::All,

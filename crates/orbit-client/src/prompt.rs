@@ -16,13 +16,48 @@ pub enum PromptUpdate<'a> {
     ApprovalDenied,
 }
 
+pub struct PromptOptions {
+    pub prompt: String,
+    pub images: Vec<orbit_protocol::ImageUpload>,
+    pub mode: Mode,
+    pub model: Option<String>,
+}
+
+pub struct PromptResult {
+    pub answer: String,
+    pub cancelled: bool,
+}
+
 pub async fn run(
     client: &mut Client,
     session: &str,
     prompt: String,
     cancellation: CancellationToken,
-    mut report: impl FnMut(PromptUpdate<'_>) -> Result<()>,
+    report: impl FnMut(PromptUpdate<'_>) -> Result<()>,
 ) -> Result<()> {
+    execute(
+        client,
+        session,
+        PromptOptions {
+            prompt,
+            images: Vec::new(),
+            mode: Mode::Auto,
+            model: None,
+        },
+        cancellation,
+        report,
+    )
+    .await
+    .map(|_| ())
+}
+
+pub async fn execute(
+    client: &mut Client,
+    session: &str,
+    options: PromptOptions,
+    cancellation: CancellationToken,
+    mut report: impl FnMut(PromptUpdate<'_>) -> Result<()>,
+) -> Result<PromptResult> {
     let mut cursor = 0;
     loop {
         let page = poll(client, session, cursor).await?;
@@ -33,17 +68,19 @@ pub async fn run(
     }
     client
         .request(Request::Start {
-            images: Vec::new(),
+            images: options.images,
             compact: false,
             session: session.into(),
             request_id: super::request_id(),
-            prompt,
-            mode: Mode::Auto,
-            model: None,
+            prompt: options.prompt,
+            mode: options.mode,
+            model: options.model,
         })
         .await?;
 
     let mut failed = false;
+    let mut answer = String::new();
+    let mut cancelled = false;
     let mut cancel_sent = false;
     loop {
         let page = poll(client, session, cursor).await?;
@@ -52,9 +89,26 @@ pub async fn run(
             match update {
                 Update::Agent(event) => {
                     failed |= matches!(*event, AgentEvent::Failed { .. });
-                    report(PromptUpdate::Agent(&event))?;
+                    match &*event {
+                        AgentEvent::TurnStarted { .. } => answer.clear(),
+                        AgentEvent::Model(orbit_model::types::StreamEvent::TextDelta(text)) => {
+                            answer.push_str(text)
+                        }
+                        _ => {}
+                    }
+                    if let Err(error) = report(PromptUpdate::Agent(&event)) {
+                        let _ = client
+                            .request(Request::Cancel {
+                                session: session.into(),
+                            })
+                            .await;
+                        return Err(error);
+                    }
                 }
-                Update::Finished { status } => failed |= status != "completed",
+                Update::Finished { status } => {
+                    cancelled = status == "cancelled";
+                    failed |= status != "completed" && !cancelled;
+                }
                 _ => {}
             }
         }
@@ -86,7 +140,7 @@ pub async fn run(
     if failed {
         bail!("workspace run did not complete successfully");
     }
-    Ok(())
+    Ok(PromptResult { answer, cancelled })
 }
 
 async fn poll(client: &mut Client, session: &str, after: usize) -> Result<Page> {
