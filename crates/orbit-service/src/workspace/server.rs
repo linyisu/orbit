@@ -439,12 +439,16 @@ impl Service {
             Request::ListSessions { session } => {
                 let handle = self.session(&session).await?;
                 let session = handle.store.session(&handle.info.id).await?;
+                let projects = handle
+                    .store
+                    .equivalent_project_ids(&session.project_id)
+                    .await?;
                 let sessions = handle
                     .store
                     .list_resumable()
                     .await?
                     .into_iter()
-                    .filter(|item| item.project_id == session.project_id)
+                    .filter(|item| projects.contains(&item.project_id))
                     .collect();
                 Ok(Response::Sessions(sessions))
             }
@@ -454,11 +458,12 @@ impl Service {
                 let project = store
                     .resolve_project(&connection_options.initial_directory)
                     .await?;
+                let projects = store.equivalent_project_ids(&project.id).await?;
                 let sessions = store
                     .list_resumable()
                     .await?
                     .into_iter()
-                    .filter(|session| session.project_id == project.id)
+                    .filter(|session| projects.contains(&session.project_id))
                     .collect();
                 Ok(Response::Sessions(sessions))
             }

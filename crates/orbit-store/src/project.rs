@@ -66,6 +66,8 @@ impl Directory {
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|t| t.as_nanos());
+        #[cfg(target_os = "linux")]
+        let birth = birth.or_else(|| linux_birth_time(&path, &metadata));
         let strong = object.is_some() && birth.is_some();
         let identity = object.map(|id| {
             format!(
@@ -81,6 +83,26 @@ impl Directory {
             strong,
         })
     }
+}
+
+// musl's standard metadata may omit birth time even when the filesystem supplies it.
+#[cfg(target_os = "linux")]
+fn linux_birth_time(path: &Path, metadata: &fs::Metadata) -> Option<u128> {
+    use rustix::fs::{AtFlags, CWD, StatxFlags, statx};
+    use std::os::unix::fs::MetadataExt;
+
+    let stat = statx(
+        CWD,
+        path,
+        AtFlags::empty(),
+        StatxFlags::BTIME | StatxFlags::INO,
+    )
+    .ok()?;
+    if stat.stx_mask & StatxFlags::BTIME.bits() == 0 || stat.stx_ino != metadata.ino() {
+        return None;
+    }
+    let seconds = u128::try_from(stat.stx_btime.tv_sec).ok()?;
+    Some(seconds * 1_000_000_000 + u128::from(stat.stx_btime.tv_nsec))
 }
 
 #[cfg(unix)]
@@ -136,6 +158,23 @@ fn object_id(_: &Path, _: &fs::Metadata) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::same_directory_identity;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn kernel_birth_time_matches_native_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let metadata = std::fs::metadata(directory.path()).unwrap();
+        let birth = metadata
+            .created()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        assert_eq!(
+            super::linux_birth_time(directory.path(), &metadata),
+            Some(birth)
+        );
+    }
 
     #[test]
     fn linux_mount_device_change_does_not_change_directory_identity() {

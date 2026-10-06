@@ -944,3 +944,72 @@ models = [{ id = "mock" }]
         "ok"
     );
 }
+
+#[tokio::test]
+async fn packaged_service_lists_history_created_by_the_native_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("config.toml"),
+        r#"default_provider = "test"
+[providers.test]
+base_url = "http://127.0.0.1:1"
+api_key = "test-only"
+auto_refresh_models = false
+models = [{ id = "mock" }]
+"#,
+    )
+    .unwrap();
+    let store = orbit_store::store::Store::open(root.join("sessions.db"))
+        .await
+        .unwrap();
+    let mut writer = store
+        .create(root.display().to_string(), "test::mock".into(), false)
+        .await
+        .unwrap();
+    let history_id = writer.id().to_owned();
+    writer
+        .begin("existing conversation".into(), "test::mock".into())
+        .await
+        .unwrap();
+    writer
+        .finish(
+            "completed",
+            Vec::new(),
+            Some(vec![orbit_model::types::ChatMessage::user(
+                "existing conversation",
+            )]),
+        )
+        .await
+        .unwrap();
+    drop(writer);
+
+    let mut client = Client::connect(root).await;
+    let opened = client.request(json!({"method":"open"})).await;
+    assert_eq!(opened["type"], "opened", "{opened}");
+    let id = opened["value"]["id"].as_str().unwrap();
+    for request in [
+        json!({"method":"sessions"}),
+        json!({"method":"list_sessions","session":id}),
+    ] {
+        let history = client.request(request).await;
+        assert_eq!(history["value"].as_array().unwrap().len(), 1, "{history}");
+        assert_eq!(history["value"][0]["id"], history_id);
+    }
+    let completions = client
+        .request(json!({"method":"complete","session":id,"input":"/resume "}))
+        .await;
+    assert_eq!(
+        completions["value"]["entries"][0]["name"],
+        format!("/resume {history_id}")
+    );
+    assert_eq!(
+        store.session(id).await.unwrap().project_id,
+        store.session(&history_id).await.unwrap().project_id
+    );
+    assert_eq!(store.projects().await.unwrap().len(), 1);
+    assert_eq!(
+        client.request(json!({"method":"shutdown"})).await["type"],
+        "ok"
+    );
+}

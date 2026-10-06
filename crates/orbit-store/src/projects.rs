@@ -69,6 +69,18 @@ impl Store {
             let mut matches = Vec::new();
 
             if directory.strong {
+                // Upgrade the latest weak identity only while its device and inode still match.
+                let known: Option<(String, String)> = tx.query_row(
+                    "SELECT id,identity FROM projects WHERE path=?1 AND strong=0 AND identity IS NOT NULL",
+                    [&directory.path],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional()?;
+                if let Some((id, identity)) = known
+                    && let Some(previous) = identity.strip_suffix(":unknown")
+                    && directory.identity.as_deref().and_then(|value| value.rsplit_once(':')).map(|(object, _)| object) == Some(previous)
+                {
+                    tx.execute("UPDATE projects SET identity=?2,strong=1 WHERE id=?1", params![id, directory.identity])?;
+                }
                 let mut query = tx.prepare(
                     "SELECT p.id,p.identity,p.strong,pp.project_id IS NOT NULL,
                                       (SELECT count(*) FROM sessions s WHERE s.project_id=p.id)
@@ -306,6 +318,104 @@ impl Store {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn established_history_survives_a_duplicate_without_birth_time() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::open(temporary.path().join("orbit.db"))
+            .await
+            .unwrap();
+        let original = store.resolve_project(temporary.path()).await.unwrap();
+        drop(
+            store
+                .create(
+                    temporary.path().display().to_string(),
+                    "model".into(),
+                    false,
+                )
+                .await
+                .unwrap(),
+        );
+        let id = original.id.clone();
+        let path = temporary.path().display().to_string();
+        store
+            .access(move |conn| {
+                let identity: String =
+                    conn.query_row("SELECT identity FROM projects WHERE id=?1", [&id], |row| {
+                        row.get(0)
+                    })?;
+                assert!(!identity.ends_with(":unknown"));
+                let (object, _) = identity.rsplit_once(':').unwrap();
+                conn.execute("UPDATE projects SET path=NULL WHERE id=?1", [&id])?;
+                conn.execute(
+                    "INSERT INTO projects(id,path,identity,strong) VALUES('weak',?1,?2,0)",
+                    params![path, format!("{object}:unknown")],
+                )?;
+                conn.execute(
+                    "INSERT INTO project_paths(project_id,path) VALUES('weak',?1)",
+                    [&path],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            store.resolve_project(temporary.path()).await.unwrap().id,
+            original.id
+        );
+        assert_eq!(store.projects().await.unwrap().len(), 2);
+        let related = store.equivalent_project_ids(&original.id).await.unwrap();
+        assert!(related.contains(&"weak".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn completing_a_weak_identity_keeps_its_history_without_adopting_other_inodes() {
+        for same_inode in [true, false] {
+            let temporary = tempfile::tempdir().unwrap();
+            let store = Store::open(temporary.path().join("orbit.db"))
+                .await
+                .unwrap();
+            let original = store.resolve_project(temporary.path()).await.unwrap();
+            let mut writer = store
+                .create(
+                    temporary.path().display().to_string(),
+                    "model".into(),
+                    false,
+                )
+                .await
+                .unwrap();
+            writer
+                .begin("saved conversation".into(), "model".into())
+                .await
+                .unwrap();
+            writer.finish("failed", Vec::new(), None).await.unwrap();
+            drop(writer);
+            let id = original.id.clone();
+            store
+                .access(move |conn| {
+                    let identity: String = conn.query_row(
+                        "SELECT identity FROM projects WHERE id=?1",
+                        [&id],
+                        |row| row.get(0),
+                    )?;
+                    let mut fields: Vec<_> = identity.split(':').map(str::to_owned).collect();
+                    if !same_inode {
+                        fields[2] = "0".into();
+                    }
+                    fields[3] = "unknown".into();
+                    conn.execute(
+                        "UPDATE projects SET identity=?2,strong=0 WHERE id=?1",
+                        params![id, fields.join(":")],
+                    )?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            let resolved = store.resolve_project(temporary.path()).await.unwrap();
+            assert_eq!(resolved.id == original.id, same_inode);
+            assert_eq!(store.list_resumable().await.unwrap().len(), 1);
+        }
+    }
 
     #[tokio::test]
     async fn mount_device_change_recovers_established_project_and_duplicate_sessions() {
