@@ -237,6 +237,17 @@ pub fn available_in_workspace(name: &str) -> bool {
             | "/resume"
             | "/exit"
             | "/help"
+            | "/btw"
+            | "/compact"
+            | "/reasoning"
+            | "/context"
+            | "/skills"
+            | "/skill"
+            | "/mcp"
+            | "/diagnostics"
+            | "/changes"
+            | "/diff"
+            | "/rename"
     )
 }
 

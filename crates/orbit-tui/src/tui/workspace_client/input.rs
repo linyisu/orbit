@@ -47,6 +47,27 @@ impl Tab {
             }
             return Ok(Action::None);
         }
+        if self.state.btw.visible() {
+            use tui::transcript_dialog::Action as DialogAction;
+            match self.state.btw.handle(&event)? {
+                DialogAction::Submit(question) => {
+                    self.ask(question, self.state.btw.follow_up_index());
+                }
+                DialogAction::Link(url) => {
+                    if let Err(error) = tui::open_link_in_browser(&url) {
+                        self.state.btw.link_error(&error);
+                    }
+                }
+                DialogAction::None | DialogAction::Redraw | DialogAction::Close => {}
+            }
+            if let Some(index) = self.state.btw.take_cancel() {
+                self.send(Request::CancelQuestion {
+                    session: self.id.clone().unwrap_or_default(),
+                    index,
+                });
+            }
+            return Ok(Action::Redraw);
+        }
         if let Some(viewer) = &mut self.state.subagent_dialog {
             match viewer.handle(&event)? {
                 tui::subagents::ViewerAction::Close => {
@@ -60,6 +81,13 @@ impl Tab {
                 }
                 tui::subagents::ViewerAction::Submit(message) => self.send_subagent(message),
                 tui::subagents::ViewerAction::None | tui::subagents::ViewerAction::Redraw => {}
+            }
+            return Ok(Action::Redraw);
+        }
+        if self.state.dialog_open() {
+            if let Some(id) = tui::dialogs::handle(&mut self.state, event) {
+                self.state.picker = None;
+                return Ok(Action::SameTarget(Some(id)));
             }
             return Ok(Action::Redraw);
         }
@@ -153,12 +181,13 @@ impl Tab {
             tui::Action::Redraw => Ok(Action::Redraw),
             tui::Action::Submit(prompt) => self.submit(prompt),
             tui::Action::Steer(prompt) => {
-                if !self.send(Request::Steer {
-                    session: self.id.clone().unwrap_or_default(),
-                    message: prompt.clone(),
-                }) {
-                    self.state.input.set(prompt);
-                }
+                self.submit_with_receipt(
+                    Request::Steer {
+                        session: self.id.clone().unwrap_or_default(),
+                        message: prompt.clone(),
+                    },
+                    submissions::Draft::Composer(prompt),
+                );
                 Ok(Action::None)
             }
             tui::Action::Cancel => {
@@ -180,6 +209,13 @@ impl Tab {
             }
             tui::Action::None => Ok(Action::None),
         }
+    }
+
+    fn inspect(&mut self, section: orbit_protocol::Inspection) {
+        self.send(Request::SessionAction {
+            session: self.id.clone().unwrap_or_default(),
+            action: orbit_protocol::SessionAction::Inspect { section },
+        });
     }
 
     fn attach(&mut self, paths: Vec<std::path::PathBuf>) {
@@ -262,6 +298,10 @@ impl Tab {
             }
         }
         let session = self.id.clone().unwrap_or_default();
+        if let Some(question) = tui::btw::question(command) {
+            self.ask(question.into(), None);
+            return Ok(Action::Redraw);
+        }
         match command {
             "/quit" | "/exit" => return Ok(Action::Quit),
             "/close" => return Ok(Action::Close),
@@ -269,21 +309,32 @@ impl Tab {
             "/new" => return Ok(Action::SameTarget(None)),
             "/reconnect" => self.reconnect(),
             "/help" => self.state.report_local(TranscriptItem::Notice(HELP.into())),
-            "/status" => self
-                .state
-                .report_local(TranscriptItem::CommandResult(format!(
-                    "{}\n{}\n会话：{}\n{}",
-                    self.state.connection_label.as_deref().unwrap_or_default(),
-                    self.state.workspace,
+            "/status" => self.inspect(orbit_protocol::Inspection::Status),
+            "/context" => self.inspect(orbit_protocol::Inspection::Context),
+            "/skills" => self.inspect(orbit_protocol::Inspection::Skills),
+            "/mcp" => self.inspect(orbit_protocol::Inspection::Mcp),
+            "/diagnostics" => self.inspect(orbit_protocol::Inspection::Diagnostics),
+            "/changes" => self.inspect(orbit_protocol::Inspection::Changes),
+            "/diff" => self.inspect(orbit_protocol::Inspection::Diff { path: None }),
+            text if text.starts_with("/diff ") => self.inspect(orbit_protocol::Inspection::Diff {
+                path: Some(text[6..].trim().into()),
+            }),
+            text if text.starts_with("/rename ") => {
+                self.send(Request::SessionAction {
                     session,
-                    if self.offline {
-                        "已断开"
-                    } else if self.connecting.is_some() {
-                        "连接中"
-                    } else {
-                        "已连接"
-                    }
-                ))),
+                    action: orbit_protocol::SessionAction::Rename {
+                        title: text[8..].trim().into(),
+                    },
+                });
+            }
+            text if text.starts_with("/skill ") => {
+                self.send(Request::SessionAction {
+                    session,
+                    action: orbit_protocol::SessionAction::LoadSkill {
+                        name: text[7..].trim().into(),
+                    },
+                });
+            }
             "/sessions" | "/resume" => {
                 self.send(Request::Sessions);
             }

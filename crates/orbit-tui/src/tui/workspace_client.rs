@@ -3,6 +3,7 @@ pub(crate) mod auth;
 mod configuration;
 mod controls;
 mod input;
+mod submissions;
 use crate::workspace::pump;
 mod standalone;
 mod subagents;
@@ -61,6 +62,10 @@ pub(super) struct Tab {
     mode: Mode,
     offline: bool,
     subagent: Option<subagents::Remote>,
+    question_revision: Option<u64>,
+    question_poll: Option<tokio::sync::oneshot::Receiver<Result<Response>>>,
+    submissions: Vec<submissions::Submission>,
+    next_questions: std::time::Instant,
     attachment_task: Option<AbortOnDropHandle<Result<Vec<orbit_model::types::Attachment>>>>,
 }
 
@@ -162,6 +167,10 @@ impl Tab {
             mode: Mode::Auto,
             offline: false,
             subagent: None,
+            question_revision: None,
+            question_poll: None,
+            submissions: Vec::new(),
+            next_questions: std::time::Instant::now(),
             attachment_task: None,
         }
     }
@@ -281,7 +290,7 @@ impl Tab {
     }
 
     pub async fn poll(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self.state.btw.tick() | self.poll_submissions() | self.poll_questions();
         if self
             .attachment_task
             .as_ref()
@@ -501,13 +510,16 @@ impl Tab {
                     }
                 }
             }
-            Response::Sessions(sessions) => self.state.report_local(TranscriptItem::CommandResult(
-                sessions
-                    .iter()
-                    .map(|session| format!("{}  {}  {}", session.id, session.model, session.title))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )),
+            Response::Questions(questions) => {
+                self.question_revision = Some(questions.revision);
+                self.state
+                    .btw
+                    .receive(questions.records, questions.running, questions.selected);
+            }
+            Response::Report(report) => self.state.show_output(&report.title, report.text),
+            Response::Sessions(sessions) => {
+                self.state.picker = Some(super::dialogs::SessionPicker::new(sessions));
+            }
             Response::Error(error) => {
                 self.restore_submission();
                 self.state.report_local(TranscriptItem::Error(error));

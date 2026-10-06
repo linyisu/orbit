@@ -31,14 +31,18 @@ struct Dialog {
 #[derive(Default)]
 pub(super) struct Questions {
     service: orbit_service::side_questions::SideQuestions,
+    records: Vec<orbit_store::side_questions::SideQuestion>,
+    running: bool,
+    remote: bool,
+    cancel_request: Option<usize>,
     dialog: Option<Box<Dialog>>,
 }
 
 impl std::fmt::Debug for Questions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Questions")
-            .field("count", &self.service.records().len())
-            .field("running", &self.service.running())
+            .field("count", &self.records.len())
+            .field("running", &self.running)
             .finish_non_exhaustive()
     }
 }
@@ -46,15 +50,48 @@ impl std::fmt::Debug for Questions {
 impl Questions {
     #[cfg(test)]
     fn records(&self) -> &[orbit_store::side_questions::SideQuestion] {
-        self.service.records()
+        self.records.as_slice()
+    }
+
+    pub fn receive(
+        &mut self,
+        records: Option<Vec<orbit_store::side_questions::SideQuestion>>,
+        running: bool,
+        selected: Option<usize>,
+    ) {
+        self.remote = true;
+        if let Some(records) = records {
+            self.records = records;
+        }
+        self.running = running;
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.index >= self.records.len())
+        {
+            self.dialog = None;
+        }
+        if let Some(index) = selected.filter(|index| *index < self.records.len()) {
+            self.open(index);
+        } else {
+            self.refresh();
+        }
+    }
+
+    pub fn follow_up_index(&self) -> Option<usize> {
+        self.dialog.as_ref().map(|dialog| dialog.index)
+    }
+
+    pub fn take_cancel(&mut self) -> Option<usize> {
+        self.cancel_request.take()
     }
 
     pub fn has_records(&self) -> bool {
-        !self.service.records().is_empty()
+        !self.records.is_empty()
     }
 
     pub fn running(&self) -> bool {
-        self.service.running()
+        self.running
     }
 
     pub fn visible(&self) -> bool {
@@ -141,6 +178,8 @@ impl Questions {
                 store, session, model, history, question, max_tokens, backend, follow_up,
             )
             .await?;
+        self.records = self.service.records().to_vec();
+        self.running = self.service.running();
         if follow_up.is_some() {
             let dialog = self.dialog.as_mut().unwrap();
             dialog.view.submitted();
@@ -155,9 +194,9 @@ impl Questions {
     }
 
     fn open(&mut self, index: usize) {
-        let mut view = TranscriptDialog::new(self.service.records()[index].model.clone());
+        let mut view = TranscriptDialog::new(self.records[index].model.clone());
         view.enable_input();
-        view.ui.follow_bottom = self.service.records()[index].status == "running";
+        view.ui.follow_bottom = self.records[index].status == "running";
         self.dialog = Some(Box::new(Dialog {
             index,
             view,
@@ -168,7 +207,14 @@ impl Questions {
     }
 
     pub fn poll(&mut self) -> bool {
-        let changed = self.service.poll();
+        let changed = if self.remote {
+            false
+        } else {
+            let changed = self.service.poll();
+            self.records = self.service.records().to_vec();
+            self.running = self.service.running();
+            changed
+        };
         self.refresh() || changed
     }
 
@@ -176,7 +222,7 @@ impl Questions {
         let Some(dialog) = &mut self.dialog else {
             return false;
         };
-        let record = &self.service.records()[dialog.index];
+        let record = &self.records[dialog.index];
         if dialog.view.ui.selection.active()
             || (dialog.rendered_answer == record.answer.len()
                 && dialog.rendered_status == record.status)
@@ -186,8 +232,8 @@ impl Questions {
 
         dialog.view.ui.transcript.clear();
         for record in self
-            .service
-            .records()
+            .records
+            .as_slice()
             .iter()
             .filter(|item| item.thread_id == record.thread_id)
         {
@@ -210,7 +256,7 @@ impl Questions {
             }
         }
 
-        dialog.view.block_submission(self.service.running());
+        dialog.view.block_submission(self.running);
         dialog.view.ui.status = match record.status.as_str() {
             "running" => RunStatus::Running,
             "completed" => RunStatus::Completed,
@@ -242,7 +288,14 @@ impl Questions {
                 && key.modifiers.contains(KeyModifiers::CONTROL)
                 && !dialog.view.ui.selection.active()
                 && dialog.view.ui.input.selection().is_none()
-                && self.service.cancel(dialog.index)
+                && if self.remote {
+                    if self.running {
+                        self.cancel_request = Some(dialog.index);
+                    }
+                    self.running
+                } else {
+                    self.service.cancel(dialog.index)
+                }
             {
                 return Ok(Action::Redraw);
             }
@@ -289,7 +342,7 @@ impl Questions {
             return;
         };
         dialog.view.ui.media = media;
-        let record = &self.service.records()[dialog.index];
+        let record = &self.records[dialog.index];
         let status = match record.status.as_str() {
             "running" => "生成中",
             "completed" => "完成",
@@ -318,10 +371,10 @@ impl Questions {
 
     fn thread_heads(&self) -> Vec<usize> {
         let mut heads = Vec::<usize>::new();
-        for (index, record) in self.service.records().iter().enumerate() {
+        for (index, record) in self.records.iter().enumerate() {
             if let Some(head) = heads
                 .iter_mut()
-                .find(|head| self.service.records()[**head].thread_id == record.thread_id)
+                .find(|head| self.records[**head].thread_id == record.thread_id)
             {
                 *head = index;
             } else {

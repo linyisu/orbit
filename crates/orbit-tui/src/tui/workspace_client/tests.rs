@@ -426,3 +426,105 @@ fn compaction_and_images_use_the_same_request_for_every_target() {
         );
     }
 }
+
+#[test]
+fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
+    let (mut tab, mut requests) = tab("local");
+    tab.submit_with_receipt(
+        Request::Steer {
+            session: "same-session".into(),
+            message: "more context".into(),
+        },
+        submissions::Draft::Composer("more context".into()),
+    );
+    requests
+        .try_recv()
+        .unwrap()
+        .reply
+        .unwrap()
+        .send(Ok(Response::Error("session is idle".into())))
+        .unwrap();
+    assert!(tab.poll_submissions());
+    assert_eq!(tab.state.input.text, "more context");
+    tab.state.input.set("new draft".into());
+    tab.submit_with_receipt(
+        Request::Steer {
+            session: "same-session".into(),
+            message: "previous".into(),
+        },
+        submissions::Draft::Composer("previous".into()),
+    );
+    drop(requests.try_recv().unwrap());
+    tab.poll_submissions();
+    assert_eq!(tab.state.input.text, "new draft");
+    assert!(
+        tab.state
+            .transcript
+            .iter()
+            .any(|item| matches!(item, TranscriptItem::Notice(text) if text.contains("previous")))
+    );
+}
+
+#[test]
+fn side_question_receipts_open_the_existing_modal_and_keep_main_draft() {
+    let (mut tab, mut requests) = tab("SSH dev");
+    tab.state.input.set("main draft".into());
+    tab.ask("why?".into(), None);
+    let call = requests.try_recv().unwrap();
+    assert!(matches!(
+        call.request,
+        Request::Ask {
+            follow_up: None,
+            ..
+        }
+    ));
+    call.reply
+        .unwrap()
+        .send(Ok(Response::Questions(orbit_protocol::Questions {
+            revision: 1,
+            selected: Some(0),
+            running: true,
+            records: Some(vec![orbit_protocol::SideQuestion {
+                thread_id: "one".into(),
+                model: "mock".into(),
+                question: "why?".into(),
+                answer: "because".into(),
+                status: "running".into(),
+                error: None,
+            }]),
+        })))
+        .unwrap();
+    assert!(tab.poll_submissions());
+    assert!(tab.state.btw.visible());
+    assert_eq!(tab.state.input.text, "main draft");
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+        .unwrap();
+    assert!(!tab.state.btw.visible());
+    assert!(tab.state.btw.running());
+    tab.poll_questions();
+    let call = requests.try_recv().unwrap();
+    assert!(matches!(
+        call.request,
+        Request::ReadQuestions { after: Some(1), .. }
+    ));
+    call.reply
+        .unwrap()
+        .send(Ok(Response::Questions(orbit_protocol::Questions {
+            revision: 2,
+            selected: None,
+            running: false,
+            records: Some(vec![orbit_protocol::SideQuestion {
+                thread_id: "one".into(),
+                model: "mock".into(),
+                question: "why?".into(),
+                answer: "done".into(),
+                status: "completed".into(),
+                error: None,
+            }]),
+        })))
+        .unwrap();
+    tab.poll_questions();
+    assert!(!tab.state.btw.running());
+    assert!(!tab.state.btw.visible());
+    assert_eq!(tab.state.input.text, "main draft");
+}
