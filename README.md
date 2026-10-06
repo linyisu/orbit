@@ -58,15 +58,19 @@ TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel �
 | `orbit-tools` | 文件、命令、网页、文档、交付与 MCP 工具 | [README](crates/orbit-tools/README.md) |
 | `orbit-store` | SQLite 会话、规范日志、执行检查点和子任务持久化 | [README](crates/orbit-store/README.md) |
 
-CLI 和 TUI 调用应用服务，`orbit-server` 提供目标端的无界面入口。应用服务组装领域库，Agent 依赖模型与工具接口，工具通过 runtime 授权和执行，store 保存会话与运行证据。
+CLI 和 TUI 通过 `orbit-client` 连接目标端的 `orbit-server`，本地、SSH、WSL 使用同一会话协议。应用服务组装领域库，Agent 依赖模型与工具接口，工具通过 runtime 授权和执行，store 保存会话与运行证据。
 
 ```mermaid
 flowchart TD
     CLI[orbit-cli] --> CLIENT[orbit-client]
     TUI[orbit-tui] --> CLIENT
-    CLI --> APP[orbit-service]
-    TUI --> APP
-    SERVER[orbit-server] --> APP
+    CLIENT --> LOCAL[本地进程]
+    CLIENT --> SSH[SSH]
+    CLIENT --> WSL[WSL]
+    LOCAL --> SERVER[orbit-server]
+    SSH --> SERVER
+    WSL --> SERVER
+    SERVER --> APP[orbit-service]
     APP --> AGENT[orbit-agent]
     APP --> TOOLS[orbit-tools]
     APP --> STORE[orbit-store]
