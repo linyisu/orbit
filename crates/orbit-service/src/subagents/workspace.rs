@@ -37,6 +37,21 @@ pub(super) async fn prepare(
         )?;
     let root = PathBuf::from(root.trim());
     let base = git(&root, &["rev-parse", "HEAD"]).await?;
+    let relative = parent
+        .canonicalize()?
+        .strip_prefix(root.canonicalize()?)?
+        .to_path_buf();
+    if !relative.as_os_str().is_empty() {
+        let tree = format!(
+            "{}:{}",
+            base.trim(),
+            relative.to_str().context("workspace path is not UTF-8")?
+        );
+        ensure!(
+            git(&root, &["cat-file", "-t", &tree]).await?.trim() == "tree",
+            "当前目录在 HEAD 中不存在，请在仓库根目录创建开发子代理"
+        );
+    }
     std::fs::create_dir_all(destination.parent().unwrap())?;
     let branch = format!("orbit/agent-{agent}");
     git(
@@ -52,10 +67,6 @@ pub(super) async fn prepare(
         ],
     )
     .await?;
-    let relative = parent
-        .canonicalize()?
-        .strip_prefix(root.canonicalize()?)?
-        .to_path_buf();
     let workspace = destination.join(relative);
     ensure!(
         workspace.is_dir(),
@@ -137,6 +148,32 @@ mod tests {
                 .await
                 .unwrap()
                 .starts_with("orbit/agent-")
+        );
+        let untracked = repo.join("untracked-directory");
+        std::fs::create_dir(&untracked).unwrap();
+        let rejected = "abcdef0123456789abcdef0123456789";
+        assert!(
+            prepare(
+                &untracked,
+                &directory.path().join("sessions.db"),
+                rejected,
+                Strategy::Worktree,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            !directory
+                .path()
+                .join("sessions.worktrees")
+                .join(rejected)
+                .exists()
+        );
+        assert!(
+            !git(&repo, &["branch", "--list"])
+                .await
+                .unwrap()
+                .contains(rejected)
         );
     }
 
