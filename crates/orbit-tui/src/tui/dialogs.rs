@@ -4,7 +4,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
@@ -257,7 +257,8 @@ impl ModelPicker {
         current: String,
         effort: Option<orbit_model::types::ReasoningEffort>,
     ) -> Self {
-        let models: Vec<ModelChoice> = models.into_iter().map(Into::into).collect();
+        let mut models: Vec<ModelChoice> = models.into_iter().map(Into::into).collect();
+        models.sort_by(|a, b| a.model.cmp(&b.model).then(a.provider.cmp(&b.provider)));
         let selected = models
             .iter()
             .position(|model| model.qualified_name() == current)
@@ -278,12 +279,7 @@ impl ModelPicker {
         let selected = self.selected.min(rows.len().saturating_sub(1));
         let mut first = self.offset.min(selected);
         while first < selected {
-            let required = selected - first
-                + 2
-                + rows[first..=selected]
-                    .windows(2)
-                    .filter(|pair| pair[0].provider != pair[1].provider)
-                    .count();
+            let required = selected - first + 1;
             if required <= height {
                 break;
             }
@@ -737,12 +733,11 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 KeyCode::Up => picker.move_by(false),
                 KeyCode::Down => picker.move_by(true),
                 KeyCode::Enter => {
-                    state.chosen_model = picker
-                        .matches()
-                        .get(picker.selected)
-                        .map(|model| model.qualified_name());
-                    state.chosen_effort = picker.effort;
-                    state.model_picker = None;
+                    if let Some(model) = picker.matches().get(picker.selected) {
+                        state.chosen_model = Some(model.qualified_name());
+                        state.chosen_effort = picker.effort;
+                        state.model_picker = None;
+                    }
                 }
 
                 KeyCode::Char(c)
@@ -926,6 +921,41 @@ fn centered_size(full: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
+fn model_row(
+    model: &str,
+    provider: &str,
+    marker: &str,
+    width: usize,
+    selected: bool,
+) -> Line<'static> {
+    use unicode_width::UnicodeWidthStr;
+    let provider_width = (width / 3).min(28);
+    let name_width = width.saturating_sub(provider_width + 6);
+    let name = super::render::fit_label(&clean(model), name_width, false);
+    let provider = super::render::fit_label(&clean(provider), provider_width, false);
+    let lead = super::render::fit_label(
+        &format!(
+            " {marker} {name}{}  ",
+            " ".repeat(name_width.saturating_sub(name.width()))
+        ),
+        width,
+        false,
+    );
+    let tail = super::render::fit_label(&provider, width.saturating_sub(lead.width()), false);
+    let padding = " ".repeat(width.saturating_sub(lead.width() + tail.width()));
+    Line::from(vec![
+        Span::raw(lead),
+        Span::styled(
+            format!("{tail}{padding}"),
+            if selected {
+                Style::default()
+            } else {
+                Style::default().fg(crate::tui::theme::THEME.description)
+            },
+        ),
+    ])
+}
+
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.dialog_rows.clear();
     if !state.dialog_open() {
@@ -935,6 +965,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.clear();
     let area = if state.btw.visible() || state.subagent_dialog.is_some() {
         transcript_area(frame.area())
+    } else if let Some(picker) = &state.model_picker {
+        centered_size(
+            frame.area(),
+            96,
+            picker.models.len().saturating_add(8).min(28) as u16,
+        )
     } else {
         centered_area(frame.area())
     };
@@ -1175,10 +1211,25 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             footer,
         );
     } else if let Some(picker) = &mut state.model_picker {
-        let body = Rect {
-            height: body.height.saturating_sub(1),
+        let column_header = Rect {
+            height: 1.min(body.height),
             ..body
         };
+        let body = Rect {
+            y: body.y + column_header.height,
+            height: body.height.saturating_sub(column_header.height),
+            ..body
+        };
+        frame.render_widget(
+            Paragraph::new(model_row(
+                "模型",
+                "连接",
+                " ",
+                column_header.width as usize,
+                false,
+            )),
+            column_header,
+        );
         let search = super::render::fit_label(
             &format!("筛选模型：{}", clean(&picker.query)),
             header.width.saturating_sub(1) as usize,
@@ -1212,35 +1263,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         };
         let rows = picker.matches();
         let mut lines = Vec::new();
-        let mut previous_provider = None;
-
-        for (index, model) in rows.iter().enumerate().skip(first) {
-            let needed = 1 + usize::from(previous_provider != Some(model.provider.as_str()));
-            if lines.len() + needed > visible {
-                break;
-            }
-            if previous_provider != Some(model.provider.as_str()) {
-                lines.push(Line::styled(
-                    clean(&model.provider),
-                    Style::default()
-                        .fg(crate::tui::theme::THEME.accent)
-                        .add_modifier(Modifier::BOLD),
-                ));
-                previous_provider = Some(model.provider.as_str());
-            }
-
+        for (index, model) in rows.iter().enumerate().skip(first).take(visible) {
             state.dialog_rows.push((
                 Rect::new(body.x, body.y + lines.len() as u16, body.width, 1).intersection(body),
                 index,
             ));
             let selected = index == picker.selected;
             let current = model.qualified_name() == picker.current;
-            let ordinal = picker
-                .models
-                .iter()
-                .filter(|candidate| candidate.provider == model.provider)
-                .position(|candidate| candidate.model == model.model)
-                .map_or(1, |position| position + 1);
             let style = if selected {
                 Style::default()
                     .fg(crate::tui::theme::THEME.on_accent)
@@ -1250,22 +1279,16 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 Style::default()
             };
 
-            let label = format!(
-                "{}. {}{}{}",
-                ordinal,
-                model.model,
-                if model.supports_vision {
-                    "  (视觉)"
-                } else {
-                    ""
-                },
-                if current { "  (当前)" } else { "" },
+            lines.push(
+                model_row(
+                    &model.model,
+                    &model.provider,
+                    if current { "✓" } else { " " },
+                    body.width as usize,
+                    selected,
+                )
+                .style(style),
             );
-
-            lines.push(Line::styled(
-                super::render::padded_label(&label, body.width as usize, 2),
-                style,
-            ));
         }
 
         if lines.is_empty() {
@@ -1275,7 +1298,23 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         fit_hit_rows(&mut state.dialog_rows, &lines, body);
         frame.render_widget(Paragraph::new(lines), body);
         frame.render_widget(
-            Paragraph::new(format!("共 {} 个模型 · Esc 返回", rows.len())),
+            Paragraph::new(vec![
+                Line::from(rows.get(picker.selected).map_or_else(String::new, |model| {
+                    format!(
+                        "{}{}",
+                        clean(&model.qualified_name()),
+                        if model.supports_vision {
+                            " · 支持图片"
+                        } else {
+                            ""
+                        }
+                    )
+                })),
+                Line::from(format!(
+                    "{} 个模型 · ↑↓ 选择 · Enter 使用 · Esc 返回",
+                    rows.len()
+                )),
+            ]),
             footer,
         );
     } else if let Some(dialog) = &mut state.marketplace_dialog {

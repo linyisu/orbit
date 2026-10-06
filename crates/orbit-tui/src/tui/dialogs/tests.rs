@@ -332,12 +332,12 @@ fn model_picker_draws_on_a_terminal_too_short_for_body_rows() {
 }
 
 #[test]
-fn grouped_models_keep_last_row_visible_and_support_mouse_selection() {
+fn models_keep_current_row_visible_and_support_mouse_selection() {
     let models: Vec<_> = (0..30)
         .map(|index| ModelOption {
             max_output_tokens: 32_000,
             provider: format!("provider-{}", index / 3),
-            model: format!("model-{index}"),
+            model: format!("model-{index:02}"),
             context_tokens: 128_000,
             input_context_tokens: 96_000,
             reasoning_efforts: Vec::new(),
@@ -405,7 +405,7 @@ fn grouped_models_keep_last_row_visible_and_support_mouse_selection() {
     assert!(state.model_picker.is_none());
     assert_eq!(
         state.chosen_model,
-        Some(format!("provider-{}::model-{index}", index / 3))
+        Some(format!("provider-{}::model-{index:02}", index / 3))
     );
 }
 
@@ -415,7 +415,7 @@ fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
         .map(|index| ModelOption {
             max_output_tokens: 32_000,
             provider: "provider".into(),
-            model: format!("model-{index}"),
+            model: format!("model-{index:02}"),
             context_tokens: 128_000,
             input_context_tokens: 96_000,
             reasoning_efforts: Vec::new(),
@@ -466,11 +466,16 @@ fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
                 .map(|x| buffer[(x, *y)].symbol())
                 .collect::<String>()
                 .replace(' ', "")
-                .contains("共30个模型·Esc返回")
+                .contains("30个模型·↑↓选择·Enter使用·Esc返回")
         })
         .unwrap();
 
-    assert!((3..97).all(|x| buffer[(x, footer_y - 1)].symbol() == " "));
+    assert!(
+        state
+            .dialog_rows
+            .iter()
+            .all(|(rect, _)| rect.bottom() < footer_y)
+    );
 }
 
 #[test]
@@ -937,4 +942,65 @@ fn dialog_borders_survive_wide_background_text_and_restore_on_close() {
             }
         }
     }
+}
+
+#[test]
+fn model_search_ranks_matches_and_keeps_connections_distinct() {
+    let models = [
+        ("zeta", "fast"),
+        ("alpha", "fast"),
+        ("local", "afast"),
+        ("local", "f-a-s-t"),
+        ("local", "fast-plus"),
+    ]
+    .map(|(provider, model)| ModelChoice {
+        provider: provider.into(),
+        model: model.into(),
+        supports_vision: false,
+        reasoning_effort: None,
+        reasoning_efforts: vec![],
+    });
+    let mut picker = ModelPicker::new(models, String::new(), None);
+    assert_eq!(picker.matches()[0].model, "afast");
+    picker.query = "fast".into();
+    assert_eq!(
+        picker
+            .matches()
+            .iter()
+            .map(|m| m.qualified_name())
+            .collect::<Vec<_>>(),
+        [
+            "alpha::fast",
+            "zeta::fast",
+            "local::fast-plus",
+            "local::afast",
+            "local::f-a-s-t"
+        ]
+    );
+    let mut state = UiState::new("");
+    state.model_picker = Some(picker);
+    handle(&mut state, Event::Paste("missing".into()));
+    handle(
+        &mut state,
+        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    );
+    assert!(state.model_picker.is_some());
+    assert!(state.chosen_model.is_none());
+    handle(
+        &mut state,
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    );
+    assert!(state.model_picker.is_none());
+    assert!(state.chosen_model.is_none());
+}
+
+#[test]
+fn model_rows_use_terminal_columns_and_fill_the_clickable_width() {
+    for width in [0, 1, 8, 24, 40, 96] {
+        let row = model_row("中文模型-长名称", "工作连接", "✓", width, false);
+        assert_eq!(row.width(), width);
+    }
+    let first = model_row("short", "local", " ", 80, false).to_string();
+    let second = model_row("longer-model-name", "local", " ", 80, false).to_string();
+    assert_eq!(first.find("local"), second.find("local"));
 }
