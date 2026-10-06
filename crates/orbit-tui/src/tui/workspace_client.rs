@@ -279,16 +279,6 @@ impl Tab {
         let mut connection = opened.connection;
         Arc::make_mut(&mut connection).unattended = true;
         self.connection = Some(connection);
-        if self.session_title.is_empty() {
-            self.title = format!(
-                "{} · {}",
-                self.state.connection_label.as_deref().unwrap_or_default(),
-                std::path::Path::new(&self.state.workspace)
-                    .file_name()
-                    .and_then(|p| p.to_str())
-                    .unwrap_or(&self.state.workspace)
-            );
-        }
         let (commands, requests) = mpsc::channel(CHANNEL_CAPACITY);
         let commands = Arc::new(commands);
         self.state.media.files = Some(Files {
@@ -316,6 +306,12 @@ impl Tab {
     }
 
     fn profile(&mut self, info: &SessionInfo) {
+        if self.state.workspace != info.workspace {
+            self.state.workspace = info.workspace.clone();
+            self.state.stored_completions.clear();
+            self.completion_input.clear();
+        }
+        self.state.media.workspace = info.workspace.clone().into();
         self.state.branch = info.branch.clone();
         self.state.branch_workspace = info.workspace.clone();
         self.state.cursor_motion.enabled = info.cursor_trail;
@@ -331,13 +327,18 @@ impl Tab {
             Arc::make_mut(connection).workspace = info.workspace.clone();
         }
         self.session_title = info.title.clone();
-        if !info.title.is_empty() {
-            self.title = format!(
-                "{} · {}",
-                self.state.connection_label.as_deref().unwrap_or_default(),
-                info.title
-            );
-        }
+        let title = if info.title.is_empty() {
+            std::path::Path::new(&info.workspace)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&info.workspace)
+        } else {
+            &info.title
+        };
+        self.title = format!(
+            "{} · {title}",
+            self.state.connection_label.as_deref().unwrap_or_default(),
+        );
         self.state.model = info.model.clone();
         self.state.model_completions = info.models.clone();
         self.model_catalog = info.model_catalog.clone();

@@ -271,12 +271,20 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
                         .text
                         .strip_prefix("/cd ")
                         .is_some_and(|argument| {
-                            directory::resolve(
-                                argument,
-                                std::path::Path::new(&state.workspace),
-                                state.completion_home.as_deref(),
-                            )
-                            .is_ok()
+                            if state.connection_label.is_some() {
+                                argument.trim_end_matches(['\'', '"']).ends_with('/')
+                                    || menu.iter().any(|entry| {
+                                        entry.name.trim_end_matches('/')
+                                            == state.input.text.trim_end_matches('/')
+                                    })
+                            } else {
+                                directory::resolve(
+                                    argument,
+                                    std::path::Path::new(&state.workspace),
+                                    state.completion_home.as_deref(),
+                                )
+                                .is_ok()
+                            }
                         });
                 if !exact_directory || state.menu_index != 0 {
                     state.input.set(candidate.name.clone());

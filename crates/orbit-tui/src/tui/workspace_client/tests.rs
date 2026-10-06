@@ -702,3 +702,62 @@ fn resume_focuses_open_conversation_and_removes_only_empty_source() {
         assert_eq!(tabs.remote.contains_key(&source), !draft.is_empty());
     }
 }
+
+#[test]
+fn directory_profile_updates_workspace_media_connection_and_empty_tab_title() {
+    let mut tab = connected_tab(workspace::transport::Target::Local);
+    let info: SessionInfo = serde_json::from_value(serde_json::json!({
+        "id":"same-session", "title":"", "workspace":"/next/project", "model":"mock", "models":[],
+        "supports_vision":false, "reasoning_effort":null, "reasoning_efforts":[],
+        "context_tokens":1000, "input_context_tokens":900, "max_output_tokens":100
+    }))
+    .unwrap();
+    tab.apply(Response::Ok);
+    tab.apply(Response::Page(Page {
+        next: 1,
+        more: false,
+        busy: false,
+        model: "mock".into(),
+        updates: vec![Update::Profile(Box::new(info.clone()))],
+        approvals: Vec::new(),
+    }));
+    assert_eq!(tab.state.workspace, "/next/project");
+    assert_eq!(
+        tab.state.media.workspace,
+        std::path::Path::new("/next/project")
+    );
+    assert_eq!(tab.connection.as_ref().unwrap().workspace, "/next/project");
+    assert_eq!(tab.title, "本地 · project");
+    assert!(tab.state.info_dialog.is_none());
+    let mut info = info;
+    info.title = "saved title".into();
+    tab.profile(&info);
+    assert_eq!(tab.title, "本地 · saved title");
+}
+
+#[test]
+fn directory_enter_keeps_completed_path_instead_of_choosing_its_first_child() {
+    for label in ["本地", "SSH dev", "WSL Ubuntu"] {
+        let (mut tab, mut requests) = tab(label);
+        tab.state.input.set("/cd ~/Tests/TC_learn/".into());
+        tab.apply(Response::Completions {
+            input: tab.state.input.text.clone(),
+            entries: vec![crate::tui::completion::Candidate {
+                name: "/cd ~/Tests/TC_learn/_check/".into(),
+                display: Some("_check/".into()),
+                description: String::new(),
+                continue_input: true,
+            }],
+        });
+        tab.handle(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        let call = requests.try_recv().unwrap();
+        assert!(
+            matches!(call.request, Request::SessionAction { action: orbit_protocol::SessionAction::ChangeDirectory { path }, .. } if path == "~/Tests/TC_learn/")
+        );
+        assert!(tab.state.info_dialog.is_none());
+    }
+}

@@ -656,15 +656,18 @@ models = [{{ id = "mock" }}]
 async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
+    let (url, model) = mock_tool_model("read_file", json!({"path":"proof.txt"}), None).await;
     std::fs::write(
         root.join("config.toml"),
-        r#"default_provider = "test"
+        format!(
+            r#"default_provider = "test"
 [providers.test]
-base_url = "http://127.0.0.1:1"
+base_url = "{url}"
 api_key = "test-only"
 auto_refresh_models = false
-models = [{ id = "mock" }, { id = "other" }]
-"#,
+models = [{{ id = "mock" }}, {{ id = "other" }}]
+"#
+        ),
     )
     .unwrap();
     let project = root.join("next project");
@@ -690,8 +693,24 @@ models = [{ id = "mock" }, { id = "other" }]
         let response = client.request(request).await;
         assert_eq!(response["type"], "ok", "{response}");
     }
-    let moved = client.request(json!({"method":"session_action","session":id,"action":{"action":"change_directory","path":project}})).await;
-    assert_eq!(moved["type"], "report", "{moved}");
+    let moved = client.request(json!({"method":"session_action","session":id,"action":{"action":"change_directory","path":"'~/next project'"}})).await;
+    assert_eq!(moved["type"], "ok", "{moved}");
+    let page = client
+        .request(json!({"method":"poll","session":id,"after":0}))
+        .await;
+    let updates = page["value"]["updates"].as_array().unwrap();
+    assert!(
+        updates.iter().all(|update| update.get("Report").is_none()),
+        "{page}"
+    );
+    assert!(
+        updates
+            .iter()
+            .any(|update| update["Profile"]["workspace"] == project.to_string_lossy().as_ref()),
+        "{page}"
+    );
+    let invalid = client.request(json!({"method":"session_action","session":id,"action":{"action":"change_directory","path":"missing-directory"}})).await;
+    assert_eq!(invalid["type"], "error", "{invalid}");
     let info = client.request(json!({"method":"open","resume":id})).await;
     assert_eq!(
         info["value"]["workspace"],
@@ -716,9 +735,57 @@ models = [{ id = "mock" }, { id = "other" }]
         .request(json!({"method":"list_sessions","session":id}))
         .await;
     assert!(list["value"].as_array().unwrap().is_empty(), "{list}");
+    let completions = client
+        .request(json!({"method":"complete","session":id,"input":"/resume "}))
+        .await;
+    assert!(
+        completions["value"]["entries"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{completions}"
+    );
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
         .await
         .unwrap();
+    let saved = client.request(json!({"method":"open"})).await;
+    assert_eq!(saved["type"], "opened", "{saved}");
+    let saved_id = saved["value"]["id"].as_str().unwrap().to_owned();
+    let moved = client.request(json!({"method":"session_action","session":saved_id,"action":{"action":"change_directory","path":project}})).await;
+    assert_eq!(moved["type"], "ok", "{moved}");
+    let started = client.request(json!({"method":"start","session":saved_id,"request_id":"history-run","prompt":"read proof.txt","mode":"auto","model":null})).await;
+    assert_eq!(started["type"], "ok", "{started}");
+    let page = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let page = client
+                .request(json!({"method":"poll","session":saved_id,"after":0}))
+                .await;
+            if page["value"]["busy"] == false {
+                break page;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(page.to_string().contains("target directory"), "{page}");
+    let list = client
+        .request(json!({"method":"list_sessions","session":id}))
+        .await;
+    assert_eq!(list["value"].as_array().unwrap().len(), 1, "{list}");
+    assert_eq!(list["value"][0]["id"], saved_id);
+    let completions = client
+        .request(json!({"method":"complete","session":id,"input":"/resume "}))
+        .await;
+    assert_eq!(
+        completions["value"]["entries"].as_array().unwrap().len(),
+        1,
+        "{completions}"
+    );
+    assert_eq!(
+        completions["value"]["entries"][0]["name"],
+        format!("/resume {saved_id}")
+    );
     let legacy_window = store.open_tui_window().await.unwrap();
     legacy_window.update(vec![id.clone()]).await.unwrap();
     legacy_window.close().await.unwrap();
@@ -739,6 +806,7 @@ models = [{ id = "mock" }, { id = "other" }]
         client.request(json!({"method":"shutdown"})).await["type"],
         "ok"
     );
+    model.abort();
 }
 
 #[tokio::test]

@@ -516,9 +516,18 @@ impl Service {
                 self.session(&session).await?.questions.cancel(index).await;
                 Ok(Response::Ok)
             }
-            Request::SessionAction { session, action } => Ok(Response::Report(
-                self.session(&session).await?.action(action).await?,
-            )),
+            Request::SessionAction { session, action } => {
+                let directory_change = matches!(
+                    action,
+                    orbit_protocol::SessionAction::ChangeDirectory { .. }
+                );
+                let report = self.session(&session).await?.action(action).await?;
+                Ok(if directory_change {
+                    Response::Ok
+                } else {
+                    Response::Report(report)
+                })
+            }
             Request::ConfigureModels {
                 session,
                 configuration,

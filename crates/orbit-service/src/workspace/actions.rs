@@ -14,6 +14,13 @@ pub(super) async fn execute(
     match action {
         SessionAction::ChangeDirectory { path } => {
             ensure!(!running, "请先结束当前响应再移动会话");
+            let path = if path.starts_with(['\'', '"']) {
+                let words = shlex::split(&path).context("路径引号未闭合")?;
+                ensure!(words.len() == 1, "请提供一个目录路径");
+                words.into_iter().next().unwrap()
+            } else {
+                path
+            };
             let root = std::path::Path::new(&setup.session.snapshot.session.workspace);
             let path = if path == "~" || path.starts_with("~/") {
                 setup
