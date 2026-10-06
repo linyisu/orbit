@@ -58,6 +58,23 @@ pub(super) async fn run(
     mut requests: mpsc::Receiver<Envelope>,
 ) {
     let mode = setup.resources.mode;
+    let remembered = match setup
+        .session
+        .store
+        .tui_file_grants(setup.session.id())
+        .await
+    {
+        Ok(grants) => grants,
+        Err(error) => {
+            view.lock()
+                .await
+                .push(Update::Report(orbit_protocol::Report {
+                    title: "文件授权".into(),
+                    text: format!("无法读取本会话保存的文件授权，请重新确认：{error}"),
+                }));
+            HashSet::new()
+        }
+    };
     let mut actor = Actor {
         configuration: None,
         workspace,
@@ -68,7 +85,7 @@ pub(super) async fn run(
         undo: None,
         mode,
         accepted: HashMap::new(),
-        remembered: HashSet::new(),
+        remembered,
         pending: HashMap::new(),
         approval_id: 0,
     };
@@ -292,19 +309,32 @@ impl Actor {
                 allow,
                 remember,
             } => {
-                let request = self
+                let preview = &self
                     .pending
-                    .remove(&id)
-                    .ok_or_else(|| anyhow::anyhow!("approval is no longer pending"))?;
+                    .get(&id)
+                    .ok_or_else(|| anyhow::anyhow!("approval is no longer pending"))?
+                    .preview;
                 if allow
                     && remember
                     && let Some(key) = approval_key(
-                        &request.preview,
+                        preview,
                         Path::new(&self.setup.session.snapshot.session.workspace),
                     )
                 {
+                    if matches!(
+                        preview,
+                        orbit_tools::approval::ApprovalPreview::Write(_)
+                            | orbit_tools::approval::ApprovalPreview::Delete(_)
+                    ) {
+                        self.setup
+                            .session
+                            .store
+                            .grant_tui_file(self.setup.session.id(), &key)
+                            .await?;
+                    }
                     self.remembered.insert(key);
                 }
+                let request = self.pending.remove(&id).unwrap();
                 {
                     let mut view = self.view.lock().await;
                     view.approvals.remove(&id);

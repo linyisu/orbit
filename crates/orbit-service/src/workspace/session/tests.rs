@@ -100,3 +100,47 @@ models=[{id="test",supports_vision=true}]
     assert!(handle.view.lock().await.page(0).unwrap().updates.iter().any(|update| matches!(update,Update::Started{prompt,presentation} if prompt.is_empty() && presentation.images==["one.png"])));
     handle.command(Command::Cancel).await.unwrap();
 }
+
+#[tokio::test]
+async fn remembered_file_grant_survives_reopen_and_matches_changed_content() {
+    use orbit_tools::approval::{ApprovalPreview, DeletePreview, WritePreview};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let session =
+        crate::session::SessionState::open_in(root.join("sessions.db"), None, "test".into(), root)
+            .await
+            .unwrap();
+    let id = session.id().to_owned();
+    let first = ApprovalPreview::Write(WritePreview {
+        path: "file.txt".into(),
+        before: None,
+        after: "first".into(),
+    });
+    let key = approval_key(&first, root).unwrap();
+    session.store.grant_tui_file(&id, &key).await.unwrap();
+    drop(session);
+    std::fs::write(root.join("file.txt"), "first").unwrap();
+    let store = orbit_store::store::Store::open(root.join("sessions.db"))
+        .await
+        .unwrap();
+    let granted = store.tui_file_grants(&id).await.unwrap();
+    for preview in [
+        ApprovalPreview::Write(WritePreview {
+            path: "file.txt".into(),
+            before: Some("first".into()),
+            after: "second".into(),
+        }),
+        ApprovalPreview::Delete(DeletePreview {
+            path: "file.txt".into(),
+            before: "second".into(),
+        }),
+    ] {
+        assert!(granted.contains(&approval_key(&preview, root).unwrap()));
+    }
+    let other = ApprovalPreview::Write(WritePreview {
+        path: "other.txt".into(),
+        before: None,
+        after: "first".into(),
+    });
+    assert!(!granted.contains(&approval_key(&other, root).unwrap()));
+}

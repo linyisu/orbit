@@ -311,10 +311,10 @@ impl Handle {
 fn approval_key(preview: &ApprovalPreview, workspace: &Path) -> Option<String> {
     let target = match preview {
         ApprovalPreview::Write(preview) => {
-            orbit_tools::approval::file_grant_key(&preview.path, workspace)?
+            return orbit_tools::approval::file_grant_key(&preview.path, workspace);
         }
         ApprovalPreview::Delete(preview) => {
-            orbit_tools::approval::file_grant_key(&preview.path, workspace)?
+            return orbit_tools::approval::file_grant_key(&preview.path, workspace);
         }
         ApprovalPreview::Command(preview) if preview.git.is_some() => {
             preview.git_grant_key(workspace)?
