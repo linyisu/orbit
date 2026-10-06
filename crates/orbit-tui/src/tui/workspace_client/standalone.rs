@@ -103,12 +103,10 @@ pub(super) async fn run(mut opened: Opened) -> Result<()> {
                     Action::None | Action::Redraw => {}
                 }
                 if let Some(selected) = tabs.remote.get_mut(&id).and_then(|tab| tab.state.restore_selection.take()) {
-                    let media = tabs.remote[&id].state.media.clone();
-                    for index in selected.into_iter().filter_map(|value| value.parse::<usize>().ok()) {
-                        if let Some(saved) = previous.get(index) {
-                            tabs.add_remote(Tab::connecting(Spec::restored(saved), media.clone()));
-                        }
-                    }
+                    let saved: Vec<_> = selected.into_iter()
+                        .filter_map(|value| value.parse::<usize>().ok())
+                        .filter_map(|index| previous.get(index)).collect();
+                    tabs.restore_tabs(&id, &saved);
                 }
                 frames.request(time::Instant::now());
             }

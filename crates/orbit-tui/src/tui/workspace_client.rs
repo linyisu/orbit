@@ -79,6 +79,17 @@ pub(super) struct Tab {
 }
 
 impl Tab {
+    pub(super) fn target_identity(&self) -> Option<workspace::transport::Target> {
+        self.connection
+            .as_ref()
+            .map(|connection| connection.target.clone())
+            .or_else(|| self.spec.as_ref().map(Spec::target_identity))
+    }
+
+    pub(super) fn ready_for_restore(&self) -> bool {
+        self.id.is_some() && self.connection.is_some() && self.connecting.is_none() && !self.offline
+    }
+
     pub fn connecting(spec: Spec, media: media::Context) -> Self {
         let mut tab = Self::empty(spec.label(), spec.workspace().into(), media);
         tab.spec = Some(spec.clone());

@@ -135,12 +135,27 @@ impl Spec {
     }
 
     pub fn label(&self) -> String {
+        self.target_identity().label()
+    }
+
+    pub fn target_identity(&self) -> crate::workspace::transport::Target {
+        use crate::workspace::transport::{SshOptions, Target};
         if let Some(host) = &self.args.ssh {
-            format!("SSH {host}")
+            Target::Ssh {
+                host: host.clone(),
+                options: SshOptions {
+                    user: self.args.ssh_user.clone(),
+                    port: self.args.ssh_port,
+                    identity: self.args.identity.clone(),
+                },
+            }
         } else if let Some(distribution) = &self.args.wsl {
-            format!("WSL {distribution}")
+            Target::Wsl {
+                distribution: distribution.clone(),
+                user: self.args.wsl_user.clone(),
+            }
         } else {
-            "本地".into()
+            Target::Local
         }
     }
 

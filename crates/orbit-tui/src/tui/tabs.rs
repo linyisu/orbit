@@ -13,14 +13,73 @@ pub(super) mod live {
         pub remote: HashMap<String, super::super::workspace_client::Tab>,
         pub active_remote: Option<String>,
         order: Vec<String>,
+        restore_sources: HashMap<String, String>,
         discovery_revision: u64,
     }
     impl Tabs {
-        pub fn add_remote(&mut self, tab: super::super::workspace_client::Tab) {
+        pub fn add_remote(&mut self, tab: super::super::workspace_client::Tab) -> String {
             let id = format!("workspace:{}", crate::workspace::request_id());
             self.order.push(id.clone());
             self.remote.insert(id.clone(), tab);
-            self.active_remote = Some(id);
+            self.active_remote = Some(id.clone());
+            id
+        }
+        pub fn restore_tabs(
+            &mut self,
+            source: &str,
+            saved: &[&crate::workspace::windows::SavedTab],
+        ) {
+            let media = self.remote[source].state.media.clone();
+            let replace = self.remote[source].can_replace_with_resumed();
+            for saved in saved {
+                let existing = self.remote.iter().find_map(|(id, tab)| {
+                    (tab.id.as_ref() == Some(&saved.id)
+                        && tab.target_identity().as_ref() == Some(&saved.target))
+                    .then(|| id.clone())
+                });
+                let restored = if let Some(id) = existing {
+                    self.active_remote = Some(id.clone());
+                    id
+                } else {
+                    self.add_remote(super::super::workspace_client::Tab::connecting(
+                        super::super::connection_spec::Spec::restored(saved),
+                        media.clone(),
+                    ))
+                };
+                if replace && restored != source {
+                    self.restore_sources.insert(restored, source.into());
+                }
+            }
+            self.finish_restores();
+        }
+
+        fn finish_restores(&mut self) -> bool {
+            let ready: Vec<_> = self
+                .restore_sources
+                .iter()
+                .filter_map(|(id, source)| {
+                    self.remote
+                        .get(id)
+                        .filter(|tab| tab.ready_for_restore())
+                        .map(|_| (id.clone(), source.clone()))
+                })
+                .collect();
+            let mut changed = false;
+            for (restored, source) in ready {
+                if self
+                    .remote
+                    .get(&source)
+                    .is_some_and(|tab| tab.can_replace_with_resumed())
+                {
+                    let active = self.active_remote.as_deref() == Some(&source);
+                    changed |= self.remove_remote(&source);
+                    if active {
+                        self.active_remote = Some(restored);
+                    }
+                }
+                self.restore_sources.retain(|_, value| *value != source);
+            }
+            changed
         }
         pub fn open_session(&mut self, source: &str, resume: Option<String>) {
             let current = &self.remote[source];
@@ -55,6 +114,8 @@ pub(super) mod live {
                 return false;
             }
             self.order.retain(|item| item != id);
+            self.restore_sources
+                .retain(|restored, source| restored != id && source != id);
             if self.active_remote.as_deref() == Some(id) {
                 self.active_remote = None;
             }
@@ -67,7 +128,7 @@ pub(super) mod live {
             for tab in self.remote.values_mut() {
                 changed |= tab.poll().await;
             }
-            changed
+            changed | self.finish_restores()
         }
         fn remote_descriptor(
             &self,
