@@ -338,7 +338,7 @@ impl Service {
                 if let Some(id) = &resume
                     && let Some(handle) = self.sessions.lock().await.get(id)
                 {
-                    return Ok(Response::Opened(handle.info.clone()));
+                    return Ok(Response::Opened(handle.current_info().await));
                 }
                 ensure!(
                     self.sessions.lock().await.len() < MAX_SESSIONS,
@@ -420,6 +420,11 @@ impl Service {
                 question,
                 follow_up,
             } => {
+                let _opening = self.opening.lock().await;
+                ensure!(
+                    !self.closing.load(Ordering::Acquire),
+                    "workspace service is shutting down"
+                );
                 let session = self.session(&session).await?;
                 let selected = session.questions.start(&question, follow_up).await?;
                 Ok(Response::Questions(
@@ -466,6 +471,13 @@ impl Service {
                     .await
                     .page(after)?,
             )),
+            Request::Undo { session, path } => {
+                self.session(&session)
+                    .await?
+                    .command(session::Command::Undo { path })
+                    .await?;
+                Ok(Response::Ok)
+            }
             Request::Cancel { session } => {
                 self.session(&session)
                     .await?

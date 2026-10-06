@@ -75,7 +75,8 @@ async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
-        for index in 0..2 {
+        let mut index = 0;
+        while index < 2 {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
             let mut byte = [0; 1];
@@ -100,6 +101,11 @@ async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
             let mut body = vec![0; length];
             socket.read_exact(&mut body).await.unwrap();
             let request: Value = serde_json::from_slice(&body).unwrap();
+            if request["stream"] == false {
+                let response = json!({"id":"title","model":"mock","choices":[{"index":0,"message":{"role":"assistant","content":"test title"},"finish_reason":"stop"}]}).to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+                continue;
+            }
             assert_eq!(request["stream"], true);
             let delta = if index == 0 {
                 json!({"tool_calls":[{"index":0,"id":"write","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"result.txt\",\"content\":\"written remotely\"}"}}]})
@@ -113,6 +119,7 @@ async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
                 json!({"choices":[{"index":0,"delta":{},"finish_reason":finish}]})
             );
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{events}", events.len()).as_bytes()).await.unwrap();
+            index += 1;
         }
     });
     (format!("http://{address}/v1"), task)
@@ -260,7 +267,11 @@ models = [{{ id = "mock" }}]
         1
     );
     assert_eq!(
-        updates.last().unwrap()["Finished"]["status"],
+        updates
+            .iter()
+            .rev()
+            .find(|update| update.get("Finished").is_some())
+            .unwrap()["Finished"]["status"],
         "completed",
         "{page}"
     );
@@ -287,7 +298,14 @@ models = [{{ id = "mock" }}]
     let empty = client
         .request(json!({"method":"poll","session":id,"after":cursor}))
         .await;
-    assert!(empty["value"]["updates"].as_array().unwrap().is_empty());
+    assert!(
+        empty["value"]["updates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|update| update.get("Profile").is_some())
+    );
+    let cursor = empty["value"]["next"].as_u64().unwrap();
     assert_eq!(
         client
             .request(json!({"method":"poll","session":id,"after":cursor+1}))
@@ -318,6 +336,54 @@ models = [{{ id = "mock" }}]
             .filter(|update| update.get("Started").is_some())
             .count(),
         1
+    );
+    assert_eq!(client.request(json!({"method":"session_action","session":id,"action":{"action":"rename","title":"restored title"}})).await["type"], "report");
+    let profile = client.request(json!({"method":"open","resume":id})).await;
+    assert_eq!(profile["value"]["title"], "restored title");
+    assert_eq!(
+        client
+            .request(json!({"method":"undo","session":id,"path":"result.txt"}))
+            .await["type"],
+        "ok"
+    );
+    let approval = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let page = client
+                .request(json!({"method":"poll","session":id,"after":0}))
+                .await;
+            if let Some(approval) = page["value"]["approvals"].as_array().unwrap().first() {
+                break approval["id"].as_u64().unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(root.join("result.txt").exists());
+    drop(client);
+    let mut client = Client::connect(root).await;
+    assert_eq!(client.request(json!({"method":"approve","session":id,"approval":approval,"allow":true,"remember":false})).await["type"], "ok");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let page = client
+                .request(json!({"method":"poll","session":id,"after":0}))
+                .await;
+            if page["value"]["busy"] == false {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!root.join("result.txt").exists());
+    assert!(
+        store
+            .workspace_changes(&id)
+            .await
+            .unwrap()
+            .iter()
+            .all(|change| change.undone)
     );
     assert_eq!(
         client.request(json!({"method":"shutdown"})).await["type"],
@@ -415,15 +481,28 @@ models = [{{ id = "mock" }}]
     );
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let page = client.request(json!({"method":"poll","session":id,"after":0})).await;
+            let page = client
+                .request(json!({"method":"poll","session":id,"after":0}))
+                .await;
             if page["value"]["busy"] == false {
-                assert_eq!(page["value"]["updates"].as_array().unwrap().last().unwrap()["Finished"]["status"], "cancelled");
+                assert_eq!(
+                    page["value"]["updates"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .rev()
+                        .find(|update| update.get("Finished").is_some())
+                        .unwrap()["Finished"]["status"],
+                    "cancelled"
+                );
                 assert!(page["value"]["approvals"].as_array().unwrap().is_empty());
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     assert!(!root.join("result.txt").exists());
     assert_eq!(
         client.request(json!({"method":"shutdown"})).await["type"],

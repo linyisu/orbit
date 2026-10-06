@@ -44,6 +44,7 @@ pub(super) enum Action {
 pub(super) struct Tab {
     pub state: UiState,
     pub title: String,
+    session_title: String,
     pub id: Option<String>,
     pub connection: Option<Arc<Connection>>,
     spec: Option<Spec>,
@@ -149,6 +150,7 @@ impl Tab {
         Self {
             state,
             title: label,
+            session_title: String::new(),
             id: None,
             connection: None,
             spec: None,
@@ -233,14 +235,16 @@ impl Tab {
         let mut connection = opened.connection;
         Arc::make_mut(&mut connection).unattended = true;
         self.connection = Some(connection);
-        self.title = format!(
-            "{} · {}",
-            self.state.connection_label.as_deref().unwrap_or_default(),
-            std::path::Path::new(&self.state.workspace)
-                .file_name()
-                .and_then(|p| p.to_str())
-                .unwrap_or(&self.state.workspace)
-        );
+        if self.session_title.is_empty() {
+            self.title = format!(
+                "{} · {}",
+                self.state.connection_label.as_deref().unwrap_or_default(),
+                std::path::Path::new(&self.state.workspace)
+                    .file_name()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or(&self.state.workspace)
+            );
+        }
         let (commands, requests) = mpsc::channel(CHANNEL_CAPACITY);
         let commands = Arc::new(commands);
         self.state.media.files = Some(Files {
@@ -272,6 +276,14 @@ impl Tab {
     }
 
     fn profile(&mut self, info: &SessionInfo) {
+        self.session_title = info.title.clone();
+        if !info.title.is_empty() {
+            self.title = format!(
+                "{} · {}",
+                self.state.connection_label.as_deref().unwrap_or_default(),
+                info.title
+            );
+        }
         self.state.model = info.model.clone();
         self.state.model_completions = info.models.clone();
         self.state.supports_vision = info.supports_vision;
@@ -472,15 +484,20 @@ impl Tab {
                 for update in page.updates {
                     match update {
                         Update::Profile(info) => self.profile(&info),
+                        Update::Report(report) => {
+                            self.state.show_output(&report.title, report.text)
+                        }
                         Update::Started { prompt } => {
                             if self.starting.take().is_some() {
                                 self.state.attachments.clear();
                             }
-                            self.title = format!(
-                                "{} · {}",
-                                self.state.connection_label.as_deref().unwrap_or_default(),
-                                prompt.lines().next().unwrap_or_default()
-                            );
+                            if self.session_title.is_empty() {
+                                self.title = format!(
+                                    "{} · {}",
+                                    self.state.connection_label.as_deref().unwrap_or_default(),
+                                    prompt.lines().next().unwrap_or_default()
+                                );
+                            }
                             self.state.submit(prompt);
                         }
                         Update::Agent(event) => self.state.apply(*event),

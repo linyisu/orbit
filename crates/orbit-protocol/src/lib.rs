@@ -82,6 +82,10 @@ pub enum Request {
         session: String,
         after: usize,
     },
+    Undo {
+        session: String,
+        path: Option<String>,
+    },
     Cancel {
         session: String,
     },
@@ -120,6 +124,7 @@ pub enum Mode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
+    pub title: String,
     pub workspace: String,
     pub model: String,
     pub models: Vec<String>,
@@ -134,6 +139,7 @@ pub struct SessionInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Update<E> {
     Profile(SessionInfo),
+    Report(Report),
     Started { prompt: String },
     Agent(Box<E>),
     Finished { status: String },
@@ -360,7 +366,7 @@ pub enum Inspection {
     Diff { path: Option<String> },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
     pub title: String,
     pub text: String,

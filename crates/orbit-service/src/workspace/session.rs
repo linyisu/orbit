@@ -1,17 +1,13 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use anyhow::{Result, ensure};
-use orbit_agent::events::AgentEvent;
-use orbit_store::workspace_requests::RequestClaim;
-use orbit_tools::approval::{ApprovalPreview, ApprovalRequest};
+use orbit_tools::approval::ApprovalPreview;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use super::protocol::{Approval, Mode, PAGE_BYTES, PAGE_EVENTS, Page, SessionInfo, Update};
+
+mod actor;
 
 const COMMAND_CAPACITY: usize = 16;
 
@@ -45,6 +41,9 @@ pub enum Command {
     },
     Steer {
         message: String,
+    },
+    Undo {
+        path: Option<String>,
     },
     Cancel,
     Approve {
@@ -143,7 +142,7 @@ impl Handle {
     }
 
     pub fn spawn(
-        mut setup: crate::PreparedWorkspace,
+        setup: crate::PreparedWorkspace,
         configuration: Option<super::configuration::Installed>,
     ) -> Self {
         for diagnostic in &setup.resources.diagnostics {
@@ -167,267 +166,19 @@ impl Handle {
                 status: run.status.clone(),
             });
         }
+        view.push(Update::Profile(info.clone()));
         let view = Arc::new(Mutex::new(view));
-        let (requests, mut envelopes) = mpsc::channel::<Envelope>(COMMAND_CAPACITY);
+        let (requests, envelopes) = mpsc::channel::<Envelope>(COMMAND_CAPACITY);
         let workspace = setup.resources.workspace.clone();
         let store = setup.session.store.clone();
         let tools = setup.resources.tools.clone();
-        let state = view.clone();
         let questions = super::questions::Questions::new(&setup);
-        let questions_task = questions.clone();
-        // The actor owns the runtime; clients only own connections to it.
-        tokio::spawn(async move {
-            let mut accepted = HashMap::<String, String>::new();
-            let mut remembered = HashSet::<String>::new();
-            let mut approval_id = 0;
-            while let Some(envelope) = envelopes.recv().await {
-                match envelope.command {
-                    Command::Action { action, result } => {
-                        let response = super::actions::execute(&mut setup, action, false).await;
-                        questions_task.update(&setup);
-                        let _ = result.send(response);
-                        let _ = envelope.reply.send(Ok(()));
-                    }
-
-                    Command::Start {
-                        request_id,
-                        prompt,
-                        images,
-                        compact,
-                        mode,
-                        model,
-                    } => {
-                        if request_id.is_empty()
-                            || request_id.len() > 128
-                            || prompt.trim().is_empty()
-                            || prompt.len() > 1024 * 1024
-                        {
-                            let _ = envelope
-                                .reply
-                                .send(Err(anyhow::anyhow!("invalid workspace request")));
-                            continue;
-                        }
-                        let identity = request_fingerprint(&prompt, &images, compact, mode, &model);
-                        match setup
-                            .session
-                            .store
-                            .claim_workspace_request(setup.session.id(), &request_id, &identity)
-                            .await
-                        {
-                            Ok(RequestClaim::New) => {}
-                            Ok(RequestClaim::Accepted) => {
-                                let _ = envelope.reply.send(Ok(()));
-                                continue;
-                            }
-                            Ok(RequestClaim::Rejected(error)) => {
-                                let _ = envelope.reply.send(Err(anyhow::anyhow!(error)));
-                                continue;
-                            }
-                            Err(error) => {
-                                if setup.session.active_run_id().is_some() {
-                                    let _ = setup.session.finish("failed", None).await;
-                                }
-                                let _ = envelope.reply.send(Err(error));
-                                continue;
-                            }
-                        }
-                        let started = super::run::start(
-                            &mut setup,
-                            prompt.clone(),
-                            images,
-                            compact,
-                            model.as_deref(),
-                        )
-                        .await;
-                        let (mut events, task, cancellation, inbox) = match started {
-                            Ok(started) => started,
-                            Err(error) => {
-                                let _ = setup
-                                    .session
-                                    .store
-                                    .finish_workspace_request(
-                                        setup.session.id(),
-                                        &request_id,
-                                        Some(format!("{error:#}")),
-                                    )
-                                    .await;
-                                let _ = envelope.reply.send(Err(error));
-                                continue;
-                            }
-                        };
-                        questions_task.update(&setup);
-                        let receipt = setup
-                            .session
-                            .store
-                            .finish_workspace_request(setup.session.id(), &request_id, None)
-                            .await;
-                        accepted.clear();
-                        accepted.insert(request_id, identity);
-                        {
-                            let mut view = state.lock().await;
-                            view.busy = true;
-                            view.model = setup.resources.model_name.clone();
-                            view.push(Update::Profile(super::profile::describe(&setup)));
-                            view.push(Update::Started { prompt });
-                        }
-                        let _ = envelope.reply.send(receipt);
-                        let mut pending = HashMap::<u64, ApprovalRequest>::new();
-                        let mut flush =
-                            tokio::time::interval(std::time::Duration::from_millis(250));
-                        loop {
-                            tokio::select! {
-                                event = events.recv() => match event {
-                                    Some(event) => state.lock().await.push(Update::agent(event)),
-                                    None => break,
-                                },
-                                _ = flush.tick() => {
-                                    if let Err(error) = setup.session.flush_events().await {
-                                        state.lock().await.push(Update::agent(AgentEvent::Failed {
-                                            error: error.to_string(),
-                                        }));
-                                        cancellation.cancel();
-                                    }
-                                }
-                                Some(request) = setup.resources.approvals.recv() => {
-                                    let key = approval_key(
-                                        &request.preview,
-                                        Path::new(&setup.session.snapshot.session.workspace),
-                                    );
-                                    if mode == Mode::Yolo
-                                        || key.as_ref().is_some_and(|key| remembered.contains(key))
-                                        || (mode == Mode::Auto
-                                            && orbit_tools::approval::auto_allows(
-                                                &request.preview,
-                                                Path::new(&setup.session.snapshot.session.workspace),
-                                            ))
-                                    {
-                                        let _ = request.decision.send(true);
-                                    } else {
-                                        approval_id += 1;
-                                        state
-                                            .lock()
-                                            .await
-                                            .approvals
-                                            .insert(approval_id, request.preview.clone());
-                                        pending.insert(approval_id, request);
-                                    }
-                                }
-                                Some(envelope) = envelopes.recv() => {
-                                    let result = match envelope.command {
-                                        Command::Action { action, result } => {
-                                            let response = super::actions::execute(&mut setup, action, true).await;
-                                            let _ = result.send(response);
-                                            Ok(())
-                                        }
-
-                                        Command::SetModel { .. } => Err(anyhow::anyhow!("wait for the current task before changing its model")),
-                                        Command::Steer { message } => {
-                                            use orbit_agent::{inbox::InboxMessage, tool::ToolError};
-                                            inbox.persist_and_push(|| async {
-                                                let id = setup.session.store.queue_session_input(setup.session.id(), message.clone()).await.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
-                                                Ok(InboxMessage { id, content: message })
-                                            }).await.map_err(Into::into)
-                                        }
-                                        Command::Cancel => {
-                                            cancellation.cancel();
-                                            pending.clear();
-                                            state.lock().await.approvals.clear();
-                                            Ok(())
-                                        }
-                                        Command::Approve {
-                                            id,
-                                            allow,
-                                            remember,
-                                        } => match pending.remove(&id) {
-                                            Some(request) => {
-                                                if allow
-                                                    && remember
-                                                    && let Some(key) = approval_key(
-                                                        &request.preview,
-                                                        Path::new(&setup.session.snapshot.session.workspace),
-                                                    )
-                                                {
-                                                    remembered.insert(key);
-                                                }
-                                                state.lock().await.approvals.remove(&id);
-                                                request
-                                                    .decision
-                                                    .send(allow)
-                                                    .map_err(|_| anyhow::anyhow!("approval is no longer pending"))
-                                            }
-                                            None => Err(anyhow::anyhow!("approval is no longer pending")),
-                                        },
-                                        Command::Start {
-                                            request_id,
-                                            prompt,
-                                            images,
-                                            compact,
-                                            mode,
-                                            model,
-                                        } => {
-                                            let identity = request_fingerprint(&prompt, &images, compact, mode, &model);
-                                            if accepted.get(&request_id) == Some(&identity) {
-                                                Ok(())
-                                            } else {
-                                                Err(anyhow::anyhow!(
-                                                    "session is running; cancel or wait before submitting"
-                                                ))
-                                            }
-                                        }
-                                    };
-                                    let _ = envelope.reply.send(result);
-                                }
-                            }
-                        }
-                        pending.clear();
-                        let (status, event, history) =
-                            crate::execution::outcome(task.await, Some(&cancellation));
-                        let error = match event {
-                            AgentEvent::Failed { error } => Some(error),
-                            _ => None,
-                        };
-                        let saved = setup.session.finish(status, history).await;
-                        questions_task.update(&setup);
-                        let status = if saved.is_ok() { status } else { "failed" };
-                        let mut view = state.lock().await;
-                        if let Some(error) =
-                            error.or_else(|| saved.err().map(|error| error.to_string()))
-                        {
-                            view.push(Update::agent(AgentEvent::Failed { error }));
-                        }
-                        view.push(Update::Finished {
-                            status: status.into(),
-                        });
-                        view.busy = false;
-                        view.approvals.clear();
-                    }
-                    Command::SetModel { model, effort } => {
-                        let result =
-                            super::profile::select(&mut setup, &model, effort.as_deref()).await;
-                        if result.is_ok() {
-                            questions_task.update(&setup);
-                            let mut view = state.lock().await;
-                            view.model = setup.resources.model_name.clone();
-                            view.push(Update::Profile(super::profile::describe(&setup)));
-                        }
-                        let _ = envelope.reply.send(result);
-                    }
-                    Command::Steer { .. } => {
-                        let _ = envelope.reply.send(Err(anyhow::anyhow!(
-                            "session is idle; submit a new message"
-                        )));
-                    }
-                    Command::Cancel => {
-                        let _ = envelope.reply.send(Ok(()));
-                    }
-                    Command::Approve { .. } => {
-                        let _ = envelope
-                            .reply
-                            .send(Err(anyhow::anyhow!("no pending approval")));
-                    }
-                }
-            }
-        });
+        tokio::spawn(actor::run(
+            setup,
+            view.clone(),
+            questions.clone(),
+            envelopes,
+        ));
         Self {
             questions,
             _configuration: configuration,
@@ -438,6 +189,20 @@ impl Handle {
             store,
             tools,
         }
+    }
+
+    pub async fn current_info(&self) -> SessionInfo {
+        self.view
+            .lock()
+            .await
+            .updates
+            .iter()
+            .rev()
+            .find_map(|(update, _)| match update {
+                Update::Profile(info) => Some(info.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| self.info.clone())
     }
 
     pub async fn action(

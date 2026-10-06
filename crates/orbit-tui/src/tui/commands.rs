@@ -245,6 +245,7 @@ pub fn available_in_workspace(name: &str) -> bool {
             | "/skill"
             | "/mcp"
             | "/diagnostics"
+            | "/undo"
             | "/changes"
             | "/diff"
             | "/rename"

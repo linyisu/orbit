@@ -146,7 +146,7 @@ impl Viewer {
                         _ => RunStatus::Failed,
                     };
                 }
-                Update::Profile(_) => {}
+                Update::Profile(_) | Update::Report(_) => {}
             }
         }
         self.view.block_submission(false);

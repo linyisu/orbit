@@ -309,6 +309,14 @@ impl Tab {
             "/new" => return Ok(Action::SameTarget(None)),
             "/reconnect" => self.reconnect(),
             "/help" => self.state.report_local(TranscriptItem::Notice(HELP.into())),
+            text if text == "/undo" || text.starts_with("/undo ") => {
+                let path = text
+                    .strip_prefix("/undo ")
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_owned);
+                self.send(Request::Undo { session, path });
+            }
             "/status" => self.inspect(orbit_protocol::Inspection::Status),
             "/context" => self.inspect(orbit_protocol::Inspection::Context),
             "/skills" => self.inspect(orbit_protocol::Inspection::Skills),

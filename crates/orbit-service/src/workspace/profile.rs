@@ -9,6 +9,7 @@ pub(super) fn describe(setup: &PreparedWorkspace) -> SessionInfo {
     let budget = &resources.budget;
     SessionInfo {
         id: setup.session.id().into(),
+        title: setup.session.snapshot.session.title.clone(),
         workspace: setup.session.snapshot.session.workspace.clone(),
         model: resources.model_name.clone(),
         models: budget
