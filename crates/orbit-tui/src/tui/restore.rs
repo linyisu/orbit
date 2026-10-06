@@ -250,7 +250,10 @@ impl RestorePicker {
             );
             let text_area = Rect::new(hit.x + 4, hit.y, hit.width.saturating_sub(4), 1);
             let style = if focused {
-                Style::default().fg(THEME.on_accent).bg(THEME.accent)
+                Style::default()
+                    .fg(THEME.on_accent)
+                    .bg(THEME.accent)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(THEME.foreground)
             };
@@ -796,6 +799,9 @@ mod tests {
             terminal.backend().buffer()[(row.right() - 1, row.y)].bg,
             THEME.accent
         );
+        let focused = &terminal.backend().buffer()[(row.x + 4, row.y)];
+        assert_eq!(focused.fg, THEME.on_accent);
+        assert!(focused.modifier.contains(Modifier::BOLD));
         mouse(
             &mut state,
             MouseEventKind::Down(MouseButton::Left),
