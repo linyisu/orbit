@@ -441,7 +441,7 @@ impl Service {
                 let session = handle.store.session(&handle.info.id).await?;
                 let sessions = handle
                     .store
-                    .list()
+                    .list_resumable()
                     .await?
                     .into_iter()
                     .filter(|item| item.project_id == session.project_id)
@@ -455,7 +455,7 @@ impl Service {
                     .resolve_project(&connection_options.initial_directory)
                     .await?;
                 let sessions = store
-                    .list()
+                    .list_resumable()
                     .await?
                     .into_iter()
                     .filter(|session| session.project_id == project.id)

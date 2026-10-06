@@ -55,7 +55,7 @@ fn user_data_directory() -> Option<PathBuf> {
 }
 
 pub async fn list_text(store: &Store) -> Result<String> {
-    let rows = store.list().await?;
+    let rows = store.list_resumable().await?;
 
     if rows.is_empty() {
         return Ok("暂无已保存会话。".into());
@@ -505,7 +505,7 @@ impl SessionState {
 
         Ok(self
             .store
-            .list()
+            .list_resumable()
             .await?
             .into_iter()
             .filter(|saved| {

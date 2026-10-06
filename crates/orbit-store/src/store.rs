@@ -131,17 +131,27 @@ impl Store {
     }
 
     pub async fn list(&self) -> Result<Vec<Session>> {
-        self.access(|conn| {
+        self.list_sessions(false).await
+    }
+
+    /// Conversations enter history when their first run begins, including failed runs.
+    pub async fn list_resumable(&self) -> Result<Vec<Session>> {
+        self.list_sessions(true).await
+    }
+
+    async fn list_sessions(&self, started_only: bool) -> Result<Vec<Session>> {
+        self.access(move |conn| {
             let mut statement = conn.prepare(
                 "SELECT s.id,COALESCE(p.path,s.workspace),s.model,s.reasoning_effort,
                         s.demo,s.title,s.updated_at,s.project_id
                  FROM sessions s LEFT JOIN projects p ON p.id=s.project_id
                  WHERE NOT EXISTS(SELECT 1 FROM agent_sessions a WHERE a.session_id=s.id)
+                   AND (?1 = 0 OR EXISTS(SELECT 1 FROM runs r WHERE r.session_id=s.id))
                  ORDER BY s.updated_at DESC, s.rowid DESC",
             )?;
 
             Ok(statement
-                .query_map([], session_row)?
+                .query_map([started_only], session_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await

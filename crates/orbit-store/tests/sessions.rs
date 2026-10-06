@@ -1342,3 +1342,44 @@ async fn developer_role_migration_preserves_children_and_queued_messages() {
         "develop"
     );
 }
+
+#[tokio::test]
+async fn resume_history_excludes_drafts_but_keeps_failed_and_untitled_runs() {
+    let db = Database::new();
+    let store = Store::open(db.path()).await.unwrap();
+    let draft = store
+        .create(db.0.to_string_lossy().into_owned(), "mock".into(), false)
+        .await
+        .unwrap();
+    draft.set_title("named draft".into()).await.unwrap();
+    assert!(store.list_resumable().await.unwrap().is_empty());
+    assert_eq!(store.list().await.unwrap().len(), 1);
+    assert!(store.load(draft.id()).await.unwrap().runs.is_empty());
+    let mut conversation = store
+        .create(db.0.to_string_lossy().into_owned(), "mock".into(), false)
+        .await
+        .unwrap();
+    conversation
+        .begin("first prompt".into(), "mock".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        store.list_resumable().await.unwrap()[0].id,
+        conversation.id()
+    );
+    conversation
+        .finish("failed", Vec::new(), None)
+        .await
+        .unwrap();
+    rusqlite::Connection::open(db.path())
+        .unwrap()
+        .execute(
+            "UPDATE sessions SET title='' WHERE id=?1",
+            [conversation.id()],
+        )
+        .unwrap();
+    let history = store.list_resumable().await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].id, conversation.id());
+    assert!(history[0].title.is_empty());
+}

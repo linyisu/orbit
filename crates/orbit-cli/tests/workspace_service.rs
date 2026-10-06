@@ -715,13 +715,7 @@ models = [{ id = "mock" }, { id = "other" }]
     let list = client
         .request(json!({"method":"list_sessions","session":id}))
         .await;
-    assert!(
-        list["value"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|session| session["id"] == id)
-    );
+    assert!(list["value"].as_array().unwrap().is_empty(), "{list}");
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
         .await
         .unwrap();

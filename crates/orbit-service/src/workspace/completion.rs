@@ -42,7 +42,7 @@ pub(super) async fn complete(
             let current = store.session(session).await?;
             let projects = store.equivalent_project_ids(&current.project_id).await?;
             store
-                .list()
+                .list_resumable()
                 .await?
                 .into_iter()
                 .filter(|entry| projects.contains(&entry.project_id))
