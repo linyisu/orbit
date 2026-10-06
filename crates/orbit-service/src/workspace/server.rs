@@ -35,6 +35,14 @@ const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 32;
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ConnectionContext {
+    config: PathBuf,
+    auth: PathBuf,
+    allow_mcp_start: bool,
+    workspace: PathBuf,
+}
+
 pub async fn serve(
     args: ServiceOptions,
     config: PathBuf,
@@ -56,16 +64,17 @@ pub async fn serve(
             directory.join(path)
         }
     }))?;
+    fs::create_dir_all(database.parent().context("database has no parent")?)?;
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(&database)?;
+    let database = database.canonicalize()?;
     let auth = std::path::absolute(auth)?;
     let root = runtime_directory()?;
-    let identity = serde_json::to_vec(&(
-        &config,
-        &database,
-        &auth,
-        args.allow_mcp_start,
-        std::env::current_exe()?,
-        protocol::VERSION,
-    ))?;
+    let identity = serde_json::to_vec(&("shared-service-v1", &database, protocol::VERSION))?;
     let key = Sha256::digest(identity)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -73,6 +82,16 @@ pub async fn serve(
     let socket = root.join(format!("{}.sock", &key[..24]));
     if !args.daemon {
         let mut child = connect_or_start(&socket, &args, &config, &database, &auth).await?;
+        protocol::write(
+            &mut child,
+            &ConnectionContext {
+                config,
+                auth,
+                allow_mcp_start: args.allow_mcp_start,
+                workspace: directory,
+            },
+        )
+        .await?;
         let (mut reader, mut writer) = child.split();
         let mut stdin = tokio::io::stdin();
         let mut stdout = tokio::io::stdout();
@@ -274,6 +293,11 @@ impl Service {
         mut reader: impl AsyncRead + Unpin,
         mut writer: impl AsyncWrite + Unpin,
     ) -> Result<()> {
+        let context = tokio::time::timeout(
+            Duration::from_secs(10),
+            protocol::read::<ConnectionContext>(&mut reader),
+        )
+        .await??;
         let request = tokio::time::timeout(
             Duration::from_secs(10),
             protocol::read::<Request>(&mut reader),
@@ -297,6 +321,10 @@ impl Service {
             return Ok(());
         }
         let mut options = self.options.clone();
+        options.config = context.config;
+        options.auth_directory = context.auth;
+        options.allow_mcp_start = context.allow_mcp_start;
+        options.initial_directory = context.workspace;
         if let Request::Hello {
             workspace: Some(path),
             ..

@@ -15,14 +15,24 @@ struct Client {
 
 impl Client {
     async fn connect(root: &Path) -> Self {
-        let mut child = Command::new(env!("ORBIT_EMBEDDED_SERVER"))
+        Self::connect_with(
+            root,
+            Path::new(env!("ORBIT_EMBEDDED_SERVER")),
+            &root.join("config.toml"),
+            &root.join("sessions.db"),
+        )
+        .await
+    }
+
+    async fn connect_with(root: &Path, executable: &Path, config: &Path, database: &Path) -> Self {
+        let mut child = Command::new(executable)
             .arg("workspace-service")
             .arg("--workspace")
             .arg(root)
             .arg("--config")
-            .arg(root.join("config.toml"))
+            .arg(config)
             .arg("--database")
-            .arg(root.join("sessions.db"))
+            .arg(database)
             .arg("--auth-dir")
             .arg(root.join("auth"))
             .env("HOME", root)
@@ -258,6 +268,27 @@ models = [{{ id = "mock" }}]
         client.request(json!({"method":"shutdown"})).await["type"],
         "error"
     );
+    let upgraded = root.join("upgraded-server");
+    std::fs::copy(env!("ORBIT_EMBEDDED_SERVER"), &upgraded).unwrap();
+    let mut observer = Client::connect_with(
+        root,
+        &upgraded,
+        &root.join("config.toml"),
+        &root.join("sessions.db"),
+    )
+    .await;
+    assert_eq!(
+        observer.request(json!({"method":"open","resume":id})).await["type"],
+        "opened"
+    );
+    let observed = observer
+        .request(json!({"method":"poll","session":id,"after":0}))
+        .await;
+    assert_eq!(observed["value"]["busy"], true);
+    assert_eq!(observed["value"]["approvals"][0]["id"], approval);
+    let mut competing = start.clone();
+    competing["request_id"] = "another-terminal".into();
+    assert_eq!(observer.request(competing).await["type"], "error");
     drop(client);
     let mut client = Client::connect(root).await;
     assert_eq!(
@@ -268,7 +299,8 @@ models = [{{ id = "mock" }}]
     let mut conflicting = start.clone();
     conflicting["prompt"] = "different prompt".into();
     assert_eq!(client.request(conflicting).await["type"], "error");
-    assert_eq!(client.request(json!({"method":"approve","session":id,"approval":approval,"allow":true,"remember":false})).await["type"], "ok");
+    assert_eq!(observer.request(json!({"method":"approve","session":id,"approval":approval,"allow":true,"remember":false})).await["type"], "ok");
+    assert_eq!(client.request(json!({"method":"approve","session":id,"approval":approval,"allow":true,"remember":false})).await["type"], "error");
     let page = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let page = client
@@ -282,6 +314,23 @@ models = [{{ id = "mock" }}]
     })
     .await
     .unwrap();
+    let observed = observer
+        .request(json!({"method":"poll","session":id,"after":0}))
+        .await;
+    assert_eq!(observed["value"]["busy"], false);
+    assert_eq!(observed["value"]["approvals"], json!([]));
+    for updates in [&page["value"]["updates"], &observed["value"]["updates"]] {
+        assert_eq!(
+            updates
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|update| update.get("Started").is_some())
+                .count(),
+            1
+        );
+        assert!(updates.to_string().contains("任务完成。"));
+    }
     assert_eq!(
         std::fs::read_to_string(root.join("result.txt")).unwrap(),
         "written remotely"
@@ -1095,6 +1144,81 @@ models = [{ id = "first" }, { id = "chosen" }]
     assert_eq!(profile["value"]["model"], "test::first");
     assert_eq!(
         client.request(json!({"method":"shutdown"})).await["type"],
+        "ok"
+    );
+}
+
+#[tokio::test]
+async fn two_sessions_share_a_service_across_executables_configs_and_database_aliases() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in ["first", "second"] {
+        std::fs::write(
+            root.join(format!("{name}.toml")),
+            format!(
+                r#"[providers.{name}]
+base_url = "http://127.0.0.1:1/v1"
+api_key = "test-only"
+auto_refresh_models = false
+models = [{{ id = "mock" }}]
+"#
+            ),
+        )
+        .unwrap();
+    }
+    let upgraded = root.join("upgraded-server");
+    std::fs::copy(env!("ORBIT_EMBEDDED_SERVER"), &upgraded).unwrap();
+    let database = root.join("sessions.db");
+    let alias = root.join("alias.db");
+    std::os::unix::fs::symlink(&database, &alias).unwrap();
+    let mut first = Client::connect_with(
+        root,
+        Path::new(env!("ORBIT_EMBEDDED_SERVER")),
+        &root.join("first.toml"),
+        &database,
+    )
+    .await;
+    let mut second = Client::connect_with(root, &upgraded, &root.join("second.toml"), &alias).await;
+    let a = first
+        .request(json!({"method":"open","model":"first::mock"}))
+        .await;
+    let b = second
+        .request(json!({"method":"open","model":"second::mock"}))
+        .await;
+    assert_eq!(a["type"], "opened", "{a}");
+    assert_eq!(b["type"], "opened", "{b}");
+    let a = a["value"]["id"].as_str().unwrap().to_owned();
+    let b = b["value"]["id"].as_str().unwrap().to_owned();
+    assert_ne!(a, b);
+    let (a_restored, b_restored) = tokio::join!(
+        second.request(json!({"method":"open","resume":a})),
+        first.request(json!({"method":"open","resume":b})),
+    );
+    assert_eq!(a_restored["type"], "opened", "{a_restored}");
+    assert_eq!(b_restored["type"], "opened", "{b_restored}");
+    assert_eq!(a_restored["value"]["model"], "first::mock");
+    assert_eq!(b_restored["value"]["model"], "second::mock");
+    for id in [&a, &b] {
+        assert_eq!(
+            second
+                .request(json!({"method":"set_mode","session":id,"mode":"ask"}))
+                .await["type"],
+            "ok"
+        );
+        assert_eq!(first.request(json!({"method":"session_action","session":id,"action":{"action":"rename","title":id}})).await["type"], "report");
+        let left = first
+            .request(json!({"method":"poll","session":id,"after":0}))
+            .await;
+        let right = second
+            .request(json!({"method":"poll","session":id,"after":0}))
+            .await;
+        assert_eq!(left, right);
+        let profile = second.request(json!({"method":"open","resume":id})).await;
+        assert_eq!(profile["value"]["title"], *id);
+        assert_eq!(profile["value"]["mode"], "ask");
+    }
+    assert_eq!(
+        second.request(json!({"method":"shutdown"})).await["type"],
         "ok"
     );
 }
