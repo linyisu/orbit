@@ -5,7 +5,7 @@ use orbit_tools::approval::ApprovalPreview;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 // Keep framing stable so Hello can report incompatible schema versions.
 pub const PREAMBLE: &[u8] = b"\0ORBIT-WORKSPACE/1\n";
 pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
@@ -67,6 +67,16 @@ pub enum Request {
         session: String,
         path: String,
     },
+    ReadSubagent {
+        session: String,
+        agent: String,
+        after: usize,
+    },
+    SendSubagent {
+        session: String,
+        agent: String,
+        message: String,
+    },
     Shutdown,
 }
 
@@ -127,6 +137,7 @@ pub enum Response {
     Opened(SessionInfo),
     Sessions(Vec<orbit_store::types::Session>),
     Page(Page),
+    Subagent(Page),
     File(String),
     Ok,
     Error(String),

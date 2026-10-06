@@ -42,7 +42,7 @@ impl Client {
         client.output.read_exact(&mut marker).await.unwrap();
         assert_eq!(marker, b"\0ORBIT-WORKSPACE/1\n");
         assert_eq!(
-            client.request(json!({"method":"hello","version":2})).await["type"],
+            client.request(json!({"method":"hello","version":3})).await["type"],
             "hello"
         );
         client
@@ -140,6 +140,64 @@ models = [{{ id = "mock" }}]
     let opened = client.request(json!({"method":"open","resume":null})).await;
     assert_eq!(opened["type"], "opened", "{opened}");
     let id = opened["value"]["id"].as_str().unwrap().to_owned();
+    let store = orbit_store::store::Store::open(root.join("sessions.db"))
+        .await
+        .unwrap();
+    let mut child = store
+        .create_subagent(
+            &id,
+            "child-model".into(),
+            "explore".into(),
+            "child task".into(),
+        )
+        .await
+        .unwrap();
+    child
+        .begin("child task".into(), "child-model".into())
+        .await
+        .unwrap();
+    child
+        .append(
+            (0..140)
+                .map(|_| {
+                    orbit_agent::events::AgentEvent::Model(
+                        orbit_model::types::StreamEvent::TextDelta("child answer\n".into()),
+                    )
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+    let child_page = client
+        .request(json!({"method":"read_subagent","session":id,"agent":child.id(),"after":0}))
+        .await;
+    assert_eq!(child_page["type"], "subagent");
+    assert_eq!(child_page["value"]["more"], true);
+    let cursor = child_page["value"]["next"].as_u64().unwrap();
+    child
+        .finish("completed", vec![], Some(vec![]))
+        .await
+        .unwrap();
+    let child_page = client
+        .request(json!({"method":"read_subagent","session":id,"agent":child.id(),"after":cursor}))
+        .await;
+    assert_eq!(child_page["value"]["busy"], false);
+    assert_eq!(
+        child_page["value"]["updates"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["Finished"]["status"],
+        "completed"
+    );
+    for method in ["read_subagent", "send_subagent"] {
+        let response = client
+            .request(
+                json!({"method":method,"session":id,"agent":id,"after":0,"message":"unrelated"}),
+            )
+            .await;
+        assert_eq!(response["type"], "error");
+    }
     let start = json!({"method":"start","session":id,"request_id":"stable-request","prompt":"write a file","mode":"ask","model":null});
     assert_eq!(client.request(start.clone()).await["type"], "ok");
     let approval = tokio::time::timeout(Duration::from_secs(15), async {

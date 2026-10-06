@@ -47,6 +47,22 @@ impl Tab {
             }
             return Ok(Action::None);
         }
+        if let Some(viewer) = &mut self.state.subagent_dialog {
+            match viewer.handle(&event)? {
+                tui::subagents::ViewerAction::Close => {
+                    self.state.subagent_dialog = None;
+                    self.subagent = None;
+                }
+                tui::subagents::ViewerAction::Link(url) => {
+                    if let Err(error) = tui::open_link_in_browser(&url) {
+                        viewer.link_error(&error);
+                    }
+                }
+                tui::subagents::ViewerAction::Submit(message) => self.send_subagent(message),
+                tui::subagents::ViewerAction::None | tui::subagents::ViewerAction::Redraw => {}
+            }
+            return Ok(Action::Redraw);
+        }
         if matches!(&event, Event::Key(key) if key.kind != KeyEventKind::Release && key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL) && self.state.input.text.is_empty())
         {
             return Ok(Action::Quit);
@@ -99,6 +115,8 @@ impl Tab {
             {
                 if tui::markdown::footnotes::is_target(&link) {
                     tui::jump_footnote_at(&mut self.state, (mouse.column, mouse.row));
+                } else if tui::subagent_link_id(&link).is_some() {
+                    tui::open_subagent_at(&mut self.state, (mouse.column, mouse.row));
                 } else if let Err(error) = tui::open_link_in_browser(&link) {
                     self.state
                         .report_local(TranscriptItem::Error(error.to_string()));
@@ -108,6 +126,7 @@ impl Tab {
         }
         if let Some(point) = self.state.selection.click(&event)
             && (tui::jump_footnote_at(&mut self.state, point)
+                || tui::open_subagent_at(&mut self.state, point)
                 || tui::toggle_transcript_at(&mut self.state, point))
         {
             return Ok(Action::None);

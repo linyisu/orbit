@@ -4,6 +4,7 @@ mod controls;
 mod input;
 mod pump;
 mod standalone;
+mod subagents;
 #[cfg(test)]
 mod tests;
 pub(crate) mod wizard;
@@ -59,6 +60,7 @@ pub(super) struct Tab {
     selected_model: Option<String>,
     mode: Mode,
     offline: bool,
+    subagent: Option<subagents::Remote>,
 }
 
 impl Tab {
@@ -159,6 +161,7 @@ impl Tab {
             selected_model: None,
             mode: Mode::Auto,
             offline: false,
+            subagent: None,
         }
     }
 
@@ -417,6 +420,7 @@ impl Tab {
             .is_some_and(|start| start.elapsed() < Duration::from_millis(160));
         changed |= super::advance_tab_hover(&mut self.state);
         changed |= self.state.expire_footnote_focus();
+        changed |= self.poll_subagent();
         changed || self.state.running()
     }
 

@@ -112,6 +112,53 @@ impl Viewer {
         self.view.tick()
     }
 
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn selecting(&self) -> bool {
+        self.view.ui.selection.active()
+    }
+
+    pub fn apply_remote(&mut self, result: anyhow::Result<crate::workspace::protocol::Page>) {
+        use crate::workspace::protocol::Update;
+
+        let page = match result {
+            Ok(page) => page,
+            Err(error) => {
+                self.error = Some(format!("无法读取子代理记录：{error}"));
+                self.view.ui.resume_loading = None;
+                self.view.ui.status = RunStatus::Failed;
+                return;
+            }
+        };
+        self.view.ui.model = page.model;
+        self.view.ui.resume_loading = None;
+        for update in page.updates {
+            match update {
+                Update::Started { prompt } => self.view.ui.submit(prompt),
+                Update::Agent(event) => self.view.ui.apply(*event),
+                Update::Finished { status } => {
+                    self.view.ui.finish_clock();
+                    self.view.ui.status = match status.as_str() {
+                        "completed" => RunStatus::Completed,
+                        "cancelled" => RunStatus::Cancelled,
+                        _ => RunStatus::Failed,
+                    };
+                }
+                Update::Profile(_) => {}
+            }
+        }
+        self.view.block_submission(false);
+    }
+
+    pub fn submission_result(&mut self, result: anyhow::Result<()>) {
+        match result {
+            Ok(()) => self.view.submitted(),
+            Err(error) => self.view.submit_error(error),
+        }
+    }
+
     pub fn draw(
         &mut self,
         frame: &mut Frame<'_>,

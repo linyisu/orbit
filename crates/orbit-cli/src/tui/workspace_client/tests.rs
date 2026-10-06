@@ -15,6 +15,99 @@ fn tab(label: &str) -> (Tab, mpsc::Receiver<Call>) {
     (tab, receiver)
 }
 
+#[test]
+fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
+    use crate::tui::app::{ToolRow, ToolStatus};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let (mut tab, mut requests) = tab("SSH dev");
+    let agent = "00000000000000000000000000000001";
+    tab.state.submit("parent task".into());
+    tab.state.input.set("parent draft".into());
+    tab.state.transcript.push(TranscriptItem::Tool(ToolRow {
+        id: "spawn".into(),
+        name: "spawn_agent".into(),
+        status: ToolStatus::Finished,
+        arguments: serde_json::json!({"task":"child task"}).to_string(),
+        output: serde_json::json!({"agent_id":agent,"status":"completed"}).to_string(),
+    }));
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
+        .unwrap();
+    let area = tab.state.selection.viewport;
+    let point = (area.y..area.bottom())
+        .find_map(|y| {
+            (area.x..area.right()).find_map(|x| {
+                tab.state
+                    .transcript_layout
+                    .link_at(area, tab.state.max_scroll, (x, y))
+                    .filter(|link| link.starts_with("orbit://session/"))
+                    .map(|_| (x, y))
+            })
+        })
+        .unwrap();
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        tab.handle(Event::Mouse(MouseEvent {
+            kind,
+            column: point.0,
+            row: point.1,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap();
+    }
+    assert!(tab.state.subagent_dialog.is_some());
+    assert!(tab.state.expanded.is_empty());
+    tab.poll_subagent();
+    let call = requests.try_recv().unwrap();
+    assert!(
+        matches!(call.request, Request::ReadSubagent { agent: ref id, after:0, .. } if id == agent)
+    );
+    call.reply
+        .unwrap()
+        .send(Ok(Response::Subagent(Page {
+            next: 3,
+            more: false,
+            busy: false,
+            model: "child-model".into(),
+            approvals: vec![],
+            updates: vec![
+                Update::Started {
+                    prompt: "child task".into(),
+                },
+                Update::agent(orbit_agent::events::AgentEvent::Model(
+                    orbit_model::types::StreamEvent::TextDelta("child answer".into()),
+                )),
+                Update::Finished {
+                    status: "completed".into(),
+                },
+            ],
+        })))
+        .unwrap();
+    assert!(tab.poll_subagent());
+    tab.handle(Event::Paste("follow-up".into())).unwrap();
+    assert_eq!(tab.state.input.text, "parent draft");
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    let call = requests.try_recv().unwrap();
+    assert!(
+        matches!(call.request, Request::SendSubagent { ref message, .. } if message == "follow-up")
+    );
+    call.reply.unwrap().send(Ok(Response::Ok)).unwrap();
+    tab.poll_subagent();
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+        .unwrap();
+    assert!(tab.state.subagent_dialog.is_none());
+    assert_eq!(tab.state.input.text, "parent draft");
+}
+
 fn page(updates: Vec<Update>, approvals: Vec<Approval>) -> Response {
     Response::Page(Page {
         next: updates.len(),

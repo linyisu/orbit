@@ -21,6 +21,8 @@ pub struct Handle {
     pub view: Arc<Mutex<View>>,
     requests: mpsc::Sender<Envelope>,
     pub workspace: orbit_runtime::filesystem::Workspace,
+    pub store: orbit_store::store::Store,
+    pub tools: orbit_agent::tool::ToolRegistry,
 }
 
 pub enum Command {
@@ -94,6 +96,38 @@ impl View {
 }
 
 impl Handle {
+    pub async fn subagent_page(&self, agent: &str, after: usize) -> Result<Page> {
+        self.authorize_subagent(agent).await?;
+        let snapshot = self.store.load(agent).await?;
+        let mut view = View {
+            updates: Vec::new(),
+            busy: snapshot
+                .runs
+                .last()
+                .is_some_and(|run| run.status == "running"),
+            model: snapshot.session.model,
+            approvals: BTreeMap::new(),
+        };
+        for run in snapshot.runs {
+            view.push(Update::Started { prompt: run.prompt });
+            for event in run.events {
+                view.push(Update::agent(event));
+            }
+            if run.status != "running" {
+                view.push(Update::Finished { status: run.status });
+            }
+        }
+        view.page(after)
+    }
+
+    pub async fn authorize_subagent(&self, agent: &str) -> Result<()> {
+        ensure!(
+            self.store.subagent_parent(agent).await?.as_deref() == Some(&self.info.id),
+            "该记录不是当前会话的子代理。"
+        );
+        Ok(())
+    }
+
     pub fn spawn(
         mut setup: crate::PreparedWorkspace,
         configuration: Option<super::configuration::Installed>,
@@ -132,6 +166,8 @@ impl Handle {
         let view = Arc::new(Mutex::new(view));
         let (requests, mut envelopes) = mpsc::channel::<Envelope>(COMMAND_CAPACITY);
         let workspace = setup.resources.workspace.clone();
+        let store = setup.session.store.clone();
+        let tools = setup.resources.tools.clone();
         let state = view.clone();
         // The actor owns the runtime; clients only own connections to it.
         tokio::spawn(async move {
@@ -358,6 +394,8 @@ impl Handle {
             view,
             requests,
             workspace,
+            store,
+            tools,
         }
     }
 

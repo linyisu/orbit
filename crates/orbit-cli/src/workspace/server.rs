@@ -456,6 +456,38 @@ impl Service {
                     base64::engine::general_purpose::STANDARD.encode(bytes),
                 ))
             }
+            Request::ReadSubagent {
+                session,
+                agent,
+                after,
+            } => {
+                let session = self.session(&session).await?;
+                Ok(Response::Subagent(
+                    session.subagent_page(&agent, after).await?,
+                ))
+            }
+            Request::SendSubagent {
+                session,
+                agent,
+                message,
+            } => {
+                ensure!(
+                    !message.trim().is_empty() && message.len() <= 1024 * 1024,
+                    "invalid subagent message"
+                );
+                let session = self.session(&session).await?;
+                session.authorize_subagent(&agent).await?;
+                let call = orbit_model::types::ToolCall::function(
+                    super::request_id(),
+                    "send_agent_message",
+                    serde_json::json!({"agent_id": agent, "message": message}),
+                );
+                session
+                    .tools
+                    .execute(call, tokio_util::sync::CancellationToken::new())
+                    .await?;
+                Ok(Response::Ok)
+            }
             Request::Shutdown => {
                 let _opening = self.opening.lock().await;
                 ensure!(
