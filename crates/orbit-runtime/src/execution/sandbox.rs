@@ -604,11 +604,22 @@ impl SandboxBackend for BwrapSandboxBackend {
                 spec.skipped_entries,
                 verification,
             )
-            .await;
+            .await?;
 
             drop(placeholder_guard);
 
-            result
+            if result.exit_code != Some(0) && isolation::user_namespace_denied(&result.stderr) {
+                return Err(failed(format!(
+                    "sandbox initialization failed before the command could run: {}\n\
+                     The target host denied Bubblewrap user/network namespace setup. \
+                     On Ubuntu with apparmor_restrict_unprivileged_userns=1, an administrator \
+                     must install and enable a Bubblewrap-specific AppArmor profile. \
+                     Retrying the command will not repair host policy.",
+                    result.stderr.trim()
+                )));
+            }
+
+            Ok(result)
         })
     }
 }
@@ -1664,7 +1675,12 @@ fn validate_toolchain_source(
     source: &Path,
     policy: &EffectivePolicy,
 ) -> Result<PathBuf, RuntimeError> {
-    let canonical = source.canonicalize().map_err(failed)?;
+    let canonical = source.canonicalize().map_err(|error| {
+        failed(format!(
+            "cannot access configured Rust toolchain '{}': {error}",
+            source.display()
+        ))
+    })?;
 
     if canonical == Path::new("/")
         || canonical.starts_with("/proc")

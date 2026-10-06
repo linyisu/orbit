@@ -150,3 +150,5 @@ cargo clippy -p orbit-runtime --all-targets -- -D warnings
 ```
 
 对含硬链接的文件，仅缓存已找到全部链接的安全路径集合；复用前重新核对链接数量、inode 和所有父目录。新增链接或重命名会使缓存失效，仍拒绝受保护路径的别名。
+
+Ubuntu 开启 `kernel.apparmor_restrict_unprivileged_userns=1` 时，需要管理员安装并启用 Bubblewrap 专用 AppArmor profile。`Failed RTM_NEWADDR`、uid map 权限错误表示隔离环境尚未建立，命令没有执行；Orbit 会明确报告系统策略问题。可先运行 `bwrap --unshare-user --unshare-net --ro-bind / / -- /bin/true` 检查目标环境。专用 profile 的设计见 [AppArmor 官方配置](https://gitlab.com/apparmor/apparmor/-/blob/master/profiles/apparmor/profiles/extras/bwrap-userns-restrict)。

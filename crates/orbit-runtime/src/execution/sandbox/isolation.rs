@@ -35,6 +35,16 @@ pub(super) fn configure_isolation(command: &mut Command, network: NetworkPolicy)
     }
 }
 
+pub(super) fn user_namespace_denied(stderr: &str) -> bool {
+    stderr.lines().any(|line| {
+        line.starts_with("bwrap:")
+            && (line.contains("Failed RTM_NEWADDR")
+                || line.contains("setting up uid map")
+                || line.contains("Creating new namespace failed"))
+            && (line.contains("Operation not permitted") || line.contains("Permission denied"))
+    })
+}
+
 /// A browser reader gets system libraries and one disposable profile, never the workspace or host home.
 pub fn browser_reader_command(profile: &Path) -> Result<Command, RuntimeError> {
     let mut command = Command::new("/usr/bin/bwrap");
@@ -156,5 +166,24 @@ pub(super) fn mount_system_paths(command: &mut Command, network: NetworkPolicy) 
                 command.args(["--ro-bind", path, path]);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::user_namespace_denied;
+
+    #[test]
+    fn namespace_startup_errors_are_distinct_from_command_failures() {
+        assert!(user_namespace_denied(
+            "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n"
+        ));
+        assert!(user_namespace_denied(
+            "bwrap: setting up uid map: Permission denied\n"
+        ));
+        assert!(!user_namespace_denied("command: Permission denied\n"));
+        assert!(!user_namespace_denied(
+            "bwrap: Can't chdir to /workspace: No such file or directory\n"
+        ));
     }
 }
