@@ -69,6 +69,31 @@ impl SessionWriter {
         self.store.session(&self.id).await
     }
 
+    pub async fn append_context(&self, message: ChatMessage) -> Result<()> {
+        ensure!(
+            self.active_run.is_none(),
+            "cannot append idle context during a run"
+        );
+        let id = self.id.clone();
+        self.store
+            .access(move |conn| {
+                let tx = conn.transaction()?;
+                let history: String =
+                    tx.query_row("SELECT history FROM sessions WHERE id=?1", [&id], |row| {
+                        row.get(0)
+                    })?;
+                let mut history: Vec<ChatMessage> = serde_json::from_str(&history)?;
+                history.push(message);
+                tx.execute(
+                    "UPDATE sessions SET history=?2,updated_at=unixepoch() WHERE id=?1",
+                    params![id, serde_json::to_string(&history)?],
+                )?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await
+    }
+
     pub fn active_run_id(&self) -> Option<i64> {
         self.active_run
     }

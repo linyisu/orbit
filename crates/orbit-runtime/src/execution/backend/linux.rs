@@ -1,4 +1,4 @@
-use std::{pin::Pin, time::Duration};
+use std::pin::Pin;
 
 use tokio_util::sync::CancellationToken;
 
@@ -54,22 +54,7 @@ impl ExecutionBackend for BwrapBackend {
                 .run(spec, &effective, output_log, cancellation)
                 .await?;
 
-            Ok(ExecutionResult {
-                exit_code: cmd_res.exit_code,
-                elapsed: Duration::from_millis(cmd_res.elapsed_ms),
-                stdout: cmd_res.stdout,
-                stderr: cmd_res.stderr,
-                timed_out: cmd_res.timed_out,
-                cancelled: cmd_res.cancelled,
-                output_truncated: cmd_res.output_truncated,
-                stdout_total_bytes: cmd_res.stdout_total_bytes,
-                stderr_total_bytes: cmd_res.stderr_total_bytes,
-                output_id: cmd_res.output_id,
-                retained_output_truncated: cmd_res.retained_output_truncated,
-                sandbox: cmd_res.sandbox,
-                verification_error: cmd_res.verification_error,
-                verification: cmd_res.verification,
-            })
+            Ok(cmd_res.into())
         })
     }
 }
@@ -253,7 +238,7 @@ pub(crate) fn prepare_execution_spec_and_policy(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, path::PathBuf};
+    use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
     use super::*;
     use crate::execution::process::MountSpec;

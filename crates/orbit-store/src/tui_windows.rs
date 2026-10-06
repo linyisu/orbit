@@ -92,6 +92,19 @@ fn reap(directory: &Path, registry: &mut Registry) -> Result<()> {
 }
 
 impl Store {
+    pub async fn previous_tui_tabs(&self) -> Result<Vec<String>> {
+        let directory = self.path().with_extension("tui-windows");
+        let legacy = self.all_tui_tabs().await?;
+        tokio::task::spawn_blocking(move || {
+            let _lock = registry_lock(&directory)?;
+            let mut registry = read_registry(&directory, &legacy)?;
+            reap(&directory, &mut registry)?;
+            save(&directory, &registry)?;
+            Ok(registry.previous)
+        })
+        .await?
+    }
+
     pub async fn open_tui_window(&self) -> Result<TuiWindow> {
         let directory = self.path().with_extension("tui-windows");
         let legacy = self.all_tui_tabs().await?;

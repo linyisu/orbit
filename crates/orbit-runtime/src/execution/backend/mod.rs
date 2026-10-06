@@ -1,4 +1,5 @@
 pub mod linux;
+mod native;
 
 use std::pin::Pin;
 
@@ -16,7 +17,17 @@ use crate::{
 
 pub use linux::BwrapBackend;
 
-/// Isolation backends must fail closed rather than fall back to host execution.
+pub fn execution_backend(
+    sandbox: bool,
+) -> Result<Box<dyn ExecutionBackend>, crate::error::RuntimeError> {
+    if sandbox {
+        Ok(Box::new(BwrapBackend::new()?))
+    } else {
+        Ok(Box::new(native::NativeBackend))
+    }
+}
+
+/// An explicitly selected backend; sandbox failures never change the selection.
 pub trait ExecutionBackend: Send + Sync {
     fn name(&self) -> &'static str;
 

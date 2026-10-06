@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+orbit-protocol.workspace = true
+
 anyhow.workspace = true
 orbit-agent.workspace = true
 orbit-model.workspace = true

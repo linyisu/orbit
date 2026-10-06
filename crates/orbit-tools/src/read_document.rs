@@ -56,6 +56,7 @@ impl Converted {
 pub struct ReadDocument {
     workspace: Workspace,
     worker: Option<std::path::PathBuf>,
+    sandbox: bool,
     cache:
         tokio::sync::Mutex<std::collections::VecDeque<(String, String, std::sync::Arc<Converted>)>>,
 }
@@ -65,8 +66,14 @@ impl ReadDocument {
         Self {
             workspace,
             worker: None,
+            sandbox: false,
             cache: tokio::sync::Mutex::new(Default::default()),
         }
+    }
+
+    pub fn with_sandbox(mut self, sandbox: bool) -> Self {
+        self.sandbox = sandbox;
+        self
     }
 
     pub fn with_worker(mut self, worker: std::path::PathBuf) -> Self {
@@ -156,7 +163,14 @@ impl Tool for ReadDocument {
                         .or_else(|| anydoc::Format::from_path(Path::new(&arguments.path)))
                         .ok_or_else(|| failed("unsupported document content and file extension"))?;
                     let text = if let Some(worker) = &self.worker {
-                        convert_worker(worker, &bytes, &extension, cancellation.clone()).await?
+                        convert_worker(
+                            worker,
+                            &bytes,
+                            &extension,
+                            self.sandbox,
+                            cancellation.clone(),
+                        )
+                        .await?
                     } else {
                         // Only unit tests exercise the parser directly; production requires a worker.
                         #[cfg(test)]
@@ -265,16 +279,39 @@ async fn convert_worker(
     worker: &Path,
     bytes: &[u8],
     extension: &str,
+    sandbox: bool,
     cancellation: CancellationToken,
 ) -> Result<String, ToolError> {
     use orbit_runtime::execution::{
-        BwrapBackend, ExecutionBackend, ExecutionEnvironment, ExecutionPolicy, ExecutionRequest,
-        MountSpec, ResourceLimits,
+        ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, MountSpec, ResourceLimits,
+        execution_backend,
     };
     let input = tempfile::tempdir().map_err(failed)?;
     let scratch = tempfile::tempdir().map_err(failed)?;
     std::fs::write(input.path().join(format!("source.{extension}")), bytes).map_err(failed)?;
     let request = ExecutionRequest::new(format!("/opt/orbit-document-worker --internal-document-worker /workspace/source.{extension} /scratch/document.md"), input.path(), std::time::Duration::from_secs(60)).with_scratch(scratch.path());
+    let request = if sandbox {
+        request
+    } else {
+        let command = shlex::try_join([
+            worker
+                .to_str()
+                .ok_or_else(|| failed("non-UTF-8 worker path"))?,
+            "--internal-document-worker",
+            input
+                .path()
+                .join(format!("source.{extension}"))
+                .to_str()
+                .ok_or_else(|| failed("non-UTF-8 document path"))?,
+            scratch
+                .path()
+                .join("document.md")
+                .to_str()
+                .ok_or_else(|| failed("non-UTF-8 output path"))?,
+        ])
+        .map_err(failed)?;
+        ExecutionRequest::new(command, input.path(), std::time::Duration::from_secs(60))
+    };
     let environment = ExecutionEnvironment::new(input.path(), input.path()).map_err(failed)?;
     let mut policy = ExecutionPolicy::read_only();
     policy.mounts = vec![MountSpec::read_only(worker, "/opt/orbit-document-worker")];
@@ -285,7 +322,7 @@ async fn convert_worker(
         max_open_files: Some(128),
         ..Default::default()
     };
-    let result = BwrapBackend::new()
+    let result = execution_backend(sandbox)
         .map_err(failed)?
         .execute(&request, &policy, &environment, None, cancellation)
         .await

@@ -35,7 +35,7 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
     let mut outputs = Vec::new();
     for name in ["orbit-first", "orbit-second"] {
         let script = format!(
-            "printf '{name}\\n'; touch /workspace/{name}.started; while [ ! -f /workspace/release ]; do sleep 0.01; done; printf '{name} finished\\n'"
+            "printf '{name}\\n'; touch {name}.started; while [ ! -f release ]; do sleep 0.01; done; printf '{name} finished\\n'"
         );
         let output = tokio::time::timeout(
             Duration::from_secs(10),
@@ -64,7 +64,7 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
             let snapshots = jobs.snapshots(&ids, true).unwrap();
             assert!(
                 !snapshots.iter().any(|job| job.status == JobStatus::Failed),
-                "sandbox launch failed: {snapshots:?}"
+                "command launch failed: {snapshots:?}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -125,7 +125,7 @@ async fn background_launch_still_requires_approval_and_denial_creates_no_job() {
     let command = RunCommand::new(Workspace::new(root.path()).unwrap(), sender)
         .with_background_jobs(jobs.clone());
     let launch = tokio::spawn(async move {
-        command.execute(ToolCall::function("denied", "run_command", json!({ "command":"touch /workspace/orbit-denied", "background":true, "workspace_access":"read_write" })), CancellationToken::new()).await
+        command.execute(ToolCall::function("denied", "run_command", json!({ "command":"touch orbit-denied", "background":true, "workspace_access":"read_write" })), CancellationToken::new()).await
     });
     let request = approvals.recv().await.unwrap();
     assert!(jobs.snapshots(&[], false).unwrap().is_empty());
@@ -220,7 +220,7 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
 }
 
 #[tokio::test]
-async fn cancelling_a_live_sandbox_command_waits_for_process_cleanup() {
+async fn cancelling_a_live_native_command_waits_for_process_cleanup() {
     let root = tempfile::tempdir().unwrap();
     let jobs = BackgroundJobs::default();
     let (sender, mut approvals) = approval::channel();
@@ -229,10 +229,20 @@ async fn cancelling_a_live_sandbox_command_waits_for_process_cleanup() {
     });
     let command = RunCommand::new(Workspace::new(root.path()).unwrap(), sender)
         .with_background_jobs(jobs.clone());
-    let output = command.execute(ToolCall::function("orbit-cancel", "run_command", json!({
-        "command":"touch /workspace/orbit.started; sleep 30; touch /workspace/orbit.finished",
-        "background":true, "workspace_access":"read_write",
-    })), CancellationToken::new()).await.unwrap();
+    let output = command
+        .execute(
+            ToolCall::function(
+                "orbit-cancel",
+                "run_command",
+                json!({
+                    "command":"touch orbit.started; sleep 30; touch orbit.finished",
+                    "background":true, "workspace_access":"read_write",
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
     approver.await.unwrap();
     let id = output.background_job.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -241,7 +251,7 @@ async fn cancelling_a_live_sandbox_command_waits_for_process_cleanup() {
             assert_eq!(
                 snapshots[0].status,
                 JobStatus::Running,
-                "sandbox launch failed: {snapshots:?}"
+                "command launch failed: {snapshots:?}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

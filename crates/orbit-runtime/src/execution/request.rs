@@ -76,6 +76,27 @@ pub struct ExecutionResult {
     pub verification: Option<VerificationEvidence>,
 }
 
+impl From<super::process::CommandResult> for ExecutionResult {
+    fn from(result: super::process::CommandResult) -> Self {
+        Self {
+            exit_code: result.exit_code,
+            elapsed: Duration::from_millis(result.elapsed_ms),
+            stdout: result.stdout,
+            stderr: result.stderr,
+            timed_out: result.timed_out,
+            cancelled: result.cancelled,
+            output_truncated: result.output_truncated,
+            stdout_total_bytes: result.stdout_total_bytes,
+            stderr_total_bytes: result.stderr_total_bytes,
+            output_id: result.output_id,
+            retained_output_truncated: result.retained_output_truncated,
+            sandbox: result.sandbox,
+            verification_error: result.verification_error,
+            verification: result.verification,
+        }
+    }
+}
+
 impl ExecutionResult {
     pub fn display_summary(&self) -> String {
         let code_str = match self.exit_code {

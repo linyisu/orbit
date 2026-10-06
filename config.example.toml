@@ -13,8 +13,9 @@ default_provider = "deepseek"
 # 通常无需额外配置。仅在需要覆盖环境代理时启用下方配置（端口按实际设置）。
 # [web]
 # proxy = "http://127.0.0.1:7897"
+# allowed_origins = ["http://docs.internal:8080", "http://127.0.0.1:3000"]
 
-# 子 Agent 独立运行，只提供探索和审查两个只读角色。
+# 子 Agent：explore/review 只读；develop 默认使用独立 Git worktree，继承父会话审批。
 [subagents]
 max_concurrent = 8 # 同一父会话的并行上限，可设为 1..128
 max_turns = 0 # 不限制轮数
@@ -52,6 +53,8 @@ reasoning = { adapter = "openai_responses", efforts = ["none", "low", "medium", 
 
 # --- 命令与交付预算 ---
 [command]
+# Enable OS isolation for commands and helper processes.
+sandbox = false
 network = "allow" # 允许显式申请联网；run_command 单次请求默认 network="deny"
 read_file_scan_bytes = 67108864 # 每次文件读取最多扫描 64 MiB；0 表示不限扫描量
 

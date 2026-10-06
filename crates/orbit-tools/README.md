@@ -4,13 +4,19 @@
 
 `orbit-tools` 是 Orbit 的工具集与执行适配库，为 AI Agent 提供一组完备、安全且受限的操作工具。`run_command` 在容器内执行；内置文件工具在宿主进程中使用受保护文件描述符访问。文档转换在独立离线沙箱进程中执行；图片处理和网页请求在宿主侧执行，MCP 服务是独立宿主进程；网页回退 Firefox 使用独立 Bubblewrap 命名空间、Seccomp 和临时 profile，不挂载工作区或宿主 HOME。
 
+## 执行保护
+
+`[command].sandbox` 默认为 `false`，本地、SSH 和 WSL 使用相同设置。普通执行使用目标用户的真实路径、HOME、开发工具链和 Git 认证；`workspace_access` 与 `network` 声明请求的效果供审批使用，不提供操作系统隔离。任意普通命令不能仅凭声明只读自动批准。会话 scratch 的真实路径通过 `$ORBIT_SCRATCH` 提供。执行记录标注 `native`，超时、取消、输出预算、文件大小、地址空间及文件描述符配额生效；进程数限制沿用宿主用户设置。
+
+设置 `sandbox = true` 时，命令、文档与 Git worker、网页浏览器回退使用 Bubblewrap。沙箱初始化失败返回错误，不自动改为普通执行。以下挂载、只读工作区、遮蔽与离线隔离规则描述启用沙箱后的行为；文件工具的路径保护独立生效。
+
 ## 共用预算和内部模块
 
 [limits.rs](src/limits.rs) 统一文本工具的页预算（32 KiB）、JSON 元数据预留及目录扫描条目预算；各工具的行数、深度、匹配数等上限由各自模块拥有，参数 schema 与实际验证引用同一常量。文本/条目预算之外仍有 JSON 分页元数据，不应将其等同于整个序列化响应的精确字节数。
 
 [web_fetch/dom.rs](src/web_fetch/dom.rs) 为 Google、Bing 和 DuckDuckGo 共用 DOM 属性、节点查找与文本投影；各引擎的结果定位、跳转及过滤规则保留在对应模块。
 
-[image_assets.rs](src/image_assets.rs) 复用 `Attachment::MAX_IMAGE_BYTES` 与有界图片文件读取，导入前不再无界读取整个文件。[web_fetch/resource.rs](src/web_fetch/resource.rs) 的 `fetch_image` 是 TUI 使用的内部网络图片接口，复用 URL、DNS 与重定向检查；同一模块的 `WebClient::fetch_json` 为公开模型规格提供有大小限制的 JSON 下载，不发送模型账号凭据。这些内部接口没有注册成额外的模型工具。
+[image_assets.rs](src/image_assets.rs) 复用 `Attachment::MAX_IMAGE_BYTES` 与有界图片文件读取，导入前使用有界读取。[web_fetch/resource.rs](src/web_fetch/resource.rs) 的 `fetch_image` 是 TUI 使用的内部网络图片接口，复用 URL、DNS 与重定向检查；同一模块的 `WebClient::fetch_json` 为公开模型规格提供有大小限制的 JSON 下载，不发送模型账号凭据。这些内部接口没有注册成额外的模型工具。
 
 ## 架构与核心设计
 
@@ -38,7 +44,7 @@
 #### `read_file`
 - **功能**：以安全方式读取工作区或已授权外部目录内的 UTF-8 文本文件。
 - **参数**：`path`（相对或已授权绝对路径）、`start_line`（从 1 起始）、`start_char`（所选行内从 0 起始的 Unicode 字符偏移）、`max_lines`（默认 200，范围 1–500）、`cursor`（原样传回 `next_cursor`）。
-- **约束与安全**：分块读取，单次扫描预算默认 64 MiB（`command.read_file_scan_bytes` 可调整，`0` 表示不限扫描量）、返回内容上限 32 KiB，不再按文件总大小拒绝；可读取指定的中间行。优先用返回的 `next_cursor` 续读，避免重新扫描开头；文件版本变化时游标失效。`total_lines` 在到达文件末尾前为 `null`。内部链接经描述符解析，越界、循环及保护目标被拒绝；超长行仍可使用 `next_start_line`、`next_start_char` 续读。TUI 的 `[start..=end]` 行号范围包含两端。
+- **约束与安全**：分块读取，单次扫描预算默认 64 MiB（`command.read_file_scan_bytes` 可调整，`0` 表示不限扫描量）、返回内容上限 32 KiB，扫描预算按实际读取量计算；可读取指定的中间行。优先用返回的 `next_cursor` 续读，避免重新扫描开头；文件版本变化时游标失效。`total_lines` 在到达文件末尾前为 `null`。内部链接经描述符解析，越界、循环及保护目标被拒绝；超长行仍可使用 `next_start_line`、`next_start_char` 续读。TUI 的 `[start..=end]` 行号范围包含两端。
 
 #### `list_files`
 - **功能**：以广度优先遍历浏览目录树结构，无需启动外部 Shell。
@@ -60,7 +66,7 @@
 #### `edit_file`
 - **功能**：对已有文件执行基于上下文锚点的精确局部替换，推荐日常代码修改使用。
 - **参数**：`path`、`old_text`（精确待替换旧文本）、`new_text`（替换新文本）、`replace_all`（是否替换所有非重叠匹配）。
-- **约束与安全**：建议先读取当前文件再提供上下文锚点；实现检查当前文本的精确匹配，未强制验证模型是否此前读过；默认强制唯一性检查，歧义多处匹配直接拒绝；需要人工审批时，TUI 显示差异预览；通过同父目录的临时文件写入、刷盘并原子重命名（atomic rename），避免直接覆盖时暴露半写入内容。
+- **约束与安全**：建议先读取当前文件再提供上下文锚点；实现检查当前文本与锚点的精确匹配；默认强制唯一性检查，歧义多处匹配直接拒绝；需要人工审批时，TUI 显示差异预览；通过同父目录的临时文件写入、刷盘并原子重命名（atomic rename），避免直接覆盖时暴露半写入内容。
 
 #### `write_file`
 - **功能**：用于创建新文件或有意整体重写完整文件。
@@ -71,7 +77,7 @@
 
 #### 原生 Git 与内部 `git_inspect`
 - **Agent 入口**：通过 `run_command` 执行原生 Git。命令分类参与审批；普通本地写入和远端写入可获得绑定具体请求、仓库与配置版本的 TUI 会话授权，危险或未分类命令进入相应审批路径。
-- **内部工具**：`git_inspect` 实现仍保留用于内部核验、补丁与测试，但不再注册为 Agent 常规工具。提供结构化只读状态、差异与历史。
+- **内部工具**：`git_inspect` 用于内部核验、补丁与测试，通过库接口提供。提供结构化只读状态、差异与历史。
 - **参数**：`view`（`status` / `diff` / `history`）、`limit`、`offset`、`staged`（查看暂存区）。
 - **约束与安全**：工作区必须为 Git 根目录；显式剥离所有 pager、hooks、fsmonitor、外部 diff 及系统环境变量；`diff` 受 256 KiB 原始输出上限约束并支持分页；不修改任何索引或工作树。
 
@@ -94,7 +100,7 @@
 
 #### `read_document`
 - **功能**：基于 AnyDoc 在本地将各种文档格式（PDF、Word、PowerPoint、Excel、OpenDocument、RTF、EPUB、CSV）转换为 Markdown 文本。
-- **约束与安全**：CLI 在独立离线 Bubblewrap 进程中转换，可取消并设 60 秒超时、512 MiB 地址空间与 64 MiB 输出限制；单个源文档上限 32 MiB。每次读取仍重新授权、读取并校验源内容哈希；相同内容、扩展名和 worker 文件版本复用进程内缓存（最多 4 项、64 MiB），工具实例释放后清空；转换时建立每 4096 字符一个定位点的索引，翻页不再扫描整个转换结果。按 Unicode 字符分页（默认 20,000，上限 60,000 字符）。库嵌入方应通过 `with_worker` 指定支持私有转换入口的可执行文件（如配套 `orbit-document-worker`）。
+- **约束与安全**：文档 worker 在独立离线 Bubblewrap 进程中转换，可取消并设 60 秒超时、512 MiB 地址空间与 64 MiB 输出限制；单个源文档上限 32 MiB。每次读取仍重新授权、读取并校验源内容哈希；相同内容、扩展名和 worker 文件版本复用进程内缓存（最多 4 项、64 MiB），工具实例释放后清空；转换时建立每 4096 字符一个定位点的索引，翻页使用索引定位转换结果。按 Unicode 字符分页（默认 20,000，上限 60,000 字符）。库嵌入方应通过 `with_worker` 指定支持私有转换入口的可执行文件（如配套 `orbit-document-worker`）。
 
 ### 5. 命令执行与输出管理
 
@@ -105,7 +111,7 @@
   - 默认工作区挂载为只读；写文件或创建目录需显式申请 `read_write`。Auto 模式自动允许字面参数的 `mkdir`、`echo`、`printf`、`cat`、`tee`，以及由这些命令组成的管道、`>` / `>>` 重定向和 `&&` 顺序执行；每个输入和输出路径都必须在工作区内。支持引号、多个文件、`mkdir -p` 与 `tee -a`。
   - 共用受限 Shell 语法解析与工作区路径校验，不将任意脚本推断为安全；命令在审批前重建，系统程序使用固定可执行文件，Shell 内置文本命令通过 `command` 调用。检查缺失父目录、符号链接及受保护名称；Shell 展开、未知程序、其他控制操作、工作区外路径、联网或外部写权限仍需审批。只读缓存挂载不影响已验证的工作区内操作。
   - `.env`、数据库和凭据等注册的受保护文件被遮蔽。原生 Git 元数据可见，读写随工作区模式变化；已有 Git 配置和 hooks 默认只读；经批准的 Git 配置操作在 `read_write` 下可写。
-  - 进程资源配额：单文件和地址空间默认不限（`0`），`/tmp` 总配额默认 2 GiB（`max_tmp_bytes`）；文件描述符和进程/线程限制默认均为 1024，可通过 `command.process_limits` 配置。超时默认 120 秒，上限默认 600 秒。
+  - 进程资源配额：单文件和地址空间默认不限（`0`），`/tmp` 总配额默认 2 GiB（`max_tmp_bytes`）；文件描述符限制默认 1024；沙箱进程/线程限制默认 1024，普通执行沿用宿主进程数限制，可通过 `command.process_limits` 配置适用的资源配额。超时默认 120 秒，上限默认 600 秒。
   - 单次请求默认离线；`network="allow"` 显式申请联网，不能超过全局 `command.network` 上限（默认允许申请）。
   - stdout / stderr 持续排空并在工具结果中各保留末尾 32 KiB，附带总字节数与截断标记。
 
@@ -137,10 +143,10 @@
 #### `web_fetch`
 - **功能**：直接获取公网已知 URL 的网页正文并转为结构化 Markdown。
 - **约束与安全**：
-  - 仅开放公网 80/443 端口，严格防范 SSRF，严禁访问内网及保留地址。
+  - 默认访问公网 80/443；`[web].allowed_origins` 可授权精确的 HTTP(S) 来源，例如 `http://docs.internal:8080`。协议、主机和端口必须匹配，重定向的每一跳分别验证。
   - 自动沿用启动环境的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 与 `NO_PROXY`（均支持小写），复用 Hyper 的标准匹配规则，支持 HTTP(S) 与 SOCKS 代理；没有匹配代理时直连并校验 DNS。`[web].proxy` 可显式指定 HTTP(S) 代理，优先于环境变量和 `NO_PROXY`，无需为已有代理环境重复设置。
-  - 网页、搜索、网络图片与浏览器回退共用 `WebClient` 路由，每次重定向重新匹配。代理承担目标域名解析及出口限制；网页结果用 `trusted_proxy_resolved` 标明这一边界。内网字面地址、私有主机名和危险重定向仍被拒绝，代理凭据不进入调试输出与错误信息。
-  - 当遇到 Cloudflare 浏览器挑战且当前路由有可用的无认证 HTTP 代理时，可使用独立 Bubblewrap 沙箱中的无头 Firefox 提取正文，仅挂载系统文件与临时 profile，进程退出/取消时 PID 命名空间一并清理。
+  - 网页、搜索、网络图片与浏览器回退共用 `WebClient` 路由，每次重定向重新匹配。代理承担目标域名解析及出口限制；网页结果用 `trusted_proxy_resolved` 标明这一边界。未授权的内网地址、私有主机名和危险重定向被拒绝，代理凭据不进入调试输出与错误信息。
+  - 当遇到 Cloudflare 浏览器挑战且当前路由有可用的无认证 HTTP 代理时，可使用无头 Firefox 和独立临时 profile 提取正文。`[command].sandbox = true` 时应用 Bubblewrap 隔离；显式授权的内部来源使用直接 HTTP 获取。
   - 单次响应体上限 2 MiB，总超时 60 秒，最多 5 次重定向；按 Unicode 字符分页。
 
 #### `web_search`
@@ -156,7 +162,7 @@ CLI/TUI 的工具注册还可加载用户配置的 MCP 工具。启动配置的�
 
 ## 审批模式与权限交互
 
-TUI 使用 `/mode` 切换 `ask` / `auto` / `yolo`；非交互 `orbit chat --mode` 接受 `read-only` / `auto` / `yolo`，不能假设其具有 TUI 弹窗：
+TUI 使用 `/mode` 切换 `ask` / `auto` / `yolo`；非交互 `orbit-cli chat --mode` 接受 `read-only` / `auto` / `yolo`，不能假设其具有 TUI 弹窗：
 
 | 模式 | 行为特征 |
 |---|---|

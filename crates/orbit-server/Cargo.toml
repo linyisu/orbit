@@ -1,0 +1,17 @@
+[package]
+name = "orbit-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "orbit-workspace-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+orbit-service.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

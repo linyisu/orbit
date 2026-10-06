@@ -4,6 +4,8 @@ use super::*;
 
 fn automatic(matcher: Matcher) -> WebClient {
     WebClient {
+        allowed_origins: Vec::new(),
+        sandbox: false,
         explicit: None,
         automatic: Arc::new(matcher),
     }
