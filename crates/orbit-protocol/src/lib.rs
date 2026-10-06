@@ -207,6 +207,8 @@ pub struct RunPresentation {
     pub compact: bool,
     #[serde(default)]
     pub queued_input: bool,
+    #[serde(default)]
+    pub replayed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

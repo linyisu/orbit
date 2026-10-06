@@ -398,3 +398,59 @@ fn history_keeps_recorded_elapsed_and_live_clock_comes_from_the_service() {
         std::time::Duration::from_millis(84000)
     );
 }
+
+#[tokio::test]
+async fn catalog_refresh_waits_until_the_current_run_finishes() {
+    let (mut tab, mut requests) = tab("本地");
+    tab.busy = true;
+    tab.model_configuration = Some(orbit_protocol::Configuration {
+        content: String::new(),
+        credentials: Default::default(),
+    });
+    tab.poll().await;
+    assert!(tab.model_configuration.is_some());
+    while let Ok(call) = requests.try_recv() {
+        assert!(!matches!(call.request, Request::ConfigureModels { .. }));
+    }
+    tab.busy = false;
+    tab.poll().await;
+    assert!(tab.model_configuration.is_none());
+    let mut configured = false;
+    while let Ok(call) = requests.try_recv() {
+        configured |= matches!(call.request, Request::ConfigureModels { .. });
+    }
+    assert!(configured);
+}
+#[test]
+fn replay_preserves_reading_position_and_finalizes_only_replayed_background_tools() {
+    let (mut tab, _rx) = tab("本地");
+    tab.state.scroll = 12;
+    tab.state.follow_bottom = false;
+    apply_page(
+        &mut tab,
+        vec![Update::Started {
+            prompt: "past".into(),
+            presentation: orbit_protocol::RunPresentation {
+                replayed: true,
+                ..Default::default()
+            },
+        }],
+    );
+    assert_eq!(tab.state.scroll, 12);
+    assert!(!tab.state.follow_bottom);
+    let call =
+        orbit_model::types::ToolCall::function("background", "run_command", serde_json::json!({}));
+    apply_page(
+        &mut tab,
+        vec![
+            Update::Agent(Box::new(orbit_agent::events::AgentEvent::ToolStarted {
+                call,
+            })),
+            Update::Finished {
+                status: "completed".into(),
+                elapsed_ms: Some(100),
+            },
+        ],
+    );
+    assert!(tab.state.transcript.iter().any(|item|matches!(item,TranscriptItem::Tool(tool) if tool.status==crate::tui::app::ToolStatus::Failed)));
+}

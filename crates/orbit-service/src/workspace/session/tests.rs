@@ -144,3 +144,55 @@ async fn remembered_file_grant_survives_reopen_and_matches_changed_content() {
     });
     assert!(!granted.contains(&approval_key(&other, root).unwrap()));
 }
+
+#[tokio::test]
+async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("config.toml"),r#"
+auto_compact=true
+[providers.test]
+base_url="http://127.0.0.1:1/v1"
+api_key="test-only"
+auto_refresh_models=false
+models=[{id="large",input_context_tokens=64000,max_output_tokens=512},{id="small",input_context_tokens=8192,max_output_tokens=512}]
+"#).unwrap();
+    let options = crate::WorkspaceOptions {
+        model: Some("test::large".into()),
+        initial_directory: root.into(),
+        auth_directory: root.join("auth"),
+        config: root.join("config.toml"),
+        database: root.join("sessions.db"),
+        allow_mcp_start: false,
+        home: None,
+        config_home: None,
+        instruction_dir: None,
+        editor_command: "vi".into(),
+    };
+    let mut setup = crate::workspace::setup::prepare_workspace(&options, root, None)
+        .await
+        .unwrap();
+    setup
+        .session
+        .append_context(orbit_model::types::ChatMessage::user(
+            "earlier context ".repeat(6000),
+        ))
+        .await
+        .unwrap();
+    assert!(setup.resources.budget.auto_compact);
+    let handle = Handle::spawn(setup, None);
+    handle
+        .command(Command::SetModel {
+            model: "test::small".into(),
+            effort: None,
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3),async {
+        loop {
+            if handle.view.lock().await.page(0).unwrap().updates.iter().any(|update|matches!(update,Update::Started{presentation,..} if presentation.compact)) { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    handle.command(Command::Cancel).await.unwrap();
+}

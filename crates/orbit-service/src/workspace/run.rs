@@ -31,6 +31,7 @@ pub(super) async fn start(
             .any(|choice| choice.qualified_name() == setup.resources.model_name),
         "当前模型已从配置中移除，请使用 /model 选择可用模型"
     );
+    let messages = context_messages(setup).await?;
     let crate::PreparedWorkspace { session, resources } = setup;
     session
         .set_model_profile(
@@ -38,21 +39,6 @@ pub(super) async fn start(
             resources.model.config().reasoning_effort,
         )
         .await?;
-    let mut messages = session.snapshot.history.clone();
-    crate::instructions::inject(&mut messages, &resources.budget.instructions);
-    resources.budget.skills.inject(&mut messages);
-    if !resources
-        .policy
-        .disabled(orbit_protocol::Capability::ProjectState)
-    {
-        crate::project_state::inject(
-            &mut messages,
-            &session.store,
-            &session.snapshot.session.project_id,
-            session.id(),
-        )
-        .await?;
-    }
     let mut tools = resources.tools.clone();
     if !resources.model.supports_vision() {
         tools.remove("read_image");
@@ -111,4 +97,46 @@ pub(super) async fn start(
         started.cancellation,
         started.inbox,
     ))
+}
+
+pub(super) async fn context_messages(
+    setup: &crate::PreparedWorkspace,
+) -> Result<Vec<orbit_model::types::ChatMessage>> {
+    let mut messages = setup.session.snapshot.history.clone();
+    crate::instructions::inject(&mut messages, &setup.resources.budget.instructions);
+    setup.resources.budget.skills.inject(&mut messages);
+    if !setup
+        .resources
+        .policy
+        .disabled(orbit_protocol::Capability::ProjectState)
+    {
+        crate::project_state::inject(
+            &mut messages,
+            &setup.session.store,
+            &setup.session.snapshot.session.project_id,
+            setup.session.id(),
+        )
+        .await?;
+    }
+    Ok(messages)
+}
+
+pub(super) async fn needs_compaction(setup: &crate::PreparedWorkspace) -> Result<bool> {
+    if !setup.resources.budget.auto_compact || setup.session.snapshot.history.is_empty() {
+        return Ok(false);
+    }
+    let messages = context_messages(setup).await?;
+    let estimated =
+        orbit_agent::context::estimate_tokens(&messages, &setup.resources.tools.definitions());
+    let calibrated = setup
+        .session
+        .calibration(&setup.resources.model_name)
+        .estimate(estimated);
+    Ok(calibrated
+        >= setup
+            .resources
+            .budget
+            .input_context_tokens
+            .saturating_mul(85)
+            / 100)
 }

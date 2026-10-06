@@ -1,3 +1,6 @@
+mod watch;
+pub use watch::Watcher;
+
 use anyhow::{Context, Result};
 use orbit_auth::AuthStore;
 pub use orbit_protocol::Configuration;

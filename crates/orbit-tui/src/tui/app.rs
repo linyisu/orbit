@@ -198,6 +198,7 @@ pub struct UiState {
     pub max_scroll: usize,
     pub(super) transcript_layout: super::transcript::TranscriptLayout,
     pub elapsed: std::time::Duration,
+    remote_replay: bool,
     pub input: InputState,
     pub transcript: Vec<TranscriptItem>,
     pub status: RunStatus,
@@ -282,11 +283,17 @@ impl UiState {
         prompt: String,
         presentation: orbit_protocol::RunPresentation,
     ) {
+        self.remote_replay = presentation.replayed;
+        let (scroll, follow) = (self.scroll, self.follow_bottom);
         if !prompt.is_empty() && self.input.history.last() != Some(&prompt) {
             self.input.history.push(prompt.clone());
         }
         if presentation.compact || prompt == "/compact" || presentation.queued_input {
             self.begin_run();
+            if presentation.replayed {
+                self.scroll = scroll;
+                self.follow_bottom = follow;
+            }
             return;
         }
         let images = presentation
@@ -301,6 +308,10 @@ impl UiState {
             (false, false) => format!("{prompt}\n{images}"),
         };
         self.submit(display);
+        if presentation.replayed {
+            self.scroll = scroll;
+            self.follow_bottom = follow;
+        }
     }
 
     pub(super) fn finish_remote(&mut self, status: &str, elapsed_ms: Option<u64>) {
@@ -321,6 +332,7 @@ impl UiState {
         for item in &mut self.transcript[first..] {
             if let TranscriptItem::Tool(tool) = item
                 && tool.status == ToolStatus::Running
+                && (self.remote_replay || status != "completed")
             {
                 tool.status = ToolStatus::Failed;
                 tool.output = "运行已结束或中断，未保存工具结果；不会自动重试。".into();
@@ -456,6 +468,7 @@ impl UiState {
             max_scroll: 0,
             transcript_layout: Default::default(),
             elapsed: std::time::Duration::ZERO,
+            remote_replay: false,
             input: InputState::default(),
             transcript: Vec::new(),
             status: RunStatus::Idle,

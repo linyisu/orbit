@@ -117,6 +117,7 @@ impl Clock {
 
 fn presentation(run: &orbit_store::types::Run) -> orbit_protocol::RunPresentation {
     orbit_protocol::RunPresentation {
+        replayed: true,
         compact: run.prompt == "/compact",
         queued_input: run
             .events

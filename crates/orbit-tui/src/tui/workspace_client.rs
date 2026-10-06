@@ -76,6 +76,8 @@ pub(super) struct Tab {
     next_completion: std::time::Instant,
     next_questions: std::time::Instant,
     model_refresh: Option<AbortOnDropHandle<Result<orbit_protocol::Configuration>>>,
+    model_watcher: Option<workspace::configuration::Watcher>,
+    model_configuration: Option<orbit_protocol::Configuration>,
     attachment_task: Option<AbortOnDropHandle<Result<Vec<orbit_model::types::Attachment>>>>,
 }
 
@@ -232,6 +234,8 @@ impl Tab {
             next_questions: std::time::Instant::now(),
             attachment_task: None,
             model_refresh: None,
+            model_watcher: None,
+            model_configuration: None,
         }
     }
 
@@ -246,7 +250,11 @@ impl Tab {
     }
 
     pub fn reload_models(&mut self) {
-        if self.model_refresh.is_some() {
+        self.refresh_models(true);
+    }
+
+    fn refresh_models(&mut self, force: bool) {
+        if !force && self.model_refresh.is_some() {
             return;
         }
         if let Some(local) = self
@@ -254,10 +262,16 @@ impl Tab {
             .as_ref()
             .and_then(|connection| connection.local_configuration.clone())
         {
-            self.state
-                .report_local(TranscriptItem::Notice("正在刷新模型目录…".into()));
+            if force {
+                self.state
+                    .report_local(TranscriptItem::Notice("正在刷新模型目录…".into()));
+            }
+            self.model_configuration = None;
+            if let Some(watcher) = &mut self.model_watcher {
+                watcher.resynchronize();
+            }
             self.model_refresh = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-                local.snapshot_with_refresh(true).await
+                local.snapshot_with_refresh(force).await
             })));
         }
     }
@@ -330,6 +344,10 @@ impl Tab {
         self.id = Some(opened.info.id.clone());
         let mut connection = opened.connection;
         Arc::make_mut(&mut connection).unattended = true;
+        self.model_watcher = connection
+            .local_configuration
+            .clone()
+            .map(workspace::configuration::Watcher::new);
         self.connection = Some(connection);
         let (commands, requests) = mpsc::channel(CHANNEL_CAPACITY);
         let commands = Arc::new(commands);
@@ -419,6 +437,17 @@ impl Tab {
     }
 
     pub async fn poll(&mut self) -> bool {
+        let mut changed = false;
+        if self.commands.is_some()
+            && self.model_refresh.is_none()
+            && self.model_configuration.is_none()
+            && self
+                .model_watcher
+                .as_mut()
+                .is_some_and(|watcher| watcher.due())
+        {
+            self.refresh_models(false);
+        }
         let input = self.state.input.text.clone();
         if self.completion_input != input
             && self.commands.is_some()
@@ -443,18 +472,16 @@ impl Tab {
             .as_ref()
             .is_some_and(|task| task.is_finished())
         {
+            changed = true;
             match self.model_refresh.take().unwrap().await {
                 Ok(Ok(configuration)) => {
-                    self.send(Request::ConfigureModels {
-                        session: self.id.clone().unwrap_or_default(),
-                        configuration: if self.connection.as_ref().is_some_and(|connection| {
-                            matches!(connection.target, workspace::transport::Target::Local)
-                        }) {
-                            None
-                        } else {
-                            Some(configuration)
-                        },
-                    });
+                    if self
+                        .model_watcher
+                        .as_ref()
+                        .is_none_or(|watcher| watcher.unchanged())
+                    {
+                        self.model_configuration = Some(configuration);
+                    }
                 }
                 Ok(Err(error)) => self
                     .state
@@ -464,7 +491,28 @@ impl Tab {
                     .report_local(TranscriptItem::CommandError(error.to_string())),
             }
         }
-        let mut changed = self.state.btw.tick() | self.poll_submissions() | self.poll_questions();
+        if !self.busy
+            && self.starting.is_none()
+            && let Some(configuration) = self.model_configuration.take()
+        {
+            if self
+                .model_watcher
+                .as_ref()
+                .is_none_or(|watcher| watcher.unchanged())
+            {
+                changed |= self.send(Request::ConfigureModels {
+                    session: self.id.clone().unwrap_or_default(),
+                    configuration: if self.connection.as_ref().is_some_and(|connection| {
+                        matches!(connection.target, workspace::transport::Target::Local)
+                    }) {
+                        None
+                    } else {
+                        Some(configuration)
+                    },
+                });
+            }
+        }
+        changed |= self.state.btw.tick() | self.poll_submissions() | self.poll_questions();
         if self
             .attachment_task
             .as_ref()

@@ -48,6 +48,7 @@ struct Actor {
     remembered: HashSet<String>,
     pending: HashMap<u64, ApprovalRequest>,
     approval_id: u64,
+    compact_after_model_switch: bool,
 }
 
 pub(super) async fn run(
@@ -88,6 +89,7 @@ pub(super) async fn run(
         remembered,
         pending: HashMap::new(),
         approval_id: 0,
+        compact_after_model_switch: false,
     };
     let mut flush = tokio::time::interval(Duration::from_millis(250));
     loop {
@@ -127,6 +129,7 @@ pub(super) async fn run(
                     actor.view.lock().await.push(Update::agent(AgentEvent::Failed { error: error.to_string() }));
                     actor.cancel();
                 }
+                actor.compact_if_needed().await;
                 if actor.setup.session.poll_title().await.unwrap_or(false) { actor.profile().await; }
             }
         }
@@ -228,6 +231,7 @@ impl Actor {
                     crate::config::FileConfig::load(&options.config, &options.auth_directory)?;
                 crate::account_models::refresh(&mut config, false).await;
                 let models = config.model_options()?;
+                let previous_limit = self.setup.resources.budget.input_context_tokens;
                 let selected = self.setup.resources.model_name.clone();
                 let available = models
                     .iter()
@@ -247,6 +251,8 @@ impl Actor {
                 self.setup.resources.budget.model_options = models;
                 if available {
                     profile::select(&mut self.setup, &selected, effort.map(|e| e.as_str())).await?;
+                    self.compact_after_model_switch |= self.setup.resources.budget.auto_compact
+                        && self.setup.resources.budget.input_context_tokens < previous_limit;
                 }
                 if let Some(installed) = installed {
                     self.setup.resources.options = installed.options.clone();
@@ -269,7 +275,10 @@ impl Actor {
                     !self.busy(),
                     "wait for the current task before changing its model"
                 );
+                let previous_limit = self.setup.resources.budget.input_context_tokens;
                 profile::select(&mut self.setup, &model, effort.as_deref()).await?;
+                self.compact_after_model_switch |= self.setup.resources.budget.auto_compact
+                    && self.setup.resources.budget.input_context_tokens < previous_limit;
                 self.profile().await;
             }
             Command::Steer { message } => {
@@ -388,6 +397,7 @@ impl Actor {
                     images: images.iter().map(|image| image.name.clone()).collect(),
                     compact,
                     queued_input: false,
+                    replayed: false,
                 };
                 let started = crate::workspace::run::start(
                     &mut self.setup,
@@ -440,6 +450,37 @@ impl Actor {
             }
         }
         Ok(())
+    }
+
+    async fn compact_if_needed(&mut self) {
+        if self.busy() || !self.compact_after_model_switch {
+            return;
+        }
+        self.compact_after_model_switch = false;
+        let result = async {
+            if super::super::run::needs_compaction(&self.setup).await? {
+                self.command(Command::Start {
+                    request_id: orbit_protocol::request_id(),
+                    prompt: "/compact".into(),
+                    images: Vec::new(),
+                    compact: true,
+                    mode: self.mode,
+                    model: None,
+                })
+                .await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            self.view
+                .lock()
+                .await
+                .push(Update::Report(orbit_protocol::Report {
+                    title: "模型上下文整理".into(),
+                    text: format!("模型已切换，但整理未能启动：{error:#}"),
+                }));
+        }
     }
 
     async fn approval(&mut self, request: ApprovalRequest) {
