@@ -76,6 +76,26 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+  native-execution:
+    name: Execution without Bubblewrap
+    runs-on: ubuntu-latest
+    env:
+      ORBIT_TEST_REQUIRE_NO_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare host without sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          sudo apt-get remove -y bubblewrap
+          test ! -e /usr/bin/bwrap
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify native execution and explicit sandbox failure
+        run: cargo test -p orbit-cli --test workspace_service native_execution
+
   linux-bundle:
     name: Portable Linux bundle
     runs-on: ubuntu-22.04

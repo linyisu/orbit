@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import ssl
@@ -37,7 +38,9 @@ def open_unconfigured_workspace(container, executable):
             assert size <= 32 * 1024 * 1024
             return json.loads(process.stdout.read(size))
 
-        assert request({"method": "hello", "version": 4})["type"] == "hello"
+        protocol = Path(__file__).resolve().parents[1] / "crates/orbit-protocol/src/lib.rs"
+        version = int(re.search(r"pub const VERSION: u32 = (\d+);", protocol.read_text()).group(1))
+        assert request({"method": "hello", "version": version})["type"] == "hello"
         config = """default_provider = "test"
 [providers.test]
 base_url = "http://127.0.0.1:9/v1"

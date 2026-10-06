@@ -723,7 +723,10 @@ async fn run_command_rejects_mount_overlapping_protected_path() {
     workspace.protect(&secret_file).unwrap();
 
     let (sender, mut receiver) = approval::channel();
-    let mut limits = CommandLimits::default();
+    let mut limits = CommandLimits {
+        sandbox: true,
+        ..Default::default()
+    };
     limits
         .dependency_caches
         .push(orbit_tools::run_command::DependencyCache {
@@ -787,7 +790,10 @@ async fn run_command_rejects_mount_containing_hardlink_to_protected_path() {
     fs::hard_link(&secret_file, &alias_file).unwrap();
 
     let (sender, mut receiver) = approval::channel();
-    let mut limits = CommandLimits::default();
+    let mut limits = CommandLimits {
+        sandbox: true,
+        ..Default::default()
+    };
     limits
         .dependency_caches
         .push(orbit_tools::run_command::DependencyCache {
