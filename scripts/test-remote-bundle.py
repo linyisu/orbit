@@ -73,8 +73,8 @@ def main():
     ).stdout.strip()
     try:
         with tempfile.TemporaryDirectory(prefix="orbit-bundle-test-") as directory:
-            client = Path(directory) / "orbit"
-            shutil.copy2(bundle / "orbit", client)
+            client = Path(directory) / "orbit-cli"
+            shutil.copy2(bundle / "orbit-cli", client)
             assert list(Path(directory).iterdir()) == [client]
             wrapper = Path(directory) / "ssh"
             wrapper.write_text(

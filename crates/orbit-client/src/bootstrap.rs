@@ -62,7 +62,11 @@ pub async fn executable(
             upload.is_none(),
             "--upload-server is only used with SSH or WSL"
         );
-        return Ok(std::env::current_exe()?.to_string_lossy().into_owned());
+        return Ok(
+            super::local_server::executable(SERVER_BUNDLE.get().copied())?
+                .to_string_lossy()
+                .into_owned(),
+        );
     }
     super::interaction::timeout(
         BOOTSTRAP_TIMEOUT,

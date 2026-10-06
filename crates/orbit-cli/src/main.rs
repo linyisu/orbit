@@ -12,17 +12,15 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use orbit_client as workspace;
-use orbit_service::context::instructions;
 use orbit_service::models::model_metadata;
-use orbit_service::{WorkspaceOptions, prepare_workspace, session};
-use orbit_tui as tui;
+use orbit_service::session;
 
 mod auth_cli;
 mod connect;
 mod connect_args;
 
 #[derive(Debug, Parser)]
-#[command(name = "orbit")]
+#[command(name = "orbit-cli")]
 struct Cli {
     #[arg(
         long,
@@ -56,7 +54,6 @@ enum Command {
         output: PathBuf,
     },
     Chat(ChatArgs),
-    Tui(TuiArgs),
     /// Connect to a local, SSH, or WSL workspace service.
     Connect(connect_args::ConnectArgs),
     #[command(hide = true)]
@@ -104,17 +101,6 @@ enum SessionCommand {
     Diagnostics {
         id: String,
     },
-}
-
-#[derive(Debug, Args)]
-struct TuiArgs {
-    /// Restore a saved session in the current workspace.
-    #[arg(long)]
-    resume: Option<String>,
-
-    /// Allow enabled local MCP server programs to start for this invocation.
-    #[arg(long)]
-    allow_mcp_start: bool,
 }
 
 #[derive(Debug, Args)]
@@ -167,7 +153,7 @@ enum ChatMode {
     /// Automatically run operations inside the workspace.
     #[default]
     Auto,
-    /// Automatically run sandbox commands and permit workspace edits.
+    /// Automatically approve tool requests.
     #[value(alias = "YOLO")]
     Yolo,
 }
@@ -214,11 +200,10 @@ struct SwePrediction<'a> {
 }
 
 fn main() -> Result<()> {
-    #[cfg(not(target_env = "musl"))]
     workspace::register_server_bundle(include_bytes!(env!("ORBIT_EMBEDDED_SERVER")))?;
 
     if std::env::args().nth(1).as_deref() == Some("--internal-ssh-askpass") {
-        workspace::interaction::askpass()?;
+        orbit_client::interaction::askpass()?;
         return Ok(());
     }
     if orbit_service::platform::workers::run()? {
@@ -243,7 +228,6 @@ async fn run_cli() -> Result<()> {
     match cli.command {
         Command::Auth { command } => auth_cli::run(command, auth_directory()?).await,
         Command::Chat(args) => chat(cli.config, cli.database, args, auth_directory()?).await,
-        Command::Tui(args) => run_tui(cli.config, cli.database, args, auth_directory()?).await,
         Command::Connect(args) => {
             connect::connect(args, cli.config, cli.database, cli.auth_dir).await
         }
@@ -353,48 +337,6 @@ async fn run_cli() -> Result<()> {
             Ok(())
         }
     }
-}
-
-async fn run_tui(
-    config_path: PathBuf,
-    database: Option<PathBuf>,
-    args: TuiArgs,
-    auth_directory: PathBuf,
-) -> Result<()> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let options = WorkspaceOptions {
-        initial_directory: std::env::current_dir()?,
-        auth_directory,
-        config: std::path::absolute(config_path)?,
-        database: session::database_path(database)?,
-        allow_mcp_start: args.allow_mcp_start,
-        config_home: std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| home.as_ref().map(|path| path.join(".config"))),
-        home,
-        instruction_dir: instructions::default_user_instruction_dir(),
-        editor_command: std::env::var("VISUAL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-                std::env::var("EDITOR")
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            })
-            .unwrap_or_else(|| "vi".into()),
-    };
-    if !options.config.try_exists()? && !tui::setup_connection(&options).await? {
-        return Ok(());
-    }
-
-    let mut prepared = prepare_workspace(&options, &options.initial_directory, args.resume).await?;
-
-    while let Some(next) = tui::run(prepared, &options).await? {
-        prepared = next;
-    }
-
-    Ok(())
 }
 
 async fn chat(

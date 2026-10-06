@@ -162,7 +162,7 @@ CLI/TUI 的工具注册还可加载用户配置的 MCP 工具。启动配置的�
 
 ## 审批模式与权限交互
 
-TUI 使用 `/mode` 切换 `ask` / `auto` / `yolo`；非交互 `orbit chat --mode` 接受 `read-only` / `auto` / `yolo`，不能假设其具有 TUI 弹窗：
+TUI 使用 `/mode` 切换 `ask` / `auto` / `yolo`；非交互 `orbit-cli chat --mode` 接受 `read-only` / `auto` / `yolo`，不能假设其具有 TUI 弹窗：
 
 | 模式 | 行为特征 |
 |---|---|

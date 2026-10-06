@@ -106,13 +106,13 @@ Orbit 将“展示事件”、“当前模型上下文”与“规范原始消�
 orbit projects list
 
 # 列出当前项目的会话
-orbit sessions list
+orbit-cli sessions list
 
 # 查看指定会话的完整调试快照 (JSON 格式，包含事件与上下文)
-orbit sessions show <SESSION_ID>
+orbit-cli sessions show <SESSION_ID>
 
 # 查看指定会话的上下文压缩审计日志
-orbit sessions compactions <SESSION_ID>
+orbit-cli sessions compactions <SESSION_ID>
 ```
 
 ---

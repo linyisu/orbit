@@ -1,10 +1,15 @@
 use std::{env, path::PathBuf, process::Command};
 
 pub fn bundle() {
-    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("musl") {
+    println!("cargo:rerun-if-env-changed=ORBIT_WORKSPACE_SERVER");
+    if let Some(server) = env::var_os("ORBIT_WORKSPACE_SERVER") {
+        let server = PathBuf::from(server)
+            .canonicalize()
+            .expect("workspace server path");
+        println!("cargo:rerun-if-changed={}", server.display());
+        publish(server);
         return;
     }
-
     let architecture = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let target = format!("{architecture}-unknown-linux-musl");
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
@@ -68,6 +73,10 @@ pub fn bundle() {
     );
 
     let server = cache.join(&target).join("release/orbit-workspace-server");
+    publish(server);
+}
+
+fn publish(server: PathBuf) {
     let inspection = Command::new("readelf")
         .args(["-l", "-d"])
         .arg(&server)

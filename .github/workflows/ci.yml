@@ -92,7 +92,7 @@ jobs:
       - name: Verify standalone client on older Linux
         run: python3 scripts/test-remote-bundle.py target/bundle
       - name: Package executable with permissions
-        run: tar -czf target/orbit-linux-x86_64.tar.gz -C target/bundle orbit
+        run: tar -czf target/orbit-linux-x86_64.tar.gz -C target/bundle orbit orbit-cli
       - uses: actions/upload-artifact@v4
         with:
           name: orbit-linux-x86_64

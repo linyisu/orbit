@@ -22,17 +22,17 @@
 
 ```sh
 # 交互式 OAuth 登录
-orbit auth login antigravity
-orbit auth login google
-orbit auth login chatgpt
-orbit auth login anthropic
+orbit-cli auth login antigravity
+orbit-cli auth login google
+orbit-cli auth login chatgpt
+orbit-cli auth login anthropic
 
 # 凭据管理
-orbit auth list
-orbit auth logout google
+orbit-cli auth list
+orbit-cli auth logout google
 
 # 独立保存 API Key
-orbit auth set-key my-provider --base-url https://api.example.com/v1
+orbit-cli auth set-key my-provider --base-url https://api.example.com/v1
 ```
 
 - **回环端口与回调机制**：Google 使用 8085 端口，ChatGPT 使用 1455 端口，Anthropic 使用 54545 端口，Antigravity 使用 51121 端口。端口被占用时明确报错，不随意切换端口以保证 OAuth 回调安全性。
@@ -73,12 +73,12 @@ supports_vision = true
 reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
 ```
 
-API Key 可通过 `orbit auth set-key` 的交互输入录入。使用 `--stdin` 时应从已有的安全输入源读取；不要把真实密钥写成 shell 命令字面量。以下 Bash 示例隐藏输入，命令历史不包含密钥正文：
+API Key 可通过 `orbit-cli auth set-key` 的交互输入录入。使用 `--stdin` 时应从已有的安全输入源读取；不要把真实密钥写成 shell 命令字面量。以下 Bash 示例隐藏输入，命令历史不包含密钥正文：
 
 ```bash
 read -r -s -p "API key: " orbit_api_key_input
 printf '\n'
-printf '%s' "$orbit_api_key_input" | orbit auth set-key my-provider --base-url https://api.example.com/v1 --stdin
+printf '%s' "$orbit_api_key_input" | orbit-cli auth set-key my-provider --base-url https://api.example.com/v1 --stdin
 unset orbit_api_key_input
 ```
 

@@ -2,9 +2,9 @@
 
 [项目总览](../../README.md)
 
-`orbit-tui` 提供 Ratatui 终端界面，负责绘制、排版、输入、鼠标交互、标签和弹窗。它通过 `orbit-app` 调用会话、模型配置、任务、旁路提问与工作区连接服务，并将领域事件转换为界面状态。
+`orbit-tui` 提供 Ratatui 终端界面，负责绘制、排版、输入、鼠标交互、标签和弹窗。它通过 `orbit-service` 调用会话、模型配置、任务、旁路提问与工作区连接服务，并将领域事件转换为界面状态。
 
-公开入口为 `run`、`run_workspace` 和 `setup_connection`。终端能力、媒体缓存、选区、滚动锚点和历史回放由界面持有；模型执行及工具运行由应用服务持有。
+独立入口为 `cargo run --release -p orbit-tui`，可执行程序名为 `orbit`。库入口为 `run`、`run_workspace` 和 `setup_connection`。终端能力、媒体缓存、选区、滚动锚点和历史回放由界面持有；模型执行及工具运行由应用服务持有。
 
 ## 目录
 
@@ -42,7 +42,7 @@
 
 `/new` 或标签栏的 `+` 在当前环境新建会话；本地标签使用启动目录，远端标签沿用其目标工作区和配置。`/local` 新建本地标签。远端 `/sessions` 列出目标工作区的历史，`/resume ID` 在新标签恢复。`/close` 关闭标签并选中左邻标签，最左侧关闭后选择剩余第一个；一个连接断开不影响其他标签，`/reconnect` 可接回原会话。远端标签暂不加入本地 `/restore` 清单，重启后使用 `/ssh … --resume ID` 或 `/wsl … --resume ID` 恢复。
 
-连接协议与服务部署见 [orbit-app](../orbit-app/README.md#工作区服务)。本地、SSH、WSL 标签可并行存在，连接状态和审批按标签显示。
+连接协议与服务部署见 [orbit-client](../orbit-client/README.md#工作区服务)。本地、SSH、WSL 标签可并行存在，连接状态和审批按标签显示。
 
 ## 终端界面（TUI）渲染引擎
 

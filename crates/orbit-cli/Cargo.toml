@@ -4,11 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "orbit"
+name = "orbit-cli"
 path = "src/main.rs"
 
 [dependencies]
 orbit-client.workspace = true
+
 anyhow.workspace = true
 clap.workspace = true
 crossterm.workspace = true
@@ -17,7 +18,6 @@ orbit-agent.workspace = true
 orbit-auth.workspace = true
 orbit-model.workspace = true
 orbit-store.workspace = true
-orbit-tui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio-util.workspace = true

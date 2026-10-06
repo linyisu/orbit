@@ -14,7 +14,7 @@ async fn isolated_document_worker_converts_pages_and_invalidates_changed_source(
     )
     .unwrap();
     let tool = ReadDocument::new(Workspace::new(root.path()).unwrap())
-        .with_worker(env!("CARGO_BIN_EXE_orbit").into());
+        .with_worker(env!("CARGO_BIN_EXE_orbit-cli").into());
     let request = |args| ToolCall::function("document", "read_document", args);
     let first: Value = serde_json::from_str(
         &tool

@@ -15,7 +15,7 @@ struct Client {
 
 impl Client {
     async fn connect(root: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_orbit"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
             .arg("workspace-service")
             .arg("--workspace")
             .arg(root)
@@ -340,11 +340,11 @@ async fn ssh_and_wsl_launchers_use_the_same_service_and_ignore_shell_banners() {
         vec!["--wsl", "Test Distro", "--wsl-user", "dev"],
     ] {
         for operation in ["--list", "--stop"] {
-            let output = Command::new(env!("CARGO_BIN_EXE_orbit"))
+            let output = Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
                 .arg("connect")
                 .args(&target)
                 .arg("--server")
-                .arg(env!("CARGO_BIN_EXE_orbit"))
+                .arg(env!("CARGO_BIN_EXE_orbit-cli"))
                 .arg("--workspace")
                 .arg(&workspace)
                 .arg("--database")
@@ -488,11 +488,11 @@ models = [{{ id = "mock" }}]
         .unwrap();
         let output = tokio::time::timeout(
             Duration::from_secs(30),
-            Command::new(env!("CARGO_BIN_EXE_orbit"))
+            Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
                 .arg("connect")
                 .args(&target)
                 .arg("--server")
-                .arg(env!("CARGO_BIN_EXE_orbit"))
+                .arg(env!("CARGO_BIN_EXE_orbit-cli"))
                 .arg("--workspace")
                 .arg(project.path())
                 .arg("--config")
@@ -526,11 +526,11 @@ models = [{{ id = "mock" }}]
         assert!(!project.path().join("auth").exists());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("test-only"));
         model.await.unwrap();
-        Command::new(env!("CARGO_BIN_EXE_orbit"))
+        Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
             .arg("connect")
             .args(&target)
             .arg("--server")
-            .arg(env!("CARGO_BIN_EXE_orbit"))
+            .arg(env!("CARGO_BIN_EXE_orbit-cli"))
             .arg("--workspace")
             .arg(project.path())
             .arg("--database")

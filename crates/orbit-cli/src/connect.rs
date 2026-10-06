@@ -53,7 +53,8 @@ pub async fn connect(
     let result = if let Some(prompt) = args.prompt {
         run_prompt(&mut client, &id, prompt).await
     } else {
-        orbit_tui::run_workspace(client, connection, info).await
+        println!("会话：{id}\n工作区：{}", info.workspace);
+        Ok(())
     };
     result.with_context(|| {
         format!(
@@ -81,7 +82,7 @@ async fn run_prompt(client: &mut transport::Client, session: &str, prompt: Strin
             }
             PromptUpdate::Agent(AgentEvent::Failed { error }) => eprintln!("{error}"),
             PromptUpdate::ApprovalDenied => {
-                eprintln!("审批已拒绝：无交互模式；使用 connect --resume {session} 交互执行。")
+                eprintln!("审批已拒绝：无交互模式；请在 TUI 中打开会话 {session} 处理审批。")
             }
             _ => {}
         }

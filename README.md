@@ -7,35 +7,35 @@ Orbit 是用 Rust 编写的终端编码 Agent。它提供交互式 TUI 和单次
 使用 stable Rust 工具链构建，源码构建还需要 `musl-tools`（含 `musl-gcc`）、`binutils` 和同架构 Rust musl target（x86-64：`rustup target add x86_64-unknown-linux-musl`；AArch64：`rustup target add aarch64-unknown-linux-musl`）；依赖版本由 `Cargo.lock` 固定。命令默认使用目标用户的 shell 与真实开发环境；在 `[command]` 中设置 `sandbox = true` 可启用 Linux Bubblewrap 隔离，此时需要 `bwrap`、`prlimit` 和可用的用户命名空间。审批模式独立于沙箱设置。文件工具使用 Unix 文件描述符接口；其他系统尚未提供完整的等价执行后端。
 
 ```sh
-cargo build --release -p orbit-cli
+cargo run --release -p orbit-tui
 ./target/release/orbit --help
-./target/release/orbit tui
+./target/release/orbit
 ```
 
-普通 `cargo build` 会自动构建并内置同架构的静态远端服务；首次构建会多花一些时间，后续复用独立的构建缓存。分发、安装或移动时只需一个 `orbit` 文件，用户无需安装 musl 工具链、准备额外服务文件或升级服务器 glibc。`scripts/build-bundle.sh` 仅将普通 release 构建输出复制到 `target/bundle/orbit`。
+普通 `cargo build` 会自动构建并内置同架构的静态远端服务；首次构建会多花一些时间，后续复用独立的构建缓存。每个前端可执行文件内置服务资源，分发、安装或移动时无需伴随服务文件，用户无需安装 musl 工具链、准备额外服务文件或升级服务器 glibc。`scripts/build-bundle.sh` 将两个前端复制到 `target/bundle/`。
 
 在 TUI 内用 `/ssh HOST [PATH]`、`/wsl DISTRO [PATH]` 打开远端标签，本地与多个远端会话可同时运行；`/new` 在当前环境新建会话，`/local` 新建本地标签。界面在本机渲染，Agent 与工具在各自环境运行。也保留实验性的命令行连接入口：
 
 ```sh
-orbit connect --workspace /path/to/project
-orbit connect --ssh my-host --workspace /home/me/project
-orbit connect --wsl Ubuntu --workspace /home/me/project
+orbit-cli connect --workspace /path/to/project
+orbit-cli connect --ssh my-host --workspace /home/me/project
+orbit-cli connect --wsl Ubuntu --workspace /home/me/project
 ```
 
-`/ssh`、`/wsl` 可打开连接弹窗，提供别名补全、认证提示、连接日志与远端目录选择；指定主机和目录则直接连接。SSH 沿用系统 OpenSSH 配置；SSH/WSL 首次连接自动上传匹配架构的 Linux 服务二进制。远端会话默认沿用本地配置和所引用的认证，无需在目标项目创建 `config.toml`；目标仍需工具执行依赖。本仓库目前仍是 Linux 客户端，WSL 适配器需要调用环境能运行 `wsl.exe`，不代表已支持 Windows 原生构建。断开连接不会取消任务，可用相同参数加 `--resume <ID>` 接回。支持范围、配置路径和恢复行为见 [工作区连接说明](crates/orbit-app/README.md#工作区服务)。
+`/ssh`、`/wsl` 可打开连接弹窗，提供别名补全、认证提示、连接日志与远端目录选择；指定主机和目录则直接连接。SSH 沿用系统 OpenSSH 配置；SSH/WSL 首次连接自动上传匹配架构的 Linux 服务二进制。远端会话默认沿用本地配置和所引用的认证，无需在目标项目创建 `config.toml`；目标仍需工具执行依赖。本仓库目前仍是 Linux 客户端，WSL 适配器需要调用环境能运行 `wsl.exe`，不代表已支持 Windows 原生构建。断开连接不会取消任务，可用相同参数加 `--resume <ID>` 接回。支持范围、配置路径和恢复行为见 [工作区连接说明](crates/orbit-client/README.md#工作区服务)。
 
-用 TUI 的 `/connect` 配置连接，或参考 [config.example.toml](config.example.toml) 编写 `config.toml`。可用 `--config <路径>` 指定配置文件，API Key 也可通过 `orbit auth set-key` 保存，再用配置中的 `credential` 引用。示例中的模型 ID 和能力需要与实际服务一致。
+用 TUI 的 `/connect` 配置连接，或参考 [config.example.toml](config.example.toml) 编写 `config.toml`。可用 `--config <路径>` 指定配置文件，API Key 也可通过 `orbit-cli auth set-key` 保存，再用配置中的 `credential` 引用。示例中的模型 ID 和能力需要与实际服务一致。
 
-API 模型的可用列表由服务接口发现；公共模型规格补齐缺失能力，缓存与离线快照保证更新失败后仍可使用。用户配置和服务返回的能力优先，详见 [模型目录说明](crates/orbit-app/README.md#模型目录)。
+API 模型的可用列表由服务接口发现；公共模型规格补齐缺失能力，缓存与离线快照保证更新失败后仍可使用。用户配置和服务返回的能力优先，详见 [模型目录说明](crates/orbit-config/README.md#模型目录)。
 
 网页读取、搜索与网络图片自动沿用启动环境中的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`（也支持小写）和 `NO_PROXY`，通常无需为 Orbit 再配置代理。可选的 `[web].proxy` 用于显式覆盖环境路由；直连目标仍须通过公网地址校验。
 
 ```sh
-orbit chat "审查当前项目的代码并说明发现的问题"
-orbit tui --resume <SESSION_ID>
-orbit sessions list
-orbit sessions diagnostics <SESSION_ID>
-orbit model-metadata crates/orbit-app/src/models/model_metadata.json
+orbit-cli chat "审查当前项目的代码并说明发现的问题"
+orbit --resume <SESSION_ID>
+orbit-cli sessions list
+orbit-cli sessions diagnostics <SESSION_ID>
+orbit-cli model-metadata crates/orbit-config/src/models/model_metadata.json
 ```
 
 TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel 或 iTerm2 协议；不支持像素图形时图片使用字符预览，公式保留 TeX。Markdown、HTML、代码、图片和 RaTeX 数学公式的支持范围见 [TUI 文档](crates/orbit-tui/README.md)。
@@ -46,7 +46,10 @@ TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel �
 | --- | --- | --- |
 | `orbit-cli` | 命令行参数、入口分发、输出与信号 | [README](crates/orbit-cli/README.md) |
 | `orbit-tui` | 终端绘制、排版、键鼠交互、标签与弹窗 | [README](crates/orbit-tui/README.md) |
-| `orbit-app` | 配置、模型目录、会话、工具装配、任务与工作区服务 | [README](crates/orbit-app/README.md) |
+| `orbit-client` | 本地、SSH、WSL 连接、部署和事件订阅 | [README](crates/orbit-client/README.md) |
+| `orbit-protocol` | 请求、事件封装、能力与分帧 | [README](crates/orbit-protocol/README.md) |
+| `orbit-config` | 共享配置、模型目录与连接编辑 | [README](crates/orbit-config/README.md) |
+| `orbit-service` | 会话、工具装配、任务与工作区服务 | [README](crates/orbit-service/README.md) |
 | `orbit-server` | 无界面服务可执行入口 | [README](crates/orbit-server/README.md) |
 | `orbit-agent` | 模型/工具执行循环、消息边界、后台等待、上下文整理 | [README](crates/orbit-agent/README.md) |
 | `orbit-model` | 通用消息类型、供应商协议、模型目录与思考参数适配 | [README](crates/orbit-model/README.md) |
@@ -59,8 +62,9 @@ CLI 和 TUI 调用应用服务，`orbit-server` 提供目标端的无界面入�
 
 ```mermaid
 flowchart TD
-    CLI[orbit-cli] --> TUI[orbit-tui]
-    CLI --> APP[orbit-app]
+    CLI[orbit-cli] --> CLIENT[orbit-client]
+    TUI[orbit-tui] --> CLIENT
+    CLI --> APP[orbit-service]
     TUI --> APP
     SERVER[orbit-server] --> APP
     APP --> AGENT[orbit-agent]

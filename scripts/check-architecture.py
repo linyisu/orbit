@@ -24,9 +24,9 @@ DEPENDENCIES = {
     },
     "orbit-tui": {
         "orbit-service", "orbit-agent", "orbit-auth", "orbit-model",
-        "orbit-runtime", "orbit-store", "orbit-tools", "orbit-client",
+        "orbit-runtime", "orbit-store", "orbit-tools", "orbit-client", "orbit-protocol",
     },
-    "orbit-cli": {"orbit-service", "orbit-client", "orbit-tui", "orbit-agent", "orbit-auth", "orbit-model", "orbit-store"},
+    "orbit-cli": {"orbit-service", "orbit-client", "orbit-agent", "orbit-auth", "orbit-model", "orbit-store"},
     "orbit-server": {"orbit-service"},
 }
 PRESENTATION = {"arboard", "clap", "crossterm", "ratatui", "ratatui-image", "syntect"}
