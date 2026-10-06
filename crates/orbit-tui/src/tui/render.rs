@@ -168,6 +168,8 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
 
     let panel_height = if !menu.is_empty() {
         menu.len().min(MAX_COMPLETION_ITEMS) as u16
+    } else if state.directory_completion_pending() {
+        1
     } else {
         0
     };
@@ -1632,6 +1634,15 @@ pub(super) fn draw_prompt(
 
 fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     let menu = state.menu();
+
+    if menu.is_empty() && state.directory_completion_pending() {
+        super::overlay::clear(frame, area);
+        frame.render_widget(
+            Paragraph::new("   读取目录…").style(Style::default().fg(THEME.secondary)),
+            area,
+        );
+        return;
+    }
 
     if menu.is_empty() || area.height == 0 || area.width <= 4 {
         return;

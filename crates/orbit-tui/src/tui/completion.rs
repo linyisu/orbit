@@ -7,6 +7,46 @@ use super::commands;
 
 pub use orbit_protocol::Completion as Candidate;
 
+pub(super) fn cached_directories(
+    input: &str,
+    previous: &str,
+    entries: &[Candidate],
+) -> Option<Vec<Candidate>> {
+    fn query(input: &str) -> Option<(&str, &str)> {
+        let typed = input.strip_prefix("/cd ")?.trim_start();
+        let typed = match typed.chars().next() {
+            Some(quote @ ('\'' | '"')) => typed.trim_matches(quote),
+            _ => typed,
+        };
+        Some(
+            typed
+                .rsplit_once('/')
+                .map_or(("", typed), |(parent, partial)| {
+                    (&typed[..parent.len() + 1], partial)
+                }),
+        )
+    }
+
+    let (parent, partial) = query(input)?;
+    if parent != query(previous)?.0 {
+        return None;
+    }
+    let mut entries: Vec<_> = entries.iter().collect();
+    entries.sort_by(|left, right| left.display.cmp(&right.display));
+    Some(
+        super::search::ranked(entries, |entry| {
+            let name = entry.display.as_deref()?.trim_end_matches('/');
+            if name.starts_with('.') && name != ".." && !partial.starts_with('.') {
+                return None;
+            }
+            super::search::rank(name, partial)
+        })
+        .into_iter()
+        .cloned()
+        .collect(),
+    )
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct DirectoryCache {
     entries: RefCell<Option<DirectorySnapshot>>,

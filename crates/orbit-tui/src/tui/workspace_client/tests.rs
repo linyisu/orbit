@@ -833,3 +833,98 @@ async fn restoring_local_tabs_and_reconnecting_never_opens_remote_configuration(
     assert!(tab.connecting.is_some());
     assert!(tab.state.workspace_wizard.is_none());
 }
+
+#[tokio::test]
+async fn directory_menu_stays_visible_while_refining_and_waiting_for_the_service() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let (mut tab, mut requests) = tab("本地");
+    let entries = ["Templates", "Testbed", "Tests"]
+        .map(|name| crate::tui::completion::Candidate {
+            name: format!("/cd ~/{name}/"),
+            display: Some(format!("{name}/")),
+            description: String::new(),
+            continue_input: true,
+        })
+        .to_vec();
+    tab.state.input.set("/cd ~/Te".into());
+    tab.apply(Response::Completions {
+        input: tab.state.input.text.clone(),
+        entries: entries.clone(),
+    });
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    for query in ["/cd ~/Tes", "/cd ~/Tests", "/cd ~/Tes", "/cd '~/TES"] {
+        tab.state.input.set(query.into());
+        let before = tab.state.menu();
+        assert!(!before.is_empty(), "{query}");
+        assert!(
+            before[0]
+                .display
+                .as_deref()
+                .unwrap()
+                .to_lowercase()
+                .starts_with("tes")
+        );
+        terminal
+            .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
+            .unwrap();
+        assert!(!tab.state.menu_rows.is_empty());
+        tab.next_completion = std::time::Instant::now();
+        tab.poll().await;
+        assert_eq!(
+            tab.state
+                .menu()
+                .iter()
+                .map(|entry| &entry.name)
+                .collect::<Vec<_>>(),
+            before.iter().map(|entry| &entry.name).collect::<Vec<_>>()
+        );
+        terminal
+            .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
+            .unwrap();
+        assert!(!tab.state.menu_rows.is_empty());
+        let mut requested = false;
+        while let Ok(call) = requests.try_recv() {
+            requested |=
+                matches!(call.request, Request::Complete { ref input, .. } if input == query);
+        }
+        assert!(requested);
+    }
+    tab.state.input.set("/cd ~/Tests/".into());
+    assert!(tab.state.menu().is_empty());
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
+        .unwrap();
+    assert!(tab.state.menu_area.height > 0);
+    assert!(tab.state.menu_rows.is_empty());
+    assert!(tab.state.directory_completion_pending());
+    tab.apply(Response::Completions {
+        input: "/cd ~/Tes".into(),
+        entries,
+    });
+    assert!(tab.state.menu().is_empty());
+    tab.state.input.set("/model tes".into());
+    assert!(
+        tab.state
+            .menu()
+            .iter()
+            .all(|entry| !entry.name.starts_with("/cd "))
+    );
+    tab.state.input.set("/cd ~/Tests/".into());
+    let entry = crate::tui::completion::Candidate {
+        name: "/cd ~/Tests/src/".into(),
+        display: Some("src/".into()),
+        description: String::new(),
+        continue_input: true,
+    };
+    tab.apply(Response::Completions {
+        input: tab.state.input.text.clone(),
+        entries: vec![entry],
+    });
+    assert_eq!(tab.state.menu()[0].name, "/cd ~/Tests/src/");
+    tab.apply(Response::Completions {
+        input: tab.state.input.text.clone(),
+        entries: vec![],
+    });
+    assert!(tab.state.menu().is_empty());
+    assert!(!tab.state.directory_completion_pending());
+}

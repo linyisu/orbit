@@ -651,6 +651,18 @@ impl UiState {
         matches!(self.status, RunStatus::Running | RunStatus::Cancelling)
     }
 
+    pub(super) fn directory_completion_pending(&self) -> bool {
+        self.connection_label.is_some()
+            && self.input.text.starts_with("/cd ")
+            && self.completion_query.as_deref() != Some(&self.input.text)
+            && !self.running()
+            && !self.menu_dismissed
+            && !self.dialog_open()
+            && self.workspace_wizard.is_none()
+            && self.ssh_prompt.is_none()
+            && self.resume_loading.is_none()
+    }
+
     pub fn menu(&self) -> Vec<super::completion::Candidate> {
         if self.workspace_wizard.is_some()
             || self.ssh_prompt.is_some()
@@ -698,6 +710,16 @@ impl UiState {
             && !self.stored_completions.is_empty()
         {
             return self.stored_completions.clone();
+        }
+
+        if let Some(previous) = &self.completion_query
+            && let Some(entries) = super::completion::cached_directories(
+                &self.input.text,
+                previous,
+                &self.stored_completions,
+            )
+        {
+            return entries;
         }
 
         super::completion::matching(

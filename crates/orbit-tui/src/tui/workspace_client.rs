@@ -313,6 +313,7 @@ impl Tab {
         if self.state.workspace != info.workspace {
             self.state.workspace = info.workspace.clone();
             self.state.stored_completions.clear();
+            self.state.completion_query = None;
             self.completion_input.clear();
         }
         self.state.media.workspace = info.workspace.clone().into();
@@ -368,7 +369,6 @@ impl Tab {
             && std::time::Instant::now() >= self.next_completion
         {
             self.completion_input = input.clone();
-            self.state.stored_completions.clear();
             self.next_completion = std::time::Instant::now() + Duration::from_millis(150);
             if [
                 "/cd ", "/diff ", "/undo ", "/resume ", "/tasks ", "/memory ",
