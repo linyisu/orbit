@@ -33,6 +33,7 @@ fn idle_and_live_pages_carry_service_clock_without_changing_the_event_cursor() {
         model: "test".into(),
         approvals: BTreeMap::new(),
         clock: Some(Clock::new()),
+        progress: Vec::new(),
     };
     let page = view.page(0).unwrap();
     assert_eq!(page.next, 0);
@@ -195,4 +196,37 @@ models=[{id="large",input_context_tokens=64000,max_output_tokens=512},{id="small
         }
     }).await.unwrap();
     handle.command(Command::Cancel).await.unwrap();
+}
+
+#[test]
+fn progress_snapshots_are_bounded_and_do_not_hide_ledger_events() {
+    let mut view = View {
+        updates: vec![],
+        busy: true,
+        model: "test".into(),
+        approvals: BTreeMap::new(),
+        clock: Some(Clock::new()),
+        progress: vec![orbit_protocol::ToolProgress {
+            call_id: "large-output".into(),
+            stdout: Some("x".repeat(PAGE_BYTES)),
+            elapsed_ms: None,
+        }],
+    };
+    view.push(Update::Started {
+        prompt: "test".into(),
+        presentation: Default::default(),
+    });
+    let page = view.page(0).unwrap();
+    assert_eq!(page.updates.len(), 1);
+    assert!(page.tool_progress.is_empty());
+    view.progress[0].stdout = Some("bounded output".into());
+    let first = view.page(0).unwrap();
+    let second = view.page(first.next).unwrap();
+    assert_eq!(
+        serde_json::to_value(&first.tool_progress).unwrap(),
+        serde_json::to_value(&second.tool_progress).unwrap()
+    );
+    assert_eq!(second.next, first.next);
+    assert!(second.updates.is_empty());
+    assert!(second.timing.is_some());
 }

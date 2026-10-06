@@ -494,23 +494,21 @@ impl Tab {
         if !self.busy
             && self.starting.is_none()
             && let Some(configuration) = self.model_configuration.take()
-        {
-            if self
+            && self
                 .model_watcher
                 .as_ref()
                 .is_none_or(|watcher| watcher.unchanged())
-            {
-                changed |= self.send(Request::ConfigureModels {
-                    session: self.id.clone().unwrap_or_default(),
-                    configuration: if self.connection.as_ref().is_some_and(|connection| {
-                        matches!(connection.target, workspace::transport::Target::Local)
-                    }) {
-                        None
-                    } else {
-                        Some(configuration)
-                    },
-                });
-            }
+        {
+            changed |= self.send(Request::ConfigureModels {
+                session: self.id.clone().unwrap_or_default(),
+                configuration: if self.connection.as_ref().is_some_and(|connection| {
+                    matches!(connection.target, workspace::transport::Target::Local)
+                }) {
+                    None
+                } else {
+                    Some(configuration)
+                },
+            });
         }
         changed |= self.state.btw.tick() | self.poll_submissions() | self.poll_questions();
         if self
@@ -745,6 +743,9 @@ impl Tab {
                     } else if self.busy {
                         self.state.resume_clock();
                     }
+                }
+                if !page.more {
+                    self.state.apply_tool_progress(page.tool_progress);
                 }
                 if !page.more
                     && let Some(timing) = page.timing

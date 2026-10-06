@@ -8,7 +8,7 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 // Keep framing stable so Hello can report incompatible schema versions.
 pub const PREAMBLE: &[u8] = b"\0ORBIT-WORKSPACE/1\n";
 pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
@@ -246,8 +246,17 @@ pub struct Approval<A> {
     pub preview: A,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolProgress {
+    pub call_id: String,
+    pub stdout: Option<String>,
+    pub elapsed_ms: Option<u64>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Page<E, A> {
+    #[serde(default)]
+    pub tool_progress: Vec<ToolProgress>,
     #[serde(default)]
     pub timing: Option<RunTiming>,
     pub next: usize,

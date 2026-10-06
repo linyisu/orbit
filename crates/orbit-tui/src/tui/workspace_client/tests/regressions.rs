@@ -454,3 +454,57 @@ fn replay_preserves_reading_position_and_finalizes_only_replayed_background_tool
     );
     assert!(tab.state.transcript.iter().any(|item|matches!(item,TranscriptItem::Tool(tool) if tool.status==crate::tui::app::ToolStatus::Failed)));
 }
+
+#[test]
+fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
+    let (mut tab, _rx) = tab("本地");
+    let call =
+        orbit_model::types::ToolCall::function("command", "run_command", serde_json::json!({}));
+    apply_page(
+        &mut tab,
+        vec![
+            Update::Started {
+                prompt: "run".into(),
+                presentation: Default::default(),
+            },
+            Update::Agent(Box::new(orbit_agent::events::AgentEvent::ToolStarted {
+                call: call.clone(),
+            })),
+        ],
+    );
+    let Response::Page(mut frame) = super::page(vec![], vec![]) else {
+        unreachable!()
+    };
+    frame.tool_progress = vec![orbit_protocol::ToolProgress {
+        call_id: call.id.clone(),
+        stdout: Some("first\nsecond".into()),
+        elapsed_ms: Some(12345),
+    }];
+    tab.apply(Response::Page(frame));
+    assert!(tab.state.transcript.iter().any(|item| matches!(item,TranscriptItem::Tool(tool) if serde_json::from_str::<serde_json::Value>(&tool.output).is_ok_and(|value|value["stdout"]=="first\nsecond" && value["elapsed_seconds"]==12))));
+    apply_page(
+        &mut tab,
+        vec![Update::Agent(Box::new(
+            orbit_agent::events::AgentEvent::ToolFinished {
+                call: call.clone(),
+                content: "final result".into(),
+                changes: vec![],
+            },
+        ))],
+    );
+    let Response::Page(mut frame) = super::page(vec![], vec![]) else {
+        unreachable!()
+    };
+    frame.tool_progress = vec![orbit_protocol::ToolProgress {
+        call_id: call.id,
+        stdout: Some("stale tail".into()),
+        elapsed_ms: None,
+    }];
+    tab.apply(Response::Page(frame));
+    assert!(
+        tab.state
+            .transcript
+            .iter()
+            .any(|item| matches!(item,TranscriptItem::Tool(tool) if tool.output=="final result"))
+    );
+}

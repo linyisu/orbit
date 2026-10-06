@@ -349,6 +349,43 @@ impl UiState {
         self.paused_elapsed = std::time::Duration::ZERO;
     }
 
+    pub(super) fn apply_tool_progress(&mut self, updates: Vec<orbit_protocol::ToolProgress>) {
+        for update in updates {
+            let Some((index, tool)) =
+                self.transcript
+                    .iter_mut()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(index, item)| match item {
+                        TranscriptItem::Tool(tool)
+                            if tool.id == update.call_id && tool.status == ToolStatus::Running =>
+                        {
+                            Some((index, tool))
+                        }
+                        _ => None,
+                    })
+            else {
+                continue;
+            };
+            let mut output = serde_json::from_str::<serde_json::Value>(&tool.output)
+                .ok()
+                .filter(serde_json::Value::is_object)
+                .unwrap_or_else(|| serde_json::json!({}));
+            if let Some(stdout) = update.stdout {
+                output["stdout"] = stdout.into();
+                output["running"] = true.into();
+            }
+            if let Some(elapsed) = update.elapsed_ms {
+                output["elapsed_seconds"] = (elapsed / 1000).into();
+            }
+            let output = output.to_string();
+            if output != tool.output {
+                tool.output = output;
+                self.transcript_layout.invalidate_from(index);
+            }
+        }
+    }
+
     pub fn calibration(&self) -> orbit_agent::calibration::TokenCalibration {
         self.calibrations
             .get(&self.model)

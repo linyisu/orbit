@@ -8,6 +8,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use super::protocol::{Approval, Mode, PAGE_BYTES, PAGE_EVENTS, Page, SessionInfo, Update};
 
 mod actor;
+mod progress;
 
 const COMMAND_CAPACITY: usize = 16;
 
@@ -78,6 +79,7 @@ pub struct View {
     pub model: String,
     approvals: BTreeMap<u64, ApprovalPreview>,
     clock: Option<Clock>,
+    progress: Vec<orbit_protocol::ToolProgress>,
 }
 
 struct Clock {
@@ -141,12 +143,27 @@ impl View {
             after <= self.updates.len(),
             "event cursor no longer exists; reopen the session"
         );
+        let mut progress_bytes = 0;
+        let progress: Vec<_> = self
+            .progress
+            .iter()
+            .take_while(|item| {
+                let size = serde_json::to_vec(item).map_or(PAGE_BYTES, |bytes| bytes.len());
+                if progress_bytes + size > PAGE_BYTES / 2 {
+                    return false;
+                }
+                progress_bytes += size;
+                true
+            })
+            .cloned()
+            .collect();
+        let limit = PAGE_BYTES.saturating_sub(progress_bytes);
         let mut bytes = 0;
         let updates: Vec<_> = self.updates[after..]
             .iter()
             .take(PAGE_EVENTS)
             .take_while(|(_, size)| {
-                if bytes > 0 && bytes + size > PAGE_BYTES {
+                if bytes > 0 && bytes + size > limit {
                     return false;
                 }
                 bytes += size;
@@ -156,6 +173,11 @@ impl View {
             .collect();
         let next = after + updates.len();
         Ok(Page {
+            tool_progress: if next == self.updates.len() {
+                progress
+            } else {
+                Vec::new()
+            },
             timing: self.clock.as_ref().map(Clock::snapshot),
             next,
             more: next < self.updates.len(),
@@ -195,6 +217,7 @@ impl Handle {
             model: snapshot.session.model,
             approvals: BTreeMap::new(),
             clock: None,
+            progress: Vec::new(),
         };
         for run in snapshot.runs {
             view.push(Update::Started {
@@ -237,6 +260,7 @@ impl Handle {
             model: info.model.clone(),
             approvals: BTreeMap::new(),
             clock: None,
+            progress: Vec::new(),
         };
         for run in &setup.session.snapshot.runs {
             view.push(Update::Started {

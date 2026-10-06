@@ -159,6 +159,9 @@ impl Viewer {
                 Update::Profile(_) | Update::Report(_) => {}
             }
         }
+        if !page.more {
+            self.view.ui.apply_tool_progress(page.tool_progress);
+        }
         if !page.more
             && let Some(timing) = page.timing
         {

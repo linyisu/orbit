@@ -49,6 +49,7 @@ struct Actor {
     pending: HashMap<u64, ApprovalRequest>,
     approval_id: u64,
     compact_after_model_switch: bool,
+    progress: super::progress::Progress,
 }
 
 pub(super) async fn run(
@@ -90,7 +91,10 @@ pub(super) async fn run(
         pending: HashMap::new(),
         approval_id: 0,
         compact_after_model_switch: false,
+        progress: Default::default(),
     };
+    let mut outputs = tokio::time::interval(Duration::from_millis(50));
+    outputs.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut flush = tokio::time::interval(Duration::from_millis(250));
     loop {
         tokio::select! {
@@ -110,7 +114,7 @@ pub(super) async fn run(
             }
             event = async { actor.running.as_mut().unwrap().events.recv().await }, if actor.running.is_some() => {
                 match event {
-                    Some(event) => actor.view.lock().await.push(Update::agent(event)),
+                    Some(event) => { actor.progress.record(&event); actor.view.lock().await.push(Update::agent(event)); },
                     None => actor.finish_run().await,
                 }
             }
@@ -124,6 +128,10 @@ pub(super) async fn run(
                 view.push(Update::Report(orbit_protocol::Report { title: "撤销文件写入".into(), text }));
             }
             Some(request) = actor.setup.resources.approvals.recv() => actor.approval(request).await,
+            _ = outputs.tick(), if actor.running.is_some() => {
+                let progress = actor.progress.snapshot(&actor.setup.resources.tools, &actor.setup.session.command_output).await;
+                actor.view.lock().await.progress = progress;
+            }
             _ = flush.tick() => {
                 if actor.running.is_some() && let Err(error) = actor.setup.session.flush_events().await {
                     actor.view.lock().await.push(Update::agent(AgentEvent::Failed { error: error.to_string() }));
@@ -532,6 +540,8 @@ impl Actor {
         if let Some(error) = error.or_else(|| saved.err().map(|error| error.to_string())) {
             view.push(Update::agent(AgentEvent::Failed { error }));
         }
+        self.progress.clear();
+        view.progress.clear();
         view.clock = None;
         view.push(Update::Finished {
             elapsed_ms: self
