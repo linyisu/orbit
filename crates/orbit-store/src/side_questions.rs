@@ -53,6 +53,52 @@ impl Store {
         .await
     }
 
+    pub async fn begin_side_question(&self, session: &str, question: &SideQuestion) -> Result<i64> {
+        ensure!(
+            question.status == "running" && !question.question.trim().is_empty(),
+            "invalid running side question"
+        );
+        let session = session.to_owned();
+        let payload = serde_json::to_string(question)?;
+        self.access(move |conn| {
+            conn.execute(
+                "INSERT INTO side_questions(session_id,payload) VALUES(?1,?2)",
+                params![session, payload],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+        .await
+    }
+
+    pub async fn checkpoint_side_question(
+        &self,
+        session: &str,
+        id: i64,
+        question: &SideQuestion,
+    ) -> Result<()> {
+        let session = session.to_owned();
+        let payload = serde_json::to_string(question)?;
+        self.access(move |conn| {
+            ensure!(
+                conn.execute(
+                    "UPDATE side_questions SET payload=?1 WHERE session_id=?2 AND id=?3",
+                    params![payload, session, id]
+                )? == 1,
+                "side question checkpoint missing"
+            );
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn interrupt_side_questions(&self, session: &str) -> Result<()> {
+        let session = session.to_owned();
+        self.access(move |conn| {
+            conn.execute("UPDATE side_questions SET payload=json_set(payload,'$.status','interrupted','$.error','服务已中断，已保存生成内容。') WHERE session_id=?1 AND json_extract(payload,'$.status')='running'", [session])?;
+            Ok(())
+        }).await
+    }
+
     pub async fn side_questions(&self, session: &str) -> Result<Vec<SideQuestion>> {
         let session = session.to_owned();
         self.read_access(move |conn| {

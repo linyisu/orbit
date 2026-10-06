@@ -45,6 +45,7 @@ impl Drop for Request {
 impl SideQuestions {
     pub async fn load(&mut self, store: &Store, session: &str) -> Result<()> {
         if !self.loaded {
+            store.interrupt_side_questions(session).await?;
             self.records = store.side_questions(session).await?;
             self.loaded = true;
         }
@@ -119,14 +120,16 @@ impl SideQuestions {
             })
             .collect::<Vec<_>>();
         let index = self.records.len();
-        self.records.push(SideQuestion {
+        let initial = SideQuestion {
             thread_id,
             model: model.config().model.clone(),
             question: question.into(),
             answer: String::new(),
             status: "running".into(),
             error: None,
-        });
+        };
+        let checkpoint = store.begin_side_question(session, &initial).await?;
+        self.records.push(initial);
         let cancellation = CancellationToken::new();
         let token = cancellation.clone();
         let (sender, receiver) = mpsc::channel(EVENT_CAPACITY);
@@ -144,7 +147,7 @@ impl SideQuestions {
             let result = tokio::select! {
                 biased;
                 _ = token.cancelled() => { record.status = "cancelled".into(); Ok(()) },
-                result = tokio::time::timeout(REQUEST_TIMEOUT, answer(&store, &session, &systems, &previous, &mut record, backend, effort, max_tokens, &sender, token.clone())) => {
+                result = tokio::time::timeout(REQUEST_TIMEOUT, answer(&store, &session, checkpoint, &systems, &previous, &mut record, backend, effort, max_tokens, &sender, token.clone())) => {
                     match result { Ok(result) => result, Err(_) => Err(anyhow::anyhow!("旁路提问超过 5 分钟，已停止等待。")) }
                 }
             };
@@ -156,7 +159,10 @@ impl SideQuestions {
                 record.status = "completed".into();
             }
 
-            if let Err(error) = store.save_side_question(&session, record.clone()).await {
+            if let Err(error) = store
+                .checkpoint_side_question(&session, checkpoint, &record)
+                .await
+            {
                 record.error = Some(format!(
                     "{}无法保存旁路记录：{error}",
                     record
@@ -287,6 +293,7 @@ pub(crate) fn request(
 async fn answer(
     store: &Store,
     session: &str,
+    checkpoint: i64,
     systems: &[ChatMessage],
     previous: &[ChatMessage],
     record: &mut SideQuestion,
@@ -308,7 +315,20 @@ async fn answer(
     );
     let mut stream = backend.stream(request, cancellation).await?;
     let mut completed = false;
-    while let Some(event) = stream.next().await {
+    let mut flush = tokio::time::interval(Duration::from_secs(1));
+    flush.tick().await;
+    let mut persisted = 0;
+    loop {
+        let event = tokio::select! {
+            event = stream.next() => match event { Some(event) => event, None => break },
+            _ = flush.tick() => {
+                if persisted != record.answer.len() {
+                    store.checkpoint_side_question(session, checkpoint, record).await?;
+                    persisted = record.answer.len();
+                }
+                continue;
+            }
+        };
         match event? {
             StreamEvent::TextDelta(delta) => {
                 ensure!(
