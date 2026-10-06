@@ -251,7 +251,7 @@ struct Service {
 impl Service {
     async fn busy(&self) -> bool {
         for session in self.sessions.lock().await.values() {
-            if session.view.lock().await.busy {
+            if session.view.lock().await.busy || session.questions.running().await {
                 return true;
             }
         }
@@ -415,6 +415,31 @@ impl Service {
                     .await?;
                 Ok(Response::Ok)
             }
+            Request::Ask {
+                session,
+                question,
+                follow_up,
+            } => {
+                let session = self.session(&session).await?;
+                let selected = session.questions.start(&question, follow_up).await?;
+                Ok(Response::Questions(
+                    session.questions.snapshot(None, Some(selected)).await?,
+                ))
+            }
+            Request::ReadQuestions { session, after } => Ok(Response::Questions(
+                self.session(&session)
+                    .await?
+                    .questions
+                    .snapshot(after, None)
+                    .await?,
+            )),
+            Request::CancelQuestion { session, index } => {
+                self.session(&session).await?.questions.cancel(index).await;
+                Ok(Response::Ok)
+            }
+            Request::SessionAction { session, action } => Ok(Response::Report(
+                self.session(&session).await?.action(action).await?,
+            )),
             Request::SetModel {
                 session,
                 model,
@@ -553,6 +578,7 @@ async fn capabilities() -> orbit_protocol::Capabilities {
                     "images",
                     "compact",
                     "steer",
+                    "side_questions",
                 ]
                 .into_iter()
                 .map(str::to_owned)

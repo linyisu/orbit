@@ -16,6 +16,7 @@ use super::protocol::{Approval, Mode, PAGE_BYTES, PAGE_EVENTS, Page, SessionInfo
 const COMMAND_CAPACITY: usize = 16;
 
 pub struct Handle {
+    pub(super) questions: super::questions::Questions,
     _configuration: Option<super::configuration::Installed>,
     pub info: SessionInfo,
     pub view: Arc<Mutex<View>>,
@@ -26,6 +27,10 @@ pub struct Handle {
 }
 
 pub enum Command {
+    Action {
+        action: orbit_protocol::SessionAction,
+        result: oneshot::Sender<Result<orbit_protocol::Report>>,
+    },
     Start {
         request_id: String,
         prompt: String,
@@ -168,6 +173,8 @@ impl Handle {
         let store = setup.session.store.clone();
         let tools = setup.resources.tools.clone();
         let state = view.clone();
+        let questions = super::questions::Questions::new(&setup);
+        let questions_task = questions.clone();
         // The actor owns the runtime; clients only own connections to it.
         tokio::spawn(async move {
             let mut accepted = HashMap::<String, String>::new();
@@ -175,6 +182,13 @@ impl Handle {
             let mut approval_id = 0;
             while let Some(envelope) = envelopes.recv().await {
                 match envelope.command {
+                    Command::Action { action, result } => {
+                        let response = super::actions::execute(&mut setup, action, false).await;
+                        questions_task.update(&setup);
+                        let _ = result.send(response);
+                        let _ = envelope.reply.send(Ok(()));
+                    }
+
                     Command::Start {
                         request_id,
                         prompt,
@@ -241,6 +255,7 @@ impl Handle {
                                 continue;
                             }
                         };
+                        questions_task.update(&setup);
                         let receipt = setup
                             .session
                             .store
@@ -299,6 +314,12 @@ impl Handle {
                                 }
                                 Some(envelope) = envelopes.recv() => {
                                     let result = match envelope.command {
+                                        Command::Action { action, result } => {
+                                            let response = super::actions::execute(&mut setup, action, true).await;
+                                            let _ = result.send(response);
+                                            Ok(())
+                                        }
+
                                         Command::SetModel { .. } => Err(anyhow::anyhow!("wait for the current task before changing its model")),
                                         Command::Steer { message } => {
                                             use orbit_agent::{inbox::InboxMessage, tool::ToolError};
@@ -366,6 +387,7 @@ impl Handle {
                             _ => None,
                         };
                         let saved = setup.session.finish(status, history).await;
+                        questions_task.update(&setup);
                         let status = if saved.is_ok() { status } else { "failed" };
                         let mut view = state.lock().await;
                         if let Some(error) =
@@ -383,6 +405,7 @@ impl Handle {
                         let result =
                             super::profile::select(&mut setup, &model, effort.as_deref()).await;
                         if result.is_ok() {
+                            questions_task.update(&setup);
                             let mut view = state.lock().await;
                             view.model = setup.resources.model_name.clone();
                             view.push(Update::Profile(super::profile::describe(&setup)));
@@ -406,6 +429,7 @@ impl Handle {
             }
         });
         Self {
+            questions,
             _configuration: configuration,
             info,
             view,
@@ -414,6 +438,15 @@ impl Handle {
             store,
             tools,
         }
+    }
+
+    pub async fn action(
+        &self,
+        action: orbit_protocol::SessionAction,
+    ) -> Result<orbit_protocol::Report> {
+        let (result, response) = oneshot::channel();
+        self.command(Command::Action { action, result }).await?;
+        response.await?
     }
 
     pub async fn command(&self, command: Command) -> Result<()> {

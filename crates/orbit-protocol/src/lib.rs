@@ -52,6 +52,23 @@ pub enum Request {
         mode: Mode,
         model: Option<String>,
     },
+    Ask {
+        session: String,
+        question: String,
+        follow_up: Option<usize>,
+    },
+    ReadQuestions {
+        session: String,
+        after: Option<u64>,
+    },
+    CancelQuestion {
+        session: String,
+        index: usize,
+    },
+    SessionAction {
+        session: String,
+        action: SessionAction,
+    },
     SetModel {
         session: String,
         model: String,
@@ -156,6 +173,8 @@ pub enum Response<E, A> {
     Sessions(Vec<Session>),
     Page(Page<E, A>),
     Subagent(Page<E, A>),
+    Questions(Questions),
+    Report(Report),
     File(String),
     Ok,
     Error(String),
@@ -300,4 +319,49 @@ pub enum Availability {
 pub struct ImageUpload {
     pub name: String,
     pub data: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SideQuestion {
+    #[serde(default)]
+    pub thread_id: String,
+    pub model: String,
+    pub question: String,
+    pub answer: String,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Questions {
+    pub revision: u64,
+    pub selected: Option<usize>,
+    pub running: bool,
+    pub records: Option<Vec<SideQuestion>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum SessionAction {
+    Inspect { section: Inspection },
+    Rename { title: String },
+    LoadSkill { name: String },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "section", rename_all = "snake_case")]
+pub enum Inspection {
+    Status,
+    Context,
+    Skills,
+    Mcp,
+    Diagnostics,
+    Changes,
+    Diff { path: Option<String> },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Report {
+    pub title: String,
+    pub text: String,
 }

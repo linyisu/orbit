@@ -2,20 +2,10 @@ use anyhow::{Context, Result, ensure};
 use orbit_agent::{checkpoint::ExecutionCheckpoint, events::AgentEvent};
 use orbit_model::types::{ChatMessage, StreamEvent};
 use rusqlite::{OptionalExtension, params};
-use serde::{Deserialize, Serialize};
 
 use crate::store::Store;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SideQuestion {
-    #[serde(default)]
-    pub thread_id: String,
-    pub model: String,
-    pub question: String,
-    pub answer: String,
-    pub status: String,
-    pub error: Option<String>,
-}
+pub use orbit_protocol::SideQuestion;
 
 pub(crate) fn migrate(conn: &rusqlite::Connection) -> Result<()> {
     conn.execute_batch(

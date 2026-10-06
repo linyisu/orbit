@@ -1,7 +1,10 @@
+mod actions;
+mod changes;
 pub mod configuration;
 mod profile;
 pub mod project;
 pub mod protocol;
+mod questions;
 mod run;
 mod server;
 mod session;

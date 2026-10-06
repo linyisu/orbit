@@ -43,6 +43,14 @@ impl Drop for Request {
 }
 
 impl SideQuestions {
+    pub async fn load(&mut self, store: &Store, session: &str) -> Result<()> {
+        if !self.loaded {
+            self.records = store.side_questions(session).await?;
+            self.loaded = true;
+        }
+        Ok(())
+    }
+
     pub fn records(&self) -> &[SideQuestion] {
         &self.records
     }
@@ -75,10 +83,7 @@ impl SideQuestions {
         follow_up: Option<usize>,
     ) -> Result<usize> {
         self.poll();
-        if !self.loaded {
-            self.records = store.side_questions(session).await?;
-            self.loaded = true;
-        }
+        self.load(store, session).await?;
 
         if question.is_empty() {
             ensure!(!self.records.is_empty(), "没有旁路问题记录。");

@@ -376,6 +376,15 @@ impl SessionState {
         Ok(())
     }
 
+    pub async fn append_context(&mut self, message: ChatMessage) -> Result<()> {
+        self.ensure_writer().await?;
+        let result = self.writer.as_ref().unwrap().append_context(message).await;
+        self.release_idle_writer();
+        result?;
+        self.snapshot = self.store.load(self.id()).await?;
+        Ok(())
+    }
+
     pub async fn rename(&mut self, title: String) -> Result<()> {
         self.ensure_writer().await?;
         let result = self.writer.as_ref().unwrap().set_title(title.clone()).await;
