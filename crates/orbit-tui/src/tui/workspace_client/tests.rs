@@ -801,3 +801,35 @@ fn model_preference_changes_only_after_successful_selection() {
         );
     }
 }
+
+#[tokio::test]
+async fn restoring_local_tabs_and_reconnecting_never_opens_remote_configuration() {
+    use workspace::{transport::Target, windows::SavedTab};
+    let mut tabs = crate::tui::tabs::live::Tabs::default();
+    for id in ["first", "second"] {
+        let saved = SavedTab {
+            id: id.into(),
+            title: id.into(),
+            target: Target::Local,
+            workspace: "/project".into(),
+            config: "/config.toml".into(),
+            auth: "/auth".into(),
+            database: None,
+            allow_mcp_start: false,
+        };
+        let tab = Tab::connecting(Spec::restored(&saved), media::Context::default());
+        assert_eq!(tab.title, "本地");
+        assert!(tab.state.workspace_wizard.is_none());
+        assert!(tab.connecting.is_some());
+        tabs.add_remote(tab);
+    }
+    assert_eq!(tabs.remote.len(), 2);
+    let mut tab = connected_tab(Target::Local);
+    let sibling = tab.sibling(Some("history".into()));
+    assert!(sibling.state.workspace_wizard.is_none());
+    tab.disconnected("test failure".into());
+    assert!(tab.state.workspace_wizard.is_none());
+    tab.reconnect();
+    assert!(tab.connecting.is_some());
+    assert!(tab.state.workspace_wizard.is_none());
+}

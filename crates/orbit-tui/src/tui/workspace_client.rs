@@ -107,9 +107,11 @@ impl Tab {
         let (progress, updates) = workspace::interaction::channel();
         self.progress = Some(progress.clone());
         self.updates = Some(updates);
-        let mut wizard = wizard::Wizard::new(None);
-        wizard.busy = true;
-        self.state.workspace_wizard = Some(wizard);
+        self.state.workspace_wizard = spec.remote().then(|| {
+            let mut wizard = wizard::Wizard::new(None);
+            wizard.busy = true;
+            wizard
+        });
         if spec.remote() && spec.configure_required() {
             self.preparing = Some(AbortOnDropHandle::new(tokio::spawn(async move {
                 spec.prepare(progress).await
@@ -244,7 +246,9 @@ impl Tab {
             }
             let connection = Arc::new(connection);
             tab.connection = Some(connection.clone());
-            tab.state.workspace_wizard = Some(wizard::Wizard::new(None));
+            tab.state.workspace_wizard =
+                (!matches!(connection.target, workspace::transport::Target::Local))
+                    .then(|| wizard::Wizard::new(None));
             let connection = connection.clone();
             let (progress, updates) = workspace::interaction::channel();
             tab.progress = Some(progress.clone());
@@ -724,7 +728,11 @@ impl Tab {
         let (progress, updates) = workspace::interaction::channel();
         self.progress = Some(progress.clone());
         self.updates = Some(updates);
-        self.state.workspace_wizard = Some(wizard::Wizard::new(None));
+        let remote = self.connection.as_ref().map_or_else(
+            || self.spec.as_ref().is_some_and(Spec::remote),
+            |connection| !matches!(connection.target, workspace::transport::Target::Local),
+        );
+        self.state.workspace_wizard = remote.then(|| wizard::Wizard::new(None));
         self.connected_at = std::time::Instant::now();
         let task = if let Some(connection) = &self.connection {
             tokio::spawn(Opened::reopen(

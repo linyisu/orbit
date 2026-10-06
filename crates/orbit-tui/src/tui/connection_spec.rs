@@ -140,7 +140,7 @@ impl Spec {
         } else if let Some(distribution) = &self.args.wsl {
             format!("WSL {distribution}")
         } else {
-            "Local".into()
+            "本地".into()
         }
     }
 
