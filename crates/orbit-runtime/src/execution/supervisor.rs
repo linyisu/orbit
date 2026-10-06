@@ -13,19 +13,30 @@ struct Captured {
     bytes: Vec<u8>,
     total: u64,
     retained_truncated: bool,
+    interrupted: bool,
 }
 
 async fn capture(
     mut pipe: impl AsyncRead + Unpin,
     mut retained: Option<super::output::RetainedOutput>,
+    finished: CancellationToken,
 ) -> std::io::Result<Captured> {
     let retaining = retained.is_some();
     let mut tail = VecDeque::with_capacity(MAX_OUTPUT);
     let mut total = 0u64;
     let mut buffer = [0; 4096];
 
+    let deadline = async {
+        finished.cancelled().await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+    tokio::pin!(deadline);
+    let mut interrupted = false;
     loop {
-        let count = pipe.read(&mut buffer).await?;
+        let count = tokio::select! {
+            count = pipe.read(&mut buffer) => count?,
+            _ = &mut deadline => { interrupted = true; 0 },
+        };
 
         if count == 0 {
             let mut bytes: Vec<u8> = tail.into();
@@ -42,8 +53,10 @@ async fn capture(
             return Ok(Captured {
                 bytes,
                 total,
+                interrupted,
                 retained_truncated: retaining
-                    && retained.as_ref().is_some_and(|file| file.written() < total),
+                    && (interrupted
+                        || retained.as_ref().is_some_and(|file| file.written() < total)),
             });
         }
 
@@ -79,10 +92,20 @@ pub(crate) async fn run_child_process(
             (Some(id), Some(stdout), Some(stderr))
         });
 
-    let stdout = capture(child.stdout.take().expect("piped stdout"), stdout_log);
-    let stderr = capture(child.stderr.take().expect("piped stderr"), stderr_log);
+    let finished = CancellationToken::new();
+    let stdout = capture(
+        child.stdout.take().expect("piped stdout"),
+        stdout_log,
+        finished.clone(),
+    );
+    let stderr = capture(
+        child.stderr.take().expect("piped stderr"),
+        stderr_log,
+        finished.clone(),
+    );
 
     let completion = async {
+        let _finished = finished.drop_guard();
         let mut timed_out = false;
         let mut cancelled = false;
         let status = tokio::select! {
@@ -120,7 +143,10 @@ pub(crate) async fn run_child_process(
 
     let stdout_total_bytes = stdout.total;
     let stderr_total_bytes = stderr.total;
-    let output_truncated = stdout.total > MAX_OUTPUT as u64 || stderr.total > MAX_OUTPUT as u64;
+    let output_truncated = stdout.interrupted
+        || stderr.interrupted
+        || stdout.total > MAX_OUTPUT as u64
+        || stderr.total > MAX_OUTPUT as u64;
     let retained_output_truncated = stdout.retained_truncated || stderr.retained_truncated;
     let stdout = String::from_utf8_lossy(&stdout.bytes).into_owned();
     let stderr = String::from_utf8_lossy(&stderr.bytes).into_owned();
@@ -156,7 +182,9 @@ mod tests {
     #[tokio::test]
     async fn capture_keeps_bounded_unicode_tail_and_counts_all_output() {
         let data = format!("{}FINAL", "中文".repeat(20_000));
-        let result = capture(data.as_bytes(), None).await.unwrap();
+        let result = capture(data.as_bytes(), None, CancellationToken::new())
+            .await
+            .unwrap();
 
         assert_eq!(result.total, data.len() as u64);
         assert!(result.bytes.len() <= MAX_OUTPUT);
@@ -166,7 +194,9 @@ mod tests {
         assert!(tail.ends_with("FINAL"));
         assert!(data.ends_with(&tail));
 
-        let short = capture(b"small".as_slice(), None).await.unwrap();
+        let short = capture(b"small".as_slice(), None, CancellationToken::new())
+            .await
+            .unwrap();
 
         assert_eq!(short.bytes, b"small");
         assert_eq!(short.total, 5);
@@ -178,9 +208,13 @@ mod tests {
         let log = OutputLog::create(directory.path()).await.unwrap();
         let id = log.id().to_owned();
         let (_, stdout, _) = log.split();
-        let result = capture(b"first\nsecond\n".as_slice(), Some(stdout))
-            .await
-            .unwrap();
+        let result = capture(
+            b"first\nsecond\n".as_slice(),
+            Some(stdout),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
 
         assert!(!result.retained_truncated);
         assert_eq!(result.total, 13);
@@ -188,5 +222,27 @@ mod tests {
             std::fs::read_to_string(directory.path().join(format!("{id}.stdout"))).unwrap(),
             "first\nsecond\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn completed_process_does_not_wait_for_a_detached_pipe_owner() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        writer.write_all(b"last output").await.unwrap();
+        let finished = CancellationToken::new();
+        finished.cancel();
+        let captured =
+            tokio::time::timeout(Duration::from_secs(2), capture(reader, None, finished))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(captured.bytes, b"last output");
+        assert!(captured.interrupted);
+        drop(writer);
     }
 }
