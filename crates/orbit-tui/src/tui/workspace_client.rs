@@ -58,10 +58,10 @@ pub(super) struct Tab {
     busy: bool,
     starting: Option<String>,
     approval_id: Option<u64>,
-    selected_model: Option<String>,
     mode: Mode,
     offline: bool,
     subagent: Option<subagents::Remote>,
+    attachment_task: Option<AbortOnDropHandle<Result<Vec<orbit_model::types::Attachment>>>>,
 }
 
 impl Tab {
@@ -159,10 +159,10 @@ impl Tab {
             busy: false,
             starting: None,
             approval_id: None,
-            selected_model: None,
             mode: Mode::Auto,
             offline: false,
             subagent: None,
+            attachment_task: None,
         }
     }
 
@@ -263,8 +263,18 @@ impl Tab {
     }
 
     fn profile(&mut self, info: &SessionInfo) {
-        self.state.model = self.selected_model.as_ref().unwrap_or(&info.model).clone();
+        self.state.model = info.model.clone();
         self.state.model_completions = info.models.clone();
+        self.state.supports_vision = info.supports_vision;
+        self.state.reasoning_effort = info
+            .reasoning_effort
+            .as_deref()
+            .and_then(|effort| effort.parse().ok());
+        self.state.reasoning_efforts = info
+            .reasoning_efforts
+            .iter()
+            .filter_map(|effort| effort.parse().ok())
+            .collect();
         self.state.context_tokens = info.context_tokens;
         self.state.input_context_tokens = info.input_context_tokens;
         self.state.max_output_tokens = info.max_output_tokens;
@@ -272,6 +282,26 @@ impl Tab {
 
     pub async fn poll(&mut self) -> bool {
         let mut changed = false;
+        if self
+            .attachment_task
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            match self.attachment_task.take().unwrap().await {
+                Ok(Ok(images)) => {
+                    for image in images {
+                        super::attachments::queue_attachment(&mut self.state, image);
+                    }
+                }
+                Ok(Err(error)) => self
+                    .state
+                    .report_local(TranscriptItem::Error(error.to_string())),
+                Err(error) => self
+                    .state
+                    .report_local(TranscriptItem::Error(error.to_string())),
+            }
+            changed = true;
+        }
         if let Some(updates) = &mut self.updates {
             if let Some(wizard) = &mut self.state.workspace_wizard {
                 let logs = updates
@@ -429,14 +459,14 @@ impl Tab {
         match response {
             Response::Page(page) => {
                 self.busy = page.busy;
-                if self.selected_model.is_none() {
-                    self.state.model = page.model;
-                }
+                self.state.model = page.model;
                 for update in page.updates {
                     match update {
                         Update::Profile(info) => self.profile(&info),
                         Update::Started { prompt } => {
-                            self.starting = None;
+                            if self.starting.take().is_some() {
+                                self.state.attachments.clear();
+                            }
                             self.title = format!(
                                 "{} · {}",
                                 self.state.connection_label.as_deref().unwrap_or_default(),

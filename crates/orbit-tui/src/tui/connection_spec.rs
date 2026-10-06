@@ -218,8 +218,8 @@ impl Spec {
 }
 
 impl ConnectArgs {
-    fn options(&self) -> orbit_app::workspace::ConnectionOptions {
-        orbit_app::workspace::ConnectionOptions {
+    fn options(&self) -> orbit_client::ConnectionOptions {
+        orbit_client::ConnectionOptions {
             ssh: self.ssh.clone(),
             ssh_user: self.ssh_user.clone(),
             ssh_port: self.ssh_port,

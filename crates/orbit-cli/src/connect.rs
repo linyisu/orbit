@@ -2,8 +2,8 @@ use std::{io::Write, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use orbit_agent::events::AgentEvent;
-use orbit_app::workspace::{
-    self,
+use orbit_client::{
+    self as workspace,
     protocol::{Request, Response},
     transport,
 };

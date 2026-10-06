@@ -11,9 +11,10 @@ use orbit_model::types::StreamEvent;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use orbit_app::context::instructions;
-use orbit_app::models::model_metadata;
-use orbit_app::{WorkspaceOptions, prepare_workspace, session, workspace};
+use orbit_client as workspace;
+use orbit_service::context::instructions;
+use orbit_service::models::model_metadata;
+use orbit_service::{WorkspaceOptions, prepare_workspace, session};
 use orbit_tui as tui;
 
 mod auth_cli;
@@ -216,7 +217,11 @@ fn main() -> Result<()> {
     #[cfg(not(target_env = "musl"))]
     workspace::register_server_bundle(include_bytes!(env!("ORBIT_EMBEDDED_SERVER")))?;
 
-    if orbit_app::platform::workers::run()? {
+    if std::env::args().nth(1).as_deref() == Some("--internal-ssh-askpass") {
+        workspace::interaction::askpass()?;
+        return Ok(());
+    }
+    if orbit_service::platform::workers::run()? {
         return Ok(());
     }
 
@@ -228,7 +233,7 @@ async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
 
     let auth_directory = || {
-        orbit_app::platform::directory(
+        orbit_service::platform::directory(
             cli.auth_dir.clone(),
             std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
             std::env::var_os("HOME").map(PathBuf::from),
@@ -243,7 +248,13 @@ async fn run_cli() -> Result<()> {
             connect::connect(args, cli.config, cli.database, cli.auth_dir).await
         }
         Command::WorkspaceService(args) => {
-            workspace::serve(args.into(), cli.config, cli.database, auth_directory()?).await
+            orbit_service::workspace::serve(
+                args.into(),
+                cli.config,
+                cli.database,
+                auth_directory()?,
+            )
+            .await
         }
 
         Command::Projects { command } => {
@@ -392,7 +403,7 @@ async fn chat(
     args: ChatArgs,
     auth: PathBuf,
 ) -> Result<()> {
-    let options = orbit_app::chat::ChatOptions {
+    let options = orbit_service::chat::ChatOptions {
         workspace: std::env::current_dir()?,
         prompt: read_chat_prompt(&args)?,
         model: args.model.clone(),
@@ -416,25 +427,22 @@ async fn chat(
     });
     let signals = tokio_util::task::AbortOnDropHandle::new(signals);
     let outcome =
-        orbit_app::chat::run(
-            config,
-            database,
-            options,
-            auth,
-            cancellation,
-            |update| match update {
-                orbit_app::chat::ChatUpdate::Agent(event) => report_chat_event(event, args.stream),
-                orbit_app::chat::ChatUpdate::Diagnostic(message) => {
+        orbit_service::chat::run(config, database, options, auth, cancellation, |update| {
+            match update {
+                orbit_service::chat::ChatUpdate::Agent(event) => {
+                    report_chat_event(event, args.stream)
+                }
+                orbit_service::chat::ChatUpdate::Diagnostic(message) => {
                     eprintln!("{message}");
                     Ok(())
                 }
-            },
-        )
+            }
+        })
         .await?;
     drop(signals);
     match outcome {
-        orbit_app::chat::ChatOutcome::Cancelled => eprintln!("已取消。"),
-        orbit_app::chat::ChatOutcome::Completed {
+        orbit_service::chat::ChatOutcome::Cancelled => eprintln!("已取消。"),
+        orbit_service::chat::ChatOutcome::Completed {
             answer,
             model_name,
             patch,
@@ -536,7 +544,7 @@ fn report_chat_event(event: &AgentEvent, stream: bool) -> Result<()> {
     Ok(())
 }
 
-impl From<ChatMode> for orbit_app::chat::ChatMode {
+impl From<ChatMode> for orbit_service::chat::ChatMode {
     fn from(value: ChatMode) -> Self {
         match value {
             ChatMode::ReadOnly => Self::ReadOnly,
@@ -546,7 +554,7 @@ impl From<ChatMode> for orbit_app::chat::ChatMode {
     }
 }
 
-impl From<ChatCapability> for orbit_app::chat::ChatCapability {
+impl From<ChatCapability> for orbit_service::chat::ChatCapability {
     fn from(value: ChatCapability) -> Self {
         match value {
             ChatCapability::All => Self::All,

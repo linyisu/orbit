@@ -234,6 +234,7 @@ impl Connection {
             diagnostics,
             drain,
             failed: false,
+            capabilities: None,
         };
         let marker = super::interaction::timeout(CONNECT_TIMEOUT, progress.as_ref(), async {
             Ok(protocol::read_preamble(&mut client.stdout).await?)
@@ -259,7 +260,10 @@ impl Connection {
         )
         .await;
         match result {
-            Ok(Ok(Response::Hello { version: protocol::VERSION, .. })) => Ok(client),
+            Ok(Ok(Response::Hello { version: protocol::VERSION, capabilities, .. })) => {
+                client.capabilities = Some(capabilities);
+                Ok(client)
+            },
             Ok(Ok(response)) => bail!("incompatible workspace server: {response:?}"),
             Ok(Err(error)) => Err(error.context("workspace connection failed; ensure Orbit is installed on the target and available through --server")),
             Err(_) => bail!("workspace connection timed out"),
@@ -268,6 +272,7 @@ impl Connection {
 }
 
 pub struct Client {
+    pub capabilities: Option<orbit_protocol::Capabilities>,
     process: Child,
     stdin: ChildStdin,
     stdout: ChildStdout,

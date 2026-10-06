@@ -52,7 +52,7 @@ pub enum ChatMode {
     /// Automatically run operations inside the workspace.
     #[default]
     Auto,
-    /// Automatically run sandbox commands and permit workspace edits.
+    /// Automatically approve tool requests.
     Yolo,
 }
 

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
-use orbit_app::{platform, workspace};
+use orbit_service::{platform, workspace};
 
 #[derive(Parser)]
 #[command(name = "orbit-workspace-server")]

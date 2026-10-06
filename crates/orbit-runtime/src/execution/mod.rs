@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod capabilities;
 pub mod environment;
 pub mod manager;
 pub mod output;

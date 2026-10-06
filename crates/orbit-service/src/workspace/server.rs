@@ -297,6 +297,7 @@ impl Service {
             &mut writer,
             &Response::Hello {
                 version: protocol::VERSION,
+                capabilities: capabilities().await,
                 workspace: self
                     .options
                     .initial_directory
@@ -344,7 +345,10 @@ impl Service {
                     "workspace session limit reached; reconnect after idle service shutdown"
                 );
                 let configuration = match configuration {
-                    Some(configuration) => Some(configuration.install(&self.options).await?),
+                    Some(configuration) => Some(
+                        super::configuration::Installed::install(configuration, &self.options)
+                            .await?,
+                    ),
                     None => None,
                 };
                 let options = configuration
@@ -388,6 +392,8 @@ impl Service {
                 session,
                 request_id,
                 prompt,
+                images,
+                compact,
                 mode,
                 model,
             } => {
@@ -401,9 +407,29 @@ impl Service {
                     .command(session::Command::Start {
                         request_id,
                         prompt,
+                        images,
+                        compact,
                         mode,
                         model,
                     })
+                    .await?;
+                Ok(Response::Ok)
+            }
+            Request::SetModel {
+                session,
+                model,
+                effort,
+            } => {
+                self.session(&session)
+                    .await?
+                    .command(session::Command::SetModel { model, effort })
+                    .await?;
+                Ok(Response::Ok)
+            }
+            Request::Steer { session, message } => {
+                self.session(&session)
+                    .await?
+                    .command(session::Command::Steer { message })
                     .await?;
                 Ok(Response::Ok)
             }
@@ -499,4 +525,40 @@ impl Service {
             }
         }
     }
+}
+
+async fn capabilities() -> orbit_protocol::Capabilities {
+    static CAPABILITIES: tokio::sync::OnceCell<orbit_protocol::Capabilities> =
+        tokio::sync::OnceCell::const_new();
+    CAPABILITIES
+        .get_or_init(|| async {
+            let sandbox = match orbit_runtime::execution::capabilities::check_sandbox().await {
+                Ok(()) => orbit_protocol::Availability::Available,
+                Err(error) => orbit_protocol::Availability::Unavailable(format!("{error:#}")),
+            };
+            orbit_protocol::Capabilities {
+                system: std::env::consts::OS.into(),
+                architecture: std::env::consts::ARCH.into(),
+                shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+                native_processes: true,
+                files: true,
+                sandbox,
+                features: [
+                    "sessions",
+                    "events",
+                    "approvals",
+                    "cancel",
+                    "files",
+                    "subagents",
+                    "images",
+                    "compact",
+                    "steer",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            }
+        })
+        .await
+        .clone()
 }

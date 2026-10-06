@@ -30,7 +30,7 @@ struct Dialog {
 
 #[derive(Default)]
 pub(super) struct Questions {
-    service: orbit_app::side_questions::SideQuestions,
+    service: orbit_service::side_questions::SideQuestions,
     dialog: Option<Box<Dialog>>,
 }
 

@@ -8,7 +8,7 @@
 
 - [agent.rs](src/agent.rs)：运行循环、取消边界、工具配对、后台完成通知与 journal 刷盘；大段运行回归位于 [agent/tests.rs](src/agent/tests.rs)。
 - [context.rs](src/context.rs)、[autocompact.rs](src/autocompact.rs)、[compaction.rs](src/compaction.rs)：输入估算、结构化摘要和整理生命周期。
-- [background.rs](src/background.rs)、[inbox.rs](src/inbox.rs)、[checkpoint.rs](src/checkpoint.rs)：任务组、补充消息与持久化接口。子代理宿主及模型选择在 [orbit-app/src/subagents.rs](../orbit-app/src/subagents.rs)，库不直接管理 UI 或数据库连接。
+- [background.rs](src/background.rs)、[inbox.rs](src/inbox.rs)、[checkpoint.rs](src/checkpoint.rs)：任务组、补充消息与持久化接口。子代理宿主及模型选择在 [orbit-service/src/subagents.rs](../orbit-service/src/subagents.rs)，库不直接管理 UI 或数据库连接。
 
 Journal 批量和间隔由 `agent.rs` 的具名常量维护；UI 帧间隔属于 CLI，不与数据库刷盘间隔混用。
 

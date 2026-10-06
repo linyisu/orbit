@@ -141,14 +141,20 @@ async fn concurrent_tabs_keep_drafts_events_models_and_requests_separate() {
     wsl.state.model_completions = vec!["wsl-model".into()];
     ssh.submit("/model ssh-model".into()).unwrap();
     wsl.submit("/model wsl-model".into()).unwrap();
+    assert!(
+        matches!(ssh_requests.try_recv().unwrap().request, Request::SetModel { model, .. } if model == "ssh-model")
+    );
+    assert!(
+        matches!(wsl_requests.try_recv().unwrap().request, Request::SetModel { model, .. } if model == "wsl-model")
+    );
     ssh.submit("/mode ask".into()).unwrap();
     ssh.submit("first target".into()).unwrap();
     wsl.submit("second target".into()).unwrap();
     assert!(
-        matches!(ssh_requests.try_recv().unwrap().request, Request::Start { prompt, mode: Mode::Ask, model: Some(model), .. } if prompt == "first target" && model == "ssh-model")
+        matches!(ssh_requests.try_recv().unwrap().request, Request::Start { prompt, mode: Mode::Ask, model: None, .. } if prompt == "first target")
     );
     assert!(
-        matches!(wsl_requests.try_recv().unwrap().request, Request::Start { prompt, mode: Mode::Auto, model: Some(model), .. } if prompt == "second target" && model == "wsl-model")
+        matches!(wsl_requests.try_recv().unwrap().request, Request::Start { prompt, mode: Mode::Auto, model: None, .. } if prompt == "second target")
     );
     ssh.state.input.set("ssh draft".into());
     wsl.state.input.set("wsl draft".into());
@@ -408,4 +414,15 @@ fn failed_setup_retains_the_last_diagnostic_without_duplicating_it() {
     assert_eq!(wizard.status, "target cannot run the executable");
     assert_eq!(tab.state.model, "连接失败");
     assert!(tab.state.transcript.is_empty());
+}
+
+#[test]
+fn compaction_and_images_use_the_same_request_for_every_target() {
+    for target in ["本地", "SSH dev", "WSL Ubuntu"] {
+        let (mut tab, mut requests) = tab(target);
+        tab.submit("/compact".into()).unwrap();
+        assert!(
+            matches!(requests.try_recv().unwrap().request, Request::Start { compact: true, images, .. } if images.is_empty())
+        );
+    }
 }

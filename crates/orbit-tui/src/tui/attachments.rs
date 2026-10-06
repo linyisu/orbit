@@ -152,7 +152,7 @@ pub(super) fn attach_paths(
     Ok(())
 }
 
-enum ClipboardPayload {
+pub(super) enum ClipboardPayload {
     Image {
         width: usize,
         height: usize,
@@ -162,7 +162,7 @@ enum ClipboardPayload {
     Text(String),
 }
 
-fn read_clipboard() -> Result<ClipboardPayload> {
+pub(super) fn read_clipboard() -> Result<ClipboardPayload> {
     let mut clipboard = arboard::Clipboard::new()?;
 
     if let Ok(image) = clipboard.get_image() {

@@ -258,7 +258,7 @@ pub(super) async fn run_command(
                     last.elapsed_ms,
                 )
             } else {
-                "命令执行  尚未执行沙箱命令".to_owned()
+                "命令执行  尚未执行命令".to_owned()
             };
 
             let verification = format!(
@@ -290,7 +290,7 @@ pub(super) async fn run_command(
                 .join(" / ");
 
             state.show_output("会话状态", format!(
-                "会话  {}\n数据库  {}\n会话工作目录  {}（沙箱内 /scratch）\n命令输出目录  {}（按会话保留）\n{}\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\nSkills  {} 个\nMCP  {} 个 server，输入 /mcp 查看状态\n超时  {}s（流空闲）\n工具  {} · 审批：{}",
+                "会话  {}\n数据库  {}\n会话工作目录  {}\n命令输出目录  {}（按会话保留）\n{}\n{}\n模型  {}\n上下文  {} 条消息 · 已持久化\n项目指令  {} 条\nSkills  {} 个\nMCP  {} 个 server，输入 /mcp 查看状态\n超时  {}s（流空闲）\n工具  {} · 审批：{}",
                 session.id(),
                 session.store.path().display(),
                 session.scratch.read().expect("scratch lock poisoned").display(),

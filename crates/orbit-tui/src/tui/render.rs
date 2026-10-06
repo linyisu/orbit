@@ -1517,10 +1517,10 @@ fn draw_composer(
             );
             let orbit_model::types::Attachment::Image { path, .. } = attachment;
             let source = super::media::Source::Image(path.to_string_lossy().into_owned());
+            let mut composer_media = state.media.clone();
+            composer_media.files = None;
             if let Some(picture) =
-                state
-                    .media
-                    .picture(&source, thumbnail.width, thumbnail.height, false)
+                composer_media.picture(&source, thumbnail.width, thumbnail.height, false)
             {
                 let image_x = thumbnail.x + thumbnail.width.saturating_sub(picture.size.width) / 2;
                 for row in 0..picture.size.height.min(thumbnail.height) {

@@ -37,7 +37,7 @@ def open_unconfigured_workspace(container, executable):
             assert size <= 32 * 1024 * 1024
             return json.loads(process.stdout.read(size))
 
-        assert request({"method": "hello", "version": 3})["type"] == "hello"
+        assert request({"method": "hello", "version": 4})["type"] == "hello"
         config = """default_provider = "test"
 [providers.test]
 base_url = "http://127.0.0.1:9/v1"

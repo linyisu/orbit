@@ -169,6 +169,14 @@ impl Store {
             "message must contain 1..32768 bytes"
         );
         self.owned_subagent(parent, id).await?;
+        self.queue_session_input(id, content).await
+    }
+
+    pub async fn queue_session_input(&self, id: &str, content: String) -> Result<i64> {
+        ensure!(
+            !content.trim().is_empty() && content.len() <= 32_768,
+            "message must contain 1..32768 bytes"
+        );
         let id = id.to_owned();
         self.access(move |conn| {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

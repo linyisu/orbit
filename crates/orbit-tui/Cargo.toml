@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+orbit-client.workspace = true
 anyhow.workspace = true
 arboard.workspace = true
 base64.workspace = true
@@ -14,7 +15,7 @@ futures-util.workspace = true
 html2text.workspace = true
 html5ever.workspace = true
 image.workspace = true
-orbit-app.workspace = true
+orbit-service.workspace = true
 orbit-agent.workspace = true
 orbit-auth.workspace = true
 orbit-model.workspace = true

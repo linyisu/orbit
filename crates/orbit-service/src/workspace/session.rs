@@ -29,8 +29,17 @@ pub enum Command {
     Start {
         request_id: String,
         prompt: String,
+        images: Vec<orbit_protocol::ImageUpload>,
+        compact: bool,
         mode: Mode,
         model: Option<String>,
+    },
+    SetModel {
+        model: String,
+        effort: Option<String>,
+    },
+    Steer {
+        message: String,
     },
     Cancel,
     Approve {
@@ -135,20 +144,7 @@ impl Handle {
         for diagnostic in &setup.resources.diagnostics {
             eprintln!("{diagnostic}");
         }
-        let budget = &setup.resources.budget;
-        let info = SessionInfo {
-            id: setup.session.id().into(),
-            workspace: setup.session.snapshot.session.workspace.clone(),
-            model: setup.resources.model_name.clone(),
-            models: budget
-                .model_options
-                .iter()
-                .map(crate::models::ModelOption::qualified_name)
-                .collect(),
-            context_tokens: budget.context_tokens,
-            input_context_tokens: budget.input_context_tokens,
-            max_output_tokens: budget.max_output_tokens,
-        };
+        let info = super::profile::describe(&setup);
         let mut view = View {
             updates: Vec::new(),
             busy: false,
@@ -182,6 +178,8 @@ impl Handle {
                     Command::Start {
                         request_id,
                         prompt,
+                        images,
+                        compact,
                         mode,
                         model,
                     } => {
@@ -195,7 +193,7 @@ impl Handle {
                                 .send(Err(anyhow::anyhow!("invalid workspace request")));
                             continue;
                         }
-                        let identity = request_fingerprint(&prompt, mode, &model);
+                        let identity = request_fingerprint(&prompt, &images, compact, mode, &model);
                         match setup
                             .session
                             .store
@@ -219,9 +217,15 @@ impl Handle {
                                 continue;
                             }
                         }
-                        let started =
-                            super::run::start(&mut setup, prompt.clone(), model.as_deref()).await;
-                        let (mut events, task, cancellation) = match started {
+                        let started = super::run::start(
+                            &mut setup,
+                            prompt.clone(),
+                            images,
+                            compact,
+                            model.as_deref(),
+                        )
+                        .await;
+                        let (mut events, task, cancellation, inbox) = match started {
                             Ok(started) => started,
                             Err(error) => {
                                 let _ = setup
@@ -248,21 +252,7 @@ impl Handle {
                             let mut view = state.lock().await;
                             view.busy = true;
                             view.model = setup.resources.model_name.clone();
-                            view.push(Update::Profile(SessionInfo {
-                                id: setup.session.id().into(),
-                                workspace: setup.session.snapshot.session.workspace.clone(),
-                                model: setup.resources.model_name.clone(),
-                                models: setup
-                                    .resources
-                                    .budget
-                                    .model_options
-                                    .iter()
-                                    .map(crate::models::ModelOption::qualified_name)
-                                    .collect(),
-                                context_tokens: setup.resources.budget.context_tokens,
-                                input_context_tokens: setup.resources.budget.input_context_tokens,
-                                max_output_tokens: setup.resources.budget.max_output_tokens,
-                            }));
+                            view.push(Update::Profile(super::profile::describe(&setup)));
                             view.push(Update::Started { prompt });
                         }
                         let _ = envelope.reply.send(receipt);
@@ -309,6 +299,14 @@ impl Handle {
                                 }
                                 Some(envelope) = envelopes.recv() => {
                                     let result = match envelope.command {
+                                        Command::SetModel { .. } => Err(anyhow::anyhow!("wait for the current task before changing its model")),
+                                        Command::Steer { message } => {
+                                            use orbit_agent::{inbox::InboxMessage, tool::ToolError};
+                                            inbox.persist_and_push(|| async {
+                                                let id = setup.session.store.queue_session_input(setup.session.id(), message.clone()).await.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+                                                Ok(InboxMessage { id, content: message })
+                                            }).await.map_err(Into::into)
+                                        }
                                         Command::Cancel => {
                                             cancellation.cancel();
                                             pending.clear();
@@ -341,10 +339,12 @@ impl Handle {
                                         Command::Start {
                                             request_id,
                                             prompt,
+                                            images,
+                                            compact,
                                             mode,
                                             model,
                                         } => {
-                                            let identity = request_fingerprint(&prompt, mode, &model);
+                                            let identity = request_fingerprint(&prompt, &images, compact, mode, &model);
                                             if accepted.get(&request_id) == Some(&identity) {
                                                 Ok(())
                                             } else {
@@ -378,6 +378,21 @@ impl Handle {
                         });
                         view.busy = false;
                         view.approvals.clear();
+                    }
+                    Command::SetModel { model, effort } => {
+                        let result =
+                            super::profile::select(&mut setup, &model, effort.as_deref()).await;
+                        if result.is_ok() {
+                            let mut view = state.lock().await;
+                            view.model = setup.resources.model_name.clone();
+                            view.push(Update::Profile(super::profile::describe(&setup)));
+                        }
+                        let _ = envelope.reply.send(result);
+                    }
+                    Command::Steer { .. } => {
+                        let _ = envelope.reply.send(Err(anyhow::anyhow!(
+                            "session is idle; submit a new message"
+                        )));
                     }
                     Command::Cancel => {
                         let _ = envelope.reply.send(Ok(()));
@@ -428,8 +443,15 @@ fn approval_key(preview: &ApprovalPreview, workspace: &Path) -> Option<String> {
     Some(format!("{target}:{}", serde_json::to_string(preview).ok()?))
 }
 
-fn request_fingerprint(prompt: &str, mode: Mode, model: &Option<String>) -> String {
-    let bytes = serde_json::to_vec(&(prompt, mode, model)).expect("serializable workspace request");
+fn request_fingerprint(
+    prompt: &str,
+    images: &[orbit_protocol::ImageUpload],
+    compact: bool,
+    mode: Mode,
+    model: &Option<String>,
+) -> String {
+    let bytes = serde_json::to_vec(&(prompt, images, compact, mode, model))
+        .expect("serializable workspace request");
     Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))

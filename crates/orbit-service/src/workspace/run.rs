@@ -1,6 +1,5 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use orbit_agent::{error::AgentError, events::AgentEvent};
-use orbit_model::client::ModelClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -8,29 +7,22 @@ pub(super) type Started = (
     mpsc::Receiver<AgentEvent>,
     tokio::task::JoinHandle<Result<orbit_agent::agent::AgentResult, AgentError>>,
     CancellationToken,
+    orbit_agent::inbox::AgentInbox,
 );
 
 pub(super) async fn start(
     setup: &mut crate::PreparedWorkspace,
     prompt: String,
+    uploads: Vec<orbit_protocol::ImageUpload>,
+    compact: bool,
     model: Option<&str>,
 ) -> Result<Started> {
-    let crate::PreparedWorkspace { session, resources } = setup;
-    if let Some(name) = model {
-        let selected = resources
-            .budget
-            .model_options
-            .iter()
-            .find(|option| option.qualified_name() == name);
-        let Some(selected) = selected else {
-            bail!("model is not configured: {name}");
-        };
-        resources.model = ModelClient::new(selected.config.clone())?;
-        resources.model_name = selected.qualified_name();
-        resources.budget.context_tokens = selected.context_tokens;
-        resources.budget.input_context_tokens = selected.input_context_tokens;
-        resources.budget.max_output_tokens = selected.max_output_tokens;
+    if let Some(name) = model
+        && name != setup.resources.model_name
+    {
+        super::profile::apply(&mut setup.resources, name, None)?;
     }
+    let crate::PreparedWorkspace { session, resources } = setup;
     session
         .set_model_profile(
             resources.model_name.clone(),
@@ -51,17 +43,38 @@ pub(super) async fn start(
     if !resources.model.supports_vision() {
         tools.remove("read_image");
     }
+    use base64::Engine;
+    anyhow::ensure!(
+        !compact || uploads.is_empty(),
+        "compaction does not accept images"
+    );
+    anyhow::ensure!(
+        uploads.is_empty() || resources.model.supports_vision(),
+        "selected model does not support images"
+    );
+    let assets = orbit_tools::image_assets::ImageAssets::for_database(session.store.path());
+    let attachments =
+        tokio::task::spawn_blocking(move || -> Result<Vec<orbit_model::types::Attachment>> {
+            uploads
+                .into_iter()
+                .map(|image| {
+                    let bytes = base64::engine::general_purpose::STANDARD.decode(image.data)?;
+                    assets.import_bytes(image.name, bytes)
+                })
+                .collect()
+        })
+        .await??;
     let started = crate::execution::start(
         session,
         prompt,
-        Vec::new(),
-        false,
+        attachments,
+        compact,
         &messages,
         &resources.model,
         &tools,
         crate::execution::RunOptions {
             model_name: resources.model_name.clone(),
-            generate_title: false,
+            generate_title: !compact,
             max_output_tokens: resources.budget.max_output_tokens,
             config: orbit_agent::agent::AgentConfig {
                 context_tokens: resources.budget.context_tokens,
@@ -74,5 +87,10 @@ pub(super) async fn start(
         },
     )
     .await?;
-    Ok((started.receiver, started.task, started.cancellation))
+    Ok((
+        started.receiver,
+        started.task,
+        started.cancellation,
+        started.inbox,
+    ))
 }

@@ -1,11 +1,11 @@
 //! Application services for configuration, sessions, tools and workspace execution.
 
 pub mod chat;
-pub mod config;
+pub use orbit_config::config;
 pub mod context;
 pub mod execution;
 pub mod extensions;
-pub mod models;
+pub use orbit_config::models;
 pub mod platform;
 pub mod session;
 pub mod side_questions;
@@ -15,7 +15,7 @@ pub mod workspace;
 
 pub(crate) use context::{history, instructions, project_state};
 pub(crate) use extensions::{marketplaces, skills};
-pub(crate) use models::{account_models, model_metadata};
+pub(crate) use models::account_models;
 pub(crate) use tools as runtime;
 pub(crate) use tools::verification;
 

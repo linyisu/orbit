@@ -6,7 +6,10 @@ members = [
     "crates/orbit-agent",
     "crates/orbit-runtime",
     "crates/orbit-cli",
-    "crates/orbit-app",
+    "crates/orbit-service",
+    "crates/orbit-client",
+    "crates/orbit-config",
+    "crates/orbit-protocol",
     "crates/orbit-tui",
     "crates/orbit-server",
     "crates/orbit-tools",
@@ -22,8 +25,11 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+orbit-client = { path = "crates/orbit-client" }
+orbit-config = { path = "crates/orbit-config" }
+orbit-protocol = { path = "crates/orbit-protocol" }
 # Internal workspace crates
-orbit-app = { path = "crates/orbit-app" }
+orbit-service = { path = "crates/orbit-service" }
 orbit-tui = { path = "crates/orbit-tui" }
 orbit-agent = { path = "crates/orbit-agent" }
 orbit-auth = { path = "crates/orbit-auth" }

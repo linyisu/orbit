@@ -25,3 +25,6 @@ pub use oauth::{CallbackFlow, LoginOutcome, OAuthLogin, OAuthProvider, PendingGo
 pub use store::AuthStore;
 
 pub use antigravity::refresh_client_version as refresh_antigravity_client_version;
+
+mod directory;
+pub use directory::directory;

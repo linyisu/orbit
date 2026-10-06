@@ -1,11 +1,9 @@
 use std::io;
 
-use orbit_agent::events::AgentEvent;
-use orbit_tools::approval::ApprovalPreview;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 // Keep framing stable so Hello can report incompatible schema versions.
 pub const PREAMBLE: &[u8] = b"\0ORBIT-WORKSPACE/1\n";
 pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
@@ -40,15 +38,28 @@ pub enum Request {
     Open {
         resume: Option<String>,
         #[serde(default)]
-        configuration: Option<super::configuration::Configuration>,
+        configuration: Option<Configuration>,
     },
     Sessions,
     Start {
         session: String,
         request_id: String,
         prompt: String,
+        #[serde(default)]
+        images: Vec<ImageUpload>,
+        #[serde(default)]
+        compact: bool,
         mode: Mode,
         model: Option<String>,
+    },
+    SetModel {
+        session: String,
+        model: String,
+        effort: Option<String>,
+    },
+    Steer {
+        session: String,
+        message: String,
     },
     Poll {
         session: String,
@@ -95,49 +106,56 @@ pub struct SessionInfo {
     pub workspace: String,
     pub model: String,
     pub models: Vec<String>,
+    pub supports_vision: bool,
+    pub reasoning_effort: Option<String>,
+    pub reasoning_efforts: Vec<String>,
     pub context_tokens: usize,
     pub input_context_tokens: usize,
     pub max_output_tokens: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Update {
+pub enum Update<E> {
     Profile(SessionInfo),
     Started { prompt: String },
-    Agent(Box<AgentEvent>),
+    Agent(Box<E>),
     Finished { status: String },
 }
 
-impl Update {
-    pub fn agent(event: AgentEvent) -> Self {
+impl<E> Update<E> {
+    pub fn agent(event: E) -> Self {
         Self::Agent(Box::new(event))
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Approval {
+pub struct Approval<A> {
     pub id: u64,
-    pub preview: ApprovalPreview,
+    pub preview: A,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Page {
+pub struct Page<E, A> {
     pub next: usize,
     pub more: bool,
     pub busy: bool,
     pub model: String,
-    pub updates: Vec<Update>,
-    pub approvals: Vec<Approval>,
+    pub updates: Vec<Update<E>>,
+    pub approvals: Vec<Approval<A>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
-pub enum Response {
-    Hello { version: u32, workspace: String },
+pub enum Response<E, A> {
+    Hello {
+        version: u32,
+        workspace: String,
+        capabilities: Capabilities,
+    },
     Opened(SessionInfo),
-    Sessions(Vec<orbit_store::types::Session>),
-    Page(Page),
-    Subagent(Page),
+    Sessions(Vec<Session>),
+    Page(Page<E, A>),
+    Subagent(Page<E, A>),
     File(String),
     Ok,
     Error(String),
@@ -222,4 +240,64 @@ mod tests {
             io::ErrorKind::UnexpectedEof
         );
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Session {
+    pub id: String,
+    pub workspace: String,
+    pub project_id: String,
+    pub model: String,
+    /// The selected reasoning setting, stored independently from provider
+    /// configuration so a resumed conversation keeps its own preference.
+    pub reasoning_effort: Option<String>,
+    pub demo: bool,
+    pub title: String,
+    pub updated_at: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Configuration {
+    pub content: String,
+    pub credentials: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+impl std::fmt::Debug for Configuration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Configuration([redacted])")
+    }
+}
+
+pub fn request_id() -> String {
+    use std::hash::BuildHasher;
+    let state = std::collections::hash_map::RandomState::new();
+    format!(
+        "{:016x}{:016x}",
+        state.hash_one(std::time::SystemTime::now()),
+        state.hash_one(std::process::id())
+    )
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Capabilities {
+    pub system: String,
+    pub architecture: String,
+    pub shell: String,
+    pub native_processes: bool,
+    pub files: bool,
+    pub sandbox: Availability,
+    pub features: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "status", content = "reason", rename_all = "snake_case")]
+pub enum Availability {
+    Available,
+    Unavailable(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImageUpload {
+    pub name: String,
+    pub data: String,
 }

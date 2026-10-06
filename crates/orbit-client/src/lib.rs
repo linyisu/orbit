@@ -1,3 +1,4 @@
+pub mod attachments;
 mod bootstrap;
 pub use bootstrap::register_server_bundle;
 mod command;
@@ -6,16 +7,10 @@ pub mod connect;
 pub mod directories;
 pub mod discovery;
 pub mod interaction;
-pub mod project;
 pub mod prompt;
 pub mod protocol;
 pub mod pump;
-mod run;
-mod server;
-mod session;
-pub mod setup;
 pub mod transport;
-
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail};
@@ -23,9 +18,6 @@ use base64::Engine;
 
 use protocol::{Request, Response};
 use transport::{Connection, Target};
-
-pub use server::runtime_directory;
-pub use server::serve;
 
 #[derive(Clone, Debug)]
 pub struct ConnectionOptions {
@@ -43,13 +35,6 @@ pub struct ConnectionOptions {
     pub server: Option<String>,
     /// Upload a Linux Orbit binary matching the target architecture.
     pub upload_server: Option<PathBuf>,
-    pub allow_mcp_start: bool,
-}
-
-#[derive(Debug)]
-pub struct ServiceOptions {
-    pub workspace: String,
-    pub daemon: bool,
     pub allow_mcp_start: bool,
 }
 
@@ -111,19 +96,15 @@ pub async fn prepare_connection(
         }
     };
     let connection = Arc::new(Connection {
-        local_configuration: if matches!(target, Target::Local) {
-            None
-        } else {
-            Some(configuration::Local {
-                config: std::path::absolute(&config)?,
-                auth: crate::platform::directory(
-                    auth_dir.clone(),
-                    std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-                    std::env::var_os("HOME").map(PathBuf::from),
-                )?,
-                model: None,
-            })
-        },
+        local_configuration: Some(configuration::Local {
+            config: std::path::absolute(&config)?,
+            auth: orbit_auth::directory(
+                auth_dir.clone(),
+                std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+                std::env::var_os("HOME").map(PathBuf::from),
+            )?,
+            model: None,
+        }),
         target,
         workspace: args.workspace.clone(),
         executable,
@@ -137,15 +118,7 @@ pub async fn prepare_connection(
     Ok(connection)
 }
 
-pub fn request_id() -> String {
-    use std::hash::BuildHasher;
-    let state = std::collections::hash_map::RandomState::new();
-    format!(
-        "{:016x}{:016x}",
-        state.hash_one(std::time::SystemTime::now()),
-        state.hash_one(std::process::id())
-    )
-}
+pub use orbit_protocol::request_id;
 
 pub struct Call {
     pub request: Request,

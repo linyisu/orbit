@@ -60,11 +60,11 @@ use crossterm::event::{
     Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use orbit_agent::{agent::AgentConfig, events::AgentEvent, tool::ToolRegistry};
-use orbit_app::models::ModelOption;
 use orbit_model::{
     client::ModelClient,
     types::{Attachment, ChatMessage},
 };
+use orbit_service::models::ModelOption;
 use tokio::{select, sync::mpsc, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 
@@ -76,7 +76,6 @@ use crate::{
     execution::{RunTask, StartedRun},
     platform::editor,
     session::SessionState,
-    workspace::setup::RequestBudget,
 };
 use command_actions::*;
 use keyboard::*;
@@ -127,3 +126,5 @@ mod tests;
 
 #[cfg(test)]
 mod subagent_tests;
+
+use orbit_service::workspace::setup::RequestBudget;

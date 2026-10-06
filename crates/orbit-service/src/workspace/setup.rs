@@ -70,7 +70,17 @@ async fn prepare(
     } else {
         session::SessionState::open_in(options.database.clone(), resume, model, directory).await?
     };
-    let resources = prepare_workspace_resources(options, directory, &session).await?;
+    let mut resources = prepare_workspace_resources(options, directory, &session).await?;
+    let (saved_model, effort) = session.saved_model_profile();
+    if let Some(choice) = resources
+        .budget
+        .model_options
+        .iter()
+        .find(|model| model.qualified_name() == saved_model)
+    {
+        let effort = effort.filter(|effort| choice.reasoning_efforts.contains(effort));
+        super::profile::apply(&mut resources, saved_model, effort)?;
+    }
     session
         .initialize_audit(
             resources.workspace.clone(),
@@ -94,6 +104,9 @@ pub async fn prepare_workspace_resources(
     );
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
     let mut file_config = FileConfig::load(config_path, &options.auth_directory)?;
+    if file_config.command.sandbox {
+        orbit_runtime::execution::capabilities::check_sandbox().await?;
+    }
     let diagnostics = account_models::refresh(&mut file_config, false).await;
     let model_options = file_config.model_options()?;
     let default_model = file_config.default_model_option()?;

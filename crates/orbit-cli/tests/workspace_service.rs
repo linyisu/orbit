@@ -42,7 +42,7 @@ impl Client {
         client.output.read_exact(&mut marker).await.unwrap();
         assert_eq!(marker, b"\0ORBIT-WORKSPACE/1\n");
         assert_eq!(
-            client.request(json!({"method":"hello","version":3})).await["type"],
+            client.request(json!({"method":"hello","version":4})).await["type"],
             "hello"
         );
         client

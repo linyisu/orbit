@@ -1,5 +1,5 @@
 use super::*;
-use orbit_app::session::SessionState;
+use orbit_service::session::SessionState;
 
 #[tokio::test]
 async fn replay_is_incremental_exact_and_preserves_scroll_and_saved_elapsed_time() {

@@ -134,10 +134,15 @@ impl Tab {
         if self.state.selection.handle(&event)? {
             return Ok(Action::None);
         }
-        // Pasted target paths are text until remote attachment upload is implemented.
         if let Event::Paste(text) = event {
             if !text.is_empty() {
-                self.state.input.insert(&text);
+                if let Some(paths) =
+                    tui::attachments::pasted_image_paths(&text, &std::env::current_dir()?)
+                {
+                    self.attach(paths);
+                } else {
+                    self.state.input.insert(&text);
+                }
                 return Ok(Action::None);
             }
             return self.paste();
@@ -148,10 +153,12 @@ impl Tab {
             tui::Action::Redraw => Ok(Action::Redraw),
             tui::Action::Submit(prompt) => self.submit(prompt),
             tui::Action::Steer(prompt) => {
-                self.state.input.set(prompt);
-                self.state.report_local(TranscriptItem::Notice(
-                    "任务仍在执行；可先取消，输入已保留。".into(),
-                ));
+                if !self.send(Request::Steer {
+                    session: self.id.clone().unwrap_or_default(),
+                    message: prompt.clone(),
+                }) {
+                    self.state.input.set(prompt);
+                }
                 Ok(Action::None)
             }
             tui::Action::Cancel => {
@@ -168,25 +175,62 @@ impl Tab {
             }
             tui::Action::PasteClipboard => self.paste(),
             tui::Action::AttachPaths(paths) => {
-                self.state.input.insert(
-                    &paths
-                        .iter()
-                        .map(|p| p.to_string_lossy())
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                );
+                self.attach(paths);
                 Ok(Action::None)
             }
             tui::Action::None => Ok(Action::None),
         }
     }
 
+    fn attach(&mut self, paths: Vec<std::path::PathBuf>) {
+        if !self.state.supports_vision || self.attachment_task.is_some() {
+            self.state.report_local(TranscriptItem::Error(
+                "当前模型不支持图片，或上一批图片尚在读取。".into(),
+            ));
+            return;
+        }
+        self.attachment_task = Some(AbortOnDropHandle::new(tokio::task::spawn_blocking(
+            move || workspace::attachments::paths(paths),
+        )));
+    }
+
     fn paste(&mut self) -> Result<Action> {
-        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
-            Ok(text) => self.state.input.insert(&text),
-            Err(error) => self.state.report_local(TranscriptItem::Error(format!(
-                "剪贴板文本读取失败：{error}；当前连接尚不支持上传图片附件。"
-            ))),
+        use tui::attachments::ClipboardPayload;
+        let payload = match tui::attachments::read_clipboard() {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.state
+                    .report_local(TranscriptItem::Error(error.to_string()));
+                return Ok(Action::None);
+            }
+        };
+        match payload {
+            ClipboardPayload::Image {
+                width,
+                height,
+                bytes,
+            } => {
+                if self.state.supports_vision && self.attachment_task.is_none() {
+                    self.attachment_task =
+                        Some(AbortOnDropHandle::new(tokio::task::spawn_blocking(
+                            move || workspace::attachments::rgba(width, height, bytes),
+                        )));
+                } else {
+                    self.state.report_local(TranscriptItem::Error(
+                        "当前模型不支持图片，或上一批图片尚在读取。".into(),
+                    ));
+                }
+            }
+            ClipboardPayload::Files(paths) => self.attach(paths),
+            ClipboardPayload::Text(text) => {
+                if let Some(paths) =
+                    tui::attachments::pasted_image_paths(&text, &std::env::current_dir()?)
+                {
+                    self.attach(paths);
+                } else {
+                    self.state.input.insert(&text);
+                }
+            }
         }
         Ok(Action::None)
     }
@@ -257,13 +301,24 @@ impl Tab {
                     .iter()
                     .any(|choice| choice == model)
                 {
-                    self.selected_model = Some(model.to_owned());
-                    self.state.model = model.into();
+                    self.send(Request::SetModel {
+                        session: session.clone(),
+                        model: model.into(),
+                        effort: None,
+                    });
                 } else {
                     self.state.report_local(TranscriptItem::Error(
                         "模型未配置；用 /model 查看目标环境的模型。".into(),
                     ));
                 }
+            }
+            "/reasoning" => self.state.input.set("/reasoning ".into()),
+            text if text.starts_with("/reasoning ") => {
+                self.send(Request::SetModel {
+                    session: session.clone(),
+                    model: self.state.model.clone(),
+                    effort: Some(text[11..].trim().into()),
+                });
             }
             text if text.starts_with("/mode ") => {
                 match text[6..].trim().to_ascii_lowercase().as_str() {
@@ -284,22 +339,37 @@ impl Tab {
                         .report_local(TranscriptItem::Error("模式：auto、ask、yolo".into())),
                 }
             }
-            text if text.starts_with('/') => self.state.report_local(TranscriptItem::Error(
-                "此命令尚未接入工作区服务；/help 查看支持的命令。".into(),
-            )),
-            _ if self.busy || self.starting.is_some() || self.commands.is_none() => {
+            text if text.starts_with('/') && text != "/compact" => self.state.report_local(
+                TranscriptItem::Error("此命令尚未接入工作区服务；/help 查看支持的命令。".into()),
+            ),
+            _ if self.busy
+                || self.starting.is_some()
+                || self.commands.is_none()
+                || self.attachment_task.is_some() =>
+            {
                 self.state.input.set(prompt);
                 self.state.report_local(TranscriptItem::Notice(
                     "连接尚未就绪或任务仍在执行，输入已保留。".into(),
                 ));
             }
             _ => {
+                let images = match workspace::attachments::uploads(&self.state.attachments) {
+                    Ok(images) => images,
+                    Err(error) => {
+                        self.state.input.set(prompt);
+                        self.state
+                            .report_local(TranscriptItem::Error(error.to_string()));
+                        return Ok(Action::None);
+                    }
+                };
                 if self.send(Request::Start {
+                    images,
+                    compact: command == "/compact",
                     session,
                     request_id: workspace::request_id(),
                     prompt: prompt.clone(),
                     mode: self.mode,
-                    model: self.selected_model.clone(),
+                    model: None,
                 }) {
                     self.starting = Some(prompt);
                 } else {

@@ -21,6 +21,7 @@ pub type RunTask = JoinHandle<Result<AgentResult, AgentError>>;
 
 pub struct StartedRun {
     pub receiver: mpsc::Receiver<AgentEvent>,
+    pub inbox: orbit_agent::inbox::AgentInbox,
     pub cancellation: CancellationToken,
     pub task: RunTask,
     pub context_used_tokens: usize,
@@ -94,7 +95,14 @@ pub async fn start(
     let local_limit = options
         .calibration
         .local_limit(options.config.context_tokens, max_output_tokens as usize);
+    let inbox = orbit_agent::inbox::AgentInbox::default();
+    if !compacting {
+        for message in session.store.pending_agent_messages(session.id()).await? {
+            inbox.push(message).await?;
+        }
+    }
     let mut agent = Agent::new(backend.clone(), tools.clone(), config)
+        .with_inbox(inbox.clone())
         .with_calibration(options.model_name.clone(), options.calibration)
         .with_compaction(options.compaction.clone())
         .with_file_activity(files.clone())
@@ -164,6 +172,7 @@ pub async fn start(
     });
 
     Ok(StartedRun {
+        inbox,
         context_used_tokens,
         receiver,
         cancellation,

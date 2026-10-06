@@ -1,13 +1,8 @@
-use crate::workspace;
 use anyhow::Result;
 use std::path::Path;
 
 /// Dispatch isolated worker entry points before parsing frontend arguments.
 pub fn run() -> Result<bool> {
-    if std::env::args().nth(1).as_deref() == Some("--internal-ssh-askpass") {
-        workspace::interaction::askpass()?;
-        return Ok(true);
-    }
     if std::env::args().nth(1).as_deref() == Some("--internal-document-worker") {
         let args: Vec<_> = std::env::args_os().skip(2).collect();
         anyhow::ensure!(

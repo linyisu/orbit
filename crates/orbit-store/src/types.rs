@@ -3,19 +3,7 @@ use orbit_agent::tool::FileChange;
 use orbit_model::types::ChatMessage;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Session {
-    pub id: String,
-    pub workspace: String,
-    pub project_id: String,
-    pub model: String,
-    /// The selected reasoning setting, stored independently from provider
-    /// configuration so a resumed conversation keeps its own preference.
-    pub reasoning_effort: Option<String>,
-    pub demo: bool,
-    pub title: String,
-    pub updated_at: i64,
-}
+pub use orbit_protocol::Session;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {

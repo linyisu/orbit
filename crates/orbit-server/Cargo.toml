@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-orbit-app.workspace = true
+orbit-service.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

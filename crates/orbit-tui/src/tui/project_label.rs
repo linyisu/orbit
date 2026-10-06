@@ -12,7 +12,7 @@ pub(super) fn path_label(workspace: &str, home: Option<&Path>) -> String {
     workspace.to_owned()
 }
 
-pub(super) use crate::workspace::project::branch;
+pub(super) use orbit_service::workspace::project::branch;
 
 #[cfg(test)]
 mod tests {

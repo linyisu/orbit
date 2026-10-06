@@ -33,6 +33,8 @@ pub async fn run(
     }
     client
         .request(Request::Start {
+            images: Vec::new(),
+            compact: false,
             session: session.into(),
             request_id: super::request_id(),
             prompt,

@@ -1,80 +1,18 @@
-use std::{collections::BTreeMap, fmt, path::PathBuf};
-
-use anyhow::{Context, Result};
-use orbit_auth::{AuthStore, CredentialSnapshot};
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug)]
-pub struct Local {
-    pub config: PathBuf,
-    pub auth: PathBuf,
-    pub model: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Configuration {
-    content: String,
-    credentials: BTreeMap<String, CredentialSnapshot>,
-}
-
-impl fmt::Debug for Configuration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Configuration([redacted])")
-    }
-}
-
-impl Local {
-    pub async fn snapshot(&self) -> Result<Configuration> {
-        let content = std::fs::read_to_string(&self.config)
-            .with_context(|| format!("无法读取本地配置 {}", self.config.display()))?;
-        let mut parsed = crate::config::FileConfig::parse(&content, &self.auth)?;
-        crate::account_models::refresh(&mut parsed, false).await;
-        let mut document: toml::Value = toml::from_str(&content)?;
-        let store = AuthStore::new(self.auth.clone())?;
-        let mut credentials = BTreeMap::new();
-        let selected = parsed
-            .model_options()?
-            .into_iter()
-            .find(|model| self.model.as_deref() == Some(model.qualified_name().as_str()));
-
-        for (name, provider) in &mut parsed.providers {
-            if let Some(selected) = &selected
-                && selected.provider == *name
-                && let Some(index) = provider
-                    .models
-                    .iter()
-                    .position(|model| model.id == selected.model)
-            {
-                provider.models.swap(0, index);
-                document["default_provider"] = name.clone().into();
-            }
-            let table = document["providers"][name]
-                .as_table_mut()
-                .context("invalid provider table")?;
-            table.insert("models".into(), toml::Value::try_from(&provider.models)?);
-            table.insert("managed_models".into(), false.into());
-            table.insert("auto_refresh_models".into(), false.into());
-            if let Some(name) = &provider.credential
-                && !credentials.contains_key(name)
-            {
-                credentials.insert(name.clone(), store.snapshot(name).await?);
-            }
-        }
-
-        Ok(Configuration {
-            content: toml::to_string(&document)?,
-            credentials,
-        })
-    }
-}
+use anyhow::Result;
+use orbit_auth::AuthStore;
+use orbit_protocol::Configuration;
+use std::path::PathBuf;
 
 pub struct Installed {
     pub options: super::setup::WorkspaceOptions,
     _directory: tempfile::TempDir,
 }
 
-impl Configuration {
-    pub async fn install(self, options: &super::setup::WorkspaceOptions) -> Result<Installed> {
+impl Installed {
+    pub async fn install(
+        configuration: Configuration,
+        options: &super::setup::WorkspaceOptions,
+    ) -> Result<Installed> {
         use std::{
             io::Write,
             os::unix::fs::{OpenOptionsExt, PermissionsExt},
@@ -92,15 +30,17 @@ impl Configuration {
             .create_new(true)
             .mode(0o600)
             .open(&options.config)?;
-        let mut document: toml::Value = toml::from_str(&self.content)?;
+        let mut document: toml::Value = toml::from_str(&configuration.content)?;
         let rustup = std::env::var_os("RUSTUP_HOME")
             .map(PathBuf::from)
             .or_else(|| options.home.as_ref().map(|home| home.join(".rustup")));
         adapt_toolchain(&mut document, rustup);
         file.write_all(toml::to_string(&document)?.as_bytes())?;
         let store = AuthStore::new(options.auth_directory.clone())?;
-        for (name, credential) in self.credentials {
-            store.import_snapshot(&name, &credential).await?;
+        for (name, credential) in configuration.credentials {
+            store
+                .import_snapshot(&name, &serde_json::from_value(credential)?)
+                .await?;
         }
         crate::config::FileConfig::load(&options.config, &options.auth_directory)?;
         Ok(Installed {
@@ -153,6 +93,7 @@ fn toolchain_exists(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbit_client::configuration::Local;
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -250,7 +191,7 @@ models = [{ id = "first" }, { id = "chosen" }]
             instruction_dir: None,
             editor_command: "vi".into(),
         };
-        let installed = snapshot.install(&options).await.unwrap();
+        let installed = Installed::install(snapshot, &options).await.unwrap();
         assert!(!options.config.exists());
         assert!(!options.auth_directory.exists());
         let parsed = crate::config::FileConfig::load(
