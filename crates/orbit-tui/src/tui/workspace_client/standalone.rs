@@ -4,7 +4,7 @@ use tokio::time;
 use super::*;
 use crate::tui::{self, TabAction, frames::Frames, input_events, render, tabs::Tabs, terminal};
 
-pub(super) async fn run(opened: Opened) -> Result<()> {
+pub(super) async fn run(mut opened: Opened) -> Result<()> {
     let settings = opened
         .connection
         .local_configuration
@@ -15,7 +15,12 @@ pub(super) async fn run(opened: Opened) -> Result<()> {
         .parent()
         .unwrap_or(&settings.auth)
         .join("windows");
-    let window = workspace::windows::TuiWindow::open(directory).await?;
+    let window = workspace::windows::TuiWindow::open_for_connection(
+        directory,
+        &mut opened.client,
+        &opened.connection,
+    )
+    .await?;
     let previous = window.previous().to_vec();
     let mut remembered = Vec::new();
     let mut persisted = std::time::Instant::now();

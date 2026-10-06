@@ -139,7 +139,33 @@ fn reap(directory: &Path, registry: &mut Registry) -> Result<()> {
 
 impl TuiWindow {
     pub async fn open(directory: PathBuf) -> Result<Self> {
-        let legacy = Vec::new();
+        Self::open_with_previous(directory, Vec::new()).await
+    }
+
+    pub async fn open_for_connection(
+        directory: PathBuf,
+        client: &mut super::transport::Client,
+        connection: &Connection,
+    ) -> Result<Self> {
+        let mut previous = Vec::new();
+        if !directory.join("state.json").exists()
+            && matches!(connection.target, Target::Local)
+            && let super::protocol::Response::Sessions(sessions) = client
+                .request(super::protocol::Request::RestoreSessions)
+                .await?
+        {
+            for session in sessions {
+                let mut origin = connection.clone();
+                origin.workspace = session.workspace;
+                if let Some(tab) = SavedTab::from_connection(&origin, session.id, session.title) {
+                    previous.push(tab);
+                }
+            }
+        }
+        Self::open_with_previous(directory, previous).await
+    }
+
+    async fn open_with_previous(directory: PathBuf, legacy: Vec<SavedTab>) -> Result<Self> {
         tokio::task::spawn_blocking(move || {
             let _lock = registry_lock(&directory)?;
             let mut registry = read_registry(&directory, &legacy)?;
@@ -275,5 +301,23 @@ mod tests {
         assert_eq!(third.previous(), [previous]);
         third.close().await.unwrap();
         second.close().await.unwrap();
+    }
+    #[tokio::test]
+    async fn legacy_tabs_seed_only_the_first_client_registry() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = tab(Target::Local, "legacy");
+        let migrated = TuiWindow::open_with_previous(root.path().into(), vec![legacy.clone()])
+            .await
+            .unwrap();
+        assert_eq!(migrated.previous(), [legacy]);
+        let current = tab(Target::Local, "current");
+        migrated.update(vec![current.clone()]).await.unwrap();
+        migrated.close().await.unwrap();
+        let next =
+            TuiWindow::open_with_previous(root.path().into(), vec![tab(Target::Local, "stale")])
+                .await
+                .unwrap();
+        assert_eq!(next.previous(), [current]);
+        next.close().await.unwrap();
     }
 }

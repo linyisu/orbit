@@ -36,6 +36,7 @@ pub async fn read_preamble(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum Request {
+    RestoreSessions,
     Complete {
         session: String,
         input: String,

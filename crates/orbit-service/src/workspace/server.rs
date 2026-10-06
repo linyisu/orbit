@@ -337,6 +337,22 @@ impl Service {
         connection_options: &crate::WorkspaceOptions,
     ) -> Result<Response> {
         match request {
+            Request::RestoreSessions => {
+                let store =
+                    orbit_store::store::Store::open(connection_options.database.clone()).await?;
+                let ids = store.previous_tui_tabs().await?;
+                let mut sessions: std::collections::HashMap<_, _> = store
+                    .list()
+                    .await?
+                    .into_iter()
+                    .map(|session| (session.id.clone(), session))
+                    .collect();
+                Ok(Response::Sessions(
+                    ids.into_iter()
+                        .filter_map(|id| sessions.remove(&id))
+                        .collect(),
+                ))
+            }
             Request::Complete { session, input } => {
                 ensure!(input.len() <= 4096, "completion input is too long");
                 let handle = self.session(&session).await?;
@@ -664,6 +680,13 @@ async fn capabilities() -> orbit_protocol::Capabilities {
                     "compact",
                     "steer",
                     "side_questions",
+                    "project_state",
+                    "plugins",
+                    "completions",
+                    "administration",
+                    "configuration",
+                    "undo",
+                    "development_worktrees",
                 ]
                 .into_iter()
                 .map(str::to_owned)
