@@ -8,10 +8,34 @@ pub(super) fn describe(setup: &PreparedWorkspace) -> SessionInfo {
     let resources = &setup.resources;
     let budget = &resources.budget;
     SessionInfo {
+        mode: resources.mode,
+        branch: None,
+        cursor_trail: resources.cursor_trail,
+        auto_compact: budget.auto_compact,
+        skills: budget.skills.completions(),
         id: setup.session.id().into(),
         title: setup.session.snapshot.session.title.clone(),
         workspace: setup.session.snapshot.session.workspace.clone(),
         model: resources.model_name.clone(),
+        model_catalog: budget
+            .model_options
+            .iter()
+            .map(|model| orbit_protocol::ModelSummary {
+                provider: model.provider.clone(),
+                model: model.model.clone(),
+                supports_vision: model.supports_vision,
+                default_for_provider: model.default_for_provider,
+                reasoning_effort: model
+                    .config
+                    .reasoning_effort
+                    .map(|effort| effort.as_str().into()),
+                reasoning_efforts: model
+                    .reasoning_efforts
+                    .iter()
+                    .map(|effort| effort.as_str().into())
+                    .collect(),
+            })
+            .collect(),
         models: budget
             .model_options
             .iter()

@@ -27,6 +27,8 @@ pub struct PreparedWorkspace {
 }
 
 pub struct WorkspaceResources {
+    pub options: WorkspaceOptions,
+    pub mode: orbit_protocol::Mode,
     pub policy: orbit_protocol::SessionPolicy,
     pub diagnostics: Vec<String>,
     pub web_client: std::sync::Arc<orbit_tools::web_fetch::WebClient>,
@@ -110,7 +112,7 @@ pub async fn prepare_workspace_resources(
     prepare_resources(options, directory, session, Default::default()).await
 }
 
-async fn prepare_resources(
+pub(super) async fn prepare_resources(
     options: &WorkspaceOptions,
     directory: &std::path::Path,
     session: &session::SessionState,
@@ -210,6 +212,12 @@ async fn prepare_resources(
     }
 
     Ok(WorkspaceResources {
+        mode: match session.store.tui_mode(session.id()).await?.as_str() {
+            "ask" => orbit_protocol::Mode::Ask,
+            "YOLO" => orbit_protocol::Mode::Yolo,
+            _ => orbit_protocol::Mode::Auto,
+        },
+        options: options.clone(),
         policy,
         diagnostics,
         web_client: runtime.web_client,

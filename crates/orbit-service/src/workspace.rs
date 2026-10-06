@@ -1,6 +1,9 @@
 mod actions;
+mod admin;
 mod changes;
+mod completion;
 pub mod configuration;
+mod plugins;
 mod profile;
 pub mod project;
 pub mod protocol;

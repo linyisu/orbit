@@ -13,14 +13,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SshOptions {
     pub user: Option<String>,
     pub port: Option<u16>,
     pub identity: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Target {
     Local,
     Ssh {
@@ -127,6 +127,9 @@ pub struct Connection {
 
 impl Connection {
     pub async fn configuration(&self) -> Result<Option<super::configuration::Configuration>> {
+        if matches!(self.target, Target::Local) {
+            return Ok(None);
+        }
         match &self.local_configuration {
             Some(configuration) => Ok(Some(configuration.snapshot().await?)),
             None => Ok(None),
@@ -145,8 +148,8 @@ impl Connection {
             "--workspace".into(),
             self.workspace.clone(),
             "--config".into(),
-            if self.local_configuration.is_some() {
-                "config.toml".into()
+            if let Some(configuration) = &self.local_configuration {
+                configuration.config.to_string_lossy().into_owned()
             } else {
                 self.config.to_string_lossy().into_owned()
             },
@@ -155,7 +158,7 @@ impl Connection {
             ("--database", &self.database),
             (
                 "--auth-dir",
-                if self.local_configuration.is_some() {
+                if self.local_configuration.is_some() && !matches!(self.target, Target::Local) {
                     &None
                 } else {
                     &self.auth_dir
@@ -255,6 +258,7 @@ impl Connection {
         let result = tokio::time::timeout(
             CONNECT_TIMEOUT,
             client.request(Request::Hello {
+                workspace: Some(self.workspace.clone()),
                 version: protocol::VERSION,
             }),
         )

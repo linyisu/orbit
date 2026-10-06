@@ -18,12 +18,22 @@ pub struct Handle {
     pub policy: orbit_protocol::SessionPolicy,
     pub view: Arc<Mutex<View>>,
     requests: mpsc::Sender<Envelope>,
-    pub workspace: orbit_runtime::filesystem::Workspace,
+    pub workspace: Arc<std::sync::RwLock<orbit_runtime::filesystem::Workspace>>,
     pub store: orbit_store::store::Store,
-    pub tools: orbit_agent::tool::ToolRegistry,
 }
 
 pub enum Command {
+    ConfigureModels {
+        configuration: Option<orbit_protocol::Configuration>,
+    },
+    SendSubagent {
+        agent: String,
+        message: String,
+    },
+    SetMode {
+        mode: Mode,
+    },
+    Close,
     Action {
         action: orbit_protocol::SessionAction,
         result: oneshot::Sender<Result<orbit_protocol::Report>>,
@@ -168,17 +178,17 @@ impl Handle {
                 status: run.status.clone(),
             });
         }
-        view.push(Update::Profile(info.clone()));
+        view.push(Update::Profile(Box::new(info.clone())));
         let view = Arc::new(Mutex::new(view));
         let (requests, envelopes) = mpsc::channel::<Envelope>(COMMAND_CAPACITY);
-        let workspace = setup.resources.workspace.clone();
+        let workspace = Arc::new(std::sync::RwLock::new(setup.resources.workspace.clone()));
         let store = setup.session.store.clone();
-        let tools = setup.resources.tools.clone();
         let questions = super::questions::Questions::new(&setup);
         tokio::spawn(actor::run(
             setup,
             view.clone(),
             questions.clone(),
+            workspace.clone(),
             envelopes,
         ));
         Self {
@@ -190,7 +200,6 @@ impl Handle {
             requests,
             workspace,
             store,
-            tools,
         }
     }
 
@@ -202,7 +211,7 @@ impl Handle {
             .iter()
             .rev()
             .find_map(|(update, _)| match update {
-                Update::Profile(info) => Some(info.clone()),
+                Update::Profile(info) => Some((**info).clone()),
                 _ => None,
             })
             .unwrap_or_else(|| self.info.clone())

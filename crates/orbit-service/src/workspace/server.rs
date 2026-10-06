@@ -59,7 +59,6 @@ pub async fn serve(
     let auth = std::path::absolute(auth)?;
     let root = runtime_directory()?;
     let identity = serde_json::to_vec(&(
-        &directory,
         &config,
         &database,
         &auth,
@@ -280,7 +279,8 @@ impl Service {
         if !matches!(
             request,
             Request::Hello {
-                version: protocol::VERSION
+                version: protocol::VERSION,
+                ..
             }
         ) {
             protocol::write(
@@ -293,16 +293,22 @@ impl Service {
             .await?;
             return Ok(());
         }
+        let mut options = self.options.clone();
+        if let Request::Hello {
+            workspace: Some(path),
+            ..
+        } = request
+        {
+            options.initial_directory = expand_home(&path)?
+                .canonicalize()
+                .context("target workspace does not exist")?;
+        }
         protocol::write(
             &mut writer,
             &Response::Hello {
                 version: protocol::VERSION,
                 capabilities: capabilities().await,
-                workspace: self
-                    .options
-                    .initial_directory
-                    .to_string_lossy()
-                    .into_owned(),
+                workspace: options.initial_directory.to_string_lossy().into_owned(),
             },
         )
         .await?;
@@ -310,7 +316,7 @@ impl Service {
             let request = protocol::read::<Request>(&mut reader).await?;
             *self.last_activity.lock().await = tokio::time::Instant::now();
             let shutdown = matches!(request, Request::Shutdown);
-            let response = match self.dispatch(request).await {
+            let response = match self.dispatch(request, &options).await {
                 Ok(response) => response,
                 Err(error) => Response::Error(format!("{error:#}")),
             };
@@ -323,8 +329,26 @@ impl Service {
         }
     }
 
-    async fn dispatch(&self, request: Request) -> Result<Response> {
+    async fn dispatch(
+        &self,
+        request: Request,
+        connection_options: &crate::WorkspaceOptions,
+    ) -> Result<Response> {
         match request {
+            Request::Complete { session, input } => {
+                ensure!(input.len() <= 4096, "completion input is too long");
+                let handle = self.session(&session).await?;
+                let info = handle.current_info().await;
+                let entries = super::completion::complete(
+                    &handle.store,
+                    &info.id,
+                    &info.workspace,
+                    connection_options.home.as_deref(),
+                    &input,
+                )
+                .await?;
+                Ok(Response::Completions { input, entries })
+            }
             Request::Hello { .. } => bail!("workspace handshake already completed"),
             Request::Open {
                 policy,
@@ -351,40 +375,66 @@ impl Service {
                 );
                 let configuration = match configuration {
                     Some(configuration) => Some(
-                        super::configuration::Installed::install(configuration, &self.options)
+                        super::configuration::Installed::install(configuration, connection_options)
                             .await?,
                     ),
                     None => None,
                 };
                 let options = configuration
                     .as_ref()
-                    .map_or(&self.options, |configuration| &configuration.options);
-                let mut setup =
+                    .map_or(connection_options, |configuration| &configuration.options);
+                let setup =
                     super::setup::prepare_service_with_policy(options, resume, policy).await?;
-                let saved = setup.session.snapshot.session.model.clone();
-                if let Some(model) = setup
-                    .resources
-                    .budget
-                    .model_options
-                    .iter()
-                    .find(|model| model.qualified_name() == saved)
-                {
-                    setup.resources.model =
-                        orbit_model::client::ModelClient::new(model.config.clone())?;
-                    setup.resources.model_name = saved;
-                    setup.resources.budget.context_tokens = model.context_tokens;
-                    setup.resources.budget.input_context_tokens = model.input_context_tokens;
-                    setup.resources.budget.max_output_tokens = model.max_output_tokens;
-                }
                 let handle = Arc::new(Handle::spawn(setup, configuration));
                 let info = handle.info.clone();
                 self.sessions.lock().await.insert(info.id.clone(), handle);
                 Ok(Response::Opened(info))
             }
+            Request::Plugins { session, action } => {
+                let handle = self.session(&session).await?;
+                let catalog = super::plugins::execute(&handle, action).await?;
+                handle
+                    .action(orbit_protocol::SessionAction::RefreshSkills)
+                    .await?;
+                Ok(Response::Plugins(catalog))
+            }
+            Request::Admin { action } => {
+                let _opening = self.opening.lock().await;
+                ensure!(
+                    !self.closing.load(Ordering::Acquire),
+                    "workspace service is shutting down"
+                );
+                if let orbit_protocol::admin::Action::DeleteSession { id } = &action {
+                    let handle = self.sessions.lock().await.get(id).cloned();
+                    if let Some(handle) = handle {
+                        handle.command(session::Command::Close).await?;
+                        self.sessions.lock().await.remove(id);
+                    }
+                }
+                let store =
+                    orbit_store::store::Store::open(connection_options.database.clone()).await?;
+                Ok(Response::Report(
+                    super::admin::execute(&store, &connection_options.initial_directory, action)
+                        .await?,
+                ))
+            }
+            Request::ListSessions { session } => {
+                let handle = self.session(&session).await?;
+                let session = handle.store.session(&handle.info.id).await?;
+                let sessions = handle
+                    .store
+                    .list()
+                    .await?
+                    .into_iter()
+                    .filter(|item| item.project_id == session.project_id)
+                    .collect();
+                Ok(Response::Sessions(sessions))
+            }
             Request::Sessions => {
-                let store = orbit_store::store::Store::open(self.options.database.clone()).await?;
+                let store =
+                    orbit_store::store::Store::open(connection_options.database.clone()).await?;
                 let project = store
-                    .resolve_project(&self.options.initial_directory)
+                    .resolve_project(&connection_options.initial_directory)
                     .await?;
                 let sessions = store
                     .list()
@@ -451,6 +501,23 @@ impl Service {
             Request::SessionAction { session, action } => Ok(Response::Report(
                 self.session(&session).await?.action(action).await?,
             )),
+            Request::ConfigureModels {
+                session,
+                configuration,
+            } => {
+                self.session(&session)
+                    .await?
+                    .command(session::Command::ConfigureModels { configuration })
+                    .await?;
+                Ok(Response::Ok)
+            }
+            Request::SetMode { session, mode } => {
+                self.session(&session)
+                    .await?
+                    .command(session::Command::SetMode { mode })
+                    .await?;
+                Ok(Response::Ok)
+            }
             Request::SetModel {
                 session,
                 model,
@@ -511,7 +578,11 @@ impl Service {
                 let session = self.session(&session).await?;
                 let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
                     use std::io::Read;
-                    let file = session.workspace.authorize_read(Path::new(&path))?;
+                    let file = session
+                        .workspace
+                        .read()
+                        .map_err(|_| anyhow::anyhow!("workspace state unavailable"))?
+                        .authorize_read(Path::new(&path))?;
                     let mut bytes = Vec::new();
                     file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
                     ensure!(
@@ -546,14 +617,8 @@ impl Service {
                 );
                 let session = self.session(&session).await?;
                 session.authorize_subagent(&agent).await?;
-                let call = orbit_model::types::ToolCall::function(
-                    super::request_id(),
-                    "send_agent_message",
-                    serde_json::json!({"agent_id": agent, "message": message}),
-                );
                 session
-                    .tools
-                    .execute(call, tokio_util::sync::CancellationToken::new())
+                    .command(session::Command::SendSubagent { agent, message })
                     .await?;
                 Ok(Response::Ok)
             }

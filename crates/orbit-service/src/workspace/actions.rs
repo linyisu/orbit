@@ -1,4 +1,6 @@
-use anyhow::{Result, ensure};
+mod project;
+
+use anyhow::{Context, Result, ensure};
 use orbit_model::types::ChatMessage;
 use orbit_protocol::{Inspection, Report, SessionAction};
 
@@ -10,6 +12,99 @@ pub(super) async fn execute(
     running: bool,
 ) -> Result<Report> {
     match action {
+        SessionAction::ChangeDirectory { path } => {
+            ensure!(!running, "请先结束当前响应再移动会话");
+            let root = std::path::Path::new(&setup.session.snapshot.session.workspace);
+            let path = if path == "~" || path.starts_with("~/") {
+                setup
+                    .resources
+                    .options
+                    .home
+                    .as_ref()
+                    .context("目标环境没有 HOME")?
+                    .join(path.trim_start_matches('~').trim_start_matches('/'))
+            } else {
+                root.join(path)
+            };
+            let directory = path.canonicalize().context("目标目录不存在")?;
+            ensure!(directory.is_dir(), "目标路径必须是目录");
+            let mut options = setup.resources.options.clone();
+            options.initial_directory = directory.clone();
+            let mut resources = super::setup::prepare_resources(
+                &options,
+                &directory,
+                &setup.session,
+                setup.resources.policy.clone(),
+            )
+            .await?;
+            super::profile::apply(
+                &mut resources,
+                &setup.resources.model_name,
+                setup.resources.model.config().reasoning_effort,
+            )?;
+            setup
+                .session
+                .move_to(
+                    resources.workspace.clone(),
+                    resources.command_limits.clone(),
+                )
+                .await?;
+            setup.resources = resources;
+            Ok(report("工作目录", directory.to_string_lossy().into_owned()))
+        }
+        SessionAction::RefreshSkills => {
+            let options = &setup.resources.options;
+            let enabled = setup
+                .session
+                .store
+                .project_plugins(&setup.session.snapshot.session.project_id)
+                .await?;
+            let roots = crate::marketplaces::enabled_skill_roots(&enabled);
+            let skills = if setup
+                .resources
+                .policy
+                .disabled(orbit_protocol::Capability::Skills)
+            {
+                Default::default()
+            } else {
+                crate::skills::Skills::discover_with_plugin_roots(
+                    std::path::Path::new(&setup.session.snapshot.session.workspace),
+                    options.home.clone(),
+                    options.config_home.clone(),
+                    roots.roots,
+                )
+            };
+            skills.register_tool(&mut setup.resources.tools);
+            setup.resources.budget.skills = skills;
+            setup.resources.budget.plugin_skill_diagnostics = roots.diagnostics;
+            Ok(report("Skills", setup.resources.budget.skills.render()))
+        }
+        SessionAction::Task { task } => {
+            ensure!(
+                !setup
+                    .resources
+                    .policy
+                    .disabled(orbit_protocol::Capability::ProjectState),
+                "任务功能已禁用"
+            );
+            let mut history = Vec::new();
+            let result =
+                crate::project_state::actions::task(&setup.session, &mut history, task).await?;
+            Ok(project::task_report(result))
+        }
+        SessionAction::Memory { memory } => {
+            ensure!(
+                !setup
+                    .resources
+                    .policy
+                    .disabled(orbit_protocol::Capability::ProjectState),
+                "记忆功能已禁用"
+            );
+            let mut history = Vec::new();
+            let result =
+                crate::project_state::actions::memory(&setup.session, &mut history, memory).await?;
+            Ok(project::memory_report(result))
+        }
         SessionAction::Inspect { section } => inspect(setup, section).await,
         SessionAction::Rename { title } => {
             ensure!(

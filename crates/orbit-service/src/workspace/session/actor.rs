@@ -36,6 +36,8 @@ struct Undo {
 }
 
 struct Actor {
+    configuration: Option<crate::workspace::configuration::Installed>,
+    workspace: Arc<std::sync::RwLock<orbit_runtime::filesystem::Workspace>>,
     setup: PreparedWorkspace,
     view: Arc<Mutex<View>>,
     questions: Questions,
@@ -52,15 +54,19 @@ pub(super) async fn run(
     setup: PreparedWorkspace,
     view: Arc<Mutex<View>>,
     questions: Questions,
+    workspace: Arc<std::sync::RwLock<orbit_runtime::filesystem::Workspace>>,
     mut requests: mpsc::Receiver<Envelope>,
 ) {
+    let mode = setup.resources.mode;
     let mut actor = Actor {
+        configuration: None,
+        workspace,
         setup,
         view,
         questions,
         running: None,
         undo: None,
-        mode: Mode::Auto,
+        mode,
         accepted: HashMap::new(),
         remembered: HashSet::new(),
         pending: HashMap::new(),
@@ -71,6 +77,15 @@ pub(super) async fn run(
         tokio::select! {
             envelope = requests.recv() => {
                 let Some(envelope) = envelope else { break };
+                if matches!(&envelope.command, Command::Close) {
+                    if actor.busy() || actor.questions.running().await {
+                        let _ = envelope.reply.send(Err(anyhow::anyhow!("会话正在运行，无法删除")));
+                        continue;
+                    }
+                    drop(actor);
+                    let _ = envelope.reply.send(Ok(()));
+                    return;
+                }
                 let result = actor.command(envelope.command).await;
                 let _ = envelope.reply.send(result);
             }
@@ -104,7 +119,19 @@ pub(super) async fn run(
 
 impl Actor {
     fn busy(&self) -> bool {
-        self.running.is_some() || self.undo.is_some()
+        self.running.is_some()
+            || self.undo.is_some()
+            || self.setup.resources.tools.task_groups().any(|jobs| {
+                jobs.snapshots(&[], false).map_or(true, |jobs| {
+                    jobs.iter().any(|job| {
+                        matches!(
+                            job.status,
+                            orbit_agent::background::JobStatus::Running
+                                | orbit_agent::background::JobStatus::Cancelling
+                        )
+                    })
+                })
+            })
     }
 
     fn cancel(&self) {
@@ -117,16 +144,86 @@ impl Actor {
     }
 
     async fn profile(&self) {
+        if let Ok(mut workspace) = self.workspace.write() {
+            *workspace = self.setup.resources.workspace.clone();
+        }
         self.questions.update(&self.setup);
         let mut view = self.view.lock().await;
         view.model = self.setup.resources.model_name.clone();
-        view.push(Update::Profile(profile::describe(&self.setup)));
+        view.push(Update::Profile(Box::new(profile::describe(&self.setup))));
     }
 
     async fn command(&mut self, command: Command) -> Result<()> {
         match command {
+            Command::SendSubagent { agent, message } => {
+                self.setup
+                    .resources
+                    .tools
+                    .execute(
+                        orbit_model::types::ToolCall::function(
+                            super::super::request_id(),
+                            "send_agent_message",
+                            serde_json::json!({"agent_id": agent, "message": message}),
+                        ),
+                        CancellationToken::new(),
+                    )
+                    .await?;
+            }
+            Command::SetMode { mode } => {
+                self.setup
+                    .session
+                    .store
+                    .set_tui_mode(
+                        self.setup.session.id(),
+                        match mode {
+                            Mode::Ask => "ask",
+                            Mode::Auto => "auto",
+                            Mode::Yolo => "YOLO",
+                        },
+                    )
+                    .await?;
+                self.setup.resources.mode = mode;
+                self.mode = mode;
+                self.profile().await;
+            }
+            Command::ConfigureModels { configuration } => {
+                ensure!(!self.busy(), "请在当前任务结束后更新模型配置");
+                let installed = match configuration {
+                    Some(configuration) => Some(
+                        crate::workspace::configuration::Installed::install(
+                            configuration,
+                            &self.setup.resources.options,
+                        )
+                        .await?,
+                    ),
+                    None => None,
+                };
+                let options = installed
+                    .as_ref()
+                    .map_or(&self.setup.resources.options, |value| &value.options);
+                let mut config =
+                    crate::config::FileConfig::load(&options.config, &options.auth_directory)?;
+                crate::account_models::refresh(&mut config, false).await;
+                let models = config.model_options()?;
+                let selected = if models
+                    .iter()
+                    .any(|model| model.qualified_name() == self.setup.resources.model_name)
+                {
+                    self.setup.resources.model_name.clone()
+                } else {
+                    config.default_model_option()?.qualified_name()
+                };
+                self.setup.resources.budget.model_options = models;
+                profile::select(&mut self.setup, &selected, None).await?;
+                if let Some(installed) = installed {
+                    self.setup.resources.options = installed.options.clone();
+                    self.configuration = Some(installed);
+                }
+                self.profile().await;
+            }
+            Command::Close => unreachable!("close handled by actor loop"),
             Command::Action { action, result } => {
-                let busy = self.busy();
+                let busy = self.busy() || self.questions.running().await;
                 let response =
                     crate::workspace::actions::execute(&mut self.setup, action, busy).await;
                 if response.is_ok() {
@@ -319,6 +416,9 @@ impl Actor {
             _ => None,
         };
         let saved = self.setup.session.finish(status, history).await;
+        if let Ok(mut workspace) = self.workspace.write() {
+            *workspace = self.setup.resources.workspace.clone();
+        }
         self.questions.update(&self.setup);
         let status = if saved.is_ok() { status } else { "failed" };
         let mut view = self.view.lock().await;

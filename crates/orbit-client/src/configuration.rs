@@ -12,10 +12,14 @@ pub struct Local {
 
 impl Local {
     pub async fn snapshot(&self) -> Result<Configuration> {
+        self.snapshot_with_refresh(false).await
+    }
+
+    pub async fn snapshot_with_refresh(&self, force: bool) -> Result<Configuration> {
         let content = std::fs::read_to_string(&self.config)
             .with_context(|| format!("无法读取本地配置 {}", self.config.display()))?;
         let mut parsed = orbit_config::config::FileConfig::parse(&content, &self.auth)?;
-        orbit_config::models::account_models::refresh(&mut parsed, false).await;
+        orbit_config::models::account_models::refresh(&mut parsed, force).await;
         let mut document: toml::Value = toml::from_str(&content)?;
         let store = AuthStore::new(self.auth.clone())?;
         let mut credentials = BTreeMap::new();

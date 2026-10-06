@@ -7,7 +7,7 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 // Keep framing stable so Hello can report incompatible schema versions.
 pub const PREAMBLE: &[u8] = b"\0ORBIT-WORKSPACE/1\n";
 pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
@@ -36,8 +36,14 @@ pub async fn read_preamble(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum Request {
+    Complete {
+        session: String,
+        input: String,
+    },
     Hello {
         version: u32,
+        #[serde(default)]
+        workspace: Option<String>,
     },
     Open {
         #[serde(default)]
@@ -47,6 +53,16 @@ pub enum Request {
         configuration: Option<Configuration>,
     },
     Sessions,
+    ListSessions {
+        session: String,
+    },
+    Plugins {
+        session: String,
+        action: plugins::Action,
+    },
+    Admin {
+        action: admin::Action,
+    },
     Start {
         session: String,
         request_id: String,
@@ -74,6 +90,14 @@ pub enum Request {
     SessionAction {
         session: String,
         action: SessionAction,
+    },
+    ConfigureModels {
+        session: String,
+        configuration: Option<Configuration>,
+    },
+    SetMode {
+        session: String,
+        mode: Mode,
     },
     SetModel {
         session: String,
@@ -134,6 +158,18 @@ pub struct SessionInfo {
     pub workspace: String,
     pub model: String,
     pub models: Vec<String>,
+    #[serde(default)]
+    pub model_catalog: Vec<ModelSummary>,
+    #[serde(default)]
+    pub mode: Mode,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub cursor_trail: bool,
+    #[serde(default)]
+    pub auto_compact: bool,
+    #[serde(default)]
+    pub skills: Vec<(String, String)>,
     pub supports_vision: bool,
     pub reasoning_effort: Option<String>,
     pub reasoning_efforts: Vec<String>,
@@ -142,9 +178,25 @@ pub struct SessionInfo {
     pub max_output_tokens: u32,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ModelSummary {
+    pub provider: String,
+    pub model: String,
+    pub supports_vision: bool,
+    pub default_for_provider: bool,
+    pub reasoning_effort: Option<String>,
+    pub reasoning_efforts: Vec<String>,
+}
+
+impl ModelSummary {
+    pub fn qualified_name(&self) -> String {
+        format!("{}::{}", self.provider, self.model)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Update<E> {
-    Profile(SessionInfo),
+    Profile(Box<SessionInfo>),
     Report(Report),
     Started { prompt: String },
     Agent(Box<E>),
@@ -176,6 +228,10 @@ pub struct Page<E, A> {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Response<E, A> {
+    Completions {
+        input: String,
+        entries: Vec<Completion>,
+    },
     Hello {
         version: u32,
         workspace: String,
@@ -187,6 +243,7 @@ pub enum Response<E, A> {
     Subagent(Page<E, A>),
     Questions(Questions),
     Report(Report),
+    Plugins(plugins::Catalog),
     File(String),
     Ok,
     Error(String),
@@ -240,16 +297,25 @@ mod tests {
             )
             .await
             .unwrap();
-            write(&mut writer, &Request::Hello { version: VERSION })
-                .await
-                .unwrap();
+            write(
+                &mut writer,
+                &Request::Hello {
+                    version: VERSION,
+                    workspace: None,
+                },
+            )
+            .await
+            .unwrap();
         });
         assert!(
             matches!(read::<Request>(&mut reader).await.unwrap(), Request::Open { resume: Some(id), .. } if id == "中文\n会话")
         );
         assert!(matches!(
             read::<Request>(&mut reader).await.unwrap(),
-            Request::Hello { version: VERSION }
+            Request::Hello {
+                version: VERSION,
+                workspace: None
+            }
         ));
         task.await.unwrap();
         let mut oversized = ((MAX_FRAME_BYTES + 1) as u32)
@@ -356,6 +422,10 @@ pub struct Questions {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum SessionAction {
+    ChangeDirectory { path: String },
+    RefreshSkills,
+    Task { task: project::TaskAction },
+    Memory { memory: project::MemoryAction },
     Inspect { section: Inspection },
     Rename { title: String },
     LoadSkill { name: String },
@@ -427,4 +497,12 @@ impl SessionPolicy {
     pub fn disabled(&self, capability: Capability) -> bool {
         self.disabled.contains(&Capability::All) || self.disabled.contains(&capability)
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Completion {
+    pub name: String,
+    pub display: Option<String>,
+    pub description: String,
+    pub continue_input: bool,
 }

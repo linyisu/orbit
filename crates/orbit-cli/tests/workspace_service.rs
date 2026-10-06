@@ -15,7 +15,7 @@ struct Client {
 
 impl Client {
     async fn connect(root: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
+        let mut child = Command::new(env!("ORBIT_EMBEDDED_SERVER"))
             .arg("workspace-service")
             .arg("--workspace")
             .arg(root)
@@ -42,7 +42,9 @@ impl Client {
         client.output.read_exact(&mut marker).await.unwrap();
         assert_eq!(marker, b"\0ORBIT-WORKSPACE/1\n");
         assert_eq!(
-            client.request(json!({"method":"hello","version":4})).await["type"],
+            client
+                .request(json!({"method":"hello","version":orbit_protocol::VERSION}))
+                .await["type"],
             "hello"
         );
         client
@@ -410,7 +412,7 @@ async fn ssh_and_wsl_launchers_use_the_same_service_and_ignore_shell_banners() {
                 .arg("connect")
                 .args(&target)
                 .arg("--server")
-                .arg(env!("CARGO_BIN_EXE_orbit-cli"))
+                .arg(env!("ORBIT_EMBEDDED_SERVER"))
                 .arg("--workspace")
                 .arg(&workspace)
                 .arg("--database")
@@ -571,7 +573,7 @@ models = [{{ id = "mock" }}]
                 .arg("connect")
                 .args(&target)
                 .arg("--server")
-                .arg(env!("CARGO_BIN_EXE_orbit-cli"))
+                .arg(env!("ORBIT_EMBEDDED_SERVER"))
                 .arg("--workspace")
                 .arg(project.path())
                 .arg("--config")
@@ -609,7 +611,7 @@ models = [{{ id = "mock" }}]
             .arg("connect")
             .args(&target)
             .arg("--server")
-            .arg(env!("CARGO_BIN_EXE_orbit-cli"))
+            .arg(env!("ORBIT_EMBEDDED_SERVER"))
             .arg("--workspace")
             .arg(project.path())
             .arg("--database")
@@ -624,4 +626,84 @@ models = [{{ id = "mock" }}]
             .await
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("config.toml"),
+        r#"default_provider = "test"
+[providers.test]
+base_url = "http://127.0.0.1:1"
+api_key = "test-only"
+auto_refresh_models = false
+models = [{ id = "mock" }, { id = "other" }]
+"#,
+    )
+    .unwrap();
+    let project = root.join("next project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("proof.txt"), "target directory").unwrap();
+    let mut client = Client::connect(root).await;
+    let opened = client.request(json!({"method":"open"})).await;
+    assert_eq!(opened["type"], "opened", "{opened}");
+    let id = opened["value"]["id"].as_str().unwrap().to_owned();
+    let completion = client
+        .request(json!({"method":"complete","session":id,"input":"/cd next"}))
+        .await;
+    assert_eq!(completion["type"], "completions", "{completion}");
+    assert_eq!(
+        completion["value"]["entries"][0]["display"],
+        "next project/"
+    );
+    for request in [
+        json!({"method":"set_mode","session":id,"mode":"ask"}),
+        json!({"method":"set_model","session":id,"model":"test::other","effort":null}),
+        json!({"method":"configure_models","session":id,"configuration":null}),
+    ] {
+        let response = client.request(request).await;
+        assert_eq!(response["type"], "ok", "{response}");
+    }
+    let moved = client.request(json!({"method":"session_action","session":id,"action":{"action":"change_directory","path":project}})).await;
+    assert_eq!(moved["type"], "report", "{moved}");
+    let info = client.request(json!({"method":"open","resume":id})).await;
+    assert_eq!(
+        info["value"]["workspace"],
+        project.to_string_lossy().as_ref()
+    );
+    assert_eq!(info["value"]["mode"], "ask");
+    assert_eq!(info["value"]["model"], "test::other");
+    let file = client
+        .request(json!({"method":"read_file","session":id,"path":"proof.txt"}))
+        .await;
+    assert_eq!(file["type"], "file", "{file}");
+    let task = client.request(json!({"method":"session_action","session":id,"action":{"action":"task","task":{"action":"add","title":"service task"}}})).await;
+    assert_eq!(task["type"], "report", "{task}");
+    let task_completion = client
+        .request(json!({"method":"complete","session":id,"input":"/tasks done "}))
+        .await;
+    assert_eq!(
+        task_completion["value"]["entries"][0]["description"], "service task",
+        "{task_completion}"
+    );
+    let list = client
+        .request(json!({"method":"list_sessions","session":id}))
+        .await;
+    assert!(
+        list["value"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["id"] == id)
+    );
+    let deletion = client
+        .request(json!({"method":"admin","action":{"action":"delete_session","id":id}}))
+        .await;
+    assert_eq!(deletion["type"], "report", "{deletion}");
+    assert_eq!(
+        client.request(json!({"method":"shutdown"})).await["type"],
+        "ok"
+    );
 }
