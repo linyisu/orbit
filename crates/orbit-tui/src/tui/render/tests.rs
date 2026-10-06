@@ -1498,6 +1498,32 @@ fn welcome_commands_and_small_terminal_render() {
 }
 
 #[test]
+fn environment_labels_never_appear_in_composer_details_or_workspace_footer() {
+    for label in ["本地", "SSH 204", "WSL Ubuntu"] {
+        let mut state = UiState::new("provider::model");
+        state.connection_label = Some(label.into());
+        state.workspace = "/project".into();
+        for width in [16, 40, 120] {
+            let details = composer_details(&state, width)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(!details.contains(label));
+            let footer = footer(&state, width).to_string();
+            assert!(!footer.contains(label));
+            assert!(footer.contains("project"));
+        }
+        assert!(
+            composer_details(&state, 120)[0]
+                .to_string()
+                .contains("model")
+        );
+        assert!(footer(&state, 120).to_string().contains("/project"));
+    }
+}
+
+#[test]
 fn connected_workspaces_keep_the_home_screen_until_a_conversation_starts() {
     for label in ["本地", "SSH 204", "WSL Ubuntu"] {
         let mut state = UiState::new("mock-model");
