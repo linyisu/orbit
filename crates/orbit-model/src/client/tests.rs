@@ -1,3 +1,7 @@
+mod request;
+
+use request::read_request;
+
 #[tokio::test]
 async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() {
     use serde_json::json;
@@ -260,10 +264,7 @@ fn rejects_credentials_used_as_service_addresses_without_echoing_them() {
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-};
+use tokio::{io::AsyncWriteExt, net::TcpListener};
 
 use super::*;
 
@@ -775,22 +776,7 @@ async fn test_server_responses(
 
         for response in responses {
             let (mut socket, _) = listener.accept().await.expect("accept request");
-            let mut bytes = Vec::new();
-            let mut buffer = [0_u8; 4096];
-
-            loop {
-                let count = socket.read(&mut buffer).await.expect("read request");
-
-                if count == 0 {
-                    break;
-                }
-
-                bytes.extend_from_slice(&buffer[..count]);
-
-                if request_complete(&bytes) {
-                    break;
-                }
-            }
+            read_request(&mut socket).await;
 
             requests += 1;
             socket.write_all(&response).await.expect("write response");
@@ -816,22 +802,7 @@ async fn test_server_held(
 
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accept request");
-        let mut bytes = Vec::new();
-        let mut buffer = [0_u8; 4096];
-
-        loop {
-            let count = socket.read(&mut buffer).await.expect("read request");
-
-            if count == 0 {
-                break;
-            }
-
-            bytes.extend_from_slice(&buffer[..count]);
-
-            if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
-            }
-        }
+        let bytes = read_request(&mut socket).await;
 
         for chunk in chunks.iter() {
             socket.write_all(chunk).await.expect("write response");
@@ -846,23 +817,4 @@ async fn test_server_held(
     (format!("http://{address}"), async move {
         receiver.await.expect("request captured")
     })
-}
-
-// Bodies must be captured before the response is written; stopping at the
-// header terminator races with the client's head and body TCP segments.
-// Forwarding proxies may re-encode bodies as chunked, so wait for either the
-// declared content length or the chunked terminator.
-fn request_complete(bytes: &[u8]) -> bool {
-    let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
-        return false;
-    };
-    let headers = String::from_utf8_lossy(&bytes[..header_end]).to_ascii_lowercase();
-    if headers.contains("transfer-encoding: chunked") {
-        return bytes.ends_with(b"0\r\n\r\n");
-    }
-    headers
-        .lines()
-        .find_map(|line| line.strip_prefix("content-length:"))
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .is_none_or(|length| bytes.len() >= header_end + 4 + length)
 }
