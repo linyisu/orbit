@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: "2"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   ci:
@@ -78,6 +82,13 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace
+
+      - name: Report build resources on failure
+        if: failure()
+        run: |
+          df -h
+          free -h
+          du -sh target/* 2>/dev/null || true
 
   native-execution:
     name: Execution without Bubblewrap
