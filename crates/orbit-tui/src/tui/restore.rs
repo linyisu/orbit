@@ -1,12 +1,12 @@
-//! Multi-select restore, drawn in the command completion area rather than a modal.
+//! Select saved workspace tabs to restore.
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
-    layout::{Alignment, Rect},
+    layout::{Alignment, Position, Rect},
     style::{Modifier, Style},
-    widgets::{Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -28,6 +28,7 @@ pub struct RestorePicker {
     rows: Vec<(Rect, usize)>,
     all: Rect,
     none: Rect,
+    confirm: Rect,
     area: Rect,
     pointer: Option<(u16, u16)>,
     title_scroll: Option<(usize, usize, Instant)>,
@@ -42,7 +43,12 @@ impl RestorePicker {
                 .enumerate()
                 .map(|(index, tab)| Entry {
                     id: index.to_string(),
-                    title: format!("{} · {}", tab.target.label(), tab.title),
+                    title: {
+                        let label = tab.target.label();
+                        let prefix = format!("{label} · ");
+                        let title = tab.title.strip_prefix(&prefix).unwrap_or(&tab.title);
+                        format!("{label} · {title}")
+                    },
                     selected: true,
                 })
                 .collect(),
@@ -52,6 +58,7 @@ impl RestorePicker {
             rows: Vec::new(),
             all: Rect::default(),
             none: Rect::default(),
+            confirm: Rect::default(),
             area: Rect::default(),
             pointer: None,
             title_scroll: None,
@@ -63,10 +70,6 @@ impl RestorePicker {
         super::search::ranked(0..self.entries.len(), |index| {
             super::search::rank(&self.entries[*index].title, &self.query)
         })
-    }
-
-    pub fn height(&self) -> u16 {
-        self.filtered().len().clamp(1, 8) as u16 + 1
     }
 
     fn selected(&self) -> Vec<String> {
@@ -127,35 +130,74 @@ impl RestorePicker {
         changed
     }
 
-    pub fn draw(&mut self, frame: &mut Frame<'_>, area: Rect) {
+    pub fn draw(&mut self, frame: &mut Frame<'_>, full: Rect) -> Option<Position> {
         self.rows.clear();
         self.all = Rect::default();
         self.none = Rect::default();
-        self.area = area;
-        if area.height < 2 || area.width < 8 {
+        self.confirm = Rect::default();
+        self.area = Rect::default();
+        let area =
+            super::dialogs::centered_size(full, 96, self.entries.len().clamp(3, 14) as u16 + 9);
+        super::overlay::clear(frame, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(THEME.accent));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        if inner.height < 7 || inner.width < 12 {
             self.title_scroll = None;
-            return;
+            return None;
         }
-
-        frame.render_widget(Clear, area);
         let inner = Rect::new(
-            area.x + 2,
-            area.y,
-            area.width.saturating_sub(4),
-            area.height,
-        );
-
-        self.all = Rect::new(inner.x, inner.y, 6.min(inner.width), 1);
-        self.none = Rect::new(
-            inner.x + 8.min(inner.width),
+            inner.x + 1,
             inner.y,
-            6.min(inner.width.saturating_sub(8)),
-            1,
+            inner.width.saturating_sub(2),
+            inner.height,
         );
-        for (label, hit) in [("全选", &mut self.all), ("清空", &mut self.none)] {
-            let label = super::render::padded_label(label, hit.width as usize, 1);
-            hit.width = label.width() as u16;
-            let style = if self.pointer.is_some_and(|point| hit.contains(point.into())) {
+        let total = self.entries.len();
+        let selected = self.entries.iter().filter(|entry| entry.selected).count();
+        frame.render_widget(
+            Paragraph::new(format!("恢复上次会话 · 已选 {selected}/{total}")).style(
+                Style::default()
+                    .fg(THEME.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+        let search = super::render::fit_label(
+            &format!("搜索：{}", self.query),
+            inner.width.saturating_sub(1) as usize,
+            true,
+        );
+        let cursor = Position::new(inner.x + search.width() as u16, inner.y + 1);
+        frame.render_widget(
+            Paragraph::new(search),
+            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+        );
+        let toolbar_y = inner.bottom() - 3;
+        self.area = Rect::new(
+            inner.x,
+            inner.y + 3,
+            inner.width,
+            toolbar_y.saturating_sub(inner.y + 4),
+        );
+        self.all = Rect::new(inner.x, toolbar_y, 6, 1).intersection(inner);
+        self.none = Rect::new(inner.x + 7, toolbar_y, 6, 1).intersection(inner);
+        let confirm_y = if inner.width < 28 {
+            toolbar_y + 1
+        } else {
+            toolbar_y
+        };
+        self.confirm = Rect::new(inner.right().saturating_sub(10), confirm_y, 10, 1);
+        for (label, hit, enabled) in [
+            ("全选", self.all, true),
+            ("清空", self.none, true),
+            ("恢复", self.confirm, selected > 0),
+        ] {
+            let hovered = self.pointer.is_some_and(|point| hit.contains(point.into()));
+            let style = if !enabled {
+                Style::default().fg(THEME.secondary)
+            } else if hovered {
                 Style::default()
                     .fg(THEME.on_accent)
                     .bg(THEME.accent)
@@ -163,44 +205,30 @@ impl RestorePicker {
             } else {
                 Style::default().fg(THEME.accent)
             };
-
-            frame.render_widget(Paragraph::new(label).style(style), *hit);
-        }
-
-        let total = self.entries.len();
-        let selected = self.entries.iter().filter(|entry| entry.selected).count();
-        let count = format!(
-            "已选 {selected:>width$}/{total}",
-            width = total.to_string().len()
-        );
-        let count_width = inner.width.saturating_sub(16);
-        if count.width() <= count_width as usize {
             frame.render_widget(
-                Paragraph::new(count)
-                    .alignment(Alignment::Right)
-                    .style(Style::default().fg(THEME.secondary)),
-                Rect::new(inner.x + 16, inner.y, count_width, 1),
+                Paragraph::new(label)
+                    .alignment(Alignment::Center)
+                    .style(style),
+                hit,
             );
         }
-
+        frame.render_widget(
+            Paragraph::new("↑↓ 选择 · 空格 勾选 · Enter 恢复 · Esc 返回")
+                .style(Style::default().fg(THEME.secondary)),
+            Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
+        );
         let ids = self.filtered();
-        let slots = inner.height.saturating_sub(1) as usize;
+        let slots = self.area.height as usize;
         self.offset = self.offset.min(ids.len().saturating_sub(slots));
         self.cursor = self.cursor.min(ids.len().saturating_sub(1));
         for (row, &index) in ids.iter().skip(self.offset).take(slots).enumerate() {
-            let entry = &self.entries[index];
-            let hit = Rect::new(
-                inner.x,
-                inner.y + 1 + row as u16,
-                (4 + entry.title.width()).min(inner.width as usize) as u16,
-                1,
-            );
-
-            self.rows.push((hit, index));
+            self.rows.push((
+                Rect::new(self.area.x, self.area.y + row as u16, self.area.width, 1),
+                index,
+            ));
         }
-
         self.hover();
-        let title_width = inner.width.saturating_sub(4) as usize;
+        let title_width = self.area.width.saturating_sub(4) as usize;
         let title_elapsed = self.prepare_title_scroll(title_width);
         for (hit, index) in &self.rows {
             let entry = &self.entries[*index];
@@ -210,20 +238,24 @@ impl RestorePicker {
                 title_width,
                 if focused { title_elapsed } else { None },
             );
-            let text = super::render::padded_label(
-                &format!("{} {title}", icons::checkbox(entry.selected)),
-                hit.width as usize,
-                1,
+            frame.render_widget(
+                Paragraph::new(icons::checkbox(entry.selected)).style(Style::default().fg(
+                    if entry.selected {
+                        THEME.accent
+                    } else {
+                        THEME.secondary
+                    },
+                )),
+                Rect::new(hit.x + 1, hit.y, 2, 1),
             );
+            let text_area = Rect::new(hit.x + 4, hit.y, hit.width.saturating_sub(4), 1);
             let style = if focused {
                 Style::default().fg(THEME.on_accent).bg(THEME.accent)
             } else {
                 Style::default().fg(THEME.foreground)
             };
-
-            frame.render_widget(Paragraph::new(text).style(style), *hit);
+            frame.render_widget(Paragraph::new(title).style(style), text_area);
         }
-
         if ids.is_empty() {
             frame.render_widget(
                 Paragraph::new(if self.entries.is_empty() {
@@ -232,9 +264,10 @@ impl RestorePicker {
                     "没有匹配的会话"
                 })
                 .style(Style::default().fg(THEME.secondary)),
-                Rect::new(inner.x, inner.y + 1, inner.width, 1),
+                self.area,
             );
         }
+        Some(cursor)
     }
 }
 
@@ -310,12 +343,11 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
                 _ => {}
             }
 
-            let slots = picker.area.height.saturating_sub(1).max(1) as usize;
+            let slots = picker.area.height.max(1) as usize;
             picker.offset = picker
                 .offset
                 .min(picker.cursor)
                 .max(picker.cursor.saturating_sub(slots - 1));
-            state.input.set(format!("/restore {}", picker.query));
         }
 
         Event::Mouse(mouse) => {
@@ -323,7 +355,15 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
             picker.pointer = Some(point);
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if picker.all.contains(point.into()) {
+                    if picker.confirm.contains(point.into()) {
+                        let ids = picker.selected();
+                        if !ids.is_empty() {
+                            state.restore_selection = Some(ids);
+                            state.restore_picker = None;
+                            state.input.set(String::new());
+                        }
+                        return true;
+                    } else if picker.all.contains(point.into()) {
                         picker
                             .entries
                             .iter_mut()
@@ -347,7 +387,7 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
                         picker
                             .filtered()
                             .len()
-                            .saturating_sub(picker.area.height.saturating_sub(1) as usize),
+                            .saturating_sub(picker.area.height as usize),
                     )
                 }
 
@@ -365,7 +405,6 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
             picker.cursor = 0;
             picker.offset = 0;
             picker.title_scroll = None;
-            state.input.set(format!("/restore {}", picker.query));
         }
 
         Event::Resize(_, _) => {
@@ -400,6 +439,7 @@ mod tests {
             rows: Vec::new(),
             all: Rect::default(),
             none: Rect::default(),
+            confirm: Rect::default(),
             area: Rect::default(),
             pointer: None,
             title_scroll: None,
@@ -498,8 +538,6 @@ mod tests {
                 icons::CHECKBOX_MARKED_OUTLINE
             );
             let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-            assert!(!text.contains("Enter"));
-            assert!(!text.contains("Esc/Ctrl+C"));
             if picker.area.width >= 31 {
                 assert!(
                     text.replace(' ', "").contains("已选15/15"),
@@ -507,7 +545,8 @@ mod tests {
                 );
             }
 
-            assert_eq!(picker.height(), 2);
+            assert_eq!(picker.rows.len(), 1);
+            assert_eq!(buffer[(row.x + 1, row.y)].fg, THEME.accent);
         }
     }
 
@@ -553,7 +592,7 @@ mod tests {
         assert!(picker.title_scroll.as_ref().unwrap().2.elapsed() < Duration::from_secs(1));
         assert_eq!(
             picker.title_scroll.as_ref().unwrap().1,
-            picker.area.width as usize - 8
+            picker.area.width as usize - 4
         );
 
         key(&mut state, KeyCode::Down);
@@ -574,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_fits_the_home_completion_area_without_opening_a_dialog() {
+    fn picker_owns_a_centered_dialog_and_search_cursor() {
         let mut state = state();
         state.input.set("/restore ".into());
         for (width, height) in [(80, 24), (40, 16), (120, 40)] {
@@ -584,7 +623,9 @@ mod tests {
                 .unwrap();
             let picker = state.restore_picker.as_ref().unwrap();
             assert!(!picker.rows.is_empty());
-            assert!(picker.area.bottom() <= state.input_area.y);
+            assert!(state.dialog_open());
+            assert!(state.ime_cursor.unwrap().y < picker.area.y);
+            assert!(!state.input_area.contains(state.ime_cursor.unwrap()));
             assert!(picker.rows.iter().all(|(area, _)| area.right() <= width));
             assert!(state.picker.is_none());
         }
@@ -658,7 +699,7 @@ mod tests {
     #[test]
     fn wheel_scrolls_rows_and_recomputes_hover_without_mouse_motion() {
         let mut state = state();
-        let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(60, 18)).unwrap();
         let draw = |state: &mut UiState, terminal: &mut Terminal<TestBackend>| {
             terminal
                 .draw(|frame| {
@@ -669,11 +710,12 @@ mod tests {
         };
 
         draw(&mut state, &mut terminal);
+        let row_y = state.restore_picker.as_ref().unwrap().rows[1].0.y;
         let mouse = |kind, column| {
             Event::Mouse(MouseEvent {
                 kind,
                 column,
-                row: 2,
+                row: row_y,
                 modifiers: KeyModifiers::NONE,
             })
         };
@@ -689,11 +731,90 @@ mod tests {
             &mut state,
             &mouse(MouseEventKind::Down(MouseButton::Left), 50),
         );
-        assert_eq!(state.restore_picker.as_ref().unwrap().selected(), before);
+        assert_ne!(state.restore_picker.as_ref().unwrap().selected(), before);
         handle(
             &mut state,
             &mouse(MouseEventKind::Down(MouseButton::Left), 4),
         );
-        assert!(!state.restore_picker.as_ref().unwrap().entries[4].selected);
+        assert!(state.restore_picker.as_ref().unwrap().entries[4].selected);
+    }
+
+    #[test]
+    fn saved_titles_show_the_connection_once() {
+        use crate::workspace::{
+            transport::{SshOptions, Target},
+            windows::SavedTab,
+        };
+        for target in [
+            Target::Local,
+            Target::Ssh {
+                host: "dev".into(),
+                options: SshOptions::default(),
+            },
+        ] {
+            let title = format!("{} · 会话标题", target.label());
+            let saved = SavedTab {
+                id: "id".into(),
+                title: title.clone(),
+                target,
+                workspace: "/workspace".into(),
+                config: "config.toml".into(),
+                auth: "auth".into(),
+                database: None,
+                allow_mcp_start: false,
+            };
+            let picker = RestorePicker::from_tabs(&[saved]);
+            assert_eq!(picker.entries[0].title, title);
+        }
+    }
+
+    #[test]
+    fn mouse_can_restore_selection_and_empty_selection_stays_open() {
+        let mut state = state();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        draw(&mut state, &mut terminal);
+        let none = state.restore_picker.as_ref().unwrap().none;
+        mouse(
+            &mut state,
+            MouseEventKind::Down(MouseButton::Left),
+            none.x,
+            none.y,
+        );
+        let confirm = state.restore_picker.as_ref().unwrap().confirm;
+        mouse(
+            &mut state,
+            MouseEventKind::Down(MouseButton::Left),
+            confirm.x,
+            confirm.y,
+        );
+        assert!(state.restore_picker.is_some());
+        assert!(state.restore_selection.is_none());
+        let row = state.restore_picker.as_ref().unwrap().rows[1].0;
+        mouse(&mut state, MouseEventKind::Moved, row.right() - 1, row.y);
+        draw(&mut state, &mut terminal);
+        assert_eq!(
+            terminal.backend().buffer()[(row.right() - 1, row.y)].bg,
+            THEME.accent
+        );
+        mouse(
+            &mut state,
+            MouseEventKind::Down(MouseButton::Left),
+            row.right() - 1,
+            row.y,
+        );
+        mouse(&mut state, MouseEventKind::Moved, confirm.x, confirm.y);
+        draw(&mut state, &mut terminal);
+        assert_eq!(
+            terminal.backend().buffer()[(confirm.x, confirm.y)].bg,
+            THEME.accent
+        );
+        mouse(
+            &mut state,
+            MouseEventKind::Down(MouseButton::Left),
+            confirm.x,
+            confirm.y,
+        );
+        assert!(state.restore_picker.is_none());
+        assert_eq!(state.restore_selection.unwrap(), ["1"]);
     }
 }

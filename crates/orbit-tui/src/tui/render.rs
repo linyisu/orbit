@@ -166,9 +166,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         state.transcript_pointer = None;
     }
 
-    let panel_height = if let Some(picker) = &state.restore_picker {
-        picker.height()
-    } else if !menu.is_empty() {
+    let panel_height = if !menu.is_empty() {
         menu.len().min(MAX_COMPLETION_ITEMS) as u16
     } else {
         0
@@ -1633,11 +1631,6 @@ pub(super) fn draw_prompt(
 }
 
 fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
-    if let Some(picker) = &mut state.restore_picker {
-        picker.draw(frame, area);
-        return;
-    }
-
     let menu = state.menu();
 
     if menu.is_empty() || area.height == 0 || area.width <= 4 {

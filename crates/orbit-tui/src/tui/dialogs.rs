@@ -910,7 +910,7 @@ pub(super) fn transcript_area(full: Rect) -> Rect {
     centered_size(full, width, height)
 }
 
-fn centered_size(full: Rect, width: u16, height: u16) -> Rect {
+pub(super) fn centered_size(full: Rect, width: u16, height: u16) -> Rect {
     let width = full.width.saturating_sub(4).min(width);
     let height = full.height.saturating_sub(2).min(height);
     Rect::new(
@@ -963,6 +963,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     }
 
     state.selection.clear();
+    if let Some(picker) = &mut state.restore_picker {
+        state.ime_cursor = picker.draw(frame, frame.area());
+        return;
+    }
     let area = if state.btw.visible() || state.subagent_dialog.is_some() {
         transcript_area(frame.area())
     } else if let Some(picker) = &state.model_picker {

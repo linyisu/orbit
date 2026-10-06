@@ -223,6 +223,7 @@ impl UiState {
             || self.subagent_dialog.is_some()
             || self.show_help
             || self.picker.is_some()
+            || self.restore_picker.is_some()
             || self.model_picker.is_some()
             || self.marketplace_dialog.is_some()
     }
