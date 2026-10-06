@@ -1,0 +1,81 @@
+use std::time::Duration;
+
+use orbit_runtime::execution::{
+    ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, execution_backend,
+};
+use tokio_util::sync::CancellationToken;
+
+#[tokio::test]
+async fn native_execution_uses_host_paths_and_retains_output() {
+    let root = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let mut env = ExecutionEnvironment::new(root.path(), root.path()).unwrap();
+    env.set_var("SHELL", "/bin/sh");
+    env.set_var("HOME", root.path().to_string_lossy());
+    let request = ExecutionRequest::new(
+        "printf '%s' \"$HOME\"; printf 'saved' > result; printf 'scratch' > \"$ORBIT_SCRATCH/result\"; printf 'err' >&2",
+        root.path(), Duration::from_secs(5),
+    ).with_scratch(scratch.path());
+    let output = orbit_runtime::execution::OutputLog::create(&root.path().join("logs"))
+        .await
+        .unwrap();
+    let result = execution_backend(false)
+        .unwrap()
+        .execute(
+            &request,
+            &ExecutionPolicy::dev_default(),
+            &env,
+            Some(output),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_success());
+    assert_eq!(result.sandbox, "native");
+    assert_eq!(result.stdout, root.path().to_string_lossy());
+    assert_eq!(result.stderr, "err");
+    assert!(result.output_id.is_some());
+    assert_eq!(std::fs::read(root.path().join("result")).unwrap(), b"saved");
+    assert_eq!(
+        std::fs::read(scratch.path().join("result")).unwrap(),
+        b"scratch"
+    );
+}
+
+#[tokio::test]
+async fn timeout_and_cancellation_stop_descendants_holding_output_pipes() {
+    for cancel in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut env = ExecutionEnvironment::new(root.path(), root.path()).unwrap();
+        env.set_var("SHELL", "/bin/sh");
+        let token = CancellationToken::new();
+        let signal = token.clone();
+        let marker = root.path().join("started");
+        let notifier = tokio::spawn(async move {
+            while !marker.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            if cancel {
+                signal.cancel();
+            }
+        });
+        let request = ExecutionRequest::new(
+            "touch started; sleep 30 & wait",
+            root.path(),
+            Duration::from_millis(200),
+        );
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            execution_backend(false)
+                .unwrap()
+                .execute(&request, &ExecutionPolicy::dev_default(), &env, None, token)
+                .await
+                .unwrap()
+        })
+        .await
+        .expect("descendant pipes must close promptly");
+        notifier.await.unwrap();
+        assert_eq!(result.cancelled, cancel);
+        assert_eq!(result.timed_out, !cancel);
+    }
+}

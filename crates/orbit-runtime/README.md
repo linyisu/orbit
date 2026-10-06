@@ -6,6 +6,10 @@
 
 它为命令执行提供操作系统级隔离，为文件工具提供路径与文件描述符校验。具体可访问资源取决于执行策略、挂载与授权；这些机制不等于对任意命令或外部程序的行为保证。
 
+## 执行后端
+
+`execution_backend(false)` 选择普通用户进程，`execution_backend(true)` 选择 Bubblewrap。调用方根据用户配置选择后端，默认关闭沙箱。普通进程继承经过敏感变量过滤的目标环境，使用真实路径，支持进程组取消、超时、资源配额和有界输出；文件与网络访问使用目标用户权限。Bubblewrap 后端落实工作区、挂载与网络隔离策略。显式启用的沙箱失败时直接返回错误。
+
 ## 隔离实现与测试组织
 
 [sandbox.rs](src/execution/sandbox.rs) 负责真实挂载授权、保护路径和 inode 校验；[sandbox/isolation.rs](src/execution/sandbox/isolation.rs) 共用命名空间、系统只读挂载及 Seccomp 构造，普通命令与浏览器读取都调用这些隔离部件。公共执行入口保持一致。
