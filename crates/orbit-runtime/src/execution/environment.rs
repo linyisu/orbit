@@ -110,9 +110,10 @@ fn populate_safe_environment(env: &mut BTreeMap<String, String>) {
         "CARGO_TERM_COLOR",
     ];
 
+    let environment = super::shell_environment::snapshot();
     for key in SAFE_PASSTHROUGH {
-        if let Ok(val) = std::env::var(key) {
-            env.insert((*key).to_string(), val);
+        if let Some(val) = environment.get(*key) {
+            env.insert((*key).to_string(), val.clone());
         }
     }
 }

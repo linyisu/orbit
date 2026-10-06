@@ -84,6 +84,8 @@ pub async fn serve(
         }
         return Ok(());
     }
+    orbit_runtime::execution::shell_environment::initialize().await;
+
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)

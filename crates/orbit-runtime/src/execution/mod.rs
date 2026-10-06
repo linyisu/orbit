@@ -8,6 +8,7 @@ pub mod process;
 pub mod request;
 pub mod resources;
 pub mod sandbox;
+pub mod shell_environment;
 mod supervisor;
 
 pub use backend::{BwrapBackend, ExecutionBackend, execution_backend};

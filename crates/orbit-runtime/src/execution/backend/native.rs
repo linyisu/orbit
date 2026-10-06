@@ -48,7 +48,7 @@ impl ExecutionBackend for NativeBackend {
                 .args(["-c", &request.command])
                 .current_dir(&env.cwd)
                 .env_clear()
-                .envs(std::env::vars().filter(|(key, _)| !is_sensitive_key(key)))
+                .envs(crate::execution::shell_environment::snapshot())
                 .envs(&env.env_vars)
                 .envs(
                     policy
