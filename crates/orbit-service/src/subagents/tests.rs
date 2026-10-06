@@ -120,6 +120,7 @@ reasoning = { adapter = "openai_chat", efforts = ["low", "high"], default = "low
         .await
         .unwrap();
     let service = Arc::new(Service {
+        approvals: None,
         parent: parent.id().into(),
         store,
         config_path: path,
@@ -659,6 +660,7 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
     let interrupted_id = interrupted.id().to_owned();
     drop(interrupted);
     let recovered = Service {
+        approvals: None,
         jobs: BackgroundJobs::default(),
         active: Mutex::new(HashMap::new()),
         store: service.store.clone(),
@@ -748,6 +750,7 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
             enabled: false,
             ..Default::default()
         },
+        None,
     )
     .await
     .unwrap();
@@ -886,4 +889,78 @@ async fn progress_deadline_wakes_parent_without_terminating_the_child() {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn development_writes_use_parent_approvals_and_capability_ceiling() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut service, _parent) =
+        fixture(directory.path(), GatedModel::new(), Default::default()).await;
+    let args = json!({"task":"write a test file", "role":"develop", "workspace_strategy":"shared"});
+    let call = ToolCall::function("develop", "spawn_agent", args.clone());
+    assert!(
+        service
+            .clone()
+            .execute(
+                Action::Spawn,
+                call.clone(),
+                args.clone(),
+                CancellationToken::new()
+            )
+            .await
+            .is_err()
+    );
+    let model = MockModel::new([
+        response(ChatMessage::assistant_tool_calls(vec![ToolCall::function(
+            "write",
+            "write_file",
+            json!({"path":"child.txt", "content":"verified child"}),
+        )])),
+        response(ChatMessage::assistant("finished")),
+    ]);
+    let (approvals, mut receiver) = orbit_tools::approval::channel();
+    let inner = Arc::get_mut(&mut service).unwrap();
+    inner.approvals = Some(approvals);
+    inner.allowed_tools.insert("write_file".into());
+    let backend = model.clone();
+    inner.backend = Arc::new(move |_| Arc::new(backend.clone()));
+    let output = service
+        .clone()
+        .execute(Action::Spawn, call, args, CancellationToken::new())
+        .await
+        .unwrap();
+    let receipt: Value = serde_json::from_str(&output.content).unwrap();
+    let approval = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!directory.path().join("child.txt").exists());
+    approval.decision.send(true).unwrap();
+    let results = service
+        .jobs
+        .wait(
+            &[receipt["job_id"].as_str().unwrap().into()],
+            true,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(results[0].status, JobStatus::Completed);
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("child.txt")).unwrap(),
+        "verified child"
+    );
+    for request in model.requests().iter() {
+        let names: Vec<_> = request
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect();
+        assert!(names.contains(&"write_file"));
+        assert!(
+            !names
+                .iter()
+                .any(|name| ["run_command", "request_capability", "spawn_agent"].contains(name))
+        );
+    }
 }

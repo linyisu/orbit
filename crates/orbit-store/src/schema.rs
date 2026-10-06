@@ -2,10 +2,10 @@
 use anyhow::{Result, ensure};
 use rusqlite::Connection;
 
-const CURRENT_SCHEMA_VERSION: u32 = 23;
+const CURRENT_SCHEMA_VERSION: u32 = 24;
 
 pub(crate) fn migrate(connection: &Connection) -> Result<()> {
-    connection.execute_batch("BEGIN IMMEDIATE;")?;
+    connection.execute_batch("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;")?;
     let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     ensure!(
         version <= CURRENT_SCHEMA_VERSION,
@@ -326,7 +326,27 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
             ); PRAGMA user_version=23;",
         )?;
     }
-    connection.execute_batch("COMMIT;")?;
+    if version < 24 {
+        connection.execute_batch(
+            "CREATE TABLE agent_sessions_v24 (
+                session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                parent_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+                role TEXT NOT NULL CHECK(role IN ('explore','review','develop')), task TEXT NOT NULL
+            );
+            INSERT INTO agent_sessions_v24 SELECT session_id,parent_session_id,role,task FROM agent_sessions;
+            DROP TABLE agent_sessions;
+            ALTER TABLE agent_sessions_v24 RENAME TO agent_sessions;
+            CREATE INDEX agent_sessions_parent ON agent_sessions(parent_session_id);
+            PRAGMA user_version=24;",
+        )?;
+    }
+    let broken: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure!(!broken, "database migration contains broken references");
+    connection.execute_batch("COMMIT; PRAGMA foreign_keys=ON;")?;
 
     Ok(())
 }

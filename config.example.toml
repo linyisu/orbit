@@ -14,7 +14,7 @@ default_provider = "deepseek"
 # [web]
 # proxy = "http://127.0.0.1:7897"
 
-# 子 Agent 独立运行，只提供探索和审查两个只读角色。
+# 子 Agent：explore/review 只读；develop 默认使用独立 Git worktree，继承父会话审批。
 [subagents]
 max_concurrent = 8 # 同一父会话的并行上限，可设为 1..128
 max_turns = 0 # 不限制轮数

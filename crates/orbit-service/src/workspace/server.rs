@@ -252,7 +252,7 @@ struct Service {
 impl Service {
     async fn busy(&self) -> bool {
         for session in self.sessions.lock().await.values() {
-            if session.view.lock().await.busy || session.questions.running().await {
+            if session.running().await {
                 return true;
             }
         }

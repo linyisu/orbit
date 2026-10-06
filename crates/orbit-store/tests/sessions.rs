@@ -1279,3 +1279,66 @@ async fn write_transactions_serialize_across_independent_store_connections() {
     }
     assert_eq!(store.tasks(&project.id, true).await.unwrap().len(), 160);
 }
+
+#[tokio::test]
+async fn developer_role_migration_preserves_children_and_queued_messages() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("sessions.db");
+    let store = Store::open(path.clone()).await.unwrap();
+    let mut parent = store
+        .create(
+            root.path().to_string_lossy().into_owned(),
+            "mock".into(),
+            false,
+        )
+        .await
+        .unwrap();
+    parent.begin("parent".into(), "mock".into()).await.unwrap();
+    let child = store
+        .create_subagent(
+            parent.id(),
+            "mock".into(),
+            "explore".into(),
+            "inspect".into(),
+        )
+        .await
+        .unwrap();
+    let parent_id = parent.id().to_owned();
+    let child_id = child.id().to_owned();
+    store
+        .queue_agent_message(&parent_id, &child_id, "preserve queued input".into())
+        .await
+        .unwrap();
+    drop(child);
+    drop(parent);
+    drop(store);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.execute_batch("PRAGMA user_version=23;").unwrap();
+    drop(connection);
+    let store = Store::open(path).await.unwrap();
+    assert_eq!(
+        store.subagent_parent(&child_id).await.unwrap(),
+        Some(parent_id.clone())
+    );
+    assert_eq!(
+        store.pending_agent_messages(&child_id).await.unwrap()[0].content,
+        "preserve queued input"
+    );
+    let developer = store
+        .create_subagent(
+            &parent_id,
+            "mock".into(),
+            "develop".into(),
+            "implement".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .owned_subagent(&parent_id, developer.id())
+            .await
+            .unwrap()
+            .role,
+        "develop"
+    );
+}

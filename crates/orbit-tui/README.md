@@ -154,12 +154,12 @@ Orbit 原生支持在多个终端窗口或终端会话中同时打开和协同�
 
 模型可通过 `spawn_agent` 将独立的探索或审查任务交给子 Agent，同时继续执行其他工作。默认每个父会话允许 8 个子任务并行；在配置中调整 `[subagents].max_concurrent`（1..128），或设置 `enabled = false` 关闭。批处理可用 `--disable subagents`，`--disable all` 也会关闭这组工具。
 
-- `spawn_agent`：传入 `task`、可选 `context` 和 `role = "explore" / "review"`，立即返回稳定的 `agent_id`。默认继承父模型及有效思考档位，也可传入 `model = "连接::模型"`、`reasoning_effort`；配置的 `explore_model` / `review_model` 为对应角色提供默认模型。每次启动或续跑都重新读取模型配置，失效的模型或档位会明确报错。
+- `spawn_agent`：传入 `task`、可选 `context` 和 `role = "explore" / "review" / "develop"`，立即返回稳定的 `agent_id`。默认继承父模型及有效思考档位，也可传入 `model = "连接::模型"`、`reasoning_effort`；配置的 `explore_model` / `review_model` 为对应角色提供默认模型。每次启动或续跑都重新读取模型配置，失效的模型或档位会明确报错。
 - `send_agent_message`：运行中在下一次模型请求前接收补充消息；结束或中断后，在原子会话内续跑。正在最终提交或取消时需等结果返回后重试。
 - `wait_agents`：等待任一子任务完成，或用 `all = true` 等待全部。等待期间不请求模型；完成结果也会在父模型请求之间自动送入。`cancel_agents` 可单独取消选定子任务，父运行取消则取消本轮全部子任务。
 - `read_agent`：不传 ID 时列出本会话的子任务；传入 ID 后默认直接读取最近一轮已完成的最终回答，每页最多 16000 个 Unicode 字符。自动回传的答案最多 6000 个字符，`truncated = false` 表示完整；长报告附带 `read_more`，后续页面返回 `next_read`，固定消息 ID 以防续跑期间串页。`view = "transcript"` 从规范消息日志开头读取；显式 `message_id` / `after_message_id` 默认沿用日志分页语义，`view = "result"` 则按最终回答正文分页。运行中的子任务明确返回结果尚未就绪，不把旧报告当成本轮结果。
 
-子 Agent 使用独立会话、上下文和工具实例，只收到任务与显式补充的上下文；项目指令继续适用。当前提供只读文件与网页工具，并与父工具集取交集；不提供命令、文件写入、MCP、跨会话记忆或嵌套代理。默认不限轮数、最多 2000 次工具调用；每 30 分钟向父代理发进度提醒，子代理继续执行。父代理先用 `read_agent` 了解情况或用 `send_agent_message` 沟通，再决定继续或通过 `cancel_agents` 终止。`[subagents].timeout_seconds` 配置提醒间隔，`0` 关闭提醒；`max_turns` / `max_tool_calls` 的 `0` 均表示不限。可写角色与 Git worktree 隔离尚未实现。
+子 Agent 使用独立会话、上下文和工具实例，只收到任务与显式补充的上下文；项目指令继续适用。探索和审查角色提供只读文件与网页工具；开发角色支持父会话已授予的文件写入和命令，使用父审批通道。子工具集与父工具集取交集，禁止权限扩展、MCP 和嵌套代理。默认不限轮数、最多 2000 次工具调用；每 30 分钟向父代理发进度提醒，子代理继续执行。父代理先用 `read_agent` 了解情况或用 `send_agent_message` 沟通，再决定继续或通过 `cancel_agents` 终止。`[subagents].timeout_seconds` 配置提醒间隔，`0` 关闭提醒；`max_turns` / `max_tool_calls` 的 `0` 均表示不限。开发角色默认从当前仓库 HEAD 创建独立 Git worktree，工作区和 `orbit/agent-<ID>` 分支保留供父任务检查与整合，父目录的未提交修改保留在原目录。`workspace_strategy = "shared"` 显式选择共享目录，非 Git 项目需指定此方式。
 
 TUI 子任务复用普通工具卡片的标题与展开边框，展开后显示当前活动、调用次数、耗时、模型、任务和结果；Markdown 分割线与代码块限制在卡片内部。点击“查看”或 Ctrl+Click 打开居中的详情弹窗，显示实时执行记录，支持滚轮、翻页、工具展开和框选复制。底部输入框可继续追问，复用 `send_agent_message`：运行中排队接收，结束后沿用原子会话上下文续跑，父代理空闲时也可发送；不切换标签，父任务继续运行。详情弹窗与 `/btw` 共用自适应尺寸：半屏保持紧凑，宽屏约占八成宽度，高度随宽度增长并限制在约八成屏高；小屏自动收缩，左右留白对称。关闭按钮沿用标签页图标与 hover 样式，左右各留一格可点击区域。`Esc`、无选区时 `Ctrl+C`、关闭按钮或点击弹窗外部可关闭。进度通过目标服务按游标增量读取，不请求模型；长记录分批回放，框选时暂停弹窗更新，取消选区后追上最新进度。
 

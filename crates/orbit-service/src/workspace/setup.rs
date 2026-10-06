@@ -171,7 +171,7 @@ pub(super) async fn prepare_resources(
         config_path,
         &options.auth_directory,
         Some(session.store.path()),
-        (!policy.read_only).then_some(approvals),
+        (!policy.read_only).then_some(approvals.clone()),
         command_limits,
         web,
         mcp,
@@ -204,6 +204,7 @@ pub(super) async fn prepare_resources(
             options.auth_directory.clone(),
             instructions.clone(),
             file_config.subagents.clone(),
+            (!policy.read_only).then_some(approvals),
         )
         .await?;
     }

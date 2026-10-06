@@ -82,7 +82,7 @@ impl Store {
         task: String,
     ) -> Result<SessionWriter> {
         ensure!(
-            matches!(role.as_str(), "explore" | "review"),
+            matches!(role.as_str(), "explore" | "review" | "develop"),
             "invalid subagent role"
         );
         let parent = parent.to_owned();

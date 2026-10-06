@@ -78,7 +78,7 @@ pub(super) async fn run(
             envelope = requests.recv() => {
                 let Some(envelope) = envelope else { break };
                 if matches!(&envelope.command, Command::Close) {
-                    if actor.busy() || actor.questions.running().await {
+                    if actor.active() || actor.questions.running().await {
                         let _ = envelope.reply.send(Err(anyhow::anyhow!("会话正在运行，无法删除")));
                         continue;
                     }
@@ -119,8 +119,11 @@ pub(super) async fn run(
 
 impl Actor {
     fn busy(&self) -> bool {
-        self.running.is_some()
-            || self.undo.is_some()
+        self.running.is_some() || self.undo.is_some()
+    }
+
+    fn active(&self) -> bool {
+        self.busy()
             || self.setup.resources.tools.task_groups().any(|jobs| {
                 jobs.snapshots(&[], false).map_or(true, |jobs| {
                     jobs.iter().any(|job| {
@@ -155,6 +158,9 @@ impl Actor {
 
     async fn command(&mut self, command: Command) -> Result<()> {
         match command {
+            Command::Activity { result } => {
+                let _ = result.send(self.active() || self.questions.running().await);
+            }
             Command::SendSubagent { agent, message } => {
                 self.setup
                     .resources
@@ -223,7 +229,7 @@ impl Actor {
             }
             Command::Close => unreachable!("close handled by actor loop"),
             Command::Action { action, result } => {
-                let busy = self.busy() || self.questions.running().await;
+                let busy = self.active() || self.questions.running().await;
                 let response =
                     crate::workspace::actions::execute(&mut self.setup, action, busy).await;
                 if response.is_ok() {
@@ -437,7 +443,7 @@ impl Actor {
             !self.setup.resources.policy.read_only,
             "read-only sessions cannot undo files"
         );
-        ensure!(!self.busy(), "请在当前任务结束后撤销文件写入");
+        ensure!(!self.active(), "请在当前任务结束后撤销文件写入");
         let change = self
             .setup
             .session

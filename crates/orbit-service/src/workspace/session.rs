@@ -23,6 +23,9 @@ pub struct Handle {
 }
 
 pub enum Command {
+    Activity {
+        result: oneshot::Sender<bool>,
+    },
     ConfigureModels {
         configuration: Option<orbit_protocol::Configuration>,
     },
@@ -120,6 +123,14 @@ impl View {
 }
 
 impl Handle {
+    pub async fn running(&self) -> bool {
+        let (result, response) = oneshot::channel();
+        if self.command(Command::Activity { result }).await.is_err() {
+            return false;
+        }
+        response.await.unwrap_or(false)
+    }
+
     pub async fn subagent_page(&self, agent: &str, after: usize) -> Result<Page> {
         self.authorize_subagent(agent).await?;
         let snapshot = self.store.load(agent).await?;
