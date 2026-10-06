@@ -13,17 +13,19 @@ async fn native_execution_uses_host_paths_and_retains_output() {
     env.set_var("SHELL", "/bin/sh");
     env.set_var("HOME", root.path().to_string_lossy());
     let request = ExecutionRequest::new(
-        "printf '%s' \"$HOME\"; printf 'saved' > result; printf 'scratch' > \"$ORBIT_SCRATCH/result\"; printf 'err' >&2",
+        "printf '%s' \"$HOME\"; printf 'saved' > result; printf 'scratch' > \"$ORBIT_SCRATCH/result\"; /bin/sh -c 'printf child > child'; printf 'err' >&2",
         root.path(), Duration::from_secs(5),
     ).with_scratch(scratch.path());
     let output = orbit_runtime::execution::OutputLog::create(&root.path().join("logs"))
         .await
         .unwrap();
+    let mut policy = ExecutionPolicy::dev_default();
+    policy.resources.max_processes = Some(1);
     let result = execution_backend(false)
         .unwrap()
         .execute(
             &request,
-            &ExecutionPolicy::dev_default(),
+            &policy,
             &env,
             Some(output),
             CancellationToken::new(),
@@ -37,6 +39,7 @@ async fn native_execution_uses_host_paths_and_retains_output() {
     assert_eq!(result.stderr, "err");
     assert!(result.output_id.is_some());
     assert_eq!(std::fs::read(root.path().join("result")).unwrap(), b"saved");
+    assert_eq!(std::fs::read(root.path().join("child")).unwrap(), b"child");
     assert_eq!(
         std::fs::read(scratch.path().join("result")).unwrap(),
         b"scratch"
@@ -53,19 +56,27 @@ async fn timeout_and_cancellation_stop_descendants_holding_output_pipes() {
         let signal = token.clone();
         let marker = root.path().join("started");
         let notifier = tokio::spawn(async move {
-            while !marker.exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
             if cancel {
+                tokio::time::timeout(Duration::from_secs(3), async {
+                    while !marker.exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("command must start before cancellation");
                 signal.cancel();
             }
         });
         let request = ExecutionRequest::new(
-            "touch started; sleep 30 & wait",
+            ": > started; sleep 30 & wait",
             root.path(),
-            Duration::from_millis(200),
+            if cancel {
+                Duration::from_secs(10)
+            } else {
+                Duration::from_millis(500)
+            },
         );
-        let result = tokio::time::timeout(Duration::from_secs(3), async {
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
             execution_backend(false)
                 .unwrap()
                 .execute(&request, &ExecutionPolicy::dev_default(), &env, None, token)

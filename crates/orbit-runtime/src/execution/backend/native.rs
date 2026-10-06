@@ -74,7 +74,6 @@ impl ExecutionBackend for NativeBackend {
                         (libc::RLIMIT_AS, limits.max_memory_bytes),
                         (libc::RLIMIT_FSIZE, limits.max_file_size_bytes),
                         (libc::RLIMIT_NOFILE, limits.max_open_files),
-                        (libc::RLIMIT_NPROC, limits.max_processes),
                     ] {
                         if value == 0 || value == u64::MAX {
                             continue;
@@ -91,6 +90,8 @@ impl ExecutionBackend for NativeBackend {
                             return Err(std::io::Error::last_os_error());
                         }
                     }
+                    // RLIMIT_NPROC counts every process owned by the target user.
+                    // Native commands retain the host limit rather than a sandbox quota.
                     Ok(())
                 });
             }
