@@ -787,7 +787,7 @@ async fn test_server_responses(
 
                 bytes.extend_from_slice(&buffer[..count]);
 
-                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                if request_complete(&bytes) {
                     break;
                 }
             }
@@ -846,4 +846,23 @@ async fn test_server_held(
     (format!("http://{address}"), async move {
         receiver.await.expect("request captured")
     })
+}
+
+// Bodies must be captured before the response is written; stopping at the
+// header terminator races with the client's head and body TCP segments.
+// Forwarding proxies may re-encode bodies as chunked, so wait for either the
+// declared content length or the chunked terminator.
+fn request_complete(bytes: &[u8]) -> bool {
+    let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return false;
+    };
+    let headers = String::from_utf8_lossy(&bytes[..header_end]).to_ascii_lowercase();
+    if headers.contains("transfer-encoding: chunked") {
+        return bytes.ends_with(b"0\r\n\r\n");
+    }
+    headers
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .is_none_or(|length| bytes.len() >= header_end + 4 + length)
 }
