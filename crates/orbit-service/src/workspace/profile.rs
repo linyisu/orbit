@@ -24,7 +24,6 @@ pub(super) fn describe(setup: &PreparedWorkspace) -> SessionInfo {
                 provider: model.provider.clone(),
                 model: model.model.clone(),
                 supports_vision: model.supports_vision,
-                default_for_provider: model.default_for_provider,
                 reasoning_effort: model
                     .config
                     .reasoning_effort

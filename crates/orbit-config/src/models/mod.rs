@@ -10,7 +10,6 @@ pub struct ModelOption {
     pub context_tokens: usize,
     /// Full usable input window shown to the user and used for compaction.
     pub input_context_tokens: usize,
-    pub default_for_provider: bool,
     pub reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
     pub supports_vision: bool,
     pub config: orbit_model::types::ModelConfig,

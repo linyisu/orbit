@@ -28,6 +28,9 @@ pub struct ConnectArgs {
     pub(crate) upload_server: Option<PathBuf>,
     #[arg(long)]
     pub(crate) resume: Option<String>,
+    /// Model for a new session, as connection::model.
+    #[arg(long, conflicts_with = "resume")]
+    pub(crate) model: Option<String>,
     /// Run a prompt without entering the TUI. Pending approvals are denied.
     #[arg(long, conflicts_with_all = ["list", "stop"])]
     pub(crate) prompt: Option<String>,

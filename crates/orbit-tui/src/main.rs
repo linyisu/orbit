@@ -65,9 +65,29 @@ async fn run_tui(
         std::env::current_dir()?.to_string_lossy().into_owned(),
     );
     options.allow_mcp_start = args.allow_mcp_start;
-    let connection =
+    let mut connection =
         orbit_client::prepare_connection(&options, config, database, Some(auth_directory), None)
             .await?;
+    if args.resume.is_none() {
+        let local = std::sync::Arc::make_mut(&mut connection)
+            .local_configuration
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("本地配置不可用"))?;
+        local.model = local.selected_model().await?;
+        if local.model.is_none() {
+            let mut models = local.model_catalog().await?;
+            if models.is_empty() {
+                if !tui::setup_connection(&settings).await? {
+                    return Ok(());
+                }
+                models = local.model_catalog().await?;
+            }
+            local.model = tui::select_startup_model(models).await?;
+            if local.model.is_none() {
+                return Ok(());
+            }
+        }
+    }
     let (progress, _updates) = orbit_client::interaction::channel();
     let opened =
         orbit_client::connect::Opened::connect_progress(connection, args.resume, progress).await?;

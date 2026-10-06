@@ -105,6 +105,7 @@ pub async fn serve(
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let options = crate::WorkspaceOptions {
+        model: None,
         initial_directory: directory.clone(),
         config,
         database,
@@ -369,6 +370,7 @@ impl Service {
             }
             Request::Hello { .. } => bail!("workspace handshake already completed"),
             Request::Open {
+                model,
                 policy,
                 resume,
                 configuration,
@@ -401,8 +403,10 @@ impl Service {
                 let options = configuration
                     .as_ref()
                     .map_or(connection_options, |configuration| &configuration.options);
+                let mut options = options.clone();
+                options.model = model;
                 let setup =
-                    super::setup::prepare_service_with_policy(options, resume, policy).await?;
+                    super::setup::prepare_service_with_policy(&options, resume, policy).await?;
                 let handle = Arc::new(Handle::spawn(setup, configuration));
                 let info = handle.info.clone();
                 self.sessions.lock().await.insert(info.id.clone(), handle);

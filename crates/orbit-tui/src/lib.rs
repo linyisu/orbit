@@ -17,7 +17,7 @@ pub(crate) use orbit_service::{
 };
 
 mod tui;
-pub use tui::{run_workspace, setup_connection};
+pub use tui::{run_workspace, select_startup_model, setup_connection};
 
 pub struct ConnectionSettings {
     pub config: std::path::PathBuf,

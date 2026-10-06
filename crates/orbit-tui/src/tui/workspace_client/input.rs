@@ -140,11 +140,14 @@ impl Tab {
                     .chosen_effort
                     .take()
                     .map(|effort| effort.as_str().into());
-                self.send(Request::SetModel {
-                    session: self.id.clone().unwrap_or_default(),
-                    model,
-                    effort,
-                });
+                self.submit_with_receipt(
+                    Request::SetModel {
+                        session: self.id.clone().unwrap_or_default(),
+                        model: model.clone(),
+                        effort,
+                    },
+                    submissions::Draft::Model(model),
+                );
             }
             return Ok(Action::Redraw);
         }
@@ -371,11 +374,7 @@ impl Tab {
                         .as_ref()
                         .and_then(|connection| connection.local_configuration.as_ref())
                     {
-                        spec.inherit(
-                            &configuration.config,
-                            &configuration.auth,
-                            Some(&self.state.model),
-                        );
+                        spec.inherit(&configuration.config, &configuration.auth, None);
                     }
                     return Ok(Action::Open(Box::new(spec)));
                 }
@@ -493,11 +492,14 @@ impl Tab {
                     .iter()
                     .any(|choice| choice == model)
                 {
-                    self.send(Request::SetModel {
-                        session: session.clone(),
-                        model: model.into(),
-                        effort: None,
-                    });
+                    self.submit_with_receipt(
+                        Request::SetModel {
+                            session: session.clone(),
+                            model: model.into(),
+                            effort: None,
+                        },
+                        submissions::Draft::Model(model.into()),
+                    );
                 } else {
                     self.state.report_local(TranscriptItem::Error(
                         "模型未配置；用 /model 查看目标环境的模型。".into(),

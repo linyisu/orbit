@@ -19,7 +19,8 @@ async fn first_custom_connection_bootstraps_and_reloads_without_plaintext_key() 
     let config = crate::config::FileConfig::load(&path, &auth).unwrap();
     let saved = std::fs::read_to_string(&path).unwrap();
 
-    assert_eq!(config.default_provider, "gateway");
+    assert!(config.providers.contains_key("gateway"));
+    assert!(!saved.contains("default_provider"));
     assert_eq!(models[0].config.base_url, "http://127.0.0.1:8000/custom/v1");
     assert_eq!(models[0].config.api_format, ApiFormat::OpenaiResponses);
     assert!(models[0].config.api_key.is_none());
@@ -178,7 +179,7 @@ fn connection_preserves_config_and_reloads_both_account_protocols() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    let original = "# user settings\ndefault_provider = 'local'\n[providers.local]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [{ id = 'local-model' }]\n";
+    let original = "# user settings\n[providers.local]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [{ id = 'local-model' }]\n";
     std::fs::write(&path, original).unwrap();
 
     for (credential, format, endpoint) in [
@@ -304,7 +305,7 @@ fn connection_keeps_existing_provider_and_rejects_invalid_config_without_writing
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    let original = "default_provider = 'google-account'\n[providers.google-account]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [{ id = 'existing' }]\n";
+    let original = "[providers.google-account]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [{ id = 'existing' }]\n";
     std::fs::write(&path, original).unwrap();
 
     let models = append_profile(
@@ -406,7 +407,6 @@ async fn editing_keeps_credentials_and_independent_model_overrides() {
     assert!(saved.starts_with("# keep this comment"));
     assert!(!saved.contains("secret"));
     assert_eq!(options[0].model, "b");
-    assert!(options[0].default_for_provider);
     assert_eq!(options[0].max_output_tokens, 8192);
     assert_eq!(options[1].max_output_tokens, 4096);
     assert_eq!(options[0].input_context_tokens, 131072 - 8192);

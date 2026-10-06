@@ -170,12 +170,7 @@ pub async fn save(
         }
     }
 
-    if document["default_provider"]
-        .as_str()
-        .is_none_or(str::is_empty)
-    {
-        document["default_provider"] = toml_edit::value(&draft.name);
-    }
+    super::remove_legacy_selection(&mut document)?;
 
     let updated = document.to_string();
     let parsed = FileConfig::parse(&updated, auth)?;

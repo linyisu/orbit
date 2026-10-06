@@ -336,9 +336,22 @@ async fn chat(
     };
     let connection =
         workspace::prepare_connection(&options, config, database, Some(auth), None).await?;
+    let mut local = connection
+        .local_configuration
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("本地配置不可用"))?;
+    local.model = args.model.clone();
+    let selected = if args.resume.is_none() {
+        Some(local.selected_model().await?.ok_or_else(|| {
+            anyhow::anyhow!("首次运行请使用 --model 连接名::模型名，或在 TUI 中选择模型")
+        })?)
+    } else {
+        None
+    };
     let mut client = connection.connect().await?;
     let Response::Opened(mut info) = client
         .request(Request::Open {
+            model: selected,
             resume: args.resume.clone(),
             configuration: connection.configuration().await?,
             policy: policy.clone(),
@@ -357,6 +370,7 @@ async fn chat(
             .await?;
         let Response::Opened(updated) = client
             .request(Request::Open {
+                model: None,
                 resume: Some(info.id.clone()),
                 configuration: None,
                 policy,
@@ -366,6 +380,9 @@ async fn chat(
             bail!("unexpected model response");
         };
         info = updated;
+    }
+    if args.resume.is_none() || args.model.is_some() {
+        local.remember_model(&info.model)?;
     }
     let images = workspace::attachments::paths(args.images.clone())?;
     let images = workspace::attachments::uploads(&images)?;

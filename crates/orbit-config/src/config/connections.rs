@@ -67,11 +67,24 @@ pub fn append_profile_models(
 fn read_config(path: &std::path::Path) -> Result<String> {
     match std::fs::read_to_string(path) {
         Ok(content) => Ok(content),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok("default_provider = \"\"\n[providers]\n".into())
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("[providers]\n".into()),
         Err(error) => Err(error.into()),
     }
+}
+
+fn remove_legacy_selection(document: &mut toml_edit::DocumentMut) -> Result<()> {
+    let prefix = document
+        .as_table()
+        .key("default_provider")
+        .and_then(|key| key.leaf_decor().prefix())
+        .and_then(|prefix| prefix.as_str())
+        .unwrap_or_default()
+        .to_owned();
+    document.remove("default_provider");
+    if !prefix.is_empty() {
+        *document = format!("{prefix}{document}").parse()?;
+    }
+    Ok(())
 }
 
 /// Build and validate the complete configuration before writing any credentials.
@@ -93,15 +106,9 @@ pub fn prepare_provider(
     );
 
     let addition = serde_json::json!({ "providers": { name: provider } });
-    let base = if config.default_provider.is_empty() {
-        // The empty bootstrap has no user settings. Existing empty files may
-        // have settings, so retain them when setting the first provider.
-        let mut value: toml::Value = toml::from_str(&original)?;
-        value["default_provider"] = toml::Value::String(name.to_owned());
-        toml::to_string_pretty(&value)?
-    } else {
-        original.clone()
-    };
+    let mut document = original.parse::<toml_edit::DocumentMut>()?;
+    remove_legacy_selection(&mut document)?;
+    let base = document.to_string();
     let updated = format!(
         "{}\n\n{}",
         base.trim_end(),

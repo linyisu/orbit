@@ -51,7 +51,6 @@ orbit-cli auth set-key my-provider --base-url https://api.example.com/v1
 使用 `credential` 字段引用由 `orbit-auth` 管理的凭据项，取代明文硬编码：
 
 ```toml
-default_provider = "google"
 
 [providers.google]
 api_format = "google_code_assist"

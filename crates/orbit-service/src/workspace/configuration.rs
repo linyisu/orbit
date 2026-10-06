@@ -181,6 +181,7 @@ models = [{ id = "first" }, { id = "chosen" }]
         let snapshot: Configuration =
             serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
         let options = super::super::setup::WorkspaceOptions {
+            model: Some("test::chosen".into()),
             initial_directory: target.path().into(),
             config: target.path().join("config.toml"),
             auth_directory: target.path().join("auth"),
@@ -200,7 +201,10 @@ models = [{ id = "first" }, { id = "chosen" }]
         )
         .unwrap();
         assert_eq!(
-            parsed.default_model_option().unwrap().qualified_name(),
+            parsed
+                .select_model("test::chosen")
+                .unwrap()
+                .qualified_name(),
             "test::chosen"
         );
         let store = AuthStore::new(installed.options.auth_directory.clone()).unwrap();

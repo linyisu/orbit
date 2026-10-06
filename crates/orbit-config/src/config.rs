@@ -24,7 +24,6 @@ pub const MIN_CONTEXT_TOKENS: usize = 8192;
 pub struct FileConfig {
     #[serde(skip)]
     pub auth_directory: Option<PathBuf>,
-    pub default_provider: String,
     #[serde(default = "default_context_tokens")]
     pub context_tokens: usize,
     #[serde(default = "default_auto_compact")]
@@ -73,7 +72,6 @@ pub struct ProviderConfig {
     pub api_key: String,
     #[serde(default)]
     pub credential: Option<String>,
-    /// The first model is selected when Orbit starts with this provider.
     pub models: Vec<ModelProfile>,
     // Explicit profiles remain authoritative across repeated catalog refreshes.
     #[serde(skip)]
@@ -307,17 +305,7 @@ impl FileConfig {
             }
         }
 
-        let options = config.model_options()?;
-
-        if !options
-            .iter()
-            .any(|option| option.provider == config.default_provider && option.default_for_provider)
-        {
-            bail!(
-                "default_provider {:?} does not name a configured provider",
-                config.default_provider
-            );
-        }
+        config.model_options()?;
 
         for (name, provider) in &config.providers {
             let mut models = std::collections::BTreeSet::new();
@@ -453,7 +441,7 @@ impl FileConfig {
         let mut options = Vec::new();
 
         for (name, provider) in &self.providers {
-            for (index, model) in provider.models.iter().enumerate() {
+            for model in &provider.models {
                 let requested_output = provider
                     .configured_models
                     .as_ref()
@@ -496,7 +484,6 @@ impl FileConfig {
                     model: model.id.clone(),
                     context_tokens,
                     input_context_tokens,
-                    default_for_provider: index == 0,
                     reasoning_efforts: reasoning
                         .map_or_else(Vec::new, |profile| profile.efforts.clone()),
                     supports_vision,
@@ -538,11 +525,34 @@ impl FileConfig {
         Ok(options)
     }
 
-    pub fn default_model_option(&self) -> Result<catalog::ModelOption> {
-        self.model_options()?
+    pub fn select_model(&self, requested: &str) -> Result<catalog::ModelOption> {
+        let requested = requested.trim();
+
+        if requested.is_empty() {
+            bail!("model must not be empty");
+        }
+
+        let options = self.model_options()?;
+
+        if requested.contains("::") {
+            return options
+                .into_iter()
+                .find(|option| option.qualified_name() == requested)
+                .ok_or_else(|| anyhow::anyhow!("model {requested:?} is not configured"));
+        }
+
+        let matches = options
             .into_iter()
-            .find(|option| option.provider == self.default_provider && option.default_for_provider)
-            .ok_or_else(|| anyhow::anyhow!("default_provider is not configured"))
+            .filter(|option| option.model == requested)
+            .collect::<Vec<_>>();
+
+        match matches.as_slice() {
+            [option] => Ok(option.clone()),
+            [] => bail!("model {requested:?} is not configured"),
+            _ => bail!(
+                "model {requested:?} is configured by multiple providers; use provider::model"
+            ),
+        }
     }
 
     pub fn agent_config_for(&self, context_tokens: usize) -> AgentConfig {

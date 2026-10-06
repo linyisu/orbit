@@ -105,6 +105,7 @@ use crate::{
 };
 #[cfg(test)]
 use command_actions::*;
+use futures_util::StreamExt;
 use keyboard::*;
 use links::*;
 #[cfg(test)]
@@ -150,6 +151,30 @@ pub async fn setup_connection(options: &crate::ConnectionSettings) -> Result<boo
     Ok(connect::run(&mut terminal, &mut events, options)
         .await?
         .is_some())
+}
+
+/// Ask for an explicit model before creating the first workspace session.
+pub async fn select_startup_model(models: Vec<ModelOption>) -> Result<Option<String>> {
+    let (_guard, mut terminal) = terminal::TerminalGuard::enter()?;
+    let mut events = EventStream::new();
+    let mut state = app::UiState::new("");
+    state.model_picker = Some(dialogs::ModelPicker::new(models, String::new(), None));
+    while state.model_picker.is_some() {
+        terminal::draw_synchronized(&mut terminal, |frame| {
+            state.ime_cursor = None;
+            render::draw(frame, &mut state);
+            if let Some(cursor) = state.ime_cursor {
+                frame.set_cursor_position(cursor);
+            }
+        })?;
+        let Some(event) = events.next().await else {
+            return Ok(None);
+        };
+        let event = event?;
+        pointer::handle_list_hover(&mut state, &event);
+        dialogs::handle(&mut state, event);
+    }
+    Ok(state.chosen_model)
 }
 
 #[cfg(test)]

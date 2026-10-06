@@ -198,12 +198,16 @@ async fn concurrent_tabs_keep_drafts_events_models_and_requests_separate() {
     wsl.state.model_completions = vec!["wsl-model".into()];
     ssh.submit("/model ssh-model".into()).unwrap();
     wsl.submit("/model wsl-model".into()).unwrap();
+    let ssh_selection = ssh_requests.try_recv().unwrap();
     assert!(
-        matches!(ssh_requests.try_recv().unwrap().request, Request::SetModel { model, .. } if model == "ssh-model")
+        matches!(ssh_selection.request, Request::SetModel { model, .. } if model == "ssh-model")
     );
+    ssh_selection.reply.unwrap().send(Ok(Response::Ok)).unwrap();
+    let wsl_selection = wsl_requests.try_recv().unwrap();
     assert!(
-        matches!(wsl_requests.try_recv().unwrap().request, Request::SetModel { model, .. } if model == "wsl-model")
+        matches!(wsl_selection.request, Request::SetModel { model, .. } if model == "wsl-model")
     );
+    wsl_selection.reply.unwrap().send(Ok(Response::Ok)).unwrap();
     ssh.submit("/mode ask".into()).unwrap();
     assert!(matches!(
         ssh_requests.try_recv().unwrap().request,
@@ -759,5 +763,41 @@ fn directory_enter_keeps_completed_path_instead_of_choosing_its_first_child() {
             matches!(call.request, Request::SessionAction { action: orbit_protocol::SessionAction::ChangeDirectory { path }, .. } if path == "~/Tests/TC_learn/")
         );
         assert!(tab.state.info_dialog.is_none());
+    }
+}
+
+#[test]
+fn model_preference_changes_only_after_successful_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config.toml");
+    std::fs::write(&config, "[providers]\n").unwrap();
+    let local = workspace::configuration::Local {
+        config,
+        auth: root.path().join("auth"),
+        model: None,
+    };
+    local.remember_model("old::model").unwrap();
+    let mut tab = connected_tab(workspace::transport::Target::Local);
+    Arc::make_mut(tab.connection.as_mut().unwrap()).local_configuration = Some(local.clone());
+    let (commands, mut requests) = mpsc::channel(CHANNEL_CAPACITY);
+    tab.commands = Some(Arc::new(commands));
+    tab.state.model_completions = vec!["new::model".into()];
+    for accepted in [false, true] {
+        tab.submit("/model new::model".into()).unwrap();
+        assert_eq!(local.last_model().unwrap().as_deref(), Some("old::model"));
+        let call = requests.try_recv().unwrap();
+        call.reply
+            .unwrap()
+            .send(Ok(if accepted {
+                Response::Ok
+            } else {
+                Response::Error("unavailable".into())
+            }))
+            .unwrap();
+        assert!(tab.poll_submissions());
+        assert_eq!(
+            local.last_model().unwrap().as_deref(),
+            Some(if accepted { "new::model" } else { "old::model" })
+        );
     }
 }

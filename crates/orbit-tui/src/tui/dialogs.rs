@@ -30,7 +30,6 @@ pub struct ModelChoice {
     provider: String,
     model: String,
     supports_vision: bool,
-    default_for_provider: bool,
     reasoning_effort: Option<orbit_model::types::ReasoningEffort>,
     reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
 }
@@ -47,7 +46,6 @@ impl From<ModelOption> for ModelChoice {
             provider: model.provider,
             model: model.model,
             supports_vision: model.supports_vision,
-            default_for_provider: model.default_for_provider,
             reasoning_effort: model.config.reasoning_effort,
             reasoning_efforts: model.reasoning_efforts,
         }
@@ -60,7 +58,6 @@ impl From<orbit_protocol::ModelSummary> for ModelChoice {
             provider: model.provider,
             model: model.model,
             supports_vision: model.supports_vision,
-            default_for_provider: model.default_for_provider,
             reasoning_effort: model.reasoning_effort.and_then(|value| value.parse().ok()),
             reasoning_efforts: model
                 .reasoning_efforts
@@ -1254,16 +1251,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             };
 
             let label = format!(
-                "{}. {}{}{}{}",
+                "{}. {}{}{}",
                 ordinal,
                 model.model,
                 if model.supports_vision {
                     "  (视觉)"
-                } else {
-                    ""
-                },
-                if model.default_for_provider {
-                    "  (默认)"
                 } else {
                     ""
                 },

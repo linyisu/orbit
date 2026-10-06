@@ -371,7 +371,6 @@ async fn home_changes_are_silent_and_queries_do_not_enter_the_conversation() {
         max_output_tokens: 8_000,
         context_tokens: 72_000,
         input_context_tokens: 64_000,
-        default_for_provider: true,
         reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
         supports_vision: true,
         config: Default::default(),

@@ -10,6 +10,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct WorkspaceOptions {
+    pub model: Option<String>,
     pub initial_directory: PathBuf,
     pub auth_directory: PathBuf,
     pub config: PathBuf,
@@ -75,8 +76,20 @@ async fn prepare(
     shared: bool,
     policy: orbit_protocol::SessionPolicy,
 ) -> Result<PreparedWorkspace> {
-    let config = FileConfig::load(&options.config, &options.auth_directory)?;
-    let model = config.default_model_option()?.qualified_name();
+    let mut config = FileConfig::load(&options.config, &options.auth_directory)?;
+    account_models::refresh(&mut config, false).await;
+    let model = if resume.is_some() {
+        String::new()
+    } else {
+        config
+            .select_model(
+                options
+                    .model
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("请选择模型后开始会话"))?,
+            )?
+            .qualified_name()
+    };
     let mut session = if shared {
         session::SessionState::open_shared_in(options.database.clone(), resume, model, directory)
             .await?
@@ -132,7 +145,7 @@ pub(super) async fn prepare_resources(
     }
     let diagnostics = account_models::refresh(&mut file_config, false).await;
     let model_options = file_config.model_options()?;
-    let default_model = file_config.default_model_option()?;
+    let selected_model = file_config.select_model(session.saved_model_profile().0)?;
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
@@ -141,11 +154,11 @@ pub(super) async fn prepare_resources(
     } else {
         file_config.mcp.clone()
     };
-    let max_output_tokens = default_model.max_output_tokens;
-    let model_name = default_model.qualified_name();
-    let context_tokens = default_model.context_tokens;
-    let input_context_tokens = default_model.input_context_tokens;
-    let client = ModelClient::new(default_model.config)?;
+    let max_output_tokens = selected_model.max_output_tokens;
+    let model_name = selected_model.qualified_name();
+    let context_tokens = selected_model.context_tokens;
+    let input_context_tokens = selected_model.input_context_tokens;
+    let client = ModelClient::new(selected_model.config)?;
     let target_project = session.store.resolve_project(directory).await?;
     let enabled_plugins = session.store.project_plugins(&target_project.id).await?;
     let plugin_skill_roots = crate::marketplaces::enabled_skill_roots(&enabled_plugins);
@@ -276,6 +289,7 @@ mod tests {
         let root = dir.path();
         std::fs::write(root.join("config.toml"), "default_provider = \"test\"\n[providers.test]\nbase_url = \"http://127.0.0.1:1/v1\"\napi_key = \"test\"\nauto_refresh_models = false\nmodels = [{ id = \"mock\" }]\n").unwrap();
         let options = WorkspaceOptions {
+            model: Some("test::mock".into()),
             initial_directory: root.into(),
             config: root.join("config.toml"),
             auth_directory: root.join("auth"),
@@ -323,5 +337,47 @@ mod tests {
         .await
         .unwrap();
         assert!(setup.resources.tools.definitions().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn creation_requires_selection_and_restore_uses_saved_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("config.toml"),
+            r#"[providers.test]
+base_url = "http://127.0.0.1:1/v1"
+auto_refresh_models = false
+models = [{ id = "first" }, { id = "chosen" }]
+"#,
+        )
+        .unwrap();
+        let mut options = WorkspaceOptions {
+            model: None,
+            initial_directory: root.into(),
+            config: root.join("config.toml"),
+            auth_directory: root.join("auth"),
+            database: root.join("sessions.db"),
+            allow_mcp_start: false,
+            home: None,
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        assert!(prepare_service(&options, None).await.is_err());
+        assert!(!options.database.exists());
+        options.model = Some("test::chosen".into());
+        let setup = prepare_service(&options, None).await.unwrap();
+        assert_eq!(setup.resources.model_name, "test::chosen");
+        let id = setup.session.id().to_owned();
+        drop(setup);
+        options.model = Some("test::first".into());
+        let restored = prepare_service(&options, Some(id)).await.unwrap();
+        assert_eq!(restored.resources.model_name, "test::chosen");
     }
 }

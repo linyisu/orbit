@@ -7,7 +7,7 @@
 ## 命令
 
 ```sh
-orbit-cli chat "分析当前项目的测试失败"
+orbit-cli chat --model provider::model "分析当前项目的测试失败"
 orbit-cli chat --stream --mode auto --image diagram.png "解释图片"
 orbit-cli chat --prompt-file task.txt --model provider::model
 orbit-cli auth login google
@@ -18,6 +18,8 @@ orbit-cli projects list
 ```
 
 全局选项 `--config` 指定本地配置文件，`--database` 指定会话数据库，`--auth-dir` 指定凭据目录。配置示例见 [config.example.toml](../../config.example.toml)。
+
+首次创建会话用 `--model 连接名::模型名` 选择模型，后续新会话使用客户端记住的上次选择。`chat` 与 `connect` 共用该偏好；`--resume` 使用会话保存的模型。
 
 `chat` 支持 `read-only`、`auto`、`yolo` 权限模式，`--disable` 可限制工具类别，`--allow-mcp-start` 允许启动已配置的 MCP 程序。`--prompt-file -` 从标准输入读取任务。`--swe-instance-id` 输出包含工作区补丁的 SWE-bench 预测 JSON。
 

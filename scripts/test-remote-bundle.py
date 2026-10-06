@@ -64,14 +64,13 @@ def open_unconfigured_workspace(container, executable):
         protocol = Path(__file__).resolve().parents[1] / "crates/orbit-protocol/src/lib.rs"
         version = int(re.search(r"pub const VERSION: u32 = (\d+);", protocol.read_text()).group(1))
         assert request({"method": "hello", "version": version})["type"] == "hello"
-        config = """default_provider = "test"
-[providers.test]
+        config = """[providers.test]
 base_url = "http://127.0.0.1:9/v1"
 api_key = "test-only"
 auto_refresh_models = false
 models = [{ id = "local-model" }]
 """
-        response = request({"method": "open", "resume": None, "configuration": {"content": config, "credentials": {}}})
+        response = request({"method": "open", "resume": None, "model": "test::local-model", "configuration": {"content": config, "credentials": {}}})
         assert response["type"] == "opened", response
         assert response["value"]["model"] == "test::local-model"
         assert request({"method": "shutdown"})["type"] == "ok"

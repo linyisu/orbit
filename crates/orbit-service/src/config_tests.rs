@@ -30,6 +30,7 @@ id = "test"
     )
     .unwrap();
     let options = WorkspaceOptions {
+        model: Some("test::test".into()),
         initial_directory: old.clone(),
         auth_directory: directory.path().join("home/.config/orbit/auth"),
         config,
@@ -106,6 +107,7 @@ models = [{ id = "test" }]
     )
     .unwrap();
     let options = WorkspaceOptions {
+        model: Some("test::test".into()),
         initial_directory: second.clone(),
         auth_directory: directory.path().join("auth"),
         config,

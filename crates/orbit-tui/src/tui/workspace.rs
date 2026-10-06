@@ -79,6 +79,7 @@ id = "selected-model"
         )
         .unwrap();
         let options = crate::WorkspaceOptions {
+            model: Some("test::default-model".into()),
             initial_directory: old.clone(),
             auth_directory: directory.path().join("auth"),
             config,

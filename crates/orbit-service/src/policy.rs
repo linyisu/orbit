@@ -1,5 +1,5 @@
 use crate::{config::FileConfig, models};
-use anyhow::{Result, bail};
+use anyhow::Result;
 pub use orbit_protocol::Capability;
 use std::collections::BTreeSet;
 
@@ -11,35 +11,7 @@ pub(crate) fn select_model(
     config: &FileConfig,
     requested: Option<&str>,
 ) -> Result<models::ModelOption> {
-    let Some(requested) = requested else {
-        return config.default_model_option();
-    };
-
-    let requested = requested.trim();
-
-    if requested.is_empty() {
-        bail!("model must not be empty");
-    }
-
-    let options = config.model_options()?;
-
-    if requested.contains("::") {
-        return options
-            .into_iter()
-            .find(|option| option.qualified_name() == requested)
-            .ok_or_else(|| anyhow::anyhow!("model {requested:?} is not configured"));
-    }
-
-    let matches = options
-        .into_iter()
-        .filter(|option| option.model == requested)
-        .collect::<Vec<_>>();
-
-    match matches.as_slice() {
-        [option] => Ok(option.clone()),
-        [] => bail!("model {requested:?} is not configured"),
-        _ => bail!("model {requested:?} is configured by multiple providers; use provider::model"),
-    }
+    config.select_model(requested.ok_or_else(|| anyhow::anyhow!("请选择模型"))?)
 }
 
 pub(crate) fn filter_tools(

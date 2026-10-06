@@ -170,7 +170,9 @@ models = [{{ id = "mock" }}]
     )
     .unwrap();
     let mut client = Client::connect(root).await;
-    let opened = client.request(json!({"method":"open","resume":null})).await;
+    let opened = client
+        .request(json!({"method":"open","resume":null,"model":"test::mock"}))
+        .await;
     assert_eq!(opened["type"], "opened", "{opened}");
     let id = opened["value"]["id"].as_str().unwrap().to_owned();
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
@@ -481,7 +483,9 @@ models = [{{ id = "mock" }}]
     )
     .unwrap();
     let mut client = Client::connect(root).await;
-    let opened = client.request(json!({"method":"open","resume":null})).await;
+    let opened = client
+        .request(json!({"method":"open","resume":null,"model":"test::mock"}))
+        .await;
     let id = opened["value"]["id"].as_str().unwrap().to_owned();
     assert_eq!(client.request(json!({"method":"start","session":id,"request_id":"cancel-me","prompt":"write a file","mode":"ask","model":null})).await["type"], "ok");
     tokio::time::timeout(Duration::from_secs(15), async {
@@ -606,6 +610,7 @@ models = [{{ id = "mock" }}]
                 .arg(&auth)
                 .arg("--database")
                 .arg(project.path().join("sessions.db"))
+                .args(["--model", "test::mock"])
                 .args(["--prompt", "write a file"])
                 .env(
                     "PATH",
@@ -674,7 +679,9 @@ models = [{{ id = "mock" }}, {{ id = "other" }}]
     std::fs::create_dir(&project).unwrap();
     std::fs::write(project.join("proof.txt"), "target directory").unwrap();
     let mut client = Client::connect(root).await;
-    let opened = client.request(json!({"method":"open"})).await;
+    let opened = client
+        .request(json!({"method":"open","model":"test::mock"}))
+        .await;
     assert_eq!(opened["type"], "opened", "{opened}");
     let id = opened["value"]["id"].as_str().unwrap().to_owned();
     let completion = client
@@ -748,7 +755,9 @@ models = [{{ id = "mock" }}, {{ id = "other" }}]
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
         .await
         .unwrap();
-    let saved = client.request(json!({"method":"open"})).await;
+    let saved = client
+        .request(json!({"method":"open","model":"test::mock"}))
+        .await;
     assert_eq!(saved["type"], "opened", "{saved}");
     let saved_id = saved["value"]["id"].as_str().unwrap().to_owned();
     let moved = client.request(json!({"method":"session_action","session":saved_id,"action":{"action":"change_directory","path":project}})).await;
@@ -899,6 +908,29 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
     let history = serde_json::to_string(&snapshot.history).unwrap();
     assert!(history.contains("native-command-ok"));
     assert!(history.contains(root.to_str().unwrap()));
+    let mut connection = (*opened.connection).clone();
+    let local = connection.local_configuration.as_mut().unwrap();
+    local.model = None;
+    local.remember_model("test::first").unwrap();
+    let connection = Arc::new(connection);
+    let fresh = Opened::connect_progress(connection.clone(), None, interaction::channel().0)
+        .await
+        .unwrap();
+    assert_eq!(fresh.info.model, "test::first");
+    let restored = Opened::connect_progress(connection.clone(), Some(id), interaction::channel().0)
+        .await
+        .unwrap();
+    assert_eq!(restored.info.model, "test::selected");
+    assert_eq!(
+        connection
+            .local_configuration
+            .as_ref()
+            .unwrap()
+            .last_model()
+            .unwrap()
+            .as_deref(),
+        Some("test::first")
+    );
     assert!(matches!(
         opened.client.request(Request::Shutdown).await.unwrap(),
         Response::Ok
@@ -933,7 +965,9 @@ models = [{ id = "mock" }]
     )
     .unwrap();
     let mut client = Client::connect(root).await;
-    let opened = client.request(json!({"method":"open"})).await;
+    let opened = client
+        .request(json!({"method":"open","model":"test::mock"}))
+        .await;
     assert_eq!(opened["type"], "error", "{opened}");
     assert!(
         opened["value"].as_str().unwrap().contains("sandbox"),
@@ -985,7 +1019,9 @@ models = [{ id = "mock" }]
     drop(writer);
 
     let mut client = Client::connect(root).await;
-    let opened = client.request(json!({"method":"open"})).await;
+    let opened = client
+        .request(json!({"method":"open","model":"test::mock"}))
+        .await;
     assert_eq!(opened["type"], "opened", "{opened}");
     let id = opened["value"]["id"].as_str().unwrap();
     for request in [
@@ -1008,6 +1044,55 @@ models = [{ id = "mock" }]
         store.session(&history_id).await.unwrap().project_id
     );
     assert_eq!(store.projects().await.unwrap().len(), 1);
+    assert_eq!(
+        client.request(json!({"method":"shutdown"})).await["type"],
+        "ok"
+    );
+}
+
+#[tokio::test]
+async fn model_selection_is_explicit_and_catalog_refresh_never_switches_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let config = r#"[providers.test]
+base_url = "http://127.0.0.1:1/v1"
+auto_refresh_models = false
+models = [{ id = "first" }, { id = "chosen" }]
+"#;
+    std::fs::write(root.join("config.toml"), config).unwrap();
+    let mut client = Client::connect(root).await;
+    let missing = client.request(json!({"method":"open"})).await;
+    assert_eq!(missing["type"], "error", "{missing}");
+    let opened = client
+        .request(json!({"method":"open","model":"test::chosen"}))
+        .await;
+    assert_eq!(opened["type"], "opened", "{opened}");
+    assert_eq!(opened["value"]["model"], "test::chosen");
+    let id = opened["value"]["id"].as_str().unwrap();
+    let restored = client
+        .request(json!({"method":"open","resume":id,"model":"test::first"}))
+        .await;
+    assert_eq!(restored["value"]["model"], "test::chosen");
+    std::fs::write(
+        root.join("config.toml"),
+        config.replace(", { id = \"chosen\" }", ""),
+    )
+    .unwrap();
+    let refreshed = client
+        .request(json!({"method":"configure_models","session":id}))
+        .await;
+    assert_eq!(refreshed["type"], "ok", "{refreshed}");
+    let profile = client.request(json!({"method":"open","resume":id})).await;
+    assert_eq!(profile["value"]["model"], "test::chosen");
+    assert_eq!(profile["value"]["models"], json!(["test::first"]));
+    let refused = client.request(json!({"method":"start","session":id,"request_id":"removed","prompt":"hello","mode":"auto"})).await;
+    assert_eq!(refused["type"], "error", "{refused}");
+    let selected = client
+        .request(json!({"method":"set_model","session":id,"model":"test::first"}))
+        .await;
+    assert_eq!(selected["type"], "ok", "{selected}");
+    let profile = client.request(json!({"method":"open","resume":id})).await;
+    assert_eq!(profile["value"]["model"], "test::first");
     assert_eq!(
         client.request(json!({"method":"shutdown"})).await["type"],
         "ok"

@@ -5,6 +5,7 @@ use super::*;
 pub(super) enum Draft {
     Composer(String),
     Question,
+    Model(String),
 }
 
 pub(super) struct Submission {
@@ -51,6 +52,9 @@ impl Tab {
 
     fn rejected(&mut self, draft: Draft, error: anyhow::Error) {
         match draft {
+            Draft::Model(_) => self
+                .state
+                .report_local(TranscriptItem::Error(error.to_string())),
             Draft::Question => self.state.btw.submit_error(&error),
             Draft::Composer(text) => {
                 if self.state.input.text.is_empty() {
@@ -82,7 +86,19 @@ impl Tab {
             let submission = self.submissions.remove(index);
             changed = true;
             match result {
-                Ok(Response::Ok) => {}
+                Ok(Response::Ok) => {
+                    if let Draft::Model(model) = submission.draft
+                        && let Some(local) = self
+                            .connection
+                            .as_ref()
+                            .and_then(|c| c.local_configuration.as_ref())
+                        && let Err(error) = local.remember_model(&model)
+                    {
+                        self.state.report_local(TranscriptItem::Error(format!(
+                            "模型已切换，但未能记住选择：{error}"
+                        )));
+                    }
+                }
                 Ok(response @ Response::Questions(_)) => self.apply(response),
                 Ok(Response::Error(error)) => {
                     self.rejected(submission.draft, anyhow::anyhow!(error))

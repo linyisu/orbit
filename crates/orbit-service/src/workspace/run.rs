@@ -22,6 +22,15 @@ pub(super) async fn start(
     {
         super::profile::apply(&mut setup.resources, name, None)?;
     }
+    anyhow::ensure!(
+        setup
+            .resources
+            .budget
+            .model_options
+            .iter()
+            .any(|choice| choice.qualified_name() == setup.resources.model_name),
+        "当前模型已从配置中移除，请使用 /model 选择可用模型"
+    );
     let crate::PreparedWorkspace { session, resources } = setup;
     session
         .set_model_profile(

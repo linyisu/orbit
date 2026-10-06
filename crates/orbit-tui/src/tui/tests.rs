@@ -61,6 +61,7 @@ id = "orbit-model"
     )
     .unwrap();
     let options = crate::WorkspaceOptions {
+        model: Some("test::orbit-model".into()),
         initial_directory: original.clone(),
         config,
         database: directory.path().join("orbit.db"),
@@ -248,7 +249,6 @@ async fn resuming_recomputes_usage_from_restored_history_and_current_tools() {
         model: "model".into(),
         context_tokens: 232_000,
         input_context_tokens: 224_000,
-        default_for_provider: true,
         reasoning_efforts: vec![],
         supports_vision: true,
         config: Default::default(),

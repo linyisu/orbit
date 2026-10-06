@@ -240,7 +240,7 @@ impl Tab {
             );
             let mut connection = (**connection).clone();
             if let Some(configuration) = &mut connection.local_configuration {
-                configuration.model = Some(self.state.model.clone());
+                configuration.model = None;
             }
             let connection = Arc::new(connection);
             tab.connection = Some(connection.clone());

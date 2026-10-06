@@ -132,7 +132,6 @@ id = "deepseek-reasoner"
 
     assert_eq!(options.len(), 2);
     assert_eq!(options[0].model, "deepseek-chat");
-    assert!(options[0].default_for_provider);
     assert_eq!(options[0].config.model, "deepseek-chat");
     assert_eq!(options[1].model, "deepseek-reasoner");
     assert_eq!(options[1].config.model, "deepseek-reasoner");
@@ -153,7 +152,7 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default =
 "#,
     )
     .unwrap();
-    let option = config.default_model_option().unwrap();
+    let option = config.select_model("openai::reasoning-model").unwrap();
 
     assert_eq!(
         option.reasoning_efforts,
@@ -181,7 +180,7 @@ reasoning = { adapter = "anthropic_messages", efforts = ["low", "high", "max"], 
     )
     .unwrap();
 
-    let option = config.default_model_option().unwrap();
+    let option = config.select_model("anthropic::claude-test").unwrap();
 
     assert_eq!(
         option.reasoning_efforts,
@@ -340,7 +339,7 @@ fn example_configuration_uses_valid_model_capability_profiles() {
     let models = config.model_options().unwrap();
 
     assert_eq!(models.len(), 3);
-    assert_eq!(config.default_provider, "deepseek");
+    assert!(config.providers.contains_key("deepseek"));
     assert!(models.iter().any(|model| model.supports_vision));
     assert!(
         models
@@ -350,7 +349,7 @@ fn example_configuration_uses_valid_model_capability_profiles() {
 }
 
 #[test]
-fn models_must_be_present_and_unique_with_a_real_default_provider() {
+fn models_are_unique_and_legacy_default_is_ignored() {
     let duplicate = r#"default_provider = "other"
 [providers.other]
 base_url = "https://other.example/v1"
@@ -378,7 +377,7 @@ id = "other-model"
     )
     .unwrap();
 
-    assert!(FileConfig::load(&path, &path.with_extension("auth")).is_err());
+    assert!(FileConfig::load(&path, &path.with_extension("auth")).is_ok());
 
     fs::write(
         &path,

@@ -12,6 +12,7 @@ pub mod platform;
 pub mod prompt;
 pub mod protocol;
 pub mod pump;
+mod selection;
 pub mod transport;
 pub mod windows;
 use std::{path::PathBuf, sync::Arc};

@@ -40,8 +40,25 @@ pub async fn connect(
         }
         return Ok(());
     }
+    let mut local = connection
+        .local_configuration
+        .clone()
+        .context("本地配置不可用")?;
+    local.model = args.model;
+    let model = if args.resume.is_none() {
+        Some(
+            local
+                .selected_model()
+                .await?
+                .context("首次连接请使用 --model 连接名::模型名，或在 TUI 中选择模型")?,
+        )
+    } else {
+        None
+    };
+    let remember = args.resume.is_none();
     let Response::Opened(info) = client
         .request(Request::Open {
+            model,
             policy: Default::default(),
             resume: args.resume,
             configuration: connection.configuration().await?,
@@ -50,6 +67,9 @@ pub async fn connect(
     else {
         bail!("unexpected workspace response");
     };
+    if remember {
+        local.remember_model(&info.model)?;
+    }
     let id = info.id.clone();
     let result = if let Some(prompt) = args.prompt {
         run_prompt(&mut client, &id, prompt).await

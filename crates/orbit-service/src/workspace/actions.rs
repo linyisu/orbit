@@ -273,6 +273,7 @@ mod tests {
         .unwrap();
         std::fs::write(root.join("config.toml"), "default_provider = \"test\"\n[providers.test]\nbase_url = \"http://127.0.0.1:1/v1\"\napi_key = \"test\"\nauto_refresh_models = false\nmodels = [{ id = \"mock\" }]\n").unwrap();
         let options = crate::WorkspaceOptions {
+            model: Some("test::mock".into()),
             initial_directory: root.into(),
             config: root.join("config.toml"),
             auth_directory: root.join("auth"),

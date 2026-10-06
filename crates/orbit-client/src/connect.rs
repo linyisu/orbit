@@ -21,18 +21,23 @@ impl Opened {
         let mut client = connection.connect_progress(Some(&progress)).await?;
         progress.report("已完成握手，正在打开工作区会话");
         progress.report("应用本地配置并打开工作区会话");
-        let desired_model = resume
-            .is_none()
-            .then(|| {
-                connection
-                    .local_configuration
-                    .as_ref()
-                    .and_then(|local| local.model.clone())
-            })
-            .flatten();
+        let local = connection.local_configuration.as_ref();
+        let model = if resume.is_none() {
+            let selected = match local {
+                Some(local) => local.selected_model().await?,
+                None => None,
+            };
+            Some(selected.ok_or_else(|| {
+                anyhow::anyhow!("请选择模型；在 TUI 中选择，或使用 --model 连接名::模型名")
+            })?)
+        } else {
+            None
+        };
+        let remember = resume.is_none();
         let configuration = connection.configuration().await?;
-        let Response::Opened(mut info) = client
+        let Response::Opened(info) = client
             .request(Request::Open {
+                model,
                 policy: Default::default(),
                 resume,
                 configuration,
@@ -41,28 +46,8 @@ impl Opened {
         else {
             anyhow::bail!("unexpected workspace response");
         };
-        if let Some(model) = desired_model.filter(|model| model != &info.model) {
-            let response = client
-                .request(Request::SetModel {
-                    session: info.id.clone(),
-                    model,
-                    effort: None,
-                })
-                .await?;
-            if !matches!(response, Response::Ok) {
-                anyhow::bail!("model selection was not confirmed");
-            }
-            let Response::Opened(updated) = client
-                .request(Request::Open {
-                    policy: Default::default(),
-                    resume: Some(info.id.clone()),
-                    configuration: None,
-                })
-                .await?
-            else {
-                anyhow::bail!("workspace profile missing");
-            };
-            info = updated;
+        if remember && let Some(local) = local {
+            local.remember_model(&info.model)?;
         }
         let opened = Self {
             client,

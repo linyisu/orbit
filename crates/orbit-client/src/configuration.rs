@@ -23,22 +23,11 @@ impl Local {
         let mut document: toml::Value = toml::from_str(&content)?;
         let store = AuthStore::new(self.auth.clone())?;
         let mut credentials = BTreeMap::new();
-        let selected = parsed
-            .model_options()?
-            .into_iter()
-            .find(|model| self.model.as_deref() == Some(model.qualified_name().as_str()));
-
-        for (name, provider) in &mut parsed.providers {
-            if let Some(selected) = &selected
-                && selected.provider == *name
-                && let Some(index) = provider
-                    .models
-                    .iter()
-                    .position(|model| model.id == selected.model)
-            {
-                provider.models.swap(0, index);
-                document["default_provider"] = name.clone().into();
-            }
+        document
+            .as_table_mut()
+            .context("invalid configuration")?
+            .remove("default_provider");
+        for (name, provider) in &parsed.providers {
             let table = document["providers"][name]
                 .as_table_mut()
                 .context("invalid provider table")?;

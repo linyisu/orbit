@@ -21,6 +21,7 @@ models = [{ id = "mock" }]
     )
     .unwrap();
     crate::WorkspaceOptions {
+        model: Some("test::mock".into()),
         initial_directory: dir.to_path_buf(),
         auth_directory: dir.join("auth"),
         config,

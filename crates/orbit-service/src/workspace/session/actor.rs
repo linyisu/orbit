@@ -211,16 +211,26 @@ impl Actor {
                     crate::config::FileConfig::load(&options.config, &options.auth_directory)?;
                 crate::account_models::refresh(&mut config, false).await;
                 let models = config.model_options()?;
-                let selected = if models
+                let selected = self.setup.resources.model_name.clone();
+                let available = models
                     .iter()
-                    .any(|model| model.qualified_name() == self.setup.resources.model_name)
-                {
-                    self.setup.resources.model_name.clone()
-                } else {
-                    config.default_model_option()?.qualified_name()
-                };
+                    .any(|model| model.qualified_name() == selected);
+                let effort =
+                    self.setup
+                        .resources
+                        .model
+                        .config()
+                        .reasoning_effort
+                        .filter(|effort| {
+                            models.iter().any(|model| {
+                                model.qualified_name() == selected
+                                    && model.reasoning_efforts.contains(effort)
+                            })
+                        });
                 self.setup.resources.budget.model_options = models;
-                profile::select(&mut self.setup, &selected, None).await?;
+                if available {
+                    profile::select(&mut self.setup, &selected, effort.map(|e| e.as_str())).await?;
+                }
                 if let Some(installed) = installed {
                     self.setup.resources.options = installed.options.clone();
                     self.configuration = Some(installed);
