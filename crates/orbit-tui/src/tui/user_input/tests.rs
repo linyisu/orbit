@@ -638,6 +638,29 @@ fn user_input_choice_padding_survives_hover_wrapping_and_custom_editing() {
 }
 
 #[test]
+fn user_input_summary_preserves_prompt_numbering() {
+    for status in [Status::Pending, Status::Answered] {
+        let mut s = state();
+        let mut r = record();
+        r.status = status;
+        r.form.questions[0].prompt = "1. Which editor?".into();
+        r.form.questions[1].prompt = "32 bit or 64 bit?".into();
+        s.upsert(r);
+        s.open("request");
+        s.activate(Focus::Tab(2));
+        let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
+        paint(&mut s, &mut terminal);
+        for (index, expected) in [(0, "1. Which editor?"), (1, "32 bit or 64 bit?")] {
+            let row = hit(&s, Focus::Review(index));
+            let text: String = (row.x..row.right())
+                .map(|x| terminal.backend().buffer()[(x, row.y)].symbol())
+                .collect();
+            assert_eq!(text.trim(), expected);
+        }
+    }
+}
+
+#[test]
 fn user_input_summary_hover_highlights_only_the_question_heading() {
     for status in [Status::Pending, Status::Answered] {
         let mut s = state();

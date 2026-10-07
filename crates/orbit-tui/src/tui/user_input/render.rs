@@ -373,7 +373,7 @@ impl State {
             for (i, (q, d)) in r.form.questions.iter().zip(&self.drafts[&r.id]).enumerate() {
                 push(
                     &mut rows,
-                    format!("{}. {}", i + 1, q.prompt),
+                    q.prompt.clone(),
                     if highlight == Some(Focus::Review(i)) {
                         selected()
                     } else {
