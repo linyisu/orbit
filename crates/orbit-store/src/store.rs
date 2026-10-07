@@ -243,7 +243,26 @@ impl Store {
                     decoded.push(serde_json::from_str(&payload?)?);
                 }
 
+                // The first canonical message belongs to this exact run, even
+                // after compaction has replaced the model's history projection.
+                let record = transaction.query_row(
+                    "SELECT id,run_id,payload,sha256 FROM session_messages WHERE run_id=?1 ORDER BY ordinal LIMIT 1",
+                    [run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                ).optional()?;
+                let message = record.map(|(id, run, payload, hash)|
+                    crate::session_log::decode(id, run, payload, hash)
+                ).transpose()?;
+                let images = match message.map(|record| record.message) {
+                    Some(orbit_model::types::ChatMessage::User { content, attachments }) if content == prompt =>
+                        attachments.into_iter().map(|attachment| match attachment {
+                            orbit_model::types::Attachment::Image { name, path, .. } =>
+                                orbit_protocol::MessageImage { name, path: path.to_string_lossy().into_owned() },
+                        }).collect(),
+                    _ => Vec::new(),
+                };
                 runs.push(Run {
+                    images,
                     prompt,
                     status,
                     elapsed_ms,

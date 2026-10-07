@@ -612,7 +612,14 @@ impl Service {
             }
             Request::ReadFile { session, path } => {
                 let session = self.session(&session).await?;
+                let attachment = session.has_image(&path).await;
                 let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+                    if attachment {
+                        return orbit_tools::image_assets::ImageAssets::for_database(
+                            session.store.path(),
+                        )
+                        .read(Path::new(&path));
+                    }
                     use std::io::Read;
                     let file = session
                         .workspace
@@ -720,3 +727,6 @@ async fn capabilities() -> orbit_protocol::Capabilities {
         .await
         .clone()
 }
+
+#[cfg(test)]
+mod tests;

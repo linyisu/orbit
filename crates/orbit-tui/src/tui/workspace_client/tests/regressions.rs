@@ -588,3 +588,33 @@ fn user_input_completed_tool_click_releases_frozen_transcript_before_drawing_mod
     assert!(!tab.state.user_input.visible());
     assert_eq!(tab.state.input.text, "保留草稿");
 }
+
+#[test]
+fn sent_images_use_target_assets_for_live_and_replayed_messages() {
+    let images = vec![orbit_protocol::MessageImage {
+        name: "clipboard.png".into(),
+        path: "/target/session.attachments/asset.png".into(),
+    }];
+    for replayed in [false, true] {
+        let (mut tab, _rx) = tab("SSH test");
+        tab.state.attachments.push(image());
+        apply_page(
+            &mut tab,
+            vec![Update::Started {
+                prompt: "看这张图".into(),
+                presentation: orbit_protocol::RunPresentation {
+                    images: vec!["clipboard.png".into()],
+                    image_assets: images.clone(),
+                    replayed,
+                    ..Default::default()
+                },
+            }],
+        );
+        assert!(matches!(&tab.state.transcript[0],
+            TranscriptItem::UserWithImages { text, images: actual }
+            if text == "看这张图" && actual == &images));
+        assert_eq!(tab.state.input.history.last().unwrap(), "看这张图");
+        assert_eq!(tab.state.attachments.len(), 1);
+        assert!(!tab.state.is_home());
+    }
+}

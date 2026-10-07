@@ -13,7 +13,12 @@ pub struct CanonicalMessage {
     pub message: ChatMessage,
 }
 
-fn decode(id: i64, run_id: i64, payload: String, expected: String) -> Result<CanonicalMessage> {
+pub(crate) fn decode(
+    id: i64,
+    run_id: i64,
+    payload: String,
+    expected: String,
+) -> Result<CanonicalMessage> {
     let actual = Sha256::digest(payload.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -128,6 +133,69 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+
+    #[tokio::test]
+    async fn replay_images_are_bound_to_their_run_after_projection_compaction() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().join("orbit.db"))
+            .await
+            .unwrap();
+        let mut writer = store
+            .create(
+                directory.path().display().to_string(),
+                "model".into(),
+                false,
+            )
+            .await
+            .unwrap();
+        let id = writer.id().to_owned();
+        for asset in ["first.png", "second.png"] {
+            // Identical prompts and upload names must retain distinct assets.
+            writer.begin(String::new(), "model".into()).await.unwrap();
+            let message = ChatMessage::user_with_attachments(
+                "",
+                vec![orbit_model::types::Attachment::Image {
+                    name: "clipboard.png".into(),
+                    mime_type: "image/png".into(),
+                    path: directory.path().join(asset),
+                }],
+            );
+            let journal = writer.execution_journal().unwrap();
+            journal.record_message(message.clone());
+            journal
+                .save(
+                    ExecutionCheckpoint {
+                        history: vec![message],
+                        turns: 0,
+                        tool_calls: 0,
+                        in_flight: None,
+                        attachments: vec![],
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            writer
+                .finish(
+                    "completed",
+                    vec![],
+                    Some(vec![ChatMessage::user("compacted")]),
+                )
+                .await
+                .unwrap();
+        }
+        let snapshot = store.load(&id).await.unwrap();
+        assert_eq!(snapshot.runs.len(), 2);
+        for (run, asset) in snapshot.runs.iter().zip(["first.png", "second.png"]) {
+            assert_eq!(
+                run.images,
+                vec![orbit_protocol::MessageImage {
+                    name: "clipboard.png".into(),
+                    path: directory.path().join(asset).to_string_lossy().into_owned(),
+                }]
+            );
+        }
+    }
 
     #[tokio::test]
     async fn canonical_messages_survive_projection_replacement_and_resume() {

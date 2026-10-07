@@ -1048,10 +1048,12 @@ pub(super) fn draw_transcript_in(
     super::media::occlude(state.selection.viewport);
     if navigation
         && area.height > 1
-        && state
-            .transcript
-            .iter()
-            .any(|item| matches!(item, TranscriptItem::User(_)))
+        && state.transcript.iter().any(|item| {
+            matches!(
+                item,
+                TranscriptItem::User(_) | TranscriptItem::UserWithImages { .. }
+            )
+        })
     {
         state.selection.viewport.height -= 1;
     }
@@ -1252,7 +1254,7 @@ pub(super) fn transcript_lines_at_width(
 
     for (index, item) in items.iter().enumerate() {
         match item {
-            TranscriptItem::User(text) => {
+            TranscriptItem::User(text) | TranscriptItem::UserWithImages { text, .. } => {
                 let text = text.trim();
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(vec![

@@ -23,6 +23,43 @@ impl ImageAssets {
         }
     }
 
+    /// Read an immutable asset after the caller has checked session ownership.
+    pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
+        ensure!(
+            path.parent() == Some(self.directory.as_path()),
+            "not an image asset"
+        );
+        let expected = path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        ensure!(
+            expected.len() == 64 && expected.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "invalid image asset name"
+        );
+        ensure!(
+            !self.directory.symlink_metadata()?.file_type().is_symlink(),
+            "image asset directory is a symlink"
+        );
+        use std::io::Read;
+        let workspace = orbit_runtime::filesystem::Workspace::new(&self.directory)?;
+        let file = workspace.authorize_read(path)?;
+        ensure!(
+            file.metadata()?.is_file(),
+            "image asset is not a regular file"
+        );
+        let mut bytes = Vec::new();
+        file.take(MAX_IMAGE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(bytes.len() <= MAX_IMAGE_BYTES, "image exceeds 20 MiB");
+        let actual = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        ensure!(actual == expected, "image asset failed integrity check");
+        Ok(bytes)
+    }
+
     pub fn import_path(&self, source: &Path) -> Result<Attachment> {
         let bytes = Attachment::read_image_bytes(source)
             .with_context(|| format!("无法读取图片 {}", source.display()))?;
@@ -157,4 +194,30 @@ fn normalize_image(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str, &'static st
         .context("无法编码缩小后的图片")?;
 
     Ok((output.into_inner(), "image/png", "png"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asset_reads_check_location_and_content() {
+        let root = tempfile::tempdir().unwrap();
+        let assets = ImageAssets::for_database(&root.path().join("sessions.db"));
+        let Attachment::Image { path, .. } = assets
+            .import_rgba("clipboard.png", 1, 1, vec![255; 4])
+            .unwrap();
+        let bytes = assets.read(&path).unwrap();
+        let external = root.path().join(path.file_name().unwrap());
+        std::fs::write(&external, &bytes).unwrap();
+        assert!(assets.read(&external).is_err());
+        std::fs::write(&path, b"modified").unwrap();
+        assert!(
+            assets
+                .read(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("integrity")
+        );
+    }
 }

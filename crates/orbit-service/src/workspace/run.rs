@@ -8,6 +8,7 @@ pub(super) type Started = (
     tokio::task::JoinHandle<Result<orbit_agent::agent::AgentResult, AgentError>>,
     CancellationToken,
     orbit_agent::inbox::AgentInbox,
+    Vec<orbit_protocol::MessageImage>,
 );
 
 pub(super) async fn start(
@@ -68,6 +69,17 @@ pub(super) async fn start(
                 .collect()
         })
         .await??;
+    let image_assets = attachments
+        .iter()
+        .map(|attachment| match attachment {
+            orbit_model::types::Attachment::Image { name, path, .. } => {
+                orbit_protocol::MessageImage {
+                    name: name.clone(),
+                    path: path.to_string_lossy().into_owned(),
+                }
+            }
+        })
+        .collect();
     let started = crate::execution::start(
         session,
         prompt,
@@ -96,6 +108,7 @@ pub(super) async fn start(
         started.task,
         started.cancellation,
         started.inbox,
+        image_assets,
     ))
 }
 

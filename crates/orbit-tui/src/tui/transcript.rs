@@ -789,16 +789,26 @@ impl Entry {
         self.observed_bytes = Some(text.len());
     }
 
-    fn user(&mut self, text: &str, width: u16) {
-        self.framed_input(text, width, super::icons::PROMPT);
+    fn user(&mut self, text: &str, images: &[orbit_protocol::MessageImage], width: u16) {
+        self.framed_input(text, images, width, super::icons::PROMPT);
     }
 
-    fn framed_input(&mut self, text: &str, width: u16, icon: &str) {
+    fn framed_input(
+        &mut self,
+        text: &str,
+        images: &[orbit_protocol::MessageImage],
+        width: u16,
+        icon: &str,
+    ) {
         // A complete frame lets user turns remain visually distinct after their
         // contents wrap. Keep a plain fallback for terminals too narrow to
         // draw the two side rails without stealing all useful text width.
         if width < 9 {
-            for (index, line) in text.lines().enumerate() {
+            let lines = text
+                .lines()
+                .map(str::to_owned)
+                .chain(images.iter().map(|image| format!("[图片：{}]", image.name)));
+            for (index, line) in lines.enumerate() {
                 self.push(
                     Line::from(vec![
                         Span::styled(
@@ -838,7 +848,10 @@ impl Entry {
         );
         let inner_width = width - 4;
 
-        for source in text.split('\n') {
+        for source in text
+            .split('\n')
+            .filter(|_| !text.is_empty() || images.is_empty())
+        {
             let content = super::markdown::LinkedLine::plain(Line::from(Span::styled(
                 source.to_owned(),
                 ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
@@ -854,6 +867,27 @@ impl Entry {
                     width,
                 );
             }
+        }
+
+        for image in images {
+            // Keep user text literal; only structured attachments create media.
+            let mut label = Line::from(format!("[图片：{}]", image.name));
+            render::sanitize_line(&mut label);
+            let mut line = super::markdown::LinkedLine::plain(label);
+            let length = line.text().len();
+            line.links.clear();
+            line.media.push(super::media::Target {
+                range: 0..length,
+                source: super::media::Source::Image(image.path.clone()),
+            });
+            let padding = usize::from(inner_width).saturating_sub(line.line.width());
+            self.push_linked(
+                line.framed(
+                    vec![Span::styled("│ ", border)],
+                    vec![Span::raw(" ".repeat(padding)), Span::styled(" │", border)],
+                ),
+                width,
+            );
         }
 
         self.push_linked(
@@ -1190,7 +1224,12 @@ impl TranscriptLayout {
 
                 TranscriptItem::User(text) => {
                     entry.clear();
-                    entry.user(text, width);
+                    entry.user(text, &[], width);
+                }
+
+                TranscriptItem::UserWithImages { text, images } => {
+                    entry.clear();
+                    entry.user(text, images, width);
                 }
 
                 TranscriptItem::Tool(row) => {

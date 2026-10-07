@@ -219,8 +219,17 @@ impl ModelSummary {
     }
 }
 
+/// An image stored on the session's host and readable through its file client.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageImage {
+    pub name: String,
+    pub path: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RunPresentation {
+    #[serde(default)]
+    pub image_assets: Vec<MessageImage>,
     #[serde(default)]
     pub images: Vec<String>,
     #[serde(default)]

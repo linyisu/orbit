@@ -4,6 +4,7 @@ use orbit_agent::events::AgentEvent;
 #[test]
 fn replay_preserves_compaction_and_queued_input_semantics() {
     let compact = orbit_store::types::Run {
+        images: Vec::new(),
         prompt: "/compact".into(),
         status: "completed".into(),
         elapsed_ms: Some(1234),
@@ -11,6 +12,7 @@ fn replay_preserves_compaction_and_queued_input_semantics() {
     };
     assert!(presentation(&compact).compact);
     let queued = orbit_store::types::Run {
+        images: Vec::new(),
         prompt: "queued".into(),
         events: vec![
             AgentEvent::InputReceived {
@@ -99,7 +101,45 @@ models=[{id="test",supports_vision=true}]
         })
         .await
         .unwrap();
-    assert!(handle.view.lock().await.page(0).unwrap().updates.iter().any(|update| matches!(update,Update::Started{prompt,presentation} if prompt.is_empty() && presentation.images==["one.png"])));
+    let page = handle.view.lock().await.page(0).unwrap();
+    let images = page
+        .updates
+        .iter()
+        .find_map(|update| match update {
+            Update::Started {
+                prompt,
+                presentation,
+            } if prompt.is_empty() => Some(presentation.image_assets.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].name, "one.png");
+    assert!(handle.has_image(&images[0].path).await);
+    assert!(!handle.has_image("/another/session/image.png").await);
+    let assets = orbit_tools::image_assets::ImageAssets::for_database(&options.database);
+    assert!(
+        assets
+            .read(Path::new(&images[0].path))
+            .unwrap()
+            .starts_with(b"\x89PNG")
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let snapshot = handle.store.load(&handle.info.id).await.unwrap();
+            if snapshot
+                .runs
+                .first()
+                .is_some_and(|run| run.images == images)
+            {
+                assert_eq!(super::presentation(&snapshot.runs[0]).image_assets, images);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
     handle.command(Command::Cancel).await.unwrap();
 }
 

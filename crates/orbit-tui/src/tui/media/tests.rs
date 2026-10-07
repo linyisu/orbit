@@ -1514,6 +1514,28 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
     for (item, linked, expanded) in [
         (TranscriptItem::Assistant(image.clone()), false, false),
         (
+            TranscriptItem::UserWithImages {
+                text: "**原样显示的文字**".into(),
+                images: vec![orbit_protocol::MessageImage {
+                    name: "clipboard.png".into(),
+                    path: path.to_string_lossy().into_owned(),
+                }],
+            },
+            false,
+            false,
+        ),
+        (
+            TranscriptItem::UserWithImages {
+                text: String::new(),
+                images: vec![orbit_protocol::MessageImage {
+                    name: "截图.png".into(),
+                    path: path.to_string_lossy().into_owned(),
+                }],
+            },
+            false,
+            false,
+        ),
+        (
             TranscriptItem::Assistant(format!("<img src='{}' alt='示意'>", path.display())),
             false,
             false,

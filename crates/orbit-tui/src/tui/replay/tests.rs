@@ -31,6 +31,7 @@ async fn replay_is_incremental_exact_and_preserves_scroll_and_saved_elapsed_time
             }
 
             orbit_store::types::Run {
+                images: Vec::new(),
                 prompt: format!("prompt-{index}"),
                 status: "completed".into(),
                 elapsed_ms: Some(12345),

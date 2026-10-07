@@ -45,12 +45,14 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
         files: FileActivity::default(),
     };
     let archive_run = Run {
+        images: Vec::new(),
         prompt: "/compact".into(),
         status: "completed".into(),
         elapsed_ms: None,
         events: vec![AgentEvent::CompactionRecorded { record }],
     };
     let failed_retry = Run {
+        images: Vec::new(),
         prompt: "/compact".into(),
         status: "failed".into(),
         elapsed_ms: None,
@@ -87,6 +89,7 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
     );
 
     let later_reply = Run {
+        images: Vec::new(),
         prompt: "new work".into(),
         status: "completed".into(),
         elapsed_ms: None,

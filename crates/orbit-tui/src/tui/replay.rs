@@ -25,7 +25,12 @@ impl HistoryReplay {
                     state
                         .transcript
                         .iter()
-                        .rposition(|item| matches!(item, TranscriptItem::User(_)))
+                        .rposition(|item| {
+                            matches!(
+                                item,
+                                TranscriptItem::User(_) | TranscriptItem::UserWithImages { .. }
+                            )
+                        })
                         .unwrap_or(0),
                 ),
             }
@@ -69,7 +74,7 @@ impl HistoryReplay {
                 if run.prompt != "/compact" && !queued_input {
                     // Do not reset the reader's scroll position between runs.
                     let (scroll, follow) = (state.scroll, state.follow_bottom);
-                    state.submit(run.prompt.clone());
+                    state.submit_with_images(run.prompt.clone(), run.images.clone());
                     state.scroll = scroll;
                     state.follow_bottom = follow;
                 }

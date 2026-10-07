@@ -435,11 +435,12 @@ impl Actor {
                     RequestClaim::Accepted => return Ok(()),
                     RequestClaim::Rejected(error) => anyhow::bail!("{error}"),
                 }
-                let presentation = orbit_protocol::RunPresentation {
+                let mut presentation = orbit_protocol::RunPresentation {
                     images: images.iter().map(|image| image.name.clone()).collect(),
                     compact,
                     queued_input: false,
                     replayed: false,
+                    image_assets: Vec::new(),
                 };
                 let started = crate::workspace::run::start(
                     &mut self.setup,
@@ -449,7 +450,7 @@ impl Actor {
                     model.as_deref(),
                 )
                 .await;
-                let (events, task, cancellation, inbox) = match started {
+                let (events, task, cancellation, inbox, image_assets) = match started {
                     Ok(started) => started,
                     Err(error) => {
                         let _ = self
@@ -465,6 +466,7 @@ impl Actor {
                         return Err(error);
                     }
                 };
+                presentation.image_assets = image_assets;
                 self.running = Some(Running {
                     events,
                     task,

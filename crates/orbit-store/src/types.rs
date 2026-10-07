@@ -7,6 +7,8 @@ pub use orbit_protocol::Session;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
+    #[serde(default)]
+    pub images: Vec<orbit_protocol::MessageImage>,
     pub prompt: String,
     pub status: String,
     /// Wall-clock duration measured by the writer, in milliseconds. Runs saved

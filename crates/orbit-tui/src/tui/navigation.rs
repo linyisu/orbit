@@ -165,7 +165,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         .iter()
         .enumerate()
         .filter_map(|(i, item)| {
-            if let TranscriptItem::User(text) = item {
+            if let TranscriptItem::User(text) | TranscriptItem::UserWithImages { text, .. } = item {
                 Some((state.transcript_layout.item_offset(i)?, text))
             } else {
                 None

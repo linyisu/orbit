@@ -66,6 +66,10 @@ impl From<String> for ThinkingRow {
 #[derive(Clone, Debug)]
 pub enum TranscriptItem {
     User(String),
+    UserWithImages {
+        text: String,
+        images: Vec<orbit_protocol::MessageImage>,
+    },
     Assistant(String),
     Thinking(ThinkingRow),
     Tool(ToolRow),
@@ -269,6 +273,7 @@ impl UiState {
             matches!(
                 item,
                 TranscriptItem::User(_)
+                    | TranscriptItem::UserWithImages { .. }
                     | TranscriptItem::Assistant(_)
                     | TranscriptItem::Thinking(_)
                     | TranscriptItem::Tool(_)
@@ -292,6 +297,14 @@ impl UiState {
         }
         if presentation.compact || prompt == "/compact" || presentation.queued_input {
             self.begin_run();
+            if presentation.replayed {
+                self.scroll = scroll;
+                self.follow_bottom = follow;
+            }
+            return;
+        }
+        if !presentation.image_assets.is_empty() {
+            self.submit_with_images(prompt, presentation.image_assets);
             if presentation.replayed {
                 self.scroll = scroll;
                 self.follow_bottom = follow;
@@ -329,7 +342,12 @@ impl UiState {
         let first = self
             .transcript
             .iter()
-            .rposition(|item| matches!(item, TranscriptItem::User(_)))
+            .rposition(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::User(_) | TranscriptItem::UserWithImages { .. }
+                )
+            })
             .unwrap_or(0);
         for item in &mut self.transcript[first..] {
             if let TranscriptItem::Tool(tool) = item
@@ -528,6 +546,16 @@ impl UiState {
         self.selection.clear();
         self.menu_index = 0;
         self.menu_dismissed = true;
+    }
+
+    pub fn submit_with_images(&mut self, text: String, images: Vec<orbit_protocol::MessageImage>) {
+        if images.is_empty() {
+            self.submit(text);
+        } else {
+            self.transcript
+                .push(TranscriptItem::UserWithImages { text, images });
+            self.begin_run();
+        }
     }
 
     pub fn submit(&mut self, prompt: String) {

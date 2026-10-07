@@ -126,6 +126,8 @@ impl Clock {
 fn presentation(run: &orbit_store::types::Run) -> orbit_protocol::RunPresentation {
     orbit_protocol::RunPresentation {
         replayed: true,
+        images: run.images.iter().map(|image| image.name.clone()).collect(),
+        image_assets: run.images.clone(),
         compact: run.prompt == "/compact",
         queued_input: run
             .events
@@ -134,7 +136,6 @@ fn presentation(run: &orbit_store::types::Run) -> orbit_protocol::RunPresentatio
                 !matches!(event, orbit_agent::events::AgentEvent::TurnStarted { .. })
             })
             .any(|event| matches!(event, orbit_agent::events::AgentEvent::InputReceived { .. })),
-        ..Default::default()
     }
 }
 
@@ -307,6 +308,14 @@ impl Handle {
             workspace,
             store,
         }
+    }
+
+    /// Only expose attachments published in this session's transcript.
+    pub async fn has_image(&self, path: &str) -> bool {
+        self.view.lock().await.updates.iter().any(|(update, _)| {
+            matches!(update, Update::Started { presentation, .. }
+                if presentation.image_assets.iter().any(|image| image.path == path))
+        })
     }
 
     pub async fn current_info(&self) -> SessionInfo {
