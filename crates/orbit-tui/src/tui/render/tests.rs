@@ -544,6 +544,9 @@ fn composer_metadata_is_below_input_without_a_background_or_sidebar() {
 
 #[test]
 fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
+    use crate::tui::{TabAction, tab_target};
+    use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
     let mut state = UiState::new("model");
     state.tabs = (0..5)
         .map(|index| SessionTab {
@@ -555,12 +558,46 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
             active: index == 4,
         })
         .collect();
-    let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
-
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-
-    assert!(state.tab_areas.iter().any(|(_, id)| id == "session-4"));
-    assert!(state.tab_areas.iter().all(|(area, _)| area.right() <= 40));
+    state.transcript.push(TranscriptItem::User("Hello".into()));
+    for width in [40, 100] {
+        let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(state.tab_areas.iter().any(|(_, id)| id == "session-4"));
+        let click = |x, y| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        for (area, id) in &state.tab_areas {
+            assert!(area.right() <= width);
+            assert_eq!(area.height, 2);
+            assert!(state.selection.viewport.y >= area.bottom());
+            let bottom = area.bottom() - 1;
+            assert_eq!(terminal.backend().buffer()[(area.x, bottom)].symbol(), "╰");
+            assert_eq!(
+                terminal.backend().buffer()[(area.right() - 1, bottom)].symbol(),
+                "╯"
+            );
+            // The entire bottom edge selects its tab, including below the close button.
+            for x in area.x..area.right() {
+                assert_eq!(
+                    tab_target(&click(x, bottom), &state),
+                    Some(TabAction::Select(id.clone()))
+                );
+            }
+            assert_eq!(tab_target(&click(area.right(), bottom), &state), None);
+        }
+        for (area, id) in &state.tab_close_areas {
+            assert_eq!(area.height, 1);
+            assert_eq!(
+                tab_target(&click(area.x, area.y), &state),
+                Some(TabAction::Close(id.clone()))
+            );
+        }
+    }
 }
 
 #[test]

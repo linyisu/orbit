@@ -194,7 +194,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     };
 
     let mut areas = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(if state.tabs.is_empty() { 1 } else { 2 }),
         Constraint::Min(1),
         Constraint::Length(approval_height),
         Constraint::Length(u16::from(state.subagent_parent.is_some())),
@@ -208,14 +208,14 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     let mut home_logo = Rect::default();
     if home {
         let composer_height = input_height + attachment_height + details_height + 3;
-        let header_height = u16::from(state.tabs.len() > 1);
+        let header_height = 2 * u16::from(state.tabs.len() > 1);
         let available_height = area.height.saturating_sub(header_height);
         let logo_height = 7.min(available_height.saturating_sub(composer_height + 3));
         let group_height = logo_height + 1 + composer_height + 2;
         let x = area.x + area.width.saturating_sub(content_width) / 2;
         let y = area.y + header_height + available_height.saturating_sub(group_height) / 2;
         areas[0] = if state.tabs.len() > 1 {
-            Rect::new(area.x, area.y, area.width, 1)
+            Rect::new(area.x, area.y, area.width, header_height)
         } else {
             Rect::default()
         };
@@ -874,7 +874,25 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             );
         }
 
-        state.tab_areas.push((rect, tab.id.clone()));
+        if area.height >= 2 {
+            let border_color = if tab.active || hovered {
+                ACCENT
+            } else if tab.status == RunStatus::Failed {
+                crate::tui::theme::THEME.tab_error
+            } else {
+                crate::tui::theme::THEME.border_muted
+            };
+            frame.render_widget(
+                Paragraph::new(format!("╰{}╯", "─".repeat(usize::from(width - 2))))
+                    .style(Style::default().fg(border_color)),
+                Rect::new(x, area.y + 1, width, 1),
+            );
+        }
+
+        state.tab_areas.push((
+            Rect::new(rect.x, rect.y, rect.width, area.height.min(2)),
+            tab.id.clone(),
+        ));
         state.tab_close_areas.push((close, tab.id.clone()));
         x = x.saturating_add(width + 1);
     }
