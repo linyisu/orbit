@@ -594,7 +594,21 @@ pub(super) fn document_with_links(
         view.note(&format!("第 {start}–{end} 页 / 共 {total} 页"));
     }
     if value["pdf"]["has_encoding_issues"].as_bool() == Some(true) {
-        view.note("文字编码异常，提取结果可能不完整或有乱码，需要核对原文");
+        view.note("部分文字编码异常：已保留可读文字，并标出无法解码的片段");
+    }
+    if value["pdf"]["partial"].as_bool() == Some(true) {
+        view.note("部分提取：图片未识别，缺失内容已按页标注");
+    }
+    if let Some(pages) = value["pdf"]["pages"].as_array() {
+        let incomplete = pages
+            .iter()
+            .filter(|page| page["status"].as_str() != Some("text"))
+            .filter_map(|page| page["page"].as_u64())
+            .map(|page| page.to_string())
+            .collect::<Vec<_>>();
+        if !incomplete.is_empty() {
+            view.note(&format!("需核对页面：{}", incomplete.join("、")));
+        }
     }
     if let Some(pages) = value["pdf"]["pages_needing_ocr"]
         .as_array()

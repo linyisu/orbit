@@ -293,13 +293,16 @@ fn document_view_shows_pdf_page_range_and_encoding_warning() {
         json!({
             "path":"book.pdf", "format":"pdf", "content":"partial text",
             "pdf":{"start_page":21,"end_page":40,"total_pages":100,
-                "has_encoding_issues":true,"pages_needing_ocr":[25]},
+                "has_encoding_issues":true,"pages_needing_ocr":[25], "partial":true,
+                "pages":[{"page":25,"status":"partial"},{"page":26,"status":"text"}]},
             "next_start_page":41
         }),
     );
     let rendered = text(&super::document(&row, true, 100).unwrap());
     assert!(rendered.contains("第 21–40 页 / 共 100 页"));
     assert!(rendered.contains("文字编码异常"));
+    assert!(rendered.contains("部分提取"));
+    assert!(rendered.contains("需核对页面：25"));
     assert!(rendered.contains("第 41 页继续读取"));
 }
 

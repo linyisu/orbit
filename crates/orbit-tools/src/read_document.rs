@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+mod pdf;
+
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_PAGE_CHARS: usize = 20_000;
 const MAX_PAGE_CHARS: usize = 60_000;
@@ -41,6 +43,10 @@ struct PdfPages {
     pages_needing_ocr: Vec<u32>,
     has_encoding_issues: bool,
     extraction: String,
+    #[serde(default)]
+    partial: bool,
+    #[serde(default)]
+    pages: Vec<pdf::PageInfo>,
 }
 
 fn page_range(start: Option<u32>, end: Option<u32>) -> Result<(u32, u32), String> {
@@ -117,7 +123,7 @@ impl Tool for ReadDocument {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_document",
-            "Preferred tool for reading local PDFs and office documents: use this before shell commands, pdftotext, Python packages or tool discovery. Reads documents up to 256 MiB inside the workspace (or outside paths granted via request_capability). PDFs use 1-based start_page/end_page (default first 20 pages, at most 100 per call); extraction is restricted to that range. Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. Scanned/image-only PDFs require OCR and return an explicit error. Conversion is local and creates no project files. Continue with next_start_char and the SAME page range while truncated; then use next_start_page for the next PDF range. start_char/max_chars paginate the converted text within that range.",
+            "Preferred tool for reading local PDFs and office documents: use this before shell commands, pdftotext, Python packages or tool discovery. Reads documents up to 256 MiB inside the workspace (or outside paths granted via request_capability). PDFs use 1-based start_page/end_page (default first 20 pages, at most 100 per call); extraction is restricted to that range. Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. Mixed text/image PDFs return available text with physical page headings and per-page status in pdf.pages. Image-only, empty and undecodable portions are marked in place instead of failing the whole range. pdf.partial means extraction is incomplete; image content is not interpreted and OCR is not performed. Do not treat missing text or an unreadable fragment as evidence that the original page lacks that information. Conversion is local and creates no project files. Continue with next_start_char and the SAME page range while truncated; then use next_start_page for the next PDF range. start_char/max_chars paginate the converted text within that range.",
             json!({
                 "type": "object",
                 "properties": {
@@ -435,68 +441,7 @@ fn convert(
             .map(|text| Document { text, pdf: None })
             .map_err(|e| e.to_string());
     }
-    let (start, end) = page_range(start, end)?;
-    let result = pdf_inspector::process_pdf_mem_with_options(
-        bytes,
-        pdf_inspector::PdfOptions::new()
-            .pages(start..=end)
-            .detection(pdf_inspector::DetectionConfig {
-                strategy: pdf_inspector::ScanStrategy::Pages((start..=end).collect()),
-                min_text_ops_per_page: 1,
-                ..Default::default()
-            }),
-    )
-    .map_err(|e| e.to_string())?;
-    if start > result.page_count {
-        return Err(format!(
-            "start_page exceeds PDF length ({} pages)",
-            result.page_count
-        ));
-    }
-    let (text, extraction) = match result.markdown.filter(|text| !text.trim().is_empty()) {
-        Some(text) => (text, "markdown"),
-        None => {
-            // Layout classification can reject valid embedded text layers (including CJK).
-            // Try bounded native text extraction before declaring that OCR is required.
-            let pages = (start..=end.min(result.page_count)).collect();
-            let items = pdf_inspector::extract_text_with_positions_mem_in_frame(
-                bytes,
-                Some(&pages),
-                pdf_inspector::PositionFrame::Sheet,
-            )
-            .map_err(|e| e.to_string())?;
-            if !items.iter().any(|item| {
-                matches!(item.item_type, pdf_inspector::types::ItemType::Text)
-                    && item.text.chars().any(char::is_alphanumeric)
-            }) {
-                return Err("Selected PDF pages have no extractable text; scanned/image-only pages require OCR".into());
-            }
-            let text = pdf_inspector::to_markdown_from_items(items, Default::default());
-            if text.chars().filter(|&c| c == '\u{fffd}').count() * 50 > text.chars().count() {
-                return Err(format!(
-                    "PDF pages {start}..{} of {} contain an undecodable text layer (font encoding errors). Use OCR or page-image recognition; increasing the file-size limit or using pdftotext will not repair the text layer.",
-                    end.min(result.page_count),
-                    result.page_count
-                ));
-            }
-            (text, "text_layer")
-        }
-    };
-    Ok(Document {
-        text,
-        pdf: Some(PdfPages {
-            start_page: start,
-            end_page: end.min(result.page_count),
-            total_pages: result.page_count,
-            pages_needing_ocr: result
-                .pages_needing_ocr
-                .into_iter()
-                .filter(|page| (start..=end.min(result.page_count)).contains(page))
-                .collect(),
-            has_encoding_issues: result.has_encoding_issues,
-            extraction: extraction.into(),
-        }),
-    })
+    pdf::convert(bytes, start, end)
 }
 
 fn page(arguments: Arguments, format: &str, markdown: &Converted) -> Result<String, ToolError> {
@@ -542,12 +487,16 @@ mod tests {
 
     use super::*;
 
-    fn pdf() -> Vec<u8> {
+    pub(super) fn pdf() -> Vec<u8> {
+        pdf_fixture(false)
+    }
+
+    fn pdf_fixture(images: bool) -> Vec<u8> {
         let stream = |text: &str| {
             let text = format!("BT /F1 12 Tf 50 700 Td ({text}) Tj ET");
             format!("<< /Length {} >>\nstream\n{text}\nendstream", text.len())
         };
-        let objects = [
+        let mut objects = vec![
             "<< /Type /Catalog /Pages 2 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>".into(),
@@ -556,6 +505,22 @@ mod tests {
             stream("First chapter: compiler structure and syntax analysis."),
             stream("Second chapter: language grammar and parsing techniques."),
         ];
+        if images {
+            objects[2] =
+                objects[2].replace("/Resources <<", "/Resources << /XObject << /Im 8 0 R >>");
+            objects[3] =
+                objects[3].replace("/Resources <<", "/Resources << /XObject << /Im 8 0 R >>");
+            let drawing = "q 200 0 0 200 50 300 cm /Im Do Q";
+            objects[5] = format!(
+                "<< /Length {} >>\nstream\n{drawing}\nendstream",
+                drawing.len()
+            );
+            let mixed = format!(
+                "{drawing} BT /F1 12 Tf 50 700 Td (Second chapter: readable text beside an image.) Tj ET"
+            );
+            objects[6] = format!("<< /Length {} >>\nstream\n{mixed}\nendstream", mixed.len());
+            objects.push("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream".into());
+        }
         let mut bytes = b"%PDF-1.4\n".to_vec();
         let mut offsets = Vec::new();
         for (index, object) in objects.iter().enumerate() {
@@ -563,14 +528,42 @@ mod tests {
             bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
         }
         let xref = bytes.len();
-        bytes.extend_from_slice(b"xref\n0 8\n0000000000 65535 f \n");
+        bytes.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
         for offset in offsets {
             bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
         }
         bytes.extend_from_slice(
-            format!("trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
         );
         bytes
+    }
+
+    #[test]
+    fn mixed_pdf_keeps_text_and_image_only_pages_do_not_fail() {
+        let result = convert(&pdf_fixture(true), anydoc::Format::Pdf, Some(1), Some(2)).unwrap();
+        assert!(
+            result
+                .text
+                .contains("Second chapter: readable text beside an image.")
+        );
+        assert!(result.text.contains("## Page 1"));
+        assert!(result.text.contains("## Page 2"));
+        let metadata = serde_json::to_value(result.pdf.unwrap()).unwrap();
+        assert_eq!(metadata["pages"][0]["status"], "image_only");
+        assert_eq!(metadata["pages"][1]["status"], "text");
+        assert_eq!(metadata["pages"][1]["has_images"], true);
+        assert_eq!(metadata["pages_needing_ocr"], json!([1]));
+        assert_eq!(metadata["has_encoding_issues"], false);
+        let image_only =
+            convert(&pdf_fixture(true), anydoc::Format::Pdf, Some(1), Some(1)).unwrap();
+        assert!(image_only.text.contains("No selectable text"));
+        assert!(!image_only.text.contains("Second chapter"));
     }
 
     #[test]
