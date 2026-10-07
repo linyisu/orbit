@@ -20,14 +20,12 @@ struct Draft {
     selected: Vec<String>,
     custom: bool,
     text: InputState,
-    note: InputState,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Tab(usize),
     Option(usize),
     Text,
-    Note,
     Previous,
     Next,
     Later,
@@ -58,6 +56,9 @@ pub(super) struct State {
     drafts: HashMap<String, Vec<Draft>>,
     dialog: Option<Dialog>,
     hits: Vec<(Rect, Focus)>,
+    hovered: Option<Focus>,
+    pointer_active: bool,
+    pointer_position: Option<Position>,
     badge: Rect,
     editor_area: Rect,
     editor_rows: Vec<(Rect, Focus, usize)>,
@@ -100,6 +101,17 @@ impl State {
         removed
     }
     fn upsert(&mut self, record: Record) {
+        if record.status != Status::Pending {
+            let was_pending = self
+                .records
+                .iter()
+                .any(|r| r.id == record.id && r.status == Status::Pending);
+            if was_pending && matches!(&self.dialog, Some(Dialog::Form(v)) if v.id == record.id) {
+                self.dialog = None;
+                self.clear_geometry();
+            }
+            self.pending.retain(|id| id != &record.id);
+        }
         if !self.drafts.contains_key(&record.id) || record.status != Status::Pending {
             self.drafts.insert(
                 record.id.clone(),
@@ -113,7 +125,6 @@ impl State {
                             d.selected = a.selected.clone();
                             d.custom = !a.text.is_empty();
                             d.text.set(a.text.clone());
-                            d.note.set(a.note.clone());
                         }
                         d
                     })
@@ -161,9 +172,6 @@ impl State {
             });
             self.history_requested = false;
         }
-        if let Some(Dialog::Form(v)) = &mut self.dialog {
-            v.sending = false;
-        }
     }
     pub fn history(&mut self) {
         self.history_requested = true;
@@ -203,11 +211,13 @@ impl State {
     }
     fn clear_geometry(&mut self) {
         self.hits.clear();
+        self.hovered = None;
         self.editor_rows.clear();
         self.editor_area = Rect::default();
     }
     fn open(&mut self, id: &str) {
         self.clear_geometry();
+        self.pointer_active = false;
         if let Some(r) = self.records.iter().find(|r| r.id == id) {
             let page = if r.status == Status::Pending {
                 0
@@ -215,7 +225,7 @@ impl State {
                 r.form.questions.len()
             };
             let focus = if r.status != Status::Pending {
-                Focus::Next
+                Focus::Later
             } else if r.form.questions[0].kind == Kind::Text {
                 Focus::Text
             } else {
@@ -232,8 +242,18 @@ impl State {
             }));
         }
     }
-    pub fn submission_error(&mut self, error: String) {
-        if let Some(Dialog::Form(v)) = &mut self.dialog {
+    pub fn submission_succeeded(&mut self, id: &str) {
+        self.dismissed.insert(id.into());
+        self.pending.retain(|pending| pending != id);
+        if matches!(&self.dialog, Some(Dialog::Form(v)) if v.id == id && v.sending) {
+            self.dialog = None;
+            self.clear_geometry();
+        }
+    }
+    pub fn submission_error(&mut self, id: &str, error: String) {
+        if let Some(Dialog::Form(v)) = &mut self.dialog
+            && v.id == id
+        {
             v.sending = false;
             v.error = Some(error);
         }
@@ -252,7 +272,7 @@ impl State {
                 } else {
                     String::new()
                 },
-                note: d.note.text.clone(),
+                note: String::new(),
             })
             .collect()
     }
@@ -262,19 +282,20 @@ impl State {
         if v.page < r.form.questions.len() && r.status == Status::Pending {
             let q = &r.form.questions[v.page];
             let d = &self.drafts[&v.id][v.page];
-            result.extend(
-                (0..q.options.len() + usize::from(q.kind != Kind::Text && q.allow_custom))
-                    .map(Focus::Option),
-            );
+            result.extend((0..q.options.len()).map(Focus::Option));
             if q.kind == Kind::Text || d.custom {
                 result.push(Focus::Text);
+            } else if q.allow_custom {
+                result.push(Focus::Option(q.options.len()));
             }
-            result.push(Focus::Note);
         }
         if v.page > 0 {
             result.push(Focus::Previous);
         }
-        result.extend([Focus::Next, Focus::Later]);
+        if v.page < r.form.questions.len() || r.status == Status::Pending {
+            result.push(Focus::Next);
+        }
+        result.push(Focus::Later);
         if r.status == Status::Pending {
             result.push(Focus::Decline);
         }
@@ -374,15 +395,18 @@ impl State {
             }
             _ => {}
         }
-        if v.page != previous_page {
+        if v.page != previous_page || matches!(focus, Focus::Tab(_) | Focus::Previous) {
             v.focus = if v.page < r.form.questions.len() && editable {
-                if r.form.questions[v.page].kind == Kind::Text {
+                if r.form.questions[v.page].kind == Kind::Text || self.drafts[&v.id][v.page].custom
+                {
                     Focus::Text
                 } else {
                     Focus::Option(0)
                 }
-            } else {
+            } else if editable {
                 Focus::Next
+            } else {
+                Focus::Tab(v.page)
             };
         }
         v.follow_focus = true;
@@ -401,71 +425,111 @@ impl State {
             return Action::None;
         }
         if let Event::Mouse(m) = event {
-            if m.kind == MouseEventKind::Down(MouseButton::Left)
-                && let Some((rect, focus, row)) = self
-                    .editor_rows
-                    .iter()
-                    .find(|(r, _, _)| r.contains(Position::new(m.column, m.row)))
-                    .copied()
-                && let Some(Dialog::Form(v)) = &mut self.dialog
-            {
-                let d = &mut self.drafts.get_mut(&v.id).unwrap()[v.page];
-                let editor = if focus == Focus::Note {
-                    &mut d.note
-                } else {
-                    &mut d.text
-                };
-                let index =
-                    editor.position_at((m.column - rect.x) as usize, row, rect.width as usize);
-                editor.set_cursor(index);
-                v.focus = focus;
-                v.follow_focus = true;
-                return Action::None;
-            }
             let pos = Position::new(m.column, m.row);
-            if let Some((_, focus)) = self
-                .hits
-                .iter()
-                .find(|(rect, _)| rect.contains(pos))
-                .copied()
-            {
-                match &mut self.dialog {
-                    Some(Dialog::Form(v)) => {
-                        if !matches!(focus, Focus::Text | Focus::Note)
-                            || m.kind == MouseEventKind::Down(MouseButton::Left)
+            match m.kind {
+                MouseEventKind::Moved => {
+                    // Some terminals emit stationary motion after a click. A
+                    // new page must retain its editor focus at those coordinates.
+                    if self.pointer_position != Some(pos) {
+                        self.pointer_position = Some(pos);
+                        self.pointer_active = true;
+                        self.hovered = self
+                            .hits
+                            .iter()
+                            .find(|(rect, _)| rect.contains(pos))
+                            .map(|(_, focus)| *focus);
+                        if let (Some(Dialog::History { cursor, .. }), Some(Focus::History(i))) =
+                            (&mut self.dialog, self.hovered)
                         {
-                            v.focus = focus;
-                        }
-                    }
-                    Some(Dialog::History { cursor, .. }) => {
-                        if let Focus::History(i) = focus {
                             *cursor = i;
                         }
                     }
-                    _ => {}
                 }
-                if m.kind == MouseEventKind::Down(MouseButton::Left) {
-                    return self.activate(focus);
-                }
-            }
-            match &mut self.dialog {
-                Some(Dialog::Form(v)) => match m.kind {
-                    MouseEventKind::ScrollDown => v.offset = v.offset.saturating_add(3),
-                    MouseEventKind::ScrollUp => v.offset = v.offset.saturating_sub(3),
-                    _ => {}
-                },
-                Some(Dialog::History { offset, .. }) => match m.kind {
-                    MouseEventKind::ScrollDown => {
-                        *offset = offset
-                            .saturating_add(3)
-                            .min(self.records.len().saturating_sub(1))
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.pointer_position = Some(pos);
+                    self.pointer_active = true;
+                    self.hovered = None;
+                    if let Some((rect, _, row)) = self
+                        .editor_rows
+                        .iter()
+                        .find(|(rect, _, _)| rect.contains(pos))
+                        .copied()
+                        && let Some(Dialog::Form(v)) = &mut self.dialog
+                    {
+                        let editor = &mut self.drafts.get_mut(&v.id).unwrap()[v.page].text;
+                        let index = editor.position_at(
+                            (m.column - rect.x) as usize,
+                            row,
+                            rect.width as usize,
+                        );
+                        editor.set_cursor(index);
+                        v.focus = Focus::Text;
+                        v.follow_focus = true;
+                        return Action::None;
                     }
-                    MouseEventKind::ScrollUp => *offset = offset.saturating_sub(3),
-                    _ => {}
-                },
+                    if let Some((_, focus)) = self
+                        .hits
+                        .iter()
+                        .find(|(rect, _)| rect.contains(pos))
+                        .copied()
+                    {
+                        let advance = match &self.dialog {
+                            Some(Dialog::Form(v)) => self.records.iter().find(|r| r.id == v.id).is_some_and(|r| {
+                                r.status == Status::Pending && !v.sending && self.pending.contains(&v.id)
+                                    && r.form.questions.get(v.page).is_some_and(|q| {
+                                        q.kind == Kind::Single && matches!(focus, Focus::Option(i) if i < q.options.len())
+                                    })
+                            }),
+                            _ => false,
+                        };
+                        if let Some(Dialog::Form(v)) = &mut self.dialog {
+                            v.focus = focus;
+                        }
+                        let action = self.activate(focus);
+                        return if advance {
+                            self.activate(Focus::Next)
+                        } else {
+                            action
+                        };
+                    }
+                }
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                    self.hovered = None;
+                    self.pointer_active = true;
+                    let down = m.kind == MouseEventKind::ScrollDown;
+                    match &mut self.dialog {
+                        Some(Dialog::Form(v)) => {
+                            v.offset = if down {
+                                v.offset.saturating_add(3)
+                            } else {
+                                v.offset.saturating_sub(3)
+                            };
+                            v.follow_focus = false;
+                        }
+                        Some(Dialog::History { offset, .. }) => {
+                            *offset = if down {
+                                offset
+                                    .saturating_add(3)
+                                    .min(self.records.len().saturating_sub(1))
+                            } else {
+                                offset.saturating_sub(3)
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+                // Release and drag events belong to the original press; they
+                // must never focus or activate controls laid out after it.
                 _ => {}
             }
             return Action::None;
+        }
+        if matches!(event, Event::Paste(_))
+            || matches!(event, Event::Key(key) if key.kind != KeyEventKind::Release)
+        {
+            self.pointer_active = false;
+            self.hovered = None;
+            self.pointer_position = None;
         }
         let key = match event {
             Event::Key(k) if k.kind == KeyEventKind::Release => return Action::None,
@@ -566,14 +630,14 @@ impl State {
                     }
                     return self.activate(Focus::Next);
                 }
-                let focus = if matches!(v.focus, Focus::Text | Focus::Note) {
+                let focus = if matches!(v.focus, Focus::Text) {
                     Focus::Next
                 } else {
                     v.focus
                 };
                 return self.activate(focus);
             }
-            if !matches!(v.focus, Focus::Text | Focus::Note) {
+            if !matches!(v.focus, Focus::Text) {
                 match k.code {
                     KeyCode::Char(' ') => {
                         let f = v.focus;
@@ -599,11 +663,7 @@ impl State {
             && v.page < record.form.questions.len()
         {
             let d = &mut self.drafts.get_mut(&v.id).unwrap()[v.page];
-            let editor = if v.focus == Focus::Note {
-                &mut d.note
-            } else {
-                &mut d.text
-            };
+            let editor = &mut d.text;
             if let Some(k) = key
                 && k.modifiers.is_empty()
                 && ((k.code == KeyCode::Up && editor.cursor == 0)
@@ -617,7 +677,7 @@ impl State {
                 }];
                 return Action::None;
             }
-            let limit = if v.focus == Focus::Note { 8192 } else { 16384 };
+            let limit = 16384;
             let previous = editor.clone();
             editor.edit(event, self.editor_area.width.max(1) as usize);
             if editor.text.len() > limit {

@@ -49,7 +49,7 @@ cargo check --offline -p orbit-service
 
 ## 用户输入请求
 
-`user_input` 管理 Agent 发起的结构化问答。`ask_user` 使用题目 ID 和选项 ID 表示答案，支持 `single`、`multiple`、`text` 题型、自定义答案及补充说明。每组最多 8 题，建议模型集中询问 1～4 个关联问题。
+`user_input` 管理 Agent 发起的结构化问答。`ask_user` 使用题目 ID 和选项 ID 表示答案，支持 `single`、`multiple`、`text` 题型及自定义答案。每组最多 8 题，建议模型集中询问 1～4 个关联问题。
 
 TUI 连接后通过 `EnableUserInput` 声明交互能力。会话的 `Page.user_inputs` 提供待回答快照，`AnswerUserInput` 提交答案或明确取消，`UserInputHistory` 分页读取记录。服务先持久化结果再恢复工具调用；相同提交可以重试，冲突答案返回已处理提示。问答独立于审批模式，等待用户期间保持任务活跃。
 

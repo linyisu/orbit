@@ -1182,9 +1182,17 @@ fn user_input_submission_uses_each_target_connection_and_preserves_composer() {
             KeyModifiers::NONE,
         )))
         .unwrap();
+        let retry = requests.try_recv().unwrap();
+        assert!(matches!(retry.request, Request::AnswerUserInput { .. }));
+        retry.reply.unwrap().send(Ok(Response::Ok)).unwrap();
+        assert!(tab.poll_submissions());
+        assert!(!tab.state.user_input.visible());
+        tab.state.user_input.open_next();
+        assert!(!tab.state.user_input.visible());
+        assert_eq!(tab.state.input.text, "尚未发送的消息");
         assert!(matches!(
             requests.try_recv().unwrap().request,
-            Request::AnswerUserInput { .. }
+            Request::UserInputHistory { .. }
         ));
         assert!(requests.try_recv().is_err());
     }

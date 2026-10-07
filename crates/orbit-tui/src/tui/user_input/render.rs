@@ -149,6 +149,11 @@ impl State {
         let Some(Dialog::Form(v)) = &mut self.dialog else {
             return None;
         };
+        let highlight = if self.pointer_active {
+            self.hovered
+        } else {
+            Some(v.focus)
+        };
         let r = self.records.iter().find(|r| r.id == v.id)?;
         let editable = r.status == Status::Pending && self.pending.contains(&v.id);
         let count = r.form.questions.len();
@@ -221,11 +226,13 @@ impl State {
                 }
                 let rect = Rect::new(x, inner.y + 1, width, 1);
                 frame.render_widget(
-                    Paragraph::new(text.as_str()).style(if i == page || v.focus == Focus::Tab(i) {
-                        selected()
-                    } else {
-                        muted()
-                    }),
+                    Paragraph::new(text.as_str()).style(
+                        if i == page || highlight == Some(Focus::Tab(i)) {
+                            selected()
+                        } else {
+                            muted()
+                        },
+                    ),
                     rect,
                 );
                 self.hits.push((rect, Focus::Tab(i)));
@@ -262,7 +269,7 @@ impl State {
                 push(
                     &mut rows,
                     format!("{mark} {}", o.label),
-                    if v.focus == Focus::Option(i) {
+                    if highlight == Some(Focus::Option(i)) {
                         selected()
                     } else if chosen {
                         accent()
@@ -276,7 +283,7 @@ impl State {
                     push(
                         &mut rows,
                         format!("  {}", o.description),
-                        if v.focus == Focus::Option(i) {
+                        if highlight == Some(Focus::Option(i)) {
                             selected()
                         } else {
                             muted()
@@ -287,15 +294,14 @@ impl State {
                 }
                 push(&mut rows, String::new(), normal(), None, inner.width);
             }
-            if q.kind != Kind::Text && q.allow_custom {
+            let custom = q.kind != Kind::Text && q.allow_custom;
+            if custom && !draft.custom {
                 let focus = Focus::Option(q.options.len());
                 push(
                     &mut rows,
-                    format!("{} 自行填写…", choice_mark(q.kind, draft.custom)),
-                    if v.focus == focus {
+                    format!("{} 自行填写…", choice_mark(q.kind, false)),
+                    if highlight == Some(focus) {
                         selected()
-                    } else if draft.custom {
-                        accent()
                     } else {
                         normal()
                     },
@@ -303,38 +309,51 @@ impl State {
                     inner.width,
                 );
             }
-            for (focus, editor, label) in [
-                (Focus::Text, &draft.text, "填写答案"),
-                (Focus::Note, &draft.note, "补充说明（可选）"),
-            ] {
-                if focus == Focus::Text && q.kind != Kind::Text && !draft.custom {
-                    continue;
-                }
-                push(
-                    &mut rows,
-                    label.into(),
-                    if v.focus == focus { accent() } else { muted() },
-                    Some(focus),
-                    inner.width,
-                );
-                if focus == Focus::Note && v.focus != focus && editor.text.is_empty() {
-                    continue;
-                }
-                let (lines, pos) = editor.visual_lines(inner.width as usize);
+            if q.kind == Kind::Text || (custom && draft.custom) {
+                // The custom choice becomes its editor in place. Continuation
+                // rows are created only by actual wrapping or entered newlines.
+                let prefix = if custom {
+                    format!("{} ", choice_mark(q.kind, true))
+                } else {
+                    String::new()
+                };
+                let prefix_width = prefix.width() as u16;
+                let width = inner.width.saturating_sub(prefix_width).max(1);
+                let (lines, pos) = draft.text.visual_lines(width as usize);
                 let start = rows.len();
-                for line in lines {
+                for (index, text) in lines.into_iter().enumerate() {
+                    let empty = draft.text.text.is_empty();
+                    let text = if empty {
+                        if custom {
+                            "自行填写…".into()
+                        } else {
+                            "填写答案…".into()
+                        }
+                    } else {
+                        text
+                    };
+                    let line = Line::from(vec![
+                        ratatui::text::Span::styled(
+                            if index == 0 {
+                                prefix.clone()
+                            } else {
+                                " ".repeat(prefix_width as usize)
+                            },
+                            accent(),
+                        ),
+                        ratatui::text::Span::styled(text, if empty { muted() } else { normal() }),
+                    ]);
                     rows.push(Row {
-                        line: Line::styled(line, normal()),
-                        focus: Some(focus),
+                        line,
+                        focus: editable.then_some(Focus::Text),
                     });
                 }
                 if editable && !v.sending {
-                    editor_ranges.push((start, rows.len(), focus));
+                    editor_ranges.push((start, rows.len(), prefix_width));
+                    if v.focus == Focus::Text {
+                        caret = Some((prefix_width + pos.0 as u16, start + pos.1));
+                    }
                 }
-                if v.focus == focus && editable && !v.sending {
-                    caret = Some((pos.0 as u16, start + pos.1));
-                }
-                push(&mut rows, String::new(), normal(), Some(focus), inner.width);
             }
         } else {
             for (i, (q, d)) in r.form.questions.iter().zip(&self.drafts[&r.id]).enumerate() {
@@ -365,10 +384,14 @@ impl State {
                     Some(Focus::Tab(i)),
                     inner.width,
                 );
-                if !d.note.text.is_empty() {
+                if let Some(answer) = r
+                    .answers
+                    .iter()
+                    .find(|a| a.question_id == q.id && !a.note.is_empty())
+                {
                     push(
                         &mut rows,
-                        format!("补充：{}", d.note.text),
+                        format!("补充：{}", answer.note),
                         muted(),
                         Some(Focus::Tab(i)),
                         inner.width,
@@ -399,17 +422,28 @@ impl State {
             let rect = Rect::new(body.x, body.y + i as u16, body.width, 1);
             frame.render_widget(Paragraph::new(row.line.clone()).style(row.line.style), rect);
             let absolute = i + v.offset as usize;
-            if let Some((start, _, focus)) = editor_ranges
+            if let Some((start, _, prefix_width)) = editor_ranges
                 .iter()
                 .find(|(start, end, _)| (*start..*end).contains(&absolute))
             {
-                self.editor_rows.push((rect, *focus, absolute - start));
+                let editor = Rect::new(
+                    rect.x + *prefix_width,
+                    rect.y,
+                    rect.width.saturating_sub(*prefix_width),
+                    1,
+                );
+                self.editor_area = editor;
+                if absolute == *start && *prefix_width > 0 {
+                    self.hits.push((
+                        Rect::new(rect.x, rect.y, *prefix_width, 1),
+                        Focus::Option(r.form.questions[page].options.len()),
+                    ));
+                }
+                self.editor_rows
+                    .push((editor, Focus::Text, absolute - start));
             }
             if let Some(focus) = row.focus {
                 self.hits.push((rect, focus));
-                if matches!(focus, Focus::Text | Focus::Note) {
-                    self.editor_area = body;
-                }
             }
         }
         let labels = [
@@ -421,10 +455,10 @@ impl State {
                 } else if editable {
                     "提交答案"
                 } else {
-                    "查看完毕"
+                    "关闭"
                 },
             ),
-            (Focus::Later, "收起"),
+            (Focus::Later, if editable { "收起" } else { "关闭" }),
             (Focus::Decline, "取消问答"),
         ];
         let mut x = inner.x;
@@ -433,9 +467,10 @@ impl State {
             if focus == Focus::Decline && !editable {
                 continue;
             }
-            if focus == Focus::Previous && page == 0 {
+            if focus == Focus::Next && page == count && !editable {
                 continue;
             }
+            let disabled = focus == Focus::Previous && page == 0;
             let width = label.width() as u16 + 2;
             if x + width > inner.right() {
                 x = inner.x;
@@ -446,14 +481,18 @@ impl State {
             }
             let rect = Rect::new(x, y, width.min(inner.width), 1);
             frame.render_widget(
-                Paragraph::new(format!(" {label} ")).style(if focus == v.focus {
+                Paragraph::new(format!(" {label} ")).style(if disabled {
+                    muted()
+                } else if highlight == Some(focus) {
                     selected()
                 } else {
                     accent()
                 }),
                 rect,
             );
-            self.hits.push((rect, focus));
+            if !disabled {
+                self.hits.push((rect, focus));
+            }
             x += width + 2;
         }
         let message = if v.sending {
@@ -469,7 +508,7 @@ impl State {
             "↑↓ 滚动 · Tab 下一题 · Shift+Tab 上一题 · Esc 关闭"
         } else if page == count {
             "Enter 提交答案 · Shift+Tab 返回修改 · Esc 收起"
-        } else if matches!(v.focus, Focus::Text | Focus::Note) {
+        } else if matches!(v.focus, Focus::Text) {
             "Enter 下一题 · Alt+Enter 换行 · Tab 切题 · Esc 收起"
         } else if r.form.questions[page].kind == Kind::Multiple {
             "↑↓ 移动 · 空格勾选 · Enter 下一题 · Tab 切题 · Esc 收起"

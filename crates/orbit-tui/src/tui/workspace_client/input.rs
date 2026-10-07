@@ -45,10 +45,10 @@ impl Tab {
                 tui::user_input::Action::Answer { id, answers } => self.submit_with_receipt(
                     Request::AnswerUserInput {
                         session: self.id.clone().unwrap_or_default(),
-                        request: id,
+                        request: id.clone(),
                         answers,
                     },
-                    submissions::Draft::UserInput,
+                    submissions::Draft::UserInput(id),
                 ),
                 tui::user_input::Action::History(before) => {
                     self.send(Request::UserInputHistory {

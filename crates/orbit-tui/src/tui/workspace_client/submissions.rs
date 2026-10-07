@@ -5,7 +5,7 @@ use super::*;
 pub(super) enum Draft {
     Composer(String),
     Question,
-    UserInput,
+    UserInput(String),
     Model(String),
 }
 
@@ -57,7 +57,10 @@ impl Tab {
             Draft::Model(_) => self
                 .state
                 .report_local(TranscriptItem::Error(error.to_string())),
-            Draft::UserInput => self.state.user_input.submission_error(error.to_string()),
+            Draft::UserInput(id) => self
+                .state
+                .user_input
+                .submission_error(&id, error.to_string()),
             Draft::Question => self.state.btw.submit_error(&error),
             Draft::Composer(text) => {
                 if self.state.input.text.is_empty() {
@@ -90,6 +93,13 @@ impl Tab {
             changed = true;
             match result {
                 Ok(Response::Ok) => {
+                    if let Draft::UserInput(id) = &submission.draft {
+                        self.state.user_input.submission_succeeded(id);
+                        self.send(Request::UserInputHistory {
+                            session: self.id.clone().unwrap_or_default(),
+                            before: None,
+                        });
+                    }
                     if let Draft::Model(model) = submission.draft
                         && let Some(local) = self
                             .connection
