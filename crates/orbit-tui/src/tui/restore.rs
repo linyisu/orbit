@@ -234,7 +234,7 @@ impl RestorePicker {
             ));
         }
         self.hover();
-        let title_width = self.area.width.saturating_sub(4) as usize;
+        let title_width = self.area.width.saturating_sub(8) as usize;
         let title_elapsed = self.prepare_title_scroll(title_width);
         for (hit, index) in &self.rows {
             let entry = &self.entries[*index];
@@ -263,7 +263,10 @@ impl RestorePicker {
             } else {
                 Style::default().fg(THEME.foreground)
             };
-            frame.render_widget(Paragraph::new(title).style(style), text_area);
+            frame.render_widget(
+                Paragraph::new(format!("  {title}  ")).style(style),
+                text_area,
+            );
         }
         if ids.is_empty() {
             frame.render_widget(
@@ -575,8 +578,12 @@ mod tests {
         assert!(picker.advance_title_scroll());
         let after = draw(&mut state, &mut terminal);
         assert!((row.x + 3..row.right() - 1).any(|x| before[(x, row.y)] != after[(x, row.y)]));
-        for x in row.x..row.x + 3 {
+        for x in (row.x..row.x + 6).chain(row.right() - 2..row.right()) {
             assert_eq!(before[(x, row.y)], after[(x, row.y)]);
+        }
+        for x in [row.x + 4, row.x + 5, row.right() - 2, row.right() - 1] {
+            assert_eq!(after[(x, row.y)].symbol(), " ");
+            assert_eq!(after[(x, row.y)].bg, THEME.accent);
         }
 
         key(&mut state, KeyCode::Down);
@@ -601,7 +608,7 @@ mod tests {
         assert!(picker.title_scroll.as_ref().unwrap().2.elapsed() < Duration::from_secs(1));
         assert_eq!(
             picker.title_scroll.as_ref().unwrap().1,
-            picker.area.width as usize - 4
+            picker.area.width as usize - 8
         );
 
         key(&mut state, KeyCode::Down);
