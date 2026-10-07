@@ -194,7 +194,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     };
 
     let mut areas = Layout::vertical([
-        Constraint::Length(if state.tabs.is_empty() { 1 } else { 2 }),
+        Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(approval_height),
         Constraint::Length(u16::from(state.subagent_parent.is_some())),
@@ -208,7 +208,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     let mut home_logo = Rect::default();
     if home {
         let composer_height = input_height + attachment_height + details_height + 3;
-        let header_height = 2 * u16::from(state.tabs.len() > 1);
+        let header_height = u16::from(state.tabs.len() > 1);
         let available_height = area.height.saturating_sub(header_height);
         let logo_height = 7.min(available_height.saturating_sub(composer_height + 3));
         let group_height = logo_height + 1 + composer_height + 2;
@@ -837,12 +837,22 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let title = scrolling_title(&titles[index], title_width, elapsed);
         let display_title = format!("{spinner_prefix}{title}");
         let rect = Rect::new(x, area.y, width, 1);
+        let hovered = state.tab_hover.as_ref().is_some_and(|(action, _)| {
+            matches!(action, super::TabAction::Select(id) | super::TabAction::Close(id) if id == &tab.id)
+        });
+        let underline = if tab.active {
+            ACCENT
+        } else if hovered {
+            crate::tui::theme::THEME.tab_underline_hover
+        } else {
+            crate::tui::theme::THEME.tab_underline
+        };
         let style = if tab.active {
             Style::default()
                 .fg(ACCENT)
                 .bg(crate::tui::theme::THEME.tab_hover_background)
                 .add_modifier(Modifier::BOLD)
-        } else if elapsed.is_some() {
+        } else if hovered {
             Style::default()
                 .fg(ACCENT)
                 .bg(crate::tui::theme::THEME.tab_background)
@@ -850,7 +860,9 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             Style::default().fg(crate::tui::theme::THEME.tab_error)
         } else {
             Style::default().fg(crate::tui::theme::THEME.tab_inactive)
-        };
+        }
+        .add_modifier(Modifier::UNDERLINED)
+        .underline_color(underline);
 
         frame.render_widget(
             Paragraph::new(format!(
@@ -861,10 +873,6 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             rect,
         );
         let close = Rect::new(rect.right() - 3, rect.y, 3, 1);
-        let hovered = state.tab_hover.as_ref().is_some_and(|(action, _)| {
-            matches!(action, super::TabAction::Select(id) | super::TabAction::Close(id) if id == &tab.id)
-        });
-
         if hovered {
             frame.render_widget(
                 Paragraph::new(format!(" {} ", icons::CLOSE_THICK)).style(style.patch(
@@ -874,25 +882,7 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             );
         }
 
-        if area.height >= 2 {
-            let border_color = if tab.active || hovered {
-                ACCENT
-            } else if tab.status == RunStatus::Failed {
-                crate::tui::theme::THEME.tab_error
-            } else {
-                crate::tui::theme::THEME.border_muted
-            };
-            frame.render_widget(
-                Paragraph::new(format!("╰{}╯", "─".repeat(usize::from(width - 2))))
-                    .style(Style::default().fg(border_color)),
-                Rect::new(x, area.y + 1, width, 1),
-            );
-        }
-
-        state.tab_areas.push((
-            Rect::new(rect.x, rect.y, rect.width, area.height.min(2)),
-            tab.id.clone(),
-        ));
+        state.tab_areas.push((rect, tab.id.clone()));
         state.tab_close_areas.push((close, tab.id.clone()));
         x = x.saturating_add(width + 1);
     }

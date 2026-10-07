@@ -573,22 +573,15 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
         };
         for (area, id) in &state.tab_areas {
             assert!(area.right() <= width);
-            assert_eq!(area.height, 2);
+            assert_eq!(area.height, 1);
             assert!(state.selection.viewport.y >= area.bottom());
-            let bottom = area.bottom() - 1;
-            assert_eq!(terminal.backend().buffer()[(area.x, bottom)].symbol(), "╰");
-            assert_eq!(
-                terminal.backend().buffer()[(area.right() - 1, bottom)].symbol(),
-                "╯"
-            );
-            // The entire bottom edge selects its tab, including below the close button.
-            for x in area.x..area.right() {
+            for x in area.x..area.right() - 3 {
                 assert_eq!(
-                    tab_target(&click(x, bottom), &state),
+                    tab_target(&click(x, area.y), &state),
                     Some(TabAction::Select(id.clone()))
                 );
             }
-            assert_eq!(tab_target(&click(area.right(), bottom), &state), None);
+            assert_eq!(tab_target(&click(area.right(), area.y), &state), None);
         }
         for (area, id) in &state.tab_close_areas {
             assert_eq!(area.height, 1);
@@ -596,6 +589,37 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
                 tab_target(&click(area.x, area.y), &state),
                 Some(TabAction::Close(id.clone()))
             );
+        }
+        let hovered_id = state.tab_areas[0].1.clone();
+        for hover in [
+            None,
+            Some(TabAction::Select(hovered_id.clone())),
+            Some(TabAction::Close(hovered_id.clone())),
+            None,
+        ] {
+            state.tab_hover = hover
+                .clone()
+                .map(|action| (action, std::time::Instant::now()));
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            for (area, id) in &state.tab_areas {
+                let expected = if id == "session-4" {
+                    ACCENT
+                } else if hover.is_some() && id == &hovered_id {
+                    crate::tui::theme::THEME.tab_underline_hover
+                } else {
+                    crate::tui::theme::THEME.tab_underline
+                };
+                for x in area.x..area.right() {
+                    let cell = &terminal.backend().buffer()[(x, area.y)];
+                    assert!(cell.modifier.contains(Modifier::UNDERLINED));
+                    assert_eq!(cell.underline_color, expected);
+                }
+                assert!(
+                    !terminal.backend().buffer()[(area.right(), area.y)]
+                        .modifier
+                        .contains(Modifier::UNDERLINED)
+                );
+            }
         }
     }
 }
