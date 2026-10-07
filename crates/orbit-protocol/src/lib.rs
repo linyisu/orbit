@@ -278,6 +278,9 @@ pub enum Response<E, A> {
         version: u32,
         workspace: String,
         capabilities: Capabilities,
+        /// Build epoch in milliseconds; legacy services report zero.
+        #[serde(default)]
+        build_generation: u64,
     },
     Opened(SessionInfo),
     Sessions(Vec<Session>),
@@ -324,6 +327,29 @@ pub async fn write<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_hello_has_unknown_build_generation() {
+        let hello = serde_json::json!({
+            "type": "hello",
+            "value": {
+                "version": VERSION, "workspace": "/project",
+                "capabilities": {
+                    "system": "Linux", "architecture": "x86_64", "shell": "sh",
+                    "native_processes": true, "files": true,
+                    "sandbox": {"status": "unavailable", "reason": "test"}, "features": []
+                }
+            }
+        });
+        let hello: Response<(), ()> = serde_json::from_value(hello).unwrap();
+        assert!(matches!(
+            hello,
+            Response::Hello {
+                build_generation: 0,
+                ..
+            }
+        ));
+    }
 
     #[tokio::test]
     async fn frames_survive_fragmentation_and_reject_oversized_or_truncated_input() {

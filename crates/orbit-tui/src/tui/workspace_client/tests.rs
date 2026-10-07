@@ -1128,4 +1128,5 @@ async fn directory_menu_stays_visible_while_refining_and_waiting_for_the_service
     assert!(!tab.state.directory_completion_pending());
 }
 
+mod reconnection;
 mod regressions;

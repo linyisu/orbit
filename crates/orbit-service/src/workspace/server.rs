@@ -1,12 +1,8 @@
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
-    os::unix::{
-        fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
-        process::CommandExt,
-    },
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -34,6 +30,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 32;
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
+
+mod lifecycle;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ConnectionContext {
@@ -81,7 +79,8 @@ pub async fn serve(
         .collect::<String>();
     let socket = root.join(format!("{}.sock", &key[..24]));
     if !args.daemon {
-        let mut child = connect_or_start(&socket, &args, &config, &database, &auth).await?;
+        let mut child =
+            lifecycle::connect_or_start(&socket, &args, &config, &database, &auth).await?;
         protocol::write(
             &mut child,
             &ConnectionContext {
@@ -189,69 +188,6 @@ pub fn runtime_directory() -> Result<PathBuf> {
     Ok(directory)
 }
 
-async fn connect_or_start(
-    socket: &Path,
-    args: &ServiceOptions,
-    config: &Path,
-    database: &Path,
-    auth: &Path,
-) -> Result<UnixStream> {
-    if let Ok(stream) = UnixStream::connect(socket).await {
-        return Ok(stream);
-    }
-    let log = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .append(true)
-        .mode(0o600)
-        .open(socket.with_extension("log"))?;
-    let mut command = Command::new(std::env::current_exe()?);
-    command
-        .args(["workspace-service", "--daemon", "--workspace"])
-        .arg(&args.workspace)
-        .arg("--config")
-        .arg(config)
-        .arg("--database")
-        .arg(database)
-        .arg("--auth-dir")
-        .arg(auth)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(log);
-    if args.allow_mcp_start {
-        command.arg("--allow-mcp-start");
-    }
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let child = command.spawn()?;
-    // Reap a failed launcher without tying the daemon's lifetime to the proxy.
-    std::thread::spawn(move || {
-        let mut child = child;
-        let _ = child.wait();
-    });
-    tokio::time::timeout(START_TIMEOUT, async {
-        loop {
-            if let Ok(stream) = UnixStream::connect(socket).await {
-                return stream;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .with_context(|| {
-        format!(
-            "workspace server did not start; see {}",
-            socket.with_extension("log").display()
-        )
-    })
-}
-
 fn expand_home(path: &str) -> Result<PathBuf> {
     if path == "~" || path.starts_with("~/") {
         let home = std::env::var_os("HOME").context("HOME is unavailable on target")?;
@@ -338,6 +274,7 @@ impl Service {
             &mut writer,
             &Response::Hello {
                 version: protocol::VERSION,
+                build_generation: lifecycle::build_generation(),
                 capabilities: capabilities().await,
                 workspace: options.initial_directory.to_string_lossy().into_owned(),
             },

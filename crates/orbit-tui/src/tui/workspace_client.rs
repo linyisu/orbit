@@ -4,6 +4,7 @@ mod configuration;
 mod controls;
 mod input;
 mod project;
+mod reconnection;
 mod submissions;
 use crate::workspace::pump;
 mod standalone;
@@ -68,6 +69,8 @@ pub(super) struct Tab {
     approval_id: Option<u64>,
     mode: Mode,
     offline: bool,
+    reconnect_at: Option<std::time::Instant>,
+    reconnect_attempts: u32,
     subagent: Option<subagents::Remote>,
     question_revision: Option<u64>,
     question_poll: Option<tokio::sync::oneshot::Receiver<Result<Response>>>,
@@ -225,6 +228,8 @@ impl Tab {
             approval_id: None,
             mode: Mode::Auto,
             offline: false,
+            reconnect_at: None,
+            reconnect_attempts: 0,
             subagent: None,
             question_revision: None,
             question_poll: None,
@@ -373,6 +378,8 @@ impl Tab {
             Mode::Yolo => super::permissions::Mode::Yolo,
         };
         self.offline = false;
+        self.reconnect_at = None;
+        self.reconnect_attempts = 0;
     }
 
     fn profile(&mut self, info: &SessionInfo) {
@@ -437,7 +444,7 @@ impl Tab {
     }
 
     pub async fn poll(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self.poll_reconnection();
         if self.commands.is_some()
             && self.model_refresh.is_none()
             && self.model_configuration.is_none()
@@ -568,7 +575,11 @@ impl Tab {
                 self.state.cursor_motion.clear();
                 changed = true;
             }
-            if self.connecting.is_some() || self.preparing.is_some() || self.browsing.is_some() {
+            if self.id.is_none()
+                && (self.connecting.is_some()
+                    || self.preparing.is_some()
+                    || self.browsing.is_some())
+            {
                 let stage = updates.stage.borrow_and_update().clone();
                 let seconds = self.connected_at.elapsed().as_secs();
                 let status = format!("{stage} · {seconds}s · Esc / Ctrl+C 取消");
@@ -790,6 +801,10 @@ impl Tab {
     }
 
     fn disconnected(&mut self, error: String) {
+        self.disconnect(error, true);
+    }
+
+    fn disconnect(&mut self, error: String, retry: bool) {
         self.restore_submission();
         if let Some(wizard) = &mut self.state.workspace_wizard {
             wizard.failed = true;
@@ -813,14 +828,26 @@ impl Tab {
         self.approval_id = None;
         self.state.finish_clock();
         self.state.status = RunStatus::Failed;
-        if self.state.workspace_wizard.is_none() {
+        let retrying = self.reconnect_attempts > 0;
+        let automatic = retry && self.schedule_reconnection();
+        if self.state.workspace_wizard.is_none() && !retrying {
+            let recovery = if automatic {
+                "正在自动重连原会话；Esc / Ctrl+C 停止重连，/close 关闭标签。"
+            } else {
+                "/reconnect 重试，/close 关闭标签。"
+            };
             self.state.report_local(TranscriptItem::Error(format!(
-                "{error}\n连接已断开，目标任务可能仍在运行；/reconnect 接回，/close 关闭此标签。"
+                "{error}\n连接已断开，目标任务可能仍在运行。{recovery}"
             )));
         }
     }
 
     fn reconnect(&mut self) {
+        self.reconnect_attempts = 0;
+        self.begin_reconnection(false);
+    }
+
+    fn begin_reconnection(&mut self, automatic: bool) {
         if self.connecting.is_some() {
             return;
         }
@@ -833,8 +860,11 @@ impl Tab {
         self.incoming = None;
         self.commands = None;
         self.offline = false;
-        self.state
-            .report_local(TranscriptItem::Notice("正在重新连接…".into()));
+        self.reconnect_at = None;
+        if !automatic {
+            self.state
+                .report_local(TranscriptItem::Notice("正在重新连接…".into()));
+        }
         let (progress, updates) = workspace::interaction::channel();
         self.progress = Some(progress.clone());
         self.updates = Some(updates);
@@ -842,7 +872,8 @@ impl Tab {
             || self.spec.as_ref().is_some_and(Spec::remote),
             |connection| !matches!(connection.target, workspace::transport::Target::Local),
         );
-        self.state.workspace_wizard = remote.then(|| wizard::Wizard::new(None));
+        self.state.workspace_wizard =
+            (remote && self.id.is_none()).then(|| wizard::Wizard::new(None));
         self.connected_at = std::time::Instant::now();
         let task = if let Some(connection) = &self.connection {
             tokio::spawn(Opened::reopen(
@@ -862,7 +893,12 @@ impl Tab {
         self.connecting = None;
         self.preparing = None;
         self.browsing = None;
-        self.disconnected("连接已取消".into());
+        self.disconnect("连接已取消".into(), false);
+        self.reconnect_at = None;
+        self.reconnect_attempts = 0;
+        self.state.report_local(TranscriptItem::Notice(
+            "已停止重连；/reconnect 可接回原会话。".into(),
+        ));
     }
 
     fn send(&mut self, request: Request) -> bool {

@@ -34,7 +34,7 @@ impl Tab {
             }
             return Ok(Action::Redraw);
         }
-        if self.connecting.is_some()
+        if (self.connecting.is_some() || self.reconnect_at.is_some())
             && matches!(&event, Event::Key(key) if key.kind != KeyEventKind::Release && (key.code == KeyCode::Esc || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))))
         {
             self.cancel_connect();
