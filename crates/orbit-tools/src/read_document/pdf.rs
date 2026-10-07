@@ -7,10 +7,16 @@ use super::{Document, PdfPages, page_range};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct PageInfo {
-    page: u32,
+    pub(super) page: u32,
     status: Status,
     has_images: bool,
     unreadable_fragments: usize,
+}
+
+impl PageInfo {
+    pub(super) fn needs_image(&self) -> bool {
+        self.has_images || self.status != Status::Text
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]

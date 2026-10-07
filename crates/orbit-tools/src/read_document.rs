@@ -1,6 +1,6 @@
 use std::{io::Read, path::Path};
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
+use orbit_agent::tool::{Tool, ToolError, ToolFuture};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::filesystem::Workspace;
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,10 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 mod pdf;
+mod vision;
+mod worker;
+
+pub use vision::render_worker;
 
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_PAGE_CHARS: usize = 20_000;
@@ -26,6 +30,9 @@ struct Arguments {
     max_chars: usize,
     start_page: Option<u32>,
     end_page: Option<u32>,
+    #[serde(default)]
+    images: vision::ImageMode,
+    image_start_page: Option<u32>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -94,6 +101,7 @@ pub struct ReadDocument {
     workspace: Workspace,
     worker: Option<std::path::PathBuf>,
     sandbox: bool,
+    images: Option<crate::image_assets::ImageAssets>,
     cache:
         tokio::sync::Mutex<std::collections::VecDeque<(String, String, std::sync::Arc<Converted>)>>,
 }
@@ -104,8 +112,14 @@ impl ReadDocument {
             workspace,
             worker: None,
             sandbox: false,
+            images: None,
             cache: tokio::sync::Mutex::new(Default::default()),
         }
+    }
+
+    pub fn with_images(mut self, images: crate::image_assets::ImageAssets) -> Self {
+        self.images = Some(images);
+        self
     }
 
     pub fn with_sandbox(mut self, sandbox: bool) -> Self {
@@ -123,13 +137,15 @@ impl Tool for ReadDocument {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_document",
-            "Preferred tool for reading local PDFs and office documents: use this before shell commands, pdftotext, Python packages or tool discovery. Reads documents up to 256 MiB inside the workspace (or outside paths granted via request_capability). PDFs use 1-based start_page/end_page (default first 20 pages, at most 100 per call); extraction is restricted to that range. Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. Mixed text/image PDFs return available text with physical page headings and per-page status in pdf.pages. Image-only, empty and undecodable portions are marked in place instead of failing the whole range. pdf.partial means extraction is incomplete; image content is not interpreted and OCR is not performed. Do not treat missing text or an unreadable fragment as evidence that the original page lacks that information. Conversion is local and creates no project files. Continue with next_start_char and the SAME page range while truncated; then use next_start_page for the next PDF range. start_char/max_chars paginate the converted text within that range.",
+            "Preferred tool for reading local PDFs and office documents: use this before shell commands, pdftotext, Python packages or tool discovery. Reads documents up to 256 MiB inside the workspace (or outside paths granted via request_capability). PDFs use 1-based start_page/end_page (default first 20 pages, at most 100 per call); extraction is restricted to that range. Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. Mixed text/image PDFs return available text with physical page headings and per-page status in pdf.pages. Image-only, empty and undecodable portions are marked in place instead of failing the whole range. pdf.partial describes incomplete TEXT extraction. With a vision model, images=auto attaches up to four rendered physical pages containing images, undecodable text or no extracted text. Read those image attachments directly. Use images=always for diagrams/layout missed by text detection, or off for text only. pdf.vision lists attached pages, failures, and next_image_start_page: continue with image_start_page in the SAME page range until it is null. OCR is not performed; rendering alone does not mean the page has been understood. Do not treat missing text or an unreadable fragment as evidence that the original page lacks that information. Conversion is local and creates no project files. Continue with next_start_char and the SAME page range while truncated; then use next_start_page for the next PDF range. start_char/max_chars paginate the converted text within that range.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" },
                     "start_page": { "type": "integer", "minimum": 1, "description": "PDF only: first physical page (1-based), default 1" },
                     "end_page": { "type": "integer", "minimum": 1, "description": "PDF only: last physical page inclusive, default start_page + 19; at most 100 pages" },
+                    "images": { "type": "string", "enum": ["auto", "always", "off"], "default": "auto", "description": "PDF page images: auto for images or missing/undecodable text; always for every requested page (including vector diagrams); off for text only. Requires vision model." },
+                    "image_start_page": { "type": "integer", "minimum": 1, "description": "Resume page images using pdf.vision.next_image_start_page, keeping start_page/end_page unchanged; at most 4 images per call." },
                     "start_char": { "type": "integer", "minimum": 0, "default": 0 },
                     "max_chars": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_CHARS, "default": DEFAULT_PAGE_CHARS }
                 },
@@ -140,6 +156,21 @@ impl Tool for ReadDocument {
     }
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
+        self.execute_with_context(
+            call,
+            cancellation,
+            orbit_agent::tool::ToolContext {
+                supports_vision: true,
+            },
+        )
+    }
+
+    fn execute_with_context<'a>(
+        &'a self,
+        call: ToolCall,
+        cancellation: CancellationToken,
+        context: orbit_agent::tool::ToolContext,
+    ) -> ToolFuture<'a> {
         Box::pin(async move {
             let arguments: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|error| invalid(error.to_string()))?;
@@ -258,7 +289,18 @@ impl Tool for ReadDocument {
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
-            page(arguments, &format, &markdown).map(ToolOutput::text)
+            drop(cache);
+            let content = page(&arguments, &format, &markdown)?;
+            vision::attach(
+                self,
+                &arguments,
+                &bytes,
+                markdown.pdf.as_ref(),
+                content,
+                context.supports_vision,
+                cancellation,
+            )
+            .await
         })
     }
 }
@@ -339,70 +381,23 @@ async fn convert_worker(
     pages: (Option<u32>, Option<u32>),
     cancellation: CancellationToken,
 ) -> Result<Document, ToolError> {
-    use orbit_runtime::execution::{
-        ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, MountSpec, ResourceLimits,
-        execution_backend,
-    };
-    let input = tempfile::tempdir().map_err(failed)?;
-    let scratch = tempfile::tempdir().map_err(failed)?;
-    std::fs::write(input.path().join(format!("source.{extension}")), bytes).map_err(failed)?;
-    let start = pages.0.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
-    let end = pages.1.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
-    let request = ExecutionRequest::new(format!("/opt/orbit-document-worker --internal-document-worker /workspace/source.{extension} /scratch/document.md {start} {end}"), input.path(), std::time::Duration::from_secs(60)).with_scratch(scratch.path());
-    let request = if sandbox {
-        request
-    } else {
-        let command = shlex::try_join([
-            worker
-                .to_str()
-                .ok_or_else(|| failed("non-UTF-8 worker path"))?,
-            "--internal-document-worker",
-            input
-                .path()
-                .join(format!("source.{extension}"))
-                .to_str()
-                .ok_or_else(|| failed("non-UTF-8 document path"))?,
-            scratch
-                .path()
-                .join("document.md")
-                .to_str()
-                .ok_or_else(|| failed("non-UTF-8 output path"))?,
-            &start,
-            &end,
-        ])
-        .map_err(failed)?;
-        ExecutionRequest::new(command, input.path(), std::time::Duration::from_secs(60))
-    };
-    let environment = ExecutionEnvironment::new(input.path(), input.path()).map_err(failed)?;
-    let mut policy = ExecutionPolicy::read_only();
-    policy.mounts = vec![MountSpec::read_only(worker, "/opt/orbit-document-worker")];
-    policy.resources = ResourceLimits {
-        max_memory_bytes: Some(1024 * 1024 * 1024),
-        max_file_size_bytes: Some(64 * 1024 * 1024),
-        max_processes: Some(64),
-        max_open_files: Some(128),
-        ..Default::default()
-    };
-    let result = execution_backend(sandbox)
-        .map_err(failed)?
-        .execute(&request, &policy, &environment, None, cancellation)
-        .await
-        .map_err(failed)?;
-    if result.cancelled {
-        return Err(ToolError::Cancelled);
+    let arguments =
+        [pages.0, pages.1].map(|page| page.map(|p| p.to_string()).unwrap_or_else(|| "-".into()));
+    let scratch = worker::run(
+        worker,
+        bytes,
+        extension,
+        sandbox,
+        "--internal-document-worker",
+        &arguments,
+        cancellation,
+    )
+    .await?;
+    let file = std::fs::File::open(scratch.path().join("result.json")).map_err(failed)?;
+    if file.metadata().map_err(failed)?.len() > 64 * 1024 * 1024 {
+        return Err(failed("document worker output exceeds 64 MiB"));
     }
-    if result.timed_out {
-        return Err(failed("document conversion timed out after 60 seconds"));
-    }
-    if result.exit_code != Some(0) {
-        return Err(failed(format!(
-            "document conversion failed: {}",
-            result.stderr
-        )));
-    }
-
-    let output = std::fs::read(scratch.path().join("document.md")).map_err(failed)?;
-    serde_json::from_slice(&output).map_err(failed)
+    serde_json::from_reader(file).map_err(failed)
 }
 
 /// Worker entry point for the host to invoke inside the conversion sandbox.
@@ -444,7 +439,7 @@ fn convert(
     pdf::convert(bytes, start, end)
 }
 
-fn page(arguments: Arguments, format: &str, markdown: &Converted) -> Result<String, ToolError> {
+fn page(arguments: &Arguments, format: &str, markdown: &Converted) -> Result<String, ToolError> {
     let total_chars = markdown.total_chars;
 
     if arguments.start_char > total_chars {
@@ -579,13 +574,15 @@ mod tests {
             max_chars,
             start_page: Some(1),
             end_page: Some(1),
+            images: Default::default(),
+            image_start_page: None,
         };
         let short: serde_json::Value =
-            serde_json::from_str(&page(args(5), "pdf", &converted).unwrap()).unwrap();
+            serde_json::from_str(&page(&args(5), "pdf", &converted).unwrap()).unwrap();
         assert!(short["next_start_page"].is_null());
         assert_eq!(short["next_start_char"], 5);
         let complete: serde_json::Value =
-            serde_json::from_str(&page(args(MAX_PAGE_CHARS), "pdf", &converted).unwrap()).unwrap();
+            serde_json::from_str(&page(&args(MAX_PAGE_CHARS), "pdf", &converted).unwrap()).unwrap();
         assert_eq!(complete["next_start_page"], 2);
         let second = convert(&pdf(), anydoc::Format::Pdf, Some(2), Some(20)).unwrap();
         assert!(second.text.contains("Second chapter"));
@@ -658,12 +655,14 @@ mod tests {
         for start in [0, 4095, 4096, 4097, 19990, 20000] {
             let output: serde_json::Value = serde_json::from_str(
                 &page(
-                    Arguments {
+                    &Arguments {
                         path: "sample.csv".into(),
                         start_char: start,
                         max_chars: 17,
                         start_page: None,
                         end_page: None,
+                        images: Default::default(),
+                        image_start_page: None,
                     },
                     "csv",
                     &document,

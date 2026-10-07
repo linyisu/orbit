@@ -351,6 +351,75 @@ fn request() -> ChatRequest {
 
 struct ImageTool;
 
+struct DocumentImageTool;
+
+impl Tool for DocumentImageTool {
+    fn definition(&self) -> orbit_model::types::ToolDefinition {
+        orbit_model::types::ToolDefinition::function("read_document", "", json!({}))
+    }
+
+    fn execute<'a>(&'a self, _call: ToolCall, _cancellation: CancellationToken) -> ToolFuture<'a> {
+        panic!("agent must pass model capabilities to document tools")
+    }
+
+    fn execute_with_context<'a>(
+        &'a self,
+        _call: ToolCall,
+        _cancellation: CancellationToken,
+        context: crate::tool::ToolContext,
+    ) -> ToolFuture<'a> {
+        Box::pin(async move {
+            if !context.supports_vision {
+                return Ok(ToolOutput::text("text only; images unavailable"));
+            }
+            Ok(ToolOutput::with_attachments(
+                "PDF page 3 attached",
+                vec![Attachment::Image {
+                    name: "book.pdf — page 3.png".into(),
+                    mime_type: "image/png".into(),
+                    path: "/global/page-3.png".into(),
+                }],
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn document_vision_respects_model_and_image_capability_and_reaches_next_request() {
+    for (supports_vision, image_enabled) in [(true, true), (false, true), (true, false)] {
+        let backend = MockModel::new(vec![
+            assistant_tool_call("doc", "read_document", "{}"),
+            assistant_text("done"),
+        ])
+        .with_vision(supports_vision);
+        let mut tools = ToolRegistry::new();
+        tools.register(DocumentImageTool);
+        if image_enabled {
+            tools.register(ImageTool);
+        }
+        let result = Agent::new(backend.clone(), tools, AgentConfig::default())
+            .run(request(), CancellationToken::new())
+            .await
+            .unwrap();
+        let requests = backend.requests();
+        let attachments = requests[1]
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                ChatMessage::User { attachments, .. } => Some(attachments.len()),
+                _ => None,
+            })
+            .sum::<usize>();
+        assert_eq!(attachments, usize::from(supports_vision && image_enabled));
+        assert_eq!(result.turns, 2);
+        if attachments > 0 {
+            assert!(
+                matches!(requests[1].messages.last(), Some(ChatMessage::User { content, .. }) if content.contains("page 3.png") && !content.contains("read_image tool"))
+            );
+        }
+    }
+}
+
 impl Tool for ImageTool {
     fn definition(&self) -> orbit_model::types::ToolDefinition {
         orbit_model::types::ToolDefinition::function("read_image", "", json!({}))

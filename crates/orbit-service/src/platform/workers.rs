@@ -3,6 +3,22 @@ use std::path::Path;
 
 /// Dispatch isolated worker entry points before parsing frontend arguments.
 pub fn run() -> Result<bool> {
+    if std::env::args().nth(1).as_deref() == Some("--internal-pdf-render-worker") {
+        let args: Vec<_> = std::env::args_os().skip(2).collect();
+        anyhow::ensure!(
+            args.len() == 3,
+            "PDF renderer requires input, output and page numbers"
+        );
+        orbit_tools::read_document::render_worker(
+            Path::new(&args[0]),
+            Path::new(&args[1]),
+            args[2]
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid render pages"))?,
+        )
+        .map_err(anyhow::Error::msg)?;
+        return Ok(true);
+    }
     if std::env::args().nth(1).as_deref() == Some("--internal-document-worker") {
         let args: Vec<_> = std::env::args_os().skip(2).collect();
         anyhow::ensure!(

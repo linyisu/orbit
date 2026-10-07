@@ -48,11 +48,13 @@ pub async fn workspace_tools(
     tools.register(
         ReadFile::new(workspace.clone()).with_scan_budget(command_limits.read_file_scan_bytes),
     );
-    tools.register(
-        ReadDocument::new(workspace.clone())
-            .with_sandbox(command_limits.sandbox)
-            .with_worker(std::env::current_exe()?),
-    );
+    let mut document = ReadDocument::new(workspace.clone())
+        .with_sandbox(command_limits.sandbox)
+        .with_worker(std::env::current_exe()?);
+    if let Some(database) = database {
+        document = document.with_images(ImageAssets::for_database(database));
+    }
+    tools.register(document);
 
     if let Some(database) = database {
         tools.register(ReadImage::new(

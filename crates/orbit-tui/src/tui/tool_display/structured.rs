@@ -597,7 +597,32 @@ pub(super) fn document_with_links(
         view.note("部分文字编码异常：已保留可读文字，并标出无法解码的片段");
     }
     if value["pdf"]["partial"].as_bool() == Some(true) {
-        view.note("部分提取：图片未识别，缺失内容已按页标注");
+        view.note("文字提取不完整，缺失内容已按页标注");
+    }
+    if let Some(pages) = value["pdf"]["vision"]["attached_pages"]
+        .as_array()
+        .filter(|p| !p.is_empty())
+    {
+        let pages = pages
+            .iter()
+            .filter_map(|p| p.as_u64())
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join("、");
+        view.note(&format!("已附页面图片供模型读取：第 {pages} 页"));
+    }
+    if let Some(next) = value["pdf"]["vision"]["next_image_start_page"].as_u64() {
+        view.note(&format!("后续页面图片从第 {next} 页继续读取"));
+    }
+    if value["pdf"]["vision"]["status"].as_str() == Some("unavailable") {
+        view.note("页面图片不可用：当前模型不支持视觉、图片能力关闭或渲染服务未配置");
+    }
+    if value["pdf"]["vision"]["status"].as_str() == Some("failed")
+        || value["pdf"]["vision"]["failures"]
+            .as_array()
+            .is_some_and(|p| !p.is_empty())
+    {
+        view.note("部分页面图片未能生成，已保留文字结果");
     }
     if let Some(pages) = value["pdf"]["pages"].as_array() {
         let incomplete = pages

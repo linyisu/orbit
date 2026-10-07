@@ -95,10 +95,25 @@ impl From<orbit_runtime::RuntimeError> for ToolError {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct ToolContext {
+    /// Whether image attachments can be delivered to the current model.
+    pub supports_vision: bool,
+}
+
 pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a>;
+
+    fn execute_with_context<'a>(
+        &'a self,
+        call: ToolCall,
+        cancellation: CancellationToken,
+        _context: ToolContext,
+    ) -> ToolFuture<'a> {
+        self.execute(call, cancellation)
+    }
 }
 
 /// A server-owned policy rechecked immediately before every execution.
@@ -207,6 +222,21 @@ impl ToolRegistry {
     }
 
     pub fn execute(&self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'static> {
+        self.execute_with_context(
+            call,
+            cancellation,
+            ToolContext {
+                supports_vision: true,
+            },
+        )
+    }
+
+    pub fn execute_with_context(
+        &self,
+        call: ToolCall,
+        cancellation: CancellationToken,
+        context: ToolContext,
+    ) -> ToolFuture<'static> {
         if call.id.trim().is_empty() {
             return Box::pin(async { Err(ToolError::EmptyCallId) });
         }
@@ -248,7 +278,7 @@ impl ToolRegistry {
             }
 
             let _lease = policy.as_ref().map(|p| p.acquire(&call)).transpose()?;
-            tool.execute(call, cancellation).await
+            tool.execute_with_context(call, cancellation, context).await
         })
     }
 }

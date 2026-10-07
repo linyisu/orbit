@@ -99,6 +99,7 @@
 - **约束与安全**：单图大小上限 20 MiB；最长边超过 2048 像素时自动等比例缩放；Agent 对非视觉模型的 `read_image` 调用直接返回错误；请求中已有图片附件的文本降级属于模型请求投影的另一条路径。
 
 #### `read_document`
+- **PDF 视觉读取**：支持视觉且未关闭图片能力时，`images=auto`（默认）将有图片、文字乱码或没有提取到文字的页面渲染为 PNG，随文字结果交给当前模型直接阅读。`images=always` 可查看矢量图/完整排版，`off` 仅取文字。每次最多 4 页、最长边 2048 像素；通过 `pdf.vision.next_image_start_page` 传入 `image_start_page`，保持原 `start_page/end_page` 继续获取。图片按物理页命名，存入全局附件库，不写入项目。内置纯 Rust Hayro，无需安装浏览器、Poppler、Python 或 OCR；页面渲染在独立离线受限 worker 中执行，失败仍保留提取文字。非视觉模型或关闭图片能力时明确提示图片未读。嵌入方通过 `with_images(ImageAssets)` 配置附件库。
 - **部分提取**：文字与图片混排是正常情况。按物理页保留文字；图片页、空白/未提取文字页和编码异常分别标注在 `pdf.pages`。无法解码的片段原位留标记，其余文字继续返回；`pdf.partial` 表示提取不完整。当前不执行 OCR，也不会把图片内容当作已读。
 - **PDF 分页**：优先使用本工具读取 PDF，无需用户安装 `pdftotext` 或 Python 库。`start_page` / `end_page` 是从 1 开始的物理页码（含结束页），默认 20 页、单次最多 100 页。`pdf` 返回总页数、实际范围和 OCR/编码提示；文本截断时保持同一页码区间并使用 `next_start_char`，读完后以 `next_start_page` 继续。其他格式使用字符分页。
 - **功能**：基于 AnyDoc 在本地将各种文档格式（PDF、Word、PowerPoint、Excel、OpenDocument、RTF、EPUB、CSV）转换为 Markdown 文本。
