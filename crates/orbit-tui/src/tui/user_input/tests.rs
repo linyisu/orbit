@@ -638,38 +638,63 @@ fn user_input_choice_padding_survives_hover_wrapping_and_custom_editing() {
 }
 
 #[test]
-fn user_input_summary_hover_is_local_and_keeps_header_navigation_independent() {
-    let mut s = state();
-    s.activate(Focus::Tab(2));
-    let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
-    paint(&mut s, &mut terminal);
-    let tabs: Vec<_> = s
-        .hits
-        .iter()
-        .filter(|(_, focus)| matches!(focus, Focus::Tab(_)))
-        .copied()
-        .collect();
-    let review_rows: Vec<_> = s
-        .hits
-        .iter()
-        .filter(|(_, focus)| matches!(focus, Focus::Review(_)))
-        .copied()
-        .collect();
-    for (row, focus) in review_rows {
-        s.handle(&pointer(MouseEventKind::Moved, row));
+fn user_input_summary_hover_highlights_only_the_question_heading() {
+    for status in [Status::Pending, Status::Answered] {
+        let mut s = state();
+        let mut r = record();
+        r.status = status;
+        r.form.questions[1].prompt = "较长的题目文字需要正确换行并整体高亮。".repeat(3);
+        s.upsert(r);
+        s.open("request");
+        s.activate(Focus::Tab(2));
+        let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
         paint(&mut s, &mut terminal);
-        assert_eq!(s.hovered, Some(focus));
-        assert_eq!(terminal.backend().buffer()[(row.x, row.y)].bg, THEME.accent);
-        for (tab, focus) in &tabs {
-            assert_eq!(
-                terminal.backend().buffer()[(tab.x, tab.y)].bg == THEME.accent,
-                *focus == Focus::Tab(2),
-                "body hover must not highlight a header tab"
-            );
+        let tabs: Vec<_> = s
+            .hits
+            .iter()
+            .filter(|(_, focus)| matches!(focus, Focus::Tab(_)))
+            .copied()
+            .collect();
+        let review_rows: Vec<_> = s
+            .hits
+            .iter()
+            .filter(|(_, focus)| matches!(focus, Focus::Review(_)))
+            .map(|(row, focus)| {
+                (
+                    *row,
+                    *focus,
+                    terminal.backend().buffer()[(row.x, row.y)].fg == THEME.accent,
+                )
+            })
+            .collect();
+        for (row, focus, _) in &review_rows {
+            // Both the heading and its answer navigate to this question, but
+            // only the heading receives the hover highlight.
+            s.handle(&pointer(MouseEventKind::Moved, *row));
+            paint(&mut s, &mut terminal);
+            assert_eq!(s.hovered, Some(*focus));
+            for (target, target_focus, heading) in &review_rows {
+                let cell = &terminal.backend().buffer()[(target.x, target.y)];
+                let highlighted = target_focus == focus && *heading;
+                assert_eq!(cell.bg == THEME.accent, highlighted);
+                if highlighted {
+                    assert!(cell.modifier.contains(Modifier::BOLD));
+                }
+            }
+            for (tab, focus) in &tabs {
+                assert_eq!(
+                    terminal.backend().buffer()[(tab.x, tab.y)].bg == THEME.accent,
+                    *focus == Focus::Tab(2),
+                    "body hover must not highlight a header tab"
+                );
+            }
         }
+        let review = hit(&s, Focus::Review(1));
+        s.handle(&pointer(MouseEventKind::Down(MouseButton::Left), review));
+        assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 1));
+        assert_eq!(
+            paint(&mut s, &mut terminal).is_some(),
+            status == Status::Pending
+        );
     }
-    let review = hit(&s, Focus::Review(1));
-    s.handle(&pointer(MouseEventKind::Down(MouseButton::Left), review));
-    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 1 && v.focus == Focus::Text));
-    assert!(paint(&mut s, &mut terminal).is_some());
 }

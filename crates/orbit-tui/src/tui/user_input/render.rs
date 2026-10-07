@@ -398,11 +398,7 @@ impl State {
                     } else {
                         answer.join("、")
                     },
-                    if highlight == Some(Focus::Review(i)) {
-                        selected()
-                    } else {
-                        normal()
-                    },
+                    normal(),
                     Some(Focus::Review(i)),
                     inner.width,
                 );
@@ -414,11 +410,7 @@ impl State {
                     push(
                         &mut rows,
                         format!("补充：{}", answer.note),
-                        if highlight == Some(Focus::Review(i)) {
-                            selected()
-                        } else {
-                            muted()
-                        },
+                        muted(),
                         Some(Focus::Review(i)),
                         inner.width,
                     );
