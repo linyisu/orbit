@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const VERSION: u32 = 8;
+// Version 8 adds optional questionnaire requests and a defaulted Page field.
+// Existing version 7 requests and responses retain their wire representation.
+pub const MIN_COMPATIBLE_VERSION: u32 = 7;
+
+pub fn supports_version(version: u32) -> bool {
+    (MIN_COMPATIBLE_VERSION..=VERSION).contains(&version)
+}
 // Keep framing stable so Hello can report incompatible schema versions.
 pub const PREAMBLE: &[u8] = b"\0ORBIT-WORKSPACE/1\n";
 pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;

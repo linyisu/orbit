@@ -31,6 +31,7 @@ const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 32;
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
+mod endpoints;
 mod lifecycle;
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -72,12 +73,7 @@ pub async fn serve(
     let database = database.canonicalize()?;
     let auth = std::path::absolute(auth)?;
     let root = runtime_directory()?;
-    let identity = serde_json::to_vec(&("shared-service-v1", &database, protocol::VERSION))?;
-    let key = Sha256::digest(identity)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let socket = root.join(format!("{}.sock", &key[..24]));
+    let socket = endpoints::shared(&root, &database)?;
     if !args.daemon {
         let mut child =
             lifecycle::connect_or_start(&socket, &args, &config, &database, &auth).await?;
@@ -114,6 +110,9 @@ pub async fn serve(
     if lock.try_lock().is_err() {
         return Ok(());
     }
+    // Retain the old daemon locks for the entire lifetime of the shared server.
+    // Older launchers can connect through aliases but cannot start a rival.
+    let _legacy_locks = endpoints::lock_legacy(&root, &database)?;
     match fs::remove_file(&socket) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -121,6 +120,7 @@ pub async fn serve(
     }
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
+    endpoints::publish_aliases(&root, &database, &socket)?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let options = crate::WorkspaceOptions {
         model: None,
@@ -163,12 +163,22 @@ pub async fn serve(
             }
             _ = service.stop.cancelled() => break,
             _ = idle.tick() => {
-                if service.last_activity.lock().await.elapsed() >= IDLE_TIMEOUT && !service.busy().await { break; }
+                let _opening = service.opening.lock().await;
+                if service.last_activity.lock().await.elapsed() >= IDLE_TIMEOUT && !service.busy().await {
+                    service.closing.store(true, Ordering::Release);
+                    break;
+                }
             }
         }
     }
+    // Release session writers before publishing the endpoint as replaceable.
+    // A replacement daemon may restore the same session immediately.
+    service.closing.store(true, Ordering::Release);
+    let _opening = service.opening.lock().await;
+    for handle in service.sessions.lock().await.values() {
+        handle.command(session::Command::Close).await?;
+    }
     fs::remove_file(socket)?;
-    drop(lock);
     Ok(())
 }
 
@@ -239,13 +249,11 @@ impl Service {
             protocol::read::<Request>(&mut reader),
         )
         .await??;
-        if !matches!(
-            request,
-            Request::Hello {
-                version: protocol::VERSION,
-                ..
-            }
-        ) {
+        let version = match &request {
+            Request::Hello { version, .. } => *version,
+            _ => 0,
+        };
+        if !orbit_protocol::supports_version(version) {
             protocol::write(
                 &mut writer,
                 &Response::Error(format!(
@@ -273,7 +281,7 @@ impl Service {
         protocol::write(
             &mut writer,
             &Response::Hello {
-                version: protocol::VERSION,
+                version,
                 build_generation: lifecycle::build_generation(),
                 capabilities: capabilities().await,
                 workspace: options.initial_directory.to_string_lossy().into_owned(),
@@ -639,6 +647,11 @@ impl Service {
                 agent,
                 message,
             } => {
+                let _opening = self.opening.lock().await;
+                ensure!(
+                    !self.closing.load(Ordering::Acquire),
+                    "workspace service is shutting down"
+                );
                 ensure!(
                     !message.trim().is_empty() && message.len() <= 1024 * 1024,
                     "invalid subagent message"

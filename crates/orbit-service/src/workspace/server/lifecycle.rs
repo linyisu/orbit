@@ -28,6 +28,41 @@ pub(super) async fn connect_or_start(
         // actors. Serialize replacement rather than creating a daemon per build.
         let startup = private_file(&socket.with_extension("startup"))?;
         acquire(&startup).await?;
+        let root = socket
+            .parent()
+            .context("workspace endpoint has no parent")?;
+        let legacy = endpoints::legacy(root, database)?;
+        // Hold every released launcher's startup lock through publication of
+        // the new endpoint and aliases, including concurrent old terminals.
+        let mut legacy_startup = Vec::new();
+        for (_, address) in &legacy {
+            let lock = private_file(&address.with_extension("startup"))?;
+            acquire(&lock).await?;
+            legacy_startup.push(lock);
+        }
+        for (version, address) in &legacy {
+            if fs::read_link(address).ok().as_deref() == Some(socket) {
+                continue;
+            }
+            match UnixStream::connect(address).await {
+                Ok(mut stream) => {
+                    verify_owner(&stream)?;
+                    ensure!(
+                        retire_version(&mut stream, args, config, auth, *version).await?,
+                        "旧版地址上运行着更新的工作区服务，请使用更新的 Orbit 客户端"
+                    );
+                    drop(stream);
+                    let daemon = private_file(&address.with_extension("lock"))?;
+                    acquire(&daemon).await?;
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    ) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         if let Ok(mut stream) = UnixStream::connect(socket).await {
             if same_executable(&stream).await? {
                 return Ok(stream);
@@ -65,7 +100,7 @@ pub(super) async fn connect_or_start(
     })?
 }
 
-fn private_file(path: &Path) -> Result<std::fs::File> {
+pub(super) fn private_file(path: &Path) -> Result<std::fs::File> {
     Ok(OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -87,15 +122,19 @@ async fn acquire(file: &std::fs::File) -> Result<()> {
     }
 }
 
-async fn same_executable(stream: &UnixStream) -> Result<bool> {
+fn verify_owner(stream: &UnixStream) -> Result<i32> {
     let credentials = stream.peer_cred()?;
     ensure!(
         credentials.uid() == unsafe { libc::geteuid() },
         "workspace daemon belongs to another user"
     );
-    let pid = credentials
+    credentials
         .pid()
-        .context("workspace daemon PID is unavailable")?;
+        .context("workspace daemon PID is unavailable")
+}
+
+async fn same_executable(stream: &UnixStream) -> Result<bool> {
+    let pid = verify_owner(stream)?;
     tokio::task::spawn_blocking(move || {
         compare_executables(
             Path::new("/proc/self/exe"),
@@ -142,6 +181,16 @@ async fn retire(
     config: &Path,
     auth: &Path,
 ) -> Result<bool> {
+    retire_version(stream, args, config, auth, protocol::VERSION).await
+}
+
+async fn retire_version(
+    stream: &mut UnixStream,
+    args: &ServiceOptions,
+    config: &Path,
+    auth: &Path,
+    version: u32,
+) -> Result<bool> {
     protocol::write(
         stream,
         &ConnectionContext {
@@ -155,20 +204,21 @@ async fn retire(
     protocol::write(
         stream,
         &Request::Hello {
-            version: protocol::VERSION,
+            version,
             workspace: None,
         },
     )
     .await?;
     let hello: Response = protocol::read(stream).await?;
     let Response::Hello {
-        version: protocol::VERSION,
+        version: negotiated,
         build_generation: active,
         ..
     } = hello
     else {
         bail!("无法与已有后台服务协商更新：{hello:?}");
     };
+    ensure!(negotiated == version, "workspace update protocol mismatch");
     if active >= build_generation() {
         // Every compatible frontend uses the newest shared daemon. A terminal
         // with an older embedded server must never downgrade it.

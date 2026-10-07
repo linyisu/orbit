@@ -143,3 +143,194 @@ async fn startup_lock_serializes_concurrent_handover_and_releases_on_cancellatio
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn legacy_protocol_endpoints_retire_before_connecting_to_shared_service() {
+    for version in [7, 8] {
+        for busy in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let database = root.path().join("db");
+            let socket = endpoints::shared(root.path(), &database).unwrap();
+            let listener = UnixListener::bind(&socket).unwrap();
+            let old_socket = endpoints::legacy(root.path(), &database)
+                .unwrap()
+                .into_iter()
+                .find(|(v, _)| *v == version)
+                .unwrap()
+                .1;
+            assert_ne!(socket, old_socket);
+            let old_listener = UnixListener::bind(&old_socket).unwrap();
+            let old_lock = private_file(&old_socket.with_extension("lock")).unwrap();
+            old_lock.try_lock().unwrap();
+            let daemon = tokio::spawn(async move {
+                let (mut stream, _) = old_listener.accept().await.unwrap();
+                let _: ConnectionContext = protocol::read(&mut stream).await.unwrap();
+                assert!(
+                    matches!(protocol::read::<Request>(&mut stream).await.unwrap(),
+                    Request::Hello { version: received, .. } if received == version)
+                );
+                protocol::write(
+                    &mut stream,
+                    &Response::Hello {
+                        version,
+                        build_generation: 0,
+                        workspace: "/project".into(),
+                        capabilities: orbit_protocol::Capabilities {
+                            system: "Linux".into(),
+                            architecture: "x86_64".into(),
+                            shell: "sh".into(),
+                            native_processes: true,
+                            files: true,
+                            sandbox: orbit_protocol::Availability::Unavailable("test".into()),
+                            features: vec![],
+                        },
+                    },
+                )
+                .await
+                .unwrap();
+                assert!(matches!(
+                    protocol::read::<Request>(&mut stream).await.unwrap(),
+                    Request::Shutdown
+                ));
+                protocol::write(
+                    &mut stream,
+                    &if busy {
+                        Response::Error("workspace has active tasks".into())
+                    } else {
+                        Response::Ok
+                    },
+                )
+                .await
+                .unwrap();
+                if !busy {
+                    drop(old_listener);
+                    fs::remove_file(old_socket).unwrap();
+                }
+                drop(old_lock);
+            });
+            let result = connect_or_start(
+                &socket,
+                &ServiceOptions {
+                    workspace: root.path().to_string_lossy().into_owned(),
+                    daemon: false,
+                    allow_mcp_start: false,
+                },
+                &root.path().join("config"),
+                &database,
+                &root.path().join("auth"),
+            )
+            .await;
+            if busy {
+                assert!(result.unwrap_err().to_string().contains("active tasks"));
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(30), listener.accept())
+                        .await
+                        .is_err()
+                );
+            } else {
+                let connected = result.unwrap();
+                let _accepted = listener.accept().await.unwrap();
+                assert!(same_executable(&connected).await.unwrap());
+            }
+            daemon.await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn legacy_aliases_share_one_listener_and_block_competing_daemons() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("db");
+    let socket = endpoints::shared(root.path(), &database).unwrap();
+    let listener = UnixListener::bind(&socket).unwrap();
+    let locks = endpoints::lock_legacy(root.path(), &database).unwrap();
+    endpoints::publish_aliases(root.path(), &database, &socket).unwrap();
+    for (version, alias) in endpoints::legacy(root.path(), &database).unwrap() {
+        assert!(orbit_protocol::supports_version(version));
+        assert_eq!(fs::read_link(&alias).unwrap(), socket);
+        let competing = private_file(&alias.with_extension("lock")).unwrap();
+        assert!(matches!(
+            competing.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        let client = UnixStream::connect(alias).await.unwrap();
+        let _accepted = listener.accept().await.unwrap();
+        assert!(same_executable(&client).await.unwrap());
+    }
+    assert_ne!(
+        socket,
+        endpoints::shared(root.path(), &root.path().join("other-db")).unwrap()
+    );
+    drop(locks);
+    endpoints::lock_legacy(root.path(), &database).unwrap();
+}
+
+#[tokio::test]
+async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions() {
+    for version in [6, 7, 8, 9] {
+        let root = tempfile::tempdir().unwrap();
+        let options = crate::WorkspaceOptions {
+            model: None,
+            initial_directory: root.path().into(),
+            auth_directory: root.path().join("auth"),
+            config: root.path().join("config"),
+            database: root.path().join("db"),
+            allow_mcp_start: false,
+            home: None,
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        let service = Service {
+            options: options.clone(),
+            sessions: Mutex::new(HashMap::new()),
+            opening: Mutex::new(()),
+            last_activity: Mutex::new(tokio::time::Instant::now()),
+            stop: tokio_util::sync::CancellationToken::new(),
+            closing: AtomicBool::new(false),
+        };
+        let (mut client, server) = tokio::io::duplex(8192);
+        let worker = tokio::spawn(async move {
+            let (reader, writer) = tokio::io::split(server);
+            service.client(reader, writer).await.unwrap();
+        });
+        protocol::write(
+            &mut client,
+            &ConnectionContext {
+                config: options.config,
+                auth: options.auth_directory,
+                allow_mcp_start: false,
+                workspace: options.initial_directory,
+            },
+        )
+        .await
+        .unwrap();
+        protocol::write(
+            &mut client,
+            &Request::Hello {
+                version,
+                workspace: None,
+            },
+        )
+        .await
+        .unwrap();
+        let response: Response = protocol::read(&mut client).await.unwrap();
+        if [7, 8].contains(&version) {
+            assert!(
+                matches!(response, Response::Hello { version: negotiated, .. } if negotiated == version)
+            );
+            protocol::write(&mut client, &Request::Shutdown)
+                .await
+                .unwrap();
+            assert!(matches!(
+                protocol::read::<Response>(&mut client).await.unwrap(),
+                Response::Ok
+            ));
+        } else {
+            assert!(
+                matches!(response, Response::Error(error) if error.contains("protocol mismatch"))
+            );
+        }
+        worker.await.unwrap();
+    }
+}
