@@ -42,7 +42,8 @@ fn layout_with_margin(
         .media
         .iter()
         .map(|target| {
-            context.cached_picture(&target.source, bounds.available, height(&target.source))
+            let (width, height) = picture_bounds(&linked, &target.source, bounds.available);
+            context.cached_picture(&target.source, width, height)
         })
         .collect::<Vec<_>>();
     if ready.iter().all(Option::is_none) {
@@ -137,6 +138,13 @@ fn height(source: &Source) -> u16 {
     }
 }
 
+fn picture_bounds(linked: &LinkedLine, source: &Source, width: u16) -> (u16, u16) {
+    let height = height(source);
+    linked.media_max_size.map_or((width, height), |size| {
+        (width.min(size.width), height.min(size.height))
+    })
+}
+
 pub(in crate::tui) fn requests(linked: &LinkedLine, width: u16) -> Vec<Request> {
     requests_with_margin(linked, width, super::super::markdown::BODY_MARGIN)
 }
@@ -153,10 +161,13 @@ fn requests_with_margin(linked: &LinkedLine, width: u16, margin: u16) -> Vec<Req
     linked
         .media
         .iter()
-        .map(|t| Request {
-            source: t.source.clone(),
-            width,
-            height: height(&t.source),
+        .map(|t| {
+            let (width, height) = picture_bounds(linked, &t.source, width);
+            Request {
+                source: t.source.clone(),
+                width,
+                height,
+            }
         })
         .collect()
 }
@@ -238,6 +249,7 @@ fn slice(linked: &LinkedLine, range: Range<usize>) -> LinkedLine {
         disclosure: linked.disclosure.clone(),
         anchors: linked.anchors.clone(),
         chrome: linked.chrome,
+        media_max_size: linked.media_max_size,
         ..Default::default()
     };
 

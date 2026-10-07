@@ -1503,7 +1503,7 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image.png");
-    image::RgbaImage::from_pixel(40, 60, image::Rgba([230, 100, 50, 255]))
+    image::RgbaImage::from_pixel(400, 600, image::Rgba([230, 100, 50, 255]))
         .save(&path)
         .unwrap();
     let destination = "https://orbit.example/document";
@@ -1566,6 +1566,7 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
             true,
         ),
     ] {
+        let thumbnail = matches!(&item, TranscriptItem::UserWithImages { .. });
         let mut state = UiState::new("mock");
         state.media = context(ProtocolType::Kitty);
         state.transcript.push(item);
@@ -1603,6 +1604,14 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
                 })
             })
             .expect("inline image has a hit area");
+        if thumbnail {
+            let bounds = state
+                .transcript_layout
+                .picture_area_at(area, state.max_scroll, point)
+                .unwrap();
+            assert!(bounds.width <= 32, "thumbnail width: {}", bounds.width);
+            assert!(bounds.height <= 6, "thumbnail height: {}", bounds.height);
+        }
         let target = state
             .transcript_layout
             .link_at(area, state.max_scroll, point);

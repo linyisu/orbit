@@ -74,6 +74,7 @@ pub(super) struct LinkedLine {
     pub disclosure: Option<Disclosure>,
     pub anchors: Vec<String>,
     pub media: Vec<super::media::Target>,
+    pub media_max_size: Option<ratatui::layout::Size>,
     pub graphics: Vec<super::media::Fragment>,
     pub copy: Vec<super::media::CopyText>,
     // Cell decode requests keep their own widths instead of using the whole table width.

@@ -874,6 +874,7 @@ impl Entry {
             let mut label = Line::from(format!("[图片：{}]", image.name));
             render::sanitize_line(&mut label);
             let mut line = super::markdown::LinkedLine::plain(label);
+            line.media_max_size = Some(ratatui::layout::Size::new(32, 6));
             let length = line.text().len();
             line.links.clear();
             line.media.push(super::media::Target {
