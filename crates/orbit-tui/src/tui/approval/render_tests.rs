@@ -145,7 +145,7 @@ fn full_preview_scrolls_to_end_and_escapes_terminal_controls() {
     );
     terminal.draw(|f| draw(f, &mut state)).unwrap();
 
-    assert_eq!(state.approval_choice, 1);
+    assert_eq!(state.approval_choice, 0);
     assert!(state.approval_max_scroll > 0);
 
     state.approval_scroll = state.approval_max_scroll;

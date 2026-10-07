@@ -86,7 +86,6 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         && state.ssh_prompt.is_none()
         && !state.dialog_open()
         && state.restore_picker.is_none()
-        && state.approval.is_none()
         && state.input.selection().is_none()
         && !state.selection.active();
 
@@ -1652,7 +1651,6 @@ pub(super) fn draw_prompt(
         && !state.dialog_open()
         && state.workspace_wizard.is_none()
         && state.ssh_prompt.is_none()
-        && state.approval.is_none()
         && state.attachment_cursor.is_none()
     {
         let x = text_area.x + (cursor.0 as u16).min(state.input_area.width - 1);

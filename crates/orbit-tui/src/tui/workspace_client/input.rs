@@ -200,7 +200,9 @@ impl Tab {
             }
             return Ok(Action::Redraw);
         }
-        if let Some(approval) = self.approval_id {
+        if let Some(approval) = self.approval_id
+            && approval::captures(&self.state, &event)
+        {
             let action = approval::handle(&mut self.state, event);
             let session = self.id.clone().unwrap_or_default();
             match action {

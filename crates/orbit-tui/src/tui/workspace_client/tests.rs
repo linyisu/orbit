@@ -292,6 +292,46 @@ async fn concurrent_tabs_keep_drafts_events_models_and_requests_separate() {
 }
 
 #[test]
+fn approval_keeps_composer_editable_and_enter_sends_steering() {
+    let (mut tab, mut requests) = tab("local");
+    tab.apply(page(vec![], vec![approval(7)]));
+    tab.busy = true;
+    tab.state.approval_shown = true;
+    tab.handle(Event::Paste("draft".into())).unwrap();
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)))
+        .unwrap();
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::Char('!'),
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    assert_eq!(tab.state.input.text, "draf!t");
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::CONTROL,
+    )))
+    .unwrap();
+    tab.handle(Event::Paste("use read_document".into()))
+        .unwrap();
+    assert_eq!(tab.state.input.text, "use read_document");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
+        .unwrap();
+    assert!(tab.state.ime_cursor.is_some());
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    assert!(
+        matches!(requests.try_recv().unwrap().request, Request::Steer { message, .. } if message == "use read_document")
+    );
+    assert!(requests.try_recv().is_err());
+    assert_eq!(tab.approval_id, Some(7));
+}
+
+#[test]
 fn approvals_and_cancellation_only_reach_the_selected_target() {
     let (mut first, mut first_requests) = tab("SSH one");
     let (mut second, mut second_requests) = tab("SSH two");
@@ -300,8 +340,8 @@ fn approvals_and_cancellation_only_reach_the_selected_target() {
     second.state.approval_shown = true;
     second
         .handle(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
+            KeyCode::Char('y'),
+            KeyModifiers::CONTROL,
         )))
         .unwrap();
     assert!(matches!(

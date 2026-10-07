@@ -22,6 +22,23 @@ pub(super) fn file_modal(_state: &UiState) -> bool {
     false
 }
 
+/// Inline approvals own only explicit approval shortcuts and pointer events in their panel.
+/// Editing/navigation/Enter remain composer actions, even while a tool waits for approval.
+pub fn captures(state: &UiState, event: &Event) -> bool {
+    match event {
+        Event::Key(key) => {
+            key.kind == KeyEventKind::Press
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char('y' | 'Y' | 'n' | 'c'))
+                && !(key.code == KeyCode::Char('c') && state.input.selected_text().is_some())
+        }
+        Event::Mouse(mouse) => state
+            .approval_area
+            .contains((mouse.column, mouse.row).into()),
+        _ => false,
+    }
+}
+
 pub fn handle(state: &mut UiState, event: Event) -> Action {
     let amount = match event {
         Event::Mouse(mouse) => {
@@ -79,58 +96,22 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
             amount
         }
 
-        Event::Key(key) if key.kind != KeyEventKind::Release => {
-            if key.modifiers == KeyModifiers::CONTROL {
+        Event::Key(key) if key.kind == KeyEventKind::Press => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
                 return match key.code {
-                    KeyCode::Char('y') if state.approval_shown => Action::Approve,
-                    KeyCode::Char('a') if state.approval_shown => Action::AlwaysAllow,
+                    KeyCode::Char('y' | 'Y') if state.approval_shown => {
+                        if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            Action::AlwaysAllow
+                        } else {
+                            Action::Approve
+                        }
+                    }
                     KeyCode::Char('n') => Action::Deny,
                     KeyCode::Char('c') => Action::Cancel,
                     _ => Action::None,
                 };
             }
-
-            match key.code {
-                KeyCode::Tab => {
-                    state.approval_choice = (state.approval_choice + 1) % 3;
-                    return Action::None;
-                }
-
-                KeyCode::Left => {
-                    state.approval_choice = state.approval_choice.saturating_sub(1);
-                    return Action::None;
-                }
-
-                KeyCode::Right => {
-                    state.approval_choice = (state.approval_choice + 1).min(2);
-                    return Action::None;
-                }
-
-                KeyCode::Enter if state.approval_shown => {
-                    return match state.approval_choice {
-                        0 => Action::Approve,
-                        1 => Action::AlwaysAllow,
-                        _ => Action::Deny,
-                    };
-                }
-
-                KeyCode::Esc => return Action::Deny,
-                KeyCode::Up => -1,
-                KeyCode::Down => 1,
-                KeyCode::PageUp => -12,
-                KeyCode::PageDown => 12,
-                KeyCode::Home => {
-                    state.approval_scroll = 0;
-                    return Action::None;
-                }
-
-                KeyCode::End => {
-                    state.approval_scroll = state.approval_max_scroll;
-                    return Action::None;
-                }
-
-                _ => 0,
-            }
+            0
         }
 
         _ => 0,
@@ -634,12 +615,22 @@ fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         return;
     }
 
+    let labels = if area.width >= 66 {
+        [
+            "[ 允许一次 Ctrl+Y ]",
+            "[ 始终允许 Ctrl+Shift+Y ]",
+            "[ 拒绝 Ctrl+N ]",
+        ]
+    } else {
+        ["[ 允许一次 ]", "[ 始终允许 ]", "[ 拒绝 ]"]
+    };
+    use unicode_width::UnicodeWidthStr;
     let opt0_x = area.x + 1;
-    let opt0_w = 12;
+    let opt0_w = labels[0].width() as u16;
     let opt1_x = opt0_x + opt0_w + 2;
-    let opt1_w = 12;
+    let opt1_w = labels[1].width() as u16;
     let opt2_x = opt1_x + opt1_w + 2;
-    let opt2_w = 8;
+    let opt2_w = labels[2].width() as u16;
 
     state.approval_options = vec![
         (Rect::new(opt0_x, area.y, opt0_w, 1).intersection(area), 0),
@@ -661,7 +652,7 @@ fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     let spans = vec![
         Span::raw(" "),
         Span::styled(
-            "[ 允许一次 ]",
+            labels[0],
             if state.approval_choice == 0 {
                 selected_style_normal
             } else {
@@ -670,7 +661,7 @@ fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         ),
         Span::raw("  "),
         Span::styled(
-            "[ 始终允许 ]",
+            labels[1],
             if state.approval_choice == 1 {
                 selected_style_normal
             } else {
@@ -679,7 +670,7 @@ fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         ),
         Span::raw("  "),
         Span::styled(
-            "[ 拒绝 ]",
+            labels[2],
             if state.approval_choice == 2 {
                 selected_style_danger
             } else {
@@ -865,76 +856,36 @@ mod tests {
     }
 
     #[test]
-    fn approval_requires_explicit_key_after_preview_and_preserves_draft() {
+    fn composer_keys_never_approve_or_get_captured() {
         let mut state = UiState::new("mock");
-        state.input.insert("draft");
-        let yes = Event::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
-
-        assert_eq!(handle(&mut state, yes.clone()), Action::None);
-
         state.approval_shown = true;
-
-        assert_eq!(handle(&mut state, Event::Paste("yes".into())), Action::None);
-        assert_eq!(
-            handle(
-                &mut state,
-                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Left,
+            KeyCode::Tab,
+            KeyCode::Esc,
+            KeyCode::Char('a'),
+        ] {
+            let event = Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+            assert!(!captures(&state, &event));
+            assert_eq!(handle(&mut state, event), Action::None);
+        }
+        assert!(!captures(&state, &Event::Paste("draft".into())));
+        assert!(!captures(
+            &state,
+            &Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL))
+        ));
+        for (modifiers, expected) in [
+            (KeyModifiers::CONTROL, Action::Approve),
+            (
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                Action::AlwaysAllow,
             ),
-            Action::Approve
-        );
-        assert_eq!(handle(&mut state, yes), Action::Approve);
-
-        handle(
-            &mut state,
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-        );
-
-        assert_eq!(
-            handle(
-                &mut state,
-                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            ),
-            Action::AlwaysAllow
-        );
-
-        handle(
-            &mut state,
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-        );
-
-        assert_eq!(
-            handle(
-                &mut state,
-                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            ),
-            Action::Deny
-        );
-
-        handle(
-            &mut state,
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
-        );
-        handle(
-            &mut state,
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
-        );
-
-        assert_eq!(
-            handle(
-                &mut state,
-                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            ),
-            Action::Approve
-        );
-
-        assert_eq!(
-            handle(
-                &mut state,
-                Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-            ),
-            Action::Deny
-        );
-        assert_eq!(state.input.text, "draft");
+        ] {
+            let event = Event::Key(KeyEvent::new(KeyCode::Char('y'), modifiers));
+            assert!(captures(&state, &event));
+            assert_eq!(handle(&mut state, event), expected);
+        }
     }
 }
 
