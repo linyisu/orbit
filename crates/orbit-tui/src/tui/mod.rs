@@ -182,3 +182,5 @@ mod tests;
 
 #[cfg(test)]
 mod subagent_tests;
+
+mod user_input;

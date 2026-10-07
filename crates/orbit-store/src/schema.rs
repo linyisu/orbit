@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use rusqlite::Connection;
 
-const CURRENT_SCHEMA_VERSION: u32 = 24;
+const CURRENT_SCHEMA_VERSION: u32 = 25;
 
 pub(crate) fn migrate(connection: &Connection) -> Result<()> {
     connection.execute_batch("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;")?;
@@ -339,6 +339,9 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
             CREATE INDEX agent_sessions_parent ON agent_sessions(parent_session_id);
             PRAGMA user_version=24;",
         )?;
+    }
+    if version < 25 {
+        crate::user_input::migrate(connection)?;
     }
     let broken: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",

@@ -24,6 +24,11 @@ pub struct Handle {
 }
 
 pub enum Command {
+    EnableUserInput,
+    AnswerUserInput {
+        id: String,
+        answers: Option<Vec<orbit_protocol::user_input::Answer>>,
+    },
     Activity {
         result: oneshot::Sender<bool>,
     },
@@ -80,6 +85,7 @@ pub struct View {
     approvals: BTreeMap<u64, ApprovalPreview>,
     clock: Option<Clock>,
     progress: Vec<orbit_protocol::ToolProgress>,
+    user_inputs: Vec<orbit_protocol::user_input::Record>,
 }
 
 struct Clock {
@@ -173,6 +179,7 @@ impl View {
             .collect();
         let next = after + updates.len();
         Ok(Page {
+            user_inputs: self.user_inputs.clone(),
             tool_progress: if next == self.updates.len() {
                 progress
             } else {
@@ -218,6 +225,7 @@ impl Handle {
             approvals: BTreeMap::new(),
             clock: None,
             progress: Vec::new(),
+            user_inputs: Vec::new(),
         };
         for run in snapshot.runs {
             view.push(Update::Started {
@@ -261,6 +269,7 @@ impl Handle {
             approvals: BTreeMap::new(),
             clock: None,
             progress: Vec::new(),
+            user_inputs: Vec::new(),
         };
         for run in &setup.session.snapshot.runs {
             view.push(Update::Started {

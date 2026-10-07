@@ -55,6 +55,13 @@ const PROGRESS_FRAME_MILLIS: u128 = 260;
 pub(super) const MAX_COMPLETION_ITEMS: usize = 8;
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
+    if !state.dialog_open()
+        && state.approval.is_none()
+        && state.workspace_wizard.is_none()
+        && state.ssh_prompt.is_none()
+    {
+        state.user_input.open_next();
+    }
     let hover = state.pending_list_hover.take();
     draw_contents(frame, state);
 
@@ -271,7 +278,13 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     frame.render_widget(Paragraph::new(footer.line), areas[6]);
     state.selection.footer = areas[6];
     draw_context_tooltip(frame, state);
-    super::dialogs::draw(frame, state);
+    state.user_input.draw_badge(frame);
+    if state.user_input.visible() {
+        state.selection.clear();
+        state.ime_cursor = state.user_input.draw(frame);
+    } else {
+        super::dialogs::draw(frame, state);
+    }
 
     if file_modal && !state.dialog_open() {
         super::approval::draw_file_modal(frame, state);

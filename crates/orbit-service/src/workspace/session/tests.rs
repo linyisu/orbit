@@ -28,6 +28,7 @@ fn replay_preserves_compaction_and_queued_input_semantics() {
 #[test]
 fn idle_and_live_pages_carry_service_clock_without_changing_the_event_cursor() {
     let mut view = View {
+        user_inputs: Vec::new(),
         updates: vec![],
         busy: true,
         model: "test".into(),
@@ -201,6 +202,7 @@ models=[{id="large",input_context_tokens=64000,max_output_tokens=512},{id="small
 #[test]
 fn progress_snapshots_are_bounded_and_do_not_hide_ledger_events() {
     let mut view = View {
+        user_inputs: Vec::new(),
         updates: vec![],
         busy: true,
         model: "test".into(),
@@ -229,4 +231,97 @@ fn progress_snapshots_are_bounded_and_do_not_hide_ledger_events() {
     assert_eq!(second.next, first.next);
     assert!(second.updates.is_empty());
     assert!(second.timing.is_some());
+}
+
+#[tokio::test]
+async fn user_input_shared_session_pages_wait_for_explicit_answer_in_yolo() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(
+        root.join("config.toml"),
+        r#"
+[providers.test]
+base_url="http://127.0.0.1:1/v1"
+api_key="test-only"
+auto_refresh_models=false
+models=[{id="test"}]
+"#,
+    )
+    .unwrap();
+    let options = crate::WorkspaceOptions {
+        model: Some("test::test".into()),
+        initial_directory: root.into(),
+        auth_directory: root.join("auth"),
+        config: root.join("config.toml"),
+        database: root.join("db"),
+        allow_mcp_start: false,
+        home: Some(root.into()),
+        config_home: None,
+        instruction_dir: None,
+        editor_command: "vi".into(),
+    };
+    let setup = crate::workspace::setup::prepare_service(&options, None)
+        .await
+        .unwrap();
+    let tools = setup.resources.tools.clone();
+    let handle = Handle::spawn(setup, None);
+    handle
+        .command(Command::SetMode { mode: Mode::Yolo })
+        .await
+        .unwrap();
+    handle.command(Command::EnableUserInput).await.unwrap();
+    let call = orbit_model::types::ToolCall::function(
+        "ask",
+        "ask_user",
+        serde_json::json!({"questions":[{"id":"q","title":"说明","prompt":"需要什么？","kind":"text"}]}),
+    );
+    let task = tokio::spawn(async move {
+        tools
+            .execute(call, tokio_util::sync::CancellationToken::new())
+            .await
+            .unwrap()
+    });
+    let record = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Some(record) = handle
+                .view
+                .lock()
+                .await
+                .page(0)
+                .unwrap()
+                .user_inputs
+                .first()
+            {
+                break record.clone();
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!task.is_finished(), "YOLO must still await user answers");
+    let second = handle.view.lock().await.page(0).unwrap();
+    assert_eq!(second.user_inputs[0].id, record.id);
+    let answers = vec![orbit_protocol::user_input::Answer {
+        question_id: "q".into(),
+        text: "用户回答".into(),
+        ..Default::default()
+    }];
+    handle
+        .command(Command::AnswerUserInput {
+            id: record.id.clone(),
+            answers: Some(answers.clone()),
+        })
+        .await
+        .unwrap();
+    let output = task.await.unwrap();
+    assert!(output.content.contains("用户回答"));
+    handle
+        .command(Command::AnswerUserInput {
+            id: record.id,
+            answers: Some(answers),
+        })
+        .await
+        .unwrap();
+    handle.command(Command::Close).await.unwrap();
 }

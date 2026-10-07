@@ -121,6 +121,7 @@ reasoning = { adapter = "openai_chat", efforts = ["low", "high"], default = "low
         .unwrap();
     let service = Arc::new(Service {
         approvals: None,
+        user_input: None,
         parent: parent.id().into(),
         store,
         config_path: path,
@@ -661,6 +662,7 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
     drop(interrupted);
     let recovered = Service {
         approvals: None,
+        user_input: None,
         jobs: BackgroundJobs::default(),
         active: Mutex::new(HashMap::new()),
         store: service.store.clone(),
@@ -750,6 +752,7 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
             enabled: false,
             ..Default::default()
         },
+        None,
         None,
     )
     .await

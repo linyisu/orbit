@@ -369,6 +369,7 @@ fn menu_selects_commands_and_busy_enter_routes_commands_locally() {
     state.input.insert("/");
     press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
     press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
+    press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
 
     assert_eq!(
         press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),

@@ -127,6 +127,7 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     call.reply
         .unwrap()
         .send(Ok(Response::Subagent(Page {
+            user_inputs: Vec::new(),
             tool_progress: Vec::new(),
             timing: None,
             next: 3,
@@ -171,6 +172,7 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
 
 fn page(updates: Vec<Update>, approvals: Vec<Approval>) -> Response {
     Response::Page(Page {
+        user_inputs: Vec::new(),
         tool_progress: Vec::new(),
         timing: None,
         next: updates.len(),
@@ -915,6 +917,7 @@ fn directory_profile_updates_workspace_media_connection_and_empty_tab_title() {
     .unwrap();
     tab.apply(Response::Ok);
     tab.apply(Response::Page(Page {
+        user_inputs: Vec::new(),
         tool_progress: Vec::new(),
         timing: None,
         next: 1,
@@ -1130,3 +1133,59 @@ async fn directory_menu_stays_visible_while_refining_and_waiting_for_the_service
 
 mod reconnection;
 mod regressions;
+
+#[test]
+fn user_input_submission_uses_each_target_connection_and_preserves_composer() {
+    for label in ["本地", "SSH test-host", "WSL Test"] {
+        let (mut tab, mut requests) = tab(label);
+        tab.state.input.set("尚未发送的消息".into());
+        let record: orbit_protocol::user_input::Record =
+            serde_json::from_value(serde_json::json!({
+                "id":"request","call_id":"tool-call","source":null,"status":"pending","answers":[],
+                "form":{"questions":[{"id":"q","title":"要求","prompt":"需要什么？","kind":"text"}]}
+            }))
+            .unwrap();
+        tab.state.user_input.sync(vec![record]);
+        tab.state.user_input.open_next();
+        tab.handle(Event::Paste("用户填写".into())).unwrap();
+        tab.handle(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        tab.handle(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        let call = requests.try_recv().unwrap();
+        let Request::AnswerUserInput {
+            session,
+            request,
+            answers,
+        } = call.request
+        else {
+            panic!("expected answer request");
+        };
+        assert_eq!(session, "same-session");
+        assert_eq!(request, "request");
+        assert_eq!(answers.unwrap()[0].text, "用户填写");
+        call.reply
+            .unwrap()
+            .send(Ok(Response::Error("临时失败".into())))
+            .unwrap();
+        tab.poll_submissions();
+        assert!(tab.state.user_input.visible());
+        assert_eq!(tab.state.input.text, "尚未发送的消息");
+        tab.handle(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        assert!(matches!(
+            requests.try_recv().unwrap().request,
+            Request::AnswerUserInput { .. }
+        ));
+        assert!(requests.try_recv().is_err());
+    }
+}

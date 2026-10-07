@@ -40,6 +40,37 @@ impl Tab {
             self.cancel_connect();
             return Ok(Action::Redraw);
         }
+        if self.state.user_input.visible() {
+            match self.state.user_input.handle(&event) {
+                tui::user_input::Action::Answer { id, answers } => self.submit_with_receipt(
+                    Request::AnswerUserInput {
+                        session: self.id.clone().unwrap_or_default(),
+                        request: id,
+                        answers,
+                    },
+                    submissions::Draft::UserInput,
+                ),
+                tui::user_input::Action::History(before) => {
+                    self.send(Request::UserInputHistory {
+                        session: self.id.clone().unwrap_or_default(),
+                        before,
+                    });
+                }
+                tui::user_input::Action::CancelTask => {
+                    self.send(Request::Cancel {
+                        session: self.id.clone().unwrap_or_default(),
+                    });
+                }
+                tui::user_input::Action::None => {}
+            }
+            return Ok(Action::Redraw);
+        }
+        if !self.state.dialog_open() && self.state.approval.is_none() {
+            self.state.user_input.handle(&event);
+            if self.state.user_input.visible() {
+                return Ok(Action::Redraw);
+            }
+        }
         if let Some(preview) = &mut self.state.media_preview {
             let (_, close) = preview.handle(&event);
             if close {
@@ -440,6 +471,13 @@ impl Tab {
             "/connect" => return Ok(Action::Connect),
             "/editor" => return Ok(Action::Editor),
             "/model refresh" => return Ok(Action::RefreshModels),
+            "/answers" => {
+                self.state.user_input.history();
+                self.send(Request::UserInputHistory {
+                    session: self.id.clone().unwrap_or_default(),
+                    before: None,
+                });
+            }
             "/help" => {
                 self.state.selection = Default::default();
                 self.state.show_help = true;

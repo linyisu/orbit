@@ -335,10 +335,16 @@ impl Tab {
         let draft = self.state.input.text.clone();
         let attachments = std::mem::take(&mut self.state.attachments);
         let attachment_cursor = self.state.attachment_cursor;
+        let user_input = if self.id.as_deref() == Some(&opened.info.id) {
+            std::mem::take(&mut self.state.user_input)
+        } else {
+            Default::default()
+        };
         let media = self.state.media.clone();
         let cursor_trail = self.state.cursor_motion.enabled;
         self.state = UiState::new(&opened.info.model);
         self.state.media = media;
+        self.state.user_input = user_input;
         self.state.cursor_motion.enabled = cursor_trail;
         self.state.input.set(draft);
         self.state.attachments = attachments;
@@ -361,6 +367,9 @@ impl Tab {
             session: opened.info.id.clone(),
         });
         self.commands = Some(commands);
+        self.send(Request::EnableUserInput {
+            session: opened.info.id.clone(),
+        });
         let (responses, incoming) = mpsc::channel(CHANNEL_CAPACITY);
         self.incoming = Some(incoming);
         self.worker = Some(AbortOnDropHandle::new(tokio::spawn(pump::pump(
@@ -711,6 +720,12 @@ impl Tab {
                 }
             }
             Response::Page(page) => {
+                if self.state.user_input.sync(page.user_inputs) {
+                    self.send(Request::UserInputHistory {
+                        session: self.id.clone().unwrap_or_default(),
+                        before: None,
+                    });
+                }
                 self.busy = page.busy;
                 self.state.model = page.model;
                 for update in page.updates {
@@ -764,6 +779,7 @@ impl Tab {
                     self.state.sync_clock(timing);
                 }
             }
+            Response::UserInputs(history) => self.state.user_input.receive(history),
             Response::Plugins(catalog) => {
                 self.state.marketplace_dialog =
                     Some(super::dialogs::MarketplaceDialog::from_catalog(catalog));

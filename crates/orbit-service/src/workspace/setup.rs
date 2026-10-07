@@ -39,6 +39,7 @@ pub struct WorkspaceResources {
     pub tools: orbit_agent::tool::ToolRegistry,
     pub undo_writer: orbit_tools::write_file::WriteFile,
     pub approvals: orbit_tools::approval::ApprovalReceiver,
+    pub user_input: crate::user_input::Questions,
     pub budget: RequestBudget,
     pub workspace: orbit_runtime::filesystem::Workspace,
     pub command_limits: orbit_tools::run_command::CommandLimits,
@@ -207,6 +208,9 @@ pub(super) async fn prepare_resources(
     history::register(&mut tools, session.store.clone(), memory_scope.clone());
     project_state::register(&mut tools, session.store.clone(), memory_scope.clone());
     skills.register_tool(&mut tools);
+    let user_input =
+        crate::user_input::Questions::new(session.store.clone(), session.id().into()).await?;
+    user_input.register(&mut tools, None);
     crate::policy::filter_tools(&mut tools, &policy.disabled.iter().copied().collect());
     if !policy.disabled(Capability::Subagents) {
         subagents::register(
@@ -218,6 +222,7 @@ pub(super) async fn prepare_resources(
             instructions.clone(),
             file_config.subagents.clone(),
             (!policy.read_only).then_some(approvals),
+            Some(user_input.clone()),
         )
         .await?;
     }
@@ -244,6 +249,7 @@ pub(super) async fn prepare_resources(
         tools,
         undo_writer,
         approvals: approval_receiver,
+        user_input,
         budget: RequestBudget {
             context_tokens,
             input_context_tokens,

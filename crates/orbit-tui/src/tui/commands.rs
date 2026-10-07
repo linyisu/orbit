@@ -8,6 +8,10 @@ pub const COMMAND_NAME_WIDTH: usize = 14;
 
 pub const COMMANDS: &[Command] = &[
     Command {
+        name: "/answers",
+        description: "查看 Agent 问答记录并回答待处理的问题",
+    },
+    Command {
         name: "/btw",
         description: "独立询问当前上下文；不打断主任务，再次输入可查看记录",
     },
@@ -167,6 +171,7 @@ pub fn available_while_running(name: &str) -> bool {
             | "/reconnect"
             | "/new"
             | "/close"
+            | "/answers"
             | "/btw"
             | "/status"
             | "/diagnostics"
@@ -254,6 +259,7 @@ pub fn available_in_workspace(name: &str) -> bool {
             | "/resume"
             | "/exit"
             | "/help"
+            | "/answers"
             | "/btw"
             | "/compact"
             | "/reasoning"
@@ -293,7 +299,7 @@ mod tests {
                 .iter()
                 .map(|command| command.name)
                 .collect::<Vec<_>>(),
-            ["/sessions", "/close", "/restore", "/resume"]
+            ["/sessions", "/close", "/answers", "/restore", "/resume"]
         );
         assert!(
             matching("/s")

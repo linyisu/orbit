@@ -16,3 +16,5 @@ pub mod subagents;
 
 pub mod side_questions;
 pub mod workspace_requests;
+
+pub mod user_input;

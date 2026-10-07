@@ -537,6 +537,33 @@ impl Service {
                     .await?;
                 Ok(Response::Ok)
             }
+            Request::EnableUserInput { session } => {
+                self.session(&session)
+                    .await?
+                    .command(session::Command::EnableUserInput)
+                    .await?;
+                Ok(Response::Ok)
+            }
+            Request::AnswerUserInput {
+                session,
+                request,
+                answers,
+            } => {
+                self.session(&session)
+                    .await?
+                    .command(session::Command::AnswerUserInput {
+                        id: request,
+                        answers,
+                    })
+                    .await?;
+                Ok(Response::Ok)
+            }
+            Request::UserInputHistory { session, before } => {
+                let handle = self.session(&session).await?;
+                Ok(Response::UserInputs(
+                    handle.store.user_input_history(&session, before).await?,
+                ))
+            }
             Request::Poll { session, after } => Ok(Response::Page(
                 self.session(&session)
                     .await?
@@ -663,6 +690,7 @@ async fn capabilities() -> orbit_protocol::Capabilities {
                     "compact",
                     "steer",
                     "side_questions",
+                    "user_input",
                     "project_state",
                     "plugins",
                     "completions",

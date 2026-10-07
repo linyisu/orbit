@@ -26,3 +26,5 @@ pub use workspace::setup::{
 
 #[cfg(test)]
 mod config_tests;
+
+pub mod user_input;

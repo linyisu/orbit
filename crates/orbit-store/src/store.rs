@@ -172,6 +172,7 @@ impl Store {
                     + COALESCE((SELECT length(CAST(b.payload AS BLOB)) FROM session_git_baselines b WHERE b.session_id=s.id),0)
                     + COALESCE((SELECT length(CAST(b.payload AS BLOB)) FROM session_workspace_baselines b WHERE b.session_id=s.id),0)
                     + COALESCE((SELECT sum(length(CAST(q.payload AS BLOB))) FROM side_questions q WHERE q.session_id=s.id),0)
+                    + COALESCE((SELECT sum(length(CAST(u.payload AS BLOB))) FROM user_inputs u WHERE u.session_id=s.id),0)
                  FROM sessions s ORDER BY 3 DESC,s.id",
             )?;
 

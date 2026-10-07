@@ -54,6 +54,7 @@ struct Service {
     limits: SubagentConfig,
     allowed_tools: HashSet<String>,
     approvals: Option<orbit_tools::approval::ApprovalSender>,
+    user_input: Option<crate::user_input::Questions>,
     jobs: BackgroundJobs,
     slots: Arc<Semaphore>,
     active: Mutex<HashMap<String, ActiveAgent>>,
@@ -99,6 +100,7 @@ pub async fn register(
     instructions: crate::instructions::Instructions,
     limits: SubagentConfig,
     approvals: Option<orbit_tools::approval::ApprovalSender>,
+    user_input: Option<crate::user_input::Questions>,
 ) -> Result<()> {
     // Child views use the same UI resources, but never expose delegation tools.
     if store.is_subagent(&parent).await? {
@@ -111,6 +113,7 @@ pub async fn register(
     }
     let service = Arc::new(Service {
         approvals,
+        user_input,
         jobs: BackgroundJobs::with_capacity(limits.max_concurrent)?,
         slots: Arc::new(Semaphore::new(limits.max_concurrent)),
         allowed_tools: tools
@@ -722,6 +725,11 @@ impl Service {
             );
         }
 
+        if self.allowed_tools.contains("ask_user")
+            && let Some(questions) = &self.user_input
+        {
+            questions.register(&mut tools, Some(agent.id.clone()));
+        }
         let mut messages = snapshot.history;
         crate::instructions::inject(&mut messages, &self.instructions);
         messages.retain(|m| !matches!(m,ChatMessage::System{content} if content.starts_with("ORBIT_SUBAGENT_V1\n")));

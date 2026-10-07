@@ -48,6 +48,7 @@ struct Actor {
     remembered: HashSet<String>,
     pending: HashMap<u64, ApprovalRequest>,
     approval_id: u64,
+    user_input_enabled: bool,
     compact_after_model_switch: bool,
     progress: super::progress::Progress,
 }
@@ -90,6 +91,7 @@ pub(super) async fn run(
         remembered,
         pending: HashMap::new(),
         approval_id: 0,
+        user_input_enabled: false,
         compact_after_model_switch: false,
         progress: Default::default(),
     };
@@ -137,6 +139,7 @@ pub(super) async fn run(
                     actor.view.lock().await.push(Update::agent(AgentEvent::Failed { error: error.to_string() }));
                     actor.cancel();
                 }
+                actor.sync_user_input().await;
                 actor.compact_if_needed().await;
                 if actor.setup.session.poll_title().await.unwrap_or(false) { actor.profile().await; }
             }
@@ -174,7 +177,28 @@ impl Actor {
         }
     }
 
+    async fn sync_user_input(&self) {
+        let inputs = self.setup.resources.user_input.pending().await;
+        let mut view = self.view.lock().await;
+        view.user_inputs = inputs;
+        let waiting = view
+            .user_inputs
+            .iter()
+            .any(|request| request.source.is_none())
+            || !view.approvals.is_empty();
+        if let Some(clock) = &mut view.clock {
+            if waiting {
+                clock.pause();
+            } else {
+                clock.resume();
+            }
+        }
+    }
+
     async fn profile(&self) {
+        if self.user_input_enabled {
+            self.setup.resources.user_input.enable();
+        }
         if let Ok(mut workspace) = self.workspace.write() {
             *workspace = self.setup.resources.workspace.clone();
         }
@@ -186,6 +210,13 @@ impl Actor {
 
     async fn command(&mut self, command: Command) -> Result<()> {
         match command {
+            Command::EnableUserInput => {
+                self.user_input_enabled = true;
+                self.setup.resources.user_input.enable();
+            }
+            Command::AnswerUserInput { id, answers } => {
+                self.setup.resources.user_input.answer(&id, answers).await?
+            }
             Command::Activity { result } => {
                 let _ = result.send(self.active() || self.questions.running().await);
             }

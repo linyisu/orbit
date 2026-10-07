@@ -5,6 +5,7 @@ use super::*;
 pub(super) enum Draft {
     Composer(String),
     Question,
+    UserInput,
     Model(String),
 }
 
@@ -55,6 +56,7 @@ impl Tab {
             Draft::Model(_) => self
                 .state
                 .report_local(TranscriptItem::Error(error.to_string())),
+            Draft::UserInput => self.state.user_input.submission_error(error.to_string()),
             Draft::Question => self.state.btw.submit_error(&error),
             Draft::Composer(text) => {
                 if self.state.input.text.is_empty() {

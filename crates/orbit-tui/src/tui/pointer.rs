@@ -219,6 +219,13 @@ pub(super) fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bo
 }
 
 pub(super) fn toggle_transcript_item(state: &mut UiState, index: usize) {
+    if let Some(super::app::TranscriptItem::Tool(row)) = state.transcript.get(index)
+        && row.name == "ask_user"
+        && state.user_input.open_tool(&row.id, &row.output)
+    {
+        return;
+    }
+
     toggle_transcript(state, index, false);
 }
 

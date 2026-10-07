@@ -291,6 +291,22 @@ pub(super) fn group_call_summary(row: &ToolRow) -> String {
 
 pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String {
     match name {
+        "ask_user" => {
+            let form = serde_json::from_str::<orbit_protocol::user_input::Form>(arguments).ok();
+            let record = serde_json::from_str::<orbit_protocol::user_input::Record>(output).ok();
+            let status = record.as_ref().map_or("待回答", |r| match r.status {
+                orbit_protocol::user_input::Status::Pending => "待回答",
+                orbit_protocol::user_input::Status::Answered => "已回答",
+                orbit_protocol::user_input::Status::Declined => "已取消问答",
+                orbit_protocol::user_input::Status::Cancelled => "任务已取消",
+                orbit_protocol::user_input::Status::Interrupted => "任务已中断",
+            });
+            format!(
+                "{} 个问题 · {} · 查看",
+                form.map_or(0, |f| f.questions.len()),
+                status
+            )
+        }
         "search_text" => search_summary(arguments),
         "memory_save" => memory_summary(arguments),
         "git_inspect" => git_summary(arguments),

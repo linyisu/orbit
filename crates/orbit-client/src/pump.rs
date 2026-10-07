@@ -46,6 +46,10 @@ pub async fn pump(
                 let status = (
                     page.busy,
                     page.model.clone(),
+                    page.user_inputs
+                        .iter()
+                        .map(|q| q.id.clone())
+                        .collect::<Vec<_>>(),
                     page.approvals
                         .iter()
                         .map(|approval| approval.id)
