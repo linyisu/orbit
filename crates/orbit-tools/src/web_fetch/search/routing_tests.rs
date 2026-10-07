@@ -61,22 +61,26 @@ async fn search(query: &str, bing_body: &str, duckduckgo_body: &str) -> serde_js
 
 #[tokio::test]
 async fn mismatched_query_offsite_results_and_weak_snippets_try_the_next_provider() {
-    let valid =
-        "<a class='result__a' href='https://github.com/example/rv32i'>Turing Complete RV32I</a>";
+    let valid = "<a class='result__a' href='https://example.org/engine/specification'>Example Engine Alpha specification</a>";
     for (query, bad, reason) in [
         (
-            "Turing Complete RV32I",
-            "<input name='q' value='Turing'><li class='b_algo'><h2><a href='https://example.org/'>Alan Turing</a></h2></li>",
+            "engine specification",
+            "<li class='b_algo'><h2><a href='https://unrelated.example/'>Unrelated page</a></h2></li>",
+            "No query term",
+        ),
+        (
+            "Example Engine Alpha",
+            "<input name='q' value='Example'><li class='b_algo'><h2><a href='https://example.org/'>Unrelated page</a></h2></li>",
             "different query",
         ),
         (
-            "site:github.com RV32I",
-            "<li class='b_algo'><h2><a href='https://example.org/'>RV32I</a></h2></li>",
+            "site:example.org Alpha",
+            "<li class='b_algo'><h2><a href='https://other.example/'>Alpha</a></h2></li>",
             "ignored site:",
         ),
         (
-            "\"Turing Complete\" \"RV32I\"",
-            "<li class='b_algo'><h2><a href='https://example.org/'>Alan Turing</a></h2></li>",
+            "\"Example Engine\" \"Alpha\"",
+            "<li class='b_algo'><h2><a href='https://example.org/'>Unrelated page</a></h2></li>",
             "Relevance is unconfirmed",
         ),
     ] {
@@ -86,7 +90,7 @@ async fn mismatched_query_offsite_results_and_weak_snippets_try_the_next_provide
         assert_eq!(result["query_match_unconfirmed"], false);
         assert_eq!(
             result["results"][0]["url"],
-            "https://github.com/example/rv32i"
+            "https://example.org/engine/specification"
         );
         assert!(result["fallback_reason"].as_str().unwrap().contains(reason));
         for field in ["request_url", "response_url"] {
@@ -103,9 +107,9 @@ async fn mismatched_query_offsite_results_and_weak_snippets_try_the_next_provide
 #[tokio::test]
 async fn weak_results_are_retained_with_a_warning_if_alternatives_are_also_weak() {
     let result = search(
-        "\"Turing Complete\" \"RV32I\"",
-        "<li class='b_algo'><h2><a href='https://example.org/'>Alan Turing</a></h2></li>",
-        "<a class='result__a' href='https://other.example/'>Turing AI</a>",
+        "\"Example Engine\" \"Alpha\"",
+        "<li class='b_algo'><h2><a href='https://example.org/'>Unrelated page</a></h2></li>",
+        "<a class='result__a' href='https://other.example/'>Example Notes</a>",
     )
     .await;
     assert_eq!(result["provider"], "Bing");

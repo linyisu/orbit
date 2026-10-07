@@ -454,7 +454,7 @@ pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Ve
 
     if value["query_match_unconfirmed"].as_bool() == Some(true) {
         view.push_spans(vec![Span::styled(
-            "相关性未确认：结果摘要未出现查询中的引号短语，请调整搜索词或打开网页核实。",
+            "相关性未确认：结果标题、摘要或链接缺少查询匹配线索，请调整搜索词或打开网页核实。",
             Style::default().fg(theme.tool_running),
         )]);
     }

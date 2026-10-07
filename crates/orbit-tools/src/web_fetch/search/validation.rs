@@ -154,8 +154,26 @@ pub(super) fn results(
         .map(|phrase| normalized(phrase))
         .filter(|phrase| !phrase.is_empty())
         .collect();
+    let terms: Vec<_> = words
+        .iter()
+        .filter(|word| word.len() >= 3 && word.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .map(|word| word.to_ascii_lowercase())
+        .filter(|word| {
+            !matches!(
+                word.as_str(),
+                "the" | "and" | "for" | "with" | "from" | "how" | "what" | "are" | "not"
+            )
+        })
+        .collect();
+    // For simple unquoted Latin queries, a response with none of the words
+    // visible is also suspect. This is a weak signal, not a semantic filter.
+    let clues = if phrases.is_empty() && terms.len() >= 2 {
+        &terms
+    } else {
+        &phrases
+    };
     let unconfirmed = !alternatives
-        && !phrases.is_empty()
+        && !clues.is_empty()
         && !results.iter().any(|result| {
             let visible = format!(
                 " {} ",
@@ -164,12 +182,17 @@ pub(super) fn results(
                     result.title, result.snippet, result.url
                 ))
             );
-            phrases
+            clues
                 .iter()
                 .any(|phrase| visible.contains(&format!(" {phrase} ")))
         });
     if unconfirmed {
-        warnings.push("No quoted phrase appears in result titles, snippets or URLs. Relevance is unconfirmed; inspect pages or refine the query before using these results as evidence.".into());
+        let missing = if phrases.is_empty() {
+            "No query term"
+        } else {
+            "No quoted phrase"
+        };
+        warnings.push(format!("{missing} appears in result titles, snippets or URLs. Relevance is unconfirmed; inspect pages or refine the query before using these results as evidence."));
     }
     Ok((warnings, unconfirmed))
 }
