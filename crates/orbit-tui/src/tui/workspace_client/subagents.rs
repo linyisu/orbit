@@ -119,6 +119,7 @@ impl Tab {
     }
 
     pub(super) fn send_subagent(&mut self, message: String) {
+        let message = message.trim().to_owned();
         self.poll_subagent();
         let (Some(remote), Some(commands), Some(session), Some(viewer)) = (
             &mut self.subagent,

@@ -221,6 +221,7 @@ impl Actor {
                 let _ = result.send(self.active() || self.questions.running().await);
             }
             Command::SendSubagent { agent, message } => {
+                let message = message.trim().to_owned();
                 self.setup
                     .resources
                     .tools
@@ -321,8 +322,9 @@ impl Actor {
                 self.profile().await;
             }
             Command::Steer { message } => {
+                let message = message.trim().to_owned();
                 ensure!(
-                    !message.trim().is_empty() && message.len() <= 1024 * 1024,
+                    !message.is_empty() && message.len() <= 1024 * 1024,
                     "invalid session input"
                 );
                 let run = self
@@ -406,10 +408,11 @@ impl Actor {
                 mode,
                 model,
             } => {
+                let prompt = prompt.trim().to_owned();
                 ensure!(
                     !request_id.is_empty()
                         && request_id.len() <= 128
-                        && (!prompt.trim().is_empty() || !images.is_empty())
+                        && (!prompt.is_empty() || !images.is_empty())
                         && prompt.len() <= 1024 * 1024,
                     "invalid workspace request"
                 );

@@ -311,6 +311,7 @@ impl Tab {
             tui::Action::Redraw => Ok(Action::Redraw),
             tui::Action::Submit(prompt) => self.submit(prompt),
             tui::Action::Steer(prompt) => {
+                let prompt = prompt.trim().to_owned();
                 self.submit_with_receipt(
                     Request::Steer {
                         session: self.id.clone().unwrap_or_default(),
@@ -421,6 +422,7 @@ impl Tab {
     }
 
     pub fn submit(&mut self, prompt: String) -> Result<Action> {
+        let prompt = prompt.trim().to_owned();
         let command = prompt.trim();
         if Spec::is_command(command) {
             match Spec::parse(command) {

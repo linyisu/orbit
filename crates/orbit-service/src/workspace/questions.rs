@@ -75,6 +75,7 @@ impl Questions {
     }
 
     pub async fn start(&self, question: &str, follow_up: Option<usize>) -> Result<usize> {
+        let question = question.trim();
         let context = self
             .context
             .read()

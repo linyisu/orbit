@@ -36,6 +36,7 @@ impl Tab {
     }
 
     pub(super) fn ask(&mut self, question: String, follow_up: Option<usize>) {
+        let question = question.trim().to_owned();
         let draft = if follow_up.is_some() {
             Draft::Question
         } else {
