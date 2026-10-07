@@ -772,6 +772,16 @@ fn tab_control_style(state: &UiState, target: &super::TabAction) -> Style {
         .as_ref()
         .filter(|(action, _)| action == target)
         .map(|(_, since)| since.elapsed());
+    if matches!(target, super::TabAction::New) {
+        return if hover.is_some() {
+            Style::default()
+                .fg(THEME.foreground)
+                .bg(THEME.tab_hover_background)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(ACCENT).bg(THEME.tab_background)
+        };
+    }
     super::theme::control_style(hover)
 }
 

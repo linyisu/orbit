@@ -239,12 +239,12 @@ fn hovered_title_scrolls_without_splitting_wide_or_combining_characters() {
 fn new_tab_button_changes_on_hover_and_restores_on_leave() {
     let mut state = UiState::new("model");
     let plain = tab_control_style(&state, &super::super::TabAction::New);
+    assert_eq!(plain.bg, Some(THEME.tab_background));
     state.tab_hover = Some((super::super::TabAction::New, std::time::Instant::now()));
 
-    assert_ne!(
-        tab_control_style(&state, &super::super::TabAction::New),
-        plain
-    );
+    let hovered = tab_control_style(&state, &super::super::TabAction::New);
+    assert_ne!(hovered, plain);
+    assert_eq!(hovered.bg, Some(THEME.tab_hover_background));
 
     state.tab_hover = None;
 
@@ -529,11 +529,16 @@ fn composer_metadata_is_below_input_without_a_background_or_sidebar() {
         }
 
         assert!(state.selection.viewport.right() > width - 10);
-        assert!(
-            buffer.content.iter().all(|cell| {
-                cell.bg == Color::Reset || cell.bg == crate::tui::theme::THEME.caret
-            })
-        );
+        for y in 0..24 {
+            for x in 0..width {
+                let cell = &buffer[(x, y)];
+                if state.new_tab_area.contains((x, y).into()) {
+                    assert_eq!(cell.bg, THEME.tab_background);
+                } else {
+                    assert!(cell.bg == Color::Reset || cell.bg == THEME.caret);
+                }
+            }
+        }
         assert!(
             composer_details(&state, width.saturating_sub(7) as usize)
                 .iter()
