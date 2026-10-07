@@ -16,7 +16,7 @@ fn payload(args: &SearchArguments, provider: SearchProvider) -> Value {
             "web_search_exa",
             json!({"query": args.query, "numResults": args.max_results}),
         ),
-        _ => unreachable!(),
+        SearchProvider::Duckduckgo => unreachable!("HTML provider is dispatched separately"),
     };
     json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": name, "arguments": arguments}})

@@ -209,7 +209,7 @@ mod tests {
     }
     #[test]
     fn query_identity_survives_encoding_but_rewritten_responses_are_rejected() {
-        let mut url = Url::parse("https://www.bing.com/search").unwrap();
+        let mut url = Url::parse("https://search.example/query").unwrap();
         url.query_pairs_mut()
             .append_pair("q", "\"Turing Complete\" RV32I");
         assert!(

@@ -10,13 +10,11 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-mod bing;
 mod browser;
 mod dom;
 mod encoding;
 mod resource;
 pub use resource::fetch_image;
-mod google;
 mod proxy;
 mod quality;
 pub use proxy::WebClient;
@@ -25,7 +23,7 @@ pub use search::SearchProvider;
 mod search_results;
 
 #[cfg(test)]
-use search::{search_at, search_with_endpoints};
+use search::search_at;
 
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);

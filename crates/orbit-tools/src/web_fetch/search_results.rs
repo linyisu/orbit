@@ -1,9 +1,6 @@
 //! Result URL identity and diversity; no relevance ranking or domain blacklist.
 use std::collections::{HashMap, HashSet};
 
-use html2text::Handle;
-
-use super::dom::{attribute as attr, text};
 use super::{SearchResult, checked_url};
 
 const MAX_PER_HOST: usize = 3;
@@ -58,75 +55,6 @@ pub(super) fn select(results: Vec<SearchResult>, limit: usize) -> Vec<SearchResu
     selected
 }
 
-pub(super) fn duckduckgo(body: &str, limit: usize) -> Vec<SearchResult> {
-    let Ok(dom) = html2text::config::plain().parse_html(body.as_bytes()) else {
-        return Vec::new();
-    };
-    fn collect(node: &Handle, results: &mut Vec<SearchResult>) {
-        if attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == "result__a"))
-            && let Some(href) = attr(node, "href")
-            && let Ok(mut url) = url::Url::parse("https://duckduckgo.com")
-                .unwrap()
-                .join(&href)
-        {
-            if url
-                .host_str()
-                .is_some_and(|h| h == "duckduckgo.com" || h.ends_with(".duckduckgo.com"))
-            {
-                let destination = url
-                    .query_pairs()
-                    .find(|(k, _)| k == "uddg")
-                    .map(|(_, v)| v.into_owned());
-                let Some(destination) = destination else {
-                    return;
-                };
-                let Ok(target) = url::Url::parse(&destination) else {
-                    return;
-                };
-                url = target;
-            }
-
-            if let Ok(url) = checked_url(url.as_str()) {
-                let title = text(node);
-                let snippet = node
-                    .get_parent()
-                    .and_then(|p| p.get_parent())
-                    .map(|p| find_snippet(&p))
-                    .unwrap_or_default();
-
-                if !title.is_empty() {
-                    results.push(SearchResult {
-                        title,
-                        url: url.into(),
-                        snippet,
-                    });
-                }
-            }
-        }
-
-        for child in node.children.borrow().iter() {
-            collect(child, results);
-        }
-    }
-    fn find_snippet(node: &Handle) -> String {
-        if attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == "result__snippet"))
-        {
-            return text(node);
-        }
-
-        node.children
-            .borrow()
-            .iter()
-            .map(find_snippet)
-            .find(|s| !s.is_empty())
-            .unwrap_or_default()
-    }
-    let mut results = Vec::new();
-    collect(&dom.document, &mut results);
-    results.truncate(limit);
-    results
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,15 +81,5 @@ mod tests {
         assert_eq!(selected.len(), 5);
         assert_eq!(selected[0].url, "https://example.com/a?x=1");
         assert_eq!(selected[3].url, "https://other.org/");
-    }
-
-    #[test]
-    fn duckduckgo_extracts_safe_target_and_description() {
-        let results = duckduckgo(
-            r#"<div><h2><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fa">Example</a></h2><a class="result__snippet">Description</a></div>"#,
-            10,
-        );
-        assert_eq!(results[0].url, "https://example.org/a");
-        assert_eq!(results[0].snippet, "Description");
     }
 }

@@ -1,15 +1,18 @@
 //! Search routing, provider filters and bounded retry/cooldown policy.
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::Mutex,
     time::{Instant, SystemTime},
 };
 
 use super::*;
 
+mod duckduckgo;
 mod mcp;
 #[cfg(test)]
 mod routing_tests;
+#[cfg(test)]
+mod test_support;
 mod validation;
 
 struct SearchPage {
@@ -25,8 +28,6 @@ struct SearchPage {
 pub enum SearchProvider {
     Parallel,
     Exa,
-    Google,
-    Bing,
     Duckduckgo,
 }
 
@@ -44,8 +45,6 @@ impl SearchProvider {
         match self {
             Self::Parallel => "Parallel",
             Self::Exa => "Exa",
-            Self::Google => "Google",
-            Self::Bing => "Bing",
             Self::Duckduckgo => "DuckDuckGo",
         }
     }
@@ -54,8 +53,6 @@ impl SearchProvider {
         match self {
             Self::Parallel => "https://search.parallel.ai/mcp",
             Self::Exa => "https://mcp.exa.ai/mcp",
-            Self::Google => "https://www.google.com/search?gbv=1",
-            Self::Bing => "https://www.bing.com/search",
             Self::Duckduckgo => "https://html.duckduckgo.com/html/",
         }
     }
@@ -291,225 +288,18 @@ async fn attempt(
     }
 }
 
-fn duckduckgo_locale(region: &str, language: &str) -> String {
-    // DuckDuckGo uses a few legacy identifiers rather than ISO/BCP-47.
-    // https://duckduckgo.com/duckduckgo-help-pages/settings/params
-    match (region.to_ascii_uppercase().as_str(), language) {
-        ("GB", "en") => "uk-en".into(),
-        ("JP", "ja") => "jp-jp".into(),
-        ("KR", "ko") => "kr-kr".into(),
-        ("TW", "zh") => "tw-tzh".into(),
-        ("HK", "zh") => "hk-tzh".into(),
-        _ => format!("{}-{language}", region.to_ascii_lowercase()),
-    }
-}
-
-fn provider_url(
-    args: &SearchArguments,
-    provider: SearchProvider,
-    endpoint: &str,
-) -> Result<Url, Failure> {
-    let mut url = Url::parse(endpoint).map_err(|_| failed("invalid search provider endpoint"))?;
-    let language = args
-        .language
-        .as_deref()
-        .unwrap_or(if args.query.is_ascii() { "en" } else { "zh" });
-    let lang = language.split('-').next().unwrap();
-    let region = args
-        .region
-        .as_deref()
-        .or_else(|| language.split('-').nth(1))
-        .unwrap_or(if lang == "zh" { "CN" } else { "US" });
-    let mut query = url.query_pairs_mut();
-    query.append_pair("q", &args.query);
-    match provider {
-        SearchProvider::Parallel | SearchProvider::Exa => {
-            return Err(failed("MCP search uses POST arguments, not HTML query parameters").into());
-        }
-        SearchProvider::Google => {
-            query
-                .append_pair("hl", language)
-                .append_pair("gl", region)
-                .append_pair("num", &args.max_results.to_string());
-            if let Some(freshness) = args.freshness {
-                query.append_pair(
-                    "tbs",
-                    match freshness {
-                        Freshness::Day => "qdr:d",
-                        Freshness::Week => "qdr:w",
-                        Freshness::Month => "qdr:m",
-                        Freshness::Year => "qdr:y",
-                    },
-                );
-            }
-        }
-
-        SearchProvider::Bing => {
-            query
-                .append_pair("setlang", language)
-                .append_pair("mkt", &format!("{lang}-{region}"))
-                .append_pair("count", &args.max_results.to_string());
-            if let Some(freshness) = args.freshness {
-                query.append_pair(
-                    "qft",
-                    match freshness {
-                        Freshness::Day => " filterui:age-lt1440",
-                        Freshness::Week => " filterui:age-lt10080",
-                        Freshness::Month => " filterui:age-lt43200",
-                        Freshness::Year => " filterui:age-lt525600",
-                    },
-                );
-            }
-        }
-
-        SearchProvider::Duckduckgo => {
-            query.append_pair("kl", &duckduckgo_locale(region, lang));
-            if let Some(freshness) = args.freshness {
-                query.append_pair(
-                    "df",
-                    match freshness {
-                        Freshness::Day => "d",
-                        Freshness::Week => "w",
-                        Freshness::Month => "m",
-                        Freshness::Year => "y",
-                    },
-                );
-            }
-        }
-    }
-
-    drop(query);
-    Ok(url)
-}
-
 async fn request(
     args: &SearchArguments,
     client: &WebClient,
     provider: SearchProvider,
     endpoint: &str,
 ) -> Result<SearchPage, Failure> {
-    if matches!(provider, SearchProvider::Parallel | SearchProvider::Exa) {
-        return mcp::request(args, client, provider, endpoint).await;
+    match provider {
+        SearchProvider::Parallel | SearchProvider::Exa => {
+            mcp::request(args, client, provider, endpoint).await
+        }
+        SearchProvider::Duckduckgo => duckduckgo::request(args, client, endpoint).await,
     }
-    let mut url = provider_url(args, provider, endpoint)?;
-    let request_url = url.to_string();
-    let mut visited = HashSet::new();
-    let mut clients = RequestClients::default();
-    for hop in 0..=5 {
-        if !visited.insert(url.to_string()) {
-            return Err(failed("search redirect loop detected").into());
-        }
-        let language = args
-            .language
-            .as_deref()
-            .unwrap_or(if args.query.is_ascii() {
-                "en-US"
-            } else {
-                "zh-CN"
-            });
-        let route = client.route(&url)?;
-        let response = clients
-            .get(&url, route.as_ref().map(|route| &route.proxy))
-            .await?
-            .get(url.clone())
-            .header(
-                header::ACCEPT,
-                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            )
-            .header(
-                header::ACCEPT_LANGUAGE,
-                format!("{language},en;q=0.8,zh;q=0.7"),
-            )
-            .header(header::ACCEPT_ENCODING, "identity")
-            .send()
-            .await
-            .map_err(|error| Failure {
-                message: error.without_url().to_string(),
-                retry: Some(Duration::from_millis(500)),
-                limited: false,
-            })?;
-
-        if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-            if hop == 5 {
-                return Err(failed("too many redirects (maximum 5)").into());
-            }
-            let location = response
-                .headers()
-                .get(header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| failed("redirect has no valid Location header"))?;
-
-            url = redirect_target(&url, location)?;
-            continue;
-        }
-
-        if !response.status().is_success() {
-            return Err(status_failure(response.status(), response.headers()));
-        }
-        if response
-            .headers()
-            .get(header::CONTENT_ENCODING)
-            .is_some_and(|v| v != "identity")
-        {
-            return Err(failed(
-                "search provider ignored identity encoding; compressed response unsupported",
-            )
-            .into());
-        }
-
-        let media = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_owned();
-        let bytes = read_body(response).await?;
-        let body = encoding::text(&bytes, &media, true)?;
-        validation::query_echo(&args.query, &url, &body)?;
-        let mut results = match provider {
-            SearchProvider::Parallel | SearchProvider::Exa => unreachable!(),
-            SearchProvider::Google => google::parse_results(&body, 50),
-            SearchProvider::Bing => bing::parse_results(&body, 50),
-            SearchProvider::Duckduckgo => search_results::duckduckgo(&body, 50),
-        };
-
-        if results.is_empty() {
-            return Err(failed(
-                "no readable search results (empty page, consent, challenge or unsupported layout)",
-            )
-            .into());
-        }
-
-        let (warnings, unconfirmed) = validation::results(&args.query, &mut results)?;
-        return Ok(SearchPage {
-            results,
-            request_url,
-            response_url: url.to_string(),
-            warnings,
-            unconfirmed,
-        });
-    }
-
-    unreachable!()
-}
-
-#[cfg(test)]
-pub(super) async fn search_with_endpoints(
-    args: SearchArguments,
-    proxy: Option<&reqwest::Proxy>,
-    google: &str,
-    bing: &str,
-) -> Result<String, ToolError> {
-    route(
-        args,
-        &WebClient::for_test(proxy),
-        &[
-            (SearchProvider::Google, google),
-            (SearchProvider::Bing, bing),
-        ],
-        &Mutex::default(),
-    )
-    .await
 }
 
 #[cfg(test)]
@@ -521,7 +311,7 @@ pub(super) async fn route_for_test(
     route(
         args,
         client,
-        &[(SearchProvider::Bing, endpoint)],
+        &[(SearchProvider::Duckduckgo, endpoint)],
         &Mutex::default(),
     )
     .await
@@ -537,196 +327,4 @@ pub(super) async fn search_at(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn unicode_length_and_whitespace_match_schema_without_destroying_operators() {
-        let mut args = SearchArguments {
-            query: "中".repeat(512),
-            max_results: 10,
-            ..Default::default()
-        };
-
-        normalize_arguments(&mut args).unwrap();
-        args.query.push('中');
-        assert!(normalize_arguments(&mut args).is_err());
-        args.query = "  site:github.com  \"mouse   click\"\nOR C++  ".into();
-        normalize_arguments(&mut args).unwrap();
-        assert_eq!(args.query, "site:github.com \"mouse click\" OR C++");
-        args.language = Some("EN-us".into());
-        args.region = Some("gb".into());
-        normalize_arguments(&mut args).unwrap();
-        assert_eq!(args.language.as_deref(), Some("en-us"));
-        args.language = Some("en\r\nInjected: x".into());
-        assert!(normalize_arguments(&mut args).is_err());
-    }
-
-    #[test]
-    fn provider_filters_and_counts_are_explicit() {
-        let args = SearchArguments {
-            query: "rust \"async io\"".into(),
-            max_results: 10,
-            language: Some("en".into()),
-            region: Some("GB".into()),
-            freshness: Some(Freshness::Week),
-        };
-
-        for provider in [
-            SearchProvider::Google,
-            SearchProvider::Bing,
-            SearchProvider::Duckduckgo,
-        ] {
-            let url = provider_url(&args, provider, provider.endpoint()).unwrap();
-            let q: HashMap<_, _> = url.query_pairs().collect();
-            assert_eq!(q["q"], args.query);
-            match provider {
-                SearchProvider::Parallel | SearchProvider::Exa => unreachable!(),
-                SearchProvider::Google => {
-                    assert_eq!(q["hl"], "en");
-                    assert_eq!(q["gl"], "GB");
-                    assert_eq!(q["tbs"], "qdr:w");
-                    assert_eq!(q["num"], "10");
-                }
-
-                SearchProvider::Bing => {
-                    assert_eq!(q["mkt"], "en-GB");
-                    assert_eq!(q["qft"], " filterui:age-lt10080");
-                    assert_eq!(q["count"], "10");
-                }
-
-                SearchProvider::Duckduckgo => {
-                    assert_eq!(q["kl"], "uk-en");
-                    assert_eq!(q["df"], "w");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn retries_only_transient_status_and_understands_retry_after_dates() {
-        let mut headers = header::HeaderMap::new();
-        headers.insert(header::RETRY_AFTER, header::HeaderValue::from_static("3"));
-        for code in [400, 401, 403, 404] {
-            assert!(
-                status_failure(reqwest::StatusCode::from_u16(code).unwrap(), &headers)
-                    .retry
-                    .is_none()
-            );
-        }
-
-        for code in [429, 500, 503] {
-            assert_eq!(
-                status_failure(reqwest::StatusCode::from_u16(code).unwrap(), &headers).retry,
-                Some(Duration::from_secs(3))
-            );
-        }
-
-        let date = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(60));
-        assert!(
-            retry_after(Some(&header::HeaderValue::from_str(&date).unwrap())).unwrap()
-                > Duration::from_secs(58)
-        );
-    }
-
-    #[tokio::test]
-    async fn rate_limit_falls_back_and_next_call_skips_cooling_provider() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let proxy =
-            reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap();
-        let server = tokio::spawn(async move {
-            for index in 0..3 {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut bytes = [0; 4096];
-                let n = stream.read(&mut bytes).await.unwrap();
-                assert!(n > 0);
-                let req = String::from_utf8_lossy(&bytes[..n]);
-                if index == 0 {
-                    assert!(req.contains("google.invalid"));
-                    stream.write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
-                } else {
-                    assert!(req.contains("bing.invalid"));
-                    let body =
-                        "<li class='b_algo'><h2><a href='https://example.org/'>Rust</a></h2></li>";
-                    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
-                }
-            }
-        });
-        let cooldown = Mutex::default();
-        let args = SearchArguments {
-            query: "rust".into(),
-            max_results: 8,
-            ..Default::default()
-        };
-
-        for i in 0..2 {
-            let result = route(
-                args.clone(),
-                &WebClient::for_test(Some(&proxy)),
-                &[
-                    (SearchProvider::Google, "http://google.invalid/"),
-                    (SearchProvider::Bing, "http://bing.invalid/"),
-                ],
-                &cooldown,
-            )
-            .await
-            .unwrap();
-            let result: serde_json::Value = serde_json::from_str(&result).unwrap();
-            assert!(
-                !result["fallback_reason"]
-                    .as_str()
-                    .unwrap()
-                    .contains("tool execution failed")
-            );
-            assert!(result["fewer_results"].as_bool().unwrap());
-            assert_eq!(result["results"][0]["snippet_empty"], true);
-            assert!(
-                result["fallback_reason"]
-                    .as_str()
-                    .unwrap()
-                    .contains(if i == 0 { "429" } else { "cooldown" })
-            );
-        }
-
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn forbidden_is_not_replayed_and_transient_server_error_is_retried() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        for code in [403, 503] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let proxy =
-                reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap();
-            let server = tokio::spawn(async move {
-                let count = if code == 403 { 1 } else { 2 };
-                for _ in 0..count {
-                    let (mut s, _) = listener.accept().await.unwrap();
-                    let mut bytes = [0; 4096];
-                    assert!(s.read(&mut bytes).await.unwrap() > 0);
-                    s.write_all(format!("HTTP/1.1 {code} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
-                }
-
-                assert!(
-                    tokio::time::timeout(Duration::from_millis(100), listener.accept())
-                        .await
-                        .is_err()
-                );
-            });
-            let result = route(
-                SearchArguments {
-                    query: "rust".into(),
-                    max_results: 1,
-                    ..Default::default()
-                },
-                &WebClient::for_test(Some(&proxy)),
-                &[(SearchProvider::Bing, "http://bing.invalid/")],
-                &Mutex::default(),
-            )
-            .await;
-
-            assert!(result.is_err());
-            server.await.unwrap();
-        }
-    }
-}
+mod tests;

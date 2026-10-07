@@ -97,63 +97,6 @@ fn url_validation_reports_the_specific_constraint() {
 use super::*;
 
 #[tokio::test]
-async fn google_results_win_and_unreadable_pages_fall_back_to_bing() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    for google_body in [
-        "<a href='https://example.org/paper'><h3>A paper</h3></a>",
-        "<html>Please complete the captcha</html>",
-    ] {
-        let success = google_body.contains("<h3>");
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let proxy =
-            reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap();
-        let server = tokio::spawn(async move {
-            for index in 0..if success { 1 } else { 2 } {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut request = vec![0; 4096];
-                let size = stream.read(&mut request).await.unwrap();
-                let request = String::from_utf8_lossy(&request[..size]);
-                let host = if index == 0 {
-                    "google.invalid"
-                } else {
-                    "bing.invalid"
-                };
-
-                assert!(request.starts_with(&format!("GET http://{host}/?q=paper&")));
-                let body = if index == 0 {
-                    google_body
-                } else {
-                    "<li class='b_algo'><h2><a href='https://example.org/bing'>Bing paper</a></h2></li>"
-                };
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                stream.write_all(response.as_bytes()).await.unwrap();
-            }
-        });
-        let output = search_with_endpoints(
-            SearchArguments {
-                query: "paper".into(),
-                max_results: 8,
-                ..Default::default()
-            },
-            Some(&proxy),
-            "http://google.invalid/",
-            "http://bing.invalid/",
-        )
-        .await
-        .unwrap();
-        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(value["provider"], if success { "Google" } else { "Bing" });
-        assert_eq!(value["results"].as_array().unwrap().len(), 1);
-        assert_eq!(value.get("fallback_reason").is_some(), !success);
-        server.await.unwrap();
-    }
-}
-
-#[tokio::test]
 async fn trusted_proxy_resolves_domains_without_local_dns() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -536,14 +479,14 @@ async fn search_follows_public_redirects_before_parsing_html() {
     let server = tokio::spawn(async move {
         let responses = [
                 (
-                    "GET http://1.1.1.1/search?q=Orbit&setlang=en&mkt=en-US&count=1 HTTP/1.1",
+                    "GET http://1.1.1.1/search?q=Orbit&kl=us-en HTTP/1.1",
                     "HTTP/1.1 302 Found\r\nLocation: http://1.1.1.1/result?q=Orbit\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                         .to_owned(),
                 ),
                 (
                     "GET http://1.1.1.1/result?q=Orbit HTTP/1.1",
                     {
-                        let body = "<li class='b_algo'><h2><a href='https://example.com/orbit'>Orbit</a></h2><p>Found</p></li>";
+                        let body = "<div><h2><a class='result__a' href='https://example.com/orbit'>Orbit</a></h2><a class='result__snippet'>Found</a></div>";
                         format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                             body.len()

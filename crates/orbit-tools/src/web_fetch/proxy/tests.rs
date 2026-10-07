@@ -162,7 +162,7 @@ async fn automatic_proxy_serves_pages_search_and_images_without_local_dns() {
                 "page" => ("text/html", "<h1>Proxy page</h1>"),
                 "search" => (
                     "text/html",
-                    "<li class='b_algo'><h2><a href='https://example.org/'>Proxy search</a></h2></li>",
+                    "<a class='result__a' href='https://example.org/'>Proxy search</a>",
                 ),
 
                 _ => ("image/png", "image payload"),

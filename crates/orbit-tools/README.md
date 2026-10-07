@@ -14,7 +14,7 @@
 
 [limits.rs](src/limits.rs) 统一文本工具的页预算（32 KiB）、JSON 元数据预留及目录扫描条目预算；各工具的行数、深度、匹配数等上限由各自模块拥有，参数 schema 与实际验证引用同一常量。文本/条目预算之外仍有 JSON 分页元数据，不应将其等同于整个序列化响应的精确字节数。
 
-[web_fetch/dom.rs](src/web_fetch/dom.rs) 为 Google、Bing 和 DuckDuckGo 共用 DOM 属性、节点查找与文本投影；各引擎的结果定位、跳转及过滤规则保留在对应模块。
+[web_fetch/search.rs](src/web_fetch/search.rs) 管理搜索路由、超时、重试和冷却；[search/mcp.rs](src/web_fetch/search/mcp.rs) 调用 Parallel 与 Exa 的托管搜索接口，[search/duckduckgo.rs](src/web_fetch/search/duckduckgo.rs) 处理 DuckDuckGo 的页面请求与过滤参数。[web_fetch/dom.rs](src/web_fetch/dom.rs) 提供 HTML 属性读取与文本投影。
 
 [image_assets.rs](src/image_assets.rs) 复用 `Attachment::MAX_IMAGE_BYTES` 与有界图片文件读取，导入前使用有界读取。[web_fetch/resource.rs](src/web_fetch/resource.rs) 的 `fetch_image` 是 TUI 使用的内部网络图片接口，复用 URL、DNS 与重定向检查；同一模块的 `WebClient::fetch_json` 为公开模型规格提供有大小限制的 JSON 下载，不发送模型账号凭据。这些内部接口没有注册成额外的模型工具。
 
@@ -150,7 +150,7 @@
   - 单次响应体上限 2 MiB，总超时 60 秒，最多 5 次重定向；按 Unicode 字符分页。
 
 #### `web_search`
-- **功能**：公共网络搜索，默认依次尝试 Parallel、Exa、DuckDuckGo。Parallel 和 Exa 使用托管 MCP HTTP 接口；DuckDuckGo 解析公共搜索页面。`[web].search_providers` 可设置顺序，支持 `parallel`、`exa`、`duckduckgo`、`google`、`bing`。
+- **功能**：公共网络搜索，默认依次尝试 Parallel、Exa、DuckDuckGo。Parallel 和 Exa 使用托管 MCP HTTP 接口；DuckDuckGo 解析公共搜索页面。`[web].search_providers` 可设置顺序，支持 `parallel`、`exa`、`duckduckgo`。
 - **参数**：`query`（1–512 字符）、`max_results`（1–10）、`language`、`region`、`freshness`。
 - **使用准备**：默认搜索无需 API Key、浏览器、Node.js 或本地 MCP 服务，需要能访问对应公共服务。Parallel 和 Exa 的匿名额度由提供商管理；限流时自动尝试下一来源。网络请求复用 `[web].proxy` 和环境代理设置。
 - **约束与安全**：自动规范化查询文本，去除跟踪参数后去重；针对 HTTP 429 和 MCP 响应中的限流信号进行实例级冷却退避。JSON、SSE 响应均限制为 2 MiB；MCP 请求禁止重定向，SSE 收到对应结果后立即结束读取；单条摘要最多 2000 字符。

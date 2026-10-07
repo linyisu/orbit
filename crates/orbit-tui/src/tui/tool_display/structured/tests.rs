@@ -144,7 +144,7 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
             "web_search",
             json!({
                 "query": "test",
-                "provider": "google",
+                "provider": "Parallel",
                 "results": [{ "title": long, "url": "https://example.com", "snippet": long }],
                 "results_returned": 1
             }),
@@ -271,19 +271,19 @@ fn web_search_warns_before_suspect_results_and_expands_diagnostics() {
     let row = tool(
         "web_search",
         json!({
-            "provider": "Bing",
+            "provider": "Parallel",
             "query_match_unconfirmed": true,
             "warnings": ["Relevance is unconfirmed"],
-            "response_url": "https://www.bing.com/search?q=Turing",
-            "results": [{"title": "Alan Turing", "url": "https://example.org/"}]
+            "response_url": "https://search.parallel.ai/mcp",
+            "results": [{"title": "Unrelated page", "url": "https://example.org/"}]
         }),
     );
     let collapsed = text(&super::web_search(&row, false, 120).unwrap());
-    assert!(collapsed.find("相关性未确认").unwrap() < collapsed.find("Alan Turing").unwrap());
+    assert!(collapsed.find("相关性未确认").unwrap() < collapsed.find("Unrelated page").unwrap());
     assert!(!collapsed.contains("搜索页面:"));
     let expanded = text(&super::web_search(&row, true, 120).unwrap());
     assert!(expanded.contains("Relevance is unconfirmed"));
-    assert!(expanded.contains("https://www.bing.com/search?q=Turing"));
+    assert!(expanded.contains("https://search.parallel.ai/mcp"));
 }
 
 #[test]

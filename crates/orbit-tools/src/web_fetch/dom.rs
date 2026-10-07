@@ -14,26 +14,6 @@ pub(super) fn attribute(node: &Handle, key: &str) -> Option<String> {
         .map(|a| a.value.to_string())
 }
 
-pub(super) fn find_class(node: &Handle, class: &str) -> Option<Handle> {
-    if attribute(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == class)) {
-        return Some(node.clone());
-    }
-    node.children
-        .borrow()
-        .iter()
-        .find_map(|child| find_class(child, class))
-}
-
-pub(super) fn find(node: &Handle, tag: &str) -> Option<Handle> {
-    if node.element_name().as_deref() == Some(tag) {
-        return Some(node.clone());
-    }
-    node.children
-        .borrow()
-        .iter()
-        .find_map(|child| find(child, tag))
-}
-
 pub(super) fn text(node: &Handle) -> String {
     let mut html = Vec::new();
     for child in node.children.borrow().iter() {

@@ -25,17 +25,29 @@ fn defaults_and_serialized_configuration_choose_hosted_search_first() {
         ]
     );
     let explicit: WebConfig =
-        serde_json::from_value(json!({"search_providers": ["exa", "parallel", "bing", "google"]}))
+        serde_json::from_value(json!({"search_providers": ["exa", "parallel", "duckduckgo"]}))
             .unwrap();
     assert_eq!(
         explicit.search_providers,
         vec![
             SearchProvider::Exa,
             SearchProvider::Parallel,
-            SearchProvider::Bing,
-            SearchProvider::Google
+            SearchProvider::Duckduckgo
         ]
     );
+}
+
+#[test]
+fn retired_or_unknown_providers_report_supported_configuration_values() {
+    for provider in ["google", "bing", "unknown"] {
+        let error = serde_json::from_value::<WebConfig>(json!({"search_providers": [provider]}))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(provider));
+        for supported in ["parallel", "exa", "duckduckgo"] {
+            assert!(error.contains(supported), "{error}");
+        }
+    }
 }
 
 #[test]
@@ -108,28 +120,8 @@ fn quota_and_tool_errors_are_failures_even_with_http_success() {
 
 // Read the full POST body rather than just its headers, even when TCP splits it.
 async fn read_request(stream: &mut tokio::net::TcpStream) -> (String, Value) {
-    let mut bytes = Vec::new();
-    loop {
-        let mut chunk = [0; 4096];
-        let size = stream.read(&mut chunk).await.unwrap();
-        assert!(size > 0);
-        bytes.extend_from_slice(&chunk[..size]);
-        if let Some(end) = bytes.windows(4).position(|b| b == b"\r\n\r\n") {
-            let headers = String::from_utf8(bytes[..end].to_vec()).unwrap();
-            let length: usize = headers
-                .lines()
-                .find_map(|line| {
-                    line.to_ascii_lowercase()
-                        .strip_prefix("content-length:")
-                        .map(|v| v.trim().parse().unwrap())
-                })
-                .unwrap();
-            if bytes.len() >= end + 4 + length {
-                let body = serde_json::from_slice(&bytes[end + 4..end + 4 + length]).unwrap();
-                return (headers, body);
-            }
-        }
-    }
+    let (headers, body) = super::super::test_support::read_request(stream).await;
+    (headers, serde_json::from_slice(&body).unwrap())
 }
 
 #[tokio::test]
