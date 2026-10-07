@@ -57,7 +57,7 @@ pub(super) async fn run_command(
             }
 
             let description = format!(
-                "{}\nShift+Tab 切换 · /mode ask|auto|YOLO\n本会话各窗口同步；新会话默认为 auto。",
+                "{}\n/permissions ask|auto|YOLO\n本会话各窗口同步；新会话默认为 auto。",
                 state.permission_mode.description()
             );
 

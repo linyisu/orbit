@@ -356,10 +356,10 @@ fn argument_menu_completes_without_executing_incomplete_commands() {
     );
     assert_eq!(state.input.text, "/memory add fact ");
 
-    state.input.set("/mode au".into());
+    state.input.set("/permissions au".into());
     assert_eq!(
         press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
-        Action::Submit("/mode auto".into())
+        Action::Submit("/permissions auto".into())
     );
 }
 
@@ -369,6 +369,8 @@ fn menu_selects_commands_and_busy_enter_routes_commands_locally() {
     state.input.insert("/");
     press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
     press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
+    press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
+
     press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
 
     assert_eq!(
@@ -555,16 +557,16 @@ fn tab_opens_recalled_command_hints_before_completing_a_choice() {
 #[test]
 fn editing_a_recalled_command_reopens_hints_but_a_noop_delete_does_not() {
     for (code, modifiers, cursor, expected) in [
-        (KeyCode::Backspace, KeyModifiers::NONE, 9, "/mode as"),
-        (KeyCode::Delete, KeyModifiers::NONE, 8, "/mode as"),
-        (KeyCode::Char('k'), KeyModifiers::CONTROL, 7, "/mode a"),
+        (KeyCode::Backspace, KeyModifiers::NONE, 10, "/mode pla"),
+        (KeyCode::Delete, KeyModifiers::NONE, 9, "/mode pla"),
+        (KeyCode::Char('k'), KeyModifiers::CONTROL, 7, "/mode p"),
     ] {
         let mut state = UiState::new("orbit-model");
-        state.input.history = vec!["Orbit older".into(), "/mode ask".into()];
+        state.input.history = vec!["Orbit older".into(), "/mode plan".into()];
         press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
         press(&mut state, KeyCode::Delete, KeyModifiers::NONE, false);
         assert!(state.menu().is_empty());
-        assert_eq!(state.input.text, "/mode ask");
+        assert_eq!(state.input.text, "/mode plan");
         state.input.set_cursor(cursor);
         press(&mut state, code, modifiers, false);
         assert_eq!(state.input.text, expected);

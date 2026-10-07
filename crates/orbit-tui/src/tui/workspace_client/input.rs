@@ -40,6 +40,24 @@ impl Tab {
             self.cancel_connect();
             return Ok(Action::Redraw);
         }
+        if self.state.planning.visible() {
+            if let Some(action) = self.state.planning.handle(&event) {
+                self.submit_with_receipt(
+                    Request::Plan {
+                        session: self.id.clone().unwrap_or_default(),
+                        action,
+                    },
+                    submissions::Draft::Plan,
+                );
+            }
+            return Ok(Action::Redraw);
+        }
+        if !self.state.dialog_open() && self.state.approval.is_none() {
+            self.state.planning.handle(&event);
+            if self.state.planning.visible() {
+                return Ok(Action::Redraw);
+            }
+        }
         if self.state.user_input.visible() {
             match self.state.user_input.handle(&event) {
                 tui::user_input::Action::Answer { id, answers } => self.submit_with_receipt(
@@ -302,7 +320,14 @@ impl Tab {
         }
         if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release)
         {
-            self.set_mode(self.state.permission_mode.next());
+            self.send(Request::Plan {
+                session: self.id.clone().unwrap_or_default(),
+                action: if self.state.planning.mode() == orbit_protocol::plan::WorkMode::Plan {
+                    orbit_protocol::plan::Action::Leave
+                } else {
+                    orbit_protocol::plan::Action::Enter
+                },
+            });
             return Ok(Action::Redraw);
         }
         let busy = self.busy || self.starting.is_some();
@@ -605,7 +630,27 @@ impl Tab {
                     effort: Some(text[11..].trim().into()),
                 });
             }
-            "/mode" | "/permissions" => {
+            "/plan" | "/mode plan" => {
+                if self.state.planning.mode() != orbit_protocol::plan::WorkMode::Plan {
+                    self.send(Request::Plan {
+                        session: session.clone(),
+                        action: orbit_protocol::plan::Action::Enter,
+                    });
+                } else if self.state.planning.snapshot.plan.is_some() {
+                    self.state.planning.open();
+                }
+            }
+            "/plan view" => self.state.planning.open(),
+            "/build" | "/mode build" => {
+                self.send(Request::Plan {
+                    session: session.clone(),
+                    action: orbit_protocol::plan::Action::Leave,
+                });
+            }
+            "/mode" => {
+                self.state.show_output("工作模式", format!("当前：{}\n/plan 只读规划 · /build 返回执行模式（不会批准或自动执行计划）\n/plan view 查看计划 · /permissions 管理执行审批", self.state.planning.mode().label()));
+            }
+            "/permissions" => {
                 self.state
                     .show_output("审批模式", self.state.permission_mode.description().into());
             }

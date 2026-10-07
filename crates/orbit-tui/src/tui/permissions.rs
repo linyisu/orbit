@@ -22,6 +22,7 @@ impl Mode {
         }
     }
 
+    #[cfg(test)]
     pub fn label(self) -> &'static str {
         match self {
             Self::Ask => "ask",
@@ -30,6 +31,7 @@ impl Mode {
         }
     }
 
+    #[cfg(test)]
     pub fn next(self) -> Self {
         match self {
             Self::Ask => Self::Auto,

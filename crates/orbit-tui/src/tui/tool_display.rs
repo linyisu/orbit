@@ -291,6 +291,22 @@ pub(super) fn group_call_summary(row: &ToolRow) -> String {
 
 pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String {
     match name {
+        "enter_plan" | "update_plan" | "submit_plan" => {
+            let record = serde_json::from_str::<orbit_protocol::plan::State>(output).ok();
+            let status = record.as_ref().and_then(|s| s.plan.as_ref()).map_or(
+                if name == "submit_plan" {
+                    "待确认"
+                } else {
+                    "只读规划"
+                },
+                |p| match p.status {
+                    orbit_protocol::plan::Status::Draft => "草稿",
+                    orbit_protocol::plan::Status::Review => "待确认",
+                    orbit_protocol::plan::Status::Approved => "已批准",
+                },
+            );
+            format!("{} · 查看当前计划", status)
+        }
         "ask_user" => {
             let form = serde_json::from_str::<orbit_protocol::user_input::Form>(arguments).ok();
             let record = serde_json::from_str::<orbit_protocol::user_input::Record>(output).ok();

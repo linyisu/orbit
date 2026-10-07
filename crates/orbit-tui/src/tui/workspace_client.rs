@@ -340,11 +340,17 @@ impl Tab {
         } else {
             Default::default()
         };
+        let planning = if self.id.as_deref() == Some(&opened.info.id) {
+            std::mem::take(&mut self.state.planning)
+        } else {
+            Default::default()
+        };
         let media = self.state.media.clone();
         let cursor_trail = self.state.cursor_motion.enabled;
         self.state = UiState::new(&opened.info.model);
         self.state.media = media;
         self.state.user_input = user_input;
+        self.state.planning = planning;
         self.state.cursor_motion.enabled = cursor_trail;
         self.state.input.set(draft);
         self.state.attachments = attachments;
@@ -367,6 +373,10 @@ impl Tab {
             session: opened.info.id.clone(),
         });
         self.commands = Some(commands);
+        self.send(Request::Plan {
+            session: opened.info.id.clone(),
+            action: orbit_protocol::plan::Action::Enable,
+        });
         self.send(Request::EnableUserInput {
             session: opened.info.id.clone(),
         });
@@ -720,6 +730,7 @@ impl Tab {
                 }
             }
             Response::Page(page) => {
+                self.state.planning.sync(page.planning);
                 if self.state.user_input.sync(page.user_inputs) {
                     self.send(Request::UserInputHistory {
                         session: self.id.clone().unwrap_or_default(),

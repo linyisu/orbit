@@ -1244,3 +1244,60 @@ fn user_input_submission_uses_each_target_connection_and_preserves_composer() {
         assert!(requests.try_recv().is_err());
     }
 }
+
+#[test]
+fn planning_commands_and_review_decisions_use_each_tabs_connection() {
+    use orbit_protocol::plan::{Action as PlanAction, WorkMode};
+    for label in ["本地", "SSH dev", "WSL Ubuntu"] {
+        let (mut tab, mut requests) = tab(label);
+        tab.submit("/plan".into()).unwrap();
+        assert!(matches!(
+            requests.try_recv().unwrap().request,
+            Request::Plan {
+                action: PlanAction::Enter,
+                ..
+            }
+        ));
+        // The client never grants a mode transition optimistically.
+        assert_eq!(tab.state.planning.mode(), WorkMode::Build);
+        tab.state.planning.sync(serde_json::from_value(serde_json::json!({"generation":3,"mode":"plan","plan":{"id":"plan","workspace":"/project","revision":1,"title":"Plan","markdown":"Implement and test.","steps":["Implement"],"status":"review"}})).unwrap());
+        tab.busy = true;
+        tab.submit("/plan".into()).unwrap();
+        assert!(requests.try_recv().is_err());
+        assert!(tab.state.planning.visible());
+        tab.handle(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        assert!(requests.try_recv().is_err());
+        for _ in 0..2 {
+            tab.handle(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))
+                .unwrap();
+        }
+        tab.handle(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        let call = requests.try_recv().unwrap();
+        assert!(matches!(
+            call.request,
+            Request::Plan {
+                action: PlanAction::Approve { generation: 3 },
+                ..
+            }
+        ));
+        call.reply.unwrap().send(Ok(Response::Ok)).unwrap();
+        assert!(tab.poll_submissions());
+        assert!(!tab.state.planning.visible());
+        tab.submit("/build".into()).unwrap();
+        assert!(matches!(
+            requests.try_recv().unwrap().request,
+            Request::Plan {
+                action: PlanAction::Leave,
+                ..
+            }
+        ));
+    }
+}

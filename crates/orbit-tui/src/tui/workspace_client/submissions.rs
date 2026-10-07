@@ -6,6 +6,7 @@ pub(super) enum Draft {
     Composer(String),
     Question,
     UserInput(String),
+    Plan,
     Model(String),
 }
 
@@ -54,6 +55,7 @@ impl Tab {
 
     fn rejected(&mut self, draft: Draft, error: anyhow::Error) {
         match draft {
+            Draft::Plan => self.state.planning.failed(error.to_string()),
             Draft::Model(_) => self
                 .state
                 .report_local(TranscriptItem::Error(error.to_string())),
@@ -93,6 +95,9 @@ impl Tab {
             changed = true;
             match result {
                 Ok(Response::Ok) => {
+                    if matches!(submission.draft, Draft::Plan) {
+                        self.state.planning.succeeded();
+                    }
                     if let Draft::UserInput(id) = &submission.draft {
                         self.state.user_input.submission_succeeded(id);
                         self.send(Request::UserInputHistory {

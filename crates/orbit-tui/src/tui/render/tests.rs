@@ -524,7 +524,7 @@ fn composer_metadata_is_below_input_without_a_background_or_sidebar() {
             .flat_map(|y| (0..width).map(move |x| buffer[(x, y)].symbol()))
             .collect();
 
-        for label in ["auto", "test-model", "provider", "high"] {
+        for label in ["build", "test-model", "provider", "high"] {
             assert!(metadata.contains(label), "{width}: {metadata:?}");
         }
 
@@ -1243,7 +1243,7 @@ fn command_menu_limits_visible_items_and_tracks_selection() {
     state.menu_index = 6;
     let middle_page = render(&mut state, 100, 20);
 
-    assert!(middle_page.contains("  /context"));
+    assert!(middle_page.contains("  /compact"));
     assert!(middle_page.contains("/btw"));
     assert_eq!(state.menu_offset, 0);
 

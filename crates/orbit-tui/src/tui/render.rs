@@ -278,6 +278,11 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     frame.render_widget(Paragraph::new(footer.line), areas[6]);
     state.selection.footer = areas[6];
     draw_context_tooltip(frame, state);
+    state.planning.draw_badge(frame);
+    if state.planning.visible() {
+        state.ime_cursor = state.planning.draw(frame);
+        return;
+    }
     state.user_input.draw_badge(frame);
     if state.user_input.visible() {
         state.selection.clear();
@@ -484,7 +489,7 @@ fn composer_details(state: &UiState, width: usize) -> Vec<Line<'static>> {
     let accent = Style::default().fg(ACCENT);
     let mut fields = vec![
         Span::styled(
-            state.permission_mode.label().to_owned(),
+            state.planning.mode().label().to_owned(),
             accent.add_modifier(Modifier::BOLD),
         ),
         Span::raw(safe_output(model)),

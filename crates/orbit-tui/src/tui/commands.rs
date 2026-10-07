@@ -16,6 +16,10 @@ pub const COMMANDS: &[Command] = &[
         description: "独立询问当前上下文；不打断主任务，再次输入可查看记录",
     },
     Command {
+        name: "/build",
+        description: "返回执行模式，不会自动批准或执行计划",
+    },
+    Command {
         name: "/cd",
         description: "将当前会话移动到另一项目；用法 /cd <路径>",
     },
@@ -73,7 +77,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/mode",
-        description: "ask 逐次确认 · auto 工作区编辑与离线只读命令 · YOLO 自动确认",
+        description: "plan 只读规划 · build 执行；审批设置使用 /permissions",
     },
     Command {
         name: "/model",
@@ -82,6 +86,10 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "/new",
         description: "在新标签开始会话",
+    },
+    Command {
+        name: "/plan",
+        description: "进入只读规划；/plan view 查看方案并反馈",
     },
     Command {
         name: "/plugins",
@@ -193,6 +201,8 @@ pub fn available_while_running(name: &str) -> bool {
             | "/mcp"
             | "/plugins"
             | "/mode"
+            | "/plan"
+            | "/build"
             | "/permissions"
             | "/resume"
             | "/sessions"
@@ -266,6 +276,8 @@ pub fn available_in_workspace(name: &str) -> bool {
             | "/status"
             | "/model"
             | "/mode"
+            | "/plan"
+            | "/build"
             | "/sessions"
             | "/resume"
             | "/exit"

@@ -156,6 +156,7 @@ pub struct UiState {
     pub ime_cursor: Option<ratatui::layout::Position>,
     pub(super) cursor_motion: super::cursor::CursorMotion,
     pub(super) user_input: super::user_input::State,
+    pub(super) planning: super::planning::State,
     pub restore_picker: Option<super::restore::RestorePicker>,
     pub restore_selection: Option<Vec<String>>,
     pub workspace_wizard: Option<super::workspace_client::wizard::Wizard>,
@@ -223,7 +224,8 @@ impl UiState {
     }
 
     pub(super) fn dialog_open(&self) -> bool {
-        self.user_input.visible()
+        self.planning.visible()
+            || self.user_input.visible()
             || self.media_preview.is_some()
             || self.btw.visible()
             || self.info_dialog.is_some()
@@ -479,6 +481,7 @@ impl UiState {
             ime_cursor: None,
             cursor_motion: Default::default(),
             user_input: Default::default(),
+            planning: Default::default(),
             restore_picker: None,
             restore_selection: None,
             workspace_wizard: None,

@@ -214,7 +214,12 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
             .map(|(name, description)| (name.clone(), description.clone(), false))
             .collect(),
 
-        "/mode" | "/permissions" => [
+        "/mode" => [("plan", "只读规划", false), ("build", "执行模式", false)]
+            .into_iter()
+            .map(|(n, d, c)| (n.into(), d.into(), c))
+            .collect(),
+        "/plan" => vec![("view".into(), "查看计划与反馈".into(), false)],
+        "/permissions" => [
             ("ask", "逐次确认", false),
             ("auto", "自动模式", false),
             ("YOLO", "自动确认", false),
@@ -367,7 +372,9 @@ mod tests {
             matching("/model two::", &models, &skills)[0].name,
             "/model two::fast"
         );
-        assert_eq!(matching("/mode a", &models, &skills).len(), 2);
+        assert_eq!(matching("/permissions a", &models, &skills).len(), 2);
+        assert_eq!(matching("/mode p", &models, &skills)[0].name, "/mode plan");
+        assert_eq!(matching("/plan v", &models, &skills)[0].name, "/plan view");
         assert_eq!(
             matching("/skill re", &models, &skills)[0].name,
             "/skill review"
