@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use rusqlite::Connection;
 
-const CURRENT_SCHEMA_VERSION: u32 = 26;
+const CURRENT_SCHEMA_VERSION: u32 = 27;
 
 pub(crate) fn migrate(connection: &Connection) -> Result<()> {
     connection.execute_batch("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;")?;
@@ -345,6 +345,20 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
     }
     if version < 26 {
         crate::plans::migrate(connection)?;
+    }
+    if version < 27 {
+        connection.execute_batch(
+            "CREATE TABLE session_inputs_v27 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            content TEXT NOT NULL, received INTEGER NOT NULL DEFAULT 0 CHECK(received IN (0,1))
+        );
+        INSERT INTO session_inputs_v27 SELECT id,session_id,content,received FROM agent_messages;
+        DROP TABLE agent_messages;
+        ALTER TABLE session_inputs_v27 RENAME TO agent_messages;
+        CREATE INDEX agent_messages_pending ON agent_messages(session_id,received);
+        PRAGMA user_version=27;",
+        )?;
     }
     let broken: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",

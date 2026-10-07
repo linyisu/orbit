@@ -174,8 +174,8 @@ impl Store {
 
     pub async fn queue_session_input(&self, id: &str, content: String) -> Result<i64> {
         ensure!(
-            !content.trim().is_empty() && content.len() <= 32_768,
-            "message must contain 1..32768 bytes"
+            !content.trim().is_empty() && content.len() <= 1024 * 1024,
+            "message must contain 1..1048576 bytes"
         );
         let id = id.to_owned();
         self.access(move |conn| {
@@ -186,7 +186,7 @@ impl Store {
                 |r| r.get(0),
             )?;
 
-            ensure!(count < 32, "subagent message queue is full");
+            ensure!(count < 32, "session message queue is full");
             tx.execute(
                 "INSERT INTO agent_messages(session_id,content) VALUES(?1,?2)",
                 params![id, content],
@@ -216,6 +216,79 @@ mod tests {
     use orbit_model::types::ChatMessage;
 
     use super::*;
+
+    #[tokio::test]
+    async fn migration_preserves_child_inputs_and_allows_root_session_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("orbit.db");
+        let store = Store::open(&path).await.unwrap();
+        let parent = store
+            .create(dir.path().display().to_string(), "model".into(), false)
+            .await
+            .unwrap();
+        let child = store
+            .create_subagent(
+                parent.id(),
+                "model".into(),
+                "review".into(),
+                "review".into(),
+            )
+            .await
+            .unwrap();
+        let parent_id = parent.id().to_owned();
+        let child_id = child.id().to_owned();
+        let child_input = store
+            .queue_agent_message(&parent_id, &child_id, "pending child".into())
+            .await
+            .unwrap();
+        drop(child);
+        drop(parent);
+        drop(store);
+        // Recreate the v26 foreign key exactly, preserving queued data.
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=OFF;
+            CREATE TABLE old_inputs (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
+                content TEXT NOT NULL, received INTEGER NOT NULL DEFAULT 0 CHECK(received IN (0,1)));
+            INSERT INTO old_inputs SELECT * FROM agent_messages;
+            DROP TABLE agent_messages;
+            ALTER TABLE old_inputs RENAME TO agent_messages;
+            PRAGMA user_version=26;").unwrap();
+        drop(connection);
+        let store = Store::open(&path).await.unwrap();
+        let pending = store.pending_agent_messages(&child_id).await.unwrap();
+        assert_eq!(pending[0].id, child_input);
+        assert_eq!(pending[0].content, "pending child");
+        let input = store
+            .queue_session_input(&parent_id, "steer root".into())
+            .await
+            .unwrap();
+        assert!(input > child_input);
+        assert_eq!(
+            store.pending_agent_messages(&parent_id).await.unwrap()[0].content,
+            "steer root"
+        );
+        assert!(
+            store
+                .queue_session_input("missing", "invalid".into())
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .queue_agent_message(&child_id, &parent_id, "not an owned child".into())
+                .await
+                .is_err()
+        );
+        store.delete_session(&parent_id).await.unwrap();
+        assert!(
+            store
+                .pending_agent_messages(&parent_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn children_are_scoped_hidden_and_deleted_with_closed_parent() {
