@@ -508,3 +508,83 @@ fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
             .any(|item| matches!(item,TranscriptItem::Tool(tool) if tool.output=="final result"))
     );
 }
+
+#[test]
+fn user_input_completed_tool_click_releases_frozen_transcript_before_drawing_modal() {
+    let (mut tab, _) = tab("本地");
+    let output = serde_json::json!({
+        "id": "answered-request", "call_id": "ask-1", "source": null,
+        "status": "answered",
+        "form": { "questions": [{
+            "id": "choice", "title": "语言", "prompt": "选择开发语言",
+            "kind": "single", "options": [
+                { "id": "rust", "label": "Rust", "description": "系统编程" },
+                { "id": "python", "label": "Python", "description": "脚本" }
+            ], "allow_custom": true, "required": true
+        }] },
+        "answers": [{ "question_id": "choice", "selected": ["rust"], "text": "", "note": "" }]
+    });
+    tab.state.input.set("保留草稿".into());
+    tab.state
+        .transcript
+        .push(TranscriptItem::Tool(crate::tui::app::ToolRow {
+            id: "ask-1".into(),
+            name: "ask_user".into(),
+            arguments: output["form"].to_string(),
+            output: output.to_string(),
+            status: crate::tui::app::ToolStatus::Finished,
+        }));
+    let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
+    terminal
+        .draw(|frame| {
+            crate::tui::render::draw(frame, &mut tab.state);
+            tab.state.selection.paint(frame);
+        })
+        .unwrap();
+    let area = tab.state.selection.viewport;
+    let offset = tab.state.max_scroll.saturating_sub(tab.state.scroll);
+    let (x, y) = (area.y..area.bottom())
+        .find_map(|y| {
+            (area.x..area.right()).find_map(|x| {
+                tab.state
+                    .transcript_layout
+                    .disclosure_at(&tab.state.transcript, area, offset, (x, y))
+                    .map(|_| (x, y))
+            })
+        })
+        .unwrap();
+    tab.handle(mouse(MouseEventKind::Down(MouseButton::Left), x, y))
+        .unwrap();
+    terminal
+        .draw(|frame| assert!(tab.state.selection.draw_frozen(frame)))
+        .unwrap();
+    tab.handle(mouse(MouseEventKind::Up(MouseButton::Left), x, y))
+        .unwrap();
+    assert!(tab.state.user_input.visible());
+    terminal
+        .draw(|frame| {
+            assert!(!tab.state.selection.draw_frozen(frame));
+            crate::tui::render::draw(frame, &mut tab.state);
+        })
+        .unwrap();
+    let screen = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(
+        screen
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .contains("问答记录")
+    );
+    assert!(screen.contains("Rust"));
+    assert!(tab.state.ime_cursor.is_none());
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+        .unwrap();
+    assert!(!tab.state.user_input.visible());
+    assert_eq!(tab.state.input.text, "保留草稿");
+}

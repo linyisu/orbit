@@ -282,7 +282,7 @@ impl Tab {
                 || tui::open_subagent_at(&mut self.state, point)
                 || tui::toggle_transcript_at(&mut self.state, point))
         {
-            return Ok(Action::None);
+            return Ok(Action::Redraw);
         }
         if self.state.selection.handle(&event)? {
             return Ok(Action::None);

@@ -270,3 +270,122 @@ fn user_input_history_uses_request_identity_when_tool_call_ids_repeat() {
     assert!(s.open_tool("call", &serde_json::to_string(&newer).unwrap()));
     assert!(matches!(&s.dialog,Some(Dialog::Form(v)) if v.id=="newer-request"));
 }
+
+#[test]
+fn user_input_tab_changes_questions_and_enter_confirms_single_choice() {
+    let mut s = state();
+    s.handle(&key(KeyCode::Down));
+    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.focus == Focus::Option(1)));
+    s.handle(&key(KeyCode::Enter));
+    assert_eq!(s.answers("request")[0].selected, ["b"]);
+    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 1 && v.focus == Focus::Text));
+    s.handle(&Event::Paste("要求".into()));
+    s.handle(&key(KeyCode::BackTab));
+    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 0));
+    s.handle(&key(KeyCode::Tab));
+    assert_eq!(s.answers("request")[1].text, "要求");
+    s.handle(&key(KeyCode::Tab));
+    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 2 && !v.sending));
+    assert!(matches!(
+        s.handle(&key(KeyCode::Enter)),
+        Action::Answer { .. }
+    ));
+}
+
+#[test]
+fn user_input_multiple_choices_use_shared_icons_and_explicit_space_selection() {
+    let mut s = state();
+    s.records[0].form.questions[0].kind = Kind::Multiple;
+    s.handle(&key(KeyCode::Char(' ')));
+    s.handle(&key(KeyCode::Down));
+    let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
+    terminal
+        .draw(|frame| {
+            s.draw(frame);
+        })
+        .unwrap();
+    let screen = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(screen.contains(crate::tui::icons::CHECKBOX_MARKED_OUTLINE));
+    assert!(screen.contains(crate::tui::icons::CHECKBOX_BLANK_OUTLINE));
+    assert!(!screen.contains('☑') && !screen.contains('○'));
+    let (row, _) = s
+        .hits
+        .iter()
+        .find(|(_, focus)| *focus == Focus::Option(1))
+        .unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(row.right() - 1, row.y)].bg,
+        THEME.accent
+    );
+    s.handle(&key(KeyCode::Enter));
+    assert_eq!(s.answers("request")[0].selected, ["a"]);
+    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 1));
+}
+
+#[test]
+fn user_input_completed_view_discards_editor_hits_and_scrolls_without_focus_snap() {
+    let mut s = state();
+    s.activate(Focus::Tab(1));
+    let mut terminal = Terminal::new(TestBackend::new(70, 25)).unwrap();
+    terminal
+        .draw(|frame| {
+            s.draw(frame);
+        })
+        .unwrap();
+    let old_editor = s.editor_rows[0].0;
+    s.handle(&key(KeyCode::Esc));
+    let mut r = record();
+    r.status = Status::Answered;
+    r.answers.push(Answer {
+        question_id: "text".into(),
+        text: "很多行的答案\n".repeat(40),
+        ..Default::default()
+    });
+    assert!(s.open_tool("call", &serde_json::to_string(&r).unwrap()));
+    s.handle(&Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: old_editor.x,
+        row: old_editor.y,
+        modifiers: KeyModifiers::NONE,
+    }));
+    terminal
+        .draw(|frame| {
+            assert!(s.draw(frame).is_none());
+        })
+        .unwrap();
+    s.handle(&key(KeyCode::PageDown));
+    terminal
+        .draw(|frame| {
+            s.draw(frame);
+        })
+        .unwrap();
+    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.offset > 0));
+    s.handle(&key(KeyCode::BackTab));
+    terminal
+        .draw(|frame| {
+            assert!(s.draw(frame).is_none());
+        })
+        .unwrap();
+    assert!(s.editor_rows.is_empty());
+}
+
+#[test]
+fn user_input_enter_on_custom_multiple_choice_opens_editor_without_losing_selections() {
+    let mut s = state();
+    s.records[0].form.questions[0].kind = Kind::Multiple;
+    s.handle(&key(KeyCode::Char(' ')));
+    s.handle(&key(KeyCode::Down));
+    s.handle(&key(KeyCode::Down));
+    s.handle(&key(KeyCode::Enter));
+    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 0 && v.focus == Focus::Text));
+    s.handle(&Event::Paste("另一个选项".into()));
+    let answer = &s.answers("request")[0];
+    assert_eq!(answer.selected, ["a"]);
+    assert_eq!(answer.text, "另一个选项");
+}

@@ -16,6 +16,15 @@ fn muted() -> Style {
 fn accent() -> Style {
     Style::default().fg(THEME.accent)
 }
+fn choice_mark(kind: Kind, chosen: bool) -> &'static str {
+    if kind == Kind::Multiple {
+        crate::tui::icons::checkbox(chosen)
+    } else if chosen {
+        crate::tui::icons::CHECK
+    } else {
+        " "
+    }
+}
 fn status(status: Status) -> &'static str {
     match status {
         Status::Pending => "待回答",
@@ -175,7 +184,15 @@ impl State {
                         !d.selected.is_empty() || !d.text.text.trim().is_empty()
                     };
                     crate::tui::render::fit_label(
-                        &format!(" {}{} ", if answered { "✓ " } else { "" }, label),
+                        &format!(
+                            " {}{} ",
+                            if answered {
+                                crate::tui::icons::CHECK
+                            } else {
+                                ""
+                            },
+                            label
+                        ),
                         inner.width as usize,
                         false,
                     )
@@ -240,13 +257,7 @@ impl State {
             push(&mut rows, String::new(), normal(), None, inner.width);
             for (i, o) in q.options.iter().enumerate() {
                 let chosen = draft.selected.contains(&o.id);
-                let mark = if q.kind == Kind::Multiple {
-                    if chosen { "☑" } else { "☐" }
-                } else if chosen {
-                    "●"
-                } else {
-                    "○"
-                };
+                let mark = choice_mark(q.kind, chosen);
                 let focus = Some(Focus::Option(i));
                 push(
                     &mut rows,
@@ -280,16 +291,7 @@ impl State {
                 let focus = Focus::Option(q.options.len());
                 push(
                     &mut rows,
-                    format!(
-                        "{} 自行填写…",
-                        if q.kind == Kind::Multiple {
-                            crate::tui::icons::checkbox(draft.custom)
-                        } else if draft.custom {
-                            "●"
-                        } else {
-                            "○"
-                        }
-                    ),
+                    format!("{} 自行填写…", choice_mark(q.kind, draft.custom)),
                     if v.focus == focus {
                         selected()
                     } else if draft.custom {
@@ -326,7 +328,9 @@ impl State {
                         focus: Some(focus),
                     });
                 }
-                editor_ranges.push((start, rows.len(), focus));
+                if editable && !v.sending {
+                    editor_ranges.push((start, rows.len(), focus));
+                }
                 if v.focus == focus && editable && !v.sending {
                     caret = Some((pos.0 as u16, start + pos.1));
                 }
@@ -381,7 +385,9 @@ impl State {
                 .map(|(_, row)| row)
                 .or_else(|| rows.iter().position(|r| r.focus == Some(v.focus)));
             if let Some(row) = row {
-                if row < v.offset as usize {
+                if v.focus == Focus::Option(0) && row < height {
+                    v.offset = 0;
+                } else if row < v.offset as usize {
                     v.offset = row as u16;
                 } else if row >= v.offset as usize + height {
                     v.offset = (row + 1 - height) as u16;
@@ -391,7 +397,7 @@ impl State {
         }
         for (i, row) in rows.iter().skip(v.offset as usize).take(height).enumerate() {
             let rect = Rect::new(body.x, body.y + i as u16, body.width, 1);
-            frame.render_widget(Paragraph::new(row.line.clone()), rect);
+            frame.render_widget(Paragraph::new(row.line.clone()).style(row.line.style), rect);
             let absolute = i + v.offset as usize;
             if let Some((start, _, focus)) = editor_ranges
                 .iter()
@@ -459,10 +465,16 @@ impl State {
             Paragraph::new(message).style(Style::default().fg(THEME.tool_failed)),
             Rect::new(inner.x, inner.bottom() - 2, inner.width, 1),
         );
-        let help = if matches!(v.focus, Focus::Text | Focus::Note) {
-            "Enter 下一题 · Alt+Enter 换行 · Tab 切换 · Esc 收起"
+        let help = if !editable {
+            "↑↓ 滚动 · Tab 下一题 · Shift+Tab 上一题 · Esc 关闭"
+        } else if page == count {
+            "Enter 提交答案 · Shift+Tab 返回修改 · Esc 收起"
+        } else if matches!(v.focus, Focus::Text | Focus::Note) {
+            "Enter 下一题 · Alt+Enter 换行 · Tab 切题 · Esc 收起"
+        } else if r.form.questions[page].kind == Kind::Multiple {
+            "↑↓ 移动 · 空格勾选 · Enter 下一题 · Tab 切题 · Esc 收起"
         } else {
-            "↑↓ 移动 · 空格选择 · Tab 切换 · Enter 确认 · Esc 收起"
+            "↑↓ 选择 · Enter 确认并继续 · Tab 切题 · Esc 收起"
         };
         frame.render_widget(
             Paragraph::new(help).style(muted()),

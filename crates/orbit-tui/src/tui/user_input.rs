@@ -201,7 +201,13 @@ impl State {
             false
         }
     }
+    fn clear_geometry(&mut self) {
+        self.hits.clear();
+        self.editor_rows.clear();
+        self.editor_area = Rect::default();
+    }
     fn open(&mut self, id: &str) {
+        self.clear_geometry();
         if let Some(r) = self.records.iter().find(|r| r.id == id) {
             let page = if r.status == Status::Pending {
                 0
@@ -252,13 +258,7 @@ impl State {
     }
     fn controls(&self, v: &FormView) -> Vec<Focus> {
         let r = self.records.iter().find(|r| r.id == v.id).unwrap();
-        let mut result = if r.form.questions.len() > 1 {
-            (0..=r.form.questions.len())
-                .map(Focus::Tab)
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let mut result = Vec::new();
         if v.page < r.form.questions.len() && r.status == Status::Pending {
             let q = &r.form.questions[v.page];
             let d = &self.drafts[&v.id][v.page];
@@ -271,7 +271,10 @@ impl State {
             }
             result.push(Focus::Note);
         }
-        result.extend([Focus::Previous, Focus::Next, Focus::Later]);
+        if v.page > 0 {
+            result.push(Focus::Previous);
+        }
+        result.extend([Focus::Next, Focus::Later]);
         if r.status == Status::Pending {
             result.push(Focus::Decline);
         }
@@ -287,6 +290,7 @@ impl State {
         if focus == Focus::More {
             return Action::History(self.next);
         }
+        self.clear_geometry();
         let Some(Dialog::Form(mut v)) = self.dialog.take() else {
             return Action::None;
         };
@@ -386,6 +390,16 @@ impl State {
         action
     }
     pub fn handle(&mut self, event: &Event) -> Action {
+        if self.dialog.is_none() {
+            if let Event::Mouse(m) = event
+                && m.kind == MouseEventKind::Down(MouseButton::Left)
+                && self.badge.contains(Position::new(m.column, m.row))
+                && let Some(id) = self.pending.first().cloned()
+            {
+                self.open(&id);
+            }
+            return Action::None;
+        }
         if let Event::Mouse(m) = event {
             if m.kind == MouseEventKind::Down(MouseButton::Left)
                 && let Some((rect, focus, row)) = self
@@ -409,15 +423,6 @@ impl State {
                 return Action::None;
             }
             let pos = Position::new(m.column, m.row);
-            if self.dialog.is_none()
-                && self.badge.contains(pos)
-                && m.kind == MouseEventKind::Down(MouseButton::Left)
-            {
-                if let Some(id) = self.pending.first().cloned() {
-                    self.open(&id);
-                }
-                return Action::None;
-            }
             if let Some((_, focus)) = self
                 .hits
                 .iter()
@@ -473,6 +478,7 @@ impl State {
             return Action::CancelTask;
         }
         if key.is_some_and(|k| k.code == KeyCode::Esc) {
+            self.clear_geometry();
             if let Some(Dialog::Form(v)) = self.dialog.take() {
                 self.dismissed.insert(v.id);
             } else {
@@ -504,20 +510,42 @@ impl State {
             return Action::None;
         };
         let controls = self.controls(v);
+        let record = self.records.iter().find(|r| r.id == v.id).unwrap();
+        let count = record.form.questions.len();
+        let readonly = record.status != Status::Pending;
+        let single = record
+            .form
+            .questions
+            .get(v.page)
+            .is_some_and(|q| q.kind == Kind::Single);
+        let custom_option = record.form.questions.get(v.page).is_some_and(|q| {
+            q.kind != Kind::Text && q.allow_custom && v.focus == Focus::Option(q.options.len())
+        });
         let Some(Dialog::Form(v)) = &mut self.dialog else {
             return Action::None;
         };
         v.follow_focus = true;
         if let Some(k) = key {
             if matches!(k.code, KeyCode::Tab | KeyCode::BackTab) {
-                let i = controls.iter().position(|f| f == &v.focus).unwrap_or(0);
-                v.focus = controls[(i + if k.code == KeyCode::BackTab
-                    || k.modifiers.contains(KeyModifiers::SHIFT)
-                {
-                    controls.len() - 1
+                let backward =
+                    k.code == KeyCode::BackTab || k.modifiers.contains(KeyModifiers::SHIFT);
+                let page = (v.page + if backward { count } else { 1 }) % (count + 1);
+                return self.activate(Focus::Tab(page));
+            }
+            if matches!(k.code, KeyCode::PageUp | KeyCode::PageDown)
+                || (readonly && matches!(k.code, KeyCode::Up | KeyCode::Down))
+            {
+                let amount = if matches!(k.code, KeyCode::PageUp | KeyCode::PageDown) {
+                    8
                 } else {
                     1
-                }) % controls.len()];
+                };
+                v.offset = if matches!(k.code, KeyCode::Up | KeyCode::PageUp) {
+                    v.offset.saturating_sub(amount)
+                } else {
+                    v.offset.saturating_add(amount)
+                };
+                v.follow_focus = false;
                 return Action::None;
             }
             if k.code == KeyCode::Enter
@@ -525,6 +553,19 @@ impl State {
                     .modifiers
                     .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL)
             {
+                if let Focus::Option(i) = v.focus {
+                    if custom_option && self.drafts[&v.id][v.page].custom {
+                        v.focus = Focus::Text;
+                        return Action::None;
+                    }
+                    if single || custom_option {
+                        self.activate(Focus::Option(i));
+                        if matches!(&self.dialog, Some(Dialog::Form(v)) if v.focus == Focus::Text) {
+                            return Action::None;
+                        }
+                    }
+                    return self.activate(Focus::Next);
+                }
                 let focus = if matches!(v.focus, Focus::Text | Focus::Note) {
                     Focus::Next
                 } else {
@@ -546,8 +587,6 @@ impl State {
                             (i + 1).min(controls.len() - 1)
                         }];
                     }
-                    KeyCode::PageUp => v.offset = v.offset.saturating_sub(8),
-                    KeyCode::PageDown => v.offset = v.offset.saturating_add(8),
                     _ => {}
                 }
                 return Action::None;
@@ -565,6 +604,19 @@ impl State {
             } else {
                 &mut d.text
             };
+            if let Some(k) = key
+                && k.modifiers.is_empty()
+                && ((k.code == KeyCode::Up && editor.cursor == 0)
+                    || (k.code == KeyCode::Down && editor.cursor == editor.text.len()))
+            {
+                let i = controls.iter().position(|f| f == &v.focus).unwrap_or(0);
+                v.focus = controls[if k.code == KeyCode::Up {
+                    i.saturating_sub(1)
+                } else {
+                    (i + 1).min(controls.len() - 1)
+                }];
+                return Action::None;
+            }
             let limit = if v.focus == Focus::Note { 8192 } else { 16384 };
             let previous = editor.clone();
             editor.edit(event, self.editor_area.width.max(1) as usize);
