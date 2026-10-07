@@ -452,6 +452,30 @@ pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Ve
         ),
     ]);
 
+    if value["query_match_unconfirmed"].as_bool() == Some(true) {
+        view.push_spans(vec![Span::styled(
+            "相关性未确认：结果摘要未出现查询中的引号短语，请调整搜索词或打开网页核实。",
+            Style::default().fg(theme.tool_running),
+        )]);
+    }
+
+    if expanded {
+        if let Some(warnings) = value["warnings"].as_array() {
+            for warning in warnings.iter().filter_map(Value::as_str) {
+                view.push_spans(vec![Span::styled(
+                    format!("注意: {warning}"),
+                    Style::default().fg(theme.tool_running),
+                )]);
+            }
+        }
+        if let Some(url) = value["response_url"].as_str() {
+            view.push_spans(vec![Span::styled(
+                format!("搜索页面: {url}"),
+                Style::default().fg(theme.md_link),
+            )]);
+        }
+    }
+
     if results.is_empty() {
         view.note("未找到相关搜索结果");
     } else {

@@ -267,6 +267,26 @@ fn web_search_view_formats_results_and_links() {
 }
 
 #[test]
+fn web_search_warns_before_suspect_results_and_expands_diagnostics() {
+    let row = tool(
+        "web_search",
+        json!({
+            "provider": "Bing",
+            "query_match_unconfirmed": true,
+            "warnings": ["Relevance is unconfirmed"],
+            "response_url": "https://www.bing.com/search?q=Turing",
+            "results": [{"title": "Alan Turing", "url": "https://example.org/"}]
+        }),
+    );
+    let collapsed = text(&super::web_search(&row, false, 120).unwrap());
+    assert!(collapsed.find("相关性未确认").unwrap() < collapsed.find("Alan Turing").unwrap());
+    assert!(!collapsed.contains("搜索页面:"));
+    let expanded = text(&super::web_search(&row, true, 120).unwrap());
+    assert!(expanded.contains("Relevance is unconfirmed"));
+    assert!(expanded.contains("https://www.bing.com/search?q=Turing"));
+}
+
+#[test]
 fn document_view_formats_format_and_characters() {
     let row = tool(
         "read_document",

@@ -7,6 +7,18 @@ use std::{
 
 use super::*;
 
+#[cfg(test)]
+mod routing_tests;
+mod validation;
+
+struct SearchPage {
+    results: Vec<SearchResult>,
+    request_url: String,
+    response_url: String,
+    warnings: Vec<String>,
+    unconfirmed: bool,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchProvider {
@@ -164,6 +176,7 @@ async fn route(
     cooldown: &Mutex<HashMap<SearchProvider, Option<Instant>>>,
 ) -> Result<String, ToolError> {
     let mut reasons = Vec::new();
+    let mut unconfirmed = None;
     let deadline = Instant::now() + REQUEST_TIMEOUT;
     for &(provider, endpoint) in providers {
         if cooldown
@@ -191,25 +204,13 @@ async fn route(
         }
 
         match outcome {
-            Ok(results) => {
-                let results = search_results::select(results, args.max_results);
-                let result_values: Vec<_> = results.iter().map(|r| json!({"title": r.title, "url": r.url, "snippet": r.snippet, "snippet_empty": r.snippet.is_empty()})).collect();
-                let mut value = json!({"query": args.query, "provider": provider.name(), "results": result_values,
-                    "results_returned": results.len(), "requested_max_results": args.max_results,
-                    "fewer_results": results.len() < args.max_results, "source_kind": "untrusted_web_search_results"});
-                if !reasons.is_empty() {
-                    value["fallback_reason"] = reasons.join("; ").into();
+            Ok(page) => {
+                if page.unconfirmed {
+                    reasons.push(format!("{}: {}", provider.name(), page.warnings.join("; ")));
+                    unconfirmed.get_or_insert((provider, page));
+                    continue;
                 }
-                if let Some(freshness) = &args.freshness {
-                    value["freshness"] = json!(freshness);
-                }
-                if let Some(language) = &args.language {
-                    value["language"] = language.clone().into();
-                }
-                if let Some(region) = &args.region {
-                    value["region"] = region.clone().into();
-                }
-                return Ok(value.to_string());
+                return Ok(output(&args, provider, page, &reasons));
             }
 
             Err(error) => {
@@ -229,7 +230,38 @@ async fn route(
         }
     }
 
-    Err(failed(reasons.join("; ")))
+    match unconfirmed {
+        Some((provider, page)) => Ok(output(&args, provider, page, &reasons)),
+        None => Err(failed(reasons.join("; "))),
+    }
+}
+
+fn output(
+    args: &SearchArguments,
+    provider: SearchProvider,
+    page: SearchPage,
+    reasons: &[String],
+) -> String {
+    let results = search_results::select(page.results, args.max_results);
+    let result_values: Vec<_> = results.iter().map(|r| json!({"title": r.title, "url": r.url, "snippet": r.snippet, "snippet_empty": r.snippet.is_empty()})).collect();
+    let mut value = json!({"query": args.query, "provider": provider.name(), "results": result_values,
+        "results_returned": results.len(), "requested_max_results": args.max_results,
+        "fewer_results": results.len() < args.max_results, "source_kind": "untrusted_web_search_results",
+        "request_url": page.request_url, "response_url": page.response_url,
+        "query_match_unconfirmed": page.unconfirmed, "warnings": page.warnings});
+    if !reasons.is_empty() {
+        value["fallback_reason"] = reasons.join("; ").into();
+    }
+    if let Some(freshness) = &args.freshness {
+        value["freshness"] = json!(freshness);
+    }
+    if let Some(language) = &args.language {
+        value["language"] = language.clone().into();
+    }
+    if let Some(region) = &args.region {
+        value["region"] = region.clone().into();
+    }
+    value.to_string()
 }
 
 async fn attempt(
@@ -238,7 +270,7 @@ async fn attempt(
     provider: SearchProvider,
     endpoint: &str,
     deadline: Instant,
-) -> Result<Vec<SearchResult>, Failure> {
+) -> Result<SearchPage, Failure> {
     let budget = deadline
         .saturating_duration_since(Instant::now())
         .min(Duration::from_secs(15));
@@ -345,8 +377,9 @@ async fn request(
     client: &WebClient,
     provider: SearchProvider,
     endpoint: &str,
-) -> Result<Vec<SearchResult>, Failure> {
+) -> Result<SearchPage, Failure> {
     let mut url = provider_url(args, provider, endpoint)?;
+    let request_url = url.to_string();
     let mut visited = HashSet::new();
     let mut clients = RequestClients::default();
     for hop in 0..=5 {
@@ -419,7 +452,8 @@ async fn request(
             .to_owned();
         let bytes = read_body(response).await?;
         let body = encoding::text(&bytes, &media, true)?;
-        let results = match provider {
+        validation::query_echo(&args.query, &url, &body)?;
+        let mut results = match provider {
             SearchProvider::Google => google::parse_results(&body, 50),
             SearchProvider::Bing => bing::parse_results(&body, 50),
             SearchProvider::Duckduckgo => search_results::duckduckgo(&body, 50),
@@ -432,7 +466,14 @@ async fn request(
             .into());
         }
 
-        return Ok(results);
+        let (warnings, unconfirmed) = validation::results(&args.query, &mut results)?;
+        return Ok(SearchPage {
+            results,
+            request_url,
+            response_url: url.to_string(),
+            warnings,
+            unconfirmed,
+        });
     }
 
     unreachable!()
