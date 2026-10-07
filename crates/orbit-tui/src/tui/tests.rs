@@ -695,6 +695,21 @@ fn pasted_or_dropped_image_paths_become_attachments() {
 }
 
 #[test]
+fn absolute_paths_during_a_run_are_steering_not_commands() {
+    let mut state = UiState::new("mock");
+    state.input.set("/tmp/report.txt 请看看".into());
+    assert_eq!(
+        press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
+        Action::Steer("/tmp/report.txt 请看看".into())
+    );
+    state.input.set("/status".into());
+    assert_eq!(
+        press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
+        Action::Submit("/status".into())
+    );
+}
+
+#[test]
 fn clipboard_shortcuts_request_the_system_clipboard() {
     let mut state = UiState::new("mock");
 

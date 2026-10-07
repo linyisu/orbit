@@ -315,7 +315,7 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
 
         KeyCode::Enter if busy => {
             if let Some(guidance) = state.input.take() {
-                return if guidance.trim_start().starts_with('/') {
+                return if commands::is_command_input(&guidance) {
                     Action::Submit(guidance)
                 } else {
                     Action::Steer(guidance)

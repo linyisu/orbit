@@ -498,6 +498,50 @@ fn failed_setup_retains_the_last_diagnostic_without_duplicating_it() {
 }
 
 #[test]
+fn file_paths_are_sent_as_messages_on_every_target() {
+    for target in ["本地", "SSH dev", "WSL Ubuntu"] {
+        for path in [
+            "/home/user/report.txt 请看看",
+            "/tmp/report.txt",
+            "/报告.txt",
+        ] {
+            let (mut tab, mut requests) = tab(target);
+            tab.submit(path.into()).unwrap();
+            assert!(matches!(requests.try_recv().unwrap().request,
+                Request::Start { prompt, .. } if prompt == path));
+        }
+        let (mut tab, mut requests) = tab(target);
+        tab.submit("/stauts".into()).unwrap();
+        assert!(requests.try_recv().is_err());
+        assert!(
+            tab.state
+                .info_dialog
+                .as_ref()
+                .unwrap()
+                .content
+                .contains("/status")
+        );
+    }
+}
+
+#[test]
+fn clipboard_regular_files_are_references_without_image_decoding() {
+    let (mut tab, mut requests) = tab("本地");
+    tab.state.supports_vision = false;
+    tab.paste_payload(crate::tui::attachments::ClipboardPayload::Files(vec![
+        "/tmp/source code.rs".into(),
+        "/tmp/spec.pdf".into(),
+    ]))
+    .unwrap();
+    assert_eq!(
+        tab.state.input.text,
+        "[文件：/tmp/source code.rs]\n[文件：/tmp/spec.pdf]"
+    );
+    assert!(tab.attachment_task.is_none());
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
 fn compaction_and_images_use_the_same_request_for_every_target() {
     for target in ["本地", "SSH dev", "WSL Ubuntu"] {
         let (mut tab, mut requests) = tab(target);

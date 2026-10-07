@@ -141,6 +141,17 @@ pub const COMMANDS: &[Command] = &[
     },
 ];
 
+/// Slash commands use a single name; absolute paths remain ordinary messages.
+pub fn is_command_input(input: &str) -> bool {
+    let name = input.split_whitespace().next().unwrap_or("");
+    name.strip_prefix('/').is_some_and(|name| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphabetic() || matches!(c, '-' | '_'))
+    })
+}
+
 pub fn matching(input: &str) -> Vec<&'static Command> {
     if !input.starts_with('/') || input.chars().any(char::is_whitespace) {
         return Vec::new();

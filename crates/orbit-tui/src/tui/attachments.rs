@@ -48,7 +48,23 @@ pub(super) fn attachment_path(argument: &str) -> std::path::PathBuf {
     #[cfg(not(unix))]
     let trimmed = trimmed.to_owned();
 
+    if let Some(rest) = trimmed.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest);
+    }
     trimmed.into()
+}
+
+pub(super) fn is_image_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp"
+            )
+        })
 }
 
 pub(super) fn resolved_image_path(value: &str, directory: &std::path::Path) -> Option<PathBuf> {
@@ -59,9 +75,7 @@ pub(super) fn resolved_image_path(value: &str, directory: &std::path::Path) -> O
         directory.join(path)
     };
 
-    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
-
-    matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp")
+    is_image_path(&path)
         .then_some(path)
         .filter(|path| path.is_file())
 }

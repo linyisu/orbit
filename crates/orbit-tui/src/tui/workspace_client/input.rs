@@ -381,7 +381,6 @@ impl Tab {
     }
 
     fn paste(&mut self) -> Result<Action> {
-        use tui::attachments::ClipboardPayload;
         let payload = match tui::attachments::read_clipboard() {
             Ok(payload) => payload,
             Err(error) => {
@@ -390,6 +389,14 @@ impl Tab {
                 return Ok(Action::None);
             }
         };
+        self.paste_payload(payload)
+    }
+
+    pub(super) fn paste_payload(
+        &mut self,
+        payload: tui::attachments::ClipboardPayload,
+    ) -> Result<Action> {
+        use tui::attachments::ClipboardPayload;
         match payload {
             ClipboardPayload::Image {
                 width,
@@ -407,7 +414,22 @@ impl Tab {
                     ));
                 }
             }
-            ClipboardPayload::Files(paths) => self.attach(paths),
+            ClipboardPayload::Files(paths) => {
+                let (images, files): (Vec<_>, Vec<_>) = paths
+                    .into_iter()
+                    .partition(|path| tui::attachments::is_image_path(path));
+                if !files.is_empty() {
+                    let references = files
+                        .iter()
+                        .map(|path| format!("[文件：{}]", path.display()))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.state.input.insert(&references);
+                }
+                if !images.is_empty() {
+                    self.attach(images);
+                }
+            }
             ClipboardPayload::Text(text) => {
                 if let Some(paths) =
                     tui::attachments::pasted_image_paths(&text, &self.local_directory()?)
@@ -595,12 +617,14 @@ impl Tab {
                         .report_local(TranscriptItem::CommandError("模式：auto、ask、yolo".into())),
                 }
             }
-            text if text.starts_with('/') && text != "/compact" => self.state.report_local(
-                TranscriptItem::CommandError(tui::commands::suggestion(text).map_or_else(
-                    || "未知命令；输入 / 查看可用命令。".into(),
-                    |command| format!("是否想输入 {}？", command.name),
-                )),
-            ),
+            text if tui::commands::is_command_input(text) && text != "/compact" => {
+                self.state.report_local(TranscriptItem::CommandError(
+                    tui::commands::suggestion(text).map_or_else(
+                        || "未知命令；输入 / 查看可用命令。".into(),
+                        |command| format!("是否想输入 {}？", command.name),
+                    ),
+                ))
+            }
             _ if self.busy
                 || self.starting.is_some()
                 || self.commands.is_none()
