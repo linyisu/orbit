@@ -840,29 +840,25 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let hovered = state.tab_hover.as_ref().is_some_and(|(action, _)| {
             matches!(action, super::TabAction::Select(id) | super::TabAction::Close(id) if id == &tab.id)
         });
-        let underline = if tab.active {
-            ACCENT
-        } else if hovered {
-            crate::tui::theme::THEME.tab_underline_hover
-        } else {
-            crate::tui::theme::THEME.tab_underline
-        };
         let style = if tab.active {
             Style::default()
-                .fg(ACCENT)
-                .bg(crate::tui::theme::THEME.tab_hover_background)
+                .fg(crate::tui::theme::THEME.on_accent)
+                .bg(ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else if hovered {
             Style::default()
-                .fg(ACCENT)
-                .bg(crate::tui::theme::THEME.tab_background)
+                .fg(crate::tui::theme::THEME.foreground)
+                .bg(crate::tui::theme::THEME.tab_hover_background)
+                .add_modifier(Modifier::BOLD)
         } else if tab.status == RunStatus::Failed {
-            Style::default().fg(crate::tui::theme::THEME.tab_error)
+            Style::default()
+                .fg(crate::tui::theme::THEME.tab_error)
+                .bg(crate::tui::theme::THEME.tab_background)
         } else {
-            Style::default().fg(crate::tui::theme::THEME.tab_inactive)
-        }
-        .add_modifier(Modifier::UNDERLINED)
-        .underline_color(underline);
+            Style::default()
+                .fg(crate::tui::theme::THEME.tab_inactive)
+                .bg(crate::tui::theme::THEME.tab_background)
+        };
 
         frame.render_widget(
             Paragraph::new(format!(
@@ -874,10 +870,18 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         );
         let close = Rect::new(rect.right() - 3, rect.y, 3, 1);
         if hovered {
+            let action = super::TabAction::Close(tab.id.clone());
+            let close_style = if state
+                .tab_hover
+                .as_ref()
+                .is_some_and(|(target, _)| target == &action)
+            {
+                style.patch(tab_control_style(state, &action))
+            } else {
+                style
+            };
             frame.render_widget(
-                Paragraph::new(format!(" {} ", icons::CLOSE_THICK)).style(style.patch(
-                    tab_control_style(state, &super::TabAction::Close(tab.id.clone())),
-                )),
+                Paragraph::new(format!(" {} ", icons::CLOSE_THICK)).style(close_style),
                 close,
             );
         }

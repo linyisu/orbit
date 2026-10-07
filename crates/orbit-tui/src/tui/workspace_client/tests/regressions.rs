@@ -62,7 +62,7 @@ fn header_hover_and_close_normal_path() {
     assert!(tab.state.tab_hover.is_some());
     assert_eq!(
         term.backend().buffer()[(rect.x + 1, rect.y)].bg,
-        crate::tui::theme::THEME.tab_background
+        crate::tui::theme::THEME.tab_hover_background
     );
     let close = tab
         .state

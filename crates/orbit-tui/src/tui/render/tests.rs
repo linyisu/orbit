@@ -605,14 +605,16 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
                 let expected = if id == "session-4" {
                     ACCENT
                 } else if hover.is_some() && id == &hovered_id {
-                    crate::tui::theme::THEME.tab_underline_hover
+                    crate::tui::theme::THEME.tab_hover_background
                 } else {
-                    crate::tui::theme::THEME.tab_underline
+                    crate::tui::theme::THEME.tab_background
                 };
                 for x in area.x..area.right() {
                     let cell = &terminal.backend().buffer()[(x, area.y)];
-                    assert!(cell.modifier.contains(Modifier::UNDERLINED));
-                    assert_eq!(cell.underline_color, expected);
+                    assert!(!cell.modifier.contains(Modifier::UNDERLINED));
+                    if x < area.right() - 3 || hover != Some(TabAction::Close(id.clone())) {
+                        assert_eq!(cell.bg, expected);
+                    }
                 }
                 assert!(
                     !terminal.backend().buffer()[(area.right(), area.y)]
