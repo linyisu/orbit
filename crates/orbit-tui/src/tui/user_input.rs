@@ -24,6 +24,7 @@ struct Draft {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Tab(usize),
+    Review(usize),
     Option(usize),
     Text,
     Previous,
@@ -324,7 +325,7 @@ impl State {
                 self.dismissed.insert(v.id);
                 return action;
             }
-            Focus::Tab(i) => {
+            Focus::Tab(i) | Focus::Review(i) => {
                 v.page = i;
                 v.offset = 0;
                 v.focus = Focus::Next;
@@ -395,7 +396,9 @@ impl State {
             }
             _ => {}
         }
-        if v.page != previous_page || matches!(focus, Focus::Tab(_) | Focus::Previous) {
+        if v.page != previous_page
+            || matches!(focus, Focus::Tab(_) | Focus::Review(_) | Focus::Previous)
+        {
             v.focus = if v.page < r.form.questions.len() && editable {
                 if r.form.questions[v.page].kind == Kind::Text || self.drafts[&v.id][v.page].custom
                 {

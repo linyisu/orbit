@@ -48,6 +48,17 @@ fn push(rows: &mut Vec<Row>, text: String, style: Style, focus: Option<Focus>, w
         }
     }
 }
+// Keep the choice's content inset from its full-width hover background,
+// including continuation lines after wrapping.
+fn push_choice(rows: &mut Vec<Row>, text: String, style: Style, focus: Option<Focus>, width: u16) {
+    let start = rows.len();
+    push(rows, text, style, focus, width.saturating_sub(4));
+    for row in &mut rows[start..] {
+        row.line.spans.insert(0, ratatui::text::Span::raw("  "));
+        row.line.spans.push(ratatui::text::Span::raw("  "));
+    }
+}
+
 impl State {
     pub fn draw_badge(&mut self, frame: &mut Frame<'_>) {
         self.badge = Rect::default();
@@ -266,7 +277,7 @@ impl State {
                 let chosen = draft.selected.contains(&o.id);
                 let mark = choice_mark(q.kind, chosen);
                 let focus = Some(Focus::Option(i));
-                push(
+                push_choice(
                     &mut rows,
                     format!("{mark} {}", o.label),
                     if highlight == Some(Focus::Option(i)) {
@@ -280,7 +291,7 @@ impl State {
                     inner.width,
                 );
                 if !o.description.is_empty() {
-                    push(
+                    push_choice(
                         &mut rows,
                         format!("  {}", o.description),
                         if highlight == Some(Focus::Option(i)) {
@@ -297,7 +308,7 @@ impl State {
             let custom = q.kind != Kind::Text && q.allow_custom;
             if custom && !draft.custom {
                 let focus = Focus::Option(q.options.len());
-                push(
+                push_choice(
                     &mut rows,
                     format!("{} 自行填写…", choice_mark(q.kind, false)),
                     if highlight == Some(focus) {
@@ -313,12 +324,15 @@ impl State {
                 // The custom choice becomes its editor in place. Continuation
                 // rows are created only by actual wrapping or entered newlines.
                 let prefix = if custom {
-                    format!("{} ", choice_mark(q.kind, true))
+                    format!("  {} ", choice_mark(q.kind, true))
                 } else {
                     String::new()
                 };
                 let prefix_width = prefix.width() as u16;
-                let width = inner.width.saturating_sub(prefix_width).max(1);
+                let width = inner
+                    .width
+                    .saturating_sub(prefix_width + if custom { 2 } else { 0 })
+                    .max(1);
                 let (lines, pos) = draft.text.visual_lines(width as usize);
                 let start = rows.len();
                 for (index, text) in lines.into_iter().enumerate() {
@@ -349,7 +363,7 @@ impl State {
                     });
                 }
                 if editable && !v.sending {
-                    editor_ranges.push((start, rows.len(), prefix_width));
+                    editor_ranges.push((start, rows.len(), prefix_width, width));
                     if v.focus == Focus::Text {
                         caret = Some((prefix_width + pos.0 as u16, start + pos.1));
                     }
@@ -360,8 +374,12 @@ impl State {
                 push(
                     &mut rows,
                     format!("{}. {}", i + 1, q.prompt),
-                    accent(),
-                    Some(Focus::Tab(i)),
+                    if highlight == Some(Focus::Review(i)) {
+                        selected()
+                    } else {
+                        accent()
+                    },
+                    Some(Focus::Review(i)),
                     inner.width,
                 );
                 let mut answer = q
@@ -380,8 +398,12 @@ impl State {
                     } else {
                         answer.join("、")
                     },
-                    normal(),
-                    Some(Focus::Tab(i)),
+                    if highlight == Some(Focus::Review(i)) {
+                        selected()
+                    } else {
+                        normal()
+                    },
+                    Some(Focus::Review(i)),
                     inner.width,
                 );
                 if let Some(answer) = r
@@ -392,8 +414,12 @@ impl State {
                     push(
                         &mut rows,
                         format!("补充：{}", answer.note),
-                        muted(),
-                        Some(Focus::Tab(i)),
+                        if highlight == Some(Focus::Review(i)) {
+                            selected()
+                        } else {
+                            muted()
+                        },
+                        Some(Focus::Review(i)),
                         inner.width,
                     );
                 }
@@ -422,16 +448,11 @@ impl State {
             let rect = Rect::new(body.x, body.y + i as u16, body.width, 1);
             frame.render_widget(Paragraph::new(row.line.clone()).style(row.line.style), rect);
             let absolute = i + v.offset as usize;
-            if let Some((start, _, prefix_width)) = editor_ranges
+            if let Some((start, _, prefix_width, editor_width)) = editor_ranges
                 .iter()
-                .find(|(start, end, _)| (*start..*end).contains(&absolute))
+                .find(|(start, end, _, _)| (*start..*end).contains(&absolute))
             {
-                let editor = Rect::new(
-                    rect.x + *prefix_width,
-                    rect.y,
-                    rect.width.saturating_sub(*prefix_width),
-                    1,
-                );
+                let editor = Rect::new(rect.x + *prefix_width, rect.y, *editor_width, 1);
                 self.editor_area = editor;
                 if absolute == *start && *prefix_width > 0 {
                     self.hits.push((

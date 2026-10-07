@@ -594,3 +594,82 @@ fn user_input_submission_closes_on_receipt_and_failures_preserve_the_answers() {
     s.activate(Focus::Later);
     assert!(!s.visible());
 }
+
+#[test]
+fn user_input_choice_padding_survives_hover_wrapping_and_custom_editing() {
+    for width in [42, 100] {
+        let mut s = state();
+        s.records[0].form.questions[0].kind = Kind::Multiple;
+        s.records[0].form.questions[0].options[0].description =
+            "长说明文字需要换行显示，并保持左右的留白。".repeat(3);
+        let mut terminal = Terminal::new(TestBackend::new(width, 35)).unwrap();
+        paint(&mut s, &mut terminal);
+        let option = hit(&s, Focus::Option(0));
+        s.handle(&pointer(MouseEventKind::Moved, option));
+        paint(&mut s, &mut terminal);
+        for (row, _) in s
+            .hits
+            .iter()
+            .filter(|(_, focus)| *focus == Focus::Option(0))
+        {
+            for x in [row.x, row.x + 1, row.right() - 2, row.right() - 1] {
+                let cell = &terminal.backend().buffer()[(x, row.y)];
+                assert_eq!(cell.symbol(), " ", "padding at width {width}");
+                assert_eq!(cell.bg, THEME.accent);
+            }
+        }
+        // Selecting the custom choice preserves its inset on the same row.
+        s.records[0].form.questions[0].options[0]
+            .description
+            .clear();
+        paint(&mut s, &mut terminal);
+        let custom = hit(&s, Focus::Option(2));
+        s.handle(&pointer(MouseEventKind::Down(MouseButton::Left), custom));
+        let cursor = paint(&mut s, &mut terminal).unwrap();
+        assert_eq!(cursor.y, custom.y);
+        assert_eq!(cursor.x, custom.x + 4);
+        s.handle(&Event::Paste("我的答案".into()));
+        paint(&mut s, &mut terminal);
+        let editor = s.editor_rows[0].0;
+        s.handle(&pointer(MouseEventKind::Down(MouseButton::Left), editor));
+        s.handle(&key(KeyCode::Char('新')));
+        assert_eq!(s.answers("request")[0].text, "新我的答案");
+    }
+}
+
+#[test]
+fn user_input_summary_hover_is_local_and_keeps_header_navigation_independent() {
+    let mut s = state();
+    s.activate(Focus::Tab(2));
+    let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
+    paint(&mut s, &mut terminal);
+    let tabs: Vec<_> = s
+        .hits
+        .iter()
+        .filter(|(_, focus)| matches!(focus, Focus::Tab(_)))
+        .copied()
+        .collect();
+    let review_rows: Vec<_> = s
+        .hits
+        .iter()
+        .filter(|(_, focus)| matches!(focus, Focus::Review(_)))
+        .copied()
+        .collect();
+    for (row, focus) in review_rows {
+        s.handle(&pointer(MouseEventKind::Moved, row));
+        paint(&mut s, &mut terminal);
+        assert_eq!(s.hovered, Some(focus));
+        assert_eq!(terminal.backend().buffer()[(row.x, row.y)].bg, THEME.accent);
+        for (tab, focus) in &tabs {
+            assert_eq!(
+                terminal.backend().buffer()[(tab.x, tab.y)].bg == THEME.accent,
+                *focus == Focus::Tab(2),
+                "body hover must not highlight a header tab"
+            );
+        }
+    }
+    let review = hit(&s, Focus::Review(1));
+    s.handle(&pointer(MouseEventKind::Down(MouseButton::Left), review));
+    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 1 && v.focus == Focus::Text));
+    assert!(paint(&mut s, &mut terminal).is_some());
+}
