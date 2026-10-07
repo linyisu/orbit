@@ -176,7 +176,7 @@ impl State {
                 if page < count {
                     format!("{}/{}", page + 1, count)
                 } else {
-                    "检查答案".into()
+                    "答案汇总".into()
                 }
             )
         } else {
@@ -192,7 +192,7 @@ impl State {
                 .questions
                 .iter()
                 .map(|q| q.title.as_str())
-                .chain(std::iter::once("检查答案"))
+                .chain(std::iter::once("答案汇总"))
                 .enumerate()
                 .map(|(i, label)| {
                     let answered = i < count && {
