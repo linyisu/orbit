@@ -7,6 +7,7 @@ use std::{
 
 use super::*;
 
+mod mcp;
 #[cfg(test)]
 mod routing_tests;
 mod validation;
@@ -22,6 +23,8 @@ struct SearchPage {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchProvider {
+    Parallel,
+    Exa,
     Google,
     Bing,
     Duckduckgo,
@@ -39,6 +42,8 @@ pub(super) enum Freshness {
 impl SearchProvider {
     fn name(self) -> &'static str {
         match self {
+            Self::Parallel => "Parallel",
+            Self::Exa => "Exa",
             Self::Google => "Google",
             Self::Bing => "Bing",
             Self::Duckduckgo => "DuckDuckGo",
@@ -47,6 +52,8 @@ impl SearchProvider {
 
     fn endpoint(self) -> &'static str {
         match self {
+            Self::Parallel => "https://search.parallel.ai/mcp",
+            Self::Exa => "https://mcp.exa.ai/mcp",
             Self::Google => "https://www.google.com/search?gbv=1",
             Self::Bing => "https://www.bing.com/search",
             Self::Duckduckgo => "https://html.duckduckgo.com/html/",
@@ -316,6 +323,9 @@ fn provider_url(
     let mut query = url.query_pairs_mut();
     query.append_pair("q", &args.query);
     match provider {
+        SearchProvider::Parallel | SearchProvider::Exa => {
+            return Err(failed("MCP search uses POST arguments, not HTML query parameters").into());
+        }
         SearchProvider::Google => {
             query
                 .append_pair("hl", language)
@@ -378,6 +388,9 @@ async fn request(
     provider: SearchProvider,
     endpoint: &str,
 ) -> Result<SearchPage, Failure> {
+    if matches!(provider, SearchProvider::Parallel | SearchProvider::Exa) {
+        return mcp::request(args, client, provider, endpoint).await;
+    }
     let mut url = provider_url(args, provider, endpoint)?;
     let request_url = url.to_string();
     let mut visited = HashSet::new();
@@ -454,6 +467,7 @@ async fn request(
         let body = encoding::text(&bytes, &media, true)?;
         validation::query_echo(&args.query, &url, &body)?;
         let mut results = match provider {
+            SearchProvider::Parallel | SearchProvider::Exa => unreachable!(),
             SearchProvider::Google => google::parse_results(&body, 50),
             SearchProvider::Bing => bing::parse_results(&body, 50),
             SearchProvider::Duckduckgo => search_results::duckduckgo(&body, 50),
@@ -566,6 +580,7 @@ mod tests {
             let q: HashMap<_, _> = url.query_pairs().collect();
             assert_eq!(q["q"], args.query);
             match provider {
+                SearchProvider::Parallel | SearchProvider::Exa => unreachable!(),
                 SearchProvider::Google => {
                     assert_eq!(q["hl"], "en");
                     assert_eq!(q["gl"], "GB");

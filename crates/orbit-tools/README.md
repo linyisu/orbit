@@ -150,11 +150,13 @@
   - 单次响应体上限 2 MiB，总超时 60 秒，最多 5 次重定向；按 Unicode 字符分页。
 
 #### `web_search`
-- **功能**：多引擎公共网络搜索，按配置顺序轮询 Google、Bing、DuckDuckGo。
+- **功能**：公共网络搜索，默认依次尝试 Parallel、Exa、DuckDuckGo。Parallel 和 Exa 使用托管 MCP HTTP 接口；DuckDuckGo 解析公共搜索页面。`[web].search_providers` 可设置顺序，支持 `parallel`、`exa`、`duckduckgo`、`google`、`bing`。
 - **参数**：`query`（1–512 字符）、`max_results`（1–10）、`language`、`region`、`freshness`。
-- **约束与安全**：无需搜索引擎 API Key；自动规范化查询文本，对跟踪参数去除后去重；针对 429 限流进行实例级冷却退避。
+- **使用准备**：默认搜索无需 API Key、浏览器、Node.js 或本地 MCP 服务，需要能访问对应公共服务。Parallel 和 Exa 的匿名额度由提供商管理；限流时自动尝试下一来源。网络请求复用 `[web].proxy` 和环境代理设置。
+- **约束与安全**：自动规范化查询文本，去除跟踪参数后去重；针对 HTTP 429 和 MCP 响应中的限流信号进行实例级冷却退避。JSON、SSE 响应均限制为 2 MiB；MCP 请求禁止重定向，SSE 收到对应结果后立即结束读取；单条摘要最多 2000 字符。
+- **筛选支持**：HTML 搜索来源接收语言、地区和时效参数；当前 Parallel、Exa MCP 搜索接口使用完整查询词，并通过 `warnings` 明确提示未应用的可选筛选条件。
 - **查询与结果检查**：保留引号和搜索运算符，检查最终地址及搜索框回显的查询。单一、无歧义的 `site:` 条件用于过滤结果 URL；查询被改写或结果全部超出该范围时尝试下一引擎。结果标题、摘要和 URL 均未出现查询中的任何引号短语时，尝试其他引擎；全部候选都缺少该信号时返回结果及 `query_match_unconfirmed` 警告。摘要匹配属于弱信号，实际相关性需要读取网页核实。
-- **诊断信息**：响应包含搜索来源、请求地址 `request_url`、最终搜索页面地址 `response_url`、`warnings` 和回退原因。TUI 展示相关性警告，展开详情可查看搜索页面地址。
+- **诊断信息**：响应包含搜索来源、请求地址 `request_url`、响应地址 `response_url`、`warnings` 和回退原因。MCP 来源的地址指向搜索服务端点，完整查询词位于 `query` 字段。TUI 展示相关性警告，展开详情可查看来源地址。
 
 ---
 

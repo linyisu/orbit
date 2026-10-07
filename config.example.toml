@@ -14,6 +14,8 @@
 # [web]
 # proxy = "http://127.0.0.1:7897"
 # allowed_origins = ["http://docs.internal:8080", "http://127.0.0.1:3000"]
+# 搜索默认使用 Parallel → Exa → DuckDuckGo；匿名额度受提供商限制，无需浏览器或 API Key。
+# search_providers = ["parallel", "exa", "duckduckgo"]
 
 # 子 Agent：explore/review 只读；develop 默认使用独立 Git worktree，继承父会话审批。
 [subagents]
