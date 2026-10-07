@@ -53,6 +53,7 @@ struct Service {
     instructions: crate::instructions::Instructions,
     limits: SubagentConfig,
     allowed_tools: HashSet<String>,
+    tool_policy: Option<Arc<dyn orbit_agent::tool::ToolPolicy>>,
     approvals: Option<orbit_tools::approval::ApprovalSender>,
     user_input: Option<crate::user_input::Questions>,
     jobs: BackgroundJobs,
@@ -116,11 +117,8 @@ pub async fn register(
         user_input,
         jobs: BackgroundJobs::with_capacity(limits.max_concurrent)?,
         slots: Arc::new(Semaphore::new(limits.max_concurrent)),
-        allowed_tools: tools
-            .definitions()
-            .into_iter()
-            .map(|d| d.function.name)
-            .collect(),
+        tool_policy: tools.policy(),
+        allowed_tools: tools.names().map(str::to_owned).collect(),
         store,
         parent,
         config_path,
@@ -445,6 +443,14 @@ impl Service {
                     .store
                     .owned_subagent(&self.parent, &args.agent_id)
                     .await?;
+                ensure!(
+                    agent.role != "develop"
+                        || self
+                            .tool_policy
+                            .as_ref()
+                            .is_none_or(|p| p.visible("write_file")),
+                    "Plan 模式不能继续开发子代理，请使用 explore 或 review"
+                );
                 let active = self.active.lock().await;
                 if let Some(entry) = active.get(&args.agent_id) {
                     let status = self
@@ -729,6 +735,9 @@ impl Service {
             && let Some(questions) = &self.user_input
         {
             questions.register(&mut tools, Some(agent.id.clone()));
+        }
+        if let Some(policy) = &self.tool_policy {
+            tools.set_policy(policy.clone());
         }
         let mut messages = snapshot.history;
         crate::instructions::inject(&mut messages, &self.instructions);

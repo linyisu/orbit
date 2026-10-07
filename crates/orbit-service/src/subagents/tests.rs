@@ -120,6 +120,7 @@ reasoning = { adapter = "openai_chat", efforts = ["low", "high"], default = "low
         .await
         .unwrap();
     let service = Arc::new(Service {
+        tool_policy: None,
         approvals: None,
         user_input: None,
         parent: parent.id().into(),
@@ -661,6 +662,7 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
     let interrupted_id = interrupted.id().to_owned();
     drop(interrupted);
     let recovered = Service {
+        tool_policy: None,
         approvals: None,
         user_input: None,
         jobs: BackgroundJobs::default(),

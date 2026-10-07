@@ -128,6 +128,7 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
         .unwrap()
         .send(Ok(Response::Subagent(Page {
             user_inputs: Vec::new(),
+            planning: Default::default(),
             tool_progress: Vec::new(),
             timing: None,
             next: 3,
@@ -173,6 +174,7 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
 fn page(updates: Vec<Update>, approvals: Vec<Approval>) -> Response {
     Response::Page(Page {
         user_inputs: Vec::new(),
+        planning: Default::default(),
         tool_progress: Vec::new(),
         timing: None,
         next: updates.len(),
@@ -962,6 +964,7 @@ fn directory_profile_updates_workspace_media_connection_and_empty_tab_title() {
     tab.apply(Response::Ok);
     tab.apply(Response::Page(Page {
         user_inputs: Vec::new(),
+        planning: Default::default(),
         tool_progress: Vec::new(),
         timing: None,
         next: 1,

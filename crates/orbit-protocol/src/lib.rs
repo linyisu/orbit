@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod plan;
 pub mod plugins;
 pub mod project;
 pub mod search;
@@ -9,9 +10,9 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 8;
-// Version 8 adds optional questionnaire requests and a defaulted Page field.
-// Existing version 7 requests and responses retain their wire representation.
+pub const VERSION: u32 = 9;
+// Version 9 adds planning actions and defaulted planning state in pages.
+// Earlier requests retain their wire representation.
 pub const MIN_COMPATIBLE_VERSION: u32 = 7;
 
 pub fn supports_version(version: u32) -> bool {
@@ -90,6 +91,10 @@ pub enum Request {
         session: String,
         question: String,
         follow_up: Option<usize>,
+    },
+    Plan {
+        session: String,
+        action: plan::Action,
     },
     EnableUserInput {
         session: String,
@@ -284,6 +289,8 @@ pub struct ToolProgress {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Page<E, A> {
+    #[serde(default)]
+    pub planning: plan::State,
     #[serde(default)]
     pub tool_progress: Vec<ToolProgress>,
     #[serde(default)]

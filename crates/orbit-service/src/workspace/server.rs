@@ -520,6 +520,13 @@ impl Service {
                     .await?;
                 Ok(Response::Ok)
             }
+            Request::Plan { session, action } => {
+                self.session(&session)
+                    .await?
+                    .command(session::Command::Plan { action })
+                    .await?;
+                Ok(Response::Ok)
+            }
             Request::SetMode { session, mode } => {
                 self.session(&session)
                     .await?
@@ -711,6 +718,7 @@ async fn capabilities() -> orbit_protocol::Capabilities {
                     "steer",
                     "side_questions",
                     "user_input",
+                    "planning",
                     "project_state",
                     "plugins",
                     "completions",

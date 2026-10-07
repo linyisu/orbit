@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use rusqlite::Connection;
 
-const CURRENT_SCHEMA_VERSION: u32 = 25;
+const CURRENT_SCHEMA_VERSION: u32 = 26;
 
 pub(crate) fn migrate(connection: &Connection) -> Result<()> {
     connection.execute_batch("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;")?;
@@ -342,6 +342,9 @@ pub(crate) fn migrate(connection: &Connection) -> Result<()> {
     }
     if version < 25 {
         crate::user_input::migrate(connection)?;
+    }
+    if version < 26 {
+        crate::plans::migrate(connection)?;
     }
     let broken: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",

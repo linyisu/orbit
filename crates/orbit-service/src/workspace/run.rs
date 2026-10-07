@@ -131,6 +131,11 @@ pub(super) async fn context_messages(
         )
         .await?;
     }
+    messages.retain(|m| !matches!(m, orbit_model::types::ChatMessage::System { content } if content.starts_with("ORBIT_TOOL_POLICY_V1\n")));
+    messages.push(orbit_model::types::ChatMessage::system(format!(
+        "ORBIT_TOOL_POLICY_V1\n{}",
+        setup.resources.planning.context().await
+    )));
     Ok(messages)
 }
 

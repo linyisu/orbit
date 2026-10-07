@@ -40,6 +40,7 @@ pub struct WorkspaceResources {
     pub undo_writer: orbit_tools::write_file::WriteFile,
     pub approvals: orbit_tools::approval::ApprovalReceiver,
     pub user_input: crate::user_input::Questions,
+    pub planning: crate::planning::Planning,
     pub budget: RequestBudget,
     pub workspace: orbit_runtime::filesystem::Workspace,
     pub command_limits: orbit_tools::run_command::CommandLimits,
@@ -197,6 +198,16 @@ pub(super) async fn prepare_resources(
     .await?;
     let audit_workspace = runtime.workspace.clone();
     let mut tools = runtime.tools;
+    let planning = crate::planning::Planning::new(
+        session.store.clone(),
+        session.id().into(),
+        runtime.workspace.clone(),
+    )
+    .await?;
+    if policy.disabled(Capability::Files) {
+        planning.disable_file_tracking();
+    }
+    planning.install_policy(&mut tools);
     let memory_scope = project_state::MemoryScope::new(session.id().into());
     verification::register(
         &mut tools,
@@ -230,7 +241,12 @@ pub(super) async fn prepare_resources(
         tools.remove("verification_status");
     }
 
+    if !policy.disabled(Capability::All) && !session.store.is_subagent(session.id()).await? {
+        planning.register(&mut tools);
+    }
+
     Ok(WorkspaceResources {
+        planning,
         mode: match session.store.tui_mode(session.id()).await?.as_str() {
             "ask" => orbit_protocol::Mode::Ask,
             "YOLO" => orbit_protocol::Mode::Yolo,

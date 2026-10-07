@@ -267,7 +267,13 @@ async fn legacy_aliases_share_one_listener_and_block_competing_daemons() {
 
 #[tokio::test]
 async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions() {
-    for version in [6, 7, 8, 9] {
+    for version in [
+        6,
+        7,
+        8,
+        orbit_protocol::VERSION,
+        orbit_protocol::VERSION + 1,
+    ] {
         let root = tempfile::tempdir().unwrap();
         let options = crate::WorkspaceOptions {
             model: None,
@@ -315,7 +321,7 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
         .await
         .unwrap();
         let response: Response = protocol::read(&mut client).await.unwrap();
-        if [7, 8].contains(&version) {
+        if orbit_protocol::supports_version(version) {
             assert!(
                 matches!(response, Response::Hello { version: negotiated, .. } if negotiated == version)
             );

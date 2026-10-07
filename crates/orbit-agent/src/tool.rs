@@ -101,9 +101,20 @@ pub trait Tool: Send + Sync {
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a>;
 }
 
+/// A server-owned policy rechecked immediately before every execution.
+/// The returned lease lives until the tool finishes, including cancellation.
+pub trait ToolPolicy: Send + Sync {
+    fn context(&self) -> Option<String> {
+        None
+    }
+    fn visible(&self, name: &str) -> bool;
+    fn acquire(&self, call: &ToolCall) -> Result<Box<dyn Send>, ToolError>;
+}
+
 #[derive(Clone, Default)]
 pub struct ToolRegistry {
     tools: Arc<HashMap<String, Arc<dyn Tool>>>,
+    policy: Option<Arc<dyn ToolPolicy>>,
     background: crate::background::BackgroundJobs,
     additional_tasks: Vec<crate::background::BackgroundJobs>,
 }
@@ -111,6 +122,21 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn policy_context(&self) -> Option<String> {
+        self.policy.as_ref().and_then(|p| p.context())
+    }
+
+    pub fn set_policy(&mut self, policy: Arc<dyn ToolPolicy>) {
+        self.policy = Some(policy);
+    }
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.tools.keys().map(String::as_str)
+    }
+
+    pub fn policy(&self) -> Option<Arc<dyn ToolPolicy>> {
+        self.policy.clone()
     }
 
     pub fn background_jobs(&self) -> &crate::background::BackgroundJobs {
@@ -164,6 +190,11 @@ impl ToolRegistry {
             .tools
             .values()
             .map(|tool| tool.definition())
+            .filter(|d| {
+                self.policy
+                    .as_ref()
+                    .is_none_or(|p| p.visible(&d.function.name))
+            })
             .collect::<Vec<_>>();
 
         definitions.sort_by(|left, right| left.function.name.cmp(&right.function.name));
@@ -210,11 +241,13 @@ impl ToolRegistry {
             ..call
         };
 
+        let policy = self.policy.clone();
         Box::pin(async move {
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
 
+            let _lease = policy.as_ref().map(|p| p.acquire(&call)).transpose()?;
             tool.execute(call, cancellation).await
         })
     }

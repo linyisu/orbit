@@ -24,6 +24,9 @@ pub struct Handle {
 }
 
 pub enum Command {
+    Plan {
+        action: orbit_protocol::plan::Action,
+    },
     EnableUserInput,
     AnswerUserInput {
         id: String,
@@ -86,6 +89,7 @@ pub struct View {
     clock: Option<Clock>,
     progress: Vec<orbit_protocol::ToolProgress>,
     user_inputs: Vec<orbit_protocol::user_input::Record>,
+    planning: orbit_protocol::plan::State,
 }
 
 struct Clock {
@@ -180,6 +184,7 @@ impl View {
             .collect();
         let next = after + updates.len();
         Ok(Page {
+            planning: self.planning.clone(),
             user_inputs: self.user_inputs.clone(),
             tool_progress: if next == self.updates.len() {
                 progress
@@ -227,6 +232,7 @@ impl Handle {
             clock: None,
             progress: Vec::new(),
             user_inputs: Vec::new(),
+            planning: Default::default(),
         };
         for run in snapshot.runs {
             view.push(Update::Started {
@@ -271,6 +277,7 @@ impl Handle {
             clock: None,
             progress: Vec::new(),
             user_inputs: Vec::new(),
+            planning: Default::default(),
         };
         for run in &setup.session.snapshot.runs {
             view.push(Update::Started {

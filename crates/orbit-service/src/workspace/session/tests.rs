@@ -31,6 +31,7 @@ fn replay_preserves_compaction_and_queued_input_semantics() {
 fn idle_and_live_pages_carry_service_clock_without_changing_the_event_cursor() {
     let mut view = View {
         user_inputs: Vec::new(),
+        planning: Default::default(),
         updates: vec![],
         busy: true,
         model: "test".into(),
@@ -243,6 +244,7 @@ models=[{id="large",input_context_tokens=64000,max_output_tokens=512},{id="small
 fn progress_snapshots_are_bounded_and_do_not_hide_ledger_events() {
     let mut view = View {
         user_inputs: Vec::new(),
+        planning: Default::default(),
         updates: vec![],
         busy: true,
         model: "test".into(),
@@ -363,5 +365,122 @@ models=[{id="test"}]
         })
         .await
         .unwrap();
+    handle.command(Command::Close).await.unwrap();
+}
+
+#[tokio::test]
+async fn planning_tool_review_and_client_decisions_share_authoritative_session_state() {
+    use orbit_model::types::ToolCall;
+    use orbit_protocol::plan::{Action, Status, WorkMode};
+    use tokio_util::sync::CancellationToken;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("config.toml"),"[providers.test]\nbase_url=\"http://127.0.0.1:1/v1\"\napi_key=\"test\"\nauto_refresh_models=false\nmodels=[{id=\"test\"}]\n").unwrap();
+    let options = crate::WorkspaceOptions {
+        model: Some("test::test".into()),
+        initial_directory: root.into(),
+        auth_directory: root.join("auth"),
+        config: root.join("config.toml"),
+        database: root.join("sessions.db"),
+        allow_mcp_start: false,
+        home: None,
+        config_home: None,
+        instruction_dir: None,
+        editor_command: "vi".into(),
+    };
+    let setup = crate::workspace::setup::prepare_workspace(&options, root, None)
+        .await
+        .unwrap();
+    let tools = setup.resources.tools.clone();
+    let handle = Handle::spawn(setup, None);
+    handle
+        .command(Command::Plan {
+            action: Action::Enable,
+        })
+        .await
+        .unwrap();
+    tools
+        .execute(
+            ToolCall::function("enter", "enter_plan", serde_json::json!({})),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while handle.view.lock().await.page(0).unwrap().planning.mode != WorkMode::Plan {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let generation = handle
+        .view
+        .lock()
+        .await
+        .page(0)
+        .unwrap()
+        .planning
+        .generation;
+    assert!(
+        tools
+            .execute(
+                ToolCall::function(
+                    "write",
+                    "write_file",
+                    serde_json::json!({"path":"should-not-exist","content":"forbidden"})
+                ),
+                CancellationToken::new()
+            )
+            .await
+            .is_err()
+    );
+    assert!(!root.join("should-not-exist").exists());
+    let result=tools.execute(ToolCall::function("draft","update_plan",serde_json::json!({"generation":generation,"title":"Feature plan","markdown":"Investigate, implement and verify.","steps":["Implement","Verify"]})),CancellationToken::new()).await.unwrap();
+    let state: orbit_protocol::plan::State = serde_json::from_str(&result.content).unwrap();
+    let submission = tokio::spawn(async move {
+        tools
+            .execute(
+                ToolCall::function(
+                    "review",
+                    "submit_plan",
+                    serde_json::json!({"generation":state.generation}),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+    });
+    let generation = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let state = handle.view.lock().await.page(0).unwrap().planning;
+            if state
+                .plan
+                .as_ref()
+                .is_some_and(|p| p.status == Status::Review)
+            {
+                break state.generation;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (first, second) = tokio::join!(
+        handle.command(Command::Plan {
+            action: Action::Approve { generation }
+        }),
+        handle.command(Command::Plan {
+            action: Action::Approve { generation }
+        })
+    );
+    first.unwrap();
+    second.unwrap();
+    let result = submission.await.unwrap().unwrap();
+    let state: orbit_protocol::plan::State = serde_json::from_str(&result.content).unwrap();
+    assert_eq!(state.mode, WorkMode::Build);
+    assert_eq!(state.plan.unwrap().task_ids.len(), 2);
+    assert_eq!(
+        handle.view.lock().await.page(0).unwrap().planning.mode,
+        WorkMode::Build
+    );
     handle.command(Command::Close).await.unwrap();
 }

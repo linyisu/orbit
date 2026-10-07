@@ -360,6 +360,12 @@ where
                 return Err(AgentError::MaxTurns);
             }
 
+            if let Some(context) = self.tools.policy_context() {
+                history.retain(|m| !matches!(m, ChatMessage::System { content } if content.starts_with("ORBIT_TOOL_POLICY_V1\n")));
+                history.push(ChatMessage::system(format!(
+                    "ORBIT_TOOL_POLICY_V1\n{context}"
+                )));
+            }
             let output = request.max_tokens.unwrap_or(4096) as usize;
             let local_limit = recovery_limit
                 .unwrap_or(usize::MAX)

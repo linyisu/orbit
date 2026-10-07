@@ -49,6 +49,7 @@ struct Actor {
     pending: HashMap<u64, ApprovalRequest>,
     approval_id: u64,
     user_input_enabled: bool,
+    planning_enabled: bool,
     compact_after_model_switch: bool,
     progress: super::progress::Progress,
 }
@@ -92,6 +93,7 @@ pub(super) async fn run(
         pending: HashMap::new(),
         approval_id: 0,
         user_input_enabled: false,
+        planning_enabled: false,
         compact_after_model_switch: false,
         progress: Default::default(),
     };
@@ -181,11 +183,13 @@ impl Actor {
         let inputs = self.setup.resources.user_input.pending().await;
         let mut view = self.view.lock().await;
         view.user_inputs = inputs;
+        view.planning = self.setup.resources.planning.snapshot().await;
         let waiting = view
             .user_inputs
             .iter()
             .any(|request| request.source.is_none())
-            || !view.approvals.is_empty();
+            || !view.approvals.is_empty()
+            || self.setup.resources.planning.waiting();
         if let Some(clock) = &mut view.clock {
             if waiting {
                 clock.pause();
@@ -196,6 +200,9 @@ impl Actor {
     }
 
     async fn profile(&self) {
+        if self.planning_enabled {
+            self.setup.resources.planning.enable();
+        }
         if self.user_input_enabled {
             self.setup.resources.user_input.enable();
         }
@@ -210,6 +217,40 @@ impl Actor {
 
     async fn command(&mut self, command: Command) -> Result<()> {
         match command {
+            Command::Plan { action } => {
+                use orbit_protocol::plan::Action;
+                if matches!(action, Action::Enable | Action::Enter) {
+                    self.planning_enabled = true;
+                }
+                if self.setup.resources.planning.already_applied(&action).await {
+                    return Ok(());
+                }
+                match &action {
+                    Action::Enable => {}
+                    Action::Enter | Action::Leave => {
+                        ensure!(!self.active(), "请先停止或等待当前任务结束，再切换工作模式")
+                    }
+                    _ => ensure!(
+                        self.undo.is_none()
+                            && (!self.busy() || self.setup.resources.planning.waiting()),
+                        "请等待当前任务结束或提交计划后再操作"
+                    ),
+                }
+                let prompt = self.setup.resources.planning.action(action).await?;
+                self.sync_user_input().await;
+                if let Some(prompt) = prompt {
+                    ensure!(!self.busy(), "请等待当前任务结束，再发送消息继续计划");
+                    Box::pin(self.command(Command::Start {
+                        request_id: orbit_protocol::request_id(),
+                        prompt,
+                        images: vec![],
+                        compact: false,
+                        mode: self.mode,
+                        model: None,
+                    }))
+                    .await?;
+                }
+            }
             Command::EnableUserInput => {
                 self.user_input_enabled = true;
                 self.setup.resources.user_input.enable();
@@ -399,7 +440,14 @@ impl Actor {
                     .send(allow)
                     .map_err(|_| anyhow::anyhow!("approval is no longer pending"))?;
             }
-            Command::Undo { path } => self.undo(path).await?,
+            Command::Undo { path } => {
+                ensure!(
+                    self.setup.resources.planning.snapshot().await.mode
+                        != orbit_protocol::plan::WorkMode::Plan,
+                    "Plan 模式不能撤销文件修改，请先切换 Build"
+                );
+                self.undo(path).await?;
+            }
             Command::Start {
                 request_id,
                 prompt,

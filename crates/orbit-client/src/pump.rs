@@ -46,6 +46,7 @@ pub async fn pump(
                 let status = (
                     page.busy,
                     page.model.clone(),
+                    page.planning.generation,
                     page.user_inputs
                         .iter()
                         .map(|q| q.id.clone())
