@@ -287,6 +287,23 @@ fn web_search_warns_before_suspect_results_and_expands_diagnostics() {
 }
 
 #[test]
+fn document_view_shows_pdf_page_range_and_encoding_warning() {
+    let row = tool(
+        "read_document",
+        json!({
+            "path":"book.pdf", "format":"pdf", "content":"partial text",
+            "pdf":{"start_page":21,"end_page":40,"total_pages":100,
+                "has_encoding_issues":true,"pages_needing_ocr":[25]},
+            "next_start_page":41
+        }),
+    );
+    let rendered = text(&super::document(&row, true, 100).unwrap());
+    assert!(rendered.contains("第 21–40 页 / 共 100 页"));
+    assert!(rendered.contains("文字编码异常"));
+    assert!(rendered.contains("第 41 页继续读取"));
+}
+
+#[test]
 fn document_view_formats_format_and_characters() {
     let row = tool(
         "read_document",

@@ -586,6 +586,22 @@ pub(super) fn document_with_links(
         ),
     ]);
 
+    if let (Some(start), Some(end), Some(total)) = (
+        value["pdf"]["start_page"].as_u64(),
+        value["pdf"]["end_page"].as_u64(),
+        value["pdf"]["total_pages"].as_u64(),
+    ) {
+        view.note(&format!("第 {start}–{end} 页 / 共 {total} 页"));
+    }
+    if value["pdf"]["has_encoding_issues"].as_bool() == Some(true) {
+        view.note("文字编码异常，提取结果可能不完整或有乱码，需要核对原文");
+    }
+    if let Some(pages) = value["pdf"]["pages_needing_ocr"]
+        .as_array()
+        .filter(|pages| !pages.is_empty())
+    {
+        view.note(&format!("此范围内有 {} 页可能需要 OCR", pages.len()));
+    }
     let mut out: Vec<_> = view.lines.drain(..).map(LinkedLine::plain).collect();
     let lines = markdown_preview(content, width);
     let total_lines = lines.len();
@@ -602,6 +618,10 @@ pub(super) fn document_with_links(
             format!("… 尚有后续字符 (next_start_char = {next}, 可使用 read_document 继续查看)"),
             Style::default().fg(theme.tool_running),
         )]);
+    }
+
+    if let Some(next) = value["next_start_page"].as_u64() {
+        view.note(&format!("后续内容从第 {next} 页继续读取"));
     }
 
     out.extend(view.finish().into_iter().map(LinkedLine::plain));

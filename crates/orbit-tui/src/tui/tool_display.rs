@@ -109,7 +109,14 @@ pub(super) fn document_summary(arguments: &str, output: Option<&str>) -> String 
         && let Ok(out_val) = serde_json::from_str::<Value>(out_str)
         && let Some(fmt) = out_val["format"].as_str()
     {
-        format!("{path_preview} [{}]", fmt.to_ascii_uppercase())
+        let pages = match (
+            out_val["pdf"]["start_page"].as_u64(),
+            out_val["pdf"]["end_page"].as_u64(),
+        ) {
+            (Some(start), Some(end)) => format!(" · 第 {start}–{end} 页"),
+            _ => String::new(),
+        };
+        format!("{path_preview} [{}]{pages}", fmt.to_ascii_uppercase())
     } else {
         path_preview
     }

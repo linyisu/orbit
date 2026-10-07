@@ -3,11 +3,11 @@ use std::{io::Read, path::Path};
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::filesystem::Workspace;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_PAGE_CHARS: usize = 20_000;
 const MAX_PAGE_CHARS: usize = 60_000;
 const CHAR_INDEX_STRIDE: usize = 4_096;
@@ -22,6 +22,34 @@ struct Arguments {
     start_char: usize,
     #[serde(default = "default_chars")]
     max_chars: usize,
+    start_page: Option<u32>,
+    end_page: Option<u32>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Document {
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pdf: Option<PdfPages>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PdfPages {
+    start_page: u32,
+    end_page: u32,
+    total_pages: u32,
+    pages_needing_ocr: Vec<u32>,
+    has_encoding_issues: bool,
+    extraction: String,
+}
+
+fn page_range(start: Option<u32>, end: Option<u32>) -> Result<(u32, u32), String> {
+    let start = start.unwrap_or(1);
+    let end = end.unwrap_or_else(|| start.saturating_add(19));
+    if start == 0 || end < start || end - start >= 100 {
+        return Err("PDF pages are 1-based; end_page must be >= start_page, with at most 100 pages per call".into());
+    }
+    Ok((start, end))
 }
 
 fn default_chars() -> usize {
@@ -29,13 +57,15 @@ fn default_chars() -> usize {
 }
 
 struct Converted {
+    pdf: Option<PdfPages>,
     text: String,
     total_chars: usize,
     offsets: Vec<usize>,
 }
 
 impl Converted {
-    fn new(text: String) -> Self {
+    fn new(document: Document) -> Self {
+        let Document { text, pdf } = document;
         let mut offsets = Vec::new();
         let mut total_chars = 0;
         for (index, (offset, _)) in text.char_indices().enumerate() {
@@ -46,6 +76,7 @@ impl Converted {
         }
 
         Self {
+            pdf,
             text,
             total_chars,
             offsets,
@@ -86,11 +117,13 @@ impl Tool for ReadDocument {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_document",
-            "Convert a document inside the workspace (or outside path granted via request_capability) to Markdown and read one Unicode-character page. Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. Scanned/image-only PDFs require OCR and return an explicit error. Conversion is local and creates no project files. Continue with next_start_char while truncated.",
+            "Preferred tool for reading local PDFs and office documents: use this before shell commands, pdftotext, Python packages or tool discovery. Reads documents up to 256 MiB inside the workspace (or outside paths granted via request_capability). PDFs use 1-based start_page/end_page (default first 20 pages, at most 100 per call); extraction is restricted to that range. Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. Scanned/image-only PDFs require OCR and return an explicit error. Conversion is local and creates no project files. Continue with next_start_char and the SAME page range while truncated; then use next_start_page for the next PDF range. start_char/max_chars paginate the converted text within that range.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" },
+                    "start_page": { "type": "integer", "minimum": 1, "description": "PDF only: first physical page (1-based), default 1" },
+                    "end_page": { "type": "integer", "minimum": 1, "description": "PDF only: last physical page inclusive, default start_page + 19; at most 100 pages" },
                     "start_char": { "type": "integer", "minimum": 0, "default": 0 },
                     "max_chars": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_CHARS, "default": DEFAULT_PAGE_CHARS }
                 },
@@ -112,6 +145,8 @@ impl Tool for ReadDocument {
                     "path must be nonempty and max_chars must be between 1 and {MAX_PAGE_CHARS}"
                 )));
             }
+
+            page_range(arguments.start_page, arguments.end_page).map_err(invalid)?;
 
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
@@ -143,65 +178,77 @@ impl Tool for ReadDocument {
                 None => env!("CARGO_PKG_VERSION").to_owned(),
             };
             let key = format!(
-                "{}:{}:{}",
+                "{}:{}:{}:{:?}:{:?}",
                 orbit_runtime::execution::content_hash(&bytes),
                 extension,
-                worker_version
+                worker_version,
+                arguments.start_page,
+                arguments.end_page,
             );
             let mut cache = tokio::select! {
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
                 guard = self.cache.lock() => guard,
             };
-            let (format, markdown) =
-                if let Some(index) = cache.iter().position(|(k, _, _)| k == &key) {
-                    let entry = cache.remove(index).unwrap();
-                    let result = (entry.1.clone(), entry.2.clone());
-                    cache.push_back(entry);
-                    result
+            let (format, markdown) = if let Some(index) =
+                cache.iter().position(|(k, _, _)| k == &key)
+            {
+                let entry = cache.remove(index).unwrap();
+                let result = (entry.1.clone(), entry.2.clone());
+                cache.push_back(entry);
+                result
+            } else {
+                let format = anydoc::Format::from_bytes(&bytes)
+                    .or_else(|| anydoc::Format::from_path(Path::new(&arguments.path)))
+                    .ok_or_else(|| failed("unsupported document content and file extension"))?;
+                if format != anydoc::Format::Pdf
+                    && (arguments.start_page.is_some() || arguments.end_page.is_some())
+                {
+                    return Err(invalid(
+                        "start_page/end_page are supported only for PDFs; use start_char/max_chars for other documents",
+                    ));
+                }
+                let document = if let Some(worker) = &self.worker {
+                    convert_worker(
+                        worker,
+                        &bytes,
+                        &extension,
+                        self.sandbox,
+                        (arguments.start_page, arguments.end_page),
+                        cancellation.clone(),
+                    )
+                    .await?
                 } else {
-                    let format = anydoc::Format::from_bytes(&bytes)
-                        .or_else(|| anydoc::Format::from_path(Path::new(&arguments.path)))
-                        .ok_or_else(|| failed("unsupported document content and file extension"))?;
-                    let text = if let Some(worker) = &self.worker {
-                        convert_worker(
-                            worker,
-                            &bytes,
-                            &extension,
-                            self.sandbox,
-                            cancellation.clone(),
-                        )
-                        .await?
-                    } else {
-                        // Only unit tests exercise the parser directly; production requires a worker.
-                        #[cfg(test)]
-                        {
-                            anydoc::to_markdown_bytes(&bytes, format).map_err(failed)?
-                        }
-                        #[cfg(not(test))]
-                        {
-                            return Err(failed("document worker executable is unavailable"));
-                        }
-                    };
-                    if text.len() > 64 * 1024 * 1024 {
-                        return Err(failed("converted document exceeds 64 MiB"));
-                    }
-                    let format = format!("{format:?}").to_ascii_lowercase();
-                    let markdown = std::sync::Arc::new(Converted::new(text));
-                    while !cache.is_empty()
-                        && (cache.len() >= MAX_CACHE_ENTRIES
-                            || cache
-                                .iter()
-                                .map(|(_, _, text)| text.text.len())
-                                .sum::<usize>()
-                                + markdown.text.len()
-                                > MAX_CACHE_BYTES)
+                    // Only unit tests exercise the parser directly; production requires a worker.
+                    #[cfg(test)]
                     {
-                        cache.pop_front();
+                        convert(&bytes, format, arguments.start_page, arguments.end_page)
+                            .map_err(failed)?
                     }
-
-                    cache.push_back((key, format.clone(), markdown.clone()));
-                    (format, markdown)
+                    #[cfg(not(test))]
+                    {
+                        return Err(failed("document worker executable is unavailable"));
+                    }
                 };
+                if document.text.len() > 64 * 1024 * 1024 {
+                    return Err(failed("converted document exceeds 64 MiB"));
+                }
+                let format = format!("{format:?}").to_ascii_lowercase();
+                let markdown = std::sync::Arc::new(Converted::new(document));
+                while !cache.is_empty()
+                    && (cache.len() >= MAX_CACHE_ENTRIES
+                        || cache
+                            .iter()
+                            .map(|(_, _, text)| text.text.len())
+                            .sum::<usize>()
+                            + markdown.text.len()
+                            > MAX_CACHE_BYTES)
+                {
+                    cache.pop_front();
+                }
+
+                cache.push_back((key, format.clone(), markdown.clone()));
+                (format, markdown)
+            };
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
@@ -229,6 +276,9 @@ fn read_source(
     use std::os::unix::fs::MetadataExt;
     let mut file = workspace.authorize_read(Path::new(path)).map_err(failed)?;
     let before = file.metadata().map_err(failed)?;
+    if before.len() > MAX_FILE_BYTES {
+        return Err(failed("document exceeds 256 MiB"));
+    }
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
@@ -240,7 +290,7 @@ fn read_source(
             break;
         }
         if bytes.len() + count > MAX_FILE_BYTES as usize {
-            return Err(failed("document exceeds 32 MiB"));
+            return Err(failed("document exceeds 256 MiB"));
         }
         bytes.extend_from_slice(&buffer[..count]);
     }
@@ -280,8 +330,9 @@ async fn convert_worker(
     bytes: &[u8],
     extension: &str,
     sandbox: bool,
+    pages: (Option<u32>, Option<u32>),
     cancellation: CancellationToken,
-) -> Result<String, ToolError> {
+) -> Result<Document, ToolError> {
     use orbit_runtime::execution::{
         ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, MountSpec, ResourceLimits,
         execution_backend,
@@ -289,7 +340,9 @@ async fn convert_worker(
     let input = tempfile::tempdir().map_err(failed)?;
     let scratch = tempfile::tempdir().map_err(failed)?;
     std::fs::write(input.path().join(format!("source.{extension}")), bytes).map_err(failed)?;
-    let request = ExecutionRequest::new(format!("/opt/orbit-document-worker --internal-document-worker /workspace/source.{extension} /scratch/document.md"), input.path(), std::time::Duration::from_secs(60)).with_scratch(scratch.path());
+    let start = pages.0.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
+    let end = pages.1.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
+    let request = ExecutionRequest::new(format!("/opt/orbit-document-worker --internal-document-worker /workspace/source.{extension} /scratch/document.md {start} {end}"), input.path(), std::time::Duration::from_secs(60)).with_scratch(scratch.path());
     let request = if sandbox {
         request
     } else {
@@ -308,6 +361,8 @@ async fn convert_worker(
                 .join("document.md")
                 .to_str()
                 .ok_or_else(|| failed("non-UTF-8 output path"))?,
+            &start,
+            &end,
         ])
         .map_err(failed)?;
         ExecutionRequest::new(command, input.path(), std::time::Duration::from_secs(60))
@@ -316,7 +371,7 @@ async fn convert_worker(
     let mut policy = ExecutionPolicy::read_only();
     policy.mounts = vec![MountSpec::read_only(worker, "/opt/orbit-document-worker")];
     policy.resources = ResourceLimits {
-        max_memory_bytes: Some(512 * 1024 * 1024),
+        max_memory_bytes: Some(1024 * 1024 * 1024),
         max_file_size_bytes: Some(64 * 1024 * 1024),
         max_processes: Some(64),
         max_open_files: Some(128),
@@ -340,23 +395,108 @@ async fn convert_worker(
         )));
     }
 
-    std::fs::read_to_string(scratch.path().join("document.md")).map_err(failed)
+    let output = std::fs::read(scratch.path().join("document.md")).map_err(failed)?;
+    serde_json::from_slice(&output).map_err(failed)
 }
 
 /// Worker entry point for the host to invoke inside the conversion sandbox.
-pub fn document_worker(input: &Path, output: &Path) -> Result<(), String> {
-    let bytes = std::fs::read(input).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("document exceeds 32 MiB".into());
+pub fn document_worker(
+    input: &Path,
+    output: &Path,
+    start: Option<u32>,
+    end: Option<u32>,
+) -> Result<(), String> {
+    if std::fs::metadata(input).map_err(|e| e.to_string())?.len() > MAX_FILE_BYTES {
+        return Err("document exceeds 256 MiB".into());
     }
+    let bytes = std::fs::read(input).map_err(|e| e.to_string())?;
     let format = anydoc::Format::from_bytes(&bytes)
         .or_else(|| anydoc::Format::from_path(input))
         .ok_or("unsupported document format")?;
-    let markdown = anydoc::to_markdown_bytes(&bytes, format).map_err(|e| e.to_string())?;
-    if markdown.len() > 64 * 1024 * 1024 {
+    let document = convert(&bytes, format, start, end)?;
+    if document.text.len() > 64 * 1024 * 1024 {
         return Err("converted document exceeds 64 MiB".into());
     }
-    std::fs::write(output, markdown).map_err(|e| e.to_string())
+    let output_file = std::fs::File::create(output).map_err(|e| e.to_string())?;
+    serde_json::to_writer(output_file, &document).map_err(|e| e.to_string())
+}
+
+fn convert(
+    bytes: &[u8],
+    format: anydoc::Format,
+    start: Option<u32>,
+    end: Option<u32>,
+) -> Result<Document, String> {
+    if format != anydoc::Format::Pdf {
+        if start.is_some() || end.is_some() {
+            return Err("page ranges are supported only for PDFs".into());
+        }
+        return anydoc::to_markdown_bytes(bytes, format)
+            .map(|text| Document { text, pdf: None })
+            .map_err(|e| e.to_string());
+    }
+    let (start, end) = page_range(start, end)?;
+    let result = pdf_inspector::process_pdf_mem_with_options(
+        bytes,
+        pdf_inspector::PdfOptions::new()
+            .pages(start..=end)
+            .detection(pdf_inspector::DetectionConfig {
+                strategy: pdf_inspector::ScanStrategy::Pages((start..=end).collect()),
+                min_text_ops_per_page: 1,
+                ..Default::default()
+            }),
+    )
+    .map_err(|e| e.to_string())?;
+    if start > result.page_count {
+        return Err(format!(
+            "start_page exceeds PDF length ({} pages)",
+            result.page_count
+        ));
+    }
+    let (text, extraction) = match result.markdown.filter(|text| !text.trim().is_empty()) {
+        Some(text) => (text, "markdown"),
+        None => {
+            // Layout classification can reject valid embedded text layers (including CJK).
+            // Try bounded native text extraction before declaring that OCR is required.
+            let pages = (start..=end.min(result.page_count)).collect();
+            let items = pdf_inspector::extract_text_with_positions_mem_in_frame(
+                bytes,
+                Some(&pages),
+                pdf_inspector::PositionFrame::Sheet,
+            )
+            .map_err(|e| e.to_string())?;
+            if !items.iter().any(|item| {
+                matches!(item.item_type, pdf_inspector::types::ItemType::Text)
+                    && item.text.chars().any(char::is_alphanumeric)
+            }) {
+                return Err("Selected PDF pages have no extractable text; scanned/image-only pages require OCR".into());
+            }
+            let text = pdf_inspector::to_markdown_from_items(items, Default::default());
+            if text.chars().filter(|&c| c == '\u{fffd}').count() * 50 > text.chars().count() {
+                return Err(format!(
+                    "PDF pages {start}..{} of {} contain an undecodable text layer (font encoding errors). Use OCR or page-image recognition; increasing the file-size limit or using pdftotext will not repair the text layer.",
+                    end.min(result.page_count),
+                    result.page_count
+                ));
+            }
+            (text, "text_layer")
+        }
+    };
+    Ok(Document {
+        text,
+        pdf: Some(PdfPages {
+            start_page: start,
+            end_page: end.min(result.page_count),
+            total_pages: result.page_count,
+            pages_needing_ocr: result
+                .pages_needing_ocr
+                .into_iter()
+                .filter(|page| (start..=end.min(result.page_count)).contains(page))
+                .collect(),
+            has_encoding_issues: result.has_encoding_issues,
+            extraction: extraction.into(),
+        }),
+    })
 }
 
 fn page(arguments: Arguments, format: &str, markdown: &Converted) -> Result<String, ToolError> {
@@ -388,6 +528,9 @@ fn page(arguments: Arguments, format: &str, markdown: &Converted) -> Result<Stri
         "total_chars": total_chars,
         "truncated": next < total_chars,
         "next_start_char": (next < total_chars).then_some(next),
+        "pdf": markdown.pdf,
+        "next_start_page": markdown.pdf.as_ref().and_then(|pdf|
+            (next >= total_chars && pdf.end_page < pdf.total_pages).then_some(pdf.end_page + 1)),
         "source_kind": "local_document_markdown"
     })
     .to_string())
@@ -398,6 +541,95 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    fn pdf() -> Vec<u8> {
+        let stream = |text: &str| {
+            let text = format!("BT /F1 12 Tf 50 700 Td ({text}) Tj ET");
+            format!("<< /Length {} >>\nstream\n{text}\nendstream", text.len())
+        };
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            stream("First chapter: compiler structure and syntax analysis."),
+            stream("Second chapter: language grammar and parsing techniques."),
+        ];
+        let mut bytes = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 8\n0000000000 65535 f \n");
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(
+            format!("trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        );
+        bytes
+    }
+
+    #[test]
+    fn pdf_ranges_extract_only_selected_pages_and_expose_continuation() {
+        let first = convert(&pdf(), anydoc::Format::Pdf, Some(1), Some(1)).unwrap();
+        assert!(first.text.contains("First chapter"));
+        assert!(!first.text.contains("Second chapter"));
+        assert_eq!(first.pdf.as_ref().unwrap().total_pages, 2);
+        let converted = Converted::new(first);
+        let args = |max_chars| Arguments {
+            path: "book.pdf".into(),
+            start_char: 0,
+            max_chars,
+            start_page: Some(1),
+            end_page: Some(1),
+        };
+        let short: serde_json::Value =
+            serde_json::from_str(&page(args(5), "pdf", &converted).unwrap()).unwrap();
+        assert!(short["next_start_page"].is_null());
+        assert_eq!(short["next_start_char"], 5);
+        let complete: serde_json::Value =
+            serde_json::from_str(&page(args(MAX_PAGE_CHARS), "pdf", &converted).unwrap()).unwrap();
+        assert_eq!(complete["next_start_page"], 2);
+        let second = convert(&pdf(), anydoc::Format::Pdf, Some(2), Some(20)).unwrap();
+        assert!(second.text.contains("Second chapter"));
+        assert!(!second.text.contains("First chapter"));
+        assert_eq!(second.pdf.unwrap().end_page, 2);
+        assert!(
+            convert(&pdf(), anydoc::Format::Pdf, Some(3), Some(3))
+                .unwrap_err()
+                .contains("exceeds PDF length")
+        );
+    }
+
+    #[test]
+    fn large_sources_and_invalid_ranges_are_checked() {
+        assert!(page_range(Some(0), None).is_err());
+        assert!(page_range(Some(4), Some(3)).is_err());
+        assert!(page_range(Some(1), Some(101)).is_err());
+        assert_eq!(page_range(None, None).unwrap(), (1, 20));
+        let dir = tempdir().unwrap();
+        let file = std::fs::File::create(dir.path().join("large.pdf")).unwrap();
+        file.set_len(33 * 1024 * 1024).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        assert_eq!(
+            read_source(workspace.clone(), "large.pdf", CancellationToken::new())
+                .unwrap()
+                .0
+                .len(),
+            33 * 1024 * 1024
+        );
+        file.set_len(MAX_FILE_BYTES + 1).unwrap();
+        assert!(
+            read_source(workspace, "large.pdf", CancellationToken::new())
+                .unwrap_err()
+                .to_string()
+                .contains("256 MiB")
+        );
+    }
 
     #[tokio::test]
     async fn converts_and_pages_csv_without_writing_to_workspace() {
@@ -426,7 +658,10 @@ mod tests {
 
     #[test]
     fn indexed_pages_preserve_unicode_across_sparse_index_boundaries() {
-        let document = Converted::new("中a".repeat(10_000));
+        let document = Converted::new(Document {
+            text: "中a".repeat(10_000),
+            pdf: None,
+        });
         for start in [0, 4095, 4096, 4097, 19990, 20000] {
             let output: serde_json::Value = serde_json::from_str(
                 &page(
@@ -434,6 +669,8 @@ mod tests {
                         path: "sample.csv".into(),
                         start_char: start,
                         max_chars: 17,
+                        start_page: None,
+                        end_page: None,
                     },
                     "csv",
                     &document,

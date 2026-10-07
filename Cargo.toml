@@ -40,6 +40,7 @@ orbit-tools = { path = "crates/orbit-tools" }
 
 # Third-party dependencies
 anydoc = "0.1.9"
+pdf-inspector = "=1.20.0"
 anyhow = "1.0.100"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 async-stream = "0.3.6"

@@ -2950,6 +2950,7 @@ dependencies = [
  "orbit-agent",
  "orbit-model",
  "orbit-runtime",
+ "pdf-inspector",
  "regex",
  "reqwest",
  "rustix 1.1.4",
