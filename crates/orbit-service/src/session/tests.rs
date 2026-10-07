@@ -60,7 +60,7 @@ async fn prepared_resume_is_atomic_and_releases_lease_when_cancelled() {
         Ok(_) => panic!("locked session was opened"),
     };
 
-    assert!(error.to_string().contains("另一个工作区服务持有"));
+    assert!(error.to_string().contains("写入锁正在被占用"));
     assert_eq!(current.id(), original);
 
     drop(lease);

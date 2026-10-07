@@ -168,7 +168,11 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
     assert!(other.acquire(&id).await.is_err());
     assert_eq!(other.load(&id).await.unwrap().runs[0].status, "running");
 
+    let lock_file = store.path().with_extension("session-locks").join(&id);
+    assert!(lock_file.is_file());
     drop(writer);
+    // A leftover lock file is not a live lease and must not prevent reopening.
+    assert!(lock_file.is_file());
     let _writer = other.acquire(&id).await.unwrap();
     let snapshot = other.load(&id).await.unwrap();
 

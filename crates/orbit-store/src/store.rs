@@ -649,7 +649,7 @@ impl Store {
             let file = private_file(&lock_dir.join(lock_id))?;
             file.try_lock().map_err(|error| match error {
                 std::fs::TryLockError::WouldBlock => {
-                    anyhow::anyhow!("该会话由另一个工作区服务持有，当前服务无法接入。请确认各窗口使用兼容的 Orbit 版本；升级前启动的服务可能仍持有会话。")
+                    anyhow::anyhow!("该会话的写入锁正在被占用，当前服务暂时无法接入。请稍后重连。")
                 }
                 std::fs::TryLockError::Error(error) => {
                     anyhow::Error::new(error).context("无法获取会话锁")
