@@ -62,7 +62,7 @@ fn offline_network() -> orbit_runtime::capability::NetworkPolicy {
     orbit_runtime::capability::NetworkPolicy::Deny
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CommandLimits {
     pub sandbox: bool,

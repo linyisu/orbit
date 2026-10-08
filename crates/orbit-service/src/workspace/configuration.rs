@@ -1,5 +1,7 @@
 use anyhow::Result;
 use orbit_auth::AuthStore;
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use orbit_protocol::Configuration;
 use std::path::PathBuf;
 
@@ -155,14 +157,15 @@ mod tests {
         let config = source.path().join("local.toml");
         std::fs::write(
             &config,
-            r#"
-default_provider = "test"
-[providers.test]
-base_url = "https://example.com/v1"
-credential = "used"
-auto_refresh_models = false
-models = [{ id = "first" }, { id = "chosen" }]
-"#,
+            &TestConfig::new()
+                .provider(
+                    TestProvider::new("test")
+                        .endpoint("https://example.com/v1")
+                        .credential("used")
+                        .models([TestModel::new("first"), TestModel::new("chosen")]),
+                )
+                .providers_toml()
+                .unwrap(),
         )
         .unwrap();
         let snapshot = Local {

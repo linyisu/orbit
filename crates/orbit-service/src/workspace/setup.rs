@@ -1,11 +1,13 @@
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use std::path::PathBuf;
 
 use anyhow::Result;
 use orbit_model::client::ModelClient;
 
 use crate::{
-    account_models, config::FileConfig, history, instructions, models::ModelOption, project_state,
-    runtime, session, skills, subagents, verification,
+    config::FileConfig, history, instructions, models::ModelOption, project_state, runtime,
+    session, skills, subagents, verification,
 };
 
 #[derive(Clone)]
@@ -80,7 +82,7 @@ async fn prepare(
     policy: orbit_protocol::SessionPolicy,
 ) -> Result<PreparedWorkspace> {
     let mut config = FileConfig::load(&options.config, &options.auth_directory)?;
-    account_models::refresh(&mut config, false).await;
+    let _ = orbit_config::models::updater::refresh(&mut config, false).await;
     let model = if resume.is_some() {
         String::new()
     } else {
@@ -146,7 +148,9 @@ pub(super) async fn prepare_resources(
     if file_config.command.sandbox {
         orbit_runtime::execution::capabilities::check_sandbox().await?;
     }
-    let diagnostics = account_models::refresh(&mut file_config, false).await;
+    let diagnostics = orbit_config::models::updater::refresh(&mut file_config, false)
+        .await
+        .diagnostics;
     let model_options = file_config.model_options()?;
     let selected_model = file_config.select_model(session.saved_model_profile().0)?;
     let agent_config = file_config.agent_config();
@@ -311,7 +315,19 @@ mod tests {
     async fn service_policy_filters_tools_before_delegation_and_blocks_mutation() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        std::fs::write(root.join("config.toml"), "default_provider = \"test\"\n[providers.test]\nbase_url = \"http://127.0.0.1:1/v1\"\napi_key = \"test\"\nauto_refresh_models = false\nmodels = [{ id = \"mock\" }]\n").unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            &TestConfig::new()
+                .provider(
+                    TestProvider::new("test")
+                        .endpoint("http://127.0.0.1:1/v1")
+                        .key("test")
+                        .models([TestModel::new("mock")]),
+                )
+                .providers_toml()
+                .unwrap(),
+        )
+        .unwrap();
         let options = WorkspaceOptions {
             model: Some("test::mock".into()),
             initial_directory: root.into(),
@@ -374,11 +390,14 @@ mod selection_tests {
         let root = dir.path();
         std::fs::write(
             root.join("config.toml"),
-            r#"[providers.test]
-base_url = "http://127.0.0.1:1/v1"
-auto_refresh_models = false
-models = [{ id = "first" }, { id = "chosen" }]
-"#,
+            &TestConfig::new()
+                .provider(
+                    TestProvider::new("test")
+                        .endpoint("http://127.0.0.1:1/v1")
+                        .models([TestModel::new("first"), TestModel::new("chosen")]),
+                )
+                .providers_toml()
+                .unwrap(),
         )
         .unwrap();
         let mut options = WorkspaceOptions {

@@ -1,5 +1,6 @@
 pub mod account_models;
 pub mod model_metadata;
+pub mod updater;
 
 #[derive(Clone, Debug)]
 pub struct ModelOption {

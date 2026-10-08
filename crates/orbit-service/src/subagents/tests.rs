@@ -3,6 +3,7 @@ use orbit_agent::{
     model::{CompletionFuture, MockModel, StreamFuture},
     tool::ClosureTool,
 };
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use orbit_model::{error::ModelError, types::ChatCompletion};
 use tokio::sync::Notify;
 
@@ -87,20 +88,19 @@ async fn fixture(
     limits: SubagentConfig,
 ) -> (Arc<Service>, SessionWriter) {
     let path = dir.join("config.toml");
-    std::fs::write(
-        &path,
-        r#"default_provider = "orbit"
-auto_compact = false
-[providers.orbit]
-base_url = "https://orbit.example.invalid/v1"
-api_key = "orbit-test-key"
-max_retries = 0
-[[providers.orbit.models]]
-id = "orbit-model"
-reasoning = { adapter = "openai_chat", efforts = ["low", "high"], default = "low" }
-"#,
-    )
-    .unwrap();
+    let mut provider = TestProvider::new("orbit").models([TestModel::new("orbit-model")
+        .reasoning(
+            orbit_model::client::ApiFormat::OpenaiChatCompletions,
+            &[
+                orbit_model::types::ReasoningEffort::Low,
+                orbit_model::types::ReasoningEffort::High,
+            ],
+            orbit_model::types::ReasoningEffort::Low,
+        )]);
+    provider.spec.max_retries = 0;
+    let mut fixture = TestConfig::new().provider(provider);
+    fixture.config.auto_compact = false;
+    fixture.write(&path).unwrap();
     let store = Store::open(dir.join("orbit.db")).await.unwrap();
     let mut parent = store
         .create(

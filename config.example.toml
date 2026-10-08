@@ -28,32 +28,30 @@ timeout_seconds = 1800 # 进度提醒间隔；提醒父代理先查看或沟通�
 # review_model = "openai::gpt-5.6-sol"
 
 # --- 供应商配置示例 ---
+# models 使用有序 ID 列表，或设为 "auto" 跟随服务端目录。
+# 容量与能力自动发现；model_overrides 仅填写希望覆盖的字段。
+# /model refresh 或模型选择器中的 F5 同时更新账号目录与公共规格，不改写配置。
 
 # 示例 1：DeepSeek (API Key 认证)
 [providers.deepseek]
+models = ["deepseek-chat", "deepseek-reasoner"]
 api_format = "openai_chat_completions" # 可选: openai_chat_completions, openai_responses, anthropic_messages
 base_url = "https://api.deepseek.com/v1"
 api_key = "replace-with-deepseek-key"  # 也可用 credential = "凭据名" 引用 orbit auth 保存的凭据
 
-[[providers.deepseek.models]]
-id = "deepseek-chat"
+[providers.deepseek.model_overrides]
+deepseek-reasoner = { reasoning = { efforts = ["high"], default = "high" } }
 
-[[providers.deepseek.models]]
-id = "deepseek-reasoner"
-reasoning = { adapter = "openai_chat", efforts = ["high"], default = "high" }
-
-# 示例 2：OpenAI (支持多模态视觉输入与思考强度调节)
+# 示例 2：OpenAI Responses
 [providers.openai]
+models = ["gpt-5.6-sol"]
 api_format = "openai_responses"
 base_url = "https://api.openai.com/v1"
 api_key = "replace-with-openai-key"
 
-[[providers.openai.models]]
-id = "gpt-5.6-sol"
-supports_vision = true
-reasoning = { adapter = "openai_responses", efforts = ["none", "low", "medium", "high"], default = "high" }
+[providers.openai.model_overrides]
+"gpt-5.6-sol" = { supports_vision = true, reasoning = { efforts = ["none", "low", "medium", "high"], default = "high" } }
 
-# --- 命令与交付预算 ---
 [command]
 # Enable OS isolation for commands and helper processes.
 sandbox = false

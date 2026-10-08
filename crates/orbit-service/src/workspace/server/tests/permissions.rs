@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use orbit_protocol::{Mode, SessionInfo};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,15 +22,15 @@ impl Fixture {
         let config = root.path().join("config.toml");
         fs::write(
             &config,
-            format!(
-                r#"
-[providers.test]
-base_url="{url}"
-api_key="test-only"
-auto_refresh_models=false
-models=[{{id="test"}}]
-"#
-            ),
+            &TestConfig::new()
+                .provider(
+                    TestProvider::new("test")
+                        .endpoint(url)
+                        .key("test-only")
+                        .models([TestModel::new("test")]),
+                )
+                .providers_toml()
+                .unwrap(),
         )
         .unwrap();
         let options = crate::WorkspaceOptions {

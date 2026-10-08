@@ -53,23 +53,22 @@ orbit-cli auth set-key my-provider --base-url https://api.example.com/v1
 ```toml
 
 [providers.google]
+models = ["gemini-2.5-pro"]
 api_format = "google_code_assist"
 base_url = "https://cloudcode-pa.googleapis.com"
 credential = "google"
 
-[[providers.google.models]]
-id = "gemini-2.5-pro"
-supports_vision = true
+[providers.google.model_overrides]
+"gemini-2.5-pro" = { supports_vision = true }
 
 [providers.chatgpt]
+models = ["gpt-5.6-sol"]
 api_format = "chatgpt_codex"
 base_url = "https://chatgpt.com/backend-api/codex"
 credential = "chatgpt"
 
-[[providers.chatgpt.models]]
-id = "gpt-5.6-sol"
-supports_vision = true
-reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
+[providers.chatgpt.model_overrides]
+"gpt-5.6-sol" = { supports_vision = true, reasoning = { efforts = ["low", "medium", "high"], default = "high" } }
 ```
 
 API Key 可通过 `orbit-cli auth set-key` 的交互输入录入。使用 `--stdin` 时应从已有的安全输入源读取；不要把真实密钥写成 shell 命令字面量。以下 Bash 示例隐藏输入，命令历史不包含密钥正文：

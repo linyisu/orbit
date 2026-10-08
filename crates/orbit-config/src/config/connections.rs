@@ -5,7 +5,11 @@ use std::io::Write;
 use anyhow::{Context, Result, ensure};
 use orbit_model::client::ApiFormat;
 
-use crate::models::ModelOption;
+use crate::{
+    config::{ModelProfile, ModelSelection, ProviderSpec},
+    models::ModelOption,
+};
+pub mod document;
 
 pub fn append_profile(
     path: &std::path::Path,
@@ -14,17 +18,9 @@ pub fn append_profile(
     format: ApiFormat,
     endpoint: &str,
 ) -> Result<Vec<ModelOption>> {
-    let catalog: serde_json::Value =
-        serde_json::from_str(include_str!("../models/account_models/bootstrap.json"))?;
-    let antigravity;
-    let models = if credential == "antigravity" {
-        antigravity = serde_json::to_value(crate::config::antigravity_profiles()?)?;
-        &antigravity
-    } else {
-        catalog.get(credential).context("账号缺少内置模型目录")?
-    };
-
-    append_profile_models(path, auth_directory, credential, format, endpoint, models)
+    let mut provider = ProviderSpec::new(format, endpoint, ModelSelection::auto());
+    provider.credential = Some(credential.into());
+    append_account(path, auth_directory, credential, &provider)
 }
 
 pub fn append_profile_models(
@@ -33,17 +29,28 @@ pub fn append_profile_models(
     credential: &str,
     format: ApiFormat,
     endpoint: &str,
-    models: &serde_json::Value,
+    models: &[ModelProfile],
+) -> Result<Vec<ModelOption>> {
+    let mut provider = ProviderSpec::new(format, endpoint, ModelSelection::Explicit(Vec::new()));
+    provider.credential = Some(credential.into());
+    provider.set_models(models);
+    append_account(path, auth_directory, credential, &provider)
+}
+
+fn append_account(
+    path: &std::path::Path,
+    auth_directory: &std::path::Path,
+    credential: &str,
+    spec: &ProviderSpec,
 ) -> Result<Vec<ModelOption>> {
     let original = read_config(path)?;
     let mut config: crate::config::FileConfig = toml::from_str(&original)?;
     config.auth_directory = Some(auth_directory.to_path_buf());
-    config.merge_account_models()?;
 
     if config.providers.values().any(|provider| {
         provider.credential.as_deref() == Some(credential)
-            && provider.base_url.trim_end_matches('/') == endpoint.trim_end_matches('/')
-            && provider.api_format == format
+            && provider.base_url.trim_end_matches('/') == spec.base_url.trim_end_matches('/')
+            && provider.api_format == spec.api_format
     }) {
         return config.model_options();
     }
@@ -55,13 +62,7 @@ pub fn append_profile_models(
         suffix += 1;
     }
 
-    let provider = serde_json::json!({
-        "api_format": format,
-        "base_url": endpoint,
-        "credential": credential,
-        "models": models
-    });
-    save_provider(path, auth_directory, &name, &provider)
+    save_provider(path, auth_directory, &name, spec)
 }
 
 fn read_config(path: &std::path::Path) -> Result<String> {
@@ -72,27 +73,12 @@ fn read_config(path: &std::path::Path) -> Result<String> {
     }
 }
 
-fn remove_legacy_selection(document: &mut toml_edit::DocumentMut) -> Result<()> {
-    let prefix = document
-        .as_table()
-        .key("default_provider")
-        .and_then(|key| key.leaf_decor().prefix())
-        .and_then(|prefix| prefix.as_str())
-        .unwrap_or_default()
-        .to_owned();
-    document.remove("default_provider");
-    if !prefix.is_empty() {
-        *document = format!("{prefix}{document}").parse()?;
-    }
-    Ok(())
-}
-
 /// Build and validate the complete configuration before writing any credentials.
 pub fn prepare_provider(
     path: &std::path::Path,
     auth_directory: &std::path::Path,
     name: &str,
-    provider: &serde_json::Value,
+    provider: &ProviderSpec,
 ) -> Result<(String, String)> {
     ensure!(
         !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
@@ -105,15 +91,9 @@ pub fn prepare_provider(
         "连接名称已存在，请使用其他名称"
     );
 
-    let addition = serde_json::json!({ "providers": { name: provider } });
     let mut document = original.parse::<toml_edit::DocumentMut>()?;
-    remove_legacy_selection(&mut document)?;
-    let base = document.to_string();
-    let updated = format!(
-        "{}\n\n{}",
-        base.trim_end(),
-        toml::to_string_pretty(&addition)?
-    );
+    document["providers"][name] = document::provider(provider)?;
+    let updated = document.to_string();
     let parsed = crate::config::FileConfig::parse(&updated, auth_directory)?;
     for option in parsed.model_options()? {
         orbit_model::client::ModelClient::new(option.config)?;
@@ -126,7 +106,7 @@ pub fn save_provider(
     path: &std::path::Path,
     auth_directory: &std::path::Path,
     name: &str,
-    provider: &serde_json::Value,
+    provider: &ProviderSpec,
 ) -> Result<Vec<ModelOption>> {
     let (original, updated) = prepare_provider(path, auth_directory, name, provider)?;
     persist(path, &original, &updated)?;
@@ -177,7 +157,9 @@ pub async fn save_account(
 
     append_profile(path, auth_directory, provider.name(), format, endpoint)?;
     let mut config = crate::config::FileConfig::load(path, auth_directory)?;
-    let diagnostics = crate::account_models::refresh(&mut config, true).await;
+    let diagnostics = crate::models::updater::refresh(&mut config, true)
+        .await
+        .diagnostics;
     if !diagnostics.is_empty() {
         anyhow::bail!("{}", diagnostics.join("\n"));
     }
@@ -195,17 +177,14 @@ pub async fn save_api_key(
     store
         .set_api_key(provider.name(), secret, provider.base_url())
         .await?;
-    let models = ids
-        .into_iter()
-        .map(|id| serde_json::json!({ "id": id }))
-        .collect::<Vec<_>>();
+    let models = ids.into_iter().map(ModelProfile::new).collect::<Vec<_>>();
     append_profile_models(
         path,
         auth_directory,
         provider.name(),
         ApiFormat::OpenaiChatCompletions,
         provider.base_url(),
-        &serde_json::Value::Array(models),
+        &models,
     )
 }
 

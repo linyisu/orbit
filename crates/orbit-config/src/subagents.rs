@@ -2,7 +2,7 @@ use anyhow::{Result, ensure};
 use orbit_agent::agent::AgentConfig;
 use serde::Deserialize;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SubagentConfig {
     pub enabled: bool,

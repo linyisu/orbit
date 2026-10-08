@@ -1,3 +1,5 @@
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 mod permissions;
 
 use super::*;
@@ -10,13 +12,15 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
     let config = root.path().join("config.toml");
     fs::write(
         &config,
-        r#"
-[providers.test]
-base_url="http://127.0.0.1:1/v1"
-api_key="test-only"
-auto_refresh_models=false
-models=[{id="test",supports_vision=true}]
-"#,
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint("http://127.0.0.1:1/v1")
+                    .key("test-only")
+                    .models([TestModel::new("test").vision(true)]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let options = crate::WorkspaceOptions {

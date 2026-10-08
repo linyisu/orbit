@@ -43,7 +43,7 @@ fn default_chars() -> usize {
     20_000
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebConfig {
     pub proxy: Option<String>,

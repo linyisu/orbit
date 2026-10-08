@@ -17,30 +17,29 @@ use crate::config::{
     FileConfig, MIN_CONTEXT_TOKENS, ModelProfile, ProviderConfig, ReasoningProfile,
 };
 
-pub async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
+pub(crate) async fn refresh_connections(
+    config: &mut FileConfig,
+    force: bool,
+    bypass_cache: bool,
+) -> Vec<(String, Vec<String>)> {
     let Some(directory) = config.auth_directory.as_ref() else {
         return Vec::new();
     };
     let mut jobs = Vec::new();
     for (name, provider) in &mut config.providers {
-        if provider.auto_refresh_models && supported(provider.api_format, &provider.base_url) {
-            jobs.push(refresh_connection(name, provider, directory, force));
+        if supported(provider.api_format, &provider.base_url) {
+            let allow_network = force || provider.auto_refresh_models;
+            jobs.push(async move {
+                (
+                    name.clone(),
+                    refresh_connection(name, provider, directory, bypass_cache, allow_network)
+                        .await,
+                )
+            });
         }
     }
 
-    let mut diagnostics = stream::iter(jobs)
-        .buffer_unordered(4)
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-    if let Some(message) = crate::model_metadata::supplement(config, force).await {
-        diagnostics.push(message);
-    }
-    diagnostics.sort();
-    diagnostics
+    stream::iter(jobs).buffer_unordered(4).collect().await
 }
 
 async fn refresh_connection(
@@ -48,9 +47,19 @@ async fn refresh_connection(
     provider: &mut ProviderConfig,
     directory: &Path,
     force: bool,
+    allow_network: bool,
 ) -> Vec<String> {
     let mut diagnostics = Vec::new();
-    if let Err(error) = refresh_provider(name, provider, directory, force, &mut diagnostics).await {
+    if let Err(error) = refresh_provider(
+        name,
+        provider,
+        directory,
+        force,
+        allow_network,
+        &mut diagnostics,
+    )
+    .await
+    {
         diagnostics.push(format!("{name}：模型目录更新失败：{error}"));
     }
     diagnostics
@@ -61,6 +70,7 @@ async fn refresh_provider(
     provider: &mut ProviderConfig,
     directory: &Path,
     force: bool,
+    allow_network: bool,
     diagnostics: &mut Vec<String>,
 ) -> Result<()> {
     let reference = provider
@@ -101,8 +111,13 @@ async fn refresh_provider(
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|time| SystemTime::now().duration_since(time).ok())
         .is_some_and(|age| age < Duration::from_secs(900));
-    let payload = if let Some(cached) = cached.as_ref().filter(|_| !force && fresh) {
+    let payload = if let Some(cached) = cached
+        .as_ref()
+        .filter(|_| !force && (fresh || !allow_network))
+    {
         cached.clone()
+    } else if !allow_network {
+        return Ok(());
     } else {
         let discovered = async {
             let payload = if matches!(
@@ -178,40 +193,25 @@ async fn refresh_provider(
 }
 
 fn merge_discovered_models(provider: &mut ProviderConfig, models: Vec<ModelProfile>) {
-    if models.is_empty() {
-        return;
-    }
-    let configured = provider
-        .configured_models
-        .get_or_insert_with(|| provider.models.clone());
-    let quota_catalog = provider.api_format == ApiFormat::GoogleCodeAssist
-        && provider.base_url.trim_end_matches('/') == "https://cloudcode-pa.googleapis.com";
-    if !provider.managed_models && !quota_catalog {
-        provider
-            .models
-            .retain(|existing| models.iter().any(|model| model.id == existing.id));
-    }
-
-    for mut model in models {
-        if let Some(explicit) = configured.iter().find(|entry| entry.id == model.id) {
-            model.max_output_tokens = explicit.max_output_tokens.or(model.max_output_tokens);
-            model.context_tokens = explicit.context_tokens.or(model.context_tokens);
-            model.input_context_tokens =
-                explicit.input_context_tokens.or(model.input_context_tokens);
-            model.supports_vision = explicit.supports_vision.or(model.supports_vision);
-            model.reasoning = explicit.reasoning.clone().or(model.reasoning);
+    // A quota response is partial: exhausted/unreported models are not retired.
+    if provider.api_format == ApiFormat::GoogleCodeAssist
+        && provider.base_url.trim_end_matches('/') == "https://cloudcode-pa.googleapis.com"
+    {
+        if provider.discovered.is_none() {
+            provider.discovered = Some(provider.bootstrap());
         }
-
-        if let Some(existing) = provider
-            .models
-            .iter_mut()
-            .find(|entry| entry.id == model.id)
-        {
-            *existing = model;
-        } else if !provider.managed_models {
-            provider.models.push(model);
+        let discovered = provider.discovered.as_mut().unwrap();
+        for model in models {
+            if let Some(existing) = discovered.iter_mut().find(|m| m.id == model.id) {
+                *existing = model;
+            } else {
+                discovered.push(model);
+            }
         }
+    } else {
+        provider.discovered = Some(models);
     }
+    provider.resolve();
 }
 
 fn supported(format: ApiFormat, base: &str) -> bool {

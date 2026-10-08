@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::run_command::ScratchDirectory;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ArtifactLimits {
     pub max_file_bytes: u64,

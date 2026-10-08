@@ -1,5 +1,7 @@
 use super::*;
 use orbit_agent::events::AgentEvent;
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 
 #[test]
 fn replay_preserves_compaction_and_queued_input_semantics() {
@@ -59,13 +61,15 @@ async fn image_only_submission_reaches_the_service_and_its_attachment_is_present
     let root = directory.path();
     std::fs::write(
         root.join("config.toml"),
-        r#"
-[providers.test]
-base_url="http://127.0.0.1:1/v1"
-api_key="test-only"
-auto_refresh_models=false
-models=[{id="test",supports_vision=true}]
-"#,
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint("http://127.0.0.1:1/v1")
+                    .key("test-only")
+                    .models([TestModel::new("test").vision(true)]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let options = crate::WorkspaceOptions {
@@ -191,14 +195,26 @@ async fn remembered_file_grant_survives_reopen_and_matches_changed_content() {
 async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    std::fs::write(root.join("config.toml"),r#"
-auto_compact=true
-[providers.test]
-base_url="http://127.0.0.1:1/v1"
-api_key="test-only"
-auto_refresh_models=false
-models=[{id="large",input_context_tokens=64000,max_output_tokens=512},{id="small",input_context_tokens=8192,max_output_tokens=512}]
-"#).unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        &format!(
+            "{}{}",
+            "auto_compact=true\n",
+            TestConfig::new()
+                .provider(
+                    TestProvider::new("test")
+                        .endpoint("http://127.0.0.1:1/v1")
+                        .key("test-only")
+                        .models([
+                            TestModel::new("large").input_context(64000).output(512),
+                            TestModel::new("small").input_context(8192).output(512)
+                        ])
+                )
+                .providers_toml()
+                .unwrap()
+        ),
+    )
+    .unwrap();
     let options = crate::WorkspaceOptions {
         model: Some("test::large".into()),
         initial_directory: root.into(),
@@ -280,13 +296,15 @@ async fn user_input_shared_session_pages_wait_for_explicit_answer_in_yolo() {
     let root = dir.path();
     std::fs::write(
         root.join("config.toml"),
-        r#"
-[providers.test]
-base_url="http://127.0.0.1:1/v1"
-api_key="test-only"
-auto_refresh_models=false
-models=[{id="test"}]
-"#,
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint("http://127.0.0.1:1/v1")
+                    .key("test-only")
+                    .models([TestModel::new("test")]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let options = crate::WorkspaceOptions {
@@ -374,7 +392,19 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
     use tokio_util::sync::CancellationToken;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    std::fs::write(root.join("config.toml"),"[providers.test]\nbase_url=\"http://127.0.0.1:1/v1\"\napi_key=\"test\"\nauto_refresh_models=false\nmodels=[{id=\"test\"}]\n").unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint("http://127.0.0.1:1/v1")
+                    .key("test")
+                    .models([TestModel::new("test")]),
+            )
+            .providers_toml()
+            .unwrap(),
+    )
+    .unwrap();
     let options = crate::WorkspaceOptions {
         model: Some("test::test".into()),
         initial_directory: root.into(),

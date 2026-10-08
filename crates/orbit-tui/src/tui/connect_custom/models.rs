@@ -16,7 +16,7 @@ pub(super) fn merge(entries: &mut Vec<Entry>, profiles: Vec<ModelProfile>) {
     for profile in profiles {
         if !entries.iter().any(|entry| entry.profile.id == profile.id) {
             entries.push(Entry {
-                profile,
+                profile: ModelProfile::new(profile.id),
                 enabled: false,
             });
         }

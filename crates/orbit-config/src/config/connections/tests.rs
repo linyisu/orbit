@@ -1,4 +1,40 @@
 use super::*;
+
+#[tokio::test]
+async fn editing_an_automatic_connection_preserves_unavailable_model_overrides() {
+    use crate::test_support::{TestConfig, TestModel, TestProvider};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.toml");
+    let auth = directory.path().join("auth");
+    TestConfig::new()
+        .provider(
+            TestProvider::new("auto")
+                .models([TestModel::new("temporarily-unavailable")
+                    .vision(false)
+                    .context(100000)])
+                .automatic(),
+        )
+        .write(&path)
+        .unwrap();
+    let mut draft = edit::ConnectionDraft::load(&path, Some("auto")).unwrap();
+    assert_eq!(draft.models.len(), 1);
+    draft.models[0].context_tokens = Some(200000);
+    edit::save(&path, &auth, &draft, edit::KeyChange::Keep)
+        .await
+        .unwrap();
+    let config = crate::config::FileConfig::load(&path, &auth).unwrap();
+    let provider = &config.providers["auto"];
+    assert!(provider.spec.models.is_auto());
+    assert_eq!(
+        provider.spec.model_overrides["temporarily-unavailable"].context_tokens,
+        Some(200000)
+    );
+    assert_eq!(
+        provider.spec.model_overrides["temporarily-unavailable"].supports_vision,
+        Some(false)
+    );
+    assert!(provider.models.is_empty());
+}
 #[tokio::test]
 async fn first_custom_connection_bootstraps_and_reloads_without_plaintext_key() {
     let temp = tempfile::tempdir().unwrap();
@@ -112,12 +148,11 @@ fn api_key_connection_persists_discovered_models_without_a_secret() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    std::fs::write(
-        &path,
-        "# preserve me\ndefault_provider = 'deepseek-account'\n[providers]\n",
-    )
-    .unwrap();
-    let catalog = serde_json::json!([{ "id": "server-model-a" }, { "id": "server-model-b" }]);
+    std::fs::write(&path, "# preserve me\n[providers]\n").unwrap();
+    let catalog = vec![
+        ModelProfile::new("server-model-a"),
+        ModelProfile::new("server-model-b"),
+    ];
 
     let models = append_profile_models(
         &path,
@@ -146,13 +181,9 @@ fn zhipu_profile_uses_domestic_coding_endpoint_and_credential() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    std::fs::write(
-        &path,
-        "default_provider = 'zhipu-coding-plan-account'\n[providers]\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "[providers]\n").unwrap();
     let provider = orbit_auth::ApiKeyProvider::ZhipuCodingPlan;
-    let catalog = serde_json::json!([{ "id": "glm-server-model" }]);
+    let catalog = vec![ModelProfile::new("glm-server-model")];
 
     let models = append_profile_models(
         &path,
@@ -179,7 +210,7 @@ fn connection_preserves_config_and_reloads_both_account_protocols() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    let original = "# user settings\n[providers.local]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [{ id = 'local-model' }]\n";
+    let original = "# user settings\n[providers.local]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [\"local-model\"]\n";
     std::fs::write(&path, original).unwrap();
 
     for (credential, format, endpoint) in [
@@ -238,11 +269,11 @@ fn connection_preserves_config_and_reloads_both_account_protocols() {
 }
 
 #[test]
-fn existing_antigravity_catalog_expands_without_rewriting_user_settings() {
+fn explicit_account_selection_is_preserved_when_connecting_another_account() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    let original = "default_provider = 'account'\n[providers.account]\napi_format = 'google_code_assist'\nbase_url = 'https://daily-cloudcode-pa.googleapis.com/'\ncredential = 'antigravity'\nmodels = [{ id = 'gemini-3-pro', context_tokens = 90000 }, { id = 'custom-model' }]\n";
+    let original = "[providers.account]\napi_format = 'google_code_assist'\nbase_url = 'https://daily-cloudcode-pa.googleapis.com/'\ncredential = 'antigravity'\nmodels = [\"gemini-3-pro\", \"custom-model\"]\n[providers.account.model_overrides.\"gemini-3-pro\"]\ncontext_tokens = 90000\n";
     std::fs::write(&path, original).unwrap();
 
     let config = crate::config::FileConfig::load(&path, &auth).unwrap();
@@ -256,20 +287,12 @@ fn existing_antigravity_catalog_expands_without_rewriting_user_settings() {
     )
     .unwrap();
 
-    assert_eq!(options.len(), 18);
+    assert_eq!(
+        options.iter().map(|m| m.model.as_str()).collect::<Vec<_>>(),
+        ["gemini-3-pro", "custom-model"]
+    );
     assert_eq!(reconnected.len(), options.len());
     assert_eq!(options[0].context_tokens, 90000);
-    for id in [
-        "gemini-3.8-flash",
-        "claude-opus-4-6",
-        "gpt-oss-120b",
-        "custom-model",
-    ] {
-        assert!(
-            options.iter().any(|model| model.model == id),
-            "missing {id}"
-        );
-    }
 
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 
@@ -282,12 +305,8 @@ fn existing_antigravity_catalog_expands_without_rewriting_user_settings() {
     )
     .unwrap();
 
-    assert_eq!(connected.len(), 19);
-    assert!(
-        connected
-            .iter()
-            .any(|model| model.model == "gemini-3.8-flash")
-    );
+    assert_eq!(connected.len(), 3);
+    assert!(connected.iter().any(|model| model.model == "gemini-3-pro"));
     assert!(connected.iter().any(|model| model.model == "gpt-5.5"));
     assert_eq!(
         crate::config::FileConfig::load(&path, &auth)
@@ -305,7 +324,7 @@ fn connection_keeps_existing_provider_and_rejects_invalid_config_without_writing
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    let original = "[providers.google-account]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [{ id = 'existing' }]\n";
+    let original = "[providers.google-account]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [\"existing\"]\n";
     std::fs::write(&path, original).unwrap();
 
     let models = append_profile(
@@ -381,7 +400,7 @@ async fn editing_keeps_credentials_and_independent_model_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     let auth = temp.path().join("auth");
-    let original = "# keep this comment\ndefault_provider = 'gateway'\n[providers.gateway]\napi_format = 'openai_responses'\nbase_url = 'http://localhost:8080/v1'\nauto_refresh_models = false\ncredential = 'existing'\ntimeout_seconds = 123\nmodels = [{ id = 'a' }, { id = 'b' }]\n";
+    let original = "# keep this comment\n[providers.gateway]\napi_format = 'openai_responses'\nbase_url = 'http://localhost:8080/v1'\nauto_refresh_models = false\ncredential = 'existing'\ntimeout_seconds = 123\nmodels = [\"a\", \"b\"]\n";
     std::fs::write(&path, original).unwrap();
     let store = orbit_auth::AuthStore::new(auth.clone()).unwrap();
     store
@@ -402,7 +421,7 @@ async fn editing_keeps_credentials_and_independent_model_overrides() {
         .unwrap();
     let saved = std::fs::read_to_string(&path).unwrap();
     let mut reloaded = crate::config::FileConfig::load(&path, &auth).unwrap();
-    crate::account_models::refresh(&mut reloaded, true).await;
+    let _ = crate::models::updater::refresh(&mut reloaded, true).await;
 
     assert!(saved.starts_with("# keep this comment"));
     assert!(!saved.contains("secret"));

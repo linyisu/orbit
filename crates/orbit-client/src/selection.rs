@@ -1,4 +1,6 @@
 //! Client model preferences, scoped to the local configuration file.
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use std::io::Write;
 
 use anyhow::{Context, Result};
@@ -17,7 +19,7 @@ struct Selection {
 impl Local {
     pub async fn model_catalog(&self) -> Result<Vec<ModelOption>> {
         let mut config = FileConfig::load(&self.config, &self.auth)?;
-        orbit_config::models::account_models::refresh(&mut config, false).await;
+        let _ = orbit_config::models::updater::refresh(&mut config, false).await;
         config.model_options()
     }
 
@@ -97,15 +99,19 @@ mod tests {
         let config = root.join(name);
         std::fs::write(
             &config,
-            r#"[providers.one]
-base_url = "http://localhost:8000/v1"
-auto_refresh_models = false
-models = [{ id = "first" }, { id = "chosen" }]
-[providers.two]
-base_url = "http://localhost:9000/v1"
-auto_refresh_models = false
-models = [{ id = "chosen" }]
-"#,
+            &TestConfig::new()
+                .provider(
+                    TestProvider::new("one")
+                        .endpoint("http://localhost:8000/v1")
+                        .models([TestModel::new("first"), TestModel::new("chosen")]),
+                )
+                .provider(
+                    TestProvider::new("two")
+                        .endpoint("http://localhost:9000/v1")
+                        .models([TestModel::new("chosen")]),
+                )
+                .providers_toml()
+                .unwrap(),
         )
         .unwrap();
         Local {

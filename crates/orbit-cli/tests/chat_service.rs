@@ -1,3 +1,5 @@
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -47,7 +49,19 @@ async fn headless_chat_uses_the_service_policy_and_persists_the_answer() {
         }
     });
     let model = tokio_util::task::AbortOnDropHandle::new(model);
-    std::fs::write(root.join("config.toml"), format!("default_provider = \"test\"\n[providers.test]\nbase_url = \"http://{address}/v1\"\napi_key = \"test\"\nauto_refresh_models = false\nmodels = [{{ id = \"first\" }}, {{ id = \"second\" }}]\n")).unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint(format!("http://{address}/v1"))
+                    .key("test")
+                    .models([TestModel::new("first"), TestModel::new("second")]),
+            )
+            .providers_toml()
+            .unwrap(),
+    )
+    .unwrap();
     let output = tokio::time::timeout(
         Duration::from_secs(30),
         Command::new(env!("CARGO_BIN_EXE_orbit-cli"))

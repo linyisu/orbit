@@ -18,6 +18,7 @@ pub struct ConnectionDraft {
     pub format: ApiFormat,
     pub endpoint: String,
     pub models: Vec<ModelProfile>,
+    original_models: Vec<String>,
 }
 
 impl ConnectionDraft {
@@ -27,6 +28,24 @@ impl ConnectionDraft {
         let provider = name
             .map(|name| config.providers.get(name).cloned().context("连接已不存在"))
             .transpose()?;
+        let models = provider.as_ref().map_or_else(Vec::new, |p| {
+            let mut ids = p.models.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+            // Keep overrides for temporarily unavailable automatic models editable and intact.
+            for id in p.spec.model_overrides.keys() {
+                if !ids.contains(id) {
+                    ids.push(id.clone());
+                }
+            }
+            ids.into_iter()
+                .map(|id| {
+                    let mut explicit = ModelProfile::new(&id);
+                    if let Some(settings) = p.spec.model_overrides.get(&id) {
+                        settings.apply(&mut explicit, p.api_format);
+                    }
+                    explicit
+                })
+                .collect::<Vec<_>>()
+        });
 
         Ok(Self {
             name: name.unwrap_or_default().to_owned(),
@@ -37,9 +56,8 @@ impl ConnectionDraft {
             endpoint: provider
                 .as_ref()
                 .map_or_else(String::new, |p| p.base_url.clone()),
-            models: provider
-                .as_ref()
-                .map_or_else(Vec::new, |p| p.models.clone()),
+            original_models: models.iter().map(|m| m.id.clone()).collect(),
+            models,
             provider,
             source,
         })
@@ -50,6 +68,16 @@ impl ConnectionDraft {
             self.format,
             ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
         )
+    }
+
+    fn preserves_automatic_selection(&self) -> bool {
+        self.provider
+            .as_ref()
+            .is_some_and(|p| p.spec.models.is_auto())
+            && self
+                .original_models
+                .iter()
+                .eq(self.models.iter().map(|m| &m.id))
     }
 }
 
@@ -77,7 +105,10 @@ pub async fn save(
             && !draft.name.chars().any(char::is_control),
         "连接名称无效"
     );
-    ensure!(!draft.models.is_empty(), "请至少启用一个模型");
+    ensure!(
+        !draft.models.is_empty() || draft.preserves_automatic_selection(),
+        "请至少启用一个模型"
+    );
     ensure!(
         draft.models.iter().all(|m| !m.id.trim().is_empty()
             && m.id.len() <= 256
@@ -132,8 +163,6 @@ pub async fn save(
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     );
-    let serialized = toml::to_string(&serde_json::json!({ "models": draft.models }))?;
-    let mut model_doc = serialized.parse::<toml_edit::DocumentMut>()?;
     let providers = document["providers"]
         .clone()
         .into_table()
@@ -156,8 +185,16 @@ pub async fn save(
             .context("协议无效")?,
     );
     provider["base_url"] = toml_edit::value(&draft.endpoint);
-    provider["managed_models"] = toml_edit::value(true);
-    provider["models"] = model_doc.remove("models").context("模型配置无效")?;
+    let mut spec = crate::config::ProviderSpec::new(
+        draft.format,
+        &draft.endpoint,
+        crate::config::ModelSelection::Explicit(Vec::new()),
+    );
+    spec.set_models(&draft.models);
+    if draft.preserves_automatic_selection() {
+        spec.models = crate::config::ModelSelection::auto();
+    }
+    super::document::models(provider, &spec)?;
     match key {
         KeyChange::Keep => {}
         KeyChange::Replace(_) | KeyChange::None => {
@@ -169,8 +206,6 @@ pub async fn save(
             }
         }
     }
-
-    super::remove_legacy_selection(&mut document)?;
 
     let updated = document.to_string();
     let parsed = FileConfig::parse(&updated, auth)?;

@@ -65,26 +65,22 @@ pub enum ChatMessage {
 
 ```toml
 [providers.openai]
+models = ["gpt-5.6-sol"]
 api_format = "openai_responses"
 base_url = "https://api.openai.com/v1"
 credential = "openai-key"
 
-[[providers.openai.models]]
-id = "gpt-5.6-sol"
-context_tokens = 128000
-max_output_tokens = 16384
-supports_vision = true
-reasoning = { adapter = "openai_responses", efforts = ["low", "medium", "high"], default = "high" }
+[providers.openai.model_overrides]
+"gpt-5.6-sol" = { context_tokens = 128000, max_output_tokens = 16384, supports_vision = true, reasoning = { efforts = ["low", "medium", "high"], default = "high" } }
 
 [providers.google]
+models = ["gemini-2.5-pro"]
 api_format = "google_code_assist"
 base_url = "https://cloudcode-pa.googleapis.com"
 credential = "google"
 
-[[providers.google.models]]
-id = "gemini-2.5-pro"
-supports_vision = true
-reasoning = { adapter = "google", efforts = ["minimal", "low", "medium", "high"], default = "medium" }
+[providers.google.model_overrides]
+"gemini-2.5-pro" = { supports_vision = true, reasoning = { efforts = ["minimal", "low", "medium", "high"], default = "medium" } }
 ```
 
 ### 容量与预算模型

@@ -1,14 +1,61 @@
 use super::*;
+async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
+    refresh_connections(config, force, force)
+        .await
+        .into_iter()
+        .flat_map(|(_, errors)| errors)
+        .collect()
+}
+
+#[tokio::test]
+async fn manual_update_is_reused_offline_when_automatic_refresh_is_disabled() {
+    use crate::test_support::{TestConfig, TestProvider};
+    let directory = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(serve_catalog(
+        listener,
+        json!({"data": [{"id": "fresh-model", "context_tokens": 200000}]}),
+    ));
+    let baseline = TestConfig::new()
+        .auth(directory.path())
+        .provider(TestProvider::new("manual").endpoint(endpoint).automatic())
+        .build()
+        .unwrap();
+    let mut manual = baseline.clone();
+    assert!(refresh(&mut manual, true).await.is_empty());
+    server.await.unwrap();
+    assert_eq!(manual.providers["manual"].models[0].id, "fresh-model");
+    // A new reader must get the manual update without contacting the stopped server.
+    let mut reloaded = baseline;
+    assert!(refresh(&mut reloaded, false).await.is_empty());
+    assert_eq!(
+        reloaded.providers["manual"].models[0].context_tokens,
+        Some(200000)
+    );
+}
 
 fn provider(format: ApiFormat, managed: bool) -> ProviderConfig {
-    serde_json::from_value(
-        json!({"api_format": format, "base_url": "https://orbit.example/v1",
-        "managed_models": managed, "models": [
-            {"id": "orbit-live", "context_tokens": 100000, "supports_vision": false},
-            {"id": "orbit-retired"}
-        ]}),
-    )
-    .unwrap()
+    use crate::test_support::{TestModel, TestProvider};
+    let builder = TestProvider::new("test")
+        .format(format)
+        .endpoint("https://orbit.example/v1")
+        .models([
+            TestModel::new("orbit-live").context(100000).vision(false),
+            TestModel::new("orbit-retired"),
+        ]);
+    let mut provider = if managed {
+        builder
+    } else {
+        builder.automatic()
+    }
+    .build();
+    provider.discovered = Some(vec![
+        ModelProfile::new("orbit-live"),
+        ModelProfile::new("orbit-retired"),
+    ]);
+    provider.resolve();
+    provider
 }
 
 #[test]
@@ -45,21 +92,21 @@ fn refresh_updates_remote_capabilities_but_preserves_explicit_fields_and_choices
 #[test]
 fn bundled_defaults_yield_to_discovered_capacity() {
     let mut config = FileConfig::parse(
-        r#"default_provider = "orbit"
-[providers.orbit]
+        r#"[providers.orbit]
 api_format = "google_code_assist"
 base_url = "https://daily-cloudcode-pa.googleapis.com"
 credential = "orbit-fixture"
-models = [{id = "orbit-configured"}]
+models = "auto"
 "#,
         Path::new("/tmp/orbit-fixture-auth"),
     )
     .unwrap();
     let provider = config.providers.get_mut("orbit").unwrap();
-    let id = provider.models[1].id.clone();
-    let model: ModelProfile = serde_json::from_value(json!({"id": id, "context_tokens": 4000000,
-            "supports_vision": false}))
-    .unwrap();
+    let id = provider.models[0].id.clone();
+    let model = crate::test_support::TestModel::new(id)
+        .context(4000000)
+        .vision(false)
+        .build();
     merge_discovered_models(provider, vec![model]);
     assert_eq!(provider.models.len(), 1);
     assert_eq!(provider.models[0].context_tokens, Some(4000000));
@@ -152,7 +199,8 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
     let temporary = tempfile::tempdir().unwrap();
     let directory = temporary.path().join("auth");
     let store = orbit_auth::AuthStore::new(directory.clone()).unwrap();
-    let mut providers = serde_json::Map::new();
+    use crate::test_support::{TestConfig, TestProvider};
+    let mut fixture = TestConfig::new().auth(&directory);
     let mut servers = Vec::new();
     for (name, format, saved, key, managed) in [
         (
@@ -186,19 +234,27 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
     ] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/orbit/v1", listener.local_addr().unwrap());
-        let mut connection = json!({"api_format": format, "base_url": endpoint,
-                "managed_models": managed, "models": [{"id": "orbit-live"}]});
+        let connection = TestProvider::new(name)
+            .format(format)
+            .endpoint(&endpoint)
+            .models(["orbit-live"])
+            .refresh(true);
+        let mut connection = if managed {
+            connection
+        } else {
+            connection.automatic()
+        };
         if saved {
             store
                 .set_api_key(name, key.into(), &endpoint)
                 .await
                 .unwrap();
-            connection["credential"] = json!(name);
+            connection = connection.credential(name);
         } else {
-            connection["api_key"] = json!(key);
+            connection = connection.key(key);
         }
 
-        providers.insert(name.into(), connection);
+        fixture = fixture.provider(connection);
         servers.push((
             name,
             format,
@@ -212,19 +268,20 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
         ));
     }
 
-    providers.insert(
-        "orbit-failure".into(),
-        json!({"base_url": "http://127.0.0.1:0/v1",
-            "models": [{"id": "orbit-fallback"}]}),
-    );
-    providers.insert(
-        "orbit-disabled".into(),
-        json!({"base_url": "http://127.0.0.1:0/v1",
-            "auto_refresh_models": false, "models": [{"id": "orbit-manual"}]}),
-    );
-    let value = json!({"default_provider": "orbit-chat", "providers": providers});
-    let mut config: FileConfig = serde_json::from_value(value.clone()).unwrap();
-    config.auth_directory = Some(directory.clone());
+    fixture = fixture
+        .provider(
+            TestProvider::new("orbit-failure")
+                .endpoint("http://127.0.0.1:0/v1")
+                .models(["orbit-fallback"])
+                .refresh(true),
+        )
+        .provider(
+            TestProvider::new("orbit-disabled")
+                .endpoint("http://127.0.0.1:0/v1")
+                .models(["orbit-manual"]),
+        );
+    let baseline = fixture.build().unwrap();
+    let mut config = baseline.clone();
     let diagnostics = refresh(&mut config, false).await;
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert!(diagnostics[0].starts_with("orbit-failure："));
@@ -250,7 +307,7 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
         );
     }
 
-    let mut reloaded: FileConfig = serde_json::from_value(value.clone()).unwrap();
+    let mut reloaded = baseline.clone();
     reloaded.auth_directory = Some(directory.clone());
     reloaded
         .providers
@@ -279,7 +336,7 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
         );
     }
 
-    let mut rotated: FileConfig = serde_json::from_value(value).unwrap();
+    let mut rotated = baseline;
     rotated.auth_directory = Some(directory.clone());
     rotated
         .providers
@@ -294,11 +351,7 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
         .unwrap();
     let diagnostics = refresh(&mut rotated, false).await;
     assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-    assert!(
-        rotated.providers["orbit-chat"].models[0]
-            .context_tokens
-            .is_none()
-    );
+    assert!(rotated.providers["orbit-chat"].models.is_empty());
     assert!(
         rotated.providers["orbit-responses"].models[0]
             .context_tokens
@@ -364,16 +417,13 @@ fn reasoning_defaults_require_a_verified_model_endpoint_and_protocol() {
 
 #[test]
 fn antigravity_discovery_removes_retired_models_and_preserves_available_settings() {
-    let mut provider: crate::config::ProviderConfig = serde_json::from_value(json!({
-        "api_format": "google_code_assist",
-        "base_url": "https://daily-cloudcode-pa.googleapis.com",
-        "credential": "antigravity",
-        "models": [
-            { "id": "claude-sonnet-4-5" },
-            { "id": "claude-sonnet-4-6", "context_tokens": 123456 }
-        ]
-    }))
-    .unwrap();
+    let mut provider = crate::test_support::TestProvider::new("test")
+        .format(ApiFormat::GoogleCodeAssist)
+        .endpoint("https://daily-cloudcode-pa.googleapis.com")
+        .credential("antigravity")
+        .models([crate::test_support::TestModel::new("claude-sonnet-4-6").context(123456)])
+        .automatic()
+        .build();
     let (models, _) = normalize(
         ApiFormat::GoogleCodeAssist,
         &json!({
@@ -388,10 +438,14 @@ fn antigravity_discovery_removes_retired_models_and_preserves_available_settings
     merge_discovered_models(&mut provider, models);
 
     assert_eq!(provider.models.len(), 2);
-    assert_eq!(provider.models[0].id, "claude-sonnet-4-6");
-    assert_eq!(provider.models[0].context_tokens, Some(123456));
-    assert_eq!(provider.models[1].id, "claude-opus-4-6");
-    assert!(provider.models[0].reasoning.is_some());
+    let sonnet = provider
+        .models
+        .iter()
+        .find(|m| m.id == "claude-sonnet-4-6")
+        .unwrap();
+    assert_eq!(sonnet.context_tokens, Some(123456));
+    assert!(sonnet.reasoning.is_some());
+    assert!(provider.models.iter().any(|m| m.id == "claude-opus-4-6"));
 }
 
 #[test]

@@ -1,17 +1,90 @@
 use super::*;
 
 #[test]
+fn compact_declarations_are_strict_and_only_explicit_overrides_are_persisted() {
+    let input = r#"[providers.test]
+base_url = "https://example.invalid/v1"
+api_format = "openai_responses"
+models = ["second", "first"]
+[providers.test.model_overrides]
+first = { supports_vision = false, reasoning = { efforts = ["low", "high"], default = "high" } }
+"#;
+    let mut config = FileConfig::parse(input, Path::new("/tmp/config-test")).unwrap();
+    let provider = config.providers.get_mut("test").unwrap();
+    provider.discovered = Some(vec![
+        crate::test_support::TestModel::new("first")
+            .vision(true)
+            .context(200000)
+            .build(),
+        crate::test_support::TestModel::new("second")
+            .context(100000)
+            .build(),
+        ModelProfile::new("unselected"),
+    ]);
+    provider.resolve();
+    assert_eq!(
+        provider
+            .models
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>(),
+        ["second", "first"]
+    );
+    assert_eq!(provider.models[1].supports_vision, Some(false));
+    assert_eq!(
+        provider.models[1].reasoning.as_ref().unwrap().adapter,
+        ReasoningAdapter::OpenaiResponses
+    );
+    let serialized = toml::to_string(&config).unwrap();
+    let reloaded = FileConfig::parse(&serialized, Path::new("/tmp/config-test")).unwrap();
+    assert!(
+        reloaded.providers["test"].models[1]
+            .context_tokens
+            .is_none()
+    );
+    assert_eq!(
+        reloaded.providers["test"].models[1].supports_vision,
+        Some(false)
+    );
+    for invalid in [
+        input.replace(
+            "models = [\"second\", \"first\"]",
+            "models = [{ id = \"first\" }]",
+        ),
+        input.replace(
+            "models = [\"second\", \"first\"]",
+            "models = [\"first\", \"first\"]",
+        ),
+        input.replace("models = [\"second\", \"first\"]", "models = [\"second\"]"),
+        input.replace("models =", "managed_models = true\nmodels ="),
+    ] {
+        assert!(FileConfig::parse(&invalid, Path::new("/tmp/config-test")).is_err());
+    }
+}
+
+#[test]
+fn authoritative_empty_catalog_does_not_restore_bootstrap_models() {
+    let mut provider = ProviderConfig::from(ProviderSpec::new(
+        ApiFormat::ChatgptCodex,
+        "https://chatgpt.com/backend-api/codex",
+        ModelSelection::auto(),
+    ));
+    assert!(!provider.models.is_empty());
+    provider.discovered = Some(Vec::new());
+    provider.resolve();
+    assert!(provider.models.is_empty());
+    provider.resolve();
+    assert!(provider.models.is_empty());
+}
+
+#[test]
 fn managed_deepseek_models_inherit_defaults_and_preserve_explicit_reasoning() {
-    let input = r#"default_provider = "orbit"
-[providers.orbit]
+    let input = r#"[providers.orbit]
+models = ["deepseek-flash", "deepseek-v4-pro"]
 base_url = "https://api.deepseek.com/v1/"
 credential = "orbit-fixture"
-managed_models = true
-[[providers.orbit.models]]
-id = "deepseek-flash"
-[[providers.orbit.models]]
-id = "deepseek-v4-pro"
-reasoning = { adapter = "openai_chat", efforts = ["low", "max"], default = "low" }
+[providers.orbit.model_overrides."deepseek-v4-pro"]
+reasoning = { "efforts" = ["low", "max"], "default" = "low" }
 "#;
     let config = FileConfig::parse(input, Path::new("/tmp/orbit-fixture-auth")).unwrap();
     assert!(config.providers["orbit"].models[0].reasoning.is_none());
@@ -56,18 +129,9 @@ reasoning = { adapter = "openai_chat", efforts = ["low", "max"], default = "low"
 
 #[test]
 fn provider_debug_redacts_credentials() {
-    let provider = ProviderConfig {
-        managed_models: false,
-        auto_refresh_models: true,
-        api_format: ApiFormat::OpenaiChatCompletions,
-        base_url: "https://example.com/v1".into(),
-        api_key: "test-secret".into(),
-        credential: None,
-        models: Vec::new(),
-        configured_models: None,
-        timeout_seconds: 30,
-        max_retries: 0,
-    };
+    let provider = crate::test_support::TestProvider::new("test")
+        .key("test-secret")
+        .build();
 
     let rendered = format!("{provider:?}");
 
@@ -78,21 +142,18 @@ fn provider_debug_redacts_credentials() {
 #[test]
 fn omitted_limits_use_working_defaults_and_explicit_limits_survive() {
     let provider = r#"[providers.test]
+models = ["test"]
 base_url = "http://localhost"
 api_key = "test"
-[[providers.test.models]]
-id = "test"
 "#;
-    let input = format!("default_provider = \"test\"\n{provider}");
+    let input = format!("{provider}");
     let config: FileConfig = toml::from_str(&input).unwrap();
 
     assert_eq!(config.context_tokens, 128000);
     assert!(config.auto_compact);
 
-    let disabled: FileConfig = toml::from_str(&format!(
-        "default_provider = \"test\"\nauto_compact = false\n{provider}"
-    ))
-    .unwrap();
+    let disabled: FileConfig =
+        toml::from_str(&format!("auto_compact = false\n{provider}")).unwrap();
 
     assert!(!disabled.agent_config().auto_compact);
     assert_eq!(config.max_output_tokens, 32000);
@@ -103,7 +164,7 @@ id = "test"
     assert_eq!(config.command.default_timeout_seconds, 120);
     assert_eq!(config.command.max_timeout_seconds, 600);
 
-    let config: FileConfig = toml::from_str(&format!("default_provider = \"test\"\ncontext_tokens = 1000000\nmax_output_tokens = 64000\nmax_turns = 75\nmax_tool_calls = 500\n[command]\ndefault_timeout_seconds = 300\nmax_timeout_seconds = 1800\n{provider}")).unwrap();
+    let config: FileConfig = toml::from_str(&format!("context_tokens = 1000000\nmax_output_tokens = 64000\nmax_turns = 75\nmax_tool_calls = 500\n[command]\ndefault_timeout_seconds = 300\nmax_timeout_seconds = 1800\n{provider}")).unwrap();
 
     assert_eq!(config.agent_config().max_turns, 75);
     assert_eq!(config.agent_config().max_tool_calls, 500);
@@ -116,15 +177,11 @@ id = "test"
 #[test]
 fn configured_provider_models_select_their_provider_connection() {
     let config: FileConfig = toml::from_str(
-        r#"default_provider = "deepseek"
-[providers.deepseek]
+        r#"[providers.deepseek]
+models = ["deepseek-chat", "deepseek-reasoner"]
 api_format = "openai_chat_completions"
 base_url = "https://deepseek.example/v1"
 api_key = "deepseek-key"
-[[providers.deepseek.models]]
-id = "deepseek-chat"
-[[providers.deepseek.models]]
-id = "deepseek-reasoner"
 "#,
     )
     .unwrap();
@@ -141,14 +198,13 @@ id = "deepseek-reasoner"
 #[test]
 fn model_reasoning_profile_sets_the_default_request_effort() {
     let config: FileConfig = toml::from_str(
-        r#"default_provider = "openai"
-[providers.openai]
+        r#"[providers.openai]
+models = ["reasoning-model"]
 api_format = "openai_responses"
 base_url = "https://openai.example/v1"
 api_key = "openai-key"
-[[providers.openai.models]]
-id = "reasoning-model"
-reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default = "high" }
+[providers.openai.model_overrides."reasoning-model"]
+reasoning = { "efforts" = ["low", "high"], "default" = "high" }
 "#,
     )
     .unwrap();
@@ -168,14 +224,13 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default =
 #[test]
 fn anthropic_reasoning_profile_accepts_max_effort() {
     let config: FileConfig = toml::from_str(
-        r#"default_provider = "anthropic"
-[providers.anthropic]
+        r#"[providers.anthropic]
+models = ["claude-test"]
 api_format = "anthropic_messages"
 base_url = "https://anthropic.example"
 api_key = "test-key"
-[[providers.anthropic.models]]
-id = "claude-test"
-reasoning = { adapter = "anthropic_messages", efforts = ["low", "high", "max"], default = "max", extra = { thinking = { type = "enabled" } } }
+[providers.anthropic.model_overrides."claude-test"]
+reasoning = { "efforts" = ["low", "high", "max"], "default" = "max", "extra" = { "thinking" = { "type" = "enabled" } } }
 "#,
     )
     .unwrap();
@@ -203,14 +258,13 @@ fn reasoning_extra_cannot_replace_standard_request_fields() {
     let path = directory.path().join("config.toml");
     fs::write(
         &path,
-        r#"default_provider = "openai"
-[providers.openai]
+        r#"[providers.openai]
+models = ["reasoning-model"]
 api_format = "openai_responses"
 base_url = "https://openai.example/v1"
 api_key = "openai-key"
-[[providers.openai.models]]
-id = "reasoning-model"
-reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default = "high", extra = { stream = false } }
+[providers.openai.model_overrides."reasoning-model"]
+reasoning = { "efforts" = ["low", "high"], "default" = "high", "extra" = { "stream" = false } }
 "#,
     )
     .unwrap();
@@ -224,19 +278,15 @@ reasoning = { adapter = "openai_responses", efforts = ["low", "high"], default =
 #[test]
 fn model_context_window_overrides_the_default_budget() {
     let config: FileConfig = toml::from_str(
-        r#"default_provider = "test"
-context_tokens = 128000
+        r#"context_tokens = 128000
 max_output_tokens = 32000
 [providers.test]
+models = ["small-window", "default-window", "separate-input-window"]
 base_url = "https://test.example/v1"
 api_key = "test-key"
-[[providers.test.models]]
-id = "small-window"
+[providers.test.model_overrides."small-window"]
 context_tokens = 64000
-[[providers.test.models]]
-id = "default-window"
-[[providers.test.models]]
-id = "separate-input-window"
+[providers.test.model_overrides."separate-input-window"]
 input_context_tokens = 224000
 "#,
     )
@@ -261,13 +311,11 @@ input_context_tokens = 224000
 fn saved_provider_credentials_are_injected_as_references_and_cannot_mix_with_keys() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
-    let content = r#"default_provider = "test"
-[providers.test]
+    let content = r#"[providers.test]
+models = ["test-model"]
 api_format = "anthropic_messages"
 base_url = "https://api.anthropic.com/v1"
 credential = "anthropic"
-[[providers.test.models]]
-id = "test-model"
 "#;
 
     fs::write(&path, content).unwrap();
@@ -349,15 +397,11 @@ fn example_configuration_uses_valid_model_capability_profiles() {
 }
 
 #[test]
-fn models_are_unique_and_legacy_default_is_ignored() {
-    let duplicate = r#"default_provider = "other"
-[providers.other]
+fn model_ids_are_unique_and_reasoning_efforts_are_valid() {
+    let duplicate = r#"[providers.other]
+models = ["other-model", "other-model"]
 base_url = "https://other.example/v1"
 api_key = "other-key"
-[[providers.other.models]]
-id = "other-model"
-[[providers.other.models]]
-id = "other-model"
 "#;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
@@ -367,12 +411,10 @@ id = "other-model"
 
     fs::write(
         &path,
-        r#"default_provider = "missing"
-[providers.other]
+        r#"[providers.other]
+models = ["other-model"]
 base_url = "https://other.example/v1"
 api_key = "other-key"
-[[providers.other.models]]
-id = "other-model"
 "#,
     )
     .unwrap();
@@ -381,13 +423,12 @@ id = "other-model"
 
     fs::write(
         &path,
-        r#"default_provider = "other"
-[providers.other]
+        r#"[providers.other]
+models = ["other-model"]
 base_url = "https://other.example/v1"
 api_key = "other-key"
-[[providers.other.models]]
-id = "other-model"
-reasoning = { adapter = "openai_chat", efforts = ["high", "high"], default = "high" }
+[providers.other.model_overrides."other-model"]
+reasoning = { "efforts" = ["high", "high"], "default" = "high" }
 "#,
     )
     .unwrap();
@@ -398,7 +439,6 @@ reasoning = { adapter = "openai_chat", efforts = ["high", "high"], default = "hi
 #[test]
 fn config_parses_permissions() {
     let input = r#"
-default_provider = "test"
 context_tokens = 100000
 max_output_tokens = 4000
 max_turns = 10
@@ -409,10 +449,9 @@ read = ["/tmp/data"]
 read_write = ["/tmp/out"]
 
 [providers.test]
+models = ["model-1"]
 base_url = "https://test.example/v1"
 api_key = "test-key"
-[[providers.test.models]]
-id = "model-1"
 "#;
     let config: FileConfig = toml::from_str(input).unwrap();
 
@@ -432,12 +471,11 @@ fn deepseek_flash_vision_defaults_apply_to_existing_config_without_overriding_us
     ] {
         let config: FileConfig = toml::from_str(&format!(
             r#"
-default_provider = "deepseek"
 [providers.deepseek]
 base_url = "https://api.deepseek.com/v1"
 api_key = "test"
-[[providers.deepseek.models]]
-id = "deepseek-flash"
+models = ["deepseek-flash"]
+[providers.deepseek.model_overrides."deepseek-flash"]
 {setting}
 "#
         ))
@@ -452,22 +490,25 @@ id = "deepseek-flash"
 fn discovered_output_limits_do_not_raise_the_configured_request_budget() {
     let directory = tempfile::tempdir().unwrap();
     let mut config = FileConfig::parse(
-        r#"default_provider = "test"
-max_output_tokens = 32000
+        r#"max_output_tokens = 32000
 [providers.test]
 api_format = "openai_responses"
 base_url = "https://api.openai.com/v1"
-models = [{id = "fixture"}]
+models = ["fixture"]
 "#,
         directory.path(),
     )
     .unwrap();
     let provider = config.providers.get_mut("test").unwrap();
-    provider.configured_models = Some(provider.models.clone());
     provider.models[0].max_output_tokens = Some(64000);
     assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 32000);
     let provider = config.providers.get_mut("test").unwrap();
-    provider.configured_models.as_mut().unwrap()[0].max_output_tokens = Some(48000);
+    provider
+        .spec
+        .model_overrides
+        .entry("fixture".into())
+        .or_default()
+        .max_output_tokens = Some(48000);
     assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 48000);
     config.providers.get_mut("test").unwrap().models[0].max_output_tokens = Some(16000);
     assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 16000);

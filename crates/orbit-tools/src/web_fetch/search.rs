@@ -23,7 +23,7 @@ struct SearchPage {
     unconfirmed: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchProvider {
     Parallel,

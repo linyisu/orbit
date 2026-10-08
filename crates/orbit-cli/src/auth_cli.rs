@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Subcommand, ValueEnum};
 use orbit_auth::{AuthStore, CallbackFlow, CallbackListener, OAuthLogin, OAuthProvider};
 use orbit_client::platform::launch_browser;
-use orbit_config::{config::FileConfig, models::account_models};
+use orbit_config::config::FileConfig;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum LoginProvider {
@@ -62,7 +62,10 @@ pub(crate) async fn run(command: AuthCommand, directory: PathBuf) -> Result<()> 
     match command {
         AuthCommand::Models { config } => {
             let mut config = FileConfig::load(&config, &directory)?;
-            for diagnostic in account_models::refresh(&mut config, true).await {
+            for diagnostic in orbit_config::models::updater::refresh(&mut config, true)
+                .await
+                .diagnostics
+            {
                 eprintln!("{diagnostic}");
             }
             for model in config.model_options()? {

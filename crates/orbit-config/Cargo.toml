@@ -3,6 +3,9 @@ name = "orbit-config"
 version.workspace = true
 edition.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 anyhow.workspace = true
 futures-util.workspace = true

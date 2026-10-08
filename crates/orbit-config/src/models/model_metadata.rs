@@ -180,11 +180,23 @@ pub async fn export(output: &Path, web: &WebConfig) -> Result<()> {
     save(output, &download(web).await?)
 }
 
-pub async fn supplement(config: &mut FileConfig, force: bool) -> Option<String> {
+pub(crate) struct MetadataUpdate {
+    pub status: String,
+    pub error: Option<String>,
+}
+pub(crate) async fn update(config: &mut FileConfig, force: bool) -> MetadataUpdate {
     if !config.providers.values().any(|p| api_format(p.api_format)) {
-        return None;
+        return MetadataUpdate {
+            status: "公共规格：此连接使用账号专属目录".into(),
+            error: None,
+        };
     }
-    let directory = config.auth_directory.as_ref()?;
+    let Some(directory) = config.auth_directory.as_ref() else {
+        return MetadataUpdate {
+            status: "公共规格：使用内置快照".into(),
+            error: None,
+        };
+    };
     let path = directory.join("model-metadata/catalog.json");
     let cache = read_cache(&path);
     let fresh = fs::metadata(&path)
@@ -196,7 +208,11 @@ pub async fn supplement(config: &mut FileConfig, force: bool) -> Option<String> 
         .providers
         .values()
         .any(|provider| api_format(provider.api_format) && provider.auto_refresh_models);
-    let (catalog, error) = if !refresh || (!force && fresh && cache.is_some()) {
+    let attempted = force || (refresh && !(fresh && cache.is_some()));
+    let previous = cache
+        .as_ref()
+        .map(|c| serde_json::to_value(&c.providers).expect("serializable catalog"));
+    let (catalog, error) = if !force && (!refresh || (fresh && cache.is_some())) {
         (cache, None)
     } else {
         match tokio::time::timeout(REFRESH_TIMEOUT, download(&config.web)).await {
@@ -223,7 +239,21 @@ pub async fn supplement(config: &mut FileConfig, force: bool) -> Option<String> 
     for provider in config.providers.values_mut() {
         catalog.supplement(provider);
     }
-    error.filter(|_| force)
+    let status = if error.is_some() {
+        "公共规格：更新失败，沿用缓存或内置快照"
+    } else if !attempted {
+        "公共规格：使用有效缓存或内置快照"
+    } else if previous
+        == Some(serde_json::to_value(&catalog.providers).expect("serializable catalog"))
+    {
+        "公共规格：已是最新"
+    } else {
+        "公共规格：已更新"
+    };
+    MetadataUpdate {
+        status: format!("{status} · models.dev"),
+        error,
+    }
 }
 
 fn api_format(format: ApiFormat) -> bool {
@@ -273,9 +303,7 @@ impl Catalog {
         if catalogs.is_empty() {
             return;
         }
-        provider
-            .configured_models
-            .get_or_insert_with(|| provider.models.clone());
+        let format = provider.spec.api_format;
         for model in &mut provider.models {
             let mut specs = catalogs.iter().filter_map(|(id, catalog)| {
                 catalog
@@ -289,7 +317,7 @@ impl Catalog {
             if specs.any(|(_, other)| other != spec) {
                 continue;
             }
-            spec.supplement(model, id, provider.api_format);
+            spec.supplement(model, id, format);
         }
     }
 }

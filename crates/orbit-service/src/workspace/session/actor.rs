@@ -316,7 +316,7 @@ impl Actor {
                     .map_or(&self.setup.resources.options, |value| &value.options);
                 let mut config =
                     crate::config::FileConfig::load(&options.config, &options.auth_directory)?;
-                crate::account_models::refresh(&mut config, false).await;
+                let _ = orbit_config::models::updater::refresh(&mut config, false).await;
                 let models = config.model_options()?;
                 let previous_limit = self.setup.resources.budget.input_context_tokens;
                 let selected = self.setup.resources.model_name.clone();

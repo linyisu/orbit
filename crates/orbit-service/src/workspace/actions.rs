@@ -1,3 +1,5 @@
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestProvider};
 mod inspection;
 mod project;
 
@@ -166,7 +168,10 @@ mod tests {
             "---\nname: example\ndescription: Example skill\n---\nKeep identifiers stable.\n",
         )
         .unwrap();
-        std::fs::write(root.join("config.toml"), "default_provider = \"test\"\n[providers.test]\nbase_url = \"http://127.0.0.1:1/v1\"\napi_key = \"test\"\nauto_refresh_models = false\nmodels = [{ id = \"mock\" }]\n").unwrap();
+        TestConfig::new()
+            .provider(TestProvider::new("test").key("test").models(["mock"]))
+            .write(root.join("config.toml"))
+            .unwrap();
         let options = crate::WorkspaceOptions {
             model: Some("test::mock".into()),
             initial_directory: root.into(),

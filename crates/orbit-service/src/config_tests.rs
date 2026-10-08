@@ -1,4 +1,6 @@
 use orbit_agent::tool::{ClosureTool, ToolRegistry};
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -19,14 +21,15 @@ async fn project_resources_follow_the_destination_without_changing_process_cwd()
     let config = directory.path().join("config.toml");
     std::fs::write(
         &config,
-        r#"default_provider = "test"
-[providers.test]
-base_url = "http://127.0.0.1:1/v1"
-auto_refresh_models = false
-api_key = "test-only"
-[[providers.test.models]]
-id = "test"
-"#,
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint("http://127.0.0.1:1/v1")
+                    .key("test-only")
+                    .models([TestModel::new("test")]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let options = WorkspaceOptions {
@@ -97,13 +100,15 @@ async fn fresh_launch_uses_its_directory_instead_of_the_previous_session() {
     let config = first.join("config.toml");
     std::fs::write(
         &config,
-        r#"default_provider = "test"
-[providers.test]
-base_url = "http://127.0.0.1:1/v1"
-auto_refresh_models = false
-api_key = "test-only"
-models = [{ id = "test" }]
-"#,
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint("http://127.0.0.1:1/v1")
+                    .key("test-only")
+                    .models([TestModel::new("test")]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let options = WorkspaceOptions {
@@ -249,21 +254,21 @@ fn disabled_git_hides_patch_export_as_well_as_inspection() {
 #[test]
 fn batch_model_selection_accepts_qualified_names_and_rejects_ambiguity() {
     let config: FileConfig = toml::from_str(
-        r#"default_provider = "one"
-[providers.one]
-base_url = "https://one.example/v1"
-api_key = "one-key"
-[[providers.one.models]]
-id = "shared"
-[[providers.one.models]]
-id = "one-only"
-
-[providers.two]
-base_url = "https://two.example/v1"
-api_key = "two-key"
-[[providers.two.models]]
-id = "shared"
-"#,
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("one")
+                    .endpoint("https://one.example/v1")
+                    .key("one-key")
+                    .models([TestModel::new("shared"), TestModel::new("one-only")]),
+            )
+            .provider(
+                TestProvider::new("two")
+                    .endpoint("https://two.example/v1")
+                    .key("two-key")
+                    .models([TestModel::new("shared")]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
 

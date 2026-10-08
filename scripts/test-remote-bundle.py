@@ -68,7 +68,7 @@ def open_unconfigured_workspace(container, executable):
 base_url = "http://127.0.0.1:9/v1"
 api_key = "test-only"
 auto_refresh_models = false
-models = [{ id = "local-model" }]
+models = ["local-model"]
 """
         response = request({"method": "open", "resume": None, "model": "test::local-model", "configuration": {"content": config, "credentials": {}}})
         assert response["type"] == "opened", response

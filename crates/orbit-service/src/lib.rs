@@ -15,7 +15,6 @@ pub mod workspace;
 
 pub(crate) use context::{history, instructions, project_state};
 pub(crate) use extensions::{marketplaces, skills};
-pub(crate) use models::account_models;
 pub(crate) use tools as runtime;
 pub(crate) use tools::verification;
 

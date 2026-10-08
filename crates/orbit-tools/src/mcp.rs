@@ -25,13 +25,13 @@ use crate::approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, McpPrevi
 const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, serde::Serialize)]
 pub struct McpConfig {
     #[serde(default)]
     pub servers: BTreeMap<String, McpServerConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 pub struct McpServerConfig {
     #[serde(rename = "type", default = "stdio_transport")]
     pub transport: String,

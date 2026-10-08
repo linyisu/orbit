@@ -17,10 +17,62 @@ fn fixture() -> Catalog {
     .unwrap()
 }
 
+#[tokio::test]
+async fn repeated_refresh_replaces_inherited_specs_without_rewriting_declarations() {
+    use crate::test_support::{TestConfig, TestModel, TestProvider};
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = TestConfig::new()
+        .auth(directory.path())
+        .provider(
+            TestProvider::responses("test")
+                .endpoint("https://api.openai.com/v1")
+                .models([TestModel::new("fixture").vision(false)]),
+        )
+        .build()
+        .unwrap();
+    let declared = toml::to_string(&config).unwrap();
+    let path = directory.path().join("model-metadata/catalog.json");
+    let mut catalog = fixture();
+    save(&path, &catalog).unwrap();
+    assert!(
+        crate::models::updater::refresh(&mut config, false)
+            .await
+            .diagnostics
+            .is_empty()
+    );
+    assert_eq!(
+        config.providers["test"].models[0].context_tokens,
+        Some(200000)
+    );
+    let spec = catalog
+        .providers
+        .get_mut("openai")
+        .unwrap()
+        .models
+        .get_mut("fixture")
+        .unwrap();
+    spec.limit.context = Some(300000);
+    spec.limit.input = None;
+    save(&path, &catalog).unwrap();
+    assert!(
+        crate::models::updater::refresh(&mut config, false)
+            .await
+            .diagnostics
+            .is_empty()
+    );
+    let model = &config.providers["test"].models[0];
+    assert_eq!(model.context_tokens, Some(300000));
+    assert!(model.input_context_tokens.is_none());
+    assert_eq!(model.supports_vision, Some(false));
+    assert_eq!(toml::to_string(&config).unwrap(), declared);
+}
+
 fn provider(base: &str, format: ApiFormat) -> ProviderConfig {
-    serde_json::from_value(json!({"base_url": base, "api_format": format,
-        "models": [{"id": "fixture"}, {"id": "unknown"}]}))
-    .unwrap()
+    crate::test_support::TestProvider::new("test")
+        .endpoint(base)
+        .format(format)
+        .models(["fixture", "unknown"])
+        .build()
 }
 
 #[test]
@@ -41,11 +93,7 @@ fn exact_endpoint_and_model_metadata_fills_missing_fields_without_adding_models(
     );
     assert_eq!(reasoning.default, ReasoningEffort::High);
     assert!(provider.models[1].context_tokens.is_none());
-    assert!(
-        provider.configured_models.as_ref().unwrap()[0]
-            .context_tokens
-            .is_none()
-    );
+    assert!(provider.spec.model_overrides.is_empty());
 
     for base in [
         "https://relay.example/v1",
@@ -111,12 +159,11 @@ fn shared_endpoint_conflicts_and_invalid_limits_do_not_supply_ambiguous_specs() 
 async fn disabled_refresh_uses_cached_specs_without_network_access() {
     let directory = tempfile::tempdir().unwrap();
     let mut config = FileConfig::parse(
-        r#"default_provider = "test"
-[providers.test]
+        r#"[providers.test]
 api_format = "openai_responses"
 base_url = "https://api.openai.com/v1"
 auto_refresh_models = false
-models = [{id = "fixture"}]
+models = ["fixture"]
 [web]
 proxy = "http://invalid.invalid:1"
 "#,
@@ -125,7 +172,7 @@ proxy = "http://invalid.invalid:1"
     .unwrap();
     let path = directory.path().join("model-metadata/catalog.json");
     save(&path, &fixture()).unwrap();
-    assert!(supplement(&mut config, true).await.is_none());
+    assert!(update(&mut config, false).await.error.is_none());
     assert_eq!(
         config.providers["test"].models[0].context_tokens,
         Some(200000)

@@ -20,7 +20,8 @@ use crate::models as catalog;
 
 pub const MIN_CONTEXT_TOKENS: usize = 8192;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileConfig {
     #[serde(skip)]
     pub auth_directory: Option<PathBuf>,
@@ -51,7 +52,7 @@ pub struct FileConfig {
     pub providers: BTreeMap<String, ProviderConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct TuiConfig {
     pub cursor_trail: bool,
@@ -63,44 +64,11 @@ impl Default for TuiConfig {
     }
 }
 
-#[derive(Clone, Deserialize)]
-pub struct ProviderConfig {
-    #[serde(default = "default_api_format")]
-    pub api_format: ApiFormat,
-    pub base_url: String,
-    #[serde(default)]
-    pub api_key: String,
-    #[serde(default)]
-    pub credential: Option<String>,
-    pub models: Vec<ModelProfile>,
-    // Explicit profiles remain authoritative across repeated catalog refreshes.
-    #[serde(skip)]
-    pub configured_models: Option<Vec<ModelProfile>>,
-    #[serde(default)]
-    pub managed_models: bool,
-    #[serde(default = "default_auto_refresh_models")]
-    pub auto_refresh_models: bool,
-    #[serde(default = "default_timeout_seconds")]
-    pub timeout_seconds: u64,
-    /// Number of retries after a failed request that has not produced headers.
-    #[serde(default = "orbit_model::types::default_max_retries")]
-    pub max_retries: u8,
-}
-
-impl std::fmt::Debug for ProviderConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ProviderConfig")
-            .field("api_format", &self.api_format)
-            .field("base_url", &self.base_url)
-            .field("api_key", &"[redacted]")
-            .field("credential", &self.credential)
-            .field("models", &self.models)
-            .field("timeout_seconds", &self.timeout_seconds)
-            .field("max_retries", &self.max_retries)
-            .finish()
-    }
-}
+mod provider;
+pub use provider::{
+    ModelOverrides, ModelSelection, ProviderConfig, ProviderSpec, ReasoningOverride,
+    adapter as reasoning_adapter,
+};
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
 pub struct ModelProfile {
@@ -117,7 +85,7 @@ pub struct ModelProfile {
     pub input_context_tokens: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningProfile>,
-    #[serde(default, alias = "vision")]
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_vision: Option<bool>,
 }
@@ -233,34 +201,6 @@ pub fn antigravity_profiles() -> Result<Vec<ModelProfile>> {
 }
 
 impl FileConfig {
-    pub fn merge_account_models(&mut self) -> Result<()> {
-        for provider in self.providers.values_mut() {
-            provider
-                .configured_models
-                .get_or_insert_with(|| provider.models.clone());
-            if provider.managed_models
-                || provider.api_format != ApiFormat::GoogleCodeAssist
-                || provider.credential.is_none()
-                || provider.base_url.trim_end_matches('/')
-                    != "https://daily-cloudcode-pa.googleapis.com"
-            {
-                continue;
-            }
-
-            for model in antigravity_profiles()? {
-                if !provider
-                    .models
-                    .iter()
-                    .any(|existing| existing.id == model.id)
-                {
-                    provider.models.push(model);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     pub fn load(path: &Path, auth_directory: &Path) -> Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
@@ -271,7 +211,12 @@ impl FileConfig {
         let mut config: Self = toml::from_str(content).context("failed to parse configuration")?;
 
         config.auth_directory = Some(auth_directory.to_path_buf());
-        config.merge_account_models()?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let config = self;
         config.subagents.validate()?;
 
         if config.context_tokens < MIN_CONTEXT_TOKENS {
@@ -291,7 +236,6 @@ impl FileConfig {
                     .credential
                     .as_ref()
                     .is_some_and(|name| name.trim().is_empty())
-                || provider.models.is_empty()
                 || provider.timeout_seconds == 0
                 || provider.max_retries > 5
                 || provider
@@ -305,6 +249,9 @@ impl FileConfig {
             }
         }
 
+        for provider in config.providers.values() {
+            provider.spec.validate()?;
+        }
         config.model_options()?;
 
         for (name, provider) in &config.providers {
@@ -382,7 +329,14 @@ impl FileConfig {
                 config
                     .model_options()?
                     .iter()
-                    .any(|m| &m.qualified_name() == name),
+                    .any(|m| &m.qualified_name() == name)
+                    || name.split_once("::").is_some_and(|(provider, model)| {
+                        !model.is_empty()
+                            && config
+                                .providers
+                                .get(provider)
+                                .is_some_and(|p| p.spec.models.is_auto())
+                    }),
                 "compaction.model must name a configured provider::model"
             );
         }
@@ -390,7 +344,7 @@ impl FileConfig {
         config.command.validate().map_err(anyhow::Error::msg)?;
         config.mcp.validate()?;
 
-        Ok(config)
+        Ok(())
     }
 
     pub fn compaction_runtime(&self) -> Result<orbit_agent::compaction::CompactionRuntime> {
@@ -443,14 +397,10 @@ impl FileConfig {
         for (name, provider) in &self.providers {
             for model in &provider.models {
                 let requested_output = provider
-                    .configured_models
-                    .as_ref()
-                    .map_or(model.max_output_tokens, |models| {
-                        models
-                            .iter()
-                            .find(|entry| entry.id == model.id)
-                            .and_then(|entry| entry.max_output_tokens)
-                    })
+                    .spec
+                    .model_overrides
+                    .get(&model.id)
+                    .and_then(|model| model.max_output_tokens)
                     .unwrap_or(self.max_output_tokens);
                 let max_output_tokens =
                     requested_output.min(model.max_output_tokens.unwrap_or(u32::MAX));

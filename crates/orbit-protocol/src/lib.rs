@@ -10,10 +10,10 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 10;
-// Mode changes now require an explicit request and a versioned confirmation.
-// Older clients can overwrite permissions when starting an ordinary turn.
-pub const MIN_COMPATIBLE_VERSION: u32 = 10;
+pub const VERSION: u32 = 11;
+// Configuration snapshots use compact model IDs and explicit overrides.
+// Both ends must understand the same provider schema.
+pub const MIN_COMPATIBLE_VERSION: u32 = 11;
 
 pub fn supports_version(version: u32) -> bool {
     (MIN_COMPATIBLE_VERSION..=VERSION).contains(&version)

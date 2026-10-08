@@ -1,3 +1,5 @@
+#[cfg(test)]
+use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use std::{path::Path, process::Stdio, time::Duration};
 
 use serde_json::{Value, json};
@@ -168,15 +170,15 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     let (url, model) = mock_model().await;
     std::fs::write(
         root.join("config.toml"),
-        format!(
-            r#"default_provider = "test"
-[providers.test]
-base_url = "{url}"
-api_key = "test-only"
-auto_refresh_models = false
-models = [{{ id = "mock" }}]
-"#
-        ),
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint(&url)
+                    .key("test-only")
+                    .models([TestModel::new("mock")]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let mut client = Client::connect(root).await;
@@ -526,15 +528,15 @@ async fn cancelling_a_disconnected_pending_approval_does_not_write_the_file() {
     let _model = tokio_util::task::AbortOnDropHandle::new(model);
     std::fs::write(
         root.join("config.toml"),
-        format!(
-            r#"default_provider = "test"
-[providers.test]
-base_url = "{url}"
-api_key = "test-only"
-auto_refresh_models = false
-models = [{{ id = "mock" }}]
-"#
-        ),
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint(&url)
+                    .key("test-only")
+                    .models([TestModel::new("mock")]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let mut client = Client::connect(root).await;
@@ -645,15 +647,15 @@ async fn remote_prompt_uses_local_configuration_and_credentials_in_an_unconfigur
         let config = local.path().join("local.toml");
         std::fs::write(
             &config,
-            format!(
-                r#"default_provider = "test"
-[providers.test]
-base_url = "{url}"
-credential = "local-only"
-auto_refresh_models = false
-models = [{{ id = "mock" }}]
-"#
-            ),
+            &TestConfig::new()
+                .provider(
+                    TestProvider::new("test")
+                        .endpoint(&url)
+                        .credential("local-only")
+                        .models([TestModel::new("mock")]),
+                )
+                .providers_toml()
+                .unwrap(),
         )
         .unwrap();
         let output = tokio::time::timeout(
@@ -725,15 +727,15 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
     let (url, model) = mock_tool_model("read_file", json!({"path":"proof.txt"}), None).await;
     std::fs::write(
         root.join("config.toml"),
-        format!(
-            r#"default_provider = "test"
-[providers.test]
-base_url = "{url}"
-api_key = "test-only"
-auto_refresh_models = false
-models = [{{ id = "mock" }}, {{ id = "other" }}]
-"#
-        ),
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint(&url)
+                    .key("test-only")
+                    .models([TestModel::new("mock"), TestModel::new("other")]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let project = root.join("next project");
@@ -921,7 +923,19 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
     )
     .await;
     let config = root.join("config.toml");
-    std::fs::write(&config, format!("default_provider = \"test\"\n[providers.test]\nbase_url = \"{url}\"\napi_key = \"test-only\"\nauto_refresh_models = false\nmodels = [{{ id = \"first\" }}, {{ id = \"selected\" }}]\n")).unwrap();
+    std::fs::write(
+        &config,
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint(&url)
+                    .key("test-only")
+                    .models([TestModel::new("first"), TestModel::new("selected")]),
+            )
+            .providers_toml()
+            .unwrap(),
+    )
+    .unwrap();
     let auth = root.join("auth");
     let connection = Arc::new(Connection {
         local_configuration: Some(Local {
@@ -1041,15 +1055,19 @@ async fn native_execution_refuses_an_explicit_unavailable_sandbox() {
     let root = directory.path();
     std::fs::write(
         root.join("config.toml"),
-        r#"default_provider = "test"
-[command]
-sandbox = true
-[providers.test]
-base_url = "http://127.0.0.1:9/v1"
-api_key = "test-only"
-auto_refresh_models = false
-models = [{ id = "mock" }]
-"#,
+        &format!(
+            "{}{}",
+            "[command]\nsandbox = true\n",
+            TestConfig::new()
+                .provider(
+                    TestProvider::new("test")
+                        .endpoint("http://127.0.0.1:9/v1")
+                        .key("test-only")
+                        .models([TestModel::new("mock")])
+                )
+                .providers_toml()
+                .unwrap()
+        ),
     )
     .unwrap();
     let mut client = Client::connect(root).await;
@@ -1073,13 +1091,15 @@ async fn packaged_service_lists_history_created_by_the_native_store() {
     let root = directory.path();
     std::fs::write(
         root.join("config.toml"),
-        r#"default_provider = "test"
-[providers.test]
-base_url = "http://127.0.0.1:1"
-api_key = "test-only"
-auto_refresh_models = false
-models = [{ id = "mock" }]
-"#,
+        &TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint("http://127.0.0.1:1")
+                    .key("test-only")
+                    .models([TestModel::new("mock")]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
@@ -1142,11 +1162,14 @@ models = [{ id = "mock" }]
 async fn model_selection_is_explicit_and_catalog_refresh_never_switches_it() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let config = r#"[providers.test]
-base_url = "http://127.0.0.1:1/v1"
-auto_refresh_models = false
-models = [{ id = "first" }, { id = "chosen" }]
-"#;
+    let config = &TestConfig::new()
+        .provider(
+            TestProvider::new("test")
+                .endpoint("http://127.0.0.1:1/v1")
+                .models([TestModel::new("first"), TestModel::new("chosen")]),
+        )
+        .providers_toml()
+        .unwrap();
     std::fs::write(root.join("config.toml"), config).unwrap();
     let mut client = Client::connect(root).await;
     let missing = client.request(json!({"method":"open"})).await;
@@ -1194,18 +1217,10 @@ async fn two_sessions_share_a_service_across_executables_configs_and_database_al
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     for name in ["first", "second"] {
-        std::fs::write(
-            root.join(format!("{name}.toml")),
-            format!(
-                r#"[providers.{name}]
-base_url = "http://127.0.0.1:1/v1"
-api_key = "test-only"
-auto_refresh_models = false
-models = [{{ id = "mock" }}]
-"#
-            ),
-        )
-        .unwrap();
+        TestConfig::new()
+            .provider(TestProvider::new(name).key("test-only").models(["mock"]))
+            .write(root.join(format!("{name}.toml")))
+            .unwrap();
     }
     let upgraded = root.join("upgraded-server");
     std::fs::copy(env!("ORBIT_EMBEDDED_SERVER"), &upgraded).unwrap();

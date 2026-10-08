@@ -1,22 +1,12 @@
 //! Editable model drafts, committed only with the connection.
 use anyhow::{Result, ensure};
-use orbit_model::{
-    client::ApiFormat,
-    types::{ReasoningAdapter, ReasoningEffort},
-};
+use orbit_model::{client::ApiFormat, types::ReasoningEffort};
 
 use super::form::Field;
-use crate::config::{ModelProfile, ReasoningProfile};
+use crate::config::{ModelProfile, ReasoningProfile, reasoning_adapter as adapter};
 
 pub(super) fn blank(id: &str) -> ModelProfile {
-    ModelProfile {
-        id: id.into(),
-        context_tokens: None,
-        input_context_tokens: None,
-        max_output_tokens: None,
-        reasoning: None,
-        supports_vision: None,
-    }
+    ModelProfile::new(id)
 }
 
 fn number<T: std::str::FromStr>(field: &Field) -> Result<Option<T>> {
@@ -28,15 +18,6 @@ fn number<T: std::str::FromStr>(field: &Field) -> Result<Option<T>> {
         .parse()
         .map(Some)
         .map_err(|_| anyhow::anyhow!("{}必须为整数", field.label))
-}
-
-fn adapter(format: ApiFormat) -> ReasoningAdapter {
-    match format {
-        ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
-        ApiFormat::OpenaiResponses | ApiFormat::ChatgptCodex => ReasoningAdapter::OpenaiResponses,
-        ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
-        ApiFormat::GoogleCodeAssist => ReasoningAdapter::Google,
-    }
 }
 
 const EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -69,9 +50,10 @@ pub(super) fn fields(model: &ModelProfile) -> Vec<Field> {
             "图片输入",
             match model.supports_vision {
                 Some(true) => "支持",
-                Some(false) | None => "不支持",
+                Some(false) => "不支持",
+                None => "继承服务端",
             },
-            &["不支持", "支持"],
+            &["继承服务端", "不支持", "支持"],
         ),
     ]
 }
@@ -102,7 +84,11 @@ pub(super) fn read(
     });
 
     ensure!(input >= 8192, "可用输入预算不能小于 8192 tokens");
-    updated.supports_vision = Some(fields[4].value() == "支持");
+    updated.supports_vision = match fields[4].value() {
+        "支持" => Some(true),
+        "不支持" => Some(false),
+        _ => None,
+    };
     Ok(updated)
 }
 
