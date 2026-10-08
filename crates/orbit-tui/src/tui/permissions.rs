@@ -16,6 +16,14 @@ impl Mode {
         }
     }
 
+    pub fn next(self) -> Self {
+        match self {
+            Self::Ask => Self::Auto,
+            Self::Auto => Self::Yolo,
+            Self::Yolo => Self::Ask,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Ask => "ask",

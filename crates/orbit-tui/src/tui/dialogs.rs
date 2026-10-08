@@ -1644,7 +1644,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 "滚轮           滚动对话，不移动输入光标",
                 "拖选 + Ctrl+C  复制选区",
                 "Ctrl+O         展开工具结果；再次按下收起当前展开项",
-                "Shift+Tab      切换 Plan / Build",
+                "Shift+Tab      切换 ask / auto / yolo",
                 "Esc            关闭面板或命令菜单",
                 "Ctrl+A         全选输入；Shift+方向键扩展选区",
                 "Ctrl+↑ / ↓     切换历史并保留草稿光标",

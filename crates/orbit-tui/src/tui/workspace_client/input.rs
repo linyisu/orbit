@@ -336,16 +336,14 @@ impl Tab {
             }
             return self.paste();
         }
-        if matches!(&event, Event::Key(key) if key.code == KeyCode::BackTab && key.kind != KeyEventKind::Release)
+        if let Event::Key(key) = &event
+            && (key.code == KeyCode::BackTab
+                || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT)))
+            && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
         {
-            self.send(Request::Plan {
-                session: self.id.clone().unwrap_or_default(),
-                action: if self.state.planning.mode() == orbit_protocol::plan::WorkMode::Plan {
-                    orbit_protocol::plan::Action::Leave
-                } else {
-                    orbit_protocol::plan::Action::Enter
-                },
-            });
+            if key.kind == KeyEventKind::Press {
+                self.set_mode(self.state.permission_mode.next());
+            }
             return Ok(Action::Redraw);
         }
         let busy = self.busy || self.starting.is_some();

@@ -93,7 +93,7 @@ flowchart TD
 
 ### Plan / Build
 
-- `/plan` 进入只读规划，Agent 也可用 `enter_plan` 自主进入；`/build` 返回执行模式。Shift+Tab 切换工作模式。运行中需先停止或等待任务完成。
+- `/plan` 进入只读规划，Agent 也可用 `enter_plan` 自主进入；`/build` 返回执行模式。切换 Plan / Build 前需先停止或等待当前任务完成。主输入框中 Shift+Tab 按 ask → auto → yolo 循环切换审批模式。
 - Plan 可读取文件、搜索、调用探索/审查子代理及 `ask_user`。服务端会拦截文件修改、任意 shell 命令、MCP 执行、开发子代理和权限扩张；子代理共享这层限制。测试、构建和安装属于 Build。
 - Agent 用 `update_plan` 保存正文、步骤及相关文件路径，再用 `submit_plan` 等待确认。点击工具记录、底部“计划待确认”或执行 `/plan view` 打开审阅弹窗；可阅读方案、提交修改意见或明确选择“开始执行”。收起弹窗不会批准计划，其他终端的更新也不会抢焦点。
 - 反馈提交后自动关闭弹窗并继续只读修改；批准后进入 Build，实施步骤加入 `/tasks`。Enter 只激活当前焦点按钮，默认焦点不会批准；反馈输入区 Enter 换行，Ctrl+Enter 提交意见。
