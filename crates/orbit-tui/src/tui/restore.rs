@@ -6,11 +6,12 @@ use ratatui::{
     Frame,
     layout::{Alignment, Position, Rect},
     style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{app::UiState, icons, theme::THEME};
+use super::{app::UiState, theme::THEME};
 
 #[derive(Clone, Debug)]
 struct Entry {
@@ -244,17 +245,6 @@ impl RestorePicker {
                 title_width,
                 if focused { title_elapsed } else { None },
             );
-            frame.render_widget(
-                Paragraph::new(icons::checkbox(entry.selected)).style(Style::default().fg(
-                    if entry.selected {
-                        THEME.accent
-                    } else {
-                        THEME.secondary
-                    },
-                )),
-                Rect::new(hit.x + 1, hit.y, 2, 1),
-            );
-            let text_area = Rect::new(hit.x + 4, hit.y, hit.width.saturating_sub(4), 1);
             let style = if focused {
                 Style::default()
                     .fg(THEME.on_accent)
@@ -263,9 +253,25 @@ impl RestorePicker {
             } else {
                 Style::default().fg(THEME.foreground)
             };
+            let mark_style = if focused {
+                style
+            } else {
+                Style::default()
+                    .fg(if entry.selected {
+                        THEME.accent
+                    } else {
+                        THEME.secondary
+                    })
+                    .add_modifier(Modifier::BOLD)
+            };
             frame.render_widget(
-                Paragraph::new(format!("  {title}  ")).style(style),
-                text_area,
+                Paragraph::new(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(if entry.selected { "[✓]" } else { "[ ]" }, mark_style),
+                    Span::raw(format!(" {title}  ")),
+                ]))
+                .style(style),
+                *hit,
             );
         }
         if ids.is_empty() {
@@ -519,8 +525,8 @@ mod tests {
             assert!(picker.selected().is_empty());
             let row = picker.rows[0].0;
             assert_eq!(
-                terminal.backend().buffer()[(row.x + 1, row.y)].symbol(),
-                icons::CHECKBOX_BLANK_OUTLINE
+                terminal.backend().buffer()[(row.x + 3, row.y)].symbol(),
+                " "
             );
 
             key(&mut state, KeyCode::Char('1'));
@@ -546,8 +552,8 @@ mod tests {
             assert_eq!(picker.selected().len(), 15);
             let row = picker.rows[0].0;
             assert_eq!(
-                terminal.backend().buffer()[(row.x + 1, row.y)].symbol(),
-                icons::CHECKBOX_MARKED_OUTLINE
+                terminal.backend().buffer()[(row.x + 3, row.y)].symbol(),
+                "✓"
             );
             let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
             if picker.area.width >= 31 {
@@ -558,7 +564,12 @@ mod tests {
             }
 
             assert_eq!(picker.rows.len(), 1);
-            assert_eq!(buffer[(row.x + 1, row.y)].fg, THEME.accent);
+            for x in row.x..row.right() {
+                assert_eq!(buffer[(x, row.y)].bg, THEME.accent);
+            }
+            assert_eq!(buffer[(row.x + 3, row.y)].fg, THEME.on_accent);
+            assert_eq!(buffer[(row.x, row.y)].symbol(), " ");
+            assert_eq!(buffer[(row.x + 1, row.y)].symbol(), " ");
         }
     }
 
@@ -581,7 +592,13 @@ mod tests {
         for x in (row.x..row.x + 6).chain(row.right() - 2..row.right()) {
             assert_eq!(before[(x, row.y)], after[(x, row.y)]);
         }
-        for x in [row.x + 4, row.x + 5, row.right() - 2, row.right() - 1] {
+        for x in [
+            row.x,
+            row.x + 1,
+            row.x + 5,
+            row.right() - 2,
+            row.right() - 1,
+        ] {
             assert_eq!(after[(x, row.y)].symbol(), " ");
             assert_eq!(after[(x, row.y)].bg, THEME.accent);
         }
