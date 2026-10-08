@@ -150,47 +150,6 @@ fn thinking_duration_measures_reasoning_stream_time() {
 }
 
 #[test]
-fn replay_preserves_recorded_reasoning_time() {
-    let events = vec![
-        AgentEvent::Model(StreamEvent::ReasoningDelta("reasoning".into())),
-        AgentEvent::ReasoningFinished { elapsed_ms: 7500 },
-        AgentEvent::Model(StreamEvent::Completed {
-            finish_reason: None,
-            usage: None,
-        }),
-    ];
-    let stored = serde_json::to_string(&events).unwrap();
-    let restored: Vec<AgentEvent> = serde_json::from_str(&stored).unwrap();
-    let mut state = UiState::new("mock");
-
-    for event in restored {
-        state.apply_replayed(event);
-    }
-
-    let TranscriptItem::Thinking(row) = &state.transcript[0] else {
-        panic!("missing reasoning");
-    };
-    assert_eq!(row.elapsed, Some(std::time::Duration::from_millis(7500)));
-}
-
-#[test]
-fn replay_does_not_invent_reasoning_duration() {
-    let mut state = UiState::new("mock");
-    state.apply_replayed(AgentEvent::Model(StreamEvent::ReasoningDelta(
-        "old thought".into(),
-    )));
-    state.apply_replayed(AgentEvent::Model(StreamEvent::TextDelta(
-        "old answer".into(),
-    )));
-
-    let TranscriptItem::Thinking(row) = &state.transcript[0] else {
-        panic!("missing reasoning");
-    };
-    assert!(row.finished);
-    assert_eq!(row.elapsed, None);
-}
-
-#[test]
 fn approval_wait_is_excluded_from_response_clock() {
     let mut state = UiState::new("mock");
     state.begin_run();

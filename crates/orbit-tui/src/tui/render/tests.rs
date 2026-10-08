@@ -2476,7 +2476,7 @@ fn activity_stays_readable_and_in_place_while_colors_animate() {
     for width in [12, 24, 40, 80] {
         assert!(footer(&state, width).width() <= width);
     }
-    state.cancel();
+    state.status = RunStatus::Cancelling;
     assert!(footer(&state, 100).to_string().contains("正在取消"));
     state.apply(orbit_agent::events::AgentEvent::Cancelled);
     assert!(!footer(&state, 100).to_string().contains("正在"));
@@ -2587,7 +2587,7 @@ fn execution_footer_keeps_an_animated_bar_for_commands_and_tasks() {
             }
         }
 
-        state.cancel();
+        state.status = RunStatus::Cancelling;
         assert!(footer(&state, 100).to_string().contains("正在取消"));
         assert!(!footer(&state, 100).to_string().contains('█'));
         state.apply(AgentEvent::Cancelled);

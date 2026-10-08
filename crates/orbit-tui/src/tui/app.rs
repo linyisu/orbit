@@ -551,13 +551,6 @@ impl UiState {
         self.follow_bottom = true;
     }
 
-    #[cfg(test)]
-    pub fn cancel(&mut self) {
-        if self.status == RunStatus::Running {
-            self.status = RunStatus::Cancelling;
-        }
-    }
-
     pub fn apply(&mut self, event: AgentEvent) {
         self.activity.apply(&event);
         match event {
@@ -924,7 +917,8 @@ impl UiState {
                     self.model_started_at = None;
                     self.active_thinking = Some(self.transcript.len());
                     self.transcript.push(TranscriptItem::Thinking(ThinkingRow {
-                        started_at: Some(Instant::now()),
+                        // Replayed events carry recorded timings; replay speed is not model time.
+                        started_at: (!self.remote_replay).then(Instant::now),
                         ..text.into()
                     }));
                 }
@@ -935,21 +929,6 @@ impl UiState {
             }
 
             StreamEvent::ToolCallDelta(_) | StreamEvent::Completed { .. } => self.finish_thinking(),
-        }
-    }
-
-    /// Historical events have no reasoning timestamps. Never time their replay.
-    #[cfg(test)]
-    pub fn apply_replayed(&mut self, event: AgentEvent) {
-        let has_timing = matches!(event, AgentEvent::ReasoningFinished { .. });
-        self.apply(event);
-        self.model_started_at = None;
-
-        if let Some(TranscriptItem::Thinking(row)) = self.transcript.last_mut() {
-            row.started_at = None;
-            if !has_timing && !row.finished {
-                row.elapsed = None;
-            }
         }
     }
 

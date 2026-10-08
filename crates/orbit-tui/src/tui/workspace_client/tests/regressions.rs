@@ -746,3 +746,51 @@ fn file_approval_scroll_and_editing_use_the_live_event_route() {
     }
     assert_eq!(tab.state.input.text, "draft text");
 }
+
+#[test]
+fn replayed_reasoning_uses_saved_duration_and_live_reasoning_still_times_itself() {
+    use orbit_agent::events::AgentEvent;
+    use orbit_model::types::StreamEvent;
+    let (mut tab, _requests) = tab("本地");
+    for (replayed, saved) in [(true, Some(7500)), (true, None), (false, None)] {
+        let mut updates = vec![
+            Update::Started {
+                prompt: "question".into(),
+                presentation: orbit_protocol::RunPresentation {
+                    replayed,
+                    ..Default::default()
+                },
+            },
+            Update::agent(AgentEvent::Model(StreamEvent::ReasoningDelta(
+                "thought".into(),
+            ))),
+        ];
+        if let Some(elapsed_ms) = saved {
+            updates.push(Update::agent(AgentEvent::ReasoningFinished { elapsed_ms }));
+        }
+        updates.push(Update::agent(AgentEvent::Model(StreamEvent::TextDelta(
+            "answer".into(),
+        ))));
+        updates.push(Update::Finished {
+            status: "completed".into(),
+            elapsed_ms: Some(8000),
+        });
+        apply_page(&mut tab, updates);
+        let row = tab
+            .state
+            .transcript
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                TranscriptItem::Thinking(row) => Some(row),
+                _ => None,
+            })
+            .unwrap();
+        assert!(row.finished);
+        if replayed {
+            assert_eq!(row.elapsed, saved.map(Duration::from_millis));
+        } else {
+            assert!(row.elapsed.is_some());
+        }
+    }
+}
