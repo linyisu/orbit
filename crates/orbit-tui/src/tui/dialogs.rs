@@ -224,17 +224,7 @@ impl MarketplaceDialog {
                     .find(|entry| entry.source == market.source && entry.name == plugin.name)
                     .map(|entry| entry.package.clone())
                     .unwrap_or_else(|| Err("插件检查结果缺失，请刷新市场".into())),
-                None => {
-                    #[cfg(test)]
-                    {
-                        crate::marketplaces::inspect_plugin(&market, &plugin)
-                            .map_err(|error| error.to_string())
-                    }
-                    #[cfg(not(test))]
-                    {
-                        Err("请刷新插件目录后重试".into())
-                    }
-                }
+                None => Err("请刷新插件目录后重试".into()),
             },
             None => Err("没有可检查的插件。".into()),
         });

@@ -2,7 +2,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use super::*;
 use crate::{
-    tui::{TabAction, tabs::Tabs},
+    tui::{TabAction, tabs::live::Tabs},
     workspace::protocol::{Approval, Page},
 };
 
@@ -163,7 +163,22 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     assert!(
         matches!(call.request, Request::SendSubagent { ref message, .. } if message == "follow-up")
     );
-    call.reply.unwrap().send(Ok(Response::Ok)).unwrap();
+    call.reply
+        .unwrap()
+        .send(Ok(Response::Error("temporary send failure".into())))
+        .unwrap();
+    tab.poll_subagent();
+    // A failed follow-up must keep its draft so Enter can retry it unchanged.
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    let retry = requests.try_recv().unwrap();
+    assert!(
+        matches!(retry.request, Request::SendSubagent { ref message, .. } if message == "follow-up")
+    );
+    retry.reply.unwrap().send(Ok(Response::Ok)).unwrap();
     tab.poll_subagent();
     tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
         .unwrap();
@@ -390,53 +405,34 @@ fn workspace_completion_offers_shared_commands_without_local_directory_reads() {
     assert!(tab.state.menu().is_empty());
 }
 
-#[tokio::test]
-async fn mixed_tabs_close_to_the_left_without_rebinding_the_local_executor() {
-    use crate::session::SessionState;
-    use orbit_model::{client::ModelClient, types::ChatMessage};
-
-    let directory = tempfile::tempdir().unwrap();
-    let mut session = SessionState::open_shared_in(
-        directory.path().join("sessions.db"),
-        None,
-        "mock".into(),
-        directory.path(),
-    )
-    .await
-    .unwrap();
-    let local_id = session.id().to_owned();
-    let mut local = UiState::new("mock");
-    local.input.set("local draft".into());
-    let mut model = ModelClient::new(Default::default()).unwrap();
-    let mut history = vec![ChatMessage::user("local history")];
-    let mut tabs = Tabs::new(&session);
-    let (ssh, mut requests) = tab("SSH dev");
-    tabs.add_remote(ssh);
-    let ssh_id = tabs.active_remote.clone().unwrap();
-    let (wsl, _) = tab("WSL Ubuntu");
-    tabs.add_remote(wsl);
-    let wsl_id = tabs.active_remote.clone().unwrap();
-    tabs.sync_ui(&mut local, &session);
-    assert_eq!(local.tabs.len(), 3);
-    assert_eq!(tabs.close_target(&wsl_id), Some(ssh_id.as_str()));
-    assert_eq!(tabs.close_target(&ssh_id), Some(local_id.as_str()));
-    assert!(tabs.close_tab(
-        &local_id,
-        &mut session,
-        &mut local,
-        &mut model,
-        &mut history
-    ));
+#[test]
+fn mixed_tabs_close_to_the_left_and_preserve_sibling_drafts() {
+    let mut tabs = Tabs::default();
+    let (mut local, mut local_requests) = tab("本地");
+    local.state.input.set("local draft".into());
+    local
+        .state
+        .transcript
+        .push(TranscriptItem::User("local history".into()));
+    let local_id = tabs.add_remote(local);
+    let (mut ssh, mut ssh_requests) = tab("SSH dev");
+    ssh.state.input.set("ssh draft".into());
+    let ssh_id = tabs.add_remote(ssh);
+    let (wsl, mut wsl_requests) = tab("WSL Ubuntu");
+    let wsl_id = tabs.add_remote(wsl);
+    tabs.sync_remote_ui();
+    assert_eq!(tabs.remote[&wsl_id].state.tabs.len(), 3);
+    standalone::close(&mut tabs, &wsl_id);
     assert_eq!(tabs.active_remote.as_deref(), Some(ssh_id.as_str()));
-    assert_eq!(session.id(), local_id);
-    assert_eq!(local.input.text, "local draft");
-    assert!(matches!(&history[0], ChatMessage::User { .. }));
-    tabs.sync_ui(&mut local, &session);
-    assert_eq!(local.tabs.len(), 2);
-    assert!(!local.tabs.iter().any(|tab| tab.id == local_id));
-    assert!(requests.try_recv().is_err());
-    tabs.remove_remote(&wsl_id);
-    assert_eq!(tabs.active_remote.as_deref(), Some(ssh_id.as_str()));
+    standalone::close(&mut tabs, &ssh_id);
+    assert_eq!(tabs.active_remote.as_deref(), Some(local_id.as_str()));
+    assert_eq!(tabs.remote[&local_id].state.input.text, "local draft");
+    assert!(
+        matches!(&tabs.remote[&local_id].state.transcript[0], TranscriptItem::User(text) if text == "local history")
+    );
+    assert!(local_requests.try_recv().is_err());
+    assert!(ssh_requests.try_recv().is_err());
+    assert!(wsl_requests.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -699,7 +695,7 @@ fn side_question_receipts_open_the_existing_modal_and_keep_main_draft() {
     assert_eq!(tab.state.input.text, "main draft");
 }
 
-fn connected_tab(target: workspace::transport::Target) -> Tab {
+pub(in crate::tui) fn connected_tab(target: workspace::transport::Target) -> Tab {
     let (mut tab, _) = tab(&target.label());
     tab.connection = Some(Arc::new(Connection {
         target,
@@ -1340,4 +1336,51 @@ fn planning_commands_and_review_decisions_use_each_tabs_connection() {
             }
         ));
     }
+}
+
+// Shared UI fixtures deliver the same protocol pages consumed by a real connection.
+pub(in crate::tui) fn replayed_tab(media: media::Context, updates: Vec<Update>) -> Tab {
+    let (mut tab, _requests) = tab("本地");
+    tab.state.media = media;
+    tab.apply(page(updates, vec![]));
+    tab
+}
+
+#[test]
+fn local_commands_and_service_reports_do_not_create_a_conversation_on_home() {
+    let (mut tab, mut requests) = tab("本地");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|f| crate::tui::render::draw(f, &mut tab.state))
+        .unwrap();
+    let input_area = tab.state.input_area;
+    for command in [
+        "/mode ask",
+        "/rename Home",
+        "/tasks add task",
+        "/status",
+        "/context",
+    ] {
+        tab.submit(command.into()).unwrap();
+        let request = requests.try_recv().unwrap().request;
+        assert!(!matches!(
+            request,
+            Request::Start { .. } | Request::Steer { .. }
+        ));
+        assert!(tab.state.is_home());
+        assert!(tab.state.transcript.is_empty());
+    }
+    tab.apply(Response::Report(orbit_protocol::Report {
+        title: "Context".into(),
+        text: "context report".into(),
+    }));
+    assert!(tab.state.info_dialog.is_some());
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+        .unwrap();
+    terminal
+        .draw(|f| crate::tui::render::draw(f, &mut tab.state))
+        .unwrap();
+    assert!(tab.state.is_home());
+    assert!(tab.state.transcript.is_empty());
+    assert_eq!(tab.state.input_area, input_area);
 }

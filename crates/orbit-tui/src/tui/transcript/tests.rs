@@ -1,4 +1,3 @@
-use std::time::Duration;
 #[test]
 fn footnote_targets_follow_streaming_definitions_wrapping_and_message_scope() {
     let source = "较长的正文引用命名脚注[^note]，以及数字脚注[^1]。\n\n[^note]: **第一段**\n\n    第二段\n[^1]: 数字内容\n";
@@ -609,35 +608,6 @@ fn unicode_line_breaks_fill_cjk_rows_and_quotes_keep_a_continuous_rail() {
     for y in 0..5 {
         assert_eq!(terminal.backend().buffer()[(2, y)].symbol(), "▎");
     }
-}
-
-#[tokio::test]
-#[ignore = "requires a disposable database copy and ORBIT_PROFILE_SESSION"]
-async fn profile_saved_session_layout() {
-    let path = std::env::var("ORBIT_PROFILE_DATABASE").unwrap();
-    let id = std::env::var("ORBIT_PROFILE_SESSION").unwrap();
-    let start = std::time::Instant::now();
-    let session = crate::session::SessionState::open(path.into(), Some(id), "profile".into())
-        .await
-        .unwrap();
-    eprintln!("load: {:?}", start.elapsed());
-    let start = std::time::Instant::now();
-    let mut state = super::super::app::UiState::new("profile");
-    while !crate::tui::replay::HistoryReplay::default().advance(
-        &session.snapshot,
-        &mut state,
-        usize::MAX,
-        Duration::MAX,
-    ) {}
-    eprintln!(
-        "replay: {:?}, items: {}",
-        start.elapsed(),
-        state.transcript.len()
-    );
-    let mut layout = TranscriptLayout::default();
-    let start = std::time::Instant::now();
-    layout.update(&state.transcript, None, 100);
-    eprintln!("layout: {:?}, rows: {}", start.elapsed(), layout.height());
 }
 
 #[test]

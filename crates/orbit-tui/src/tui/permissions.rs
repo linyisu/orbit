@@ -1,9 +1,3 @@
-#[cfg(test)]
-use std::path::Path;
-
-#[cfg(test)]
-use orbit_tools::approval::ApprovalPreview;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     Ask,
@@ -22,33 +16,6 @@ impl Mode {
         }
     }
 
-    #[cfg(test)]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Ask => "ask",
-            Self::Auto => "auto",
-            Self::Yolo => "YOLO",
-        }
-    }
-
-    #[cfg(test)]
-    pub fn next(self) -> Self {
-        match self {
-            Self::Ask => Self::Auto,
-            Self::Auto => Self::Yolo,
-            Self::Yolo => Self::Ask,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn allows(self, preview: &ApprovalPreview, workspace: &Path) -> bool {
-        match self {
-            Self::Ask => false,
-            Self::Auto => orbit_tools::approval::auto_allows(preview, workspace),
-            Self::Yolo => true,
-        }
-    }
-
     pub fn description(self) -> &'static str {
         match self {
             Self::Ask => "ask：文件修改、命令、MCP 调用和外部权限逐次确认",
@@ -62,196 +29,18 @@ impl Mode {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use orbit_runtime::capability::{EnvironmentId, FilesystemAccess};
-    use orbit_tools::approval::{
-        CapabilityPreview, CommandPreview, CommandWorkspaceAccess, DeletePreview, McpPreview,
-        WritePreview,
-    };
-
     use super::*;
-
     #[test]
-    fn policy_matrix_and_cycle() {
-        let workspace = tempfile::tempdir().unwrap();
-        let root = workspace.path();
-        let cmd_read = ApprovalPreview::Command(CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "pwd".into(),
-            cwd: None,
-            timeout_seconds: 30,
-            workspace_access: CommandWorkspaceAccess::Read,
-            network_allowed: true,
-            external_capabilities: Vec::new(),
-            external_write: false,
-            git: None,
-        });
-        let cmd_rw = ApprovalPreview::Command(CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "cargo build".into(),
-            cwd: None,
-            timeout_seconds: 30,
-            workspace_access: CommandWorkspaceAccess::ReadWrite,
-            network_allowed: true,
-            external_capabilities: Vec::new(),
-            external_write: false,
-            git: None,
-        });
-        let write = ApprovalPreview::Write(WritePreview {
-            path: "file".into(),
-            before: None,
-            after: "text".into(),
-        });
-        let delete = ApprovalPreview::Delete(DeletePreview {
-            path: "file".into(),
-            before: "text".into(),
-        });
-        let mcp = ApprovalPreview::Mcp(McpPreview {
-            server: "files".into(),
-            tool: "read_file".into(),
-            arguments: r#"{\"path\":\"README.md\"}"#.into(),
-        });
-        let capability = ApprovalPreview::Capability(CapabilityPreview {
-            environment: EnvironmentId::Local,
-            path: PathBuf::from("/tmp/data"),
-            access: FilesystemAccess::ReadWrite,
-            reason: "testing".into(),
-        });
-
-        assert!(!Mode::Ask.allows(&cmd_read, root));
-        assert!(!Mode::Ask.allows(&cmd_rw, root));
-        assert!(!Mode::Ask.allows(&write, root));
-        assert!(!Mode::Ask.allows(&capability, root));
-        assert!(!Mode::Auto.allows(&cmd_read, root));
-        assert!(!Mode::Auto.allows(&cmd_rw, root));
-
-        let offline_read = ApprovalPreview::Command(CommandPreview {
-            network_allowed: false,
-            ..match cmd_read.clone() {
-                ApprovalPreview::Command(command) => command,
-                _ => unreachable!(),
-            }
-        });
-
-        assert!(Mode::Auto.allows(&offline_read, root));
-        let mkdir = ApprovalPreview::Command(CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "mkdir -p demo".into(),
-            workspace_access: CommandWorkspaceAccess::ReadWrite,
-            ..match offline_read.clone() {
-                ApprovalPreview::Command(command) => command,
-                _ => unreachable!(),
-            }
-        });
-
-        assert!(Mode::Auto.allows(&mkdir, root));
-        assert!(!Mode::Ask.allows(&mkdir, root));
-        assert!(Mode::Yolo.allows(&mkdir, root));
-        let text_write = ApprovalPreview::Command(CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "echo hello | tee demo.txt".into(),
-            ..match mkdir.clone() {
-                ApprovalPreview::Command(command) => command,
-                _ => unreachable!(),
-            }
-        });
-
-        assert!(Mode::Auto.allows(&text_write, root));
-        assert!(!Mode::Ask.allows(&text_write, root));
-        assert!(Mode::Auto.allows(&write, root));
-        assert!(Mode::Auto.allows(&delete, root));
-        assert!(!Mode::Ask.allows(&mcp, root));
-        assert!(!Mode::Auto.allows(&mcp, root));
-        assert!(!Mode::Auto.allows(&capability, root));
-        assert!(Mode::Yolo.allows(&cmd_read, root));
-        assert!(Mode::Yolo.allows(&cmd_rw, root));
-        assert!(Mode::Yolo.allows(&write, root));
-        assert!(Mode::Yolo.allows(&delete, root));
-        assert!(Mode::Yolo.allows(&mcp, root));
-        assert!(Mode::Yolo.allows(&capability, root));
-
-        let outside = ApprovalPreview::Write(WritePreview {
-            path: workspace
-                .path()
-                .parent()
-                .unwrap()
-                .join("outside.txt")
-                .display()
-                .to_string(),
-            before: None,
-            after: "text".into(),
-        });
-
-        assert!(!Mode::Auto.allows(&outside, root));
-
-        let external_command = ApprovalPreview::Command(CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "write outside".into(),
-            cwd: None,
-            timeout_seconds: 30,
-            workspace_access: CommandWorkspaceAccess::ReadWrite,
-            network_allowed: true,
-            external_capabilities: Vec::new(),
-            external_write: true,
-            git: None,
-        });
-
-        assert!(!Mode::Auto.allows(&external_command, root));
-
-        let git_status = ApprovalPreview::Command(CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "git status".into(),
-            cwd: None,
-            timeout_seconds: 30,
-            workspace_access: CommandWorkspaceAccess::Read,
-            network_allowed: false,
-            external_capabilities: Vec::new(),
-            external_write: false,
-            git: orbit_runtime::git::GitCommandAnalysis::parse("git status"),
-        });
-
-        assert!(Mode::Auto.allows(&git_status, root));
-
-        let git_push = ApprovalPreview::Command(CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "git push origin main".into(),
-            cwd: None,
-            timeout_seconds: 30,
-            workspace_access: CommandWorkspaceAccess::ReadWrite,
-            network_allowed: true,
-            external_capabilities: Vec::new(),
-            external_write: false,
-            git: orbit_runtime::git::GitCommandAnalysis::parse("git push origin main"),
-        });
-
-        assert!(!Mode::Auto.allows(&git_push, root));
-
-        let git_reset_hard = ApprovalPreview::Command(CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "git reset --hard".into(),
-            cwd: None,
-            timeout_seconds: 30,
-            workspace_access: CommandWorkspaceAccess::ReadWrite,
-            network_allowed: false,
-            external_capabilities: Vec::new(),
-            external_write: false,
-            git: orbit_runtime::git::GitCommandAnalysis::parse("git reset --hard"),
-        });
-
-        assert!(!Mode::Auto.allows(&git_reset_hard, root));
+    fn parses_supported_permission_modes() {
         assert_eq!(Mode::default(), Mode::Auto);
-        assert_eq!(Mode::Auto.next().next().next(), Mode::Auto);
-        assert_eq!(Mode::parse("yolo"), Some(Mode::Yolo));
-        assert_eq!(Mode::parse("YOLO"), Some(Mode::Yolo));
+        for (text, mode) in [
+            ("ask", Mode::Ask),
+            ("auto", Mode::Auto),
+            ("yolo", Mode::Yolo),
+            ("YOLO", Mode::Yolo),
+        ] {
+            assert_eq!(Mode::parse(text), Some(mode));
+        }
         assert_eq!(Mode::parse("unknown"), None);
     }
 }

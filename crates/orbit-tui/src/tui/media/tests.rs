@@ -188,200 +188,112 @@ fn assert_ui_graphics(state: &mut UiState) -> Buffer {
 
 #[tokio::test]
 async fn new_tabs_share_terminal_media_and_keep_graphics_when_switching_back() {
-    use crate::{
-        session::SessionState,
-        tui::{CommandContext, tabs::Tabs},
-    };
-    use orbit_model::client::ModelClient;
-    let dir = tempfile::tempdir().unwrap();
-    let mut session = SessionState::open(dir.path().join("sessions.db"), None, "mock".into())
-        .await
-        .unwrap();
-    let mut state = UiState::new("mock");
-    state.media = context(ProtocolType::Kitty);
-    let media = state.media.clone();
-    state
+    use crate::tui::{tabs::live::Tabs, workspace_client::tests::connected_tab};
+    let mut first = connected_tab(crate::workspace::transport::Target::Local);
+    first.state.media = context(ProtocolType::Kitty);
+    let media = first.state.media.clone();
+    first
+        .state
         .transcript
         .push(TranscriptItem::Assistant("公式 $E=mc^2$".into()));
-    assert_ui_graphics(&mut state);
-    let first = session.id().to_owned();
-    let mut tabs = Tabs::new(&session);
-    let mut history = Vec::new();
-    let mut model = ModelClient::new(Default::default()).unwrap();
-    let tools = orbit_agent::tool::ToolRegistry::new();
-    let instructions = crate::instructions::Instructions::default();
-    let skills = crate::skills::Skills::default();
-    crate::tui::new_tab(
-        &mut tabs,
-        &mut session,
-        &mut state,
-        &mut model,
-        &mut history,
-        dir.path(),
-        CommandContext {
-            tools: &tools,
-            instructions: &instructions,
-            skills: &skills,
-            mcp_statuses: &[],
-            model_options: &[],
-        },
-    )
-    .await
-    .unwrap();
-    assert!(state.media.same_cache(&media));
-    assert!(state.media_preview.is_none());
-    let second = session.id().to_owned();
-    state
+    assert_ui_graphics(&mut first.state);
+    let mut tabs = Tabs::default();
+    let first = tabs.add_remote(first);
+    tabs.open_session(&first, None);
+    let second = tabs.active_remote.clone().unwrap();
+    assert_ne!(first, second);
+    assert!(tabs.remote[&second].state.media.same_cache(&media));
+    assert!(tabs.remote[&second].state.media_preview.is_none());
+    tabs.remote
+        .get_mut(&second)
+        .unwrap()
+        .state
         .transcript
         .push(TranscriptItem::Assistant("$$\n\\frac{a}{b}\n$$".into()));
-    assert_ui_graphics(&mut state);
-    assert!(tabs.restore(&first, &mut session, &mut state, &mut model, &mut history));
-    assert!(state.media.same_cache(&media));
-    assert_ui_graphics(&mut state);
-    assert!(tabs.restore(&second, &mut session, &mut state, &mut model, &mut history));
-    assert_ui_graphics(&mut state);
+    for id in [second.as_str(), first.as_str(), second.as_str()] {
+        tabs.active_remote = Some(id.to_owned());
+        let state = &mut tabs.remote.get_mut(id).unwrap().state;
+        assert!(state.media.same_cache(&media));
+        assert_ui_graphics(state);
+    }
 }
 
-#[tokio::test]
-async fn saved_sessions_restore_media_capabilities_before_replaying_formula_output() {
-    use crate::session::SessionState;
-    use orbit_model::{
-        client::ModelClient,
-        types::{ChatMessage, StreamEvent},
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let mut session = SessionState::open(dir.path().join("sessions.db"), None, "mock".into())
-        .await
-        .unwrap();
-    let id = session.id().to_owned();
+#[test]
+fn replayed_sessions_keep_media_capabilities_for_formula_output() {
+    use orbit_model::types::StreamEvent;
+    use orbit_protocol::{RunPresentation, Update};
+    let media = context(ProtocolType::Kitty);
     let formula = "## 数学公式\n$$\n\\int_{-\\infty}^{\\infty}e^{-x^2}\\,dx=\\sqrt{\\pi}\n$$";
-    session
-        .begin("formula".into(), "mock".into())
-        .await
-        .unwrap();
-    let journal = session.execution_journal().unwrap();
-    journal.record(orbit_agent::events::AgentEvent::Model(
-        StreamEvent::TextDelta(formula.into()),
-    ));
-    journal.flush().await.unwrap();
-    session
-        .finish(
-            "completed",
-            Some(vec![
-                ChatMessage::user("formula"),
-                ChatMessage::assistant(formula),
-            ]),
-        )
-        .await
-        .unwrap();
-    crate::tui::session_actions::new_test_session(&mut session, "mock".into())
-        .await
-        .unwrap();
-    let mut state = UiState::new("mock");
-    state.media = context(ProtocolType::Kitty);
-    let media = state.media.clone();
-    let mut model = ModelClient::new(Default::default()).unwrap();
-    let mut history = Vec::new();
-    let scope = crate::project_state::MemoryScope::new(session.id().into());
-    crate::tui::resume_session(
-        &id,
-        &mut state,
-        &mut model,
-        &mut history,
-        &mut session,
-        &Default::default(),
-        &Default::default(),
-        &[],
-        &scope,
-        &orbit_agent::tool::ToolRegistry::new(),
-    )
-    .await
-    .unwrap();
-    assert!(state.media.same_cache(&media));
+    let mut tab = crate::tui::workspace_client::tests::replayed_tab(
+        media.clone(),
+        vec![
+            Update::Started {
+                prompt: "formula".into(),
+                presentation: RunPresentation {
+                    replayed: true,
+                    ..Default::default()
+                },
+            },
+            Update::Agent(Box::new(orbit_agent::events::AgentEvent::Model(
+                StreamEvent::TextDelta(formula.into()),
+            ))),
+        ],
+    );
+    assert!(tab.state.media.same_cache(&media));
     assert!(
-        state
+        tab.state
             .transcript
             .iter()
             .any(|item| matches!(item, TranscriptItem::Assistant(text) if text.contains("\\int")))
     );
-    assert_ui_graphics(&mut state);
+    assert_ui_graphics(&mut tab.state);
 }
 
 #[tokio::test]
 async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row_clipping() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use orbit_agent::events::AgentEvent;
-    use orbit_model::{client::ModelClient, types::ToolCall};
+    use orbit_model::types::ToolCall;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image.png");
     image::RgbImage::from_pixel(1800, 520, image::Rgb([80, 120, 160]))
         .save(&path)
         .unwrap();
-    let mut session = crate::session::SessionState::open_in(
-        dir.path().join("sessions.db"),
-        None,
-        "mock".into(),
-        dir.path(),
-    )
-    .await
-    .unwrap();
-    let id = session.id().to_owned();
-    session.begin("image".into(), "mock".into()).await.unwrap();
     let call = ToolCall::function(
         "image",
         "read_image",
         serde_json::json!({"path": "image.png"}),
     );
-    let journal = session.execution_journal().unwrap();
-    let checkpoint = orbit_agent::checkpoint::ExecutionCheckpoint {
-        history: Vec::new(),
-        turns: 1,
-        tool_calls: 1,
-        in_flight: None,
-        attachments: Vec::new(),
-    };
-    for event in [
-        AgentEvent::ToolStarted { call: call.clone() },
-        AgentEvent::ToolFinished {
-            call,
-            content: serde_json::json!({"path": "image.png", "loaded": true}).to_string(),
-            changes: Vec::new(),
-        },
-    ] {
-        journal.save(checkpoint.clone(), Some(event)).await.unwrap();
-    }
-    session.finish("completed", Some(Vec::new())).await.unwrap();
-    crate::tui::session_actions::new_test_session(&mut session, "mock".into())
-        .await
-        .unwrap();
-
-    let mut state = UiState::new("mock");
-    state.media = context(ProtocolType::Kitty);
-    let mut model = ModelClient::new(Default::default()).unwrap();
-    let mut history = Vec::new();
-    let scope = crate::project_state::MemoryScope::new(session.id().into());
-    crate::tui::resume_session(
-        &id,
-        &mut state,
-        &mut model,
-        &mut history,
-        &mut session,
-        &Default::default(),
-        &Default::default(),
-        &[],
-        &scope,
-        &orbit_agent::tool::ToolRegistry::new(),
-    )
-    .await
-    .unwrap();
+    let mut media = context(ProtocolType::Kitty);
+    media.workspace = dir.path().into();
+    let mut tab = crate::tui::workspace_client::tests::replayed_tab(
+        media,
+        vec![
+            orbit_protocol::Update::Started {
+                prompt: "image".into(),
+                presentation: orbit_protocol::RunPresentation {
+                    replayed: true,
+                    ..Default::default()
+                },
+            },
+            orbit_protocol::Update::Agent(Box::new(AgentEvent::ToolStarted { call: call.clone() })),
+            orbit_protocol::Update::Agent(Box::new(AgentEvent::ToolFinished {
+                call,
+                content: serde_json::json!({"path": "image.png", "loaded": true}).to_string(),
+                changes: Vec::new(),
+            })),
+        ],
+    );
+    let state = &mut tab.state;
+    state.workspace = dir.path().display().to_string();
     let index = state
         .transcript
         .iter()
         .position(|item| matches!(item, TranscriptItem::Tool(row) if row.name == "read_image"))
         .unwrap();
     state.expanded.insert(index);
-    let rendered = assert_ui_graphics(&mut state);
+    let rendered = assert_ui_graphics(state);
     let picture = state
         .media
         .shared

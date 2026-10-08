@@ -258,7 +258,7 @@ fn new_tab_button_changes_on_hover_and_restores_on_leave() {
 #[tokio::test]
 async fn editor_returns_to_home_until_the_draft_is_sent() {
     let directory = tempfile::tempdir().unwrap();
-    let editor = super::super::editor::Editor::new("/bin/true".into());
+    let editor = crate::platform::editor::Editor::new("/bin/true".into());
     let mut state = UiState::new("model");
     state.tabs.push(SessionTab {
         waiting_approval: false,
@@ -332,181 +332,6 @@ fn home_centers_composer_and_conversation_exposes_new_session_button() {
     state.tab_hover = None;
 
     assert!(!render(&mut state, 140, 40).contains(icons::CLOSE_THICK));
-}
-
-#[tokio::test]
-async fn home_changes_are_silent_and_queries_do_not_enter_the_conversation() {
-    use super::super::{CommandContext, ModelOption, dialogs, run_command};
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    use orbit_model::types::ReasoningEffort;
-
-    let directory = tempfile::tempdir().unwrap();
-    let mut session = crate::session::SessionState::open_in(
-        directory.path().join("orbit.db"),
-        None,
-        "orbit-model".into(),
-        directory.path(),
-    )
-    .await
-    .unwrap();
-    let mut state = UiState::new("orbit-model");
-    state.tabs.push(SessionTab {
-        waiting_approval: false,
-        elapsed: std::time::Duration::ZERO,
-        id: session.id().into(),
-        title: "Orbit session".into(),
-        status: RunStatus::Idle,
-        active: true,
-    });
-    render(&mut state, 140, 40);
-    let input_area = state.input_area;
-    let mut model = orbit_model::client::ModelClient::new(Default::default()).unwrap();
-    let mut history = Vec::new();
-    let tools = orbit_agent::tool::ToolRegistry::new();
-    let instructions = crate::instructions::Instructions::default();
-    let skills = crate::skills::Skills::default();
-    let options = [ModelOption {
-        provider: "orbit".into(),
-        model: "fast".into(),
-        max_output_tokens: 8_000,
-        context_tokens: 72_000,
-        input_context_tokens: 64_000,
-        reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
-        supports_vision: true,
-        config: Default::default(),
-    }];
-    let context = || CommandContext {
-        tools: &tools,
-        instructions: &instructions,
-        skills: &skills,
-        mcp_statuses: &[],
-        model_options: &options,
-    };
-
-    for command in [
-        "/mode ask",
-        "/rename Orbit home",
-        "/model orbit::fast",
-        "/reasoning high",
-        "/tasks add Orbit task",
-        "/memory add fact Orbit memory",
-    ] {
-        run_command(
-            command,
-            &mut state,
-            &mut model,
-            &mut history,
-            &mut session,
-            context(),
-        )
-        .await
-        .unwrap();
-        let screen = render(&mut state, 140, 40);
-        assert!(state.transcript.is_empty(), "{command}");
-        assert!(state.info_dialog.is_none(), "{command}");
-        assert_eq!(state.input_area, input_area, "{command}");
-        assert!(!screen.contains('→'), "{command}");
-    }
-
-    assert_eq!(session.store.tui_mode(session.id()).await.unwrap(), "ask");
-    let saved = session.store.load(session.id()).await.unwrap();
-    assert_eq!(saved.session.title, "Orbit home");
-    assert_eq!(saved.session.model, "orbit::fast");
-    assert_eq!(saved.session.reasoning_effort.as_deref(), Some("high"));
-    assert_eq!(state.reasoning_effort, Some(ReasoningEffort::High));
-    assert_eq!(state.input_context_tokens, 64_000);
-    let tasks = session
-        .store
-        .tasks(&session.snapshot.session.project_id, false)
-        .await
-        .unwrap();
-
-    assert_eq!(tasks[0].title, "Orbit task");
-    let memories = session
-        .store
-        .session_memories(session.id(), false)
-        .await
-        .unwrap();
-
-    assert_eq!(memories[0].content, "Orbit memory");
-    for command in [
-        "/mode",
-        "/status",
-        "/context",
-        "/skills",
-        "/mcp",
-        "/tasks",
-        "/memory",
-        "/memory search Orbit",
-        "/changes",
-        "/diff",
-        "/diff orbit.rs",
-        "/diagnostics",
-        "/orbit-unknown",
-        "/model orbit::missing",
-        "/reasoning missing",
-        "/rename",
-    ] {
-        run_command(
-            command,
-            &mut state,
-            &mut model,
-            &mut history,
-            &mut session,
-            context(),
-        )
-        .await
-        .unwrap();
-        render(&mut state, 140, 40);
-        assert!(
-            !state.info_dialog.as_ref().unwrap().content.is_empty(),
-            "{command}"
-        );
-        if command == "/context" {
-            let content = &state.info_dialog.as_ref().unwrap().content;
-            assert!(content.contains("原始上下文估算"));
-            assert!(content.contains("校准后总计"));
-        }
-
-        assert!(state.transcript.is_empty(), "{command}");
-        assert_eq!(state.status, RunStatus::Idle);
-        assert_eq!(state.selection.viewport.height, 0);
-        dialogs::handle(
-            &mut state,
-            Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        );
-        render(&mut state, 140, 40);
-        assert_eq!(state.input_area, input_area);
-        assert!(state.is_home());
-    }
-
-    for (width, height) in [(28, 18), (20, 10)] {
-        render(&mut state, width, height);
-        assert_eq!(state.selection.viewport.height, 0);
-        assert_eq!(state.max_scroll, 0);
-    }
-
-    state.submit("Orbit message".into());
-    let screen = render(&mut state, 140, 40);
-    assert!(state.has_conversation());
-    assert!(state.input_area.x < 20);
-    assert_eq!(state.new_tab_area.height, 1);
-    assert!(!screen.contains("未知命令"));
-    run_command(
-        "/mode auto",
-        &mut state,
-        &mut model,
-        &mut history,
-        &mut session,
-        context(),
-    )
-    .await
-    .unwrap();
-    assert!(matches!(
-        state.transcript.last(),
-        Some(TranscriptItem::CommandResult(_))
-    ));
-    assert!(state.info_dialog.is_none());
 }
 
 #[test]
@@ -1346,7 +1171,7 @@ fn reasoning_is_visible_and_expansion_only_affects_one_visible_collapsible() {
     let footer: String = (0..100).map(|x| buffer[(x, 29)].symbol()).collect();
 
     assert!(footer.contains("/96k"));
-    assert!(!footer.contains("model") && !footer.contains(state.permission_mode.label()));
+    assert!(!footer.contains("model") && !footer.contains("auto"));
     assert!(!footer.contains("Shift") && !footer.contains("恢复"));
 }
 
@@ -2143,7 +1968,7 @@ fn footer_keeps_project_and_context_with_unicode_paths() {
             assert!(!text.contains("󰧑"));
             assert!(!text.contains("思考"));
             assert!(text.contains("53%/96k"));
-            assert!(!text.contains(state.permission_mode.label()));
+            assert!(!text.contains("auto"));
             assert!(!text.contains('·'));
         }
 

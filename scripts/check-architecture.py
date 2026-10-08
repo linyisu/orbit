@@ -42,6 +42,10 @@ def check() -> list[str]:
         name = manifest["package"]["name"]
         packages.add(name)
         dependencies = set(manifest.get("dependencies", {})) | set(manifest.get("build-dependencies", {}))
+        # TUI tests exercise protocol consumers, never a second in-process service.
+        # Include dev dependencies so cfg(test) cannot bypass that boundary.
+        if name == "orbit-tui":
+            dependencies |= set(manifest.get("dev-dependencies", {}))
         allowed = DEPENDENCIES.get(name)
         if allowed is None:
             errors.append(f"{name}: define its dependency boundary")

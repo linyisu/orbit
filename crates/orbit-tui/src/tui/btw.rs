@@ -1,15 +1,4 @@
-#[cfg(test)]
-use std::sync::Arc;
-
-#[cfg(test)]
-use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-#[cfg(test)]
-use orbit_agent::model::{ModelBackend, ModelClientBackend};
-#[cfg(test)]
-use orbit_model::{client::ModelClient, types::ChatMessage};
-#[cfg(test)]
-use orbit_store::store::Store;
 use ratatui::{Frame, layout::Rect};
 
 use super::{
@@ -35,11 +24,8 @@ struct Dialog {
 
 #[derive(Default)]
 pub(super) struct Questions {
-    #[cfg(test)]
-    service: orbit_service::side_questions::SideQuestions,
     records: Vec<orbit_protocol::SideQuestion>,
     running: bool,
-    remote: bool,
     cancel_request: Option<usize>,
     dialog: Option<Box<Dialog>>,
 }
@@ -54,18 +40,12 @@ impl std::fmt::Debug for Questions {
 }
 
 impl Questions {
-    #[cfg(test)]
-    fn records(&self) -> &[orbit_protocol::SideQuestion] {
-        self.records.as_slice()
-    }
-
     pub fn receive(
         &mut self,
         records: Option<Vec<orbit_protocol::SideQuestion>>,
         running: bool,
         selected: Option<usize>,
     ) {
-        self.remote = true;
         if let Some(records) = records {
             self.records = records;
         }
@@ -104,81 +84,6 @@ impl Questions {
         self.dialog.is_some()
     }
 
-    #[cfg(test)]
-    pub async fn ask(
-        &mut self,
-        store: &Store,
-        session: &str,
-        model: &ModelClient,
-        history: &[ChatMessage],
-        question: &str,
-        max_tokens: u32,
-    ) -> Result<()> {
-        self.ask_with_backend(
-            store,
-            session,
-            model,
-            history,
-            question,
-            max_tokens,
-            Arc::new(ModelClientBackend::new(model.clone())),
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(test)]
-    async fn ask_with_backend(
-        &mut self,
-        store: &Store,
-        session: &str,
-        model: &ModelClient,
-        history: &[ChatMessage],
-        question: &str,
-        max_tokens: u32,
-        backend: Arc<dyn ModelBackend>,
-    ) -> Result<()> {
-        self.start(
-            store, session, model, history, question, max_tokens, backend, None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(test)]
-    async fn start(
-        &mut self,
-        store: &Store,
-        session: &str,
-        model: &ModelClient,
-        history: &[ChatMessage],
-        question: &str,
-        max_tokens: u32,
-        backend: Arc<dyn ModelBackend>,
-        follow_up: Option<usize>,
-    ) -> Result<()> {
-        self.poll();
-        let index = self
-            .service
-            .start(
-                store, session, model, history, question, max_tokens, backend, follow_up,
-            )
-            .await?;
-        self.records = self.service.records().to_vec();
-        self.running = self.service.running();
-        if follow_up.is_some() {
-            let dialog = self.dialog.as_mut().unwrap();
-            dialog.view.submitted();
-            dialog.index = index;
-            dialog.rendered_answer = usize::MAX;
-            dialog.rendered_status.clear();
-            self.refresh();
-        } else {
-            self.open(index);
-        }
-        Ok(())
-    }
-
     fn open(&mut self, index: usize) {
         let mut view = TranscriptDialog::new(self.records[index].model.clone());
         view.enable_input();
@@ -193,18 +98,7 @@ impl Questions {
     }
 
     pub fn poll(&mut self) -> bool {
-        #[cfg(not(test))]
-        let changed = false;
-        #[cfg(test)]
-        let changed = if self.remote {
-            false
-        } else {
-            let changed = self.service.poll();
-            self.records = self.service.records().to_vec();
-            self.running = self.service.running();
-            changed
-        };
-        self.refresh() || changed
+        self.refresh()
     }
 
     fn refresh(&mut self) -> bool {
@@ -277,22 +171,9 @@ impl Questions {
                 && key.modifiers.contains(KeyModifiers::CONTROL)
                 && !dialog.view.ui.selection.active()
                 && dialog.view.ui.input.selection().is_none()
-                && if self.remote {
-                    if self.running {
-                        self.cancel_request = Some(dialog.index);
-                    }
-                    self.running
-                } else {
-                    #[cfg(test)]
-                    {
-                        self.service.cancel(dialog.index)
-                    }
-                    #[cfg(not(test))]
-                    {
-                        false
-                    }
-                }
+                && self.running
             {
+                self.cancel_request = Some(dialog.index);
                 return Ok(Action::Redraw);
             }
 

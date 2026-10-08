@@ -1,10 +1,3 @@
-#[cfg(test)]
-#[allow(dead_code)]
-#[path = "tabs_legacy.rs"]
-mod legacy;
-#[cfg(test)]
-pub(super) use legacy::*;
-
 pub(super) mod live {
     use super::super::app::SessionTab;
     use std::collections::HashMap;

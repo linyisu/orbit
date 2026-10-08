@@ -227,3 +227,28 @@ async fn status(setup: &PreparedWorkspace) -> Result<String> {
         crate::verification::summary(session).await
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn overview_budget_counts_only_matching_tool_results_in_effective_history() {
+        use orbit_model::types::ToolCall;
+
+        let call = ToolCall::function("map", "project_overview", serde_json::json!({}));
+        let output = ChatMessage::tool("map", "repository map");
+        let messages = vec![
+            ChatMessage::user("project_overview"),
+            ChatMessage::assistant_tool_calls(vec![call]),
+            output.clone(),
+            ChatMessage::tool("other", "unrelated output"),
+        ];
+
+        assert_eq!(
+            tool_context_tokens(&messages, "project_overview"),
+            orbit_agent::context::estimate_tokens(&[output], &[])
+        );
+        assert_eq!(tool_context_tokens(&[], "project_overview"), 0);
+        assert_eq!(tool_context_tokens(&messages, "missing"), 0);
+    }
+}

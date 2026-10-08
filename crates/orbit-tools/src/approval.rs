@@ -341,3 +341,6 @@ mod tests {
         assert_ne!(file_grant_key("alias", workspace.path()).unwrap(), initial);
     }
 }
+
+#[cfg(test)]
+mod policy_matrix;

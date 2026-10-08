@@ -166,7 +166,7 @@ fn saved_tabs(tabs: &Tabs) -> Vec<workspace::windows::SavedTab> {
         .collect()
 }
 
-fn close(tabs: &mut Tabs, id: &str) {
+pub(super) fn close(tabs: &mut Tabs, id: &str) {
     let next = tabs.close_target(id).map(str::to_owned);
     if next.is_none() {
         let replacement = tabs.remote[id].sibling(None);

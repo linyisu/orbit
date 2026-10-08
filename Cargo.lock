@@ -3161,8 +3161,6 @@ dependencies = [
  "orbit-model",
  "orbit-protocol",
  "orbit-runtime",
- "orbit-service",
- "orbit-store",
  "orbit-tools",
  "pulldown-cmark",
  "ratatui",

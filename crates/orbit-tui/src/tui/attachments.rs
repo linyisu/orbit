@@ -3,14 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-#[cfg(test)]
-use super::app::TranscriptItem;
 use super::app::UiState;
-#[cfg(test)]
-use crate::session::SessionState;
-
-#[cfg(test)]
-const VISION_DISABLED_MESSAGE: &str = "当前模型未启用图片输入，未添加图片附件。可切换支持图片的模型，或在 /connect 中调整自定义模型的图片输入设置。";
 
 pub(super) fn attachment_path(argument: &str) -> std::path::PathBuf {
     let trimmed = argument.trim();
@@ -150,25 +143,6 @@ pub(super) fn remove_focused_attachment(state: &mut UiState, backwards: bool) ->
     }
 
     true
-}
-
-#[cfg(test)]
-pub(super) fn attach_paths(
-    state: &mut UiState,
-    session: &SessionState,
-    paths: Vec<PathBuf>,
-) -> Result<()> {
-    if !state.supports_vision {
-        state.report_local(TranscriptItem::CommandError(VISION_DISABLED_MESSAGE.into()));
-        return Ok(());
-    }
-
-    for path in paths {
-        let attachment = session.import_image(&path)?;
-        queue_attachment(state, attachment);
-    }
-
-    Ok(())
 }
 
 pub(super) enum ClipboardPayload {

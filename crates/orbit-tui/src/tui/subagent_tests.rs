@@ -1,3 +1,4 @@
+use super::app::TranscriptItem;
 use super::*;
 
 #[test]

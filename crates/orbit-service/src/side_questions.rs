@@ -362,3 +362,6 @@ async fn answer(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod streaming_tests;

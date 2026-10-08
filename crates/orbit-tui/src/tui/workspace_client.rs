@@ -10,7 +10,7 @@ use crate::workspace::pump;
 mod standalone;
 mod subagents;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 pub(crate) mod wizard;
 
 use std::{sync::Arc, time::Duration};

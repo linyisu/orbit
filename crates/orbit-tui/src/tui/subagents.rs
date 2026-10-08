@@ -1,15 +1,4 @@
-#[cfg(test)]
-use std::collections::{HashMap, HashSet};
-
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
-#[cfg(test)]
-use orbit_agent::events::AgentEvent;
-#[cfg(test)]
-use orbit_model::types::StreamEvent;
-#[cfg(test)]
-use orbit_store::types::Snapshot;
-#[cfg(test)]
-use orbit_store::{store::Store, tui_sessions::SessionRevision};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -18,8 +7,6 @@ use ratatui::{
     widgets::Paragraph,
 };
 use serde_json::Value;
-#[cfg(test)]
-use serde_json::json;
 use unicode_width::UnicodeWidthStr;
 
 use super::{
@@ -35,10 +22,6 @@ pub(super) use super::transcript_dialog::Action as ViewerAction;
 pub(super) struct Viewer {
     id: String,
     view: super::transcript_dialog::TranscriptDialog,
-    #[cfg(test)]
-    snapshot: Option<Snapshot>,
-    #[cfg(test)]
-    sync: super::session_sync::SessionSync,
     error: Option<String>,
 }
 
@@ -61,65 +44,11 @@ pub(super) fn open(state: &mut UiState, id: String) {
     state.subagent_dialog = Some(Box::new(Viewer {
         id,
         view,
-        #[cfg(test)]
-        snapshot: None,
-        #[cfg(test)]
-        sync: Default::default(),
         error: None,
     }));
 }
 
 impl Viewer {
-    /// Read saved events without acquiring a writer or changing the active parent session.
-    #[cfg(test)]
-    pub async fn poll(&mut self, store: &Store, parent: &str) -> bool {
-        if self.error.is_some() || self.view.ui.selection.active() {
-            return false;
-        }
-        let result: anyhow::Result<bool> = async {
-            if self.snapshot.is_none() {
-                anyhow::ensure!(
-                    store.subagent_parent(&self.id).await?.as_deref() == Some(parent),
-                    "该记录不是当前会话的子代理。"
-                );
-                let snapshot = store.load(&self.id).await?;
-                self.view.ui.model = snapshot.session.model.clone();
-                self.view.ui.subagent_parent = Some(parent.into());
-                self.view.ui.follow_bottom = snapshot
-                    .runs
-                    .last()
-                    .is_some_and(|run| run.status == "running");
-                self.view.ui.resume_loading = None;
-                self.snapshot = Some(snapshot);
-            }
-
-            let mut history = Vec::new();
-            self.sync
-                .poll_read_only(
-                    store,
-                    self.snapshot.as_mut().unwrap(),
-                    &mut self.view.ui,
-                    &mut history,
-                )
-                .await
-        }
-        .await;
-
-        match result {
-            Ok(changed) => {
-                self.view.block_submission(false);
-                changed
-            }
-
-            Err(error) => {
-                self.error = Some(format!("无法读取子代理记录：{error}"));
-                self.view.ui.resume_loading = None;
-                self.view.ui.status = RunStatus::Failed;
-                true
-            }
-        }
-    }
-
     pub fn tick(&mut self) -> bool {
         self.view.tick()
     }
@@ -220,27 +149,6 @@ impl Viewer {
 
     pub fn handle(&mut self, event: &Event) -> std::io::Result<ViewerAction> {
         self.view.handle(event)
-    }
-
-    #[cfg(test)]
-    pub async fn send(&mut self, tools: &orbit_agent::tool::ToolRegistry, message: String) {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let call = orbit_model::types::ToolCall::function(
-            format!("ui-followup-{}-{stamp}", std::process::id()),
-            "send_agent_message",
-            json!({"agent_id":self.id,"message":message}),
-        );
-
-        match tools
-            .execute(call, tokio_util::sync::CancellationToken::new())
-            .await
-        {
-            Ok(_) => self.view.submitted(),
-            Err(error) => self.view.submit_error(error),
-        }
     }
 
     pub fn cursor(&self) -> Option<ratatui::layout::Position> {
@@ -419,111 +327,7 @@ pub(super) fn details(row: &ToolRow, width: u16) -> Option<Vec<LinkedLine>> {
 }
 
 #[cfg(test)]
-#[derive(Default)]
-struct Activity {
-    revision: Option<SessionRevision>,
-    events: usize,
-    tool_calls: usize,
-    current: String,
-}
-
-#[cfg(test)]
-impl Activity {
-    fn apply(&mut self, event: AgentEvent) {
-        match event {
-            AgentEvent::TurnStarted { .. } => self.current = "准备请求".into(),
-            AgentEvent::Model(StreamEvent::ReasoningDelta(_)) => self.current = "思考中".into(),
-            AgentEvent::Model(StreamEvent::TextDelta(_)) => self.current = "生成回复".into(),
-            AgentEvent::ToolStarted { call } => {
-                self.tool_calls += 1;
-                self.current = format!(
-                    "{} {}",
-                    call.function.name,
-                    super::tool_display::tool_summary(
-                        &call.function.name,
-                        &call.function.arguments,
-                        ""
-                    )
-                );
-            }
-
-            AgentEvent::CompactionStarted => self.current = "压缩上下文".into(),
-            _ => {}
-        }
-    }
-}
-
-/// Read journal changes for child runs without retaining their message bodies.
-#[cfg(test)]
-#[derive(Default)]
-pub(super) struct Progress {
-    runs: HashMap<(String, i64), Activity>,
-}
-
-#[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-impl Progress {
-    #[cfg(test)]
-    pub async fn poll(&mut self, store: &Store, state: &mut UiState) -> anyhow::Result<bool> {
-        let mut retained = HashSet::new();
-        let mut changed = false;
-        for (index, item) in state.transcript.iter_mut().enumerate() {
-            let TranscriptItem::Tool(row) = item else {
-                continue;
-            };
-            if !is_task(&row.name) {
-                continue;
-            }
-            let Some(id) = super::tool_display::agent_session_id(&row.output) else {
-                continue;
-            };
-            let Ok(mut value) = serde_json::from_str::<Value>(&row.output) else {
-                continue;
-            };
-            let Some(run) = value["run_id"].as_i64() else {
-                continue;
-            };
-            let key = (id.clone(), run);
-            retained.insert(key.clone());
-            let activity = self.runs.entry(key).or_default();
-            if row.status == ToolStatus::Running
-                || activity
-                    .revision
-                    .as_ref()
-                    .is_none_or(|r| r.status == "running")
-            {
-                let Some(revision) = store.session_revision(&id).await? else {
-                    continue;
-                };
-                // A continuation belongs to a new card, never to the original invocation.
-                if revision.run != run {
-                    continue;
-                }
-                if activity.revision.as_ref() != Some(&revision) {
-                    let events = store.run_events_after(&id, run, activity.events).await?;
-                    activity.events += events.len();
-                    for event in events {
-                        activity.apply(event);
-                    }
-                    activity.revision = Some(revision);
-                }
-            }
-
-            let next = json!({"tool_calls":activity.tool_calls,"current":activity.current});
-            if value["_activity"] != next {
-                value["_activity"] = next;
-                row.output = value.to_string();
-                state.transcript_layout.invalidate_from(index);
-                changed = true;
-            }
-        }
-
-        self.runs.retain(|key, _| retained.contains(key));
-        Ok(changed)
-    }
-}
 
 pub(super) fn draw_parent(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     state.subagent_parent_area = Rect::default();
