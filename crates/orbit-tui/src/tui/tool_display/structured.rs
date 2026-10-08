@@ -594,7 +594,7 @@ pub(super) fn document_with_links(
         view.note(&format!("第 {start}–{end} 页 / 共 {total} 页"));
     }
     if value["pdf"]["has_encoding_issues"].as_bool() == Some(true) {
-        view.note("部分文字编码异常：已保留可读文字，并标出无法解码的片段");
+        view.note("部分文字编码异常：缺失片段已标注，严重乱码页已省略文字");
     }
     if value["pdf"]["partial"].as_bool() == Some(true) {
         view.note("文字提取不完整，缺失内容已按页标注");
@@ -639,7 +639,7 @@ pub(super) fn document_with_links(
         .as_array()
         .filter(|pages| !pages.is_empty())
     {
-        view.note(&format!("此范围内有 {} 页可能需要 OCR", pages.len()));
+        view.note(&format!("此范围内有 {} 页需结合页面图片读取", pages.len()));
     }
     let mut out: Vec<_> = view.lines.drain(..).map(LinkedLine::plain).collect();
     let lines = markdown_preview(content, width);
