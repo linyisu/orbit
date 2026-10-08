@@ -23,7 +23,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::approval::{
     ApprovalPreview, ApprovalRequest, ApprovalSender, CommandPreview, CommandWorkspaceAccess,
-    pinned_local_command,
 };
 use crate::limits::DEFAULT_FILE_SCAN_BYTES;
 
@@ -243,7 +242,7 @@ impl Tool for RunCommand {
             "run_command",
             if self.limits.sandbox {
                 format!(
-                    "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write' (usually requires approval in Auto mode). Literal mkdir, echo, printf, cat and tee commands with workspace-scoped paths, pipelines, > / >> redirection and && sequencing run automatically in Auto mode when offline and without external write access. Shell expansions and other programs still require approval. Native Git commands are available within the requested sandbox permissions. Offline read-only queries may run automatically; writes and network requests follow approval policy. Use git_push for an ordinary HTTPS push requiring host credentials. Protected paths (.env*, orbit config/db) are isolated and masked; Existing repository configuration and hooks are read-only unless an explicitly approved configuration operation requests read_write. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is denied by default; request network=allow explicitly, subject to the configured policy and approval. Enforces execution timeout, private script execution, and resource limits. When background=true, starts a managed command and returns a job_id after approval; the same timeout and permissions apply. Independent background commands may overlap. Completion is delivered automatically to this session between model requests. Continue useful independent work; when nothing remains, call wait_commands once rather than polling get_command_status. Use cancel_commands to stop jobs. Background jobs do not survive an Orbit restart and are cancelled when the Agent run is stopped. /tmp is a disposable command temporary directory. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
+                    "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write'. Auto mode automatically approves all commands started in the workspace, including scripts, writes and network access allowed by configuration. Ask mode requests confirmation; Yolo approves automatically. Native Git commands are available within the requested sandbox permissions. Use git_push for an ordinary HTTPS push requiring host credentials. Protected paths (.env*, orbit config/db) are isolated and masked; Existing repository configuration and hooks are read-only unless an explicitly approved configuration operation requests read_write. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is denied by default; request network=allow explicitly, subject to the configured policy and approval. Enforces execution timeout, private script execution, and resource limits. When background=true, starts a managed command and returns a job_id after approval; the same timeout and permissions apply. Independent background commands may overlap. Completion is delivered automatically to this session between model requests. Continue useful independent work; when nothing remains, call wait_commands once rather than polling get_command_status. Use cancel_commands to stop jobs. Background jobs do not survive an Orbit restart and are cancelled when the Agent run is stopped. /tmp is a disposable command temporary directory. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
                     serde_json::to_string(
                         &self
                             .limits
@@ -257,7 +256,7 @@ impl Tool for RunCommand {
                 )
             } else {
                 format!(
-                    "Run a command with the target user's shell, real working directory, HOME and development environment. There is no filesystem or network sandbox. workspace_access and network declare intended effects for approval, not OS restrictions. Use real host paths; there are no /workspace or /scratch mounts. Session scratch is available through $ORBIT_SCRATCH. Use native Git with the target user's configured SSH or HTTPS authentication. Commands require approval according to the active permission mode. Timeout, cancellation, bounded output and process resource limits apply. background=true returns a managed job_id; use wait_commands when idle and read_command_output for retained output. Jobs do not survive a service restart. Verification commands: {}.",
+                    "Run a command with the target user's shell, real working directory, HOME and development environment. There is no filesystem or network sandbox. workspace_access and network declare intended effects for approval, not OS restrictions. Use real host paths; there are no /workspace or /scratch mounts. Session scratch is available through $ORBIT_SCRATCH. Use native Git with the target user's configured SSH or HTTPS authentication. Auto mode automatically approves all commands started in the workspace, including scripts and networked commands. Ask mode requests confirmation; Yolo approves automatically. Approval does not restrict a native command to its starting directory. Timeout, cancellation, bounded output and process resource limits apply. background=true returns a managed job_id; use wait_commands when idle and read_command_output for retained output. Jobs do not survive a service restart. Verification commands: {}.",
                     serde_json::to_string(&self.limits.verification_commands).unwrap_or_default()
                 )
             },
@@ -393,20 +392,9 @@ impl Tool for RunCommand {
             }
 
             let git_analysis = orbit_runtime::git::GitCommandAnalysis::parse(&args.command);
-            let command =
-                pinned_local_command(&args.command).unwrap_or_else(|| args.command.clone());
-            let native_workspace_scoped = !self.limits.sandbox
-                && crate::approval::native_workspace_command(
-                    &args.command,
-                    args.cwd.as_deref(),
-                    &self.workspace,
-                )
-                .is_some();
-
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     sandbox: self.limits.sandbox,
-                    native_workspace_scoped,
                     command: args.command.clone(),
                     cwd: args.cwd.clone().filter(|s| !s.is_empty()),
                     workspace_access,
@@ -482,7 +470,7 @@ impl Tool for RunCommand {
 
             let backend = execution_backend(self.limits.sandbox)?;
             let mut request = ExecutionRequest::new(
-                command,
+                args.command.clone(),
                 execution_env.cwd.clone(),
                 Duration::from_secs(timeout_seconds),
             )

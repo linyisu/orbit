@@ -221,7 +221,7 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
         "/plan" => vec![("view".into(), "查看计划与反馈".into(), false)],
         "/permissions" => [
             ("ask", "逐次确认", false),
-            ("auto", "自动模式", false),
+            ("auto", "工作区命令自动执行（含联网）", false),
             ("YOLO", "自动确认", false),
         ]
         .into_iter()

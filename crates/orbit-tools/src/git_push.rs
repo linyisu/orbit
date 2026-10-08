@@ -167,7 +167,6 @@ impl Tool for GitPush {
             let approval = self.approvals.send(ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     sandbox: self.sandbox,
-                    native_workspace_scoped: false,
                     command: description.clone(),
                     cwd: Some(self.workspace.root().display().to_string()),
                     timeout_seconds: self.timeout.as_secs(),

@@ -1,9 +1,3 @@
-mod commands;
-
-pub(crate) use commands::{
-    local_workspace_command, native_workspace_command, pinned_local_command,
-};
-
 use std::path::Path;
 
 use tokio::sync::{mpsc, oneshot};
@@ -33,8 +27,6 @@ pub enum CommandWorkspaceAccess {
 pub struct CommandPreview {
     #[serde(default = "sandbox_default")]
     pub sandbox: bool,
-    #[serde(default)]
-    pub native_workspace_scoped: bool,
     pub command: String,
     pub cwd: Option<String>,
     pub timeout_seconds: u64,
@@ -144,32 +136,18 @@ pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
     file_grant_key(path, &root).is_some_and(|path| Path::new(&path).starts_with(root))
 }
 
-/// Auto permits scoped workspace operations and offline read-only commands.
-/// Network access, external writes and other shell scripts require approval.
+/// Auto trusts commands started in the workspace, including networked scripts.
+/// This is an approval policy, not shell analysis or filesystem isolation;
+/// execution policy still controls the sandbox and available capabilities.
 pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
     match preview {
         ApprovalPreview::Command(command) => {
-            if command.git.as_ref().is_some_and(|git| {
-                matches!(
-                    git.kind,
-                    orbit_runtime::git::GitOperationKind::Dangerous { .. }
-                        | orbit_runtime::git::GitOperationKind::ConfigMutation { .. }
-                )
-            }) {
+            let Ok(root) = workspace.canonicalize() else {
                 return false;
-            }
-
-            !command.network_allowed
-                && !command.external_write
-                && ((command.sandbox
-                    && command.workspace_access == CommandWorkspaceAccess::Read
-                    && command.external_capabilities.is_empty())
-                    || if command.sandbox {
-                        local_workspace_command(&command.command, command.cwd.as_deref(), workspace)
-                            .is_some()
-                    } else {
-                        command.native_workspace_scoped
-                    })
+            };
+            root.join(command.cwd.as_deref().unwrap_or("."))
+                .canonicalize()
+                .is_ok_and(|cwd| cwd.is_dir() && cwd.starts_with(root))
         }
 
         ApprovalPreview::Write(write) => workspace_local_file(&write.path, workspace),
@@ -244,84 +222,6 @@ mod tests {
             std::os::unix::fs::symlink(outside.path(), root.path().join("linked")).unwrap();
 
             assert!(!workspace_local_file("linked/data.txt", root.path()));
-        }
-    }
-
-    #[test]
-    fn git_query_does_not_override_network_or_filesystem_permissions() {
-        let root = tempfile::tempdir().unwrap();
-        let mut command = CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "git status".into(),
-            cwd: None,
-            timeout_seconds: 30,
-            workspace_access: CommandWorkspaceAccess::Read,
-            network_allowed: false,
-            external_write: false,
-            external_capabilities: Vec::new(),
-            git: orbit_runtime::git::GitCommandAnalysis::parse("git status"),
-        };
-
-        assert!(auto_allows(
-            &ApprovalPreview::Command(command.clone()),
-            root.path()
-        ));
-        command.network_allowed = true;
-        assert!(!auto_allows(
-            &ApprovalPreview::Command(command.clone()),
-            root.path()
-        ));
-        command.network_allowed = false;
-        command.workspace_access = CommandWorkspaceAccess::ReadWrite;
-        assert!(!auto_allows(
-            &ApprovalPreview::Command(command.clone()),
-            root.path()
-        ));
-        command.workspace_access = CommandWorkspaceAccess::Read;
-        command.external_capabilities.push("outside".into());
-        assert!(!auto_allows(
-            &ApprovalPreview::Command(command),
-            root.path()
-        ));
-    }
-
-    #[test]
-    fn auto_directory_creation_checks_targets_and_keeps_other_permissions() {
-        let root = tempfile::tempdir().unwrap();
-        let mut command = CommandPreview {
-            sandbox: true,
-            native_workspace_scoped: false,
-            command: "mkdir -p demo/nested".into(),
-            cwd: None,
-            timeout_seconds: 30,
-            workspace_access: CommandWorkspaceAccess::ReadWrite,
-            network_allowed: false,
-            external_capabilities: Vec::new(),
-            external_write: false,
-            git: None,
-        };
-        let allowed = |command: &CommandPreview| {
-            auto_allows(&ApprovalPreview::Command(command.clone()), root.path())
-        };
-        assert!(allowed(&command));
-        command
-            .external_capabilities
-            .push("cache (ro, dependency cache)".into());
-        assert!(allowed(&command));
-        command.external_write = true;
-        assert!(!allowed(&command));
-        command.external_write = false;
-        command.network_allowed = true;
-        assert!(!allowed(&command));
-        command.network_allowed = false;
-        for script in [
-            "mkdir -p demo && touch file",
-            "mkdir -p /tmp/outside",
-            "cargo build",
-        ] {
-            command.command = script.into();
-            assert!(!allowed(&command), "{script}");
         }
     }
 

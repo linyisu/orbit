@@ -167,19 +167,29 @@ fn navigation_wheel_does_not_scroll_transcript() {
 }
 
 #[test]
-fn permissions_alias_accepts_a_mode() {
+fn permissions_command_sends_and_displays_each_mode_separately_from_build() {
     let (mut tab, mut rx) = tab("本地");
-    tab.submit("/permissions ask".into()).unwrap();
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(Call {
-            request: Request::SetMode {
-                mode: Mode::Ask,
-                ..
-            },
-            ..
-        })
-    ));
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    for (label, expected) in [
+        ("ask", Mode::Ask),
+        ("auto", Mode::Auto),
+        ("yolo", Mode::Yolo),
+    ] {
+        tab.submit(format!("/permissions {label}")).unwrap();
+        assert!(matches!(rx.try_recv().unwrap().request,
+            Request::SetMode {mode, ..} if mode == expected));
+        terminal
+            .draw(|f| crate::tui::render::draw(f, &mut tab.state))
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains(&format!("build  {label}")), "{screen}");
+    }
 }
 
 #[test]

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum GitOperationKind {
     /// Read-only inspection; approval still depends on the execution boundaries.
     ReadOnlyQuery { subcommand: String },
-    /// Local modification requiring approval for the exact command and repository.
+    /// Local modification; reusable grants bind to the exact command and repository.
     LocalWrite {
         subcommand: String,
         description: String,
@@ -16,15 +16,15 @@ pub enum GitOperationKind {
         target: String,
         risk_notice: Option<String>,
     },
-    /// Remote push requiring write approval in addition to network permission.
+    /// Remote push with write effects and network access.
     RemoteWrite {
         remote: String,
         source_branch: Option<String>,
         target_branch: Option<String>,
     },
-    /// Destructive operation excluded from Auto mode and reusable Git approvals.
+    /// Destructive operation excluded from reusable Git approvals.
     Dangerous { subcommand: String, reason: String },
-    /// Configuration or hook mutation requiring a separate approval.
+    /// Configuration or hook mutation, excluded from reusable Git approvals.
     ConfigMutation {
         key: Option<String>,
         value: Option<String>,

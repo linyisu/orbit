@@ -26,6 +26,42 @@ fn sandbox_command(workspace: Workspace, sender: approval::ApprovalSender) -> Ru
 }
 
 #[tokio::test]
+async fn auto_native_network_enabled_script_executes_in_requested_workspace_directory() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("src")).unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::with_limits(
+        Workspace::new(root.path()).unwrap(),
+        sender,
+        CommandLimits::default(),
+    );
+    let task = tokio::spawn(async move {
+        tool.execute(ToolCall::function("script", "run_command", json!({
+            "command": "for value in first second; do printf '%s\\n' \"$value\"; done > result.txt; pwd",
+            "cwd": "src", "workspace_access": "read_write", "network": "allow"
+        })), CancellationToken::new()).await
+    });
+    let request = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(&request.preview, approval::ApprovalPreview::Command(command) if command.network_allowed && !command.sandbox)
+    );
+    let allow = approval::auto_allows(&request.preview, root.path());
+    request.decision.send(allow).unwrap();
+    assert!(allow);
+    let output = task.await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(value["exit_code"], 0, "{value}");
+    assert_eq!(
+        fs::read_to_string(root.path().join("src/result.txt")).unwrap(),
+        "first\nsecond\n"
+    );
+    assert!(!root.path().join("result.txt").exists());
+}
+
+#[tokio::test]
 async fn auto_literal_text_pipeline_creates_and_appends_workspace_files_without_a_dialog() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("existing")).unwrap();
