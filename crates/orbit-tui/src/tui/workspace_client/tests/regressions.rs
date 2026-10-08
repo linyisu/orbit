@@ -640,3 +640,56 @@ fn foreground_image_closes_before_plan_and_restores_the_composer_after_both_clos
     assert_eq!(tab.state.input.text, "未发送草稿");
     assert!(requests.try_recv().is_err());
 }
+
+#[test]
+fn resize_rejects_old_button_coordinates_until_the_dialog_is_painted() {
+    let (mut tab, mut requests) = tab("本地");
+    tab.state.planning.sync(
+        serde_json::from_value(serde_json::json!({
+            "generation": 3, "mode": "plan", "plan": {
+                "id": "layout-test", "workspace": "/project", "revision": 1,
+                "title": "方案", "markdown": "正文", "steps": ["实施"], "status": "review"
+            }
+        }))
+        .unwrap(),
+    );
+    tab.state.planning.open();
+    let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
+        .unwrap();
+    let approve_point = |terminal: &Terminal<TestBackend>| {
+        let buffer = terminal.backend().buffer();
+        let area = *buffer.area();
+        (area.y..area.bottom())
+            .find_map(|y| {
+                (area.x..area.right().saturating_sub(2)).find_map(|x| {
+                    (buffer[(x, y)].symbol() == "开" && buffer[(x + 2, y)].symbol() == "始")
+                        .then_some((x, y))
+                })
+            })
+            .unwrap()
+    };
+    let (x, y) = approve_point(&terminal);
+    tab.handle(Event::Resize(80, 25)).unwrap();
+    tab.handle(mouse(MouseEventKind::Down(MouseButton::Left), x, y))
+        .unwrap();
+    assert!(requests.try_recv().is_err());
+    terminal.backend_mut().resize(80, 25);
+    terminal
+        .resize(ratatui::layout::Rect::new(0, 0, 80, 25))
+        .unwrap();
+    terminal
+        .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
+        .unwrap();
+    let (x, y) = approve_point(&terminal);
+    tab.handle(mouse(MouseEventKind::Down(MouseButton::Left), x, y))
+        .unwrap();
+    assert!(matches!(
+        requests.try_recv().unwrap().request,
+        Request::Plan {
+            action: orbit_protocol::plan::Action::Approve { generation: 3 },
+            ..
+        }
+    ));
+}

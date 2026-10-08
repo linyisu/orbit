@@ -107,6 +107,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     if let Some(prompt) = &state.ssh_prompt {
         prompt.draw(frame);
     }
+    state.overlay_needs_layout = false;
 }
 
 fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {

@@ -61,6 +61,8 @@ pub(super) fn sync(state: &mut UiState) {
 }
 
 pub(super) fn invalidate(state: &mut UiState) {
+    // Reject queued pointer events until the visible surface has new geometry.
+    state.overlay_needs_layout = true;
     state.planning.invalidate_geometry();
     state.user_input.clear_geometry();
     state.dialog_rows.clear();

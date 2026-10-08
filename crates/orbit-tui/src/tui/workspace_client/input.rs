@@ -9,6 +9,9 @@ impl Tab {
         if matches!(event, Event::Resize(..)) {
             tui::overlay::invalidate(&mut self.state);
         }
+        if self.state.overlay_needs_layout && matches!(event, Event::Mouse(_)) {
+            return Ok(Action::Redraw);
+        }
         let action = self.handle_event(event);
         tui::overlay::sync(&mut self.state);
         action
