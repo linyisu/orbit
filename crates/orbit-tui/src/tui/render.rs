@@ -175,8 +175,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         0
     };
 
-    let file_modal = super::approval::file_modal(state);
-    let approval_height = if state.approval.is_some() && !file_modal {
+    let approval_height = if state.approval.is_some() {
         let needed = state
             .approval
             .as_ref()
@@ -250,7 +249,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         draw_transcript(frame, state, areas[1]);
     }
 
-    if state.approval.is_some() && !file_modal {
+    if state.approval.is_some() {
         super::approval::draw_in(frame, state, areas[2]);
         state.selection.approval = areas[2];
     }
@@ -282,10 +281,6 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor = state.user_input.draw(frame);
     } else {
         super::dialogs::draw(frame, state);
-    }
-
-    if file_modal && !state.dialog_open() {
-        super::approval::draw_file_modal(frame, state);
     }
 }
 

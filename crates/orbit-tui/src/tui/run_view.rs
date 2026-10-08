@@ -61,10 +61,8 @@ pub(super) fn queue_approval(
     state.selection = Default::default();
     state.approval = Some(request.preview.clone());
     state.approval_scroll = 0;
-    state.approval_expanded = false;
     state.approval_shown = false;
     state.approval_choice = 0;
-    state.approval_diff = None;
     *pending = Some(request);
     state.pause_clock();
 }

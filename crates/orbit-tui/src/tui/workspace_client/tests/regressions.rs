@@ -693,3 +693,56 @@ fn resize_rejects_old_button_coordinates_until_the_dialog_is_painted() {
         }
     ));
 }
+
+#[test]
+fn file_approval_scroll_and_editing_use_the_live_event_route() {
+    let (mut tab, mut requests) = tab("本地");
+    tab.state
+        .transcript
+        .push(TranscriptItem::Assistant("chat line\n".repeat(100)));
+    tab.apply(page(
+        vec![],
+        vec![Approval {
+            id: 42,
+            preview: orbit_tools::approval::ApprovalPreview::Write(
+                orbit_tools::approval::WritePreview {
+                    path: "src/main.rs".into(),
+                    before: Some("old\n".repeat(100)),
+                    after: "new\n".repeat(100),
+                },
+            ),
+        }],
+    ));
+    tab.state.input.set("draft".into());
+    let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
+    terminal
+        .draw(|f| crate::tui::render::draw(f, &mut tab.state))
+        .unwrap();
+    let panel = tab.state.approval_area;
+    let chat = tab.state.selection.viewport;
+    assert!(panel.height > 0 && chat.height > 0);
+    for x in [panel.x + 1, panel.right() - 2] {
+        tab.handle(mouse(MouseEventKind::ScrollDown, x, panel.y + 2))
+            .unwrap();
+    }
+    let preview_scroll = tab.state.approval_scroll;
+    assert!(preview_scroll > 0);
+    let chat_scroll = tab.state.scroll;
+    tab.handle(mouse(MouseEventKind::ScrollUp, chat.x + 1, chat.y + 1))
+        .unwrap();
+    assert!(tab.state.scroll > chat_scroll);
+    assert_eq!(tab.state.approval_scroll, preview_scroll);
+    tab.handle(Event::Paste(" text".into())).unwrap();
+    assert_eq!(tab.state.input.text, "draft text");
+    assert!(requests.try_recv().is_err());
+    for (width, height) in [(24, 10), (10, 5), (1, 1), (140, 40)] {
+        terminal.backend_mut().resize(width, height);
+        terminal
+            .resize(ratatui::layout::Rect::new(0, 0, width, height))
+            .unwrap();
+        terminal
+            .draw(|f| crate::tui::render::draw(f, &mut tab.state))
+            .unwrap();
+    }
+    assert_eq!(tab.state.input.text, "draft text");
+}

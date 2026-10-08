@@ -922,7 +922,7 @@ fn web_fetch_title_is_not_a_link_but_wrapped_body_urls_keep_the_full_target() {
 
 #[test]
 fn source_colors_and_multiline_state_match_across_code_previews() {
-    use super::super::{app::ToolRow, approval_diff, markdown};
+    use super::super::{app::ToolRow, markdown};
     let content =
         "/* Orbit block\nfn inside_comment() {}\n*/\nfn main() {\n    let name = \"orbit\";\n}";
     let samples: Vec<_> = content.lines().collect();
@@ -940,7 +940,19 @@ fn source_colors_and_multiline_state_match_across_code_previews() {
     }).collect();
     let cards: Vec<_> = tools.iter().map(|row| tool_card(row, true, 100)).collect();
     let message = markdown::document(&format!("```rust\n{content}\n```"), 100);
-    let diff = approval_diff::Cache::new("", content, (100, 100), true, "src/Orbit Code.RS");
+    let mut approval = UiState::new("mock");
+    approval.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
+        orbit_tools::approval::WritePreview {
+            path: "src/Orbit Code.RS".into(),
+            before: None,
+            after: content.into(),
+        },
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| super::super::approval::draw(frame, &mut approval))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
     let colors = |line: &Line<'static>, source: &str| {
         let start = line.to_string().find(source).unwrap();
         let colors: Vec<_> = line
@@ -951,12 +963,25 @@ fn source_colors_and_multiline_state_match_across_code_previews() {
         colors[start..start + source.len()].to_vec()
     };
 
+    let mut source_row = 0;
     for (index, sample) in samples.iter().enumerate() {
         let expected = colors(&message[index + 1].line, sample);
         for card in &cards {
             assert_eq!(colors(&card[index + 3], sample), expected, "{sample}");
         }
-        assert_eq!(colors(&diff.right[index], sample), expected, "{sample}");
+        let actual = (source_row..30)
+            .find_map(|y| {
+                let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
+                row.find(sample).map(|start| {
+                    source_row = y + 1;
+                    let x = row[..start].width() as u16;
+                    (x..x + sample.len() as u16)
+                        .map(|x| Some(buffer[(x, y)].fg))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .expect("approval renders source line");
+        assert_eq!(actual, expected, "{sample}");
     }
 
     let comment_colors = colors(&message[2].line, samples[1]);

@@ -771,10 +771,8 @@ impl Tab {
                     self.approval_id = pending.as_ref().map(|approval| approval.id);
                     self.state.approval = pending.map(|approval| approval.preview);
                     self.state.approval_scroll = 0;
-                    self.state.approval_expanded = false;
                     self.state.approval_shown = false;
                     self.state.approval_choice = 0;
-                    self.state.approval_diff = None;
                     if self.state.approval.is_some() {
                         self.state.pause_clock();
                     } else if self.busy {

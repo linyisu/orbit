@@ -1,7 +1,7 @@
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
@@ -16,10 +16,6 @@ pub enum Action {
     Deny,
     Cancel,
     None,
-}
-
-pub(super) fn file_modal(_state: &UiState) -> bool {
-    false
 }
 
 /// Inline approvals own only explicit approval shortcuts and pointer events in their panel.
@@ -76,10 +72,6 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
                 .approval_area
                 .contains((mouse.column, mouse.row).into())
             {
-                if file_modal(state) {
-                    return Action::None;
-                }
-
                 if mouse.row < state.approval_area.y {
                     if amount < 0 {
                         state.scroll_up(super::wheel::LINES);
@@ -170,11 +162,6 @@ pub(super) fn needed_height(preview: &orbit_tools::approval::ApprovalPreview) ->
 }
 
 pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
-    if file_modal(state) {
-        draw_file_modal(frame, state);
-        return;
-    }
-
     if area.height < 3 || area.width < 10 {
         return;
     }
@@ -680,115 +667,6 @@ fn draw_options(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     ];
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-pub(super) fn draw_file_modal(frame: &mut Frame<'_>, state: &mut UiState) {
-    let (path, before, after, operation) = match state.approval.as_ref() {
-        Some(orbit_tools::approval::ApprovalPreview::Write(preview)) => (
-            preview.path.as_str(),
-            preview.before.as_deref().unwrap_or_default(),
-            preview.after.as_str(),
-            if preview.before.is_some() {
-                "修改文件"
-            } else {
-                "新建文件"
-            },
-        ),
-
-        Some(orbit_tools::approval::ApprovalPreview::Delete(preview)) => (
-            preview.path.as_str(),
-            preview.before.as_str(),
-            "",
-            "删除文件",
-        ),
-
-        _ => return,
-    };
-
-    let screen = frame.area();
-    let area = screen.inner(Margin::new(
-        if screen.width >= 40 { 2 } else { 0 },
-        if screen.height >= 16 { 1 } else { 0 },
-    ));
-    super::overlay::clear(frame, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(crate::tui::theme::THEME.accent))
-        .title(" 文件变更确认 ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let sections = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(1),
-        Constraint::Length(2),
-    ])
-    .split(inner);
-    let title = super::render::fit_label(
-        &format!("{operation} · {}", safe_output(path)),
-        sections[0].width as usize,
-        true,
-    );
-
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(title),
-            Line::from(format!("{} 字节 → {} 字节", before.len(), after.len())),
-        ]),
-        sections[0],
-    );
-    let panes = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(sections[1]);
-    let left_block = Block::default().borders(Borders::ALL).title(" 修改前 ");
-    let right_block = Block::default().borders(Borders::ALL).title(" 修改后 ");
-    let left = left_block.inner(panes[0]);
-    let right = right_block.inner(panes[1]);
-    let widths = (left.width, right.width);
-
-    if state
-        .approval_diff
-        .as_ref()
-        .is_none_or(|cache| !cache.matches(before, after, widths, state.approval_expanded, path))
-    {
-        state.approval_diff = Some(super::approval_diff::Cache::new(
-            before,
-            after,
-            widths,
-            state.approval_expanded,
-            path,
-        ));
-    }
-
-    let cache = state.approval_diff.as_ref().unwrap();
-    let height = usize::from(left.height.min(right.height));
-    state.approval_max_scroll = cache.left.len().saturating_sub(height);
-    state.approval_scroll = state.approval_scroll.min(state.approval_max_scroll);
-    frame.render_widget(left_block, panes[0]);
-    frame.render_widget(right_block, panes[1]);
-
-    // Both panes consume exactly the same aligned physical-row offset.
-    for (rows, pane) in [(&cache.left, left), (&cache.right, right)] {
-        let visible: Vec<_> = rows
-            .iter()
-            .skip(state.approval_scroll)
-            .take(height)
-            .cloned()
-            .collect();
-
-        frame.render_widget(Paragraph::new(visible), pane);
-    }
-
-    draw_options(frame, state, sections[2]);
-    state.approval_area = area;
-    state.selection.approval = sections[1];
-    // The modal owns pointer interaction; no links or composer clicks below it.
-    state.selection.viewport = Rect::default();
-    state.selection.footer = Rect::default();
-    state.input_area = Rect::default();
-    state.attachment_areas.clear();
-    state.context_indicator_area = Rect::default();
-    state.ime_cursor = None;
-    state.approval_shown = true;
 }
 
 #[cfg(test)]

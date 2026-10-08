@@ -100,9 +100,7 @@ pub struct UiState {
     pub approval: Option<orbit_tools::approval::ApprovalPreview>,
     pub approval_area: ratatui::layout::Rect,
     pub approval_scroll: usize,
-    pub approval_expanded: bool,
     pub approval_max_scroll: usize,
-    pub(super) approval_diff: Option<super::approval_diff::Cache>,
     pub approval_shown: bool,
     pub approval_choice: usize,
     #[cfg(test)]
@@ -425,9 +423,7 @@ impl UiState {
             approval: None,
             approval_area: ratatui::layout::Rect::default(),
             approval_scroll: 0,
-            approval_expanded: false,
             approval_max_scroll: 0,
-            approval_diff: None,
             approval_shown: false,
             approval_choice: 0,
             #[cfg(test)]

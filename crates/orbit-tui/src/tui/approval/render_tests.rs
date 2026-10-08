@@ -25,96 +25,6 @@ fn approval_keeps_old_and_new_syntax_states_independent() {
         .expect("unchanged source line is visible");
 
     assert_eq!(buffer[point].fg, ratatui::style::Color::Rgb(198, 120, 221));
-
-    let cache = super::super::approval_diff::Cache::new(
-        "/* Orbit block\nfn orbit() {}\n*/\n",
-        "// Orbit update\nfn orbit() {}\n",
-        (50, 50),
-        true,
-        "src/Orbit Code.rs",
-    );
-
-    for (side, expected) in [
-        (&cache.left, ratatui::style::Color::Rgb(163, 173, 190)),
-        (&cache.right, ratatui::style::Color::Rgb(198, 120, 221)),
-    ] {
-        let line = side
-            .iter()
-            .find(|line| line.to_string().contains("fn orbit"))
-            .unwrap();
-        let keyword = line
-            .spans
-            .iter()
-            .find(|span| span.content.contains("fn"))
-            .unwrap();
-
-        assert_eq!(keyword.style.fg, Some(expected));
-    }
-}
-
-#[test]
-fn preview_wheels_scroll_preview_and_outside_wheels_scroll_chat() {
-    let mut state = UiState::new("mock");
-    state.max_scroll = 100;
-    state.input.insert("draft");
-    state.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
-        WritePreview {
-            path: "src/main.rs".into(),
-            before: Some("old\n".repeat(100)),
-            after: "new\n".repeat(100),
-        },
-    ));
-    let mut terminal = Terminal::new(TestBackend::new(100, 25)).unwrap();
-    terminal.draw(|f| draw_file_modal(f, &mut state)).unwrap();
-    let cached_rows = state.approval_diff.as_ref().unwrap().left.as_ptr();
-
-    for x in [10, 70] {
-        handle(
-            &mut state,
-            Event::Mouse(crossterm::event::MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                column: x,
-                row: 10,
-                modifiers: KeyModifiers::NONE,
-            }),
-        );
-    }
-
-    assert_eq!(state.approval_scroll, super::super::wheel::LINES * 2);
-
-    handle(
-        &mut state,
-        Event::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        }),
-    );
-
-    assert_eq!(state.scroll, super::super::wheel::LINES);
-    assert_eq!(state.approval_scroll, super::super::wheel::LINES * 2);
-
-    terminal.draw(|f| draw_file_modal(f, &mut state)).unwrap();
-
-    assert_eq!(
-        cached_rows,
-        state.approval_diff.as_ref().unwrap().left.as_ptr()
-    );
-
-    let row_text: String = (0..100)
-        .map(|x| terminal.backend().buffer()[(x, 5)].symbol())
-        .collect();
-
-    assert!(row_text.contains("-  17 │ old"), "{row_text}");
-    assert!(row_text.contains("+  17 │ new"), "{row_text}");
-    assert_eq!(state.input.text, "draft");
-
-    for (width, height) in [(24, 10), (10, 5), (1, 1), (140, 40)] {
-        terminal.backend_mut().resize(width, height);
-        terminal.resize(Rect::new(0, 0, width, height)).unwrap();
-        terminal.draw(|f| draw_file_modal(f, &mut state)).unwrap();
-    }
 }
 
 #[test]
@@ -134,7 +44,6 @@ fn full_preview_scrolls_to_end_and_escapes_terminal_controls() {
     terminal.draw(|f| draw(f, &mut state)).unwrap();
 
     assert!(state.approval_shown);
-    assert!(!state.approval_expanded);
 
     handle(
         &mut state,

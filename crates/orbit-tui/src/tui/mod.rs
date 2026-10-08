@@ -1,6 +1,5 @@
 pub mod app;
 mod approval;
-mod approval_diff;
 mod attachments;
 #[cfg(test)]
 #[allow(dead_code)]
