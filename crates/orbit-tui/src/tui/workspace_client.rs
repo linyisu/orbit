@@ -77,7 +77,7 @@ pub(super) struct Tab {
     completion_input: String,
     next_completion: std::time::Instant,
     next_questions: std::time::Instant,
-    model_refresh: Option<AbortOnDropHandle<Result<orbit_protocol::Configuration>>>,
+    model_refresh: Option<AbortOnDropHandle<Result<(orbit_protocol::Configuration, Vec<String>)>>>,
     model_watcher: Option<workspace::configuration::Watcher>,
     model_configuration: Option<orbit_protocol::Configuration>,
     attachment_task: Option<AbortOnDropHandle<Result<Vec<orbit_model::types::Attachment>>>>,
@@ -257,7 +257,7 @@ impl Tab {
     }
 
     fn refresh_models(&mut self, force: bool) {
-        if !force && self.model_refresh.is_some() {
+        if self.model_refresh.is_some() {
             return;
         }
         if let Some(local) = self
@@ -274,7 +274,7 @@ impl Tab {
                 watcher.resynchronize();
             }
             self.model_refresh = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-                local.snapshot_with_refresh(force).await
+                local.snapshot_with_report(force).await
             })));
         }
     }
@@ -482,7 +482,10 @@ impl Tab {
         {
             changed = true;
             match self.model_refresh.take().unwrap().await {
-                Ok(Ok(configuration)) => {
+                Ok(Ok((configuration, notices))) => {
+                    for notice in notices {
+                        self.state.report_local(TranscriptItem::Notice(notice));
+                    }
                     if self
                         .model_watcher
                         .as_ref()

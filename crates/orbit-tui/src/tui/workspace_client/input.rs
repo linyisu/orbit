@@ -166,6 +166,9 @@ impl Tab {
                 self.state.picker = None;
                 return Ok(Action::SameTarget(Some(id)));
             }
+            if std::mem::take(&mut self.state.model_update_requested) {
+                return Ok(Action::RefreshModels);
+            }
             let plugin_action = if let Some(source) = self.state.pending_marketplace_source.take() {
                 Some(orbit_protocol::plugins::Action::Add { source })
             } else {

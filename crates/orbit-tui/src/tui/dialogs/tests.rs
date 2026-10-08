@@ -1,4 +1,5 @@
 use crossterm::event::KeyEvent;
+use orbit_config::test_support::TestModel;
 use ratatui::{Terminal, backend::TestBackend};
 
 use super::*;
@@ -332,17 +333,47 @@ fn model_picker_draws_on_a_terminal_too_short_for_body_rows() {
 }
 
 #[test]
+fn model_refresh_button_and_f5_request_an_update_without_selecting_a_model() {
+    let mut state = UiState::new("test::model");
+    state.model_picker = Some(ModelPicker::new(
+        vec![TestModel::new("model").option("test")],
+        state.model.clone(),
+        None,
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(90, 25)).unwrap();
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    assert!(
+        handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE))
+        )
+        .is_none()
+    );
+    assert!(state.model_update_requested);
+    state.model_update_requested = false;
+    let area = state.model_update_area.unwrap();
+    assert!(
+        handle(
+            &mut state,
+            Event::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column: area.x,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            })
+        )
+        .is_none()
+    );
+    assert!(state.model_update_requested);
+    assert!(state.model_picker.is_some());
+    assert_eq!(state.model, "test::model");
+}
+
+#[test]
 fn models_keep_current_row_visible_and_support_mouse_selection() {
     let models: Vec<_> = (0..30)
-        .map(|index| ModelOption {
-            max_output_tokens: 32_000,
-            provider: format!("provider-{}", index / 3),
-            model: format!("model-{index:02}"),
-            context_tokens: 128_000,
-            input_context_tokens: 96_000,
-            reasoning_efforts: Vec::new(),
-            supports_vision: false,
-            config: orbit_model::types::ModelConfig::default(),
+        .map(|index| {
+            TestModel::new(format!("model-{index:02}")).option(format!("provider-{}", index / 3))
         })
         .collect();
     let mut state = UiState::new("provider-9::model-29");
@@ -412,16 +443,7 @@ fn models_keep_current_row_visible_and_support_mouse_selection() {
 #[test]
 fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
     let models: Vec<_> = (0..30)
-        .map(|index| ModelOption {
-            max_output_tokens: 32_000,
-            provider: "provider".into(),
-            model: format!("model-{index:02}"),
-            context_tokens: 128_000,
-            input_context_tokens: 96_000,
-            reasoning_efforts: Vec::new(),
-            supports_vision: false,
-            config: orbit_model::types::ModelConfig::default(),
-        })
+        .map(|index| TestModel::new(format!("model-{index:02}")).option("provider"))
         .collect();
     let mut state = UiState::new("provider::model-0");
     state.model_picker = Some(ModelPicker::new(models, state.model.clone(), None));
@@ -501,29 +523,25 @@ fn model_picker_filters_and_returns_a_qualified_model_name() {
     let mut state = UiState::new("deepseek::deepseek-chat");
     state.model_picker = Some(ModelPicker::new(
         vec![
-            ModelOption {
-                max_output_tokens: 32_000,
-                provider: "deepseek".into(),
-                model: "deepseek-chat".into(),
-                context_tokens: 64_000,
-                input_context_tokens: 32_000,
-                reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
-                supports_vision: false,
-                config: orbit_model::types::ModelConfig::default(),
-            },
-            ModelOption {
-                max_output_tokens: 32_000,
-                provider: "openai".into(),
-                model: "gpt-6-astra".into(),
-                context_tokens: 128_000,
-                input_context_tokens: 96_000,
-                reasoning_efforts: vec![
+            TestModel::new("deepseek-chat")
+                .context(64_000)
+                .reasoning(
+                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
+                    &[orbit_model::types::ReasoningEffort::Low],
+                    orbit_model::types::ReasoningEffort::Low,
+                )
+                .option("deepseek"),
+            TestModel::new("gpt-6-astra")
+                .vision(true)
+                .reasoning(
+                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
+                    &[
+                        orbit_model::types::ReasoningEffort::Medium,
+                        orbit_model::types::ReasoningEffort::High,
+                    ],
                     orbit_model::types::ReasoningEffort::Medium,
-                    orbit_model::types::ReasoningEffort::High,
-                ],
-                supports_vision: true,
-                config: orbit_model::types::ModelConfig::default(),
-            },
+                )
+                .option("openai"),
         ],
         state.model.clone(),
         Some(orbit_model::types::ReasoningEffort::Low),
@@ -545,29 +563,25 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
     let mut state = UiState::new("deepseek::deepseek-chat");
     state.model_picker = Some(ModelPicker::new(
         vec![
-            ModelOption {
-                max_output_tokens: 32_000,
-                provider: "deepseek".into(),
-                model: "deepseek-chat".into(),
-                context_tokens: 64_000,
-                input_context_tokens: 32_000,
-                reasoning_efforts: vec![
+            TestModel::new("deepseek-chat")
+                .context(64_000)
+                .reasoning(
+                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
+                    &[
+                        orbit_model::types::ReasoningEffort::None,
+                        orbit_model::types::ReasoningEffort::Low,
+                    ],
                     orbit_model::types::ReasoningEffort::None,
+                )
+                .option("deepseek"),
+            TestModel::new("strict-model")
+                .context(64_000)
+                .reasoning(
+                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
+                    &[orbit_model::types::ReasoningEffort::Low],
                     orbit_model::types::ReasoningEffort::Low,
-                ],
-                supports_vision: false,
-                config: orbit_model::types::ModelConfig::default(),
-            },
-            ModelOption {
-                max_output_tokens: 32_000,
-                provider: "deepseek".into(),
-                model: "strict-model".into(),
-                context_tokens: 64_000,
-                input_context_tokens: 32_000,
-                reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
-                supports_vision: false,
-                config: orbit_model::types::ModelConfig::default(),
-            },
+                )
+                .option("deepseek"),
         ],
         state.model.clone(),
         Some(orbit_model::types::ReasoningEffort::Low),
@@ -583,16 +597,16 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
 
     state.model = "deepseek::strict-model".into();
     state.model_picker = Some(ModelPicker::new(
-        vec![ModelOption {
-            max_output_tokens: 32_000,
-            provider: "deepseek".into(),
-            model: "strict-model".into(),
-            context_tokens: 64_000,
-            input_context_tokens: 32_000,
-            reasoning_efforts: vec![orbit_model::types::ReasoningEffort::Low],
-            supports_vision: false,
-            config: orbit_model::types::ModelConfig::default(),
-        }],
+        vec![
+            TestModel::new("strict-model")
+                .context(64_000)
+                .reasoning(
+                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
+                    &[orbit_model::types::ReasoningEffort::Low],
+                    orbit_model::types::ReasoningEffort::Low,
+                )
+                .option("deepseek"),
+        ],
         state.model.clone(),
         Some(orbit_model::types::ReasoningEffort::Low),
     ));

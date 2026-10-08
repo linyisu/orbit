@@ -204,7 +204,7 @@ pub fn matching(input: &str, models: &[String], skills: &[(String, String)]) -> 
             .map(|name| (name.clone(), "切换模型".into(), false))
             .chain(std::iter::once((
                 "refresh".into(),
-                "刷新账号模型目录".into(),
+                "更新公共模型规格及账号目录".into(),
                 false,
             )))
             .collect(),

@@ -516,6 +516,27 @@ impl InfoDialog {
 }
 
 pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
+    if state.model_picker.is_some() {
+        match &event {
+            Event::Mouse(mouse) => {
+                let hit = state
+                    .model_update_area
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into()));
+                state.model_update_hover = hit;
+                if hit {
+                    if mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left) {
+                        state.model_update_requested = true;
+                    }
+                    return None;
+                }
+            }
+            Event::Key(key) if key.code == KeyCode::F(5) && key.kind != KeyEventKind::Release => {
+                state.model_update_requested = true;
+                return None;
+            }
+            _ => {}
+        }
+    }
     if let Some(dialog) = &mut state.info_dialog {
         if dialog.handle(&event) {
             state.info_dialog = None;
@@ -941,6 +962,7 @@ fn model_row(
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     state.dialog_rows.clear();
+    state.model_update_area = None;
     if !state.dialog_open() {
         return;
     }
@@ -1232,6 +1254,21 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 Line::from(search.clone()),
             ]),
             header,
+        );
+        let update_width = 18.min(header.width);
+        state.model_update_area = super::components::button(
+            frame,
+            Rect::new(
+                header.right().saturating_sub(update_width),
+                header.y,
+                update_width,
+                header.height.min(1),
+            ),
+            "更新模型 F5",
+            super::components::Control {
+                highlighted: state.model_update_hover,
+                ..Default::default()
+            },
         );
         let visible = body.height as usize;
         let first = if state.dialog_manual_scroll {
