@@ -229,7 +229,7 @@ fn compaction_uses_one_quiet_maintenance_row() {
     state.apply(AgentEvent::CompactionStarted);
 
     assert!(state.transcript.is_empty());
-    assert_eq!(state.activity.label(), Some("正在压缩上下文"));
+    assert_eq!(state.activity.label(), "正在压缩上下文");
 
     state.apply(AgentEvent::ContextCompacted {
         strategy: Default::default(),
@@ -329,31 +329,31 @@ fn context_indicator_tracks_each_model_request_during_a_run() {
 fn activity_tracks_compaction_and_concurrent_tools_without_background_completion_override() {
     let mut state = UiState::new("mock");
     state.submit("work".into());
-    assert_eq!(state.activity.label(), Some("等待模型响应"));
+    assert_eq!(state.activity.label(), "等待模型响应");
     state.apply(AgentEvent::CompactionStarted);
-    assert_eq!(state.activity.label(), Some("正在压缩上下文"));
+    assert_eq!(state.activity.label(), "正在压缩上下文");
     state.apply(AgentEvent::CompactionFailed {
         kind: None,
         error: "timeout".into(),
     });
-    assert_eq!(state.activity.label(), Some("等待模型响应"));
+    assert_eq!(state.activity.label(), "等待模型响应");
     state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
         "reason".into(),
     )));
-    assert_eq!(state.activity.label(), None);
+    assert_eq!(state.activity.label(), "正在思考");
     let mut read = call("read");
     read.function.name = "read_file".into();
     let mut edit = call("edit");
     edit.function.name = "edit_file".into();
     state.apply(AgentEvent::ToolStarted { call: read.clone() });
     state.apply(AgentEvent::ToolStarted { call: edit.clone() });
-    assert_eq!(state.activity.label(), None);
+    assert_eq!(state.activity.label(), "正在调用工具");
     state.apply(AgentEvent::ToolFinished {
         call: edit,
         content: String::new(),
         changes: vec![],
     });
-    assert_eq!(state.activity.label(), None);
+    assert_eq!(state.activity.label(), "正在调用工具");
     state.apply(AgentEvent::ToolBackgrounded {
         call: read.clone(),
         job_id: "job".into(),
@@ -362,7 +362,7 @@ fn activity_tracks_compaction_and_concurrent_tools_without_background_completion
     state.apply(AgentEvent::WaitingForTasks {
         job_ids: vec!["job".into()],
     });
-    assert_eq!(state.activity.label(), None);
+    assert_eq!(state.activity.label(), "等待子任务完成");
     state.apply(AgentEvent::TurnStarted { turn: 2 });
     state.apply(AgentEvent::Model(StreamEvent::TextDelta("answer".into())));
     state.apply(AgentEvent::ToolFinished {
@@ -370,8 +370,8 @@ fn activity_tracks_compaction_and_concurrent_tools_without_background_completion
         content: String::new(),
         changes: vec![],
     });
-    assert_eq!(state.activity.label(), None);
+    assert_eq!(state.activity.label(), "正在回复");
     state.apply(AgentEvent::Cancelled);
     state.begin_run();
-    assert_eq!(state.activity.label(), Some("等待模型响应"));
+    assert_eq!(state.activity.label(), "等待模型响应");
 }

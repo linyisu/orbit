@@ -1377,14 +1377,6 @@ impl TranscriptLayout {
             })
     }
 
-    pub(super) fn visible_items(&self, offset: usize, height: usize) -> Range<usize> {
-        let first = self.entries.partition_point(|entry| entry.end <= offset);
-        let end = self.entries.partition_point(|entry| {
-            entry.end.saturating_sub(entry.height) < offset.saturating_add(height)
-        });
-        first..end.max(first)
-    }
-
     pub(super) fn item_offset(&self, index: usize) -> Option<usize> {
         self.entries
             .get(index)

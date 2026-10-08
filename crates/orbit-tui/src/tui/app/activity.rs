@@ -60,22 +60,16 @@ impl Activity {
         }
     }
 
-    pub fn executing(&self) -> bool {
-        matches!(
-            self.phase,
-            Phase::Executing | Phase::WaitingCommands | Phase::WaitingTasks
-        )
-    }
-
-    pub fn label(&self) -> Option<&'static str> {
+    pub fn label(&self) -> &'static str {
         match self.phase {
-            Phase::Waiting | Phase::PreparingTools => Some("等待模型响应"),
-            Phase::Compacting => Some("正在压缩上下文"),
-            Phase::Thinking
-            | Phase::Responding
-            | Phase::Executing
-            | Phase::WaitingCommands
-            | Phase::WaitingTasks => None,
+            Phase::Waiting => "等待模型响应",
+            Phase::Thinking => "正在思考",
+            Phase::Responding => "正在回复",
+            Phase::PreparingTools => "准备调用工具",
+            Phase::Executing => "正在调用工具",
+            Phase::WaitingCommands => "等待命令完成",
+            Phase::WaitingTasks => "等待子任务完成",
+            Phase::Compacting => "正在压缩上下文",
         }
     }
 }

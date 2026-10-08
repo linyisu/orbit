@@ -2491,7 +2491,7 @@ fn activity_stays_readable_and_in_place_while_colors_animate() {
 }
 
 #[test]
-fn live_tool_and_thinking_labels_animate_without_changing_body_or_layout() {
+fn activity_animates_only_in_footer_and_stops_when_completed() {
     use orbit_agent::events::AgentEvent;
     use orbit_model::types::{FunctionCall, StreamEvent, ToolCall};
 
@@ -2507,15 +2507,16 @@ fn live_tool_and_thinking_labels_animate_without_changing_body_or_layout() {
     state.elapsed = std::time::Duration::from_millis(800);
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
     let second = terminal.backend().buffer();
-    let mut changed = 0;
-    for (a, b) in first.content.iter().zip(&second.content) {
-        assert_eq!(a.symbol(), b.symbol());
-        if a.fg != b.fg {
-            assert!(matches!(a.symbol(), "思" | "考"));
-            changed += 1;
-        }
-    }
-    assert!(changed > 0);
+    let footer_start = usize::from(state.selection.footer.y) * 100;
+    assert_eq!(
+        first.content[..footer_start],
+        second.content[..footer_start]
+    );
+    assert_ne!(
+        first.content[footer_start..],
+        second.content[footer_start..]
+    );
+    assert!(footer(&state, 100).to_string().contains("正在思考"));
 
     let call = ToolCall {
         id: "command".into(),
@@ -2534,20 +2535,16 @@ fn live_tool_and_thinking_labels_animate_without_changing_body_or_layout() {
     state.elapsed = std::time::Duration::from_millis(800);
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
     let second = terminal.backend().buffer();
-    let mut changed = 0;
-    let transcript_end = usize::from(state.selection.footer.y) * 100;
-    for (a, b) in first.content[..transcript_end]
-        .iter()
-        .zip(&second.content[..transcript_end])
-    {
-        assert_eq!(a.symbol(), b.symbol());
-        if a.fg != b.fg {
-            assert!("run_command".contains(a.symbol()));
-            changed += 1;
-        }
-    }
-    assert!(changed > 0);
-    assert!(!footer(&state, 100).to_string().contains("执行命令"));
+    let footer_start = usize::from(state.selection.footer.y) * 100;
+    assert_eq!(
+        first.content[..footer_start],
+        second.content[..footer_start]
+    );
+    assert_ne!(
+        first.content[footer_start..],
+        second.content[footer_start..]
+    );
+    assert!(footer(&state, 100).to_string().contains("正在调用工具"));
     state.apply(AgentEvent::ToolFinished {
         call,
         content: "stable output".into(),
@@ -2565,7 +2562,7 @@ fn live_tool_and_thinking_labels_animate_without_changing_body_or_layout() {
 }
 
 #[test]
-fn execution_footer_keeps_an_animated_bar_for_commands_and_tasks() {
+fn execution_footer_shows_stable_status_labels_for_commands_and_tasks() {
     use orbit_agent::events::AgentEvent;
 
     for connection in [None, Some("SSH 204".into())] {
@@ -2574,9 +2571,15 @@ fn execution_footer_keeps_an_animated_bar_for_commands_and_tasks() {
         state.submit("work".into());
         state.started_at = None;
 
-        for event in [
-            AgentEvent::WaitingForCommands { job_ids: vec![] },
-            AgentEvent::WaitingForTasks { job_ids: vec![] },
+        for (event, expected) in [
+            (
+                AgentEvent::WaitingForCommands { job_ids: vec![] },
+                "等待命令完成",
+            ),
+            (
+                AgentEvent::WaitingForTasks { job_ids: vec![] },
+                "等待子任务完成",
+            ),
         ] {
             state.apply(event);
             let mut frames = std::collections::HashSet::new();
@@ -2584,12 +2587,13 @@ fn execution_footer_keeps_an_animated_bar_for_commands_and_tasks() {
             for millis in (0..2000).step_by(130) {
                 state.elapsed = std::time::Duration::from_millis(millis);
                 let line = footer(&state, 100).to_string();
-                assert!(line.contains('█'));
+                assert!(line.contains(expected));
+                assert!(!line.contains('█'));
                 let offset = line[..line.find("Ctrl+C 取消").unwrap()].width();
                 assert_eq!(*hint_offset.get_or_insert(offset), offset);
                 frames.insert(line);
             }
-            assert!(frames.len() > 1);
+            assert_eq!(frames.len(), 1);
             for width in [12, 24, 40, 80] {
                 assert!(footer(&state, width).width() <= width);
             }

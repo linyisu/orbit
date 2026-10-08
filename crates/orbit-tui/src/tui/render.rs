@@ -1,5 +1,4 @@
 //! Frame orchestration. Component renderers live beside this facade.
-mod activity;
 pub(super) use thinking::thinking_header;
 mod links;
 mod text;
@@ -50,8 +49,6 @@ const TOOL_FAILED: Color = THEME.tool_failed;
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
 const BORDER: Color = THEME.border;
-const PROGRESS_FRAMES: &[&str] = &["█     ", "██    ", "███   ", "████  ", "█████ ", "██████"];
-const PROGRESS_FRAME_MILLIS: u128 = 260;
 pub(super) const MAX_COMPLETION_ITEMS: usize = 8;
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
@@ -340,42 +337,16 @@ fn footer(state: &UiState, width: usize) -> Line<'static> {
 }
 
 fn activity_spans(state: &UiState, width: usize) -> Vec<Span<'static>> {
-    if state.status == RunStatus::Running && state.approval.is_none() && state.activity.executing()
-    {
-        let index = (state.active_elapsed().as_millis() / PROGRESS_FRAME_MILLIS)
-            % PROGRESS_FRAMES.len() as u128;
-        let mut spans = vec![Span::styled(
-            PROGRESS_FRAMES[index as usize]
-                .chars()
-                .take(width)
-                .collect::<String>(),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )];
-        if width >= 26 {
-            spans.push(Span::styled(
-                " · Ctrl+C 取消",
-                Style::default().fg(THEME.muted_text),
-            ));
-        }
-        return spans;
-    }
-
-    let label: String = if state.status == RunStatus::Cancelling {
-        "正在取消".into()
+    let label = if state.status == RunStatus::Cancelling {
+        "正在取消"
     } else if state.approval.is_some() {
-        "等待审批".into()
+        "等待审批"
     } else {
-        state.activity.label().unwrap_or_default().into()
+        state.activity.label()
     };
-    let hint = if width < 26 {
-        ""
-    } else if label.is_empty() {
-        "Ctrl+C 取消"
-    } else {
-        " · Ctrl+C 取消"
-    };
+    let hint = if width < 26 { "" } else { " · Ctrl+C 取消" };
     let label = fit_label(
-        &safe_output(&label),
+        &safe_output(label),
         width.saturating_sub(hint.width()),
         false,
     );
@@ -1135,7 +1106,6 @@ pub(super) fn draw_transcript_in(
     state
         .transcript_layout
         .draw(frame, state.selection.viewport, offset);
-    activity::draw(frame, state, offset);
     if let Some(focus) = &state.footnote_focus {
         state.transcript_layout.paint_footnote_focus(
             frame,
