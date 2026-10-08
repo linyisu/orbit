@@ -427,12 +427,11 @@ impl BwrapSandboxBackend {
 
         let mut protected_inodes = if let Some(source) = writable_snapshot_source {
             command.arg("--ro-bind").arg(source).arg("/orbit-source");
-            command.args([
-                "--size",
-                &spec.limits.max_file_size_bytes.to_string(),
-                "--tmpfs",
-                "/workspace",
-            ]);
+            // Zero and u64::MAX mean no explicit limit, not a zero-byte tmpfs.
+            if !matches!(spec.limits.max_file_size_bytes, 0 | u64::MAX) {
+                command.args(["--size", &spec.limits.max_file_size_bytes.to_string()]);
+            }
+            command.args(["--tmpfs", "/workspace"]);
 
             HashSet::new()
         } else {

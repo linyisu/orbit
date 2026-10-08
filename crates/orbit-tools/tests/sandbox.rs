@@ -5,7 +5,10 @@ use std::{fs, os::unix::fs::symlink, time::Duration};
 use orbit_agent::tool::Tool;
 use orbit_model::types::ToolCall;
 use orbit_runtime::{
-    execution::{ProcessLimits, WorkspaceScanLimits, sandbox},
+    execution::{
+        BwrapSandboxBackend, ProcessLimits, ProcessSpec, SandboxBackend, WorkspaceScanLimits,
+        sandbox,
+    },
     filesystem::Workspace,
 };
 use orbit_tools::{approval, run_command::RunCommand};
@@ -159,14 +162,18 @@ async fn isolates_host_files_network_environment_and_processes() {
         secret.path().display(),
         root.path().display()
     );
-    let result = sandbox::run(
-        workspace,
-        script,
-        Duration::from_secs(10),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap();
+    let mut policy = workspace.policy().effective_policy().clone();
+    policy.base.network = orbit_runtime::capability::NetworkPolicy::Deny;
+    let result = BwrapSandboxBackend::new()
+        .unwrap()
+        .run(
+            ProcessSpec::new(script, Duration::from_secs(10)),
+            &policy,
+            None,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stdout.contains("network blocked"));
@@ -384,14 +391,19 @@ async fn configured_command_timeout_reaches_approval_and_rejects_excess() {
 #[ignore = "requires Linux user namespaces"]
 async fn process_limits_keep_memory_and_descriptor_bounds() {
     let (_root, workspace) = fixture();
-    let result = sandbox::run(
-        workspace,
-        "ulimit -v; ulimit -n".into(),
-        Duration::from_secs(600),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap();
+    let mut spec = ProcessSpec::new("ulimit -v; ulimit -n", Duration::from_secs(10));
+    spec.limits.max_memory_bytes = 4 * 1024 * 1024 * 1024;
+    spec.limits.max_open_files = 1024;
+    let result = BwrapSandboxBackend::new()
+        .unwrap()
+        .run(
+            spec,
+            workspace.policy().effective_policy(),
+            None,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "4194304\n1024\n");
