@@ -58,11 +58,19 @@ fn parse_ansi_to_spans_strips_charset_and_preserves_clean_text() {
 fn completed_thinking_drops_trailing_blank_rows_without_changing_content() {
     let mut row: super::super::app::ThinkingRow = "thought\n\n  \n".to_owned().into();
     row.finished = true;
-    row.elapsed = Some(std::time::Duration::ZERO);
-    let lines = transcript_lines(&[TranscriptItem::Thinking(row.clone())], true);
-
-    assert!(lines[0].to_string().contains("<0.1s"));
-    assert_eq!(lines.len(), 3);
+    for (millis, expected) in [
+        (None, "思考"),
+        (Some(0), "思考 0ms"),
+        (Some(75), "思考 75ms"),
+        (Some(999), "思考 999ms"),
+        (Some(1000), "思考 1.0s"),
+        (Some(7500), "思考 7.5s"),
+    ] {
+        row.elapsed = millis.map(std::time::Duration::from_millis);
+        let lines = transcript_lines(&[TranscriptItem::Thinking(row.clone())], true);
+        assert_eq!(lines[0].to_string().trim(), expected);
+        assert_eq!(lines.len(), 3);
+    }
     assert_eq!(row.content, "thought\n\n  \n");
 }
 

@@ -28,8 +28,8 @@ pub(in crate::tui) fn thinking_card_at_width(
         let label = row.elapsed.map_or_else(
             || "思考".to_owned(),
             |elapsed| {
-                if elapsed.as_secs_f64() < 0.1 {
-                    "思考 <0.1s".into()
+                if elapsed.as_secs() == 0 {
+                    format!("思考 {}ms", elapsed.as_millis())
                 } else {
                     format!("思考 {:.1}s", elapsed.as_secs_f64())
                 }
