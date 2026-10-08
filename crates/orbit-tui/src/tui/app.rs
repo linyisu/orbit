@@ -154,6 +154,7 @@ pub struct UiState {
     pub input_dragging: bool,
     pub input_width: usize,
     pub ime_cursor: Option<ratatui::layout::Position>,
+    pub(super) overlay_layer: Option<super::overlay::Layer>,
     pub(super) cursor_motion: super::cursor::CursorMotion,
     pub(super) user_input: super::user_input::State,
     pub(super) planning: super::planning::State,
@@ -224,17 +225,7 @@ impl UiState {
     }
 
     pub(super) fn dialog_open(&self) -> bool {
-        self.planning.visible()
-            || self.user_input.visible()
-            || self.media_preview.is_some()
-            || self.btw.visible()
-            || self.info_dialog.is_some()
-            || self.subagent_dialog.is_some()
-            || self.show_help
-            || self.picker.is_some()
-            || self.restore_picker.is_some()
-            || self.model_picker.is_some()
-            || self.marketplace_dialog.is_some()
+        super::overlay::active(self).is_some()
     }
 
     /// Local feedback must not become conversation history on the home screen.
@@ -479,6 +470,7 @@ impl UiState {
             input_dragging: false,
             input_width: 74,
             ime_cursor: None,
+            overlay_layer: None,
             cursor_motion: Default::default(),
             user_input: Default::default(),
             planning: Default::default(),

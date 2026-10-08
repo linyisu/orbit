@@ -41,6 +41,11 @@ pub(super) struct State {
     cached: Option<(u64, u16, Vec<Line<'static>>)>,
 }
 impl State {
+    pub(super) fn invalidate_geometry(&mut self) {
+        self.hits.clear();
+        self.pointer.invalidate();
+        self.editor = Rect::default();
+    }
     pub fn visible(&self) -> bool {
         self.open
     }

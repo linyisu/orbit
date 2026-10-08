@@ -123,6 +123,7 @@ pub(super) async fn run(mut opened: Opened) -> Result<()> {
                 tabs.sync_remote_ui();
                 let state = &mut tabs.remote.get_mut(tabs.active_remote.as_ref().unwrap()).unwrap().state;
                 terminal::draw_synchronized(&mut terminal, |frame| {
+                    tui::overlay::prepare(state);
                     if state.selection.draw_frozen(frame) { media::frozen_frame(); return; }
                     render::draw(frame, state);
                     state.selection.paint(frame);

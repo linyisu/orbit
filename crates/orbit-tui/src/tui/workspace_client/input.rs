@@ -4,7 +4,18 @@ use super::*;
 use crate::tui::{self, approval, render, selection};
 
 impl Tab {
-    pub fn handle(&mut self, mut event: Event) -> Result<Action> {
+    pub fn handle(&mut self, event: Event) -> Result<Action> {
+        tui::overlay::sync(&mut self.state);
+        if matches!(event, Event::Resize(..)) {
+            tui::overlay::invalidate(&mut self.state);
+        }
+        let action = self.handle_event(event);
+        tui::overlay::sync(&mut self.state);
+        action
+    }
+
+    fn handle_event(&mut self, mut event: Event) -> Result<Action> {
+        let layer = tui::overlay::active(&self.state);
         if let Some(prompt) = &mut self.state.ssh_prompt {
             if prompt.handle(&event) {
                 self.cancel_connect();
@@ -40,7 +51,14 @@ impl Tab {
             self.cancel_connect();
             return Ok(Action::Redraw);
         }
-        if self.state.planning.visible() {
+        if let Some(preview) = &mut self.state.media_preview {
+            let (_, close) = preview.handle(&event);
+            if close {
+                self.state.media_preview = None;
+            }
+            return Ok(Action::None);
+        }
+        if layer == Some(tui::overlay::Layer::Plan) {
             if let Some(action) = self.state.planning.handle(&event) {
                 self.submit_with_receipt(
                     Request::Plan {
@@ -58,7 +76,7 @@ impl Tab {
                 return Ok(Action::Redraw);
             }
         }
-        if self.state.user_input.visible() {
+        if layer == Some(tui::overlay::Layer::Questions) {
             match self.state.user_input.handle(&event) {
                 tui::user_input::Action::Answer { id, answers } => self.submit_with_receipt(
                     Request::AnswerUserInput {
@@ -89,12 +107,10 @@ impl Tab {
                 return Ok(Action::Redraw);
             }
         }
-        if let Some(preview) = &mut self.state.media_preview {
-            let (_, close) = preview.handle(&event);
-            if close {
-                self.state.media_preview = None;
-            }
-            return Ok(Action::None);
+        if layer == Some(tui::overlay::Layer::Restore)
+            && tui::restore::handle(&mut self.state, &event)
+        {
+            return Ok(Action::Redraw);
         }
         if self.state.btw.visible() {
             use tui::transcript_dialog::Action as DialogAction;
@@ -140,9 +156,6 @@ impl Tab {
             if !matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) {
                 return Ok(Action::Redraw);
             }
-        }
-        if tui::restore::handle(&mut self.state, &event) {
-            return Ok(Action::Redraw);
         }
         if self.state.dialog_open() {
             if let Some(id) = tui::dialogs::handle(&mut self.state, event) {

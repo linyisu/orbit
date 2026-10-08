@@ -618,3 +618,25 @@ fn sent_images_use_target_assets_for_live_and_replayed_messages() {
         assert!(!tab.state.is_home());
     }
 }
+
+#[test]
+fn foreground_image_closes_before_plan_and_restores_the_composer_after_both_close() {
+    use crate::tui::{media, overlay};
+    let (mut tab, mut requests) = tab("本地");
+    tab.state.input.set("未发送草稿".into());
+    tab.state.planning.open();
+    overlay::sync(&mut tab.state);
+    tab.state.media_preview = Some(media::Preview::new(
+        tab.state.media.clone(),
+        media::Source::Image("missing-test-image.png".into()),
+    ));
+    let escape = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    tab.handle(escape.clone()).unwrap();
+    assert!(tab.state.media_preview.is_none());
+    assert!(tab.state.planning.visible());
+    assert_eq!(overlay::active(&tab.state), Some(overlay::Layer::Plan));
+    tab.handle(escape).unwrap();
+    assert!(!tab.state.dialog_open());
+    assert_eq!(tab.state.input.text, "未发送草稿");
+    assert!(requests.try_recv().is_err());
+}

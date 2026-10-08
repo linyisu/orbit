@@ -141,12 +141,16 @@ impl RestorePicker {
         changed
     }
 
-    pub fn draw(&mut self, frame: &mut Frame<'_>, full: Rect) -> Option<Position> {
+    pub(super) fn invalidate_geometry(&mut self) {
         self.rows.clear();
         self.all = Rect::default();
         self.none = Rect::default();
         self.confirm = Rect::default();
         self.area = Rect::default();
+    }
+
+    pub fn draw(&mut self, frame: &mut Frame<'_>, full: Rect) -> Option<Position> {
+        self.invalidate_geometry();
         let area =
             super::dialogs::centered_size(full, 96, self.entries.len().clamp(3, 14) as u16 + 9);
         let inner = components::modal(frame, area);

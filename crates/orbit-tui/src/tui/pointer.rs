@@ -225,7 +225,6 @@ pub(super) fn toggle_transcript_item(state: &mut UiState, index: usize) {
             "enter_plan" | "update_plan" | "submit_plan"
         )
     {
-        state.selection.clear();
         state.planning.open();
         return;
     }
@@ -233,9 +232,6 @@ pub(super) fn toggle_transcript_item(state: &mut UiState, index: usize) {
         && row.name == "ask_user"
         && state.user_input.open_tool(&row.id, &row.output)
     {
-        // The click originates in transcript selection, which freezes the frame
-        // on mouse-down. Release it before the main loop's frozen-frame shortcut.
-        state.selection.clear();
         return;
     }
 

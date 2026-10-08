@@ -208,7 +208,7 @@ impl State {
             false
         }
     }
-    fn clear_geometry(&mut self) {
+    pub(super) fn clear_geometry(&mut self) {
         self.hits.clear();
         self.pointer.invalidate();
         self.editor_rows.clear();

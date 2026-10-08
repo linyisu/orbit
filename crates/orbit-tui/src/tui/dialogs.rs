@@ -955,7 +955,6 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         return;
     }
 
-    state.selection.clear();
     if let Some(picker) = &mut state.restore_picker {
         state.ime_cursor = picker.draw(frame, frame.area());
         return;
