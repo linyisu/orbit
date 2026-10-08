@@ -911,14 +911,7 @@ pub(super) fn transcript_area(full: Rect) -> Rect {
 }
 
 pub(super) fn centered_size(full: Rect, width: u16, height: u16) -> Rect {
-    let width = full.width.saturating_sub(4).min(width);
-    let height = full.height.saturating_sub(2).min(height);
-    Rect::new(
-        full.x + (full.width - width) / 2,
-        full.y + (full.height - height) / 2,
-        width,
-        height,
-    )
+    super::components::centered(full, width, height)
 }
 
 fn model_row(

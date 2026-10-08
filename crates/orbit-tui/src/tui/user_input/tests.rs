@@ -521,7 +521,7 @@ fn user_input_hover_moves_without_scrolling_relayout_or_highlighting_other_contr
             .iter()
             .find(|(r, _)| r.contains(Position::new(first.x, row)))
             .map(|(_, focus)| *focus);
-        assert_eq!(s.hovered, hovered);
+        assert_eq!(s.pointer.hovered(), hovered);
         for (target, focus) in &geometry {
             if matches!(focus, Focus::Option(_)) {
                 assert_eq!(
@@ -695,7 +695,7 @@ fn user_input_summary_hover_highlights_only_the_question_heading() {
             // only the heading receives the hover highlight.
             s.handle(&pointer(MouseEventKind::Moved, *row));
             paint(&mut s, &mut terminal);
-            assert_eq!(s.hovered, Some(*focus));
+            assert_eq!(s.pointer.hovered(), Some(*focus));
             for (target, target_focus, heading) in &review_rows {
                 let cell = &terminal.backend().buffer()[(target.x, target.y)];
                 let highlighted = target_focus == focus && *heading;

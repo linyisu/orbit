@@ -92,9 +92,9 @@ fn plan_feedback_focus_is_editor_mouse_geometry_does_not_leak_and_submit_closes_
     state.handle(&Event::Paste("  补充测试  ".into()));
     let editor = state.editor;
     state.handle(&mouse(MouseEventKind::Moved, editor.x + 1, editor.y + 1));
-    assert_eq!(state.hovered, Some(Focus::Editor));
+    assert_eq!(state.pointer.hovered(), Some(Focus::Editor));
     state.handle(&mouse(MouseEventKind::Moved, 0, 0));
-    assert_eq!(state.hovered, None);
+    assert_eq!(state.pointer.hovered(), None);
     assert_eq!(
         state.handle(&key(KeyCode::Enter, KeyModifiers::CONTROL)),
         Some(Action::Feedback {

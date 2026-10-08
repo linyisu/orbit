@@ -4,14 +4,18 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
-    layout::{Alignment, Position, Rect},
+    layout::{Position, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{app::UiState, theme::THEME};
+use super::{
+    app::UiState,
+    components::{self, Control},
+    theme::THEME,
+};
 
 #[derive(Clone, Debug)]
 struct Entry {
@@ -145,31 +149,17 @@ impl RestorePicker {
         self.area = Rect::default();
         let area =
             super::dialogs::centered_size(full, 96, self.entries.len().clamp(3, 14) as u16 + 9);
-        super::overlay::clear(frame, area);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(THEME.accent));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        if inner.height < 7 || inner.width < 12 {
+        let inner = components::modal(frame, area);
+        if inner.height < 7 || inner.width < 10 {
             self.title_scroll = None;
             return None;
         }
-        let inner = Rect::new(
-            inner.x + 1,
-            inner.y,
-            inner.width.saturating_sub(2),
-            inner.height,
-        );
         let total = self.entries.len();
         let selected = self.entries.iter().filter(|entry| entry.selected).count();
-        frame.render_widget(
-            Paragraph::new(format!("恢复上次会话 · 已选 {selected}/{total}")).style(
-                Style::default()
-                    .fg(THEME.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Rect::new(inner.x, inner.y, inner.width, 1),
+        components::title(
+            frame,
+            inner,
+            format!("恢复上次会话 · 已选 {selected}/{total}"),
         );
         let search = super::render::fit_label(
             &format!("搜索：{}", self.query),
@@ -202,21 +192,15 @@ impl RestorePicker {
             ("恢复", self.confirm, selected > 0),
         ] {
             let hovered = self.pointer.is_some_and(|point| hit.contains(point.into()));
-            let style = if !enabled {
-                Style::default().fg(THEME.secondary)
-            } else if hovered {
-                Style::default()
-                    .fg(THEME.on_accent)
-                    .bg(THEME.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(THEME.accent)
-            };
-            frame.render_widget(
-                Paragraph::new(label)
-                    .alignment(Alignment::Center)
-                    .style(style),
+            components::button(
+                frame,
                 hit,
+                label,
+                Control {
+                    disabled: !enabled,
+                    highlighted: hovered,
+                    ..Control::default()
+                },
             );
         }
         frame.render_widget(
@@ -245,14 +229,11 @@ impl RestorePicker {
                 title_width,
                 if focused { title_elapsed } else { None },
             );
-            let style = if focused {
-                Style::default()
-                    .fg(THEME.on_accent)
-                    .bg(THEME.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(THEME.foreground)
-            };
+            let style = Control {
+                highlighted: focused,
+                ..Control::default()
+            }
+            .style(components::normal());
             let mark_style = if focused {
                 style
             } else {
@@ -264,15 +245,14 @@ impl RestorePicker {
                     })
                     .add_modifier(Modifier::BOLD)
             };
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::raw("  "),
+            let line = components::inset_line(
+                Line::from(vec![
                     Span::styled(if entry.selected { "[✓]" } else { "[ ]" }, mark_style),
-                    Span::raw(format!(" {title}  ")),
-                ]))
-                .style(style),
-                *hit,
+                    Span::raw(format!(" {title}")),
+                ]),
+                hit.width,
             );
+            frame.render_widget(Paragraph::new(line).style(style), *hit);
         }
         if ids.is_empty() {
             frame.render_widget(

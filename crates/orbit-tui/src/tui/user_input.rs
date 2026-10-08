@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Position, Rect},
     style::{Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -57,9 +57,7 @@ pub(super) struct State {
     drafts: HashMap<String, Vec<Draft>>,
     dialog: Option<Dialog>,
     hits: Vec<(Rect, Focus)>,
-    hovered: Option<Focus>,
-    pointer_active: bool,
-    pointer_position: Option<Position>,
+    pointer: super::components::Pointer<Focus>,
     badge: Rect,
     editor_area: Rect,
     editor_rows: Vec<(Rect, Focus, usize)>,
@@ -212,13 +210,13 @@ impl State {
     }
     fn clear_geometry(&mut self) {
         self.hits.clear();
-        self.hovered = None;
+        self.pointer.invalidate();
         self.editor_rows.clear();
         self.editor_area = Rect::default();
     }
     fn open(&mut self, id: &str) {
         self.clear_geometry();
-        self.pointer_active = false;
+        self.pointer.keyboard();
         if let Some(r) = self.records.iter().find(|r| r.id == id) {
             let page = if r.status == Status::Pending {
                 0
@@ -431,27 +429,15 @@ impl State {
             let pos = Position::new(m.column, m.row);
             match m.kind {
                 MouseEventKind::Moved => {
-                    // Some terminals emit stationary motion after a click. A
-                    // new page must retain its editor focus at those coordinates.
-                    if self.pointer_position != Some(pos) {
-                        self.pointer_position = Some(pos);
-                        self.pointer_active = true;
-                        self.hovered = self
-                            .hits
-                            .iter()
-                            .find(|(rect, _)| rect.contains(pos))
-                            .map(|(_, focus)| *focus);
-                        if let (Some(Dialog::History { cursor, .. }), Some(Focus::History(i))) =
-                            (&mut self.dialog, self.hovered)
-                        {
-                            *cursor = i;
-                        }
+                    if self.pointer.moved(pos, &self.hits)
+                        && let (Some(Dialog::History { cursor, .. }), Some(Focus::History(i))) =
+                            (&mut self.dialog, self.pointer.hovered())
+                    {
+                        *cursor = i;
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    self.pointer_position = Some(pos);
-                    self.pointer_active = true;
-                    self.hovered = None;
+                    self.pointer.press(pos);
                     if let Some((rect, _, row)) = self
                         .editor_rows
                         .iter()
@@ -497,8 +483,7 @@ impl State {
                     }
                 }
                 MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
-                    self.hovered = None;
-                    self.pointer_active = true;
+                    self.pointer.scroll();
                     let down = m.kind == MouseEventKind::ScrollDown;
                     match &mut self.dialog {
                         Some(Dialog::Form(v)) => {
@@ -530,9 +515,7 @@ impl State {
         if matches!(event, Event::Paste(_))
             || matches!(event, Event::Key(key) if key.kind != KeyEventKind::Release)
         {
-            self.pointer_active = false;
-            self.hovered = None;
-            self.pointer_position = None;
+            self.pointer.keyboard();
         }
         let key = match event {
             Event::Key(k) if k.kind == KeyEventKind::Release => return Action::None,

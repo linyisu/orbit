@@ -14,6 +14,7 @@ mod code;
 mod command_actions;
 pub mod commands;
 mod completion;
+mod components;
 mod connect;
 mod connect_custom;
 mod connect_key;

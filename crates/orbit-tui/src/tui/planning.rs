@@ -1,5 +1,9 @@
 //! Plan review uses the same overlay, editor and theme as questionnaires.
-use super::{input::InputState, theme::THEME};
+use super::{
+    components::{self, Control},
+    input::InputState,
+    theme::THEME,
+};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use orbit_protocol::plan::{Action, State as Snapshot, Status, WorkMode};
 use ratatui::{
@@ -7,9 +11,8 @@ use ratatui::{
     layout::{Position, Rect},
     style::{Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
-use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -27,7 +30,7 @@ pub(super) struct State {
     feedback_page: bool,
     draft: InputState,
     focus: Option<Focus>,
-    hovered: Option<Focus>,
+    pointer: components::Pointer<Focus>,
     hits: Vec<(Rect, Focus)>,
     badge: Rect,
     editor: Rect,
@@ -49,7 +52,7 @@ impl State {
         self.error = None;
         self.feedback_page = false;
         self.focus = Some(Focus::Document);
-        self.hovered = None;
+        self.pointer.keyboard();
         self.hits.clear();
         self.offset = 0;
     }
@@ -72,7 +75,7 @@ impl State {
                 self.open = false;
             }
             self.hits.clear();
-            self.hovered = None;
+            self.pointer.invalidate();
         }
         self.snapshot = state;
     }
@@ -106,7 +109,7 @@ impl State {
             Focus::Feedback if self.editable() => {
                 self.feedback_page = true;
                 self.focus = Some(Focus::Editor);
-                self.hovered = None;
+                self.pointer.invalidate();
                 self.hits.clear();
             }
             Focus::Editor => self.focus = Some(Focus::Editor),
@@ -154,8 +157,11 @@ impl State {
                 .find(|(r, _)| r.contains(point))
                 .map(|(_, f)| *f);
             match m.kind {
-                MouseEventKind::Moved => self.hovered = hit,
+                MouseEventKind::Moved => {
+                    self.pointer.moved(point, &self.hits);
+                }
                 MouseEventKind::Down(MouseButton::Left) if !self.sending => {
+                    self.pointer.press(point);
                     if let Some(focus) = hit {
                         if focus == Focus::Editor {
                             let index = self.draft.position_at(
@@ -182,7 +188,7 @@ impl State {
             if k.kind == KeyEventKind::Release {
                 return None;
             }
-            self.hovered = None;
+            self.pointer.keyboard();
             if k.code == KeyCode::Esc {
                 self.open = false;
                 return None;
@@ -288,18 +294,19 @@ impl State {
         focus: Focus,
         active: bool,
     ) {
-        let highlight =
-            self.hovered == Some(focus) || (self.hovered.is_none() && self.focus == Some(focus));
-        let style = if highlight || active {
-            Style::default()
-                .fg(THEME.on_accent)
-                .bg(THEME.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(THEME.accent)
-        };
-        frame.render_widget(Paragraph::new(format!("  {label}  ")).style(style), area);
-        self.hits.push((area, focus));
+        let highlight = self.pointer.highlight(self.focus) == Some(focus);
+        if let Some(area) = components::button(
+            frame,
+            area,
+            label,
+            Control {
+                highlighted: highlight || active,
+                disabled: self.sending,
+                ..Control::default()
+            },
+        ) {
+            self.hits.push((area, focus));
+        }
     }
     pub fn draw(&mut self, frame: &mut Frame<'_>) -> Option<Position> {
         if !self.open {
@@ -308,14 +315,7 @@ impl State {
         self.hits.clear();
         self.editor = Rect::default();
         let area = super::dialogs::centered_size(frame.area(), 92, 27);
-        super::overlay::clear(frame, area);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(THEME.accent));
-        let mut inner = block.inner(area);
-        frame.render_widget(block, area);
-        inner.x += 2.min(inner.width);
-        inner.width = inner.width.saturating_sub(4);
+        let inner = components::modal(frame, area);
         if inner.height < 9 || inner.width < 24 {
             frame.render_widget(Paragraph::new("请扩大窗口 · Esc 收起"), inner);
             return None;
@@ -335,14 +335,7 @@ impl State {
                 )
             },
         );
-        frame.render_widget(
-            Paragraph::new(title).style(
-                Style::default()
-                    .fg(THEME.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Rect::new(inner.x, inner.y, inner.width, 1),
-        );
+        components::title(frame, inner, title);
         self.button(
             frame,
             Rect::new(inner.x, inner.y + 1, 12, 1),
@@ -420,8 +413,8 @@ impl State {
                 body,
             );
         }
-        let mut x = inner.x;
-        let y = inner.bottom() - 3;
+        let mut bar =
+            components::ActionBar::new(Rect::new(inner.x, inner.bottom() - 3, inner.width, 1));
         let buttons = if self.editable() {
             if self.feedback_page {
                 vec![("提交意见", Focus::Send), ("收起", Focus::Close)]
@@ -436,10 +429,16 @@ impl State {
             vec![("关闭", Focus::Close)]
         };
         for (label, focus) in buttons {
-            let width = (label.width() + 4) as u16;
-            if x + width <= inner.right() {
-                self.button(frame, Rect::new(x, y, width, 1), label, focus, false);
-                x += width + 2;
+            if let Some(area) = bar.button(
+                frame,
+                label,
+                Control {
+                    highlighted: self.pointer.highlight(self.focus) == Some(focus),
+                    disabled: self.sending,
+                    ..Control::default()
+                },
+            ) {
+                self.hits.push((area, focus));
             }
         }
         let hint = if self.sending {

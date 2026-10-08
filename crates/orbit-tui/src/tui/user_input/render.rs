@@ -1,21 +1,8 @@
 use super::*;
 use unicode_width::UnicodeWidthStr;
 
-fn selected() -> Style {
-    Style::default()
-        .fg(THEME.on_accent)
-        .bg(THEME.accent)
-        .add_modifier(Modifier::BOLD)
-}
-fn normal() -> Style {
-    Style::default().fg(THEME.foreground)
-}
-fn muted() -> Style {
-    Style::default().fg(THEME.secondary)
-}
-fn accent() -> Style {
-    Style::default().fg(THEME.accent)
-}
+use crate::tui::components::{self, Control, accent, highlighted as selected, muted, normal};
+
 fn choice_mark(kind: Kind, chosen: bool) -> &'static str {
     if kind == Kind::Multiple {
         crate::tui::icons::checkbox(chosen)
@@ -51,12 +38,11 @@ fn push(rows: &mut Vec<Row>, text: String, style: Style, focus: Option<Focus>, w
 // Keep the choice's content inset from its full-width hover background,
 // including continuation lines after wrapping.
 fn push_choice(rows: &mut Vec<Row>, text: String, style: Style, focus: Option<Focus>, width: u16) {
-    let start = rows.len();
-    push(rows, text, style, focus, width.saturating_sub(4));
-    for row in &mut rows[start..] {
-        row.line.spans.insert(0, ratatui::text::Span::raw("  "));
-        row.line.spans.push(ratatui::text::Span::raw("  "));
-    }
+    rows.extend(
+        components::choice_lines(&text, style, width)
+            .into_iter()
+            .map(|line| Row { line, focus }),
+    );
 }
 
 impl State {
@@ -91,14 +77,7 @@ impl State {
             Dialog::Form(_) => 25,
         };
         let area = crate::tui::dialogs::centered_size(frame.area(), 92, desired as u16);
-        crate::tui::overlay::clear(frame, area);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(accent());
-        let mut inner = block.inner(area);
-        frame.render_widget(block, area);
-        inner.x = inner.x.saturating_add(1);
-        inner.width = inner.width.saturating_sub(2);
+        let inner = components::modal(frame, area);
         if inner.height < 8 || inner.width < 16 {
             frame.render_widget(
                 Paragraph::new("请扩大窗口 · Esc 收起").style(muted()),
@@ -160,11 +139,7 @@ impl State {
         let Some(Dialog::Form(v)) = &mut self.dialog else {
             return None;
         };
-        let highlight = if self.pointer_active {
-            self.hovered
-        } else {
-            Some(v.focus)
-        };
+        let highlight = self.pointer.highlight(Some(v.focus));
         let r = self.records.iter().find(|r| r.id == v.id)?;
         let editable = r.status == Status::Pending && self.pending.contains(&v.id);
         let count = r.form.questions.len();
@@ -474,39 +449,25 @@ impl State {
             (Focus::Later, if editable { "收起" } else { "关闭" }),
             (Focus::Decline, "取消问答"),
         ];
-        let mut x = inner.x;
-        let mut y = inner.bottom() - 4;
+        let mut bar =
+            components::ActionBar::new(Rect::new(inner.x, inner.bottom() - 4, inner.width, 2));
         for (focus, label) in labels {
-            if focus == Focus::Decline && !editable {
+            if (focus == Focus::Decline && !editable)
+                || (focus == Focus::Next && page == count && !editable)
+            {
                 continue;
             }
-            if focus == Focus::Next && page == count && !editable {
-                continue;
-            }
-            let disabled = focus == Focus::Previous && page == 0;
-            let width = label.width() as u16 + 2;
-            if x + width > inner.right() {
-                x = inner.x;
-                y += 1;
-            }
-            if y > inner.bottom() - 3 {
-                break;
-            }
-            let rect = Rect::new(x, y, width.min(inner.width), 1);
-            frame.render_widget(
-                Paragraph::new(format!(" {label} ")).style(if disabled {
-                    muted()
-                } else if highlight == Some(focus) {
-                    selected()
-                } else {
-                    accent()
-                }),
-                rect,
-            );
-            if !disabled {
+            if let Some(rect) = bar.button(
+                frame,
+                label,
+                Control {
+                    disabled: (focus == Focus::Previous && page == 0) || v.sending,
+                    highlighted: highlight == Some(focus),
+                    ..Control::default()
+                },
+            ) {
                 self.hits.push((rect, focus));
             }
-            x += width + 2;
         }
         let message = if v.sending {
             "正在确认提交结果…"
