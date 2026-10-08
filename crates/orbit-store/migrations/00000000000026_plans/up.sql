@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS session_plans(session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, generation INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(session_id,generation)); PRAGMA user_version=26;

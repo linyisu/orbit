@@ -1,58 +1,83 @@
+use sea_orm::sea_query::Expr;
 use std::path::Path;
 
+use crate::entities::*;
 use anyhow::{Context, Result, ensure};
-use rusqlite::{OptionalExtension, params};
+use sea_orm::*;
 
 use crate::{
     project::{Directory, Project, same_directory_identity},
     store::Store,
 };
 
-pub(crate) fn migrate(conn: &rusqlite::Connection) -> Result<()> {
-    conn.execute_batch("CREATE TABLE projects (
-        id TEXT PRIMARY KEY, path TEXT, identity TEXT, strong INTEGER NOT NULL DEFAULT 0,
-        legacy INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE INDEX projects_identity ON projects(identity);
-    CREATE TABLE project_paths (project_id TEXT NOT NULL REFERENCES projects(id), path TEXT NOT NULL,
-        PRIMARY KEY(project_id,path));
-    ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id);
-    INSERT INTO projects(id,path,legacy) SELECT lower(hex(randomblob(16))), workspace, 1 FROM sessions GROUP BY workspace;
-    INSERT INTO project_paths(project_id,path) SELECT id,path FROM projects;
-    UPDATE sessions SET project_id=(SELECT id FROM projects WHERE path=sessions.workspace);
-    CREATE INDEX sessions_project ON sessions(project_id);
-    PRAGMA user_version=2;")?;
-
+async fn affected_sessions<C: ConnectionTrait>(
+    conn: &C,
+    id: &str,
+    path: &str,
+) -> Result<Vec<String>> {
+    Ok(sessions::Entity::find()
+        .select_only()
+        .column(sessions::Column::Id)
+        .join(JoinType::InnerJoin, sessions::Relation::Project.def())
+        .filter(
+            Condition::any()
+                .add(projects::Column::Id.eq(id))
+                .add(projects::Column::Path.eq(path)),
+        )
+        .order_by_asc(sessions::Column::Id)
+        .into_tuple()
+        .all(conn)
+        .await?)
+}
+async fn record_path<C: ConnectionTrait>(conn: &C, id: &str, path: &str) -> Result<()> {
+    project_paths::Entity::insert(project_paths::ActiveModel {
+        project_id: Set(id.to_owned()),
+        path: Set(path.to_owned()),
+    })
+    .on_conflict(
+        sea_query::OnConflict::columns([
+            project_paths::Column::ProjectId,
+            project_paths::Column::Path,
+        ])
+        .do_nothing()
+        .to_owned(),
+    )
+    .do_nothing()
+    .exec(conn)
+    .await?;
     Ok(())
 }
-
-fn affected_sessions(conn: &rusqlite::Connection, id: &str, path: &str) -> Result<Vec<String>> {
-    let mut query = conn.prepare(
-        "SELECT sessions.id FROM sessions
-         JOIN projects ON projects.id=sessions.project_id
-         WHERE projects.id=?1 OR projects.path=?2
-         ORDER BY sessions.id",
-    )?;
-    let sessions = query
-        .query_map(params![id, path], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    Ok(sessions)
+async fn update_directory<C: ConnectionTrait>(
+    conn: &C,
+    id: &str,
+    path: &str,
+    identity: Option<String>,
+    strong: bool,
+) -> Result<()> {
+    projects::Entity::update_many()
+        .col_expr(projects::Column::Path, Expr::value(path))
+        .col_expr(projects::Column::Identity, Expr::value(identity))
+        .col_expr(projects::Column::Strong, Expr::value(strong))
+        .col_expr(projects::Column::Legacy, Expr::value(false))
+        .filter(projects::Column::Id.eq(id))
+        .exec(conn)
+        .await?;
+    record_path(conn, id, path).await
 }
-
 impl Store {
     pub async fn projects(&self) -> Result<Vec<Project>> {
-        self.access(|conn| {
-            let mut query = conn.prepare("SELECT id,path FROM projects ORDER BY path,id")?;
-
-            Ok(query
-                .query_map([], |row| {
-                    Ok(Project {
-                        id: row.get(0)?,
-                        path: row.get(1)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?)
+        self.read_access(|conn| async move {
+            Ok(projects::Entity::find()
+                .order_by_asc(projects::Column::Path)
+                .order_by_asc(projects::Column::Id)
+                .all(&conn)
+                .await?
+                .into_iter()
+                .map(|row| Project {
+                    id: row.id,
+                    path: row.path,
+                })
+                .collect())
         })
         .await
     }
@@ -60,107 +85,108 @@ impl Store {
     pub async fn resolve_project(&self, path: impl AsRef<Path>) -> Result<Project> {
         let directory = Directory::read(path.as_ref())?;
 
-        self.access(move |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            // An unchanged inode and birth time at the same recorded path is
-            // still the same project when a mount changes its device number.
-            // Prefer the project with the established session history if an
-            // older build already created a duplicate for the new device.
+        self.write_access(move |conn| async move {
+            let tx = conn.begin().await?;
             let mut matches = Vec::new();
-
             if directory.strong {
-                // Upgrade the latest weak identity only while its device and inode still match.
-                let known: Option<(String, String)> = tx.query_row(
-                    "SELECT id,identity FROM projects WHERE path=?1 AND strong=0 AND identity IS NOT NULL",
-                    [&directory.path],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                ).optional()?;
-                if let Some((id, identity)) = known
-                    && let Some(previous) = identity.strip_suffix(":unknown")
-                    && directory.identity.as_deref().and_then(|value| value.rsplit_once(':')).map(|(object, _)| object) == Some(previous)
+                let known = projects::Entity::find()
+                    .filter(projects::Column::Path.eq(&directory.path))
+                    .filter(projects::Column::Strong.eq(false))
+                    .filter(projects::Column::Identity.is_not_null())
+                    .one(&tx)
+                    .await?;
+                if let Some(row) = known
+                    && let Some(previous) = row
+                        .identity
+                        .as_deref()
+                        .and_then(|s| s.strip_suffix(":unknown"))
+                    && directory
+                        .identity
+                        .as_deref()
+                        .and_then(|value| value.rsplit_once(':'))
+                        .map(|(object, _)| object)
+                        == Some(previous)
                 {
-                    tx.execute("UPDATE projects SET identity=?2,strong=1 WHERE id=?1", params![id, directory.identity])?;
+                    projects::Entity::update_many()
+                        .col_expr(
+                            projects::Column::Identity,
+                            Expr::value(directory.identity.clone()),
+                        )
+                        .col_expr(projects::Column::Strong, Expr::value(true))
+                        .filter(projects::Column::Id.eq(row.id))
+                        .exec(&tx)
+                        .await?;
                 }
-                let mut query = tx.prepare(
-                    "SELECT p.id,p.identity,p.strong,pp.project_id IS NOT NULL,
-                                      (SELECT count(*) FROM sessions s WHERE s.project_id=p.id)
-                               FROM projects p LEFT JOIN project_paths pp
-                                 ON pp.project_id=p.id AND pp.path=?1
-                               WHERE p.identity=?2 OR pp.project_id IS NOT NULL",
-                )?;
-                let rows = query.query_map(params![directory.path, directory.identity], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, bool>(2)?,
-                        row.get::<_, bool>(3)?,
-                        row.get::<_, i64>(4)?,
-                    ))
-                })?;
-
+                let same_path: std::collections::HashSet<String> = project_paths::Entity::find()
+                    .filter(project_paths::Column::Path.eq(&directory.path))
+                    .all(&tx)
+                    .await?
+                    .into_iter()
+                    .map(|r| r.project_id)
+                    .collect();
+                let rows = projects::Entity::find()
+                    .filter(
+                        Condition::any()
+                            .add(projects::Column::Identity.eq(directory.identity.clone()))
+                            .add(projects::Column::Id.is_in(same_path.iter().cloned())),
+                    )
+                    .all(&tx)
+                    .await?;
                 for row in rows {
-                    let (id, identity, strong, same_path, sessions) = row?;
-                    let Some(identity) = identity else { continue };
-
+                    let Some(identity) = row.identity else {
+                        continue;
+                    };
                     let exact = directory.identity.as_deref() == Some(identity.as_str());
-
-                    if strong
+                    if row.strong
                         && (exact
-                            || (same_path
+                            || (same_path.contains(&row.id)
                                 && same_directory_identity(
                                     &identity,
                                     directory.identity.as_deref().unwrap_or_default(),
                                 )))
                     {
-                        matches.push((id, sessions, exact));
+                        let count = sessions::Entity::find()
+                            .filter(sessions::Column::ProjectId.eq(&row.id))
+                            .count(&tx)
+                            .await?;
+                        matches.push((row.id, count, exact));
                     }
                 }
             }
-
             matches.sort_by(|a, b| {
                 b.1.cmp(&a.1)
                     .then_with(|| b.2.cmp(&a.2))
                     .then_with(|| a.0.cmp(&b.0))
             });
-            let known = tx
-                .query_row(
-                    "SELECT id,identity,legacy FROM projects WHERE path=?1",
-                    [&directory.path],
-                    |r| {
-                        Ok((
-                            r.get::<_, String>(0)?,
-                            r.get::<_, Option<String>>(1)?,
-                            r.get::<_, bool>(2)?,
-                        ))
-                    },
-                )
-                .optional()?;
+            let known = projects::Entity::find()
+                .filter(projects::Column::Path.eq(&directory.path))
+                .one(&tx)
+                .await?;
             let id = if let Some((id, _, _)) = matches.into_iter().next() {
                 id
-            } else if let Some((id, identity, legacy)) = &known {
-                if *legacy || *identity == directory.identity {
-                    id.clone()
-                } else {
-                    new_project(&tx)?
-                }
+            } else if let Some(row) = known
+                && (row.legacy || row.identity == directory.identity)
+            {
+                row.id
             } else {
-                new_project(&tx)?
+                new_project(&tx).await?
             };
-
-            // Preserve the previous project and its sessions when its old path is reused.
-            tx.execute(
-                "UPDATE projects SET path=NULL WHERE path=?1 AND id<>?2",
-                params![directory.path, id],
-            )?;
-            tx.execute(
-                "UPDATE projects SET path=?2,identity=?3,strong=?4,legacy=0 WHERE id=?1",
-                params![id, directory.path, directory.identity, directory.strong],
-            )?;
-            tx.execute(
-                "INSERT OR IGNORE INTO project_paths(project_id,path) VALUES(?1,?2)",
-                params![id, directory.path],
-            )?;
-            tx.commit()?;
+            // Reusing a path never merges its previous conversation history.
+            projects::Entity::update_many()
+                .col_expr(projects::Column::Path, Expr::value(Option::<String>::None))
+                .filter(projects::Column::Path.eq(&directory.path))
+                .filter(projects::Column::Id.ne(&id))
+                .exec(&tx)
+                .await?;
+            update_directory(
+                &tx,
+                &id,
+                &directory.path,
+                directory.identity,
+                directory.strong,
+            )
+            .await?;
+            tx.commit().await?;
 
             Ok(Project {
                 id,
@@ -180,7 +206,9 @@ impl Store {
             let scan_id = id.clone();
             let scan_path = directory.path.clone();
             let session_ids = self
-                .read_access(move |conn| affected_sessions(conn, &scan_id, &scan_path))
+                .read_access(move |conn| async move {
+                    affected_sessions(&conn, &scan_id, &scan_path).await
+                })
                 .await?;
 
             // Acquire file leases without holding the database mutex. Acquire
@@ -213,18 +241,15 @@ impl Store {
             let identity = directory.identity.clone();
             let strong = directory.strong;
             let linked = self
-                .access(move |conn| {
-                    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-                    let actual = affected_sessions(&tx, &link_id, &link_path)?;
+                .write_access(move |conn| async move {
+                    let tx = conn.begin().await?;
+                    let actual = affected_sessions(&tx, &link_id, &link_path).await?;
 
                     if actual != expected {
                         return Ok(None);
                     }
 
-                    let old: Option<String> = tx
-                        .query_row("SELECT path FROM projects WHERE id=?1", [&link_id], |row| row.get(0))
-                        .optional()?
-                        .ok_or_else(|| anyhow::anyhow!("project not found"))?;
+                    let old = projects::Entity::find_by_id(&link_id).one(&tx).await?.context("project not found")?.path;
 
                     if let Some(old) = old.as_deref().filter(|old| *old != link_path) {
                         ensure!(
@@ -233,18 +258,22 @@ impl Store {
                         );
                     }
 
-                    let others: i64 = tx.query_row(
-                        "SELECT count(*) FROM runs JOIN sessions ON sessions.id=runs.session_id JOIN projects ON projects.id=sessions.project_id WHERE projects.path=?1 AND projects.id<>?2",
-                        params![link_path, link_id],
-                        |row| row.get(0),
-                    )?;
-
+                    let others = runs::Entity::find()
+                        .join(JoinType::InnerJoin, runs::Relation::Session.def())
+                        .join(JoinType::InnerJoin, sessions::Relation::Project.def())
+                        .filter(projects::Column::Path.eq(&link_path))
+                        .filter(projects::Column::Id.ne(&link_id))
+                        .count(&tx).await?;
                     ensure!(others == 0, "this directory already has another project's conversations; refusing to merge histories");
-
-                    tx.execute("UPDATE projects SET path=NULL,identity=NULL,strong=0 WHERE path=?1 AND id<>?2", params![link_path,link_id])?;
-                    tx.execute("UPDATE projects SET path=?2,identity=?3,strong=?4,legacy=0 WHERE id=?1", params![link_id,link_path,identity,strong])?;
-                    tx.execute("INSERT OR IGNORE INTO project_paths(project_id,path) VALUES(?1,?2)", params![link_id,link_path])?;
-                    tx.commit()?;
+                    projects::Entity::update_many()
+                        .col_expr(projects::Column::Path, Expr::value(Option::<String>::None))
+                        .col_expr(projects::Column::Identity, Expr::value(Option::<String>::None))
+                        .col_expr(projects::Column::Strong, Expr::value(false))
+                        .filter(projects::Column::Path.eq(&link_path))
+                        .filter(projects::Column::Id.ne(&link_id))
+                        .exec(&tx).await?;
+                    update_directory(&tx, &link_id, &link_path, identity, strong).await?;
+                    tx.commit().await?;
 
                     Ok(Some(Project { id: link_id, path: Some(link_path) }))
                 })
@@ -265,50 +294,43 @@ impl Store {
     pub async fn equivalent_project_ids(&self, project_id: &str) -> Result<Vec<String>> {
         let project_id = project_id.to_owned();
 
-        self.access(move |conn| {
-            let (identity, strong): (Option<String>, bool) = conn.query_row(
-                "SELECT identity,strong FROM projects WHERE id=?1",
-                [&project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            let Some(identity) = identity else {
+        self.read_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            let own = projects::Entity::find_by_id(&project_id)
+                .one(&tx)
+                .await?
+                .context("project not found")?;
+            let Some(identity) = own.identity.filter(|_| own.strong) else {
                 return Ok(vec![project_id]);
             };
-            if !strong {
-                return Ok(vec![project_id]);
-            }
-
-            let mut query = conn.prepare(
-                "SELECT DISTINCT p.id,p.identity,p.strong
-                 FROM project_paths source
-                 JOIN project_paths other ON other.path=source.path
-                 JOIN projects p ON p.id=other.project_id
-                 WHERE source.project_id=?1",
-            )?;
-            let mut ids = Vec::new();
-
-            for row in query.query_map([&project_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, bool>(2)?,
-                ))
-            })? {
-                let (id, candidate, candidate_strong) = row?;
-
-                if candidate_strong
-                    && candidate
-                        .as_deref()
-                        .is_some_and(|value| same_directory_identity(&identity, value))
-                {
-                    ids.push(id);
-                }
-            }
-
+            let paths = project_paths::Entity::find()
+                .select_only()
+                .column(project_paths::Column::Path)
+                .filter(project_paths::Column::ProjectId.eq(&project_id))
+                .into_query();
+            let ids = project_paths::Entity::find()
+                .select_only()
+                .column(project_paths::Column::ProjectId)
+                .filter(project_paths::Column::Path.in_subquery(paths))
+                .into_query();
+            let rows = projects::Entity::find()
+                .filter(projects::Column::Id.in_subquery(ids))
+                .all(&tx)
+                .await?;
+            let mut ids = rows
+                .into_iter()
+                .filter(|row| {
+                    row.strong
+                        && row
+                            .identity
+                            .as_deref()
+                            .is_some_and(|value| same_directory_identity(&identity, value))
+                })
+                .map(|row| row.id)
+                .collect::<Vec<_>>();
             if !ids.contains(&project_id) {
                 ids.push(project_id);
             }
-
             Ok(ids)
         })
         .await
@@ -318,6 +340,16 @@ impl Store {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use rusqlite::params;
+
+    // Construct legacy identity states independently of the ORM being tested.
+    async fn fixture(
+        store: &Store,
+        change: impl FnOnce(&rusqlite::Connection) -> Result<()> + Send + 'static,
+    ) -> Result<()> {
+        let path = store.path().to_owned();
+        tokio::task::spawn_blocking(move || change(&rusqlite::Connection::open(path)?)).await?
+    }
 
     #[tokio::test]
     async fn established_history_survives_a_duplicate_without_birth_time() {
@@ -338,27 +370,26 @@ mod tests {
         );
         let id = original.id.clone();
         let path = temporary.path().display().to_string();
-        store
-            .access(move |conn| {
-                let identity: String =
-                    conn.query_row("SELECT identity FROM projects WHERE id=?1", [&id], |row| {
-                        row.get(0)
-                    })?;
-                assert!(!identity.ends_with(":unknown"));
-                let (object, _) = identity.rsplit_once(':').unwrap();
-                conn.execute("UPDATE projects SET path=NULL WHERE id=?1", [&id])?;
-                conn.execute(
-                    "INSERT INTO projects(id,path,identity,strong) VALUES('weak',?1,?2,0)",
-                    params![path, format!("{object}:unknown")],
-                )?;
-                conn.execute(
-                    "INSERT INTO project_paths(project_id,path) VALUES('weak',?1)",
-                    [&path],
-                )?;
-                Ok(())
-            })
-            .await
-            .unwrap();
+        fixture(&store, move |conn| {
+            let identity: String =
+                conn.query_row("SELECT identity FROM projects WHERE id=?1", [&id], |row| {
+                    row.get(0)
+                })?;
+            assert!(!identity.ends_with(":unknown"));
+            let (object, _) = identity.rsplit_once(':').unwrap();
+            conn.execute("UPDATE projects SET path=NULL WHERE id=?1", [&id])?;
+            conn.execute(
+                "INSERT INTO projects(id,path,identity,strong) VALUES('weak',?1,?2,0)",
+                params![path, format!("{object}:unknown")],
+            )?;
+            conn.execute(
+                "INSERT INTO project_paths(project_id,path) VALUES('weak',?1)",
+                [&path],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
         assert_eq!(
             store.resolve_project(temporary.path()).await.unwrap().id,
             original.id
@@ -391,26 +422,24 @@ mod tests {
             writer.finish("failed", Vec::new(), None).await.unwrap();
             drop(writer);
             let id = original.id.clone();
-            store
-                .access(move |conn| {
-                    let identity: String = conn.query_row(
-                        "SELECT identity FROM projects WHERE id=?1",
-                        [&id],
-                        |row| row.get(0),
-                    )?;
-                    let mut fields: Vec<_> = identity.split(':').map(str::to_owned).collect();
-                    if !same_inode {
-                        fields[2] = "0".into();
-                    }
-                    fields[3] = "unknown".into();
-                    conn.execute(
-                        "UPDATE projects SET identity=?2,strong=0 WHERE id=?1",
-                        params![id, fields.join(":")],
-                    )?;
-                    Ok(())
-                })
-                .await
-                .unwrap();
+            fixture(&store, move |conn| {
+                let identity: String =
+                    conn.query_row("SELECT identity FROM projects WHERE id=?1", [&id], |row| {
+                        row.get(0)
+                    })?;
+                let mut fields: Vec<_> = identity.split(':').map(str::to_owned).collect();
+                if !same_inode {
+                    fields[2] = "0".into();
+                }
+                fields[3] = "unknown".into();
+                conn.execute(
+                    "UPDATE projects SET identity=?2,strong=0 WHERE id=?1",
+                    params![id, fields.join(":")],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
             let resolved = store.resolve_project(temporary.path()).await.unwrap();
             assert_eq!(resolved.id == original.id, same_inode);
             assert_eq!(store.list_resumable().await.unwrap().len(), 1);
@@ -438,8 +467,7 @@ mod tests {
 
         let original_id = original.id.clone();
         let workspace_text = workspace.display().to_string();
-        store
-            .access(move |conn| {
+        fixture(&store, move |conn| {
                 let current: String = conn.query_row(
                     "SELECT identity FROM projects WHERE id=?1",
                     [&original_id],
@@ -481,8 +509,13 @@ mod tests {
     }
 }
 
-fn new_project(conn: &rusqlite::Connection) -> Result<String> {
-    let id: String = conn.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
-    conn.execute("INSERT INTO projects(id) VALUES(?1)", [&id])?;
+async fn new_project<C: ConnectionTrait>(conn: &C) -> Result<String> {
+    let id = crate::database::new_id()?;
+    projects::ActiveModel {
+        id: Set(id.clone()),
+        ..Default::default()
+    }
+    .insert(conn)
+    .await?;
     Ok(id)
 }

@@ -5,7 +5,8 @@ use orbit_agent::events::AgentEvent;
 use orbit_model::types::{StreamEvent, Usage};
 use serde::{Deserialize, Serialize};
 
-use crate::store::Store;
+use crate::{entities::*, store::Store};
+use sea_orm::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionDiagnostics {
@@ -44,38 +45,36 @@ impl Store {
     pub async fn diagnostics(&self, session_id: &str) -> Result<SessionDiagnostics> {
         let session_id = session_id.to_owned();
 
-        self.read_access(move |conn| {
-            conn.query_row("SELECT id FROM sessions WHERE id=?1", [&session_id], |_| {
-                Ok(())
-            })
-            .context("session not found")?;
-            let mut query = conn
-                .prepare("SELECT id,status,elapsed_ms FROM runs WHERE session_id=?1 ORDER BY id")?;
-            let runs = query
-                .query_map([&session_id], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<i64>>(2)?
-                            .map(|value| value.max(0) as u64),
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+        self.read_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            sessions::Entity::find_by_id(&session_id)
+                .one(&tx)
+                .await?
+                .context("session not found")?;
+            let runs = runs::Entity::find()
+                .filter(runs::Column::SessionId.eq(&session_id))
+                .order_by_asc(runs::Column::Id)
+                .all(&tx)
+                .await?;
             let mut diagnostics = Vec::with_capacity(runs.len());
-
-            for (run_id, status, elapsed_ms) in runs {
-                let mut events = conn.prepare(
-                    "SELECT payload,created_at_ms FROM events WHERE run_id=?1 ORDER BY id",
-                )?;
-                let events = events
-                    .query_map([run_id], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-
-                diagnostics.push(summarize(run_id, status, elapsed_ms, events));
+            for row in runs {
+                let events = events::Entity::find()
+                    .select_only()
+                    .column(events::Column::Payload)
+                    .column(events::Column::CreatedAtMs)
+                    .filter(events::Column::RunId.eq(row.id))
+                    .order_by_asc(events::Column::Id)
+                    .into_tuple()
+                    .all(&tx)
+                    .await?;
+                diagnostics.push(summarize(
+                    row.id,
+                    row.status,
+                    row.elapsed_ms.map(|ms| ms.max(0) as u64),
+                    events,
+                ));
             }
-
+            tx.commit().await?;
             Ok(SessionDiagnostics {
                 session_id,
                 runs: diagnostics,

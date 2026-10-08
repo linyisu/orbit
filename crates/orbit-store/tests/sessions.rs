@@ -1,3 +1,4 @@
+mod support;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use orbit_agent::events::AgentEvent;
@@ -203,7 +204,9 @@ async fn invalid_finish_keeps_run_recoverable_and_migration_can_be_replayed() {
     drop(writer);
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("PRAGMA user_version=14").unwrap();
+    connection
+        .execute_batch("DROP TABLE seaql_migrations; PRAGMA user_version=14")
+        .unwrap();
     drop(connection);
 
     assert!(Store::open(db.path()).await.is_ok());
@@ -560,40 +563,15 @@ async fn project_memory_migration_keeps_only_unambiguous_session_ownership() {
     let db = Database::new();
     std::fs::create_dir_all(&db.0).unwrap();
     let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection
-        .execute_batch(
-            "CREATE TABLE projects (id TEXT PRIMARY KEY);
-             CREATE TABLE sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL);
-             CREATE TABLE project_memories (
-                id INTEGER PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                category TEXT NOT NULL,
-                title TEXT NOT NULL,
-                content TEXT NOT NULL,
-                source_session_id TEXT,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at INTEGER NOT NULL DEFAULT 1,
-                updated_at INTEGER NOT NULL DEFAULT 1
-             );
-             CREATE TABLE project_plugins (
-                project_id TEXT NOT NULL,
-                marketplace_source TEXT NOT NULL,
-                plugin_name TEXT NOT NULL,
-                package_source TEXT NOT NULL,
-                version TEXT,
-                enabled_at INTEGER NOT NULL DEFAULT 1,
-                PRIMARY KEY(project_id,marketplace_source,plugin_name)
-             );
-             PRAGMA user_version=9;",
-        )
-        .unwrap();
+    // Use a complete released v9 schema, so the test exercises a real upgrade.
+    support::legacy_schema(&connection, 9);
     connection
         .execute("INSERT INTO projects(id) VALUES('many'),('one')", [])
         .unwrap();
     connection
         .execute(
-            "INSERT INTO sessions(id,project_id) VALUES
-             ('first','many'),('second','many'),('only','one')",
+            "INSERT INTO sessions(id,project_id,workspace,model,demo) VALUES
+             ('first','many','/many','model',0),('second','many','/many','model',0),('only','one','/one','model',0)",
             [],
         )
         .unwrap();
@@ -1207,7 +1185,9 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
                 .unwrap();
         }
 
-        connection.execute_batch("PRAGMA user_version=19;").unwrap();
+        connection
+            .execute_batch("DROP TABLE seaql_migrations; PRAGMA user_version=19;")
+            .unwrap();
         drop(connection);
 
         let store = Store::open(db.path()).await.unwrap();
@@ -1317,7 +1297,9 @@ async fn developer_role_migration_preserves_children_and_queued_messages() {
     drop(parent);
     drop(store);
     let connection = rusqlite::Connection::open(&path).unwrap();
-    connection.execute_batch("PRAGMA user_version=23;").unwrap();
+    connection
+        .execute_batch("DROP TABLE seaql_migrations; PRAGMA user_version=23;")
+        .unwrap();
     drop(connection);
     let store = Store::open(path).await.unwrap();
     assert_eq!(

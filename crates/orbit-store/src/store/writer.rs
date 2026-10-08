@@ -4,10 +4,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::{database::now, entities::*};
 use anyhow::{Context, Result, bail, ensure};
 use orbit_agent::events::AgentEvent;
 use orbit_model::types::ChatMessage;
-use rusqlite::params;
+use sea_orm::*;
 
 use super::{SessionWriter, now_millis};
 
@@ -27,41 +28,53 @@ impl SessionWriter {
             .transpose()?;
 
         self.store
-            .access(move |conn| {
-                let tx =
-                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-                let running: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM runs WHERE session_id=?1 AND status='running')",
-                    [&id],
-                    |row| row.get(0),
-                )?;
-
+            .write_access(move |conn| async move {
+                let tx = conn.begin().await?;
+                let running = runs::Entity::find()
+                    .filter(runs::Column::SessionId.eq(&id))
+                    .filter(runs::Column::Status.eq("running"))
+                    .count(&tx)
+                    .await?
+                    > 0;
                 ensure!(!running, "cannot move a running session");
-
-                tx.execute(
-                    "UPDATE sessions SET project_id=?2,workspace=?3,
-                     workspace_since_run=COALESCE((SELECT MAX(id) FROM runs WHERE session_id=?1),0),
-                     updated_at=unixepoch() WHERE id=?1",
-                    params![id, project.id, path],
-                )?;
-                tx.execute("DELETE FROM tui_file_grants WHERE session_id=?1", [&id])?;
-                tx.execute(
-                    "DELETE FROM session_workspace_baselines WHERE session_id=?1",
-                    [&id],
-                )?;
-                tx.execute(
-                    "DELETE FROM session_git_baselines WHERE session_id=?1",
-                    [&id],
-                )?;
-
+                let last = runs::Entity::find()
+                    .filter(runs::Column::SessionId.eq(&id))
+                    .order_by_desc(runs::Column::Id)
+                    .one(&tx)
+                    .await?
+                    .map_or(0, |run| run.id);
+                sessions::Entity::update_many()
+                    .set(sessions::ActiveModel {
+                        project_id: Set(Some(project.id)),
+                        workspace: Set(path),
+                        workspace_since_run: Set(last),
+                        updated_at: Set(now()),
+                        ..Default::default()
+                    })
+                    .filter(sessions::Column::Id.eq(&id))
+                    .exec(&tx)
+                    .await?;
+                tui_file_grants::Entity::delete_many()
+                    .filter(tui_file_grants::Column::SessionId.eq(&id))
+                    .exec(&tx)
+                    .await?;
+                session_workspace_baselines::Entity::delete_by_id(&id)
+                    .exec(&tx)
+                    .await?;
+                session_git_baselines::Entity::delete_by_id(&id)
+                    .exec(&tx)
+                    .await?;
                 if let Some(payload) = baseline {
-                    tx.execute(
-                        "INSERT INTO session_git_baselines(session_id,payload) VALUES(?1,?2)",
-                        params![id, payload],
-                    )?;
+                    session_git_baselines::ActiveModel {
+                        session_id: Set(id),
+                        payload: Set(payload),
+                        ..Default::default()
+                    }
+                    .insert(&tx)
+                    .await?;
                 }
 
-                tx.commit()?;
+                tx.commit().await?;
                 Ok(())
             })
             .await?;
@@ -76,19 +89,19 @@ impl SessionWriter {
         );
         let id = self.id.clone();
         self.store
-            .access(move |conn| {
-                let tx = conn.transaction()?;
-                let history: String =
-                    tx.query_row("SELECT history FROM sessions WHERE id=?1", [&id], |row| {
-                        row.get(0)
-                    })?;
-                let mut history: Vec<ChatMessage> = serde_json::from_str(&history)?;
+            .write_access(move |conn| async move {
+                let tx = conn.begin().await?;
+                let row = sessions::Entity::find_by_id(&id)
+                    .one(&tx)
+                    .await?
+                    .context("session not found")?;
+                let mut history: Vec<ChatMessage> = serde_json::from_str(&row.history)?;
                 history.push(message);
-                tx.execute(
-                    "UPDATE sessions SET history=?2,updated_at=unixepoch() WHERE id=?1",
-                    params![id, serde_json::to_string(&history)?],
-                )?;
-                tx.commit()?;
+                let mut row = row.into_active_model();
+                row.history = Set(serde_json::to_string(&history)?);
+                row.updated_at = Set(now());
+                row.update(&tx).await?;
+                tx.commit().await?;
                 Ok(())
             })
             .await
@@ -110,11 +123,17 @@ impl SessionWriter {
         let id = self.id.clone();
 
         self.store
-            .access(move |conn| {
-                conn.execute(
-                    "UPDATE sessions SET model=?2, reasoning_effort=?3, updated_at=unixepoch() WHERE id=?1",
-                    params![id, model, reasoning_effort],
-                )?;
+            .write_access(move |conn| async move {
+                sessions::Entity::update_many()
+                    .set(sessions::ActiveModel {
+                        model: Set(model),
+                        reasoning_effort: Set(reasoning_effort),
+                        updated_at: Set(now()),
+                        ..Default::default()
+                    })
+                    .filter(sessions::Column::Id.eq(id))
+                    .exec(&conn)
+                    .await?;
                 Ok(())
             })
             .await
@@ -132,11 +151,16 @@ impl SessionWriter {
         let id = self.id.clone();
 
         self.store
-            .access(move |conn| {
-                conn.execute(
-                    "UPDATE sessions SET title=?2, updated_at=unixepoch() WHERE id=?1",
-                    params![id, title],
-                )?;
+            .write_access(move |conn| async move {
+                sessions::Entity::update_many()
+                    .set(sessions::ActiveModel {
+                        title: Set(title),
+                        updated_at: Set(now()),
+                        ..Default::default()
+                    })
+                    .filter(sessions::Column::Id.eq(id))
+                    .exec(&conn)
+                    .await?;
                 Ok(())
             })
             .await
@@ -146,16 +170,35 @@ impl SessionWriter {
         ensure!(self.active_run.is_none(), "a run is already active");
 
         let id = self.id.clone();
-        let run = self.store.access(move |conn| {
-            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            transaction.execute("INSERT INTO runs(session_id,prompt) VALUES(?1,?2)", params![id,prompt])?;
-            let run = transaction.last_insert_rowid();
-            let title: String = prompt.chars().take(80).collect();
-            transaction.execute("UPDATE sessions SET model=?2, updated_at=unixepoch(), title=CASE WHEN title='' THEN ?3 ELSE title END WHERE id=?1", params![id,model,title])?;
-            transaction.commit()?;
+        let run = self
+            .store
+            .write_access(move |conn| async move {
+                let transaction = conn.begin().await?;
+                let run = runs::ActiveModel {
+                    session_id: Set(id.clone()),
+                    prompt: Set(prompt.clone()),
+                    ..Default::default()
+                }
+                .insert(&transaction)
+                .await?
+                .id;
+                let row = sessions::Entity::find_by_id(&id)
+                    .one(&transaction)
+                    .await?
+                    .context("session not found")?;
+                let empty = row.title.is_empty();
+                let mut row = row.into_active_model();
+                row.model = Set(model);
+                row.updated_at = Set(now());
+                if empty {
+                    row.title = Set(prompt.chars().take(80).collect());
+                }
+                row.update(&transaction).await?;
+                transaction.commit().await?;
 
-            Ok(run)
-        }).await?;
+                Ok(run)
+            })
+            .await?;
 
         self.active_run = Some(run);
         self.active_started = Some(std::time::Instant::now());
@@ -167,18 +210,21 @@ impl SessionWriter {
         let run = self.active_run.context("no active run")?;
 
         self.store
-            .access(move |conn| {
-                let transaction =
-                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            .write_access(move |conn| async move {
+                let transaction = conn.begin().await?;
 
                 for event in events {
-                    transaction.execute(
-                        "INSERT INTO events(run_id,payload,created_at_ms) VALUES(?1,?2,?3)",
-                        params![run, serde_json::to_string(&event)?, now_millis()],
-                    )?;
+                    events::ActiveModel {
+                        run_id: Set(run),
+                        payload: Set(serde_json::to_string(&event)?),
+                        created_at_ms: Set(Some(now_millis())),
+                        ..Default::default()
+                    }
+                    .insert(&transaction)
+                    .await?;
                 }
 
-                transaction.commit()?;
+                transaction.commit().await?;
 
                 Ok(())
             })
@@ -247,24 +293,33 @@ impl SessionWriter {
         let status = status.to_owned();
         let id = self.id.clone();
         self.store
-            .access(move |conn| {
-                let transaction =
-                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            .write_access(move |conn| async move {
+                let transaction = conn.begin().await?;
 
                 for event in events {
-                    transaction.execute(
-                        "INSERT INTO events(run_id,payload,created_at_ms) VALUES(?1,?2,?3)",
-                        params![run, serde_json::to_string(&event)?, now_millis()],
-                    )?;
+                    events::ActiveModel {
+                        run_id: Set(run),
+                        payload: Set(serde_json::to_string(&event)?),
+                        created_at_ms: Set(Some(now_millis())),
+                        ..Default::default()
+                    }
+                    .insert(&transaction)
+                    .await?;
                 }
 
                 if let Some((parent, invocation, result)) = agent_result {
-                    let updated = transaction.execute(
-                        "UPDATE agent_invocations SET result=?4
-                         WHERE id=?1 AND parent_session_id=?2 AND child_session_id=?3
-                           AND result IS NULL",
-                        params![invocation, parent, id, serde_json::to_string(&result)?],
-                    )?;
+                    let updated = agent_invocations::Entity::update_many()
+                        .col_expr(
+                            agent_invocations::Column::Result,
+                            sea_query::Expr::value(serde_json::to_string(&result)?),
+                        )
+                        .filter(agent_invocations::Column::Id.eq(invocation))
+                        .filter(agent_invocations::Column::ParentSessionId.eq(parent))
+                        .filter(agent_invocations::Column::ChildSessionId.eq(&id))
+                        .filter(agent_invocations::Column::Result.is_null())
+                        .exec(&transaction)
+                        .await?
+                        .rows_affected;
 
                     ensure!(
                         updated == 1,
@@ -272,30 +327,38 @@ impl SessionWriter {
                     );
                 }
 
-                transaction.execute(
-                    "UPDATE runs SET status=?2,elapsed_ms=?3 WHERE id=?1",
-                    params![run, status, elapsed_ms],
-                )?;
-
+                runs::Entity::update_many()
+                    .set(runs::ActiveModel {
+                        status: Set(status.clone()),
+                        elapsed_ms: Set(elapsed_ms),
+                        ..Default::default()
+                    })
+                    .filter(runs::Column::Id.eq(run))
+                    .exec(&transaction)
+                    .await?;
                 if status == "cancelled" {
-                    transaction.execute(
-                        "UPDATE agent_invocations SET delivered=1 WHERE parent_run_id=?1",
-                        [run],
-                    )?;
+                    agent_invocations::Entity::update_many()
+                        .col_expr(
+                            agent_invocations::Column::Delivered,
+                            sea_query::Expr::value(true),
+                        )
+                        .filter(agent_invocations::Column::ParentRunId.eq(run))
+                        .exec(&transaction)
+                        .await?;
                 }
-
+                let mut row = sessions::ActiveModel {
+                    updated_at: Set(now()),
+                    ..Default::default()
+                };
                 if let Some(history) = history {
-                    transaction.execute(
-                        "UPDATE sessions SET history=?2 WHERE id=?1",
-                        params![id, serde_json::to_string(&history)?],
-                    )?;
+                    row.history = Set(serde_json::to_string(&history)?);
                 }
-
-                transaction.execute(
-                    "UPDATE sessions SET updated_at=unixepoch() WHERE id=?1",
-                    [id],
-                )?;
-                transaction.commit()?;
+                sessions::Entity::update_many()
+                    .set(row)
+                    .filter(sessions::Column::Id.eq(id))
+                    .exec(&transaction)
+                    .await?;
+                transaction.commit().await?;
 
                 Ok(())
             })

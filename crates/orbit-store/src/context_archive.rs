@@ -1,8 +1,11 @@
 //! Immutable pre-compaction snapshots. Reads always require the session ID;
 //! knowing an archive ID never grants access to another conversation.
+use crate::entities::*;
 use anyhow::{Result, ensure};
 use orbit_model::types::ChatMessage;
-use rusqlite::params;
+use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Alias, Func, SimpleExpr};
+use sea_orm::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -24,23 +27,16 @@ impl Store {
         );
         let session_id = session_id.to_owned();
 
-        self.access(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT a.id,a.created_at,
-                        (SELECT count(*) FROM context_archive_messages m WHERE m.archive_id=a.id)
-                 FROM context_archives a
-                 WHERE a.session_id=?1 AND (?2 IS NULL OR a.id<?2)
-                 ORDER BY a.id DESC LIMIT ?3",
-            )?;
-            let rows = stmt.query_map(
-                params![session_id, before_archive, (ARCHIVE_LIST_LIMIT + 1) as i64],
-                |row| Ok(json!({
-                    "archive_id": row.get::<_, i64>(0)?,
-                    "created_at": row.get::<_, i64>(1)?,
-                    "message_count": row.get::<_, i64>(2)?,
-                })),
-            )?;
-            let mut archives = rows.collect::<Result<Vec<_>, _>>()?;
+        self.read_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            let mut select = context_archives::Entity::find().filter(context_archives::Column::SessionId.eq(session_id));
+            if let Some(before) = before_archive { select = select.filter(context_archives::Column::Id.lt(before)); }
+            let rows = select.order_by_desc(context_archives::Column::Id).limit((ARCHIVE_LIST_LIMIT + 1) as u64).all(&tx).await?;
+            let mut archives = Vec::with_capacity(rows.len());
+            for row in rows {
+                let count = context_archive_messages::Entity::find().filter(context_archive_messages::Column::ArchiveId.eq(row.id)).count(&tx).await?;
+                archives.push(json!({"archive_id": row.id, "created_at": row.created_at, "message_count": count}));
+            }
             let has_more = archives.len() > ARCHIVE_LIST_LIMIT;
             archives.truncate(ARCHIVE_LIST_LIMIT);
             let next = if has_more {
@@ -78,26 +74,24 @@ impl Store {
 
         let session_id = session_id.to_owned();
 
-        self.access(move |conn| {
-            let exists: bool = conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM context_archives WHERE id=?1 AND session_id=?2)",
-                params![archive_id, session_id],
-                |row| row.get(0),
-            )?;
-
-            ensure!(exists, "history archive not found in this session");
-
-            let mut stmt = conn.prepare(
-                "SELECT payload FROM context_archive_messages WHERE archive_id=?1 ORDER BY ordinal",
-            )?;
-            let rows = stmt.query_map(params![archive_id], |row| row.get::<_, String>(0))?;
-            let mut messages = Vec::new();
-
-            for row in rows {
-                messages.push(serde_json::from_str(&row?)?);
-            }
-
-            Ok(messages)
+        self.read_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            ensure!(
+                context_archives::Entity::find_by_id(archive_id)
+                    .filter(context_archives::Column::SessionId.eq(session_id))
+                    .one(&tx)
+                    .await?
+                    .is_some(),
+                "history archive not found in this session"
+            );
+            context_archive_messages::Entity::find()
+                .filter(context_archive_messages::Column::ArchiveId.eq(archive_id))
+                .order_by_asc(context_archive_messages::Column::Ordinal)
+                .all(&tx)
+                .await?
+                .into_iter()
+                .map(|row| serde_json::from_str(&row.payload).map_err(Into::into))
+                .collect()
         })
         .await
     }
@@ -113,35 +107,37 @@ impl Store {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
 
-        self.access(move |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            tx.execute(
-                "INSERT OR IGNORE INTO context_archives(session_id,content_sha256) VALUES (?1,?2)",
-                params![session_id, fingerprint],
-            )?;
-            let inserted = tx.changes() > 0;
-            let id: i64 = tx.query_row(
-                "SELECT id FROM context_archives WHERE session_id=?1 AND content_sha256=?2",
-                params![session_id, fingerprint],
-                |row| row.get(0),
-            )?;
-
-            if !inserted {
-                tx.commit()?;
-                return Ok(id);
-            }
-
+        self.write_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            if let Some(row) = context_archives::Entity::find()
+                .filter(context_archives::Column::SessionId.eq(&session_id))
+                .filter(context_archives::Column::ContentSha256.eq(&fingerprint))
+                .one(&tx)
+                .await?
             {
-                let mut insert = tx.prepare("INSERT INTO context_archive_messages(archive_id,ordinal,payload) VALUES (?1,?2,?3)")?;
-
-                for (index, message) in messages.iter().enumerate() {
-                    insert.execute(params![id, index as i64, message])?;
-                }
+                tx.commit().await?;
+                return Ok(row.id);
             }
-            tx.commit()?;
-
-            Ok(id)
-        }).await
+            let row = context_archives::ActiveModel {
+                session_id: Set(session_id),
+                content_sha256: Set(Some(fingerprint)),
+                ..Default::default()
+            }
+            .insert(&tx)
+            .await?;
+            for (index, payload) in messages.into_iter().enumerate() {
+                context_archive_messages::ActiveModel {
+                    archive_id: Set(row.id),
+                    ordinal: Set(index as i64),
+                    payload: Set(payload),
+                }
+                .insert(&tx)
+                .await?;
+            }
+            tx.commit().await?;
+            Ok(row.id)
+        })
+        .await
     }
 
     /// `message` selects an exact source message. Otherwise browse/search by
@@ -176,32 +172,36 @@ impl Store {
 
         let session = session_id.to_owned();
 
-        self.access(move |conn| {
-            let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM context_archives WHERE id=?1 AND session_id=?2)", params![archive_id,session], |r| r.get(0))?;
+        self.read_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            let exists = context_archives::Entity::find_by_id(archive_id)
+                .filter(context_archives::Column::SessionId.eq(session))
+                .one(&tx).await?.is_some();
             ensure!(exists, "history archive not found in this session; call read_history with {{}} to discover available archive IDs instead of guessing");
-
-            // SQL performs slicing: do not load the entire snapshot to show a
-            // few hits. Query previews begin near the first matching text.
-            let mut stmt = conn.prepare("SELECT ordinal,length(payload),substr(payload,?5+1,?6),
-                CASE WHEN ?4 IS NULL THEN 0 ELSE instr(payload,?4)-1 END,
-                CASE WHEN ?4 IS NULL THEN '' ELSE substr(payload,max(1,instr(payload,?4)-120),?6) END
-                FROM context_archive_messages
-                WHERE archive_id=?1 AND (?2 IS NULL OR ordinal=?2) AND ordinal>?3
-                  AND (?4 IS NULL OR instr(payload,?4)>0)
-                ORDER BY ordinal LIMIT 9")?;
-            let mut rows = stmt.query(params![archive_id, message.map(|i| i as i64), after_message.map(|i| i as i64).unwrap_or(-1), query, offset as i64, length as i64])?;
+            // Slice in SQLite so a preview never materializes a whole large message.
+            let payload: SimpleExpr = Expr::col(context_archive_messages::Column::Payload).into();
+            let function = |name: &str, args: Vec<SimpleExpr>| -> SimpleExpr { Func::cust(Alias::new(name)).args(args).into() };
+            let mut select = context_archive_messages::Entity::find()
+                .filter(context_archive_messages::Column::ArchiveId.eq(archive_id))
+                .filter(context_archive_messages::Column::Ordinal.gt(after_message.map_or(-1, |i| i as i64)));
+            if let Some(message) = message { select = select.filter(context_archive_messages::Column::Ordinal.eq(message as i64)); }
+            let (start, hit) = if let Some(query) = query.as_ref() {
+                let position = function("instr", vec![payload.clone(), Expr::value(query.clone())]);
+                select = select.filter(Expr::expr(position.clone()).gt(0));
+                (function("max", vec![Expr::value(1), Expr::expr(position.clone()).sub(120)]), Expr::expr(position).sub(1))
+            } else { (Expr::value(offset as i64 + 1), Expr::value(0)) };
+            let rows: Vec<(i64, i64, String, i64)> = select.select_only()
+                .column(context_archive_messages::Column::Ordinal)
+                .column_as(function("length", vec![payload.clone()]), "total")
+                .column_as(function("substr", vec![payload, start, Expr::value(length as i64)]), "text")
+                .column_as(hit, "hit")
+                .order_by_asc(context_archive_messages::Column::Ordinal)
+                .limit(9).into_tuple().all(&tx).await?;
+            let has_more = rows.len() > 8;
             let mut items = Vec::new();
-            let mut has_more = false;
-
-            while let Some(row) = rows.next()? {
-                if items.len() == 8 { has_more = true; break; }
-
-                let index: i64 = row.get(0)?;
-                let total = row.get::<_, i64>(1)? as usize;
-                let hit: i64 = row.get(3)?;
+            for (index, total, text, hit) in rows.into_iter().take(8) {
+                let total = total as usize;
                 let start = if query.is_some() { hit.saturating_sub(120).max(0) as usize } else { offset };
-
-                let text: String = row.get(if query.is_some() {4} else {2})?;
                 let next = start + text.chars().count();
                 items.push(json!({
                     "message": index,

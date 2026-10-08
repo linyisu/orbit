@@ -1,5 +1,7 @@
+use sea_orm::sea_query::Expr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use crate::entities::*;
 use anyhow::ensure;
 use orbit_agent::{
     checkpoint::{CheckpointFuture, ExecutionCheckpoint, ExecutionJournal},
@@ -7,7 +9,7 @@ use orbit_agent::{
     events::AgentEvent,
 };
 use orbit_model::types::ChatMessage;
-use rusqlite::params;
+use sea_orm::*;
 use sha2::{Digest, Sha256};
 
 use crate::store::Store;
@@ -45,57 +47,102 @@ impl Journal {
         }
         let mut events = events;
         events.extend(event);
-        self.store.access(move |conn| {
-            let transaction=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let active:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND session_id=?2 AND status='running')",params![run,session],|r|r.get(0))?;
-            ensure!(active,"checkpoint writer no longer owns an active run");
-
-            if let Some(checkpoint)=checkpoint {
-                transaction.execute("INSERT INTO execution_checkpoints(run_id,payload) VALUES(?1,?2) ON CONFLICT(run_id) DO UPDATE SET payload=excluded.payload",params![run,serde_json::to_string(&checkpoint)?])?;
-            }
-
-            if !messages.is_empty() {
-                let first_ordinal: i64 = transaction.query_row(
-                    "SELECT COALESCE(MAX(ordinal)+1,0) FROM session_messages WHERE run_id=?1",
-                    [run],
-                    |row| row.get(0),
-                )?;
-
-                for (ordinal, message) in (first_ordinal..).zip(messages) {
-                    let payload = serde_json::to_string(&message)?;
-                    let sha256 = Sha256::digest(payload.as_bytes())
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>();
-                    transaction.execute(
-                        "INSERT INTO session_messages(session_id,run_id,ordinal,payload,sha256) VALUES(?1,?2,?3,?4,?5)",
-                        params![session,run,ordinal,payload,sha256],
-                    )?;
+        self.store
+            .write_access(move |conn| async move {
+                let transaction = conn.begin().await?;
+                let active = runs::Entity::find_by_id(run)
+                    .filter(runs::Column::SessionId.eq(&session))
+                    .filter(runs::Column::Status.eq("running"))
+                    .one(&transaction)
+                    .await?
+                    .is_some();
+                ensure!(active, "checkpoint writer no longer owns an active run");
+                if let Some(checkpoint) = checkpoint {
+                    execution_checkpoints::Entity::insert(execution_checkpoints::ActiveModel {
+                        run_id: Set(run),
+                        payload: Set(serde_json::to_string(&checkpoint)?),
+                    })
+                    .on_conflict(
+                        sea_query::OnConflict::column(execution_checkpoints::Column::RunId)
+                            .update_column(execution_checkpoints::Column::Payload)
+                            .to_owned(),
+                    )
+                    .exec(&transaction)
+                    .await?;
                 }
-            }
-
-            for event in events {
-                match &event {
-                    AgentEvent::InputReceived { message_id, .. } => {
-                        transaction.execute("UPDATE agent_messages SET received=1 WHERE id=?1 AND session_id=?2",params![message_id,session])?;
-                    }
-                    AgentEvent::ToolFinished { call, content, .. } if matches!(call.function.name.as_str(), "spawn_agent" | "send_agent_message") => {
-                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
-                            && let Some(id) = value.get("invocation_id").and_then(|id|id.as_i64()) {
-                            transaction.execute("UPDATE agent_invocations SET delivered=1 WHERE id=?1 AND parent_session_id=?2 AND result IS NOT NULL",params![id,session])?;
+                if !messages.is_empty() {
+                    let first = session_messages::Entity::find()
+                        .filter(session_messages::Column::RunId.eq(run))
+                        .order_by_desc(session_messages::Column::Ordinal)
+                        .one(&transaction)
+                        .await?
+                        .map_or(0, |row| row.ordinal + 1);
+                    for (ordinal, message) in (first..).zip(messages) {
+                        let payload = serde_json::to_string(&message)?;
+                        let hash = Sha256::digest(payload.as_bytes())
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect::<String>();
+                        session_messages::ActiveModel {
+                            session_id: Set(session.clone()),
+                            run_id: Set(run),
+                            ordinal: Set(ordinal),
+                            payload: Set(payload),
+                            sha256: Set(hash),
+                            ..Default::default()
                         }
+                        .insert(&transaction)
+                        .await?;
                     }
-
-                    _ => {}
                 }
-
-                transaction.execute("INSERT INTO events(run_id,payload,created_at_ms) VALUES(?1,?2,CAST(unixepoch('subsec') * 1000 AS INTEGER))",params![run,serde_json::to_string(&event)?])?;
-            }
-
-            transaction.commit()?;
-
-            Ok(())
-        }).await.map_err(|e|AgentError::Checkpoint(e.to_string()))?;
+                for event in events {
+                    match &event {
+                        AgentEvent::InputReceived { message_id, .. } => {
+                            agent_messages::Entity::update_many()
+                                .col_expr(agent_messages::Column::Received, Expr::value(true))
+                                .filter(agent_messages::Column::Id.eq(*message_id))
+                                .filter(agent_messages::Column::SessionId.eq(&session))
+                                .exec(&transaction)
+                                .await?;
+                        }
+                        AgentEvent::ToolFinished { call, content, .. }
+                            if matches!(
+                                call.function.name.as_str(),
+                                "spawn_agent" | "send_agent_message"
+                            ) =>
+                        {
+                            if let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
+                                && let Some(id) =
+                                    value.get("invocation_id").and_then(|id| id.as_i64())
+                            {
+                                agent_invocations::Entity::update_many()
+                                    .col_expr(
+                                        agent_invocations::Column::Delivered,
+                                        Expr::value(true),
+                                    )
+                                    .filter(agent_invocations::Column::Id.eq(id))
+                                    .filter(agent_invocations::Column::ParentSessionId.eq(&session))
+                                    .filter(agent_invocations::Column::Result.is_not_null())
+                                    .exec(&transaction)
+                                    .await?;
+                            }
+                        }
+                        _ => {}
+                    }
+                    events::ActiveModel {
+                        run_id: Set(run),
+                        payload: Set(serde_json::to_string(&event)?),
+                        created_at_ms: Set(Some(crate::store::now_millis())),
+                        ..Default::default()
+                    }
+                    .insert(&transaction)
+                    .await?;
+                }
+                transaction.commit().await?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| AgentError::Checkpoint(e.to_string()))?;
         journal_lock(&self.pending).drain(..event_count);
         journal_lock(&self.pending_messages).drain(..message_count);
 

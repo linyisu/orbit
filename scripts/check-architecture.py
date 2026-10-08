@@ -29,6 +29,7 @@ DEPENDENCIES = {
     "orbit-cli": {"orbit-protocol", "orbit-config", "orbit-client", "orbit-agent", "orbit-auth", "orbit-model"},
     "orbit-server": {"orbit-service"},
 }
+DATABASE = {"sea-orm", "sea-orm-migration", "sqlx", "diesel", "rusqlite"}
 PRESENTATION = {"arboard", "clap", "crossterm", "ratatui", "ratatui-image", "syntect"}
 EXECUTION = re.compile(r"\b(?:Agent::new|run_with_agent_events|compact_configured|workspace_tools)\b")
 
@@ -42,6 +43,12 @@ def check() -> list[str]:
         name = manifest["package"]["name"]
         packages.add(name)
         dependencies = set(manifest.get("dependencies", {})) | set(manifest.get("build-dependencies", {}))
+        for target in manifest.get("target", {}).values():
+            dependencies |= set(target.get("dependencies", {})) | set(target.get("build-dependencies", {}))
+        if name != "orbit-store" and dependencies & DATABASE:
+            errors.append(f"{name}: database access belongs to orbit-store: {sorted(dependencies & DATABASE)}")
+        if name == "orbit-store" and dependencies & {"rusqlite", "diesel", "sqlx"}:
+            errors.append(f"{name}: production database access must use SeaORM")
         # TUI tests exercise protocol consumers, never a second in-process service.
         # Include dev dependencies so cfg(test) cannot bypass that boundary.
         if name == "orbit-tui":

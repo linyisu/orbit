@@ -1,20 +1,15 @@
+use crate::{entities::workspace_requests as requests, store::Store};
 use anyhow::{Result, ensure};
-use rusqlite::params;
-
-use crate::store::Store;
-
+use sea_orm::*;
 const UNKNOWN_OUTCOME: &str = "request was reserved but its outcome is unknown; inspect session history before submitting a new request";
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum RequestClaim {
     New,
     Accepted,
     Rejected(String),
 }
-
 impl Store {
-    /// Reserve before starting any work. A crash in the gap leaves an explicit
-    /// uncertain result, never permission to run the same mutation again.
+    /// A durable reservation precedes work; an interrupted reservation never authorizes replay.
     pub async fn claim_workspace_request(
         &self,
         session: &str,
@@ -25,46 +20,58 @@ impl Store {
             !request.is_empty() && request.len() <= 128,
             "invalid workspace request ID"
         );
-        let (session, request, fingerprint) = (
-            session.to_owned(),
-            request.to_owned(),
-            fingerprint.to_owned(),
-        );
-        self.access(move |connection| {
-            let transaction = connection.transaction()?;
-            let inserted = transaction.execute(
-                "INSERT OR IGNORE INTO workspace_requests(session_id,request_id,fingerprint,error) VALUES(?1,?2,?3,?4)",
-                params![session, request, fingerprint, UNKNOWN_OUTCOME],
-            )?;
-            let result = if inserted == 1 {
-                RequestClaim::New
+        self.write_access(|conn| async move {
+            let tx = conn.begin().await?;
+            let result = if let Some(previous) =
+                requests::Entity::find_by_id((session.to_owned(), request.to_owned()))
+                    .one(&tx)
+                    .await?
+            {
+                ensure!(
+                    previous.fingerprint == fingerprint,
+                    "request ID reused with different input"
+                );
+                match previous.error {
+                    Some(error) => RequestClaim::Rejected(error),
+                    None => RequestClaim::Accepted,
+                }
             } else {
-                let (previous, error): (String, Option<String>) = transaction.query_row(
-                    "SELECT fingerprint,error FROM workspace_requests WHERE session_id=?1 AND request_id=?2",
-                    params![session, request], |row| Ok((row.get(0)?, row.get(1)?)),
-                )?;
-                ensure!(previous == fingerprint, "request ID reused with different input");
-                match error { Some(error) => RequestClaim::Rejected(error), None => RequestClaim::Accepted }
+                requests::ActiveModel {
+                    session_id: Set(session.into()),
+                    request_id: Set(request.into()),
+                    fingerprint: Set(fingerprint.into()),
+                    error: Set(Some(UNKNOWN_OUTCOME.into())),
+                }
+                .insert(&tx)
+                .await?;
+                RequestClaim::New
             };
-            transaction.commit()?;
+            tx.commit().await?;
             Ok(result)
-        }).await
+        })
+        .await
     }
-
     pub async fn finish_workspace_request(
         &self,
         session: &str,
         request: &str,
         error: Option<String>,
     ) -> Result<()> {
-        let (session, request) = (session.to_owned(), request.to_owned());
-        self.access(move |connection| {
-            ensure!(connection.execute(
-                "UPDATE workspace_requests SET error=?3 WHERE session_id=?1 AND request_id=?2 AND error=?4",
-                params![session, request, error, UNKNOWN_OUTCOME],
-            )? == 1, "workspace request was not reserved or already finalized");
+        self.write_access(|conn| async move {
+            let updated = requests::Entity::update_many()
+                .col_expr(requests::Column::Error, sea_query::Expr::value(error))
+                .filter(requests::Column::SessionId.eq(session))
+                .filter(requests::Column::RequestId.eq(request))
+                .filter(requests::Column::Error.eq(UNKNOWN_OUTCOME))
+                .exec(&conn)
+                .await?;
+            ensure!(
+                updated.rows_affected == 1,
+                "workspace request was not reserved or already finalized"
+            );
             Ok(())
-        }).await
+        })
+        .await
     }
 }
 

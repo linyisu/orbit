@@ -10,13 +10,16 @@ anyhow.workspace = true
 orbit-agent.workspace = true
 orbit-model.workspace = true
 orbit-runtime.workspace = true
-rusqlite.workspace = true
+getrandom.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile.workspace = true
 tokio-util.workspace = true
 

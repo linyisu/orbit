@@ -1,7 +1,9 @@
 //! Read-only audit view over durable compaction events. No project-side files.
+use crate::entities::*;
 use anyhow::{Result, ensure};
 use orbit_agent::memory::{CompactionRecord, SummaryProgress};
-use rusqlite::OptionalExtension;
+use sea_orm::sea_query::Expr;
+use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
 use crate::store::Store;
@@ -25,16 +27,12 @@ impl Store {
         let session_id = session_id.to_owned();
         let fingerprint = fingerprint.to_owned();
 
-        self.access(move |conn| {
-            let payload: Option<String> = conn
-                .query_row(
-                    "SELECT payload FROM compaction_progress WHERE session_id=?1 AND source_fingerprint=?2",
-                    rusqlite::params![session_id, fingerprint],
-                    |row| row.get(0),
-                )
-                .optional()?;
-
-            payload.map(|value| serde_json::from_str(&value).map_err(Into::into)).transpose()
+        self.read_access(move |conn| async move {
+            compaction_progress::Entity::find_by_id((session_id, fingerprint))
+                .one(&conn)
+                .await?
+                .map(|row| serde_json::from_str(&row.payload).map_err(Into::into))
+                .transpose()
         })
         .await
     }
@@ -57,58 +55,85 @@ impl Store {
         let session_id = session_id.to_owned();
         let progress = progress.clone();
 
-        self.access(move |conn| {
-            let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let old: Option<String> = transaction
-                .query_row(
-                    "SELECT payload FROM compaction_progress WHERE session_id=?1 AND source_fingerprint=?2",
-                    rusqlite::params![session_id, progress.source_fingerprint],
-                    |row| row.get(0),
-                )
-                .optional()?;
-
-            if let Some(old) = old {
-                let old: SummaryProgress = serde_json::from_str(&old)?;
+        self.write_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            if let Some(row) = compaction_progress::Entity::find_by_id((
+                session_id.clone(),
+                progress.source_fingerprint.clone(),
+            ))
+            .one(&tx)
+            .await?
+            {
+                let old: SummaryProgress = serde_json::from_str(&row.payload)?;
                 ensure!(
                     (progress.next_record, progress.next_byte_offset)
                         >= (old.next_record, old.next_byte_offset),
                     "compaction progress cannot move backwards"
                 );
             }
-
-            transaction.execute(
-                "INSERT INTO compaction_progress(session_id,source_fingerprint,payload)
-                 VALUES(?1,?2,?3) ON CONFLICT(session_id,source_fingerprint)
-                 DO UPDATE SET payload=excluded.payload,updated_at=unixepoch()",
-                rusqlite::params![
-                    session_id,
-                    progress.source_fingerprint,
-                    serde_json::to_string(&progress)?
-                ],
-            )?;
-            transaction.commit()?;
-
+            compaction_progress::Entity::insert(compaction_progress::ActiveModel {
+                session_id: Set(session_id),
+                source_fingerprint: Set(progress.source_fingerprint.clone()),
+                payload: Set(serde_json::to_string(&progress)?),
+                updated_at: Set(crate::database::now()),
+            })
+            .on_conflict(
+                sea_query::OnConflict::columns([
+                    compaction_progress::Column::SessionId,
+                    compaction_progress::Column::SourceFingerprint,
+                ])
+                .update_columns([
+                    compaction_progress::Column::Payload,
+                    compaction_progress::Column::UpdatedAt,
+                ])
+                .to_owned(),
+            )
+            .exec(&tx)
+            .await?;
+            tx.commit().await?;
             Ok(())
         })
         .await
     }
-
     pub async fn compactions(&self, session_id: &str) -> Result<Vec<StoredCompaction>> {
         let id = session_id.to_owned();
-
-        self.access(move |conn| {
-            conn.query_row("SELECT id FROM sessions WHERE id=?1", [&id], |_| Ok(()))?;
-            let mut query = conn.prepare("SELECT e.id,e.run_id,r.status,json_extract(e.payload,'$.CompactionRecorded.record') FROM events e JOIN runs r ON r.id=e.run_id WHERE r.session_id=?1 AND json_type(e.payload,'$.CompactionRecorded.record')='object' ORDER BY e.id")?;
-            let rows = query.query_map([id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?)))?;
-            let mut records = Vec::new();
-
-            for row in rows {
-                let (event_id, run_id, run_status, record) = row?;
-                records.push(StoredCompaction { event_id, run_id, run_status, record: serde_json::from_str(&record)? });
-            }
-
-            Ok(records)
-        }).await
+        self.read_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            ensure!(
+                sessions::Entity::find_by_id(&id).count(&tx).await? > 0,
+                "session not found"
+            );
+            let json = |function: &str| {
+                sea_query::Func::cust(sea_query::Alias::new(function)).args([
+                    Expr::col((events::Entity, events::Column::Payload)).into(),
+                    Expr::value("$.CompactionRecorded.record"),
+                ])
+            };
+            let rows: Vec<(i64, i64, String, String)> = events::Entity::find()
+                .select_only()
+                .column(events::Column::Id)
+                .column(events::Column::RunId)
+                .column(runs::Column::Status)
+                .column_as(Expr::expr(json("json_extract")), "record")
+                .join(JoinType::InnerJoin, events::Relation::Run.def())
+                .filter(runs::Column::SessionId.eq(id))
+                .filter(Expr::expr(json("json_type")).eq("object"))
+                .order_by_asc(events::Column::Id)
+                .into_tuple()
+                .all(&tx)
+                .await?;
+            rows.into_iter()
+                .map(|(event_id, run_id, run_status, record)| {
+                    Ok(StoredCompaction {
+                        event_id,
+                        run_id,
+                        run_status,
+                        record: serde_json::from_str(&record)?,
+                    })
+                })
+                .collect()
+        })
+        .await
     }
 }
 

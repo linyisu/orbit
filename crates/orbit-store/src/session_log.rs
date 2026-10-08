@@ -1,7 +1,10 @@
 //! Append-only conversation messages, separate from the mutable model projection.
+use crate::entities::*;
 use anyhow::{Result, ensure};
 use orbit_model::types::ChatMessage;
-use rusqlite::{OptionalExtension, params};
+#[cfg(test)]
+use sea_orm::sea_query::Expr;
+use sea_orm::*;
 use sha2::{Digest, Sha256};
 
 use crate::store::Store;
@@ -50,38 +53,29 @@ impl Store {
 
         let session_id = session_id.to_owned();
 
-        self.access(move |conn| {
-            conn.query_row("SELECT id FROM sessions WHERE id=?1", [&session_id], |_| {
-                Ok(())
-            })?;
-            let legacy_gap: bool = conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM session_log_gaps WHERE session_id=?1)",
-                [&session_id],
-                |row| row.get(0),
-            )?;
-            let mut stmt = conn.prepare(
-                "SELECT id,run_id,payload,sha256 FROM session_messages
-                 WHERE session_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
-            )?;
-            let rows = stmt.query_map(
-                rusqlite::params![session_id, after_id.unwrap_or(0), limit as i64],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                    ))
-                },
-            )?;
-            let mut messages = Vec::new();
-
-            for row in rows {
-                let (id, run_id, payload, expected) = row?;
-                messages.push(decode(id, run_id, payload, expected)?);
-            }
-
-            Ok((legacy_gap, messages))
+        self.read_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            ensure!(
+                sessions::Entity::find_by_id(&session_id).count(&tx).await? > 0,
+                "session not found"
+            );
+            let gap = session_log_gaps::Entity::find_by_id(&session_id)
+                .one(&tx)
+                .await?
+                .is_some();
+            let rows = session_messages::Entity::find()
+                .filter(session_messages::Column::SessionId.eq(&session_id))
+                .filter(session_messages::Column::Id.gt(after_id.unwrap_or(0)))
+                .order_by_asc(session_messages::Column::Id)
+                .limit(limit as u64)
+                .all(&tx)
+                .await?;
+            let messages = rows
+                .into_iter()
+                .map(|row| decode(row.id, row.run_id, row.payload, row.sha256))
+                .collect::<Result<Vec<_>>>()?;
+            tx.commit().await?;
+            Ok((gap, messages))
         })
         .await
     }
@@ -93,29 +87,41 @@ impl Store {
         run_id: Option<i64>,
     ) -> Result<(bool, Option<CanonicalMessage>)> {
         let session_id = session_id.to_owned();
-        self.read_access(move |conn| {
-            conn.query_row("SELECT id FROM sessions WHERE id=?1", [&session_id], |_| {
-                Ok(())
-            })?;
-            let legacy_gap = conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM session_log_gaps WHERE session_id=?1)",
-                [&session_id],
-                |row| row.get(0),
-            )?;
-            let record = conn
-                .query_row(
-                    "SELECT id,run_id,payload,sha256 FROM session_messages
-                 WHERE session_id=?1 AND run_id=COALESCE(?2,
-                   (SELECT id FROM runs WHERE session_id=?1 ORDER BY id DESC LIMIT 1))
-                 ORDER BY ordinal DESC LIMIT 1",
-                    params![session_id, run_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                )
-                .optional()?;
-            let message = record
-                .map(|(id, run_id, payload, hash)| decode(id, run_id, payload, hash))
+        self.read_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            ensure!(
+                sessions::Entity::find_by_id(&session_id).count(&tx).await? > 0,
+                "session not found"
+            );
+            let gap = session_log_gaps::Entity::find_by_id(&session_id)
+                .one(&tx)
+                .await?
+                .is_some();
+            let run = match run_id {
+                Some(id) => Some(id),
+                None => runs::Entity::find()
+                    .filter(runs::Column::SessionId.eq(&session_id))
+                    .order_by_desc(runs::Column::Id)
+                    .one(&tx)
+                    .await?
+                    .map(|row| row.id),
+            };
+            let row = match run {
+                Some(id) => {
+                    session_messages::Entity::find()
+                        .filter(session_messages::Column::SessionId.eq(&session_id))
+                        .filter(session_messages::Column::RunId.eq(id))
+                        .order_by_desc(session_messages::Column::Ordinal)
+                        .one(&tx)
+                        .await?
+                }
+                None => None,
+            };
+            let message = row
+                .map(|row| decode(row.id, row.run_id, row.payload, row.sha256))
                 .transpose()?;
-            Ok((legacy_gap, message))
+            tx.commit().await?;
+            Ok((gap, message))
         })
         .await
     }
@@ -368,11 +374,12 @@ mod tests {
             ChatMessage::assistant("Orbit 第一轮结果")
         );
         store
-            .access(move |conn| {
-                conn.execute(
-                    "UPDATE session_messages SET payload='{}' WHERE run_id=?1",
-                    [first],
-                )?;
+            .write_access(move |conn| async move {
+                session_messages::Entity::update_many()
+                    .col_expr(session_messages::Column::Payload, Expr::value("{}"))
+                    .filter(session_messages::Column::RunId.eq(first))
+                    .exec(&conn)
+                    .await?;
                 Ok(())
             })
             .await

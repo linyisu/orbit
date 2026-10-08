@@ -1,6 +1,8 @@
+use crate::entities::*;
 use anyhow::{Context, Result, ensure};
 use orbit_model::types::ToolCall;
-use rusqlite::{OptionalExtension, params};
+use sea_orm::sea_query::Expr;
+use sea_orm::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -22,58 +24,55 @@ pub struct AgentInvocation {
     pub result: Option<Value>,
 }
 
-pub(crate) fn migrate(conn: &rusqlite::Connection) -> Result<()> {
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS agent_sessions (
-        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-        parent_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-        role TEXT NOT NULL CHECK(role IN ('explore','review')), task TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS agent_sessions_parent ON agent_sessions(parent_session_id);
-    CREATE TABLE IF NOT EXISTS agent_invocations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-        parent_run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-        child_session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-        call TEXT NOT NULL, result TEXT, delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1))
-    );
-    CREATE INDEX IF NOT EXISTS agent_invocations_delivery ON agent_invocations(parent_session_id,delivered);
-    CREATE TABLE IF NOT EXISTS agent_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-        content TEXT NOT NULL, received INTEGER NOT NULL DEFAULT 0 CHECK(received IN (0,1))
-    );
-    PRAGMA user_version=21;")?;
-    Ok(())
+#[derive(FromQueryResult)]
+struct PendingInvocationRow {
+    id: i64,
+    session_id: String,
+    role: String,
+    model: String,
+    task: String,
+    call: String,
+    result: Option<String>,
 }
 
+fn agent_query() -> Select<agent_sessions::Entity> {
+    agent_sessions::Entity::find()
+        .join(JoinType::InnerJoin, agent_sessions::Relation::Session.def())
+}
+fn agent_columns(query: Select<agent_sessions::Entity>) -> Select<agent_sessions::Entity> {
+    query
+        .select_only()
+        .column(agent_sessions::Column::SessionId)
+        .column(agent_sessions::Column::Role)
+        .column(sessions::Column::Model)
+        .column(agent_sessions::Column::Task)
+}
+fn agent_model((id, role, model, task): (String, String, String, String)) -> SubagentSession {
+    SubagentSession {
+        id,
+        role,
+        model,
+        task,
+    }
+}
 impl Store {
     pub async fn subagent_parent(&self, id: &str) -> Result<Option<String>> {
         let id = id.to_owned();
-        self.read_access(move |conn| {
-            Ok(conn
-                .query_row(
-                    "SELECT parent_session_id FROM agent_sessions WHERE session_id=?1",
-                    [id],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .optional()?
-                .flatten())
+        self.read_access(move |conn| async move {
+            Ok(agent_sessions::Entity::find_by_id(id)
+                .one(&conn)
+                .await?
+                .and_then(|row| row.parent_session_id))
         })
         .await
     }
-
     pub async fn is_subagent(&self, id: &str) -> Result<bool> {
         let id = id.to_owned();
-        self.read_access(move |conn| {
-            Ok(conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE session_id=?1)",
-                [id],
-                |r| r.get::<_, bool>(0),
-            )?)
+        self.read_access(move |conn| async move {
+            Ok(agent_sessions::Entity::find_by_id(id).count(&conn).await? > 0)
         })
         .await
     }
-
     pub async fn create_subagent(
         &self,
         parent: &str,
@@ -86,56 +85,117 @@ impl Store {
             "invalid subagent role"
         );
         let parent = parent.to_owned();
-        let id = self.access(move |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            ensure!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE session_id=?1)", [&parent], |r| r.get::<_,bool>(0))?, "subagents cannot create nested agents");
-            let (workspace, project, demo): (String,String,bool) = tx.query_row("SELECT workspace,project_id,demo FROM sessions WHERE id=?1", [&parent], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-            let id: String = tx.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
-            tx.execute("INSERT INTO sessions(id,workspace,project_id,model,demo) VALUES(?1,?2,?3,?4,?5)", params![id,workspace,project,model,demo])?;
-            tx.execute("INSERT INTO agent_sessions(session_id,parent_session_id,role,task) VALUES(?1,?2,?3,?4)", params![id,parent,role,task])?;
-            tx.commit()?;
-            Ok(id)
-        }).await?;
+        let id = self
+            .write_access(move |conn| async move {
+                let tx = conn.begin().await?;
+                ensure!(
+                    agent_sessions::Entity::find_by_id(&parent)
+                        .one(&tx)
+                        .await?
+                        .is_none(),
+                    "subagents cannot create nested agents"
+                );
+                let row = sessions::Entity::find_by_id(&parent)
+                    .one(&tx)
+                    .await?
+                    .context("parent session not found")?;
+                let id = crate::database::new_id()?;
+                sessions::ActiveModel {
+                    id: Set(id.clone()),
+                    workspace: Set(row.workspace),
+                    project_id: Set(row.project_id),
+                    model: Set(model),
+                    demo: Set(row.demo),
+                    ..Default::default()
+                }
+                .insert(&tx)
+                .await?;
+                agent_sessions::ActiveModel {
+                    session_id: Set(id.clone()),
+                    parent_session_id: Set(Some(parent)),
+                    role: Set(role),
+                    task: Set(task),
+                }
+                .insert(&tx)
+                .await?;
+                tx.commit().await?;
+                Ok(id)
+            })
+            .await?;
         self.acquire(&id).await
     }
-
     pub async fn subagents(&self, parent: &str) -> Result<Vec<SubagentSession>> {
         let parent = parent.to_owned();
-        self.read_access(move |conn| {
-            let mut query = conn.prepare("SELECT a.session_id,a.role,s.model,a.task FROM agent_sessions a JOIN sessions s ON s.id=a.session_id WHERE a.parent_session_id=?1 ORDER BY s.rowid")?;
-            Ok(query.query_map([parent], |r| Ok(SubagentSession{id:r.get(0)?,role:r.get(1)?,model:r.get(2)?,task:r.get(3)?}))?.collect::<rusqlite::Result<_>>()?)
-        }).await
+        self.read_access(move |conn| async move {
+            Ok(agent_columns(agent_query())
+                .filter(agent_sessions::Column::ParentSessionId.eq(parent))
+                .order_by_asc(Expr::col((
+                    sessions::Entity,
+                    sea_query::Alias::new("rowid"),
+                )))
+                .into_tuple()
+                .all(&conn)
+                .await?
+                .into_iter()
+                .map(agent_model)
+                .collect())
+        })
+        .await
     }
-
     pub async fn owned_subagent(&self, parent: &str, id: &str) -> Result<SubagentSession> {
         let parent = parent.to_owned();
         let id = id.to_owned();
-        self.read_access(move |conn| {
-            conn.query_row("SELECT a.session_id,a.role,s.model,a.task FROM agent_sessions a JOIN sessions s ON s.id=a.session_id WHERE a.parent_session_id=?1 AND a.session_id=?2",params![parent,id],|r|Ok(SubagentSession{id:r.get(0)?,role:r.get(1)?,model:r.get(2)?,task:r.get(3)?})).context("subagent does not belong to this conversation")
-        }).await
+        self.read_access(move |conn| async move {
+            Ok(agent_model(
+                agent_columns(agent_query())
+                    .filter(agent_sessions::Column::ParentSessionId.eq(parent))
+                    .filter(agent_sessions::Column::SessionId.eq(id))
+                    .into_tuple()
+                    .one(&conn)
+                    .await?
+                    .context("subagent does not belong to this conversation")?,
+            ))
+        })
+        .await
     }
-
     pub async fn begin_agent_invocation(
         &self,
         parent: &str,
         id: &str,
         call: ToolCall,
     ) -> Result<i64> {
-        self.owned_subagent(parent, id).await?;
         let parent = parent.to_owned();
         let id = id.to_owned();
-        self.access(move |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            // A direct user follow-up can resume a child after the parent has finished.
-            // Retain its originating run without inventing a new parent execution.
-            let run: i64 = tx.query_row("SELECT id FROM runs WHERE session_id=?1 ORDER BY id DESC LIMIT 1", [&parent], |r|r.get(0)).context("parent agent has no originating run")?;
-            tx.execute("INSERT INTO agent_invocations(parent_session_id,parent_run_id,child_session_id,call) VALUES(?1,?2,?3,?4)",params![parent,run,id,serde_json::to_string(&call)?])?;
-            let invocation = tx.last_insert_rowid();
-            tx.commit()?;
-            Ok(invocation)
-        }).await
+        self.write_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            ensure!(
+                agent_sessions::Entity::find_by_id(&id)
+                    .filter(agent_sessions::Column::ParentSessionId.eq(&parent))
+                    .one(&tx)
+                    .await?
+                    .is_some(),
+                "subagent does not belong to this conversation"
+            );
+            let run = runs::Entity::find()
+                .filter(runs::Column::SessionId.eq(&parent))
+                .order_by_desc(runs::Column::Id)
+                .one(&tx)
+                .await?
+                .context("parent agent has no originating run")?;
+            let row = agent_invocations::ActiveModel {
+                parent_session_id: Set(parent),
+                parent_run_id: Set(run.id),
+                child_session_id: Set(id),
+                call: Set(serde_json::to_string(&call)?),
+                ..Default::default()
+            }
+            .insert(&tx)
+            .await?;
+            tx.commit().await?;
+            Ok(row.id)
+        })
+        .await
     }
-
     pub async fn finish_agent_invocation(
         &self,
         parent: &str,
@@ -143,21 +203,61 @@ impl Store {
         result: Value,
     ) -> Result<()> {
         let parent = parent.to_owned();
-        self.access(move |conn| {
-            ensure!(conn.execute("UPDATE agent_invocations SET result=?3 WHERE id=?1 AND parent_session_id=?2 AND result IS NULL", params![invocation,parent,serde_json::to_string(&result)?])? == 1, "subagent invocation is unavailable or already finished");
+        self.write_access(move |conn| async move {
+            let updated = agent_invocations::Entity::update_many()
+                .col_expr(
+                    agent_invocations::Column::Result,
+                    Expr::value(serde_json::to_string(&result)?),
+                )
+                .filter(agent_invocations::Column::Id.eq(invocation))
+                .filter(agent_invocations::Column::ParentSessionId.eq(parent))
+                .filter(agent_invocations::Column::Result.is_null())
+                .exec(&conn)
+                .await?;
+            ensure!(
+                updated.rows_affected == 1,
+                "subagent invocation is unavailable or already finished"
+            );
             Ok(())
-        }).await
+        })
+        .await
     }
-
     pub async fn pending_agent_results(&self, parent: &str) -> Result<Vec<AgentInvocation>> {
         let parent = parent.to_owned();
-        self.read_access(move |conn| {
-            let mut query = conn.prepare("SELECT i.id,a.session_id,a.role,s.model,a.task,i.call,i.result FROM agent_invocations i JOIN agent_sessions a ON a.session_id=i.child_session_id JOIN sessions s ON s.id=a.session_id WHERE i.parent_session_id=?1 AND i.delivered=0 ORDER BY i.id")?;
-            let records = query.query_map([parent], |r| Ok((r.get::<_,i64>(0)?,SubagentSession{id:r.get(1)?,role:r.get(2)?,model:r.get(3)?,task:r.get(4)?},r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            records.into_iter().map(|(id,agent,call,result)| Ok(AgentInvocation{id,agent,call:serde_json::from_str(&call)?,result:result.map(|r|serde_json::from_str(&r)).transpose()?})).collect()
-        }).await
+        self.read_access(move |conn| async move {
+            let rows = agent_invocations::Entity::find()
+                .select_only()
+                .column(agent_invocations::Column::Id)
+                .column(agent_sessions::Column::SessionId)
+                .column(agent_sessions::Column::Role)
+                .column(sessions::Column::Model)
+                .column(agent_sessions::Column::Task)
+                .column(agent_invocations::Column::Call)
+                .column(agent_invocations::Column::Result)
+                .join(
+                    JoinType::InnerJoin,
+                    agent_invocations::Relation::ChildSession.def(),
+                )
+                .join(JoinType::InnerJoin, agent_sessions::Relation::Session.def())
+                .filter(agent_invocations::Column::ParentSessionId.eq(parent))
+                .filter(agent_invocations::Column::Delivered.eq(false))
+                .order_by_asc(agent_invocations::Column::Id)
+                .into_model::<PendingInvocationRow>()
+                .all(&conn)
+                .await?;
+            rows.into_iter()
+                .map(|row| {
+                    Ok(AgentInvocation {
+                        id: row.id,
+                        agent: agent_model((row.session_id, row.role, row.model, row.task)),
+                        call: serde_json::from_str(&row.call)?,
+                        result: row.result.map(|r| serde_json::from_str(&r)).transpose()?,
+                    })
+                })
+                .collect()
+        })
+        .await
     }
-
     pub async fn queue_agent_message(
         &self,
         parent: &str,
@@ -171,42 +271,52 @@ impl Store {
         self.owned_subagent(parent, id).await?;
         self.queue_session_input(id, content).await
     }
-
     pub async fn queue_session_input(&self, id: &str, content: String) -> Result<i64> {
         ensure!(
             !content.trim().is_empty() && content.len() <= 1024 * 1024,
             "message must contain 1..1048576 bytes"
         );
         let id = id.to_owned();
-        self.access(move |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let count: i64 = tx.query_row(
-                "SELECT count(*) FROM agent_messages WHERE session_id=?1 AND received=0",
-                [&id],
-                |r| r.get(0),
-            )?;
-
+        self.write_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            let count = agent_messages::Entity::find()
+                .filter(agent_messages::Column::SessionId.eq(&id))
+                .filter(agent_messages::Column::Received.eq(false))
+                .count(&tx)
+                .await?;
             ensure!(count < 32, "session message queue is full");
-            tx.execute(
-                "INSERT INTO agent_messages(session_id,content) VALUES(?1,?2)",
-                params![id, content],
-            )?;
-            let message = tx.last_insert_rowid();
-            tx.commit()?;
-            Ok(message)
+            let row = agent_messages::ActiveModel {
+                session_id: Set(id),
+                content: Set(content),
+                ..Default::default()
+            }
+            .insert(&tx)
+            .await?;
+            tx.commit().await?;
+            Ok(row.id)
         })
         .await
     }
-
     pub async fn pending_agent_messages(
         &self,
         id: &str,
     ) -> Result<Vec<orbit_agent::inbox::InboxMessage>> {
         let id = id.to_owned();
-        self.read_access(move |conn| {
-            let mut query = conn.prepare("SELECT id,content FROM agent_messages WHERE session_id=?1 AND received=0 ORDER BY id")?;
-            Ok(query.query_map([id], |r|Ok(orbit_agent::inbox::InboxMessage{id:r.get(0)?,content:r.get(1)?}))?.collect::<rusqlite::Result<_>>()?)
-        }).await
+        self.read_access(move |conn| async move {
+            Ok(agent_messages::Entity::find()
+                .filter(agent_messages::Column::SessionId.eq(id))
+                .filter(agent_messages::Column::Received.eq(false))
+                .order_by_asc(agent_messages::Column::Id)
+                .all(&conn)
+                .await?
+                .into_iter()
+                .map(|row| orbit_agent::inbox::InboxMessage {
+                    id: row.id,
+                    content: row.content,
+                })
+                .collect())
+        })
+        .await
     }
 }
 
@@ -253,6 +363,7 @@ mod tests {
             INSERT INTO old_inputs SELECT * FROM agent_messages;
             DROP TABLE agent_messages;
             ALTER TABLE old_inputs RENAME TO agent_messages;
+            DROP TABLE seaql_migrations;
             PRAGMA user_version=26;").unwrap();
         drop(connection);
         let store = Store::open(&path).await.unwrap();

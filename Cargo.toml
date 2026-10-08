@@ -71,7 +71,9 @@ ratex-types = "0.1.14"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "stream", "socks"] }
 resvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+sea-orm = { version = "1.1", default-features = false, features = ["macros", "sqlx-sqlite", "runtime-tokio-rustls"] }
+sea-orm-migration = { version = "1.1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
 rustix = { version = "1.1.4", features = ["fs"] }
 seccompiler = "0.5.0"
 serde = { version = "1.0.229", features = ["derive"] }
