@@ -1,194 +1,110 @@
-//! Versioned migrations and legacy adoption share one transaction.
-//!
-//! The 27 historical SQL steps are frozen compatibility artifacts. Append future
-//! changes as Rust `MigrationTrait` implementations in `Migrator::migrations()`;
-//! never edit a released step. The runner synchronizes `user_version` with the
-//! ledger so older Orbit executables reject schemas they cannot understand.
+//! Versioned Rust migrations. Released names remain stable in the SeaORM ledger.
+//! Schema changes use SeaQuery; data transforms use typed query builders.
+use crate::database::sqlite;
 use anyhow::{Result, ensure};
 use sea_orm::{
-    ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, Set, Statement,
-    TransactionTrait,
+    ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, Set, TransactionTrait,
 };
 use sea_orm_migration::{prelude::*, seaql_migrations};
-
-const HISTORICAL: &[(&str, &str)] = &[
-    (
-        "00000000000001_sessions",
-        include_str!("../migrations/00000000000001_sessions/up.sql"),
-    ),
-    (
-        "00000000000002_projects",
-        include_str!("../migrations/00000000000002_projects/up.sql"),
-    ),
-    (
-        "00000000000003_run_duration",
-        include_str!("../migrations/00000000000003_run_duration/up.sql"),
-    ),
-    (
-        "00000000000004_reasoning",
-        include_str!("../migrations/00000000000004_reasoning/up.sql"),
-    ),
-    (
-        "00000000000005_tasks_memories",
-        include_str!("../migrations/00000000000005_tasks_memories/up.sql"),
-    ),
-    (
-        "00000000000006_event_time",
-        include_str!("../migrations/00000000000006_event_time/up.sql"),
-    ),
-    (
-        "00000000000007_undo",
-        include_str!("../migrations/00000000000007_undo/up.sql"),
-    ),
-    (
-        "00000000000008_git_baseline",
-        include_str!("../migrations/00000000000008_git_baseline/up.sql"),
-    ),
-    (
-        "00000000000009_plugins",
-        include_str!("../migrations/00000000000009_plugins/up.sql"),
-    ),
-    (
-        "00000000000010_session_memory",
-        include_str!("../migrations/00000000000010_session_memory/up.sql"),
-    ),
-    (
-        "00000000000011_archives",
-        include_str!("../migrations/00000000000011_archives/up.sql"),
-    ),
-    (
-        "00000000000012_checkpoints",
-        include_str!("../migrations/00000000000012_checkpoints/up.sql"),
-    ),
-    (
-        "00000000000013_workspace_baseline",
-        include_str!("../migrations/00000000000013_workspace_baseline/up.sql"),
-    ),
-    (
-        "00000000000014_message_log",
-        include_str!("../migrations/00000000000014_message_log/up.sql"),
-    ),
-    (
-        "00000000000015_compaction",
-        include_str!("../migrations/00000000000015_compaction/up.sql"),
-    ),
-    (
-        "00000000000016_plugin_revision",
-        include_str!("../migrations/00000000000016_plugin_revision/up.sql"),
-    ),
-    (
-        "00000000000017_workspace_boundary",
-        include_str!("../migrations/00000000000017_workspace_boundary/up.sql"),
-    ),
-    (
-        "00000000000018_tabs",
-        include_str!("../migrations/00000000000018_tabs/up.sql"),
-    ),
-    (
-        "00000000000019_runtime",
-        include_str!("../migrations/00000000000019_runtime/up.sql"),
-    ),
-    (
-        "00000000000020_file_grants",
-        include_str!("../migrations/00000000000020_file_grants/up.sql"),
-    ),
-    (
-        "00000000000021_subagents",
-        include_str!("../migrations/00000000000021_subagents/up.sql"),
-    ),
-    (
-        "00000000000022_side_questions",
-        include_str!("../migrations/00000000000022_side_questions/up.sql"),
-    ),
-    (
-        "00000000000023_request_receipts",
-        include_str!("../migrations/00000000000023_request_receipts/up.sql"),
-    ),
-    (
-        "00000000000024_subagent_parent",
-        include_str!("../migrations/00000000000024_subagent_parent/up.sql"),
-    ),
-    (
-        "00000000000025_questions",
-        include_str!("../migrations/00000000000025_questions/up.sql"),
-    ),
-    (
-        "00000000000026_plans",
-        include_str!("../migrations/00000000000026_plans/up.sql"),
-    ),
-    (
-        "00000000000027_input_sequence",
-        include_str!("../migrations/00000000000027_input_sequence/up.sql"),
-    ),
-];
+mod backfill;
+mod m00000000000001_sessions;
+mod m00000000000002_projects;
+mod m00000000000003_run_duration;
+mod m00000000000004_reasoning;
+mod m00000000000005_tasks_memories;
+mod m00000000000006_event_time;
+mod m00000000000007_undo;
+mod m00000000000008_git_baseline;
+mod m00000000000009_plugins;
+mod m00000000000010_session_memory;
+mod m00000000000011_archives;
+mod m00000000000012_checkpoints;
+mod m00000000000013_workspace_baseline;
+mod m00000000000014_message_log;
+mod m00000000000015_compaction;
+mod m00000000000016_plugin_revision;
+mod m00000000000017_workspace_boundary;
+mod m00000000000018_tabs;
+mod m00000000000019_runtime;
+mod m00000000000020_file_grants;
+mod m00000000000021_subagents;
+mod m00000000000022_side_questions;
+mod m00000000000023_request_receipts;
+mod m00000000000024_subagent_parent;
+mod m00000000000025_questions;
+mod m00000000000026_plans;
+mod m00000000000027_input_sequence;
 const LEGACY_VERSION: i64 = 27;
-
+fn timestamp_default() -> SimpleExpr {
+    // SQLite expression defaults need parentheses; a single-item tuple supplies them.
+    Expr::tuple([Func::cust(Alias::new("unixepoch")).into()]).into()
+}
 pub(crate) struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        HISTORICAL
-            .iter()
-            .map(|&(name, sql)| Box::new(Historical { name, sql }) as Box<dyn MigrationTrait>)
-            .collect()
+        vec![
+            Box::new(m00000000000001_sessions::Migration),
+            Box::new(m00000000000002_projects::Migration),
+            Box::new(m00000000000003_run_duration::Migration),
+            Box::new(m00000000000004_reasoning::Migration),
+            Box::new(m00000000000005_tasks_memories::Migration),
+            Box::new(m00000000000006_event_time::Migration),
+            Box::new(m00000000000007_undo::Migration),
+            Box::new(m00000000000008_git_baseline::Migration),
+            Box::new(m00000000000009_plugins::Migration),
+            Box::new(m00000000000010_session_memory::Migration),
+            Box::new(m00000000000011_archives::Migration),
+            Box::new(m00000000000012_checkpoints::Migration),
+            Box::new(m00000000000013_workspace_baseline::Migration),
+            Box::new(m00000000000014_message_log::Migration),
+            Box::new(m00000000000015_compaction::Migration),
+            Box::new(m00000000000016_plugin_revision::Migration),
+            Box::new(m00000000000017_workspace_boundary::Migration),
+            Box::new(m00000000000018_tabs::Migration),
+            Box::new(m00000000000019_runtime::Migration),
+            Box::new(m00000000000020_file_grants::Migration),
+            Box::new(m00000000000021_subagents::Migration),
+            Box::new(m00000000000022_side_questions::Migration),
+            Box::new(m00000000000023_request_receipts::Migration),
+            Box::new(m00000000000024_subagent_parent::Migration),
+            Box::new(m00000000000025_questions::Migration),
+            Box::new(m00000000000026_plans::Migration),
+            Box::new(m00000000000027_input_sequence::Migration),
+        ]
     }
 }
-struct Historical {
-    name: &'static str,
-    sql: &'static str,
+fn forward_only() -> Result<(), DbErr> {
+    Err(DbErr::Migration(
+        "Conversation migrations are forward-only; automatic rollback would discard history".into(),
+    ))
 }
-impl MigrationName for Historical {
-    fn name(&self) -> &str {
-        self.name
-    }
-}
-#[async_trait::async_trait]
-impl MigrationTrait for Historical {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        let mut sql = self.sql.to_owned();
-        // Released pre-versioned patches added these columns early. Retain their data.
-        for (version, table, column, ddl) in [
-            (
-                15,
-                "context_archives",
-                "content_sha256",
-                "ALTER TABLE context_archives ADD COLUMN content_sha256 TEXT;",
-            ),
-            (
-                16,
-                "project_plugins",
-                "marketplace_revision",
-                "ALTER TABLE project_plugins ADD COLUMN marketplace_revision TEXT;",
-            ),
-            (
-                17,
-                "sessions",
-                "workspace_since_run",
-                "ALTER TABLE sessions ADD COLUMN workspace_since_run INTEGER NOT NULL DEFAULT 0;",
-            ),
-        ] {
-            if self.name.starts_with(&format!("{version:014}_"))
-                && manager.has_column(table, column).await?
-            {
-                sql = sql.replace(ddl, "");
-            }
-        }
-        manager.get_connection().execute_unprepared(&sql).await?;
-        Ok(())
-    }
-    async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
-        Err(DbErr::Migration("Historical Orbit migrations are forward-only; automatic rollback would discard conversation data".into()))
-    }
-}
-
-pub(crate) async fn run(connection: &DatabaseConnection) -> Result<()> {
-    connection
-        .execute_unprepared("PRAGMA foreign_keys=OFF")
+async fn copy(
+    manager: &SchemaManager<'_>,
+    from: &str,
+    to: &str,
+    columns: &[&str],
+) -> Result<(), DbErr> {
+    let selection = Query::select()
+        .columns(columns.iter().map(|s| Alias::new(*s)))
+        .from(Alias::new(from))
+        .to_owned();
+    let insert = Query::insert()
+        .into_table(Alias::new(to))
+        .columns(columns.iter().map(|s| Alias::new(*s)))
+        .select_from(selection)
+        .map_err(|e| DbErr::Custom(e.to_string()))?
+        .to_owned();
+    manager
+        .get_connection()
+        .execute(manager.get_database_backend().build(&insert))
         .await?;
+    Ok(())
+}
+pub(crate) async fn run(connection: &DatabaseConnection) -> Result<()> {
+    sqlite::foreign_keys(connection, false).await?;
     let result = upgrade(connection).await;
-    let restored = connection
-        .execute_unprepared("PRAGMA foreign_keys=ON")
-        .await;
+    let restored = sqlite::foreign_keys(connection, true).await;
     result?;
     restored?;
     Ok(())
@@ -197,14 +113,7 @@ pub(crate) async fn run(connection: &DatabaseConnection) -> Result<()> {
 async fn upgrade(connection: &DatabaseConnection) -> Result<()> {
     let transaction = connection.begin().await?;
     let result: Result<()> = async {
-        let row = transaction
-            .query_one(Statement::from_string(
-                DbBackend::Sqlite,
-                "PRAGMA user_version",
-            ))
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("missing schema version"))?;
-        let version: i64 = row.try_get("", "user_version")?;
+        let version = sqlite::schema_version(&transaction).await?;
         let migrations = Migrator::migrations();
         let current_version: i64 = migrations.len().try_into()?;
         ensure!(
@@ -235,9 +144,9 @@ async fn upgrade(connection: &DatabaseConnection) -> Result<()> {
                 version <= LEGACY_VERSION,
                 "database migration ledger is missing"
             );
-            for &(name, _) in HISTORICAL.iter().take(version as usize) {
+            for migration in migrations.iter().take(version as usize) {
                 seaql_migrations::ActiveModel {
-                    version: Set(name.into()),
+                    version: Set(migration.name().into()),
                     applied_at: Set(crate::database::now()),
                 }
                 .insert(&transaction)
@@ -263,19 +172,11 @@ async fn upgrade(connection: &DatabaseConnection) -> Result<()> {
             }
         }
         Migrator::up(&transaction, None).await?;
-        let violations = transaction
-            .query_all(Statement::from_string(
-                DbBackend::Sqlite,
-                "PRAGMA foreign_key_check",
-            ))
-            .await?;
         ensure!(
-            violations.is_empty(),
+            sqlite::references_valid(&transaction).await?,
             "database migration contains broken references"
         );
-        transaction
-            .execute_unprepared(&format!("PRAGMA user_version={current_version}"))
-            .await?;
+        sqlite::set_schema_version(&transaction, current_version.try_into()?).await?;
         Ok(())
     }
     .await;

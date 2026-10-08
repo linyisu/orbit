@@ -72,6 +72,10 @@ def check() -> list[str]:
     for source in (ROOT / "crates/orbit-service/src").rglob("*.rs"):
         if re.search(r"\b(?:orbit_tui|crate::tui)::", source.read_text()):
             errors.append(f"{source.relative_to(ROOT)}: application depends on terminal presentation")
+    migrations = ROOT / "crates/orbit-store/src/migrations"
+    for source in [migrations.with_suffix(".rs"), *migrations.rglob("*.rs")]:
+        if re.search(r"\b(?:execute_unprepared|from_sql_and_values|from_string|include_str)\s*[!(]", source.read_text()):
+            errors.append(f"{source.relative_to(ROOT)}: migrations must use Rust schema/query builders; SQLite connection controls belong to database/sqlite.rs")
     return errors
 
 

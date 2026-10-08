@@ -2,8 +2,79 @@ mod support;
 use orbit_store::store::Store;
 use rusqlite::{Connection, params};
 
+#[derive(Debug, PartialEq, Eq)]
+struct Schema {
+    columns: Vec<(String, String, i64, Option<String>, i64)>,
+    references: Vec<(String, String, String, String, String)>,
+    indexes: Vec<(i64, i64, Vec<(String, i64)>)>,
+}
+
+fn schema(db: &Connection) -> std::collections::BTreeMap<String, Schema> {
+    let tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'seaql_migrations' ORDER BY name")
+        .unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+    tables.into_iter().map(|table| {
+        let columns = db.prepare("SELECT name,upper(type),\"notnull\",dflt_value,pk FROM pragma_table_info(?1) ORDER BY cid")
+            .unwrap().query_map([&table], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)))
+            .unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        let mut references = db.prepare("SELECT \"from\",\"table\",\"to\",on_update,on_delete FROM pragma_foreign_key_list(?1)")
+            .unwrap().query_map([&table], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)))
+            .unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        references.sort();
+        let indices = db.prepare("SELECT name,\"unique\",partial FROM pragma_index_list(?1)")
+            .unwrap().query_map([&table], |row| Ok((row.get::<_, String>(0)?,row.get::<_, i64>(1)?,row.get::<_, i64>(2)?)))
+            .unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        let mut indexes = indices.into_iter().map(|(name, unique, partial)| {
+            let columns = db.prepare("SELECT name,desc FROM pragma_index_xinfo(?1) WHERE key=1 ORDER BY seqno")
+                .unwrap().query_map([name], |row| Ok((row.get(0)?,row.get(1)?)))
+                .unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+            (unique, partial, columns)
+        }).collect::<Vec<_>>();
+        indexes.sort();
+        (table, Schema { columns, references, indexes })
+    }).collect()
+}
+
+#[tokio::test]
+async fn rust_schema_retains_domain_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("constraints.db");
+    drop(Store::open(&path).await.unwrap());
+    let current = Connection::open(path).unwrap();
+    let historical = Connection::open_in_memory().unwrap();
+    support::legacy_schema(&historical, 27);
+    for db in [&current, &historical] {
+        db.execute("INSERT INTO projects(id) VALUES('project')", [])
+            .unwrap();
+        db.execute("INSERT INTO sessions(id,workspace,model,demo,project_id) VALUES('session','/workspace','model',0,'project')", []).unwrap();
+        for statement in [
+            "INSERT INTO runs(session_id,prompt,status) VALUES('session','prompt','unknown')",
+            "INSERT INTO project_tasks(project_id,title) VALUES('project','')",
+            "INSERT INTO project_tasks(project_id,title,priority) VALUES('project','task',101)",
+            "INSERT INTO project_tasks(project_id,title,status) VALUES('project','task','unknown')",
+            "INSERT INTO session_memories(session_id,category,title,content) VALUES('session','unknown','title','content')",
+            "INSERT INTO session_memories(session_id,category,title,content,active) VALUES('session','fact','title','content',2)",
+            "INSERT INTO project_plugins(project_id,marketplace_source,plugin_name,package_source) VALUES('project','source','','package')",
+            "INSERT INTO agent_sessions(session_id,role,task) VALUES('session','unknown','task')",
+            "INSERT INTO agent_messages(session_id,content,received) VALUES('session','input',2)",
+        ] {
+            let error = db.execute(statement, []).unwrap_err();
+            assert!(
+                matches!(error, rusqlite::Error::SqliteFailure(code, _) if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK),
+                "{error}"
+            );
+        }
+        let error = db.execute("INSERT INTO session_memories(session_id,category,title,content) VALUES('session','fact','title',?1)", ["x".repeat(8193)]).unwrap_err();
+        assert!(
+            matches!(error, rusqlite::Error::SqliteFailure(code, _) if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK)
+        );
+    }
+}
+
 #[tokio::test]
 async fn every_released_schema_upgrades_without_losing_history_and_reopens_idempotently() {
+    let reference = Connection::open_in_memory().unwrap();
+    support::legacy_schema(&reference, 27);
+    let expected_schema = schema(&reference);
     for version in 0..=27 {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("legacy.db");
@@ -53,6 +124,11 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
             drop(store);
         }
         let db = Connection::open(&path).unwrap();
+        assert_eq!(
+            schema(&db),
+            expected_schema,
+            "schema from version {version}"
+        );
         assert_eq!(
             db.query_row("SELECT count(*) FROM seaql_migrations", [], |r| r
                 .get::<_, i64>(0))

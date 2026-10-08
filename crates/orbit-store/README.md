@@ -6,16 +6,17 @@
 
 ## 源码组织与迁移
 
-- [schema.rs](src/schema.rs)：有序 schema 迁移与支持的最高版本；历史版本号是持久化标识，不能当作普通重复数字消除。
-- [store.rs](src/store.rs)：连接、WAL 读取、会话和项目数据操作；读写连接共用锁等待常量。
+- [migrations.rs](src/migrations.rs)：SeaORM 迁移账本、历史版本接入与事务回滚；[migrations/](src/migrations/) 中每个 Rust `MigrationTrait` 对应一个已发布版本，使用 SeaQuery 定义表、约束、索引与数据变换。已发布迁移名称保持稳定，后续变更追加新版本。
+- [database.rs](src/database.rs)：SeaORM 连接池、只读连接和跨进程写入调度；[database/sqlite.rs](src/database/sqlite.rs) 集中处理 SQLite 特有的版本及外键 PRAGMA。
+- [store.rs](src/store.rs)：会话和项目的存储接口。
 - [store/writer.rs](src/store/writer.rs)：运行开始、journal 创建、消息与子任务结果的事务性终态提交。`SessionWriter` 的公共接口和租约所有权保持不变。
 - [session_log.rs](src/session_log.rs)、[execution.rs](src/execution.rs)：规范消息、检查点和持久化接口；[subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs) 分别存储子代理与旁路对话。
 
-迁移和历史恢复回归在 [tests/sessions.rs](tests/sessions.rs)，包括旧版本升级及拒绝未来 schema。流式 journal 的 250 ms / 256 条提交触发策略由 `orbit-agent` 维护，store 负责执行相应事务。
+迁移回归在 [tests/migrations.rs](tests/migrations.rs)，验证每个已发布版本升级后的数据、列、外键、索引、幂等性及失败回滚。旧 SQL 仅存于 `tests/fixtures/schema`，作为独立的历史数据库样本生成器，不进入生产迁移；仓库不保存数据库二进制模板。历史恢复回归在 [tests/sessions.rs](tests/sessions.rs)。流式 journal 的 250 ms / 256 条提交触发策略由 `orbit-agent` 维护，store 负责执行相应事务。
 
 ## 架构与核心组件
 
-- **非阻塞数据管道**：SQLite 读写通过 `access` / `read_access` 在 `spawn_blocking` 中执行。目录、锁文件与部分侧车文件操作仍有同步路径，不应把这一点理解为所有文件 I/O 都异步。
+- **异步数据管道**：数据读写通过 SeaORM 的异步接口执行；写入前取得跨进程数据库租约。目录、锁文件与部分侧车文件操作仍有同步路径。
 - **并发与持久性模型**：
   - 开启 SQLite WAL（Write-Ahead Logging）模式，实现读写互不阻塞。
   - 强制启用外键约束，保证关联数据的完整性与级联安全。

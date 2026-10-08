@@ -1,4 +1,5 @@
 //! Connection policy and per-database write scheduling, independent of domain repositories.
+pub(crate) mod sqlite;
 use anyhow::{Context, Result};
 use sea_orm::{ConnectOptions, ConnectionTrait, DatabaseConnection};
 use std::{
