@@ -451,7 +451,7 @@ fn composer_details(state: &UiState, width: usize) -> Vec<Line<'static>> {
             state.planning.mode().label().to_owned(),
             accent.add_modifier(Modifier::BOLD),
         ),
-        Span::styled(state.permission_mode.label(), accent),
+        Span::styled(state.permissions.label(), accent),
         Span::raw(safe_output(model)),
     ];
 

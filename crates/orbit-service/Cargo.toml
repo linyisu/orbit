@@ -31,5 +31,6 @@ toml_edit.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 orbit-client.workspace = true
 image.workspace = true

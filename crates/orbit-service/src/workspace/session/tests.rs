@@ -97,7 +97,6 @@ models=[{id="test",supports_vision=true}]
                 data: base64::engine::general_purpose::STANDARD.encode(png.into_inner()),
             }],
             compact: false,
-            mode: Mode::Ask,
             model: None,
         })
         .await

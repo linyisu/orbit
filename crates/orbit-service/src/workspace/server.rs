@@ -450,7 +450,6 @@ impl Service {
                 prompt,
                 images,
                 compact,
-                mode,
                 model,
             } => {
                 let _opening = self.opening.lock().await;
@@ -465,7 +464,6 @@ impl Service {
                         prompt,
                         images,
                         compact,
-                        mode,
                         model,
                     })
                     .await?;
@@ -528,11 +526,9 @@ impl Service {
                 Ok(Response::Ok)
             }
             Request::SetMode { session, mode } => {
-                self.session(&session)
-                    .await?
-                    .command(session::Command::SetMode { mode })
-                    .await?;
-                Ok(Response::Ok)
+                let handle = self.session(&session).await?;
+                handle.command(session::Command::SetMode { mode }).await?;
+                Ok(Response::Profile(Box::new(handle.current_info().await)))
             }
             Request::SetModel {
                 session,

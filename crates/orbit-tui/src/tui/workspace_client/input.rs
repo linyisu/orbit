@@ -1,3 +1,4 @@
+use crate::tui::permissions::ModeExt;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
 use super::*;
@@ -342,7 +343,7 @@ impl Tab {
             && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
         {
             if key.kind == KeyEventKind::Press {
-                self.set_mode(self.state.permission_mode.next());
+                self.set_mode(self.state.permissions.next());
             }
             return Ok(Action::Redraw);
         }
@@ -383,23 +384,14 @@ impl Tab {
         }
     }
 
-    fn set_mode(&mut self, mode: tui::permissions::Mode) {
-        let mode = match mode {
-            tui::permissions::Mode::Ask => Mode::Ask,
-            tui::permissions::Mode::Auto => Mode::Auto,
-            tui::permissions::Mode::Yolo => Mode::Yolo,
-        };
-        if self.send(Request::SetMode {
-            session: self.id.clone().unwrap_or_default(),
-            mode,
-        }) {
-            self.mode = mode;
-            self.state.permission_mode = match mode {
-                Mode::Ask => tui::permissions::Mode::Ask,
-                Mode::Auto => tui::permissions::Mode::Auto,
-                Mode::Yolo => tui::permissions::Mode::Yolo,
-            };
-        }
+    fn set_mode(&mut self, mode: Mode) {
+        self.submit_with_receipt(
+            Request::SetMode {
+                session: self.id.clone().unwrap_or_default(),
+                mode,
+            },
+            submissions::Draft::Permissions(mode),
+        );
     }
 
     fn inspect(&mut self, section: orbit_protocol::Inspection) {
@@ -668,7 +660,7 @@ impl Tab {
             }
             "/permissions" => {
                 self.state
-                    .show_output("审批模式", self.state.permission_mode.description().into());
+                    .show_output("审批模式", self.state.permissions.mode.description().into());
             }
             _ if matches!(name, "/mode" | "/permissions") && !argument.trim().is_empty() => {
                 match tui::permissions::Mode::parse(argument.trim()) {
@@ -724,7 +716,6 @@ impl Tab {
                     session,
                     request_id: workspace::request_id(),
                     prompt: prompt.clone(),
-                    mode: self.mode,
                     model: None,
                 }) {
                     self.starting = Some(prompt);

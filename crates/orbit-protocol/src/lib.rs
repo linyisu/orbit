@@ -10,10 +10,10 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 9;
-// Version 9 adds planning actions and defaulted planning state in pages.
-// Earlier requests retain their wire representation.
-pub const MIN_COMPATIBLE_VERSION: u32 = 7;
+pub const VERSION: u32 = 10;
+// Mode changes now require an explicit request and a versioned confirmation.
+// Older clients can overwrite permissions when starting an ordinary turn.
+pub const MIN_COMPATIBLE_VERSION: u32 = 10;
 
 pub fn supports_version(version: u32) -> bool {
     (MIN_COMPATIBLE_VERSION..=VERSION).contains(&version)
@@ -84,7 +84,6 @@ pub enum Request {
         images: Vec<ImageUpload>,
         #[serde(default)]
         compact: bool,
-        mode: Mode,
         model: Option<String>,
     },
     Ask {
@@ -193,6 +192,8 @@ pub struct SessionInfo {
     pub model_catalog: Vec<ModelSummary>,
     #[serde(default)]
     pub mode: Mode,
+    #[serde(default)]
+    pub mode_revision: u64,
     #[serde(default)]
     pub branch: Option<String>,
     #[serde(default)]
@@ -321,6 +322,7 @@ pub enum Response<E, A> {
         build_generation: u64,
     },
     Opened(SessionInfo),
+    Profile(Box<SessionInfo>),
     Sessions(Vec<Session>),
     Page(Page<E, A>),
     Subagent(Page<E, A>),

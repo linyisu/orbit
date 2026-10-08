@@ -245,8 +245,8 @@ async fn legacy_aliases_share_one_listener_and_block_competing_daemons() {
     let listener = UnixListener::bind(&socket).unwrap();
     let locks = endpoints::lock_legacy(root.path(), &database).unwrap();
     endpoints::publish_aliases(root.path(), &database, &socket).unwrap();
-    for (version, alias) in endpoints::legacy(root.path(), &database).unwrap() {
-        assert!(orbit_protocol::supports_version(version));
+    // Historical addresses still route to the owner; Hello negotiates schema separately.
+    for (_, alias) in endpoints::legacy(root.path(), &database).unwrap() {
         assert_eq!(fs::read_link(&alias).unwrap(), socket);
         let competing = private_file(&alias.with_extension("lock")).unwrap();
         assert!(matches!(
@@ -267,12 +267,12 @@ async fn legacy_aliases_share_one_listener_and_block_competing_daemons() {
 
 #[tokio::test]
 async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions() {
-    for version in [
-        6,
-        7,
-        8,
-        orbit_protocol::VERSION,
-        orbit_protocol::VERSION + 1,
+    for (version, compatible) in [
+        (7, false),
+        (8, false),
+        (9, false),
+        (orbit_protocol::VERSION, true),
+        (orbit_protocol::VERSION + 1, false),
     ] {
         let root = tempfile::tempdir().unwrap();
         let options = crate::WorkspaceOptions {
@@ -321,7 +321,7 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
         .await
         .unwrap();
         let response: Response = protocol::read(&mut client).await.unwrap();
-        if orbit_protocol::supports_version(version) {
+        if compatible {
             assert!(
                 matches!(response, Response::Hello { version: negotiated, .. } if negotiated == version)
             );

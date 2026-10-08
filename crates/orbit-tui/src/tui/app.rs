@@ -101,7 +101,7 @@ pub struct UiState {
     pub approval_max_scroll: usize,
     pub approval_shown: bool,
     pub approval_choice: usize,
-    pub permission_mode: super::permissions::Mode,
+    pub permissions: super::permissions::State,
     pub selection: super::selection::Selection,
     /// Request budget, including output capacity where the provider counts it.
     pub context_tokens: usize,
@@ -414,7 +414,7 @@ impl UiState {
             approval_max_scroll: 0,
             approval_shown: false,
             approval_choice: 0,
-            permission_mode: super::permissions::Mode::default(),
+            permissions: super::permissions::State::default(),
             selection: super::selection::Selection::default(),
             context_tokens: 128_000,
             input_context_tokens: 96_000,

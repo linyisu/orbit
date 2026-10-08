@@ -243,7 +243,13 @@ models = [{{ id = "mock" }}]
             .await;
         assert_eq!(response["type"], "error");
     }
-    let start = json!({"method":"start","session":id,"request_id":"stable-request","prompt":"write a file","mode":"ask","model":null});
+    assert_eq!(
+        client
+            .request(json!({"method":"set_mode","session":id,"mode":"ask"}))
+            .await["type"],
+        "profile"
+    );
+    let start = json!({"method":"start","session":id,"request_id":"stable-request","prompt":"write a file","model":null});
     assert_eq!(client.request(start.clone()).await["type"], "ok");
     let approval = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
@@ -536,7 +542,13 @@ models = [{{ id = "mock" }}]
         .request(json!({"method":"open","resume":null,"model":"test::mock"}))
         .await;
     let id = opened["value"]["id"].as_str().unwrap().to_owned();
-    assert_eq!(client.request(json!({"method":"start","session":id,"request_id":"cancel-me","prompt":"write a file","mode":"ask","model":null})).await["type"], "ok");
+    assert_eq!(
+        client
+            .request(json!({"method":"set_mode","session":id,"mode":"ask"}))
+            .await["type"],
+        "profile"
+    );
+    assert_eq!(client.request(json!({"method":"start","session":id,"request_id":"cancel-me","prompt":"write a file","model":null})).await["type"], "ok");
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let page = client
@@ -761,8 +773,13 @@ models = [{{ id = "mock" }}, {{ id = "other" }}]
         json!({"method":"set_model","session":id,"model":"test::other","effort":null}),
         json!({"method":"configure_models","session":id,"configuration":null}),
     ] {
+        let expected = if request["method"] == "set_mode" {
+            "profile"
+        } else {
+            "ok"
+        };
         let response = client.request(request).await;
-        assert_eq!(response["type"], "ok", "{response}");
+        assert_eq!(response["type"], expected, "{response}");
     }
     let moved = client.request(json!({"method":"session_action","session":id,"action":{"action":"change_directory","path":"'~/next project'"}})).await;
     assert_eq!(moved["type"], "ok", "{moved}");
@@ -826,7 +843,7 @@ models = [{{ id = "mock" }}, {{ id = "other" }}]
     let saved_id = saved["value"]["id"].as_str().unwrap().to_owned();
     let moved = client.request(json!({"method":"session_action","session":saved_id,"action":{"action":"change_directory","path":project}})).await;
     assert_eq!(moved["type"], "ok", "{moved}");
-    let started = client.request(json!({"method":"start","session":saved_id,"request_id":"history-run","prompt":"read proof.txt","mode":"auto","model":null})).await;
+    let started = client.request(json!({"method":"start","session":saved_id,"request_id":"history-run","prompt":"read proof.txt","model":null})).await;
     assert_eq!(started["type"], "ok", "{started}");
     let page = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
@@ -927,6 +944,14 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
         .unwrap();
     assert_eq!(opened.info.model, "test::selected");
     let id = opened.info.id.clone();
+    opened
+        .client
+        .request(Request::SetMode {
+            session: id.clone(),
+            mode: Mode::Yolo,
+        })
+        .await
+        .unwrap();
     assert!(matches!(
         opened
             .client
@@ -936,7 +961,6 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
                 prompt: "execute command".into(),
                 images: vec![],
                 compact: false,
-                mode: Mode::Yolo,
                 model: None
             })
             .await
@@ -1149,7 +1173,9 @@ models = [{ id = "first" }, { id = "chosen" }]
     let profile = client.request(json!({"method":"open","resume":id})).await;
     assert_eq!(profile["value"]["model"], "test::chosen");
     assert_eq!(profile["value"]["models"], json!(["test::first"]));
-    let refused = client.request(json!({"method":"start","session":id,"request_id":"removed","prompt":"hello","mode":"auto"})).await;
+    let refused = client
+        .request(json!({"method":"start","session":id,"request_id":"removed","prompt":"hello"}))
+        .await;
     assert_eq!(refused["type"], "error", "{refused}");
     let selected = client
         .request(json!({"method":"set_model","session":id,"model":"test::first"}))
@@ -1218,7 +1244,7 @@ models = [{{ id = "mock" }}]
             second
                 .request(json!({"method":"set_mode","session":id,"mode":"ask"}))
                 .await["type"],
-            "ok"
+            "profile"
         );
         assert_eq!(first.request(json!({"method":"session_action","session":id,"action":{"action":"rename","title":id}})).await["type"], "report");
         let left = first

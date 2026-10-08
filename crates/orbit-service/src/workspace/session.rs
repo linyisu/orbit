@@ -55,7 +55,6 @@ pub enum Command {
         prompt: String,
         images: Vec<orbit_protocol::ImageUpload>,
         compact: bool,
-        mode: Mode,
         model: Option<String>,
     },
     SetModel {
@@ -379,10 +378,9 @@ fn request_fingerprint(
     prompt: &str,
     images: &[orbit_protocol::ImageUpload],
     compact: bool,
-    mode: Mode,
     model: &Option<String>,
 ) -> String {
-    let bytes = serde_json::to_vec(&(prompt, images, compact, mode, model))
+    let bytes = serde_json::to_vec(&(prompt, images, compact, model))
         .expect("serializable workspace request");
     Sha256::digest(bytes)
         .iter()

@@ -233,21 +233,13 @@ async fn concurrent_tabs_keep_drafts_events_models_and_requests_separate() {
         matches!(wsl_selection.request, Request::SetModel { model, .. } if model == "wsl-model")
     );
     wsl_selection.reply.unwrap().send(Ok(Response::Ok)).unwrap();
-    ssh.submit("/mode ask".into()).unwrap();
-    assert!(matches!(
-        ssh_requests.try_recv().unwrap().request,
-        Request::SetMode {
-            mode: Mode::Ask,
-            ..
-        }
-    ));
     ssh.submit("first target".into()).unwrap();
     wsl.submit("second target".into()).unwrap();
     assert!(
-        matches!(ssh_requests.try_recv().unwrap().request, Request::Start { prompt, mode: Mode::Ask, model: None, .. } if prompt == "first target")
+        matches!(ssh_requests.try_recv().unwrap().request, Request::Start { prompt, model: None, .. } if prompt == "first target")
     );
     assert!(
-        matches!(wsl_requests.try_recv().unwrap().request, Request::Start { prompt, mode: Mode::Auto, model: None, .. } if prompt == "second target")
+        matches!(wsl_requests.try_recv().unwrap().request, Request::Start { prompt, model: None, .. } if prompt == "second target")
     );
     ssh.state.input.set("ssh draft".into());
     wsl.state.input.set("wsl draft".into());
@@ -1214,6 +1206,7 @@ async fn directory_menu_stays_visible_while_refining_and_waiting_for_the_service
     assert!(!tab.state.directory_completion_pending());
 }
 
+mod permissions;
 mod reconnection;
 mod regressions;
 

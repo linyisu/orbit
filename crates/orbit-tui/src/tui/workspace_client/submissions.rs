@@ -8,6 +8,7 @@ pub(super) enum Draft {
     UserInput(String),
     Plan,
     Model(String),
+    Permissions(Mode),
 }
 
 pub(super) struct Submission {
@@ -34,6 +35,7 @@ impl Tab {
             Ok(response) => self.submissions.push(Submission { response, draft }),
             Err(error) => self.rejected(draft, error),
         }
+        self.sync_pending_permissions();
     }
 
     pub(super) fn ask(&mut self, question: String, follow_up: Option<usize>) {
@@ -56,7 +58,7 @@ impl Tab {
     fn rejected(&mut self, draft: Draft, error: anyhow::Error) {
         match draft {
             Draft::Plan => self.state.planning.failed(error.to_string()),
-            Draft::Model(_) => self
+            Draft::Model(_) | Draft::Permissions(_) => self
                 .state
                 .report_local(TranscriptItem::Error(error.to_string())),
             Draft::UserInput(id) => self
@@ -94,7 +96,12 @@ impl Tab {
             let submission = self.submissions.remove(index);
             changed = true;
             match result {
-                Ok(Response::Ok) => {
+                Ok(Response::Profile(info))
+                    if matches!(submission.draft, Draft::Permissions(_)) =>
+                {
+                    self.state.permissions.apply(info.mode, info.mode_revision);
+                }
+                Ok(Response::Ok) if !matches!(submission.draft, Draft::Permissions(_)) => {
                     if matches!(submission.draft, Draft::Plan) {
                         self.state.planning.succeeded();
                     }
@@ -125,7 +132,30 @@ impl Tab {
                 Ok(_) => self.rejected(submission.draft, anyhow::anyhow!("工作区响应类型不匹配")),
             }
         }
+        self.sync_pending_permissions();
         changed
+    }
+
+    pub(super) fn abandon_submissions(&mut self) {
+        let pending = std::mem::take(&mut self.submissions);
+        for submission in pending {
+            self.rejected(
+                submission.draft,
+                anyhow::anyhow!("连接已断开，请重连后确认请求结果"),
+            );
+        }
+        self.sync_pending_permissions();
+    }
+
+    fn sync_pending_permissions(&mut self) {
+        self.state.permissions.pending =
+            self.submissions
+                .iter()
+                .rev()
+                .find_map(|submission| match submission.draft {
+                    Draft::Permissions(mode) => Some(mode),
+                    _ => None,
+                });
     }
 
     pub(super) fn poll_questions(&mut self) -> bool {

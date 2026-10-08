@@ -67,7 +67,6 @@ pub(super) struct Tab {
     starting: Option<String>,
     starting_attachments: Vec<orbit_model::types::Attachment>,
     approval_id: Option<u64>,
-    mode: Mode,
     offline: bool,
     reconnect_at: Option<std::time::Instant>,
     reconnect_attempts: u32,
@@ -226,7 +225,6 @@ impl Tab {
             starting: None,
             starting_attachments: Vec::new(),
             approval_id: None,
-            mode: Mode::Auto,
             offline: false,
             reconnect_at: None,
             reconnect_attempts: 0,
@@ -332,6 +330,7 @@ impl Tab {
     }
 
     fn install(&mut self, opened: Opened) {
+        self.abandon_submissions();
         let draft = self.state.input.text.clone();
         let attachments = std::mem::take(&mut self.state.attachments);
         let attachment_cursor = self.state.attachment_cursor;
@@ -391,11 +390,6 @@ impl Tab {
         self.busy = false;
         self.starting = None;
         self.approval_id = None;
-        self.state.permission_mode = match self.mode {
-            Mode::Auto => super::permissions::Mode::Auto,
-            Mode::Ask => super::permissions::Mode::Ask,
-            Mode::Yolo => super::permissions::Mode::Yolo,
-        };
         self.offline = false;
         self.reconnect_at = None;
         self.reconnect_attempts = 0;
@@ -415,12 +409,7 @@ impl Tab {
         self.state.cursor_motion.enabled = info.cursor_trail;
         self.state.auto_compact = info.auto_compact;
         self.state.skill_completions = info.skills.clone();
-        self.mode = info.mode;
-        self.state.permission_mode = match info.mode {
-            Mode::Ask => super::permissions::Mode::Ask,
-            Mode::Auto => super::permissions::Mode::Auto,
-            Mode::Yolo => super::permissions::Mode::Yolo,
-        };
+        self.state.permissions.apply(info.mode, info.mode_revision);
         if let Some(connection) = &mut self.connection {
             Arc::make_mut(connection).workspace = info.workspace.clone();
         }
@@ -823,6 +812,7 @@ impl Tab {
     }
 
     fn disconnect(&mut self, error: String, retry: bool) {
+        self.abandon_submissions();
         self.restore_submission();
         if let Some(wizard) = &mut self.state.workspace_wizard {
             wizard.failed = true;

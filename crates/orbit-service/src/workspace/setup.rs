@@ -30,6 +30,7 @@ pub struct PreparedWorkspace {
 pub struct WorkspaceResources {
     pub options: WorkspaceOptions,
     pub mode: orbit_protocol::Mode,
+    pub mode_revision: u64,
     pub policy: orbit_protocol::SessionPolicy,
     pub diagnostics: Vec<String>,
     pub web_client: std::sync::Arc<orbit_tools::web_fetch::WebClient>,
@@ -246,6 +247,7 @@ pub(super) async fn prepare_resources(
     }
 
     Ok(WorkspaceResources {
+        mode_revision: 0,
         planning,
         mode: match session.store.tui_mode(session.id()).await?.as_str() {
             "ask" => orbit_protocol::Mode::Ask,

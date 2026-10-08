@@ -9,6 +9,7 @@ pub(super) fn describe(setup: &PreparedWorkspace) -> SessionInfo {
     let budget = &resources.budget;
     SessionInfo {
         mode: resources.mode,
+        mode_revision: resources.mode_revision,
         branch: None,
         home: resources
             .options

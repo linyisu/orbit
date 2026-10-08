@@ -1,5 +1,5 @@
 use super::*;
-use crossterm::event::{KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend};
 fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
     Event::Mouse(MouseEvent {
@@ -164,70 +164,6 @@ fn navigation_wheel_does_not_scroll_transcript() {
     ))
     .unwrap();
     assert_eq!(tab.state.scroll, before);
-}
-
-#[test]
-fn permissions_command_sends_and_displays_each_mode_separately_from_build() {
-    let (mut tab, mut rx) = tab("本地");
-    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    for (label, expected) in [
-        ("ask", Mode::Ask),
-        ("auto", Mode::Auto),
-        ("yolo", Mode::Yolo),
-    ] {
-        tab.submit(format!("/permissions {label}")).unwrap();
-        assert!(matches!(rx.try_recv().unwrap().request,
-            Request::SetMode {mode, ..} if mode == expected));
-        terminal
-            .draw(|f| crate::tui::render::draw(f, &mut tab.state))
-            .unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(screen.contains(&format!("build  {label}")), "{screen}");
-    }
-}
-
-#[test]
-fn shift_tab_cycles_permissions_without_changing_draft_or_work_mode() {
-    for (code, modifiers) in [
-        (KeyCode::BackTab, KeyModifiers::SHIFT),
-        (KeyCode::BackTab, KeyModifiers::NONE),
-        (KeyCode::Tab, KeyModifiers::SHIFT),
-    ] {
-        let (mut tab, mut rx) = tab("本地");
-        tab.state.input.set("未发送草稿".into());
-        let work_mode = tab.state.planning.mode();
-        // The default Auto mode starts the cycle at Yolo. Running requests
-        // use the same mode-change path as an idle composer.
-        for (index, expected) in [Mode::Yolo, Mode::Ask, Mode::Auto].into_iter().enumerate() {
-            tab.busy = index != 0;
-            tab.handle(Event::Key(KeyEvent::new(code, modifiers)))
-                .unwrap();
-            assert!(matches!(rx.try_recv().unwrap().request,
-                Request::SetMode {mode, ..} if mode == expected));
-            assert_eq!(tab.mode, expected);
-            assert_eq!(tab.state.input.text, "未发送草稿");
-            assert_eq!(tab.state.planning.mode(), work_mode);
-        }
-        for kind in [KeyEventKind::Release, KeyEventKind::Repeat] {
-            tab.handle(Event::Key(KeyEvent::new_with_kind(code, modifiers, kind)))
-                .unwrap();
-            assert!(rx.try_recv().is_err());
-            assert_eq!(tab.state.input.text, "未发送草稿");
-        }
-        tab.busy = false;
-        tab.submit("/help".into()).unwrap();
-        assert!(tab.state.dialog_open());
-        tab.handle(Event::Key(KeyEvent::new(code, modifiers)))
-            .unwrap();
-        assert!(rx.try_recv().is_err());
-        assert_eq!(tab.mode, Mode::Auto);
-    }
 }
 
 #[test]

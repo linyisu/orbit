@@ -1,13 +1,42 @@
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Mode {
-    Ask,
-    #[default]
-    Auto,
-    Yolo,
+pub use orbit_protocol::Mode;
+
+/// Confirmed permissions and local intent have different lifetimes.
+#[derive(Debug, Default)]
+pub struct State {
+    pub mode: Mode,
+    pub pending: Option<Mode>,
+    revision: u64,
 }
 
-impl Mode {
-    pub fn parse(text: &str) -> Option<Self> {
+impl State {
+    pub fn apply(&mut self, mode: Mode, revision: u64) {
+        if revision >= self.revision {
+            self.mode = mode;
+            self.revision = revision;
+        }
+    }
+
+    pub fn next(&self) -> Mode {
+        self.pending.unwrap_or(self.mode).next()
+    }
+
+    pub fn label(&self) -> String {
+        match self.pending {
+            Some(mode) => format!("{} → {}…", self.mode.label(), mode.label()),
+            None => self.mode.label().into(),
+        }
+    }
+}
+
+pub trait ModeExt {
+    fn parse(text: &str) -> Option<Mode>;
+    fn next(self) -> Mode;
+    fn label(self) -> &'static str;
+    fn description(self) -> &'static str;
+}
+
+impl ModeExt for Mode {
+    fn parse(text: &str) -> Option<Self> {
         match text.to_ascii_lowercase().as_str() {
             "ask" => Some(Self::Ask),
             "auto" => Some(Self::Auto),
@@ -16,7 +45,7 @@ impl Mode {
         }
     }
 
-    pub fn next(self) -> Self {
+    fn next(self) -> Self {
         match self {
             Self::Ask => Self::Auto,
             Self::Auto => Self::Yolo,
@@ -24,7 +53,7 @@ impl Mode {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
             Self::Ask => "ask",
             Self::Auto => "auto",
@@ -32,7 +61,7 @@ impl Mode {
         }
     }
 
-    pub fn description(self) -> &'static str {
+    fn description(self) -> &'static str {
         match self {
             Self::Ask => "ask：文件修改、命令、MCP 调用和外部权限逐次确认",
             Self::Auto => {

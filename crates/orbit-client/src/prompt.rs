@@ -67,13 +67,18 @@ pub async fn execute(
         }
     }
     client
+        .request(Request::SetMode {
+            session: session.into(),
+            mode: options.mode,
+        })
+        .await?;
+    client
         .request(Request::Start {
             images: options.images,
             compact: false,
             session: session.into(),
             request_id: super::request_id(),
             prompt: options.prompt,
-            mode: options.mode,
             model: options.model,
         })
         .await?;

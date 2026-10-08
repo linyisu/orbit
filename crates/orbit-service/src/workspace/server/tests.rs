@@ -1,3 +1,5 @@
+mod permissions;
+
 use super::*;
 
 #[tokio::test]
@@ -52,7 +54,6 @@ models=[{id="test",supports_vision=true}]
                 data: base64::engine::general_purpose::STANDARD.encode(&bytes),
             }],
             compact: false,
-            mode: orbit_protocol::Mode::Ask,
             model: None,
         })
         .await

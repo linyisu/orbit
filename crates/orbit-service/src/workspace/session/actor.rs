@@ -43,7 +43,6 @@ struct Actor {
     questions: Questions,
     running: Option<Running>,
     undo: Option<Undo>,
-    mode: Mode,
     accepted: HashMap<String, String>,
     remembered: HashSet<String>,
     pending: HashMap<u64, ApprovalRequest>,
@@ -61,7 +60,6 @@ pub(super) async fn run(
     workspace: Arc<std::sync::RwLock<orbit_runtime::filesystem::Workspace>>,
     mut requests: mpsc::Receiver<Envelope>,
 ) {
-    let mode = setup.resources.mode;
     let remembered = match setup
         .session
         .store
@@ -87,7 +85,6 @@ pub(super) async fn run(
         questions,
         running: None,
         undo: None,
-        mode,
         accepted: HashMap::new(),
         remembered,
         pending: HashMap::new(),
@@ -245,7 +242,6 @@ impl Actor {
                         prompt,
                         images: vec![],
                         compact: false,
-                        mode: self.mode,
                         model: None,
                     }))
                     .await?;
@@ -290,8 +286,18 @@ impl Actor {
                     )
                     .await?;
                 self.setup.resources.mode = mode;
-                self.mode = mode;
+                self.setup.resources.mode_revision += 1;
                 self.profile().await;
+                let allowed: Vec<_> = self
+                    .pending
+                    .iter()
+                    .filter(|(_, request)| self.allows(&request.preview))
+                    .map(|(id, _)| *id)
+                    .collect();
+                for id in allowed {
+                    // A cancelled waiter does not invalidate the committed mode change.
+                    let _ = self.resolve_approval(id, true).await;
+                }
             }
             Command::ConfigureModels { configuration } => {
                 ensure!(!self.busy(), "请在当前任务结束后更新模型配置");
@@ -425,20 +431,7 @@ impl Actor {
                     }
                     self.remembered.insert(key);
                 }
-                let request = self.pending.remove(&id).unwrap();
-                {
-                    let mut view = self.view.lock().await;
-                    view.approvals.remove(&id);
-                    if view.approvals.is_empty()
-                        && let Some(clock) = &mut view.clock
-                    {
-                        clock.resume();
-                    }
-                }
-                request
-                    .decision
-                    .send(allow)
-                    .map_err(|_| anyhow::anyhow!("approval is no longer pending"))?;
+                self.resolve_approval(id, allow).await?;
             }
             Command::Undo { path } => {
                 ensure!(
@@ -453,7 +446,6 @@ impl Actor {
                 prompt,
                 images,
                 compact,
-                mode,
                 model,
             } => {
                 let prompt = prompt.trim().to_owned();
@@ -464,7 +456,7 @@ impl Actor {
                         && prompt.len() <= 1024 * 1024,
                     "invalid workspace request"
                 );
-                let identity = request_fingerprint(&prompt, &images, compact, mode, &model);
+                let identity = request_fingerprint(&prompt, &images, compact, &model);
                 if self.busy() {
                     ensure!(
                         self.accepted.get(&request_id) == Some(&identity),
@@ -521,7 +513,6 @@ impl Actor {
                     cancellation,
                     inbox,
                 });
-                self.mode = mode;
                 self.accepted.clear();
                 self.accepted.insert(request_id.clone(), identity);
                 self.profile().await;
@@ -556,7 +547,6 @@ impl Actor {
                     prompt: "/compact".into(),
                     images: Vec::new(),
                     compact: true,
-                    mode: self.mode,
                     model: None,
                 })
                 .await?;
@@ -575,21 +565,37 @@ impl Actor {
         }
     }
 
+    fn allows(&self, preview: &orbit_tools::approval::ApprovalPreview) -> bool {
+        let workspace = Path::new(&self.setup.session.snapshot.session.workspace);
+        let key = approval_key(preview, workspace);
+        self.undo.is_none()
+            && (self.setup.resources.mode == Mode::Yolo
+                || key
+                    .as_ref()
+                    .is_some_and(|key| self.remembered.contains(key))
+                || (self.setup.resources.mode == Mode::Auto
+                    && orbit_tools::approval::auto_allows(preview, workspace)))
+    }
+
+    async fn resolve_approval(&mut self, id: u64, allow: bool) -> Result<()> {
+        let request = self
+            .pending
+            .remove(&id)
+            .ok_or_else(|| anyhow::anyhow!("approval is no longer pending"))?;
+        self.view.lock().await.approvals.remove(&id);
+        self.sync_user_input().await;
+        request
+            .decision
+            .send(allow)
+            .map_err(|_| anyhow::anyhow!("approval is no longer pending"))
+    }
+
     async fn approval(&mut self, request: ApprovalRequest) {
         if !self.busy() {
             let _ = request.decision.send(false);
             return;
         }
-        let workspace = Path::new(&self.setup.session.snapshot.session.workspace);
-        let key = approval_key(&request.preview, workspace);
-        let allowed = self.undo.is_none()
-            && (self.mode == Mode::Yolo
-                || key
-                    .as_ref()
-                    .is_some_and(|key| self.remembered.contains(key))
-                || (self.mode == Mode::Auto
-                    && orbit_tools::approval::auto_allows(&request.preview, workspace)));
-        if allowed {
+        if self.allows(&request.preview) {
             let _ = request.decision.send(true);
             return;
         }
