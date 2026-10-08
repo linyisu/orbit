@@ -390,6 +390,77 @@ impl Context<'_> {
             .remove(0)
     }
 
+    /// Keep unpaired masking runs inside words literal. Paired emphasis and
+    /// parser-owned literals/destinations must retain their Markdown meaning.
+    fn literal_word_asterisks<'s>(&self, source: &'s str) -> std::borrow::Cow<'s, str> {
+        use std::borrow::Cow;
+        if !source.contains("***") {
+            return Cow::Borrowed(source);
+        }
+        let mut protected = Vec::new();
+        let mut opening = Vec::new();
+        let mut closing = Vec::new();
+        for (event, range) in self.parse(source, Options::ENABLE_MATH).into_offset_iter() {
+            let delimiter = match event {
+                Event::Start(Tag::Strong) => 2,
+                Event::Start(Tag::Emphasis) => 1,
+                _ => 0,
+            };
+            if delimiter > 0 {
+                opening.push(range.start..range.start + delimiter);
+                closing.push(range.end - delimiter..range.end);
+            }
+            if matches!(
+                event,
+                Event::Code(_)
+                    | Event::InlineMath(_)
+                    | Event::DisplayMath(_)
+                    | Event::Html(_)
+                    | Event::InlineHtml(_)
+                    | Event::Start(Tag::Link { .. } | Tag::Image { .. })
+            ) {
+                protected.push(range);
+            }
+        }
+        let bytes = source.as_bytes();
+        let mut output = String::new();
+        let mut copied = 0;
+        let mut cursor = 0;
+        while cursor < bytes.len() {
+            if bytes[cursor] != b'*' {
+                cursor += 1;
+                continue;
+            }
+            let start = cursor;
+            while cursor < bytes.len() && bytes[cursor] == b'*' {
+                cursor += 1;
+            }
+            if cursor - start < 3
+                || start == 0
+                || !bytes[start - 1].is_ascii_alphanumeric()
+                || !bytes.get(cursor).is_some_and(u8::is_ascii_alphanumeric)
+                || protected.iter().any(|range| range.start < cursor && start < range.end)
+                // A masking run splits into closing bold + opening italic (or
+                // vice versa). Runs opening/closing valid nested emphasis stay intact.
+                || !opening.iter().any(|range| range.start < cursor && start < range.end)
+                || !closing.iter().any(|range| range.start < cursor && start < range.end)
+            {
+                continue;
+            }
+            output.push_str(&source[copied..start]);
+            for _ in start..cursor {
+                output.push_str(r"\*");
+            }
+            copied = cursor;
+        }
+        if copied == 0 {
+            Cow::Borrowed(source)
+        } else {
+            output.push_str(&source[copied..]);
+            Cow::Owned(output)
+        }
+    }
+
     /// Render one source line into physical lines using shared semantics and link metadata.
     pub fn linked_lines(
         &self,
@@ -424,15 +495,16 @@ impl Context<'_> {
         let trimmed = source.trim_start();
         let indent = source.len() - trimmed.len();
         state.footnotes = self.footnotes.numbers.clone();
+        let trimmed = self.literal_word_asterisks(trimmed);
         inline::render(
             self.parse(
-                trimmed,
+                &trimmed,
                 Options::ENABLE_STRIKETHROUGH
                     | Options::ENABLE_TASKLISTS
                     | Options::ENABLE_MATH
                     | Options::ENABLE_OLD_FOOTNOTES,
             ),
-            trimmed,
+            &trimmed,
             format!("  {}", &source[..indent]),
             state,
         )

@@ -671,3 +671,47 @@ fn document_fragment_links_are_plain_text_in_markdown_html_and_tables() {
         );
     }
 }
+
+#[test]
+fn unpaired_word_asterisks_preserve_text_and_surrounding_emphasis() {
+    for source in ["**Label (a***b)**：说明", "**Label (a***b c***d)**：说明"] {
+        let rendered = document(source, 100);
+        assert_eq!(
+            rendered[0].line.to_string().trim(),
+            source.trim_start_matches("**").replace("**：", "：")
+        );
+        for span in &rendered[0].line.spans {
+            if span.content.contains("Label") || span.content.contains("b)") {
+                assert!(span.style.add_modifier.contains(Modifier::BOLD));
+            }
+            assert!(!span.style.add_modifier.contains(Modifier::ITALIC));
+        }
+    }
+    let paired = render("a***bold italic***b");
+    assert_eq!(paired.to_string().trim(), "abold italicb");
+    assert!(paired.spans.iter().any(|span| {
+        span.content == "bold italic"
+            && span
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::ITALIC)
+    }));
+    let nested = render("a***bold** italic*b");
+    assert_eq!(nested.to_string().trim(), "abold italicb");
+    assert!(nested.spans.iter().any(|span| {
+        span.content == "bold"
+            && span
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::ITALIC)
+    }));
+    for (source, expected) in [
+        ("`a***b`", "a***b"),
+        (r"a\*\*\*b", "a***b"),
+        ("$a***b$", "$a***b$"),
+    ] {
+        assert_eq!(render(source).to_string().trim(), expected);
+    }
+    let linked = document("[link](https://example.test/a***b)", 100);
+    assert_eq!(linked[0].links[0].url, "https://example.test/a***b");
+}
