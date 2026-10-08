@@ -2,8 +2,18 @@ use anyhow::{Context, Result, ensure};
 use orbit_protocol::plugins::{Action, Catalog, Inspection};
 
 pub(super) async fn execute(handle: &super::session::Handle, action: Action) -> Result<Catalog> {
-    let session = handle.store.session(&handle.info.id).await?;
-    let project = &session.project_id;
+    let info = handle.current_info().await;
+    let project_id = if matches!(&action, Action::Enable { .. }) {
+        handle.store.resolve_project(&info.workspace).await?.id
+    } else {
+        handle
+            .store
+            .project_at(&info.workspace)
+            .await?
+            .map(|project| project.id)
+            .unwrap_or_default()
+    };
+    let project = &project_id;
     match action {
         Action::List => {}
         Action::Add { source } => {

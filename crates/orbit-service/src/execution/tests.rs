@@ -13,6 +13,11 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
         ChatMessage::user("original work"),
         ChatMessage::assistant("original answer"),
     ];
+    session
+        .begin("original work".into(), "mock".into())
+        .await
+        .unwrap();
+    session.finish("cancelled", None).await.unwrap();
     let id = session
         .store
         .archive_context(session.id(), &original)

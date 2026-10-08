@@ -22,6 +22,7 @@ struct Inner {
     changed: Notify,
     waiting: AtomicBool,
     enabled: AtomicBool,
+    persistent: AtomicBool,
     file_tracking: AtomicBool,
     workspace: orbit_runtime::filesystem::Workspace,
 }
@@ -43,6 +44,7 @@ impl Planning {
             changed: Notify::new(),
             waiting: AtomicBool::new(false),
             enabled: AtomicBool::new(false),
+            persistent: AtomicBool::new(true),
             file_tracking: AtomicBool::new(true),
             workspace,
         })))
@@ -78,7 +80,34 @@ impl Planning {
     pub async fn snapshot(&self) -> State {
         self.0.state.lock().await.clone()
     }
+    pub(crate) fn defer_persistence(&self) {
+        self.0.persistent.store(false, Ordering::Release);
+    }
+
+    pub(crate) async fn persist(&self) -> Result<()> {
+        let mut state = self.0.state.lock().await;
+        if !self.0.persistent.load(Ordering::Acquire) {
+            if state.mode != WorkMode::Build || state.plan.is_some() {
+                let mut next = state.clone();
+                next.generation = 1;
+                *state = self
+                    .0
+                    .store
+                    .save_planning(&self.0.session, 0, &next)
+                    .await?;
+            }
+            self.0.persistent.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
     async fn save(&self, current: &mut State, mut next: State) -> Result<()> {
+        if !self.0.persistent.load(Ordering::Acquire) {
+            *current = next;
+            self.0.gate.context(context(current));
+            self.0.changed.notify_waiters();
+            return Ok(());
+        }
         next.generation = current.generation + 1;
         *current = self
             .0

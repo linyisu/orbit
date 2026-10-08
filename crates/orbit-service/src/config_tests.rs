@@ -126,25 +126,13 @@ async fn fresh_launch_uses_its_directory_instead_of_the_previous_session() {
     let previous = prepare_workspace(&options, &first, None).await.unwrap();
     let fresh = prepare_workspace(&options, &second, None).await.unwrap();
     assert_ne!(previous.session.id(), fresh.session.id());
-    assert_ne!(
-        previous.session.snapshot.session.project_id,
-        fresh.session.snapshot.session.project_id,
-    );
+    assert!(fresh.session.store.projects().await.unwrap().is_empty());
     assert_eq!(fresh.resources.workspace.root(), second);
     assert_eq!(
         fresh.session.snapshot.session.workspace,
         second.to_str().unwrap()
     );
-    assert_eq!(
-        fresh
-            .session
-            .store
-            .session(fresh.session.id())
-            .await
-            .unwrap()
-            .workspace,
-        second.to_str().unwrap(),
-    );
+    assert!(fresh.session.store.list().await.unwrap().is_empty());
     let output = fresh
         .resources
         .tools

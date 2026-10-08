@@ -689,6 +689,7 @@ fn side_question_receipts_open_the_existing_modal_and_keep_main_draft() {
 
 pub(in crate::tui) fn connected_tab(target: workspace::transport::Target) -> Tab {
     let (mut tab, _) = tab(&target.label());
+    tab.persisted = true;
     tab.connection = Some(Arc::new(Connection {
         target,
         workspace: "/project".into(),

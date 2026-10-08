@@ -8,6 +8,7 @@ pub(super) fn describe(setup: &PreparedWorkspace) -> SessionInfo {
     let resources = &setup.resources;
     let budget = &resources.budget;
     SessionInfo {
+        persisted: setup.session.is_persisted(),
         mode: resources.mode,
         mode_revision: resources.mode_revision,
         branch: None,

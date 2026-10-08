@@ -182,6 +182,9 @@ pub enum Mode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
+    /// False until the in-memory draft has gained durable content.
+    #[serde(default)]
+    pub persisted: bool,
     pub title: String,
     pub workspace: String,
     #[serde(default)]

@@ -72,16 +72,45 @@ impl Store {
         model: String,
         demo: bool,
     ) -> Result<SessionWriter> {
-        let project = self.resolve_project(&workspace).await?;
-        let id = crate::database::new_id()?;
-        let session_id = id.clone();
+        let session = self.draft(workspace, model, demo).await?;
+        self.persist_draft(&session, &[]).await
+    }
+
+    /// Allocate a stable identity without inserting a conversation or acquiring a writer.
+    pub async fn draft(&self, workspace: String, model: String, demo: bool) -> Result<Session> {
+        let project = self.project_at(&workspace).await?;
+        Ok(Session {
+            id: crate::database::new_id()?,
+            workspace,
+            model,
+            demo,
+            project_id: project.map(|p| p.id).unwrap_or_default(),
+            title: String::new(),
+            reasoning_effort: None,
+            updated_at: crate::database::now(),
+        })
+    }
+
+    /// Commit a draft's identity and selected profile when it first gains content.
+    pub async fn persist_draft(
+        &self,
+        session: &Session,
+        history: &[orbit_model::types::ChatMessage],
+    ) -> Result<SessionWriter> {
+        let history = serde_json::to_string(history)?;
+        let mut session = session.clone();
+        session.project_id = self.resolve_project(&session.workspace).await?.id;
+        let id = session.id.clone();
         self.write_access(move |conn| async move {
             sessions::ActiveModel {
-                id: Set(session_id),
-                workspace: Set(workspace),
-                model: Set(model),
-                demo: Set(demo),
-                project_id: Set(Some(project.id)),
+                id: Set(session.id),
+                workspace: Set(session.workspace),
+                model: Set(session.model),
+                demo: Set(session.demo),
+                project_id: Set(Some(session.project_id)),
+                title: Set(session.title),
+                reasoning_effort: Set(session.reasoning_effort),
+                history: Set(history),
                 ..Default::default()
             }
             .insert(&conn)

@@ -12,6 +12,11 @@ async fn generated_title_follows_its_session_and_manual_rename_wins() {
     )
     .await
     .unwrap();
+    current
+        .begin("first question".into(), "model".into())
+        .await
+        .unwrap();
+    current.finish("cancelled", None).await.unwrap();
     let original_id = current.id().to_owned();
     current.title_task = Some(crate::session::title::TitleTask::ready("解析器修复").await);
     let next = current.prepare_new("model".into()).await.unwrap();
@@ -29,6 +34,12 @@ async fn generated_title_follows_its_session_and_manual_rename_wins() {
     current.title_task = Some(crate::session::title::TitleTask::ready("自动生成标题").await);
     current.rename("手动标题".into()).await.unwrap();
     assert!(!current.poll_title().await.unwrap());
+    assert!(current.store.session(current.id()).await.is_err());
+    current
+        .begin("next question".into(), "model".into())
+        .await
+        .unwrap();
+    current.finish("cancelled", None).await.unwrap();
     assert_eq!(
         current.store.session(current.id()).await.unwrap().title,
         "手动标题"
@@ -41,8 +52,18 @@ async fn prepared_resume_is_atomic_and_releases_lease_when_cancelled() {
     let mut current = SessionState::open(tmp.path().join("sessions.db"), None, "model".into())
         .await
         .unwrap();
+    current
+        .begin("question".into(), "model".into())
+        .await
+        .unwrap();
+    current.finish("cancelled", None).await.unwrap();
     let target = current.id().to_owned();
     current.new_session("model".into()).await.unwrap();
+    current
+        .begin("another question".into(), "model".into())
+        .await
+        .unwrap();
+    current.finish("cancelled", None).await.unwrap();
     let original = current.id().to_owned();
     let lease = current.store.acquire(&target).await.unwrap();
     let result = tokio::time::timeout(
@@ -167,6 +188,11 @@ async fn resumed_session_keeps_its_selected_model_profile() {
         .set_model_profile("deepseek::flash".into(), Some(ReasoningEffort::High))
         .await
         .unwrap();
+    state
+        .begin("question".into(), "deepseek::flash".into())
+        .await
+        .unwrap();
+    state.finish("cancelled", None).await.unwrap();
     drop(state);
 
     let restored = SessionState::open(database, Some(id), "qwen::default".into())
@@ -190,7 +216,17 @@ async fn renamed_session_keeps_its_identity_and_title_after_resume() {
     state.rename("解析器重构".into()).await.unwrap();
 
     assert_eq!(state.snapshot.session.title, "解析器重构");
-
+    assert!(state.store.session(&id).await.is_err());
+    state
+        .append_context(ChatMessage::system("draft context"))
+        .await
+        .unwrap();
+    assert!(state.store.session(&id).await.is_err());
+    state
+        .begin("start conversation".into(), "model".into())
+        .await
+        .unwrap();
+    state.finish("cancelled", None).await.unwrap();
     drop(state);
 
     let restored = SessionState::open(database, Some(id.clone()), "model".into())
@@ -199,6 +235,10 @@ async fn renamed_session_keeps_its_identity_and_title_after_resume() {
 
     assert_eq!(restored.id(), id);
     assert_eq!(restored.snapshot.session.title, "解析器重构");
+    assert_eq!(
+        restored.snapshot.history,
+        vec![ChatMessage::system("draft context")]
+    );
 }
 
 #[tokio::test]
@@ -287,8 +327,8 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     assert_eq!(*command_output.read().unwrap(), first_command_output);
     assert_eq!(state.snapshot.history, history);
     assert_eq!(state.snapshot.runs.len(), 1);
-    assert!(state.store.load(&second).await.is_ok());
-    assert!(state.store.acquire(&second).await.is_ok());
+    assert!(state.store.load(&second).await.is_err());
+    assert!(state.store.acquire(&second).await.is_err());
 
     drop(state);
     let reopened = SessionState::open(tmp.path().join("sessions.db"), Some(first), "model".into())
@@ -425,7 +465,7 @@ async fn test_session_switch_and_resume_clears_session_grants() {
 
     let prepared = SessionState::prepare_resume(
         session.store.clone(),
-        session.snapshot.session.project_id.clone(),
+        session.store.session(&second_id).await.unwrap().project_id,
         second_id,
     )
     .await

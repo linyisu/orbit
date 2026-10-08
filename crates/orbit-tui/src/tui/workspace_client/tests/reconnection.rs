@@ -82,3 +82,24 @@ async fn escape_cancels_a_scheduled_retry_and_manual_reconnect_still_works() {
     assert!(tab.connecting.is_some());
     assert!(tab.state.workspace_wizard.is_none());
 }
+
+#[test]
+fn disconnected_draft_is_discarded_but_an_unconfirmed_first_message_keeps_its_identity() {
+    let mut draft = connected_tab(Target::Local);
+    draft.persisted = false;
+    draft.disconnected("connection closed".into());
+    assert!(draft.id.is_none());
+    assert!(draft.reconnect_at.is_none());
+
+    let (mut configuring, _requests) = tab("本地");
+    configuring.submit("/permissions yolo".into()).unwrap();
+    configuring.disconnected("configuration acknowledgement lost".into());
+    assert!(configuring.id.is_none());
+
+    let mut sending = connected_tab(Target::Local);
+    sending.persisted = false;
+    sending.starting = Some("first message".into());
+    sending.disconnected("acknowledgement lost".into());
+    assert_eq!(sending.id.as_deref(), Some("same-session"));
+    assert!(sending.reconnect_at.is_some());
+}

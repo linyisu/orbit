@@ -1,8 +1,128 @@
 #[cfg(test)]
 use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
+mod drafts;
 mod permissions;
+use orbit_protocol::{Mode, SessionInfo};
 
 use super::*;
+
+struct Fixture {
+    _root: tempfile::TempDir,
+    service: Service,
+    handle: Arc<Handle>,
+    external: std::path::PathBuf,
+}
+
+impl Fixture {
+    async fn new(url: &str) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let external = root.path().join("external");
+        fs::create_dir(&workspace).unwrap();
+        fs::create_dir(&external).unwrap();
+        let config = root.path().join("config.toml");
+        fs::write(
+            &config,
+            &TestConfig::new()
+                .provider(
+                    TestProvider::new("test")
+                        .endpoint(url)
+                        .key("test-only")
+                        .models([TestModel::new("test")]),
+                )
+                .providers_toml()
+                .unwrap(),
+        )
+        .unwrap();
+        let options = crate::WorkspaceOptions {
+            model: Some("test::test".into()),
+            initial_directory: workspace.clone(),
+            auth_directory: root.path().join("auth"),
+            config,
+            database: root.path().join("sessions.db"),
+            allow_mcp_start: false,
+            home: Some(root.path().into()),
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        let setup = crate::workspace::setup::prepare_workspace(&options, &workspace, None)
+            .await
+            .unwrap();
+        // An existing external capability allows the tool to reach its separate write approval.
+        setup
+            .resources
+            .workspace
+            .policy()
+            .record_grant(orbit_runtime::policy::FilesystemGrant {
+                environment: orbit_runtime::capability::EnvironmentId::Local,
+                path: orbit_runtime::filesystem::ResolvedPath::resolve(&external, None).unwrap(),
+                read: true,
+                write: true,
+            });
+        let handle = Arc::new(Handle::spawn(setup, None));
+        let service = Service {
+            options,
+            sessions: Mutex::new([(handle.info.id.clone(), handle.clone())].into()),
+            opening: Mutex::new(()),
+            last_activity: Mutex::new(tokio::time::Instant::now()),
+            stop: tokio_util::sync::CancellationToken::new(),
+            closing: AtomicBool::new(false),
+        };
+        Self {
+            _root: root,
+            service,
+            handle,
+            external,
+        }
+    }
+
+    async fn request(&self, request: Request) -> Result<Response> {
+        self.service.dispatch(request, &self.service.options).await
+    }
+
+    async fn mode(&self, mode: Mode) -> SessionInfo {
+        let Response::Profile(info) = self
+            .request(Request::SetMode {
+                session: self.handle.info.id.clone(),
+                mode,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("missing mode confirmation")
+        };
+        *info
+    }
+
+    async fn page(&self, after: usize) -> protocol::Page {
+        let Response::Page(page) = self
+            .request(Request::Poll {
+                session: self.handle.info.id.clone(),
+                after,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("missing session page")
+        };
+        page
+    }
+
+    async fn wait(&self, predicate: impl Fn(&protocol::Page) -> bool) -> protocol::Page {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let page = self.page(0).await;
+                if predicate(&page) {
+                    return page;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("session failed to reach expected state")
+    }
+}
 
 #[tokio::test]
 async fn sent_images_are_readable_only_through_the_owning_session() {

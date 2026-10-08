@@ -154,7 +154,7 @@ fn saved_tabs(tabs: &Tabs) -> Vec<workspace::windows::SavedTab> {
         .iter()
         .filter_map(|entry| {
             let tab = tabs.remote.get(&entry.id)?;
-            if tab.state.is_home() && !tab.state.btw.has_records() {
+            if !tab.persisted || (tab.state.is_home() && !tab.state.btw.has_records()) {
                 return None;
             }
             workspace::windows::SavedTab::from_connection(

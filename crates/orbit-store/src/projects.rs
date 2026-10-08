@@ -64,6 +64,88 @@ async fn update_directory<C: ConnectionTrait>(
         .await?;
     record_path(conn, id, path).await
 }
+fn can_complete_identity(row: &projects::Model, directory: &Directory) -> bool {
+    directory.strong
+        && !row.strong
+        && row.path.as_deref() == Some(&directory.path)
+        && row
+            .identity
+            .as_deref()
+            .and_then(|s| s.strip_suffix(":unknown"))
+            .is_some_and(|previous| {
+                directory
+                    .identity
+                    .as_deref()
+                    .and_then(|s| s.rsplit_once(':'))
+                    .map(|(object, _)| object)
+                    == Some(previous)
+            })
+}
+
+async fn find_project(
+    conn: &impl ConnectionTrait,
+    directory: &Directory,
+) -> Result<Option<String>> {
+    let mut matches = Vec::new();
+    let known = projects::Entity::find()
+        .filter(projects::Column::Path.eq(&directory.path))
+        .one(conn)
+        .await?;
+    if directory.strong {
+        let same_path: std::collections::HashSet<String> = project_paths::Entity::find()
+            .filter(project_paths::Column::Path.eq(&directory.path))
+            .all(conn)
+            .await?
+            .into_iter()
+            .map(|r| r.project_id)
+            .collect();
+        let rows = projects::Entity::find()
+            .filter(
+                Condition::any()
+                    .add(projects::Column::Identity.eq(directory.identity.clone()))
+                    .add(projects::Column::Path.eq(&directory.path))
+                    .add(projects::Column::Id.is_in(same_path.iter().cloned())),
+            )
+            .all(conn)
+            .await?;
+        for mut row in rows {
+            // Read-only lookup uses the completed identity without changing stored rows.
+            if can_complete_identity(&row, directory) {
+                row.identity = directory.identity.clone();
+                row.strong = true;
+            }
+            let Some(identity) = row.identity else {
+                continue;
+            };
+            let exact = directory.identity.as_deref() == Some(identity.as_str());
+            if row.strong
+                && (exact
+                    || (same_path.contains(&row.id)
+                        && same_directory_identity(
+                            &identity,
+                            directory.identity.as_deref().unwrap_or_default(),
+                        )))
+            {
+                let count = sessions::Entity::find()
+                    .filter(sessions::Column::ProjectId.eq(&row.id))
+                    .count(conn)
+                    .await?;
+                matches.push((row.id, count, exact));
+            }
+        }
+    }
+    matches.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    Ok(matches.into_iter().next().map(|(id, _, _)| id).or_else(|| {
+        known
+            .filter(|row| row.legacy || row.identity == directory.identity)
+            .map(|row| row.id)
+    }))
+}
+
 impl Store {
     pub async fn projects(&self) -> Result<Vec<Project>> {
         self.read_access(|conn| async move {
@@ -82,94 +164,40 @@ impl Store {
         .await
     }
 
+    /// Resolve existing project identity without registering paths or creating rows.
+    pub async fn project_at(&self, path: impl AsRef<Path>) -> Result<Option<Project>> {
+        let directory = Directory::read(path.as_ref())?;
+        self.read_access(move |conn| async move {
+            let tx = conn.begin().await?;
+            Ok(find_project(&tx, &directory).await?.map(|id| Project {
+                id,
+                path: Some(directory.path),
+            }))
+        })
+        .await
+    }
+
     pub async fn resolve_project(&self, path: impl AsRef<Path>) -> Result<Project> {
         let directory = Directory::read(path.as_ref())?;
 
         self.write_access(move |conn| async move {
             let tx = conn.begin().await?;
-            let mut matches = Vec::new();
-            if directory.strong {
-                let known = projects::Entity::find()
-                    .filter(projects::Column::Path.eq(&directory.path))
-                    .filter(projects::Column::Strong.eq(false))
-                    .filter(projects::Column::Identity.is_not_null())
-                    .one(&tx)
-                    .await?;
-                if let Some(row) = known
-                    && let Some(previous) = row
-                        .identity
-                        .as_deref()
-                        .and_then(|s| s.strip_suffix(":unknown"))
-                    && directory
-                        .identity
-                        .as_deref()
-                        .and_then(|value| value.rsplit_once(':'))
-                        .map(|(object, _)| object)
-                        == Some(previous)
-                {
-                    projects::Entity::update_many()
-                        .col_expr(
-                            projects::Column::Identity,
-                            Expr::value(directory.identity.clone()),
-                        )
-                        .col_expr(projects::Column::Strong, Expr::value(true))
-                        .filter(projects::Column::Id.eq(row.id))
-                        .exec(&tx)
-                        .await?;
-                }
-                let same_path: std::collections::HashSet<String> = project_paths::Entity::find()
-                    .filter(project_paths::Column::Path.eq(&directory.path))
-                    .all(&tx)
-                    .await?
-                    .into_iter()
-                    .map(|r| r.project_id)
-                    .collect();
-                let rows = projects::Entity::find()
-                    .filter(
-                        Condition::any()
-                            .add(projects::Column::Identity.eq(directory.identity.clone()))
-                            .add(projects::Column::Id.is_in(same_path.iter().cloned())),
-                    )
-                    .all(&tx)
-                    .await?;
-                for row in rows {
-                    let Some(identity) = row.identity else {
-                        continue;
-                    };
-                    let exact = directory.identity.as_deref() == Some(identity.as_str());
-                    if row.strong
-                        && (exact
-                            || (same_path.contains(&row.id)
-                                && same_directory_identity(
-                                    &identity,
-                                    directory.identity.as_deref().unwrap_or_default(),
-                                )))
-                    {
-                        let count = sessions::Entity::find()
-                            .filter(sessions::Column::ProjectId.eq(&row.id))
-                            .count(&tx)
-                            .await?;
-                        matches.push((row.id, count, exact));
-                    }
-                }
-            }
-            matches.sort_by(|a, b| {
-                b.1.cmp(&a.1)
-                    .then_with(|| b.2.cmp(&a.2))
-                    .then_with(|| a.0.cmp(&b.0))
-            });
-            let known = projects::Entity::find()
+            // On a real write, preserve equivalence with an older partial-identity row
+            // even when another project holds the established conversation history.
+            if let Some(row) = projects::Entity::find()
                 .filter(projects::Column::Path.eq(&directory.path))
                 .one(&tx)
-                .await?;
-            let id = if let Some((id, _, _)) = matches.into_iter().next() {
-                id
-            } else if let Some(row) = known
-                && (row.legacy || row.identity == directory.identity)
+                .await?
+                && can_complete_identity(&row, &directory)
             {
-                row.id
-            } else {
-                new_project(&tx).await?
+                let mut row = row.into_active_model();
+                row.identity = Set(directory.identity.clone());
+                row.strong = Set(true);
+                row.update(&tx).await?;
+            }
+            let id = match find_project(&tx, &directory).await? {
+                Some(id) => id,
+                None => new_project(&tx).await?,
             };
             // Reusing a path never merges its previous conversation history.
             projects::Entity::update_many()

@@ -16,6 +16,7 @@ pub struct Handle {
     pub(super) questions: super::questions::Questions,
     _configuration: Option<super::configuration::Installed>,
     pub info: SessionInfo,
+    pub(super) clients: std::sync::atomic::AtomicUsize,
     pub policy: orbit_protocol::SessionPolicy,
     pub view: Arc<Mutex<View>>,
     requests: mpsc::Sender<Envelope>,
@@ -24,6 +25,10 @@ pub struct Handle {
 }
 
 pub enum Command {
+    Persist,
+    DiscardDraft {
+        result: oneshot::Sender<bool>,
+    },
     Plan {
         action: orbit_protocol::plan::Action,
     },
@@ -308,6 +313,7 @@ impl Handle {
             questions,
             _configuration: configuration,
             info,
+            clients: std::sync::atomic::AtomicUsize::new(0),
             policy,
             view,
             requests,

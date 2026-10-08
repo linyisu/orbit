@@ -288,19 +288,50 @@ impl Service {
             },
         )
         .await?;
-        loop {
-            let request = protocol::read::<Request>(&mut reader).await?;
-            *self.last_activity.lock().await = tokio::time::Instant::now();
-            let shutdown = matches!(request, Request::Shutdown);
-            let response = match self.dispatch(request, &options).await {
-                Ok(response) => response,
-                Err(error) => Response::Error(format!("{error:#}")),
+        let mut opened = Vec::new();
+        let result = async {
+            loop {
+                let request = protocol::read::<Request>(&mut reader).await?;
+                *self.last_activity.lock().await = tokio::time::Instant::now();
+                let shutdown = matches!(request, Request::Shutdown);
+                let response = match self.dispatch(request, &options).await {
+                    Ok(response) => response,
+                    Err(error) => Response::Error(format!("{error:#}")),
+                };
+                if let Response::Opened(info) = &response {
+                    opened.push(info.id.clone());
+                }
+                let stop = shutdown && matches!(response, Response::Ok);
+                protocol::write(&mut writer, &response).await?;
+                if stop {
+                    self.stop.cancel();
+                    return Ok(());
+                }
+            }
+        }
+        .await;
+        self.release_client(opened).await;
+        result
+    }
+
+    async fn release_client(&self, opened: Vec<String>) {
+        let _opening = self.opening.lock().await;
+        let mut sessions = self.sessions.lock().await;
+        for id in opened {
+            let Some(handle) = sessions.get(&id) else {
+                continue;
             };
-            let stop = shutdown && matches!(response, Response::Ok);
-            protocol::write(&mut writer, &response).await?;
-            if stop {
-                self.stop.cancel();
-                return Ok(());
+            if handle.clients.fetch_sub(1, Ordering::AcqRel) != 1 {
+                continue;
+            }
+            let (result, discarded) = tokio::sync::oneshot::channel();
+            if handle
+                .command(session::Command::DiscardDraft { result })
+                .await
+                .is_ok()
+                && discarded.await.unwrap_or(false)
+            {
+                sessions.remove(&id);
             }
         }
     }
@@ -360,6 +391,7 @@ impl Service {
                         handle.policy == policy,
                         "open session has a different capability policy"
                     );
+                    handle.clients.fetch_add(1, Ordering::AcqRel);
                     return Ok(Response::Opened(handle.current_info().await));
                 }
                 ensure!(
@@ -382,6 +414,7 @@ impl Service {
                     super::setup::prepare_service_with_policy(&options, resume, policy).await?;
                 let handle = Arc::new(Handle::spawn(setup, configuration));
                 let info = handle.info.clone();
+                handle.clients.fetch_add(1, Ordering::AcqRel);
                 self.sessions.lock().await.insert(info.id.clone(), handle);
                 Ok(Response::Opened(info))
             }
@@ -415,11 +448,11 @@ impl Service {
             }
             Request::ListSessions { session } => {
                 let handle = self.session(&session).await?;
-                let session = handle.store.session(&handle.info.id).await?;
-                let projects = handle
-                    .store
-                    .equivalent_project_ids(&session.project_id)
-                    .await?;
+                let info = handle.current_info().await;
+                let Some(project) = handle.store.project_at(&info.workspace).await? else {
+                    return Ok(Response::Sessions(Vec::new()));
+                };
+                let projects = handle.store.equivalent_project_ids(&project.id).await?;
                 let sessions = handle
                     .store
                     .list_resumable()
@@ -432,9 +465,12 @@ impl Service {
             Request::Sessions => {
                 let store =
                     orbit_store::store::Store::open(connection_options.database.clone()).await?;
-                let project = store
-                    .resolve_project(&connection_options.initial_directory)
-                    .await?;
+                let Some(project) = store
+                    .project_at(&connection_options.initial_directory)
+                    .await?
+                else {
+                    return Ok(Response::Sessions(Vec::new()));
+                };
                 let projects = store.equivalent_project_ids(&project.id).await?;
                 let sessions = store
                     .list_resumable()
@@ -480,6 +516,8 @@ impl Service {
                     "workspace service is shutting down"
                 );
                 let session = self.session(&session).await?;
+                ensure!(!question.trim().is_empty(), "问题不能为空");
+                session.command(session::Command::Persist).await?;
                 let selected = session.questions.start(&question, follow_up).await?;
                 Ok(Response::Questions(
                     session.questions.snapshot(None, Some(selected)).await?,

@@ -91,6 +91,7 @@ impl std::error::Error for SessionRefreshRequired {}
 pub struct SessionState {
     pub store: Store,
     writer: Option<SessionWriter>,
+    persisted: bool,
     pub snapshot: Snapshot,
     pub scratch: orbit_tools::run_command::ScratchDirectory,
     pub command_output: orbit_tools::run_command::CommandOutputDirectory,
@@ -132,6 +133,7 @@ pub struct PreparedResume {
     store: Store,
     title_task: Option<crate::session::title::TitleTask>,
     writer: Option<SessionWriter>,
+    persisted: bool,
     pub snapshot: Snapshot,
     git_baseline: Option<serde_json::Value>,
 }
@@ -203,9 +205,9 @@ impl SessionState {
     ) -> Result<Self> {
         let store = Store::open(path).await?;
         let workspace = directory.canonicalize()?.to_string_lossy().into_owned();
-        let project = store.resolve_project(&workspace).await?;
-        let creating = resume.is_none();
-        let (id, writer) = if let Some(id) = resume {
+        let persisted = resume.is_some();
+        let (snapshot, writer, git_baseline) = if let Some(id) = resume {
+            let project = store.resolve_project(&workspace).await?;
             let saved = store.session(&id).await?;
             let equivalent = store.equivalent_project_ids(&project.id).await?;
             ensure!(
@@ -214,52 +216,74 @@ impl SessionState {
                 saved.workspace
             );
             ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
-
             let writer = if shared {
                 None
             } else {
                 Some(store.acquire(&id).await?)
             };
-            (id, writer)
+            (
+                store.load(&id).await?,
+                writer,
+                store.git_baseline(&id).await?,
+            )
         } else {
-            let writer = store.create(workspace.clone(), model, false).await?;
-            (writer.id().to_owned(), Some(writer))
+            let session = store.draft(workspace, model, false).await?;
+            (
+                Snapshot {
+                    session,
+                    history: Vec::new(),
+                    runs: Vec::new(),
+                    recovery: None,
+                },
+                None,
+                None,
+            )
         };
+        Ok(Self::from_prepared(
+            PreparedResume {
+                store,
+                writer,
+                persisted,
+                snapshot,
+                git_baseline,
+                title_task: None,
+            },
+            shared,
+        ))
+    }
 
-        let git_baseline = if creating {
-            let baseline = orbit_tools::git_inspect::capture_baseline(Path::new(&workspace));
-
-            if let Some(baseline) = &baseline {
-                store.save_git_baseline(&id, baseline).await?;
-            }
-
-            baseline
-        } else {
-            store.git_baseline(&id).await?
-        };
-
-        let snapshot = store.load(&id).await?;
+    fn from_prepared(prepared: PreparedResume, shared: bool) -> Self {
+        let PreparedResume {
+            store,
+            writer,
+            persisted,
+            snapshot,
+            git_baseline,
+            title_task,
+        } = prepared;
+        let id = &snapshot.session.id;
         let scratch = std::sync::Arc::new(std::sync::RwLock::new(
-            store.path().with_extension("workspaces").join(&id),
+            store.path().with_extension("workspaces").join(id),
         ));
         let command_output = std::sync::Arc::new(std::sync::RwLock::new(
-            store.path().with_extension("command-output").join(&id),
+            store.path().with_extension("command-output").join(id),
         ));
 
-        Ok(Self {
+        Self {
             scratch,
             command_output,
             git_baseline,
             store,
-            writer: if shared { None } else { writer },
+            writer,
+            persisted,
             snapshot,
             audit_workspace: None,
             audit_limits: Default::default(),
-            title_task: None,
+            title_task,
             active: false,
             shared,
             journal: None,
-        })
+        }
     }
 
     pub async fn move_to(
@@ -268,6 +292,14 @@ impl SessionState {
         limits: orbit_tools::run_command::CommandLimits,
     ) -> Result<()> {
         ensure!(!self.active, "请先结束当前响应再移动会话");
+        if !self.persisted {
+            let project = self.store.project_at(workspace.root()).await?;
+            self.snapshot.session.workspace = workspace.root().to_string_lossy().into_owned();
+            self.snapshot.session.project_id = project.map(|p| p.id).unwrap_or_default();
+            self.audit_workspace = Some(workspace);
+            self.audit_limits = limits;
+            return Ok(());
+        }
         let baseline = orbit_tools::git_inspect::capture_baseline(workspace.root());
         self.ensure_writer().await?;
         let session = self
@@ -294,7 +326,8 @@ impl SessionState {
         self.audit_workspace = Some(workspace.clone());
 
         // Never label the current state of an old session as its starting state.
-        if self.snapshot.runs.is_empty()
+        if self.persisted
+            && self.snapshot.runs.is_empty()
             && self.store.workspace_baseline(self.id()).await?.is_none()
             && let Ok(baseline) = orbit_runtime::execution::fingerprint_configured(
                 workspace,
@@ -353,6 +386,12 @@ impl SessionState {
         model: String,
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<()> {
+        if !self.persisted {
+            self.snapshot.session.model = model;
+            self.snapshot.session.reasoning_effort =
+                reasoning_effort.map(|value| value.as_str().to_owned());
+            return Ok(());
+        }
         self.ensure_writer().await?;
         let result = self
             .writer
@@ -377,6 +416,10 @@ impl SessionState {
     }
 
     pub async fn append_context(&mut self, message: ChatMessage) -> Result<()> {
+        if !self.persisted {
+            self.snapshot.history.push(message);
+            return Ok(());
+        }
         self.ensure_writer().await?;
         let result = self.writer.as_ref().unwrap().append_context(message).await;
         self.release_idle_writer();
@@ -386,6 +429,11 @@ impl SessionState {
     }
 
     pub async fn rename(&mut self, title: String) -> Result<()> {
+        if !self.persisted {
+            self.title_task = None;
+            self.snapshot.session.title = title;
+            return Ok(());
+        }
         self.ensure_writer().await?;
         let result = self.writer.as_ref().unwrap().set_title(title.clone()).await;
         self.release_idle_writer();
@@ -423,6 +471,7 @@ impl SessionState {
     }
 
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
+        self.persist().await?;
         self.ensure_writer().await?;
         let latest = match self.store.load(self.id()).await {
             Ok(latest) => latest,
@@ -498,10 +547,14 @@ impl SessionState {
     }
 
     pub async fn resumable(&self) -> Result<Vec<orbit_store::types::Session>> {
-        let equivalent = self
+        let Some(project) = self
             .store
-            .equivalent_project_ids(&self.snapshot.session.project_id)
-            .await?;
+            .project_at(&self.snapshot.session.workspace)
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        let equivalent = self.store.equivalent_project_ids(&project.id).await?;
 
         Ok(self
             .store
@@ -560,6 +613,7 @@ impl SessionState {
             store: store.clone(),
             title_task: None,
             writer: Some(writer),
+            persisted: true,
             snapshot,
             git_baseline,
         })
@@ -582,6 +636,7 @@ impl SessionState {
             store,
             title_task: None,
             writer: None,
+            persisted: true,
             snapshot,
             git_baseline,
         })
@@ -598,7 +653,36 @@ impl SessionState {
         }
     }
 
+    pub fn is_persisted(&self) -> bool {
+        self.persisted
+    }
+
+    pub(crate) async fn persist(&mut self) -> Result<()> {
+        if self.persisted {
+            return Ok(());
+        }
+        self.writer = Some(
+            self.store
+                .persist_draft(&self.snapshot.session, &self.snapshot.history)
+                .await?,
+        );
+        self.persisted = true;
+        self.snapshot.session = self.store.session(self.id()).await?;
+        self.git_baseline =
+            orbit_tools::git_inspect::capture_baseline(Path::new(&self.snapshot.session.workspace));
+        if let Some(baseline) = &self.git_baseline {
+            self.store.save_git_baseline(self.id(), baseline).await?;
+        }
+        if let Some(workspace) = self.audit_workspace.clone() {
+            self.initialize_audit(workspace, self.audit_limits.clone())
+                .await?;
+        }
+        self.release_idle_writer();
+        Ok(())
+    }
+
     async fn ensure_writer(&mut self) -> Result<()> {
+        ensure!(self.persisted, "会话尚未开始");
         if self.writer.is_none() {
             self.writer = Some(self.store.acquire(self.id()).await?);
         }
@@ -624,6 +708,7 @@ impl SessionState {
             store: self.store.clone(),
             title_task: std::mem::replace(&mut self.title_task, prepared.title_task),
             writer: std::mem::replace(&mut self.writer, prepared.writer),
+            persisted: std::mem::replace(&mut self.persisted, prepared.persisted),
             snapshot: std::mem::replace(&mut self.snapshot, prepared.snapshot),
             git_baseline: std::mem::replace(&mut self.git_baseline, prepared.git_baseline),
         };
@@ -653,54 +738,25 @@ impl SessionState {
 
     /// Exchange complete session ownership without rebinding a running task's paths or grants.
     pub fn replace_with(&mut self, prepared: PreparedResume) -> Self {
-        let scratch = std::sync::Arc::new(std::sync::RwLock::new(
-            prepared
-                .store
-                .path()
-                .with_extension("workspaces")
-                .join(&prepared.snapshot.session.id),
-        ));
-        let command_output = std::sync::Arc::new(std::sync::RwLock::new(
-            prepared
-                .store
-                .path()
-                .with_extension("command-output")
-                .join(&prepared.snapshot.session.id),
-        ));
-        let next = Self {
-            store: prepared.store,
-            writer: prepared.writer,
-            snapshot: prepared.snapshot,
-            git_baseline: prepared.git_baseline,
-            title_task: prepared.title_task,
-            scratch,
-            command_output,
-            audit_workspace: None,
-            audit_limits: Default::default(),
-            active: false,
-            shared: self.shared,
-            journal: None,
-        };
+        let next = Self::from_prepared(prepared, self.shared);
         std::mem::replace(self, next)
     }
 
     pub async fn prepare_new_in(&self, model: String, directory: &Path) -> Result<PreparedResume> {
         let workspace = directory.canonicalize()?.to_string_lossy().into_owned();
-        let writer = self.store.create(workspace, model, false).await?;
-        let snapshot = self.store.load(writer.id()).await?;
-        let git_baseline =
-            orbit_tools::git_inspect::capture_baseline(Path::new(&snapshot.session.workspace));
-
-        if let Some(baseline) = &git_baseline {
-            self.store.save_git_baseline(writer.id(), baseline).await?;
-        }
-
+        let session = self.store.draft(workspace, model, false).await?;
         Ok(PreparedResume {
             store: self.store.clone(),
             title_task: None,
-            writer: if self.shared { None } else { Some(writer) },
-            snapshot,
-            git_baseline,
+            writer: None,
+            persisted: false,
+            snapshot: Snapshot {
+                session,
+                history: Vec::new(),
+                runs: Vec::new(),
+                recovery: None,
+            },
+            git_baseline: None,
         })
     }
 

@@ -101,6 +101,17 @@ pub(super) async fn run(
         tokio::select! {
             envelope = requests.recv() => {
                 let Some(envelope) = envelope else { break };
+                if let Command::DiscardDraft { result } = envelope.command {
+                    let discard = !actor.setup.session.is_persisted();
+                    let _ = result.send(discard);
+                    if discard {
+                        drop(actor);
+                        let _ = envelope.reply.send(Ok(()));
+                        return;
+                    }
+                    let _ = envelope.reply.send(Ok(()));
+                    continue;
+                }
                 if matches!(&envelope.command, Command::Close) {
                     if actor.active() || actor.questions.running().await {
                         let _ = envelope.reply.send(Err(anyhow::anyhow!("会话正在运行，无法删除")));
@@ -214,6 +225,10 @@ impl Actor {
 
     async fn command(&mut self, command: Command) -> Result<()> {
         match command {
+            Command::Persist => {
+                self.setup.start_session().await?;
+                self.profile().await;
+            }
             Command::Plan { action } => {
                 use orbit_protocol::plan::Action;
                 if matches!(action, Action::Enable | Action::Enter) {
@@ -273,18 +288,20 @@ impl Actor {
                     .await?;
             }
             Command::SetMode { mode } => {
-                self.setup
-                    .session
-                    .store
-                    .set_tui_mode(
-                        self.setup.session.id(),
-                        match mode {
-                            Mode::Ask => "ask",
-                            Mode::Auto => "auto",
-                            Mode::Yolo => "YOLO",
-                        },
-                    )
-                    .await?;
+                if self.setup.session.is_persisted() {
+                    self.setup
+                        .session
+                        .store
+                        .set_tui_mode(
+                            self.setup.session.id(),
+                            match mode {
+                                Mode::Ask => "ask",
+                                Mode::Auto => "auto",
+                                Mode::Yolo => "YOLO",
+                            },
+                        )
+                        .await?;
+                }
                 self.setup.resources.mode = mode;
                 self.setup.resources.mode_revision += 1;
                 self.profile().await;
@@ -347,7 +364,9 @@ impl Actor {
                 }
                 self.profile().await;
             }
-            Command::Close => unreachable!("close handled by actor loop"),
+            Command::Close | Command::DiscardDraft { .. } => {
+                unreachable!("close handled by actor loop")
+            }
             Command::Action { action, result } => {
                 let busy = self.active() || self.questions.running().await;
                 let response =
@@ -464,6 +483,7 @@ impl Actor {
                     );
                     return Ok(());
                 }
+                self.setup.start_session().await?;
                 match self
                     .setup
                     .session

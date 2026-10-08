@@ -50,6 +50,7 @@ pub(super) struct Tab {
     pub state: UiState,
     pub title: String,
     session_title: String,
+    persisted: bool,
     model_catalog: Vec<orbit_protocol::ModelSummary>,
     pub id: Option<String>,
     pub connection: Option<Arc<Connection>>,
@@ -208,6 +209,7 @@ impl Tab {
             state,
             title: label,
             session_title: String::new(),
+            persisted: false,
             model_catalog: Vec::new(),
             id: None,
             connection: None,
@@ -396,6 +398,7 @@ impl Tab {
     }
 
     fn profile(&mut self, info: &SessionInfo) {
+        self.persisted = info.persisted;
         if self.state.workspace != info.workspace {
             self.state.workspace = info.workspace.clone();
             self.state.stored_completions.clear();
@@ -734,6 +737,7 @@ impl Tab {
                             prompt,
                             presentation,
                         } => {
+                            self.persisted = true;
                             self.starting.take();
                             self.starting_attachments.clear();
                             if self.session_title.is_empty() {
@@ -815,6 +819,18 @@ impl Tab {
     }
 
     fn disconnect(&mut self, error: String, retry: bool) {
+        // A submitted request may have committed before its acknowledgement was lost.
+        // Keep that identity; an untouched draft is discarded with its connection.
+        if !self.persisted
+            && self.starting.is_none()
+            && !self.busy
+            && !self
+                .submissions
+                .iter()
+                .any(submissions::Submission::starts_session)
+        {
+            self.id = None;
+        }
         self.abandon_submissions();
         self.restore_submission();
         if let Some(wizard) = &mut self.state.workspace_wizard {

@@ -16,6 +16,12 @@ pub(super) struct Submission {
     draft: Draft,
 }
 
+impl Submission {
+    pub(super) fn starts_session(&self) -> bool {
+        matches!(self.draft, Draft::Composer(_) | Draft::Question)
+    }
+}
+
 impl Tab {
     fn request(&self, request: Request) -> Result<oneshot::Receiver<Result<Response>>> {
         let commands = self

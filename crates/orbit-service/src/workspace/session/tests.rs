@@ -152,10 +152,15 @@ async fn remembered_file_grant_survives_reopen_and_matches_changed_content() {
     use orbit_tools::approval::{ApprovalPreview, DeletePreview, WritePreview};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let session =
+    let mut session =
         crate::session::SessionState::open_in(root.join("sessions.db"), None, "test".into(), root)
             .await
             .unwrap();
+    session
+        .begin("edit file".into(), "test".into())
+        .await
+        .unwrap();
+    session.finish("cancelled", None).await.unwrap();
     let id = session.id().to_owned();
     let first = ApprovalPreview::Write(WritePreview {
         path: "file.txt".into(),
@@ -319,9 +324,10 @@ async fn user_input_shared_session_pages_wait_for_explicit_answer_in_yolo() {
         instruction_dir: None,
         editor_command: "vi".into(),
     };
-    let setup = crate::workspace::setup::prepare_service(&options, None)
+    let mut setup = crate::workspace::setup::prepare_service(&options, None)
         .await
         .unwrap();
+    setup.start_session().await.unwrap();
     let tools = setup.resources.tools.clone();
     let handle = Handle::spawn(setup, None);
     handle
@@ -417,9 +423,10 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
         instruction_dir: None,
         editor_command: "vi".into(),
     };
-    let setup = crate::workspace::setup::prepare_workspace(&options, root, None)
+    let mut setup = crate::workspace::setup::prepare_workspace(&options, root, None)
         .await
         .unwrap();
+    setup.start_session().await.unwrap();
     let tools = setup.resources.tools.clone();
     let handle = Handle::spawn(setup, None);
     handle

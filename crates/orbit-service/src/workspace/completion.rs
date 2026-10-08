@@ -39,8 +39,10 @@ pub(super) async fn complete(
             .map(|change| (change.change.path, "会话文件变更".into()))
             .collect(),
         "/resume" => {
-            let current = store.session(session).await?;
-            let projects = store.equivalent_project_ids(&current.project_id).await?;
+            let Some(project) = store.project_at(workspace).await? else {
+                return Ok(Vec::new());
+            };
+            let projects = store.equivalent_project_ids(&project.id).await?;
             store
                 .list_resumable()
                 .await?
@@ -49,12 +51,17 @@ pub(super) async fn complete(
                 .map(|entry| (entry.id, entry.title))
                 .collect()
         }
-        "/tasks" => store
-            .tasks(&store.session(session).await?.project_id, true)
-            .await?
-            .into_iter()
-            .map(|task| (task.id.to_string(), task.title))
-            .collect(),
+        "/tasks" => {
+            let Some(project) = store.project_at(workspace).await? else {
+                return Ok(Vec::new());
+            };
+            store
+                .tasks(&project.id, true)
+                .await?
+                .into_iter()
+                .map(|task| (task.id.to_string(), task.title))
+                .collect()
+        }
         "/memory" => store
             .session_memories(session, false)
             .await?

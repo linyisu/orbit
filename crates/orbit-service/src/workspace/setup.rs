@@ -29,6 +29,26 @@ pub struct PreparedWorkspace {
     pub resources: WorkspaceResources,
 }
 
+impl PreparedWorkspace {
+    /// Promote a draft once, before any run/receipt/tool can write child records.
+    pub(crate) async fn start_session(&mut self) -> Result<()> {
+        self.session.persist().await?;
+        self.session
+            .store
+            .set_tui_mode(
+                self.session.id(),
+                match self.resources.mode {
+                    orbit_protocol::Mode::Ask => "ask",
+                    orbit_protocol::Mode::Auto => "auto",
+                    orbit_protocol::Mode::Yolo => "YOLO",
+                },
+            )
+            .await?;
+        self.resources.planning.persist().await?;
+        Ok(())
+    }
+}
+
 pub struct WorkspaceResources {
     pub options: WorkspaceOptions,
     pub mode: orbit_protocol::Mode,
@@ -166,8 +186,10 @@ pub(super) async fn prepare_resources(
     let context_tokens = selected_model.context_tokens;
     let input_context_tokens = selected_model.input_context_tokens;
     let client = ModelClient::new(selected_model.config)?;
-    let target_project = session.store.resolve_project(directory).await?;
-    let enabled_plugins = session.store.project_plugins(&target_project.id).await?;
+    let enabled_plugins = match session.store.project_at(directory).await? {
+        Some(project) => session.store.project_plugins(&project.id).await?,
+        None => Vec::new(),
+    };
     let plugin_skill_roots = crate::marketplaces::enabled_skill_roots(&enabled_plugins);
     let mut skills = skills::Skills::discover_with_plugin_roots(
         directory,
@@ -209,6 +231,9 @@ pub(super) async fn prepare_resources(
         runtime.workspace.clone(),
     )
     .await?;
+    if !session.is_persisted() {
+        planning.defer_persistence();
+    }
     if policy.disabled(Capability::Files) {
         planning.disable_file_tracking();
     }
@@ -415,8 +440,15 @@ mod selection_tests {
         assert!(prepare_service(&options, None).await.is_err());
         assert!(!options.database.exists());
         options.model = Some("test::chosen".into());
-        let setup = prepare_service(&options, None).await.unwrap();
+        let mut setup = prepare_service(&options, None).await.unwrap();
+        assert!(setup.session.store.list().await.unwrap().is_empty());
         assert_eq!(setup.resources.model_name, "test::chosen");
+        setup
+            .session
+            .begin("question".into(), "test::chosen".into())
+            .await
+            .unwrap();
+        setup.session.finish("cancelled", None).await.unwrap();
         let id = setup.session.id().to_owned();
         drop(setup);
         options.model = Some("test::first".into());

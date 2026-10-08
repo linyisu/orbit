@@ -59,6 +59,14 @@ pub(super) async fn execute(
                     resources.command_limits.clone(),
                 )
                 .await?;
+            resources.mode = setup.resources.mode;
+            resources.mode_revision = setup.resources.mode_revision;
+            if !setup.session.is_persisted()
+                && setup.resources.planning.snapshot().await.mode
+                    == orbit_protocol::plan::WorkMode::Plan
+            {
+                resources.planning.enter().await?;
+            }
             setup.resources = resources;
             Ok(report("工作目录", directory.to_string_lossy().into_owned()))
         }
@@ -97,6 +105,22 @@ pub(super) async fn execute(
                     .disabled(orbit_protocol::Capability::ProjectState),
                 "任务功能已禁用"
             );
+            let project = if matches!(&task, orbit_protocol::project::TaskAction::Add { .. }) {
+                Some(
+                    setup
+                        .session
+                        .store
+                        .resolve_project(&setup.session.snapshot.session.workspace)
+                        .await?,
+                )
+            } else {
+                setup
+                    .session
+                    .store
+                    .project_at(&setup.session.snapshot.session.workspace)
+                    .await?
+            };
+            setup.session.snapshot.session.project_id = project.map(|p| p.id).unwrap_or_default();
             let mut history = Vec::new();
             let result =
                 crate::project_state::actions::task(&setup.session, &mut history, task).await?;
@@ -110,6 +134,13 @@ pub(super) async fn execute(
                     .disabled(orbit_protocol::Capability::ProjectState),
                 "记忆功能已禁用"
             );
+            if let orbit_protocol::project::MemoryAction::Add { content, .. } = &memory {
+                ensure!(!content.trim().is_empty(), "记忆内容不能为空。");
+                ensure!(
+                    setup.session.is_persisted(),
+                    "请先开始会话，再添加会话记忆。"
+                );
+            }
             let mut history = Vec::new();
             let result =
                 crate::project_state::actions::memory(&setup.session, &mut history, memory).await?;
@@ -246,10 +277,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(
-            setup.session.store.session(&id).await.unwrap().title,
-            "review"
-        );
+        assert_eq!(setup.session.snapshot.session.title, "review");
+        assert!(setup.session.store.session(&id).await.is_err());
         assert!(
             execute(
                 &mut setup,
@@ -270,6 +299,13 @@ mod tests {
         )
         .await
         .unwrap();
+        assert!(setup.session.store.session(&id).await.is_err());
+        setup
+            .session
+            .begin("use this skill".into(), "test::mock".into())
+            .await
+            .unwrap();
+        setup.session.finish("cancelled", None).await.unwrap();
         drop(setup);
         let reopened = super::super::setup::prepare_service(&options, Some(id))
             .await

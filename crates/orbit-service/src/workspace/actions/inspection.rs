@@ -36,7 +36,11 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
         ),
         Inspection::Diagnostics => report(
             "诊断记录",
-            orbit_store::diagnostics::text(&session.store.diagnostics(session.id()).await?),
+            if session.is_persisted() {
+                orbit_store::diagnostics::text(&session.store.diagnostics(session.id()).await?)
+            } else {
+                "尚未开始会话，暂无诊断记录。".into()
+            },
         ),
         Inspection::Changes => {
             let listing =
@@ -59,7 +63,11 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
         }
         Inspection::Status => report("会话状态", status(setup).await?),
         Inspection::Context => {
-            let mut history = session.store.side_question_context(session.id()).await?;
+            let mut history = if session.is_persisted() {
+                session.store.side_question_context(session.id()).await?
+            } else {
+                session.snapshot.history.clone()
+            };
             crate::instructions::inject(&mut history, &budget.instructions);
             budget.skills.inject(&mut history);
             if !resources
