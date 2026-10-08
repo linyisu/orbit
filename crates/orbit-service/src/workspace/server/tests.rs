@@ -23,7 +23,7 @@ impl Fixture {
         let config = root.path().join("config.toml");
         fs::write(
             &config,
-            &TestConfig::new()
+            TestConfig::new()
                 .provider(
                     TestProvider::new("test")
                         .endpoint(url)
@@ -132,7 +132,7 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
     let config = root.path().join("config.toml");
     fs::write(
         &config,
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint("http://127.0.0.1:1/v1")

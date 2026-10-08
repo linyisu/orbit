@@ -99,7 +99,7 @@ mod tests {
         let config = root.join(name);
         std::fs::write(
             &config,
-            &TestConfig::new()
+            TestConfig::new()
                 .provider(
                     TestProvider::new("one")
                         .endpoint("http://localhost:8000/v1")

@@ -46,6 +46,8 @@ pub(super) enum Action {
     Redraw,
 }
 
+type ModelRefresh = (orbit_protocol::Configuration, Vec<String>);
+
 pub(super) struct Tab {
     pub state: UiState,
     pub title: String,
@@ -78,7 +80,7 @@ pub(super) struct Tab {
     completion_input: String,
     next_completion: std::time::Instant,
     next_questions: std::time::Instant,
-    model_refresh: Option<AbortOnDropHandle<Result<(orbit_protocol::Configuration, Vec<String>)>>>,
+    model_refresh: Option<AbortOnDropHandle<Result<ModelRefresh>>>,
     model_watcher: Option<workspace::configuration::Watcher>,
     model_configuration: Option<orbit_protocol::Configuration>,
     attachment_task: Option<AbortOnDropHandle<Result<Vec<orbit_model::types::Attachment>>>>,

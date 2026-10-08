@@ -146,8 +146,7 @@ models = ["test"]
 base_url = "http://localhost"
 api_key = "test"
 "#;
-    let input = format!("{provider}");
-    let config: FileConfig = toml::from_str(&input).unwrap();
+    let config: FileConfig = toml::from_str(provider).unwrap();
 
     assert_eq!(config.context_tokens, 128000);
     assert!(config.auto_compact);

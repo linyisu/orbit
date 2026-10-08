@@ -51,7 +51,7 @@ async fn headless_chat_uses_the_service_policy_and_persists_the_answer() {
     let model = tokio_util::task::AbortOnDropHandle::new(model);
     std::fs::write(
         root.join("config.toml"),
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint(format!("http://{address}/v1"))

@@ -61,7 +61,7 @@ async fn image_only_submission_reaches_the_service_and_its_attachment_is_present
     let root = directory.path();
     std::fs::write(
         root.join("config.toml"),
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint("http://127.0.0.1:1/v1")
@@ -202,7 +202,7 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
     let root = directory.path();
     std::fs::write(
         root.join("config.toml"),
-        &format!(
+        format!(
             "{}{}",
             "auto_compact=true\n",
             TestConfig::new()
@@ -301,7 +301,7 @@ async fn user_input_shared_session_pages_wait_for_explicit_answer_in_yolo() {
     let root = dir.path();
     std::fs::write(
         root.join("config.toml"),
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint("http://127.0.0.1:1/v1")
@@ -400,7 +400,7 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
     let root = dir.path();
     std::fs::write(
         root.join("config.toml"),
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint("http://127.0.0.1:1/v1")

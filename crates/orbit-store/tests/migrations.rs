@@ -2,11 +2,13 @@ mod support;
 use orbit_store::store::Store;
 use rusqlite::{Connection, params};
 
+type IndexSchema = (i64, i64, Vec<(String, i64)>);
+
 #[derive(Debug, PartialEq, Eq)]
 struct Schema {
     columns: Vec<(String, String, i64, Option<String>, i64)>,
     references: Vec<(String, String, String, String, String)>,
-    indexes: Vec<(i64, i64, Vec<(String, i64)>)>,
+    indexes: Vec<IndexSchema>,
 }
 
 fn schema(db: &Connection) -> std::collections::BTreeMap<String, Schema> {

@@ -26,6 +26,9 @@ class ArchitectureTests(unittest.TestCase):
                 (root / name / "Cargo.toml").write_text(
                     f'[package]\nname = "{name}"\n'
                 )
+            migrations = root / "crates/orbit-store/src/migrations.rs"
+            migrations.parent.mkdir(parents=True)
+            migrations.write_text("")
             manifest = root / "orbit-tui/Cargo.toml"
             with patch.object(architecture, "ROOT", root):
                 for dependency in ["orbit-client", "orbit-protocol"]:
