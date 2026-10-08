@@ -612,7 +612,6 @@ async fn browser_challenge_reads_the_requested_wiki_page() {
     let browser_page = browser::fetch(
         &checked_url("https://isaac.huijiwiki.com/wiki/%E9%81%93%E5%85%B7").unwrap(),
         &Url::parse(&proxy).unwrap(),
-        true,
     )
     .await
     .unwrap();

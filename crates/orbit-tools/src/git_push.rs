@@ -1,4 +1,4 @@
-//! Explicit HTTPS push with host credentials confined to a trusted sandbox worker.
+//! Explicit HTTPS push with host credentials confined to a trusted helper process.
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -8,9 +8,7 @@ use std::{
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::{
-    execution::{
-        ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, MountSpec, execution_backend,
-    },
+    execution::{ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, execution_backend},
     filesystem::Workspace,
 };
 use serde::{Deserialize, Serialize};
@@ -31,7 +29,6 @@ pub struct GitPush {
     approvals: ApprovalSender,
     process_limits: orbit_runtime::execution::ProcessLimits,
     timeout: Duration,
-    sandbox: bool,
 }
 
 impl GitPush {
@@ -41,12 +38,10 @@ impl GitPush {
             approvals,
             process_limits: Default::default(),
             timeout: DEFAULT_PUSH_TIMEOUT,
-            sandbox: false,
         }
     }
 
     pub fn with_limits(mut self, limits: &crate::run_command::CommandLimits) -> Self {
-        self.sandbox = limits.sandbox;
         self.process_limits = limits.process_limits.clone();
         self.timeout = Duration::from_secs(
             limits
@@ -115,7 +110,7 @@ impl Tool for GitPush {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "git_push",
-            "Push one local branch to one explicit HTTPS remote branch. Prerequisite: the user's host global Git credential helper must already provide noninteractive HTTPS credentials for that remote. This tool never reads origin or converts an SSH remote; SSH keys/agents cannot authenticate it. Requires explicit remote-write approval. Credentials are confined to a trusted sandbox worker and never exposed to run_command or tool results. Only ordinary fast-forward pushes are supported; no force, deletion, mirror or SSH. Obtain the exact HTTPS URL and branches before calling. If credentials are unavailable, report the prerequisite instead of retrying or inventing credentials.",
+            "Push one local branch to one explicit HTTPS remote branch. Prerequisite: the user's host global Git credential helper must already provide noninteractive HTTPS credentials for that remote. This tool never reads origin or converts an SSH remote; SSH keys/agents cannot authenticate it. Requires explicit remote-write approval. Credentials are passed privately to the helper and omitted from tool results. Only ordinary fast-forward pushes are supported; no force, deletion, mirror or SSH. Obtain the exact HTTPS URL and branches before calling. If credentials are unavailable, report the prerequisite instead of retrying or inventing credentials.",
             json!({"type":"object","properties":{"remote_url":{"type":"string","description":"Exact HTTPS repository URL; independent of origin and requires host HTTPS authentication"},"source_branch":{"type":"string"},"target_branch":{"type":"string"}},"required":["remote_url","source_branch","target_branch"],"additionalProperties":false}),
         )
     }
@@ -166,7 +161,6 @@ impl Tool for GitPush {
             );
             let approval = self.approvals.send(ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
-                    sandbox: self.sandbox,
                     command: description.clone(),
                     cwd: Some(self.workspace.root().display().to_string()),
                     timeout_seconds: self.timeout.as_secs(),
@@ -196,83 +190,38 @@ impl Tool for GitPush {
             }
             let (username, password) = credential(&url, cancellation.clone()).await?;
             let private = tempfile::tempdir().map_err(failed)?;
-            let scratch = tempfile::tempdir().map_err(failed)?;
-            let map_path = |path: &Path| {
-                if !self.sandbox {
-                    return path.to_owned();
-                }
-                path.strip_prefix(self.workspace.root())
-                    .map(|rel| Path::new("/workspace").join(rel))
-                    .unwrap_or_else(|_| path.to_owned())
-            };
             let input = WorkerInput {
                 arguments: args,
                 username,
                 password,
-                git_dir: map_path(&repo.git_dir),
-                objects: map_path(&repo.common_dir.join("objects")),
+                git_dir: repo.git_dir.clone(),
+                objects: repo.common_dir.join("objects"),
             };
             let secret = private.path().join("request.json");
             std::fs::write(&secret, serde_json::to_vec(&input).map_err(failed)?).map_err(failed)?;
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600))
                 .map_err(failed)?;
-            let mut policy = ExecutionPolicy::read_only();
-            policy.network = orbit_runtime::capability::NetworkPolicy::Allow;
-            policy.unmask_git = true;
-            policy.resources = self.process_limits.clone().into();
-            policy.protected_paths = self.workspace.protected().to_vec();
-            policy.opaque_runtime_roots = self.workspace.opaque_runtime_roots().to_vec();
-            policy.external_read = effective
-                .persistent_read
-                .iter()
-                .chain(effective.persistent_read_write.iter())
-                .map(|p| p.canonical().to_owned())
-                .collect();
-            if let Ok(store) = effective.session_grants.read() {
-                policy.external_read.extend(
-                    store
-                        .grants()
-                        .iter()
-                        .filter(|g| g.environment.is_local() && (g.read || g.write))
-                        .map(|g| g.path.canonical().to_owned()),
-                );
-            }
-
-            policy.mounts = vec![
-                MountSpec::read_only(
-                    std::env::current_exe().map_err(failed)?,
-                    "/opt/orbit-git-worker",
-                ),
-                MountSpec::read_only(&secret, "/opt/orbit-push-request"),
-            ];
-            let request = ExecutionRequest::new(
-                "/opt/orbit-git-worker --internal-git-push-worker /opt/orbit-push-request",
-                self.workspace.root(),
-                self.timeout,
-            )
-            .with_scratch(scratch.path());
-            let request = if self.sandbox {
-                request
-            } else {
-                let worker = std::env::current_exe().map_err(failed)?;
-                let command = shlex::try_join([
-                    worker
-                        .to_str()
-                        .ok_or_else(|| failed("non-UTF-8 worker path"))?,
-                    "--internal-git-push-worker",
-                    secret
-                        .to_str()
-                        .ok_or_else(|| failed("non-UTF-8 request path"))?,
-                ])
-                .map_err(failed)?;
-                ExecutionRequest::new(command, self.workspace.root(), self.timeout)
+            let policy = ExecutionPolicy {
+                resources: self.process_limits.clone().into(),
+                ..Default::default()
             };
+            let worker = std::env::current_exe().map_err(failed)?;
+            let command = shlex::try_join([
+                worker
+                    .to_str()
+                    .ok_or_else(|| failed("non-UTF-8 worker path"))?,
+                "--internal-git-push-worker",
+                secret
+                    .to_str()
+                    .ok_or_else(|| failed("non-UTF-8 request path"))?,
+            ])
+            .map_err(failed)?;
+            let request = ExecutionRequest::new(command, self.workspace.root(), self.timeout);
             let environment =
                 ExecutionEnvironment::new(self.workspace.root(), self.workspace.root())
                     .map_err(failed)?;
-            let result = execution_backend(self.sandbox)
-                .map_err(failed)?
+            let result = execution_backend()
                 .execute(&request, &policy, &environment, None, cancellation)
                 .await
                 .map_err(failed)?;

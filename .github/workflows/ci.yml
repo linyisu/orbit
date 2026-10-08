@@ -24,40 +24,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap musl-tools build-essential python3 nodejs
-
-      - name: Enable unprivileged user namespaces
-        run: |
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
-            sudo sysctl -w kernel.unprivileged_userns_clone=1
-          fi
-
-      - name: Verify Bubblewrap
-        run: |
-          bwrap --version
-          args=(
-            --unshare-user
-            --disable-userns
-            --die-with-parent
-            --new-session
-            --cap-drop ALL
-            --unshare-pid
-            --unshare-ipc
-            --unshare-uts
-            --unshare-cgroup-try
-          )
-          for path in /usr /bin /sbin /lib /lib64; do
-            if [ -e "$path" ]; then
-              args+=(--ro-bind "$path" "$path")
-            fi
-          done
-          if [ -e /etc/ld.so.cache ]; then
-            args+=(--ro-bind /etc/ld.so.cache /etc/ld.so.cache)
-          fi
-          bwrap "${args[@]}" /usr/bin/true
+          sudo apt-get install -y musl-tools build-essential python3 nodejs
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -83,10 +50,8 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
-      - name: Run sandbox and document integration contracts
-        run: |
-          export ORBIT_TEST_RUST_TOOLCHAIN="$(rustc --print sysroot)"
-          cargo test -p orbit-tools --test sandbox --test coding_loop --test read_document -- --ignored
+      - name: Run native development toolchain contracts
+        run: cargo test -p orbit-tools --test coding_loop -- --ignored
 
       - name: Report build resources on failure
         if: failure()
@@ -94,26 +59,6 @@ jobs:
           df -h
           free -h
           du -sh target/* 2>/dev/null || true
-
-  native-execution:
-    name: Execution without Bubblewrap
-    runs-on: ubuntu-latest
-    env:
-      ORBIT_TEST_REQUIRE_NO_SANDBOX: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Prepare host without sandbox dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
-          sudo apt-get remove -y bubblewrap
-          test ! -e /usr/bin/bwrap
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@v2
-      - name: Verify native execution and explicit sandbox failure
-        run: cargo test -p orbit-cli --test workspace_service native_execution
 
   linux-bundle:
     name: Portable Linux bundle

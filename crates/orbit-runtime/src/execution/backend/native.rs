@@ -48,7 +48,6 @@ impl ExecutionBackend for NativeBackend {
                 .args(["-c", &request.command])
                 .current_dir(&env.cwd)
                 .env_clear()
-                .envs(crate::execution::shell_environment::snapshot())
                 .envs(&env.env_vars)
                 .envs(
                     policy
@@ -61,10 +60,6 @@ impl ExecutionBackend for NativeBackend {
                 .stderr(Stdio::piped())
                 .process_group(0)
                 .kill_on_drop(true);
-
-            if let Some(scratch) = &request.scratch {
-                command.env("ORBIT_SCRATCH", scratch);
-            }
 
             let limits = policy.resources.to_process_limits();
             // Only async-signal-safe system calls may run between fork and exec.
@@ -107,10 +102,6 @@ impl ExecutionBackend for NativeBackend {
                     output: None,
                     platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
                     isolation: "native user process; no filesystem or network isolation".into(),
-                    rust_toolchain: None,
-                    writable_snapshot: false,
-                    persistent_scratch: request.scratch.is_some(),
-                    mounts: Vec::new(),
                 });
 
             let result = run_child_process(
@@ -119,7 +110,6 @@ impl ExecutionBackend for NativeBackend {
                 cancellation,
                 output_log,
                 "native",
-                false,
                 request.workspace_files,
                 request.skipped_entries,
                 verification,

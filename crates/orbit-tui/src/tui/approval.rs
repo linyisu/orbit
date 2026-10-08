@@ -317,11 +317,6 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         }
 
         orbit_tools::approval::ApprovalPreview::Command(preview) => {
-            let access = match preview.workspace_access {
-                orbit_tools::approval::CommandWorkspaceAccess::Read => "只读",
-                orbit_tools::approval::CommandWorkspaceAccess::ReadWrite => "读写",
-            };
-
             let mut title_spans = vec![
                 Span::raw(" "),
                 Span::styled(
@@ -332,11 +327,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 ),
                 Span::raw("  "),
                 Span::styled(
-                    if preview.sandbox {
-                        format!("[沙箱 · {access}]")
-                    } else {
-                        "[普通执行]".into()
-                    },
+                    "[普通执行]",
                     Style::default().fg(crate::tui::theme::THEME.accent),
                 ),
             ];

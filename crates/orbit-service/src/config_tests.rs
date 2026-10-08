@@ -21,7 +21,7 @@ async fn project_resources_follow_the_destination_without_changing_process_cwd()
     let config = directory.path().join("config.toml");
     std::fs::write(
         &config,
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint("http://127.0.0.1:1/v1")
@@ -100,7 +100,7 @@ async fn fresh_launch_uses_its_directory_instead_of_the_previous_session() {
     let config = first.join("config.toml");
     std::fs::write(
         &config,
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint("http://127.0.0.1:1/v1")
@@ -202,12 +202,7 @@ fn chat_capability_filter_removes_groups_before_request_assembly() {
 fn disabled_commands_hide_audit_and_export_tools() {
     let mut tools = ToolRegistry::new();
 
-    for name in [
-        "run_command",
-        "read_command_output",
-        "verification_status",
-        "export_artifact",
-    ] {
+    for name in ["run_command", "read_command_output", "verification_status"] {
         tools.register(ClosureTool::new(
             name,
             "",
@@ -222,10 +217,10 @@ fn disabled_commands_hide_audit_and_export_tools() {
 }
 
 #[test]
-fn disabled_git_hides_patch_export_as_well_as_inspection() {
+fn disabled_git_hides_push_and_inspection() {
     let mut tools = ToolRegistry::new();
 
-    for name in ["git_inspect", "git_export_patch"] {
+    for name in ["git_inspect", "git_push"] {
         tools.register(ClosureTool::new(
             name,
             "",

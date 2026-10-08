@@ -39,7 +39,7 @@ impl RequestCapability {
 impl Tool for RequestCapability {
     fn definition(&self) -> ToolDefinition {
         let description = format!(
-            "Request session permission for an existing file or directory outside the workspace. Only eligible paths prompt the user for approval. Existing workspace access needs no request. To create external files, request read_write for an existing eligible parent directory. Policy denials are permanent and never open an approval dialog: workspace ancestors, protected files/directories and these exact host paths: {}; these host directories and all descendants: {}. The whole host /tmp is reserved, but an existing specific /tmp child outside /tmp/home may be eligible. run_command already provides isolated /tmp and /scratch for temporary work; these are sandbox paths, not host capability requests. Approved grants last for this session.",
+            "Request session permission for an existing file or directory outside the workspace. Only eligible paths prompt the user for approval. Existing workspace access needs no request. To create external files, request read_write for an existing eligible parent directory. Policy denials are permanent and never open an approval dialog: workspace ancestors, protected files/directories and these exact host paths: {}; these host directories and all descendants: {}. The whole host /tmp is reserved, but an existing specific /tmp child may be eligible. File-tool grants do not isolate shell commands; run_command uses real host paths. Approved grants last for this session.",
             RESERVED_CAPABILITY_PATHS.join(", "),
             RESERVED_CAPABILITY_TREES.join(", ")
         );
@@ -113,7 +113,7 @@ impl Tool for RequestCapability {
                         parent.display()
                     ),
 
-                    None => "no existing eligible parent is available; use the workspace or run_command's isolated /tmp or /scratch for temporary work".into(),
+                    None => "no existing eligible parent is available; use the workspace or an existing temporary directory".into(),
                 };
 
                 return Err(ToolError::ExecutionFailed(format!(

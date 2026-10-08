@@ -1,10 +1,10 @@
 # Orbit
 
-Orbit 是用 Rust 编写的终端编码 Agent。它提供交互式 TUI 和单次命令行任务，支持多供应商模型、文件工具、命令执行、可选沙箱、持久化会话、后台命令与探索、审查、开发子代理。
+Orbit 是用 Rust 编写的终端编码 Agent。它提供交互式 TUI 和单次命令行任务，支持多供应商模型、文件工具、原生命令执行、持久化会话、后台命令与探索、审查、开发子代理。
 
 ## 启动
 
-使用 stable Rust 工具链构建，源码构建还需要 `musl-tools`（含 `musl-gcc`）、`binutils` 和同架构 Rust musl target（x86-64：`rustup target add x86_64-unknown-linux-musl`；AArch64：`rustup target add aarch64-unknown-linux-musl`）；依赖版本由 `Cargo.lock` 固定。命令默认使用目标用户的 shell 与真实开发环境；在 `[command]` 中设置 `sandbox = true` 可启用 Linux Bubblewrap 隔离，此时需要 `bwrap`、`prlimit` 和可用的用户命名空间。审批模式独立于沙箱设置。文件工具使用 Unix 文件描述符接口；其他系统尚未提供完整的等价执行后端。
+使用 stable Rust 工具链构建，源码构建还需要 `musl-tools`（含 `musl-gcc`）、`binutils` 和同架构 Rust musl target（x86-64：`rustup target add x86_64-unknown-linux-musl`；AArch64：`rustup target add aarch64-unknown-linux-musl`）；依赖版本由 `Cargo.lock` 固定。命令直接使用目标用户的 shell、真实工作目录与开发环境，审批由 `ask` / `auto` / `yolo` 模式控制。文件工具使用 Unix 文件描述符接口；其他系统尚未提供完整的等价执行后端。
 
 ```sh
 cargo run --release -p orbit-tui
@@ -89,7 +89,7 @@ flowchart TD
 - 子代理提供独立的探索、审查和开发角色；开发角色默认使用 Git worktree，并继承父审批策略，默认并行上限 8，支持补充消息和原会话续跑。默认不限轮数；超时配置用于提醒父代理查看进度，不直接终止子代理。
 - `/btw` 在弹窗中独立回答旁路问题，不调用工具、不改变主会话上下文。
 - Agent 可通过 `ask_user` 在弹窗中发起多题问答，支持选择、自定义填写和填空；`/answers` 查看问答记录。
-- SQLite 保存会话、消息、任务结果与检查点；多个终端可同步打开同一会话，由共享服务串行处理操作并持有写入锁。数据库、附件和 scratch 位于用户数据目录，具体路径见 [存储文档](crates/orbit-store/README.md)。
+- SQLite 保存会话、消息、任务结果与检查点；多个终端可同步打开同一会话，由共享服务串行处理操作并持有写入锁。数据库和附件位于用户数据目录，具体路径见 [存储文档](crates/orbit-store/README.md)。
 
 ### Plan / Build
 
@@ -113,10 +113,9 @@ cargo test --workspace
 
 依赖已缓存时可为 Clippy 和测试增加 `--offline`。部分测试启动本地回环 HTTP 服务，需要允许本地监听，不需要真实供应商账号。CI 配置见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
 
-标记为 ignored 的真实沙箱与工具链测试不会被普通测试命令执行。沙箱测试需要 Linux 用户命名空间；编码循环测试还需要 Python、Node，以及 `ORBIT_TEST_RUST_TOOLCHAIN` 指向可挂载的 Rust 工具链：
+标记为 ignored 的开发工具链测试需要 PATH 中有 Rust、Python 和 Node，单独运行：
 
 ```sh
-cargo test -p orbit-tools --test sandbox -- --ignored
 cargo test -p orbit-tools --test coding_loop -- --ignored
 ```
 

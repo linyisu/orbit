@@ -1,8 +1,4 @@
-use std::{
-    path::PathBuf,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
 use orbit_agent::{
     background::BackgroundJobs,
@@ -16,7 +12,7 @@ use orbit_runtime::{
     },
     filesystem::Workspace,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -26,8 +22,6 @@ use crate::approval::{
 };
 use crate::limits::DEFAULT_FILE_SCAN_BYTES;
 
-pub type ScratchDirectory = Arc<RwLock<PathBuf>>;
-
 pub type CommandOutputDirectory = crate::read_command_output::CommandOutputDirectory;
 
 #[derive(Clone)]
@@ -35,7 +29,6 @@ pub struct RunCommand {
     workspace: Workspace,
     approvals: ApprovalSender,
     limits: CommandLimits,
-    scratch: Option<ScratchDirectory>,
     output_directory: Option<CommandOutputDirectory>,
     jobs: Option<BackgroundJobs>,
 }
@@ -53,8 +46,6 @@ struct Arguments {
     #[serde(default)]
     workspace_access: CommandWorkspaceAccess,
     #[serde(default)]
-    writable_snapshot: bool,
-    #[serde(default)]
     timeout_seconds: Option<u64>,
 }
 
@@ -65,41 +56,17 @@ fn offline_network() -> orbit_runtime::capability::NetworkPolicy {
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CommandLimits {
-    pub sandbox: bool,
     pub network: orbit_runtime::capability::NetworkPolicy,
-    pub rust_toolchain: Option<std::path::PathBuf>,
-    #[serde(alias = "snapshot_mib")]
     pub max_scan_mib: usize,
-    #[serde(alias = "snapshot_entries")]
     pub max_scan_entries: usize,
-    #[serde(alias = "writable_snapshot_mib")]
-    pub legacy_writable_snapshot_mib: Option<usize>,
     pub process_limits: ProcessLimits,
-    pub artifacts: crate::export_artifact::ArtifactLimits,
     pub read_file_scan_bytes: u64,
-    pub dependency_caches: Vec<DependencyCache>,
     pub verification_commands: std::collections::BTreeMap<String, String>,
     pub default_timeout_seconds: u64,
     pub max_timeout_seconds: u64,
 }
 
-pub use orbit_runtime::execution::{MountAccess, MountSpec, ProcessLimits, WorkspaceScanLimits};
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(deny_unknown_fields)]
-pub struct DependencyCache {
-    pub name: String,
-    pub path: std::path::PathBuf,
-}
-
-impl DependencyCache {
-    pub fn to_mount_spec(&self) -> MountSpec {
-        MountSpec::read_only(
-            &self.path,
-            std::path::PathBuf::from(format!("/opt/orbit-cache/{}", self.name)),
-        )
-    }
-}
+pub use orbit_runtime::execution::{ProcessLimits, WorkspaceScanLimits};
 
 impl From<&CommandLimits> for WorkspaceScanLimits {
     fn from(limits: &CommandLimits) -> Self {
@@ -121,16 +88,11 @@ impl Default for CommandLimits {
         let scan_limits = WorkspaceScanLimits::default();
 
         Self {
-            sandbox: false,
             network: orbit_runtime::capability::NetworkPolicy::Allow,
-            rust_toolchain: None,
             max_scan_mib: scan_limits.max_scan_mib,
             max_scan_entries: scan_limits.max_scan_entries,
-            legacy_writable_snapshot_mib: None,
             process_limits: ProcessLimits::default(),
-            artifacts: Default::default(),
             read_file_scan_bytes: DEFAULT_FILE_SCAN_BYTES,
-            dependency_caches: Vec::new(),
             verification_commands: Default::default(),
             default_timeout_seconds: 120,
             max_timeout_seconds: 600,
@@ -148,14 +110,6 @@ impl CommandLimits {
             );
         }
 
-        if self
-            .rust_toolchain
-            .as_ref()
-            .is_some_and(|path| !path.is_absolute())
-        {
-            return Err("command.rust_toolchain must be an absolute toolchain directory");
-        }
-
         if !(1..=1024).contains(&self.max_scan_mib)
             || !(1..=100_000).contains(&self.max_scan_entries)
         {
@@ -163,26 +117,7 @@ impl CommandLimits {
         }
 
         self.process_limits.validate()?;
-        let mut names = std::collections::BTreeSet::new();
-
-        for cache in &self.dependency_caches {
-            if cache.name.is_empty()
-                || cache.name.len() > 48
-                || !cache
-                    .name
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
-                || !cache.path.is_absolute()
-                || !names.insert(&cache.name)
-            {
-                return Err(
-                    "dependency cache names must be unique ASCII letters/digits/-/_ up to 48 bytes, with absolute directory paths",
-                );
-            }
-        }
-
-        if self.dependency_caches.len() > 16
-            || self.verification_commands.len() > 16
+        if self.verification_commands.len() > 16
             || self.verification_commands.iter().any(|(name, cmd)| {
                 name.is_empty()
                     || name.len() > 64
@@ -192,7 +127,7 @@ impl CommandLimits {
             })
         {
             return Err(
-                "at most 16 caches and 16 named verification commands; commands must be nonempty and at most 4096 bytes",
+                "at most 16 named verification commands; commands must be nonempty and at most 4096 bytes",
             );
         }
 
@@ -214,7 +149,6 @@ impl RunCommand {
             workspace,
             approvals,
             limits,
-            scratch: None,
             output_directory: None,
             jobs: None,
         }
@@ -222,11 +156,6 @@ impl RunCommand {
 
     pub fn with_background_jobs(mut self, jobs: BackgroundJobs) -> Self {
         self.jobs = Some(jobs);
-        self
-    }
-
-    pub fn with_scratch(mut self, scratch: ScratchDirectory) -> Self {
-        self.scratch = Some(scratch);
         self
     }
 
@@ -240,26 +169,10 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",
-            if self.limits.sandbox {
-                format!(
-                    "Run a /bin/sh command inside a secure Linux Bubblewrap sandbox. /workspace is mounted read-only by default ('workspace_access': 'read'); commands cannot modify project files unless 'workspace_access' is explicitly set to 'read_write'. Auto mode automatically approves all commands started in the workspace, including scripts, writes and network access allowed by configuration. Ask mode requests confirmation; Yolo approves automatically. Native Git commands are available within the requested sandbox permissions. Use git_push for an ordinary HTTPS push requiring host credentials. Protected paths (.env*, orbit config/db) are isolated and masked; Existing repository configuration and hooks are read-only unless an explicitly approved configuration operation requests read_write. Access to paths outside /workspace is denied by default unless granted via request_capability or persistent workspace configuration. Network is denied by default; request network=allow explicitly, subject to the configured policy and approval. Enforces execution timeout, private script execution, and resource limits. When background=true, starts a managed command and returns a job_id after approval; the same timeout and permissions apply. Independent background commands may overlap. Completion is delivered automatically to this session between model requests. Continue useful independent work; when nothing remains, call wait_commands once rather than polling get_command_status. Use cancel_commands to stop jobs. Background jobs do not survive an Orbit restart and are cancelled when the Agent run is stopped. /tmp is a disposable command temporary directory. Persistent scratch is mounted at /scratch when configured; HOME is /scratch/home in that case, or /tmp/home. System tools are available; a host-configured Rust toolchain may be mounted read-only at /opt/orbit-rust and added to PATH. Host-configured dependency caches are mounted read-only at /opt/orbit-cache/<name>. Output is captured with byte counts and retained per session; large outputs return an output_id for pagination via read_command_output. Read-only cache mounts: {}. Host-configured verification commands: {}.",
-                    serde_json::to_string(
-                        &self
-                            .limits
-                            .dependency_caches
-                            .iter()
-                            .map(|c| format!("/opt/orbit-cache/{}", c.name))
-                            .collect::<Vec<_>>()
-                    )
-                    .unwrap_or_default(),
-                    serde_json::to_string(&self.limits.verification_commands).unwrap_or_default()
-                )
-            } else {
-                format!(
-                    "Run a command with the target user's shell, real working directory, HOME and development environment. There is no filesystem or network sandbox. workspace_access and network declare intended effects for approval, not OS restrictions. Use real host paths; there are no /workspace or /scratch mounts. Session scratch is available through $ORBIT_SCRATCH. Use native Git with the target user's configured SSH or HTTPS authentication. Auto mode automatically approves all commands started in the workspace, including scripts and networked commands. Ask mode requests confirmation; Yolo approves automatically. Approval does not restrict a native command to its starting directory. Timeout, cancellation, bounded output and process resource limits apply. background=true returns a managed job_id; use wait_commands when idle and read_command_output for retained output. Jobs do not survive a service restart. Verification commands: {}.",
-                    serde_json::to_string(&self.limits.verification_commands).unwrap_or_default()
-                )
-            },
+            format!(
+                "Run a command with the target user's shell, real working directory, HOME and development environment. There is no filesystem or network sandbox. workspace_access and network declare intended effects for approval, not OS restrictions. Use real host paths and save generated files directly in the project or a user-specified location. Outputs belong to the user; Orbit does not export or clean project artifacts. Use native Git with the target user's configured SSH or HTTPS authentication. Auto mode automatically approves all commands started in the workspace, including scripts and networked commands. Ask mode requests confirmation; Yolo approves automatically. Approval does not restrict a native command to its starting directory. Timeout, cancellation, bounded output and process resource limits apply. background=true returns a managed job_id; use wait_commands when idle and read_command_output for retained output. Jobs do not survive a service restart. Verification commands: {}.",
+                serde_json::to_string(&self.limits.verification_commands).unwrap_or_default()
+            ),
             json!({
                 "type": "object",
                 "properties": {
@@ -274,7 +187,7 @@ impl Tool for RunCommand {
                         "type": "string",
                         "enum": ["read", "read_write"],
                         "default": "read",
-                        "description": "Workspace access mode. Defaults to 'read'; enforced as a read-only mount only when sandboxing is enabled. Specify 'read_write' if the command needs to modify files in the workspace (such as cargo build, npm install, code generation)."
+                        "description": "Declared workspace access for approval, not an OS restriction. Defaults to 'read'. Specify 'read_write' if the command needs to modify files in the workspace (such as cargo build, npm install, code generation)."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -316,12 +229,6 @@ impl Tool for RunCommand {
             }
 
             let (sender, receiver) = oneshot::channel();
-
-            if args.writable_snapshot {
-                return Err(invalid(
-                    "'writable_snapshot' is deprecated. Orbit executes directly in the workspace with protected path masking. For workspace write access, specify 'workspace_access': 'read_write'.",
-                ));
-            }
 
             let requested_cwd = match args.cwd {
                 Some(ref dir) => {
@@ -386,15 +293,9 @@ impl Tool for RunCommand {
                 }
             }
 
-            for cache in &self.limits.dependency_caches {
-                external_capabilities
-                    .push(format!("{} (ro, dependency cache)", cache.path.display()));
-            }
-
             let git_analysis = orbit_runtime::git::GitCommandAnalysis::parse(&args.command);
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
-                    sandbox: self.limits.sandbox,
                     command: args.command.clone(),
                     cwd: args.cwd.clone().filter(|s| !s.is_empty()),
                     workspace_access,
@@ -423,10 +324,6 @@ impl Tool for RunCommand {
                 ));
             }
 
-            let scratch = self
-                .scratch
-                .as_ref()
-                .map(|directory| directory.read().expect("scratch lock poisoned").clone());
             let output_log = match &self.output_directory {
                 Some(directory) => {
                     let directory = directory
@@ -468,72 +365,18 @@ impl Tool for RunCommand {
                     ),
                 };
 
-            let backend = execution_backend(self.limits.sandbox)?;
-            let mut request = ExecutionRequest::new(
+            let backend = execution_backend();
+            let request = ExecutionRequest::new(
                 args.command.clone(),
                 execution_env.cwd.clone(),
                 Duration::from_secs(timeout_seconds),
             )
             .with_verification(fingerprint, workspace_files, skipped_entries);
 
-            if let Some(s) = scratch.as_ref() {
-                request = request.with_scratch(s);
-            }
-
-            let effective_policy = self.workspace.policy().effective_policy();
-            let mut execution_policy = ExecutionPolicy::dev_default();
-            execution_policy.read_only_workspace = workspace_access == CommandWorkspaceAccess::Read;
-            execution_policy.network = args.network;
-            execution_policy.mounts = self
-                .limits
-                .dependency_caches
-                .iter()
-                .map(DependencyCache::to_mount_spec)
-                .collect();
-            execution_policy.protected_paths = self.workspace.protected().to_vec();
-            execution_policy.opaque_runtime_roots = self.workspace.opaque_runtime_roots().to_vec();
-            execution_policy.resources = self.limits.process_limits.clone().into();
-            execution_policy.rust_toolchain = self.limits.rust_toolchain.clone();
-            execution_policy.unmask_git = true;
-            execution_policy.allow_git_config_write = workspace_access
-                == CommandWorkspaceAccess::ReadWrite
-                && orbit_runtime::git::GitCommandAnalysis::parse(&request.command).is_some_and(
-                    |g| {
-                        matches!(
-                            g.kind,
-                            orbit_runtime::git::GitOperationKind::ConfigMutation { .. }
-                        )
-                    },
-                );
-            execution_policy.read_templates = effective_policy.read_templates.clone();
-            execution_policy.write_templates = effective_policy.write_templates.clone();
-            execution_policy.external_read = effective_policy
-                .persistent_read
-                .iter()
-                .map(|p| p.canonical().to_path_buf())
-                .collect();
-            execution_policy.external_read_write = effective_policy
-                .persistent_read_write
-                .iter()
-                .map(|p| p.canonical().to_path_buf())
-                .collect();
-
-            if let Ok(store) = self.workspace.policy().session_grants().read() {
-                for grant in store.grants() {
-                    if !grant.environment.is_local() {
-                        continue;
-                    }
-                    if grant.write {
-                        execution_policy
-                            .external_read_write
-                            .push(grant.path.canonical().to_path_buf());
-                    } else {
-                        execution_policy
-                            .external_read
-                            .push(grant.path.canonical().to_path_buf());
-                    }
-                }
-            }
+            let execution_policy = ExecutionPolicy {
+                resources: self.limits.process_limits.clone().into(),
+                ..Default::default()
+            };
 
             let workspace = self.workspace.clone();
             let scan_limits = self.limits.clone().into();
@@ -641,8 +484,8 @@ mod configuration_tests {
     use super::*;
 
     #[test]
-    fn configurable_environment_rejects_ambiguous_mounts_and_invalid_budgets() {
-        let limits: CommandLimits = toml::from_str("max_scan_mib=128\nmax_scan_entries=20000\ndependency_caches=[{name='cargo',path='/offline/cargo'}]\n[verification_commands]\ntest='cargo test --offline'\n").unwrap();
+    fn command_configuration_validates_scan_and_process_budgets() {
+        let limits: CommandLimits = toml::from_str("max_scan_mib=128\nmax_scan_entries=20000\n[verification_commands]\ntest='cargo test --offline'\n").unwrap();
 
         assert!(limits.validate().is_ok());
         assert_eq!(limits.max_scan_mib, 128);
@@ -655,14 +498,6 @@ mod configuration_tests {
             orbit_runtime::capability::NetworkPolicy::Deny
         );
 
-        let legacy: CommandLimits =
-            toml::from_str("snapshot_mib=256\nsnapshot_entries=30000\nwritable_snapshot_mib=512\n")
-                .unwrap();
-
-        assert!(legacy.validate().is_ok());
-        assert_eq!(legacy.max_scan_mib, 256);
-        assert_eq!(legacy.max_scan_entries, 30000);
-
         let mut bad = limits.clone();
         bad.max_scan_mib = 0;
 
@@ -672,36 +507,5 @@ mod configuration_tests {
         bad.process_limits.max_memory_bytes = 1024; // < 16 MiB
 
         assert!(bad.validate().is_err());
-
-        let mut bad = limits.clone();
-        bad.dependency_caches.push(bad.dependency_caches[0].clone());
-
-        assert!(bad.validate().is_err());
-
-        let mut bad = limits.clone();
-        bad.dependency_caches[0].name = "../escape".into();
-
-        assert!(bad.validate().is_err());
-
-        let mut bad = limits;
-        bad.dependency_caches[0].path = "relative".into();
-
-        assert!(bad.validate().is_err());
-    }
-
-    #[test]
-    fn tool_schema_omits_writable_snapshot() {
-        let (sender, _receiver) = crate::approval::channel();
-        let ws_temp = tempfile::tempdir().unwrap();
-        let workspace = Workspace::new(ws_temp.path()).unwrap();
-        let tool = RunCommand::new(workspace, sender);
-        let def = tool.definition();
-        let props = def.function.parameters["properties"].as_object().unwrap();
-
-        assert!(props.contains_key("command"));
-        assert!(props.contains_key("cwd"));
-        assert!(props.contains_key("workspace_access"));
-        assert!(props.contains_key("timeout_seconds"));
-        assert!(!props.contains_key("writable_snapshot"));
     }
 }

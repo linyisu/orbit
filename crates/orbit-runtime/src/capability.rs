@@ -98,7 +98,7 @@ impl FilesystemCapability {
     }
 }
 
-/// Network access policy for sandboxed execution.
+/// Network declaration policy used by command approval.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NetworkPolicy {

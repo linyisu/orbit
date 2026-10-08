@@ -707,69 +707,6 @@ pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
     Some(view.finish())
 }
 
-pub(super) fn export_artifact(
-    row: &ToolRow,
-    _expanded: bool,
-    width: u16,
-) -> Option<Vec<Line<'static>>> {
-    let value: Value = serde_json::from_str(&row.output).ok()?;
-    let path = value["path"].as_str().unwrap_or_default();
-    let name = value["name"].as_str().unwrap_or_default();
-    let bytes = value["bytes"].as_u64().unwrap_or(0);
-    let sha256 = value["sha256"].as_str().unwrap_or_default();
-    let theme = &crate::tui::theme::THEME;
-    let mut view = View::new(true, width);
-
-    view.push_spans(vec![Span::styled(
-        format!("{} 工件已成功导出", icons::PACKAGE_VARIANT_CLOSED),
-        Style::default()
-            .fg(theme.success)
-            .add_modifier(Modifier::BOLD),
-    )]);
-    view.push(
-        &format!("  文件: {name} ({})", format_bytes(bytes)),
-        theme.output_foreground,
-    );
-    view.push(&format!("  路径: {path}"), theme.tool_detail);
-    if !sha256.is_empty() {
-        let short_sha = if sha256.len() > 16 {
-            &sha256[..16]
-        } else {
-            sha256
-        };
-
-        view.push(&format!("  哈希: sha256:{short_sha}…"), theme.output_muted);
-    }
-
-    Some(view.finish())
-}
-
-pub(super) fn git_export_patch(
-    row: &ToolRow,
-    _expanded: bool,
-    width: u16,
-) -> Option<Vec<Line<'static>>> {
-    let value: Value = serde_json::from_str(&row.output).ok()?;
-    let path = value["path"].as_str().unwrap_or_default();
-    let bytes = value["bytes"].as_u64().unwrap_or(0);
-    let theme = &crate::tui::theme::THEME;
-    let mut view = View::new(true, width);
-
-    view.push_spans(vec![Span::styled(
-        format!("{} Git 补丁已导出", icons::PACKAGE_VARIANT_CLOSED),
-        Style::default()
-            .fg(theme.success)
-            .add_modifier(Modifier::BOLD),
-    )]);
-    view.push(
-        &format!("  大小: {} ({bytes} 字节)", format_bytes(bytes)),
-        theme.output_foreground,
-    );
-    view.push(&format!("  路径: {path}"), theme.tool_detail);
-
-    Some(view.finish())
-}
-
 pub(super) fn read_image(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
     let path = value["path"].as_str().unwrap_or_default();

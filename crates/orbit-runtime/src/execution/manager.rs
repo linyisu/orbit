@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     error::RuntimeError,
     execution::{
-        backend::{BwrapBackend, ExecutionBackend},
+        backend::{ExecutionBackend, NativeBackend},
         environment::ExecutionEnvironment,
         output::OutputLog,
         policy::ExecutionPolicy,
@@ -23,9 +23,8 @@ impl ExecutionManager {
         Self { backend }
     }
 
-    pub fn linux() -> Result<Self, RuntimeError> {
-        let backend = BwrapBackend::new()?;
-        Ok(Self::new(Arc::new(backend)))
+    pub fn native() -> Self {
+        Self::new(Arc::new(NativeBackend))
     }
 
     pub fn backend(&self) -> &dyn ExecutionBackend {

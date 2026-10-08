@@ -1,13 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 pub const MIB: usize = 1024 * 1024;
-pub const TMP_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 pub const UNLIMITED: u64 = 0;
 pub const DEFAULT_MAX_MEMORY_BYTES: u64 = UNLIMITED;
 pub const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = UNLIMITED;
-pub const DEFAULT_MAX_PROCESSES: u64 = 1024;
 pub const DEFAULT_MAX_OPEN_FILES: u64 = 1024;
-pub const DEFAULT_MAX_TMP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// OS process limits. Zero disables the corresponding limit.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -15,9 +12,7 @@ pub const DEFAULT_MAX_TMP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub struct ProcessLimits {
     pub max_memory_bytes: u64,
     pub max_file_size_bytes: u64,
-    pub max_processes: u64,
     pub max_open_files: u64,
-    pub max_tmp_bytes: u64,
 }
 
 impl ProcessLimits {
@@ -36,13 +31,6 @@ impl ProcessLimits {
             return Err("process max_file_size_bytes must be at least 1 KiB or 0 (unlimited)");
         }
 
-        if self.max_processes != UNLIMITED
-            && self.max_processes != u64::MAX
-            && self.max_processes < 1
-        {
-            return Err("process max_processes must be at least 1");
-        }
-
         if self.max_open_files != UNLIMITED
             && self.max_open_files != u64::MAX
             && self.max_open_files < 16
@@ -59,9 +47,7 @@ impl Default for ProcessLimits {
         Self {
             max_memory_bytes: DEFAULT_MAX_MEMORY_BYTES,
             max_file_size_bytes: DEFAULT_MAX_FILE_SIZE_BYTES,
-            max_processes: DEFAULT_MAX_PROCESSES,
             max_open_files: DEFAULT_MAX_OPEN_FILES,
-            max_tmp_bytes: DEFAULT_MAX_TMP_BYTES,
         }
     }
 }
@@ -72,9 +58,7 @@ impl Default for ProcessLimits {
 pub struct ResourceLimits {
     pub max_memory_bytes: Option<u64>,
     pub max_file_size_bytes: Option<u64>,
-    pub max_processes: Option<u64>,
     pub max_open_files: Option<u64>,
-    pub max_tmp_bytes: Option<u64>,
 }
 
 impl ResourceLimits {
@@ -98,9 +82,7 @@ impl ResourceLimits {
             max_file_size_bytes: self
                 .max_file_size_bytes
                 .unwrap_or(DEFAULT_MAX_FILE_SIZE_BYTES),
-            max_processes: self.max_processes.unwrap_or(DEFAULT_MAX_PROCESSES),
             max_open_files: self.max_open_files.unwrap_or(DEFAULT_MAX_OPEN_FILES),
-            max_tmp_bytes: self.max_tmp_bytes.unwrap_or(DEFAULT_MAX_TMP_BYTES),
         }
     }
 }
@@ -110,9 +92,7 @@ impl From<ProcessLimits> for ResourceLimits {
         Self {
             max_memory_bytes: Some(limits.max_memory_bytes),
             max_file_size_bytes: Some(limits.max_file_size_bytes),
-            max_processes: Some(limits.max_processes),
             max_open_files: Some(limits.max_open_files),
-            max_tmp_bytes: Some(limits.max_tmp_bytes),
         }
     }
 }
@@ -155,9 +135,7 @@ mod tests {
         let original = ProcessLimits {
             max_memory_bytes: 0,
             max_file_size_bytes: 0,
-            max_processes: 0,
             max_open_files: 0,
-            max_tmp_bytes: 0,
         };
 
         let resource_limits = ResourceLimits::from(original.clone());

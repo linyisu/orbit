@@ -1,4 +1,3 @@
-pub mod linux;
 mod native;
 
 use std::pin::Pin;
@@ -15,19 +14,13 @@ use crate::{
     },
 };
 
-pub use linux::BwrapBackend;
+pub use native::NativeBackend;
 
-pub fn execution_backend(
-    sandbox: bool,
-) -> Result<Box<dyn ExecutionBackend>, crate::error::RuntimeError> {
-    if sandbox {
-        Ok(Box::new(BwrapBackend::new()?))
-    } else {
-        Ok(Box::new(native::NativeBackend))
-    }
+pub fn execution_backend() -> Box<dyn ExecutionBackend> {
+    Box::new(native::NativeBackend)
 }
 
-/// An explicitly selected backend; sandbox failures never change the selection.
+/// Process execution interface shared by command and helper workers.
 pub trait ExecutionBackend: Send + Sync {
     fn name(&self) -> &'static str;
 

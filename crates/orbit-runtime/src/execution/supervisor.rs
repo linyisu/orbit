@@ -79,7 +79,6 @@ pub(crate) async fn run_child_process(
     token: CancellationToken,
     output_log: Option<OutputLog>,
     sandbox_label: &'static str,
-    persistent_scratch: bool,
     workspace_files: usize,
     skipped_entries: usize,
     verification: Option<VerificationEvidence>,
@@ -164,11 +163,6 @@ pub(crate) async fn run_child_process(
         output_id,
         retained_output_truncated,
         sandbox: sandbox_label,
-        scratch: if persistent_scratch {
-            Some("/scratch (persistent session files; no persistent processes)")
-        } else {
-            None
-        },
         workspace_files,
         skipped_entries,
         verification_error: None,

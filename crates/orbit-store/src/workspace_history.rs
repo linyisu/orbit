@@ -96,7 +96,7 @@ impl Store {
 
     /// Reconstruct successful `run_command` invocations from durable tool
     /// results. This deliberately excludes model prose and failed requests
-    /// that never reached the sandbox.
+    /// that never started execution.
     pub async fn verification_records(&self, session_id: &str) -> Result<Vec<VerificationRecord>> {
         let session_id = session_id.to_owned();
 

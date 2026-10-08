@@ -38,7 +38,6 @@ const CORE_PROMPT: &str = concat!(
     "For UI work, enumerate the relevant screen states and inspect actual rendered output for each state that can be exercised; a headless test of one screen is evidence only for that screen. ",
     "Do not claim a font glyph or visual layout was verified without a renderer that displayed it; name any visual check that remains unverified. ",
     "After compaction, confirm task-critical constraints against the current state or retrieve earlier history when needed. ",
-    "If Git metadata is inaccessible under the command sandbox, explain the limitation and offer a patch or artifact that can be exported without weakening the sandbox. ",
     "For a question that needs no change, answer from evidence without inventing tool work.",
 );
 

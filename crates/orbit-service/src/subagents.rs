@@ -697,12 +697,6 @@ impl Service {
             Some(Arc::new(std::sync::RwLock::new(
                 self.store
                     .path()
-                    .with_extension("workspaces")
-                    .join(&agent.id),
-            ))),
-            Some(Arc::new(std::sync::RwLock::new(
-                self.store
-                    .path()
                     .with_extension("command-output")
                     .join(&agent.id),
             ))),

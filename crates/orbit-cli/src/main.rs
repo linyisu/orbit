@@ -174,13 +174,13 @@ enum ChatCapability {
     Document,
     /// read_file, list_files, search_text and project_overview.
     Files,
-    /// git_inspect and git_export_patch.
+    /// Git operations.
     Git,
     /// write_file and edit_file.
     Write,
     /// request_capability for paths outside the workspace.
     Capability,
-    /// run_command, read_command_output, verification_status and export_artifact.
+    /// run_command, read_command_output, verification_status.
     Command,
     /// Archived context retrieval and tool-output pruning.
     History,

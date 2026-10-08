@@ -82,7 +82,6 @@ fn command_approval_card_renders_rounded_frame_and_buttons() {
     let mut state = UiState::new("mock");
     state.approval = Some(orbit_tools::approval::ApprovalPreview::Command(
         CommandPreview {
-            sandbox: true,
             command: "mkdir -p demo".into(),
             workspace_access: CommandWorkspaceAccess::ReadWrite,
             network_allowed: true,
@@ -108,7 +107,7 @@ fn command_approval_card_renders_rounded_frame_and_buttons() {
     let flat = text.replace(' ', "");
     assert!(text.contains("mkdir -p demo"), "{text}");
     assert!(flat.contains("权限确认"), "{text}");
-    assert!(flat.contains("[沙箱·读写]"), "{text}");
+    assert!(flat.contains("[普通执行]"), "{text}");
     assert!(flat.contains("[联网]"), "{text}");
     assert!(flat.contains("cwd:/home/user/repo"), "{text}");
     assert!(!text.contains("Tab 切换"), "{text}");
@@ -149,7 +148,6 @@ fn git_dangerous_card_shows_risk_and_badges() {
     let mut state = UiState::new("mock");
     state.approval = Some(orbit_tools::approval::ApprovalPreview::Command(
         CommandPreview {
-            sandbox: true,
             command: "git reset --hard HEAD~1".into(),
             workspace_access: CommandWorkspaceAccess::ReadWrite,
             network_allowed: false,
@@ -176,7 +174,7 @@ fn git_dangerous_card_shows_risk_and_badges() {
     assert!(flat.contains("权限确认"), "{text}");
     assert!(flat.contains("高危操作(reset)"), "{text}");
     assert!(text.contains("git reset --hard HEAD~1"), "{text}");
-    assert!(flat.contains("[沙箱·读写]"), "{text}");
+    assert!(flat.contains("[普通执行]"), "{text}");
     assert!(!flat.contains("[联网]"), "{text}");
     assert!(!text.contains("Tab 切换"), "{text}");
 }

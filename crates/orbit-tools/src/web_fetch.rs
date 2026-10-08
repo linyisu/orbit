@@ -464,8 +464,7 @@ async fn fetch(args: Arguments, mut url: Url, client: &WebClient) -> Result<Stri
             if browser::is_browser_challenge(response.headers())
                 && let Some(browser_proxy) = browser_proxy
             {
-                return browser_output(&requested, &url, browser_proxy, &args, client.sandbox)
-                    .await;
+                return browser_output(&requested, &url, browser_proxy, &args).await;
             }
 
             return Err(fetch_status_error(response.status(), response.headers()));
@@ -509,8 +508,7 @@ async fn fetch(args: Arguments, mut url: Url, client: &WebClient) -> Result<Stri
             && quality::javascript_shell(&text)
         {
             if let Some(browser_proxy) = browser_proxy {
-                return browser_output(&requested, &url, browser_proxy, &args, client.sandbox)
-                    .await;
+                return browser_output(&requested, &url, browser_proxy, &args).await;
             }
             return Err(failed(
                 "page returned only a JavaScript application shell, not readable content; use a browser to read this exact URL. Automatic browser rendering requires Firefox and an available unauthenticated HTTP proxy",
@@ -543,9 +541,8 @@ async fn browser_output(
     url: &Url,
     proxy: &Url,
     args: &Arguments,
-    sandbox: bool,
 ) -> Result<String, ToolError> {
-    let browser_page = browser::fetch(url, proxy, sandbox).await?;
+    let browser_page = browser::fetch(url, proxy).await?;
     if browser_page.text.trim().is_empty() || quality::javascript_shell(&browser_page.text) {
         return Err(failed(
             "browser rendering did not produce readable page content",

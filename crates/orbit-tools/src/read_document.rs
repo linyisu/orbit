@@ -100,7 +100,6 @@ impl Converted {
 pub struct ReadDocument {
     workspace: Workspace,
     worker: Option<std::path::PathBuf>,
-    sandbox: bool,
     images: Option<crate::image_assets::ImageAssets>,
     cache:
         tokio::sync::Mutex<std::collections::VecDeque<(String, String, std::sync::Arc<Converted>)>>,
@@ -111,7 +110,6 @@ impl ReadDocument {
         Self {
             workspace,
             worker: None,
-            sandbox: false,
             images: None,
             cache: tokio::sync::Mutex::new(Default::default()),
         }
@@ -119,11 +117,6 @@ impl ReadDocument {
 
     pub fn with_images(mut self, images: crate::image_assets::ImageAssets) -> Self {
         self.images = Some(images);
-        self
-    }
-
-    pub fn with_sandbox(mut self, sandbox: bool) -> Self {
-        self.sandbox = sandbox;
         self
     }
 
@@ -249,7 +242,6 @@ impl Tool for ReadDocument {
                         worker,
                         &bytes,
                         &extension,
-                        self.sandbox,
                         (arguments.start_page, arguments.end_page),
                         cancellation.clone(),
                     )
@@ -377,30 +369,28 @@ async fn convert_worker(
     worker: &Path,
     bytes: &[u8],
     extension: &str,
-    sandbox: bool,
     pages: (Option<u32>, Option<u32>),
     cancellation: CancellationToken,
 ) -> Result<Document, ToolError> {
     let arguments =
         [pages.0, pages.1].map(|page| page.map(|p| p.to_string()).unwrap_or_else(|| "-".into()));
-    let scratch = worker::run(
+    let temporary_output = worker::run(
         worker,
         bytes,
         extension,
-        sandbox,
         "--internal-document-worker",
         &arguments,
         cancellation,
     )
     .await?;
-    let file = std::fs::File::open(scratch.path().join("result.json")).map_err(failed)?;
+    let file = std::fs::File::open(temporary_output.path().join("result.json")).map_err(failed)?;
     if file.metadata().map_err(failed)?.len() > 64 * 1024 * 1024 {
         return Err(failed("document worker output exceeds 64 MiB"));
     }
     serde_json::from_reader(file).map_err(failed)
 }
 
-/// Worker entry point for the host to invoke inside the conversion sandbox.
+/// Worker entry point for the host to invoke in a separate conversion process.
 pub fn document_worker(
     input: &Path,
     output: &Path,

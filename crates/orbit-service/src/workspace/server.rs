@@ -729,17 +729,12 @@ async fn capabilities() -> orbit_protocol::Capabilities {
         tokio::sync::OnceCell::const_new();
     CAPABILITIES
         .get_or_init(|| async {
-            let sandbox = match orbit_runtime::execution::capabilities::check_sandbox().await {
-                Ok(()) => orbit_protocol::Availability::Available,
-                Err(error) => orbit_protocol::Availability::Unavailable(format!("{error:#}")),
-            };
             orbit_protocol::Capabilities {
                 system: std::env::consts::OS.into(),
                 architecture: std::env::consts::ARCH.into(),
                 shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
                 native_processes: true,
                 files: true,
-                sandbox,
                 features: [
                     "sessions",
                     "events",

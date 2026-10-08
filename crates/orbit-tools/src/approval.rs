@@ -25,8 +25,6 @@ pub enum CommandWorkspaceAccess {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CommandPreview {
-    #[serde(default = "sandbox_default")]
-    pub sandbox: bool,
     pub command: String,
     pub cwd: Option<String>,
     pub timeout_seconds: u64,
@@ -38,22 +36,17 @@ pub struct CommandPreview {
     pub git: Option<orbit_runtime::git::GitCommandAnalysis>,
 }
 
-fn sandbox_default() -> bool {
-    true
-}
-
 impl CommandPreview {
     pub fn request_grant_key(&self, workspace: &Path) -> String {
         format!(
-            "{}:{:?}:{}:{:?}:{}:{}:{:?}:{}",
+            "{}:{:?}:{}:{:?}:{}:{}:{:?}",
             workspace.display(),
             self.cwd,
             self.command,
             self.workspace_access,
             self.network_allowed,
             self.external_write,
-            self.external_capabilities,
-            self.sandbox
+            self.external_capabilities
         )
     }
 
@@ -95,15 +88,14 @@ impl CommandPreview {
         }
 
         Some(format!(
-            "{}:{:?}:{}:{:?}:{}:{:?}:{}:{}",
+            "{}:{:?}:{}:{:?}:{}:{:?}:{}",
             repo.git_dir.display(),
             self.cwd,
             self.command,
             self.workspace_access,
             self.network_allowed,
             self.external_capabilities,
-            orbit_runtime::execution::content_hash(&bytes),
-            self.sandbox
+            orbit_runtime::execution::content_hash(&bytes)
         ))
     }
 }
@@ -138,7 +130,7 @@ pub fn workspace_local_file(path: &str, workspace: &Path) -> bool {
 
 /// Auto trusts commands started in the workspace, including networked scripts.
 /// This is an approval policy, not shell analysis or filesystem isolation;
-/// execution policy still controls the sandbox and available capabilities.
+/// approved commands execute with the target user’s ordinary OS access.
 pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
     match preview {
         ApprovalPreview::Command(command) => {

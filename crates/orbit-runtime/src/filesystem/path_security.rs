@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-/// Reserved names shared by file access, capability policy and sandbox masks.
+/// Reserved names shared by file access and capability policy.
 pub(crate) fn is_protected_workspace_name(name: &str) -> bool {
     matches!(name, ".git" | ".env")
         || name.starts_with(".env.")

@@ -25,7 +25,7 @@ pub fn register(
 ) {
     tools.register(ClosureTool::new(
         "verification_status",
-        "Inspect this session's actual command evidence and compare input file fingerprints with the current filtered workspace. Call after final edits before reporting verification. A zero exit code is not proof of tests; input_unchanged means the current workspace matches the recorded input or post-command output fingerprint; it does not verify mutable system tools, caches, scratch, or external state. Also classifies per-path changes against the session baseline and Orbit receipts. Old sessions without evidence remain unknown. Does not execute commands or change files.",
+        "Inspect this session's actual command evidence and compare input file fingerprints with the current filtered workspace. Call after final edits before reporting verification. A zero exit code is not proof of tests; input_unchanged means the current workspace matches the recorded input or post-command output fingerprint; it does not verify mutable system tools, caches, or external state. Also classifies per-path changes against the session baseline and Orbit receipts. Old sessions without evidence remain unknown. Does not execute commands or change files.",
         json!({
             "type": "object",
             "properties": {},
@@ -141,10 +141,6 @@ fn compare(
                 "environment": record.evidence.as_ref().map(|e| json!({
                     "platform": e.platform,
                     "isolation": e.isolation,
-                    "rust_toolchain": e.rust_toolchain,
-                    "writable_snapshot": e.writable_snapshot,
-                    "persistent_scratch": e.persistent_scratch,
-                    "mounts": e.mounts
                 }))
             })
         })
@@ -225,7 +221,7 @@ fn compare(
         "commands_omitted": commands.len().saturating_sub(20),
         "changes": paths,
         "changes_omitted": total.saturating_sub(100),
-        "limitations": "Source fingerprints cover the same filtered workspace as run_command, not ignored runtime directories or external system state. Commands with workspace_access=read_write modify the real workspace; scratch may also persist between commands. Inspect the command and its output before claiming tests passed; stale or unknown evidence does not verify current edits."
+        "limitations": "Source fingerprints cover the same filtered workspace as run_command, not ignored runtime directories or external system state. Commands execute in the real workspace with the target user environment. Inspect the command and its output before claiming tests passed; stale or unknown evidence does not verify current edits."
     })
 }
 
@@ -373,11 +369,7 @@ mod tests {
                 input: verified.clone(),
                 output: None,
                 platform: "linux".into(),
-                isolation: "bubblewrap".into(),
-                rust_toolchain: None,
-                writable_snapshot: true,
-                persistent_scratch: true,
-                mounts: Vec::new(),
+                isolation: "native".into(),
             }),
         };
         let same = compare(
@@ -403,11 +395,7 @@ mod tests {
                 input: verified.clone(),
                 output: Some(modified_ws.clone()),
                 platform: "linux".into(),
-                isolation: "bubblewrap".into(),
-                rust_toolchain: None,
-                writable_snapshot: false,
-                persistent_scratch: false,
-                mounts: Vec::new(),
+                isolation: "native".into(),
             }),
         };
         let compared = compare(

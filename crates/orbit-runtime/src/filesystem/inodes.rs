@@ -73,32 +73,8 @@ pub(crate) fn collect_dir_inodes(
     Ok(())
 }
 
-/// Scan opaque roots only when a multiply-linked inode could point into one.
-/// A root on another device cannot share a hardlink with the candidate.
-pub(crate) fn collect_opaque_inodes_for_dev(
-    device: u64,
-    roots: &[std::path::PathBuf],
-    protected_inodes: &mut HashSet<(u64, u64)>,
-    scanned: &mut HashSet<std::path::PathBuf>,
-) -> Result<(), RuntimeError> {
-    for root in roots {
-        let metadata = match std::fs::symlink_metadata(root) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(failed(error)),
-        };
-
-        if metadata.dev() == device && metadata.is_dir() && scanned.insert(root.clone()) {
-            collect_dir_inodes(root, protected_inodes)?;
-        }
-    }
-
-    Ok(())
-}
-
 /// File tools reject inode aliases of reserved workspace names as well as
-/// literal paths. The command sandbox performs this same check while building
-/// its mount masks; ordinary single-link reads need no extra traversal.
+/// literal paths; ordinary single-link reads need no extra traversal.
 pub(crate) fn is_reserved_workspace_inode_with_templates(
     root: &Path,
     candidate: (u64, u64),

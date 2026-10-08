@@ -22,7 +22,7 @@ cargo build --release -p orbit-server --target x86_64-unknown-linux-musl
 
 构建需要 `musl-tools` 和相应架构的 Rust target。客户端的 [server.rs](../../build-support/server.rs) 使用独立的 `target/workspace-server/` 构建缓存，编译本包的静态二进制，验证 ELF 加载器和动态库依赖后将文件内置到 `orbit`。部署时由客户端提供此资源，客户端处理目标检测、上传和校验。
 
-服务使用目标用户的普通进程执行命令。显式启用 `[command].sandbox` 时，目标需要提供 Bubblewrap 和可用的用户命名空间。静态服务可用于 glibc 版本较旧的 Linux 系统。
+服务使用目标用户的普通进程在真实工作目录执行命令，无需 Bubblewrap。静态服务可用于 glibc 版本较旧的 Linux 系统。
 
 ## 验证
 

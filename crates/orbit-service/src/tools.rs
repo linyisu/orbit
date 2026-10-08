@@ -32,7 +32,6 @@ pub async fn workspace_tools(
     web: orbit_tools::web_fetch::WebConfig,
     mcp: orbit_tools::mcp::McpConfig,
     allow_mcp_start: bool,
-    scratch: Option<orbit_tools::run_command::ScratchDirectory>,
     command_output: Option<orbit_tools::run_command::CommandOutputDirectory>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
 ) -> Result<WorkspaceRuntime> {
@@ -48,9 +47,7 @@ pub async fn workspace_tools(
     tools.register(
         ReadFile::new(workspace.clone()).with_scan_budget(command_limits.read_file_scan_bytes),
     );
-    let mut document = ReadDocument::new(workspace.clone())
-        .with_sandbox(command_limits.sandbox)
-        .with_worker(std::env::current_exe()?);
+    let mut document = ReadDocument::new(workspace.clone()).with_worker(std::env::current_exe()?);
     if let Some(database) = database {
         document = document.with_images(ImageAssets::for_database(database));
     }
@@ -70,16 +67,7 @@ pub async fn workspace_tools(
     ));
     // Model-facing Git commands use run_command; GitInspect supplies internal snapshots.
 
-    if let Some(database) = database {
-        tools.register(orbit_tools::git_export_patch::GitExportPatch::new(
-            workspace.clone(),
-            database.with_extension("artifacts"),
-        ));
-    }
-
-    let web_client = std::sync::Arc::new(
-        orbit_tools::web_fetch::WebClient::new(&web)?.with_sandbox(command_limits.sandbox),
-    );
+    let web_client = std::sync::Arc::new(orbit_tools::web_fetch::WebClient::new(&web)?);
     tools.register(orbit_tools::web_fetch::WebFetch::with_client(
         (*web_client).clone(),
     ));
@@ -111,23 +99,6 @@ pub async fn workspace_tools(
         tools.register(RequestCapability::new(workspace.clone(), approvals.clone()));
         let command = RunCommand::with_limits(workspace.clone(), approvals, command_limits.clone())
             .with_background_jobs(jobs);
-        let command = if let Some(scratch) = scratch {
-            if let Some(database) = database {
-                tools.register(
-                    orbit_tools::export_artifact::ExportArtifact::new(
-                        scratch.clone(),
-                        database.with_extension("artifacts"),
-                    )
-                    .with_workspace(workspace.clone())
-                    .with_limits(command_limits.artifacts.clone()),
-                );
-            }
-
-            command.with_scratch(scratch)
-        } else {
-            command
-        };
-
         if let Some(command_output) = command_output {
             tools.register(ReadCommandOutput::new(command_output.clone()));
             tools.register(command.with_output_directory(command_output));

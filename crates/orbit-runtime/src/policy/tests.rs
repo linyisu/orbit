@@ -178,14 +178,12 @@ fn rejects_reserved_runtime_paths() {
     let engine = PolicyEngine::new(workspace);
 
     for reserved in [
-        "/workspace/sub",
-        "/scratch/file",
-        "/orbit-command.sh",
-        "/orbit-source/file",
-        "/opt/orbit-rust/bin",
-        "/tmp/home/user",
+        "/",
+        "/tmp",
+        "/opt",
         "/proc/cpuinfo",
         "/dev/null",
+        "/sys/kernel",
     ] {
         let cap = FilesystemCapability::local_read(Path::new(reserved));
 

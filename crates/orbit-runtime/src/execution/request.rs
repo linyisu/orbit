@@ -4,14 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::verification::{VerificationEvidence, WorkspaceFingerprint};
 
-/// A command request with timeouts and optional session scratch storage.
+/// A command request in the target user environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionRequest {
     pub command: String,
     pub cwd: PathBuf,
     pub timeout: Duration,
     pub foreground_wait: Option<Duration>,
-    pub scratch: Option<PathBuf>,
     pub fingerprint: Option<WorkspaceFingerprint>,
     pub workspace_files: usize,
     pub skipped_entries: usize,
@@ -24,7 +23,6 @@ impl ExecutionRequest {
             cwd: cwd.into(),
             timeout,
             foreground_wait: None,
-            scratch: None,
             fingerprint: None,
             workspace_files: 0,
             skipped_entries: 0,
@@ -33,11 +31,6 @@ impl ExecutionRequest {
 
     pub fn with_foreground_wait(mut self, wait: Duration) -> Self {
         self.foreground_wait = Some(wait);
-        self
-    }
-
-    pub fn with_scratch(mut self, scratch: impl Into<PathBuf>) -> Self {
-        self.scratch = Some(scratch.into());
         self
     }
 
@@ -121,14 +114,12 @@ mod tests {
     #[test]
     fn execution_request_builders() {
         let req = ExecutionRequest::new("cargo test", "/workspace", Duration::from_secs(30))
-            .with_foreground_wait(Duration::from_millis(500))
-            .with_scratch("/scratch");
+            .with_foreground_wait(Duration::from_millis(500));
 
         assert_eq!(req.command, "cargo test");
         assert_eq!(req.cwd, PathBuf::from("/workspace"));
         assert_eq!(req.timeout, Duration::from_secs(30));
         assert_eq!(req.foreground_wait, Some(Duration::from_millis(500)));
-        assert_eq!(req.scratch, Some(PathBuf::from("/scratch")));
     }
 
     #[test]
@@ -145,7 +136,7 @@ mod tests {
             stderr_total_bytes: 0,
             output_id: None,
             retained_output_truncated: false,
-            sandbox: "bwrap",
+            sandbox: "native",
             verification_error: None,
             verification: None,
         };
@@ -165,7 +156,7 @@ mod tests {
             stderr_total_bytes: 0,
             output_id: None,
             retained_output_truncated: false,
-            sandbox: "bwrap",
+            sandbox: "native",
             verification_error: None,
             verification: None,
         };

@@ -1,4 +1,4 @@
-//! Optional, isolated browser reader for sites that explicitly demand browser verification.
+//! Optional browser reader for sites that explicitly demand browser verification.
 //! The configured proxy is the trusted egress boundary for this path.
 
 use std::time::Duration;
@@ -23,7 +23,7 @@ pub(super) fn is_browser_challenge(headers: &header::HeaderMap) -> bool {
         .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"challenge"))
 }
 
-pub(super) async fn fetch(url: &Url, proxy: &Url, sandbox: bool) -> Result<BrowserPage, ToolError> {
+pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolError> {
     if proxy.scheme() != "http" || !proxy.username().is_empty() || proxy.password().is_some() {
         return Err(failed(
             "browser verification requires an unauthenticated HTTP [web].proxy",
@@ -53,29 +53,20 @@ pub(super) async fn fetch(url: &Url, proxy: &Url, sandbox: bool) -> Result<Brows
     file.flush().await.map_err(failed)?;
     drop(file);
 
-    let mut launcher = if sandbox {
-        orbit_runtime::execution::sandbox::browser_reader_command(profile.path()).map_err(failed)?
-    } else {
-        let mut command = tokio::process::Command::new("/usr/bin/firefox");
-        command
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("HOME", profile.path())
-            .env("XDG_CONFIG_HOME", profile.path())
-            .env("XDG_CACHE_HOME", profile.path())
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
-        command
-    };
+    let mut launcher = tokio::process::Command::new("/usr/bin/firefox");
+    launcher
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", profile.path())
+        .env("XDG_CONFIG_HOME", profile.path())
+        .env("XDG_CACHE_HOME", profile.path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
     let mut child = launcher
         .args(["--headless", "--no-remote", "--profile"])
-        .arg(if sandbox {
-            std::path::Path::new("/orbit-browser")
-        } else {
-            profile.path()
-        })
+        .arg(profile.path())
         .args(["--remote-debugging-port", "0"])
         .spawn()
         .map_err(|error| {

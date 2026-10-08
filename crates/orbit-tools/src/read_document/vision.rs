@@ -86,7 +86,6 @@ pub(super) async fn attach(
                 executable,
                 bytes,
                 "pdf",
-                tool.sandbox,
                 "--internal-pdf-render-worker",
                 &[pages_arg],
                 cancellation.clone(),
@@ -106,7 +105,7 @@ pub(super) async fn attach(
                             .collect::<Vec<_>>()
                     );
                 }
-                Ok(scratch) => {
+                Ok(temporary_output) => {
                     let assets = assets.clone();
                     let name = Path::new(&args.path)
                         .file_name()
@@ -115,7 +114,7 @@ pub(super) async fn attach(
                         .into_owned();
                     let selected_copy = selected.clone();
                     let imported = tokio::task::spawn_blocking(move || {
-                        import_pages(scratch.path(), &selected_copy, &assets, &name)
+                        import_pages(temporary_output.path(), &selected_copy, &assets, &name)
                     })
                     .await
                     .map_err(failed)
@@ -182,7 +181,7 @@ fn import_pages(
         let error = match result {
             Some(RenderedPage { error: None, .. }) => {
                 let path = directory.join(format!("page-{page}.png"));
-                // Authorize a fixed basename beneath the private scratch directory; never trust
+                // Authorize a fixed basename beneath the private temporary_output directory; never trust
                 // output paths returned by a document parser, including symlinks.
                 let loaded = orbit_runtime::filesystem::Workspace::new(directory)
                     .and_then(|workspace| workspace.authorize_read(&path))

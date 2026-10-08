@@ -62,14 +62,12 @@ fn mixed_pdf() -> Vec<u8> {
 }
 
 #[tokio::test]
-#[ignore = "requires Linux user namespaces; run explicitly outside the outer tool sandbox"]
-async fn pdf_images_work_in_the_offline_document_sandbox() {
+async fn pdf_images_work_in_the_native_document_worker() {
     let root = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("mixed.pdf"), mixed_pdf()).unwrap();
     let tool = ReadDocument::new(Workspace::new(root.path()).unwrap())
         .with_worker(env!("CARGO_BIN_EXE_orbit-document-worker").into())
-        .with_sandbox(true)
         .with_images(orbit_tools::image_assets::ImageAssets::for_database(
             &data.path().join("orbit.db"),
         ));

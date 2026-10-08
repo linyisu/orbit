@@ -230,7 +230,6 @@ mod tests {
         .unwrap();
         assert!(status.text.contains("普通执行"));
         for field in [
-            "Scratch：",
             "命令输出目录：",
             "Git 基线：",
             "模型流空闲",

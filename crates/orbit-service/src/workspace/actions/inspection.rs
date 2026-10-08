@@ -160,11 +160,6 @@ async fn status(setup: &PreparedWorkspace) -> Result<String> {
     let session = &setup.session;
     let resources = &setup.resources;
     let budget = &resources.budget;
-    let scratch = session
-        .scratch
-        .read()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| "无法读取".into());
     let output = session
         .command_output
         .read()
@@ -204,16 +199,12 @@ async fn status(setup: &PreparedWorkspace) -> Result<String> {
         },
     );
     Ok(format!(
-        "会话：{}\n工作目录：{}\n数据库：{}\n模型：{}\n执行：{}\nScratch：{scratch}\n命令输出目录：{output}\nGit 基线：{baseline}\n上下文：{} 条持久化消息\n项目指令：{}\nSkills：{} 个\nMCP：{} 个 server\n超时：{}s（模型流空闲） · 命令默认 {}s / 最大 {}s\n审批：{:?}\n工具：{}\n命令执行：{} 次 · 成功退出 {} · 异常结束 {} · 最近 {recent}\n{}",
+        "会话：{}\n工作目录：{}\n数据库：{}\n模型：{}\n执行：{}\n命令输出目录：{output}\nGit 基线：{baseline}\n上下文：{} 条持久化消息\n项目指令：{}\nSkills：{} 个\nMCP：{} 个 server\n超时：{}s（模型流空闲） · 命令默认 {}s / 最大 {}s\n审批：{:?}\n工具：{}\n命令执行：{} 次 · 成功退出 {} · 异常结束 {} · 最近 {recent}\n{}",
         session.id(),
         session.snapshot.session.workspace,
         session.store.path().display(),
         resources.model_name,
-        if resources.command_limits.sandbox {
-            "沙箱"
-        } else {
-            "普通执行"
-        },
+        "普通执行",
         session.snapshot.history.len(),
         budget.instructions.source_summary(),
         budget.skills.len(),

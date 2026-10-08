@@ -337,10 +337,7 @@ impl Store {
 
         let sidecar_path = self.path.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            for extension in ["workspaces", "command-output", "artifacts"] {
-                let root = sidecar_path.with_extension(extension);
-                ensure_real_directory_if_present(&root)?;
-            }
+            ensure_real_directory_if_present(&sidecar_path.with_extension("command-output"))?;
 
             Ok(())
         })
@@ -385,21 +382,13 @@ impl Store {
 
         let cleanup_path = self.path.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
+            let output_root = cleanup_path.with_extension("command-output");
+            let has_output = ensure_real_directory_if_present(&output_root)?;
             for id in session_ids {
-                for extension in ["workspaces", "command-output", "artifacts"] {
-                    let root = cleanup_path.with_extension(extension);
-
-                    if !ensure_real_directory_if_present(&root)? {
-                        continue;
-                    }
-
-                    let directory = root.join(&id);
-
+                if has_output {
+                    let directory = output_root.join(&id);
                     match std::fs::symlink_metadata(&directory) {
-                        Ok(metadata) if metadata.file_type().is_symlink() => {
-                            std::fs::remove_file(&directory)?;
-                        }
-                        Ok(metadata) if metadata.is_dir() => {
+                        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
                             std::fs::remove_dir_all(&directory)?;
                         }
                         Ok(_) => {

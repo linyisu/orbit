@@ -165,9 +165,6 @@ pub(super) async fn prepare_resources(
     );
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
     let mut file_config = FileConfig::load(config_path, &options.auth_directory)?;
-    if file_config.command.sandbox {
-        orbit_runtime::execution::capabilities::check_sandbox().await?;
-    }
     let diagnostics = orbit_config::models::updater::refresh(&mut file_config, false)
         .await
         .diagnostics;
@@ -218,7 +215,6 @@ pub(super) async fn prepare_resources(
         web,
         mcp,
         options.allow_mcp_start,
-        Some(session.scratch.clone()),
         Some(session.command_output.clone()),
         Some(file_config.permissions.clone()),
     )
@@ -342,7 +338,7 @@ mod tests {
         let root = dir.path();
         std::fs::write(
             root.join("config.toml"),
-            &TestConfig::new()
+            TestConfig::new()
                 .provider(
                     TestProvider::new("test")
                         .endpoint("http://127.0.0.1:1/v1")
@@ -389,7 +385,6 @@ mod tests {
         ] {
             assert!(!tools.contains(name), "unexpected tool: {name}");
         }
-        assert!(!setup.resources.command_limits.sandbox);
         drop(setup);
         let setup = prepare_service_with_policy(
             &options,
@@ -415,7 +410,7 @@ mod selection_tests {
         let root = dir.path();
         std::fs::write(
             root.join("config.toml"),
-            &TestConfig::new()
+            TestConfig::new()
                 .provider(
                     TestProvider::new("test")
                         .endpoint("http://127.0.0.1:1/v1")

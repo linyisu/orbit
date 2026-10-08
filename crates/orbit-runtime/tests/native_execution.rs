@@ -8,21 +8,19 @@ use tokio_util::sync::CancellationToken;
 #[tokio::test]
 async fn native_execution_uses_host_paths_and_retains_output() {
     let root = tempfile::tempdir().unwrap();
-    let scratch = tempfile::tempdir().unwrap();
     let mut env = ExecutionEnvironment::new(root.path(), root.path()).unwrap();
     env.set_var("SHELL", "/bin/sh");
     env.set_var("HOME", root.path().to_string_lossy());
     let request = ExecutionRequest::new(
-        "printf '%s' \"$HOME\"; printf 'saved' > result; printf 'scratch' > \"$ORBIT_SCRATCH/result\"; /bin/sh -c 'printf child > child'; printf 'err' >&2",
-        root.path(), Duration::from_secs(5),
-    ).with_scratch(scratch.path());
+        "printf '%s' \"$HOME\"; printf 'saved' > result; /bin/sh -c 'printf child > child'; printf 'err' >&2",
+        root.path(),
+        Duration::from_secs(5),
+    );
     let output = orbit_runtime::execution::OutputLog::create(&root.path().join("logs"))
         .await
         .unwrap();
-    let mut policy = ExecutionPolicy::dev_default();
-    policy.resources.max_processes = Some(1);
-    let result = execution_backend(false)
-        .unwrap()
+    let policy = ExecutionPolicy::default();
+    let result = execution_backend()
         .execute(
             &request,
             &policy,
@@ -40,10 +38,6 @@ async fn native_execution_uses_host_paths_and_retains_output() {
     assert!(result.output_id.is_some());
     assert_eq!(std::fs::read(root.path().join("result")).unwrap(), b"saved");
     assert_eq!(std::fs::read(root.path().join("child")).unwrap(), b"child");
-    assert_eq!(
-        std::fs::read(scratch.path().join("result")).unwrap(),
-        b"scratch"
-    );
 }
 
 #[tokio::test]
@@ -77,9 +71,8 @@ async fn timeout_and_cancellation_stop_descendants_holding_output_pipes() {
             },
         );
         let result = tokio::time::timeout(Duration::from_secs(5), async {
-            execution_backend(false)
-                .unwrap()
-                .execute(&request, &ExecutionPolicy::dev_default(), &env, None, token)
+            execution_backend()
+                .execute(&request, &ExecutionPolicy::default(), &env, None, token)
                 .await
                 .unwrap()
         })

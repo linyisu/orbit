@@ -73,7 +73,6 @@ pub(crate) fn filter_tools(
 
     if capability_is_disabled(disabled, Capability::Git) {
         tools.remove("git_inspect");
-        tools.remove("git_export_patch");
         tools.remove("git_push");
     }
 
@@ -92,7 +91,6 @@ pub(crate) fn filter_tools(
         tools.remove("get_command_status");
         tools.remove("wait_commands");
         tools.remove("cancel_commands");
-        tools.remove("export_artifact");
         tools.remove("verification_status");
     }
 

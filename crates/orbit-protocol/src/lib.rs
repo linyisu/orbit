@@ -381,7 +381,7 @@ mod tests {
                 "capabilities": {
                     "system": "Linux", "architecture": "x86_64", "shell": "sh",
                     "native_processes": true, "files": true,
-                    "sandbox": {"status": "unavailable", "reason": "test"}, "features": []
+                    "features": []
                 }
             }
         });
@@ -496,15 +496,7 @@ pub struct Capabilities {
     pub shell: String,
     pub native_processes: bool,
     pub files: bool,
-    pub sandbox: Availability,
     pub features: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "status", content = "reason", rename_all = "snake_case")]
-pub enum Availability {
-    Available,
-    Unavailable(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -584,13 +576,13 @@ pub enum Capability {
     Document,
     /// read_file, list_files, search_text and project_overview.
     Files,
-    /// git_inspect and git_export_patch.
+    /// Git operations.
     Git,
     /// write_file and edit_file.
     Write,
     /// request_capability for paths outside the workspace.
     Capability,
-    /// run_command, read_command_output, verification_status and export_artifact.
+    /// run_command, read_command_output, verification_status.
     Command,
     /// Archived context retrieval and tool-output pruning.
     History,

@@ -134,31 +134,6 @@ pub(super) fn capability_summary(arguments: &str) -> String {
     format!("{access_label} · {path}")
 }
 
-pub(super) fn export_artifact_summary(arguments: &str, output: Option<&str>) -> String {
-    let args: Value = serde_json::from_str(arguments).unwrap_or_default();
-    let path = args["path"].as_str().unwrap_or_default();
-    if let Some(out_str) = output
-        && let Ok(out_val) = serde_json::from_str::<Value>(out_str)
-        && let Some(bytes) = out_val["bytes"].as_u64()
-    {
-        let name = out_val["name"].as_str().unwrap_or(path);
-        format!("{name} ({})", structured::format_bytes(bytes))
-    } else {
-        path.to_owned()
-    }
-}
-
-pub(super) fn git_export_patch_summary(output: Option<&str>) -> String {
-    if let Some(out_str) = output
-        && let Ok(out_val) = serde_json::from_str::<Value>(out_str)
-        && let Some(bytes) = out_val["bytes"].as_u64()
-    {
-        format!("补丁 ({})", structured::format_bytes(bytes))
-    } else {
-        "导出补丁".to_owned()
-    }
-}
-
 pub(super) fn read_image_summary(arguments: &str) -> String {
     let args: Value = serde_json::from_str(arguments).unwrap_or_default();
     let path = args["path"].as_str().unwrap_or_default();
@@ -274,9 +249,7 @@ pub(super) fn group_target_summary(row: &ToolRow) -> String {
         }
         "read_agent" => "子任务列表".into(),
         "read_file" | "write_file" | "edit_file" | "read_image" | "read_document"
-        | "export_artifact" | "request_capability" => {
-            safe_output(args["path"].as_str().unwrap_or_default())
-        }
+        | "request_capability" => safe_output(args["path"].as_str().unwrap_or_default()),
 
         "list_files" | "project_overview" => {
             safe_output(args["path"].as_str().unwrap_or("当前目录"))
@@ -338,8 +311,6 @@ pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String 
         "web_search" => web_search_summary(arguments, Some(output)),
         "read_document" => document_summary(arguments, Some(output)),
         "request_capability" => capability_summary(arguments),
-        "export_artifact" => export_artifact_summary(arguments, Some(output)),
-        "git_export_patch" => git_export_patch_summary(Some(output)),
         "read_image" => read_image_summary(arguments),
         "read_agent" => agent_read_summary(arguments, output),
         _ => super::render::default_tool_summary(arguments),
@@ -588,8 +559,6 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
         "read_command_output" => structured::command_output(row, expanded, width),
         "read_document" => structured::document(row, expanded, width),
         "request_capability" => structured::capability(row, expanded, width),
-        "export_artifact" => structured::export_artifact(row, expanded, width),
-        "git_export_patch" => structured::git_export_patch(row, expanded, width),
         "read_image" => structured::read_image(row, expanded, width),
         _ => structured::fallback(row, expanded, width),
     }

@@ -49,7 +49,6 @@ fn target(row: &ToolRow) -> Option<Value> {
         "read_file" | "write_file" | "edit_file" | "read_image" | "read_document" => {
             json!(path()?)
         }
-        "export_artifact" => json!([path()?, args["name"]]),
         "request_capability" => json!([path()?, args["access"].as_str()?]),
         "list_files" => json!([
             args["path"].as_str().unwrap_or("."),
@@ -110,7 +109,6 @@ fn target(row: &ToolRow) -> Option<Value> {
             args["staged"].as_bool().unwrap_or(false)
         ]),
 
-        "git_export_patch" => args,
         "git_push" => json!([
             args["remote_url"].as_str()?,
             args["source_branch"].as_str()?,
@@ -204,7 +202,6 @@ pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> Link
                 | "edit_file"
                 | "read_image"
                 | "read_document"
-                | "export_artifact"
                 | "request_capability"
                 | "list_files"
                 | "project_overview"

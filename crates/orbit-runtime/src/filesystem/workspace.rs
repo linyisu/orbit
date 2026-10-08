@@ -245,10 +245,9 @@ impl Workspace {
 
     /// Protects an internal runtime storage directory (e.g. orbit.workspaces, command-output).
     ///
-    /// Opaque runtime roots are forbidden from capability mounts and cannot be accessed
-    /// from the sandbox. Unlike regular sensitive directories, when located outside the
-    /// workspace they are not scanned until a hardlink could alias a descendant.
-    /// This avoids scanning historical session caches on ordinary reads and commands.
+    /// Opaque runtime roots cannot be accessed through file tools or capability grants.
+    /// Unlike regular sensitive directories, external roots are not scanned until a
+    /// hardlink could alias a descendant. Native shell commands use OS permissions.
     pub fn protect_opaque_runtime_root(
         &mut self,
         path: impl AsRef<Path>,

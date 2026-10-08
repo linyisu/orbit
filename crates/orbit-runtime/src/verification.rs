@@ -23,9 +23,4 @@ pub struct VerificationEvidence {
     pub output: Option<WorkspaceFingerprint>,
     pub platform: String,
     pub isolation: String,
-    pub rust_toolchain: Option<String>,
-    pub writable_snapshot: bool,
-    pub persistent_scratch: bool,
-    #[serde(default, alias = "dependency_caches")]
-    pub mounts: Vec<String>,
 }

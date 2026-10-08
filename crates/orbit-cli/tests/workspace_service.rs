@@ -170,7 +170,7 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     let (url, model) = mock_model().await;
     std::fs::write(
         root.join("config.toml"),
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint(&url)
@@ -190,6 +190,32 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
         .await
         .unwrap();
+    assert_eq!(
+        client
+            .request(json!({"method":"set_mode","session":id,"mode":"ask"}))
+            .await["type"],
+        "profile"
+    );
+    let start = json!({"method":"start","session":id,"request_id":"stable-request","prompt":"write a file","model":null});
+    assert_eq!(client.request(start.clone()).await["type"], "ok");
+    let approval = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let page = client
+                .request(json!({"method":"poll","session":id,"after":0}))
+                .await;
+            assert_eq!(page["type"], "page", "{page}");
+            if let Some(approval) = page["value"]["approvals"].as_array().unwrap().first() {
+                break approval["id"].as_u64().unwrap();
+            }
+            assert_eq!(
+                page["value"]["busy"], true,
+                "run unexpectedly finished: {page}"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
     let mut child = store
         .create_subagent(
             &id,
@@ -245,32 +271,6 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
             .await;
         assert_eq!(response["type"], "error");
     }
-    assert_eq!(
-        client
-            .request(json!({"method":"set_mode","session":id,"mode":"ask"}))
-            .await["type"],
-        "profile"
-    );
-    let start = json!({"method":"start","session":id,"request_id":"stable-request","prompt":"write a file","model":null});
-    assert_eq!(client.request(start.clone()).await["type"], "ok");
-    let approval = tokio::time::timeout(Duration::from_secs(15), async {
-        loop {
-            let page = client
-                .request(json!({"method":"poll","session":id,"after":0}))
-                .await;
-            assert_eq!(page["type"], "page", "{page}");
-            if let Some(approval) = page["value"]["approvals"].as_array().unwrap().first() {
-                break approval["id"].as_u64().unwrap();
-            }
-            assert_eq!(
-                page["value"]["busy"], true,
-                "run unexpectedly finished: {page}"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .unwrap();
     assert!(!root.join("result.txt").exists());
     assert_eq!(
         client.request(json!({"method":"shutdown"})).await["type"],
@@ -528,7 +528,7 @@ async fn cancelling_a_disconnected_pending_approval_does_not_write_the_file() {
     let _model = tokio_util::task::AbortOnDropHandle::new(model);
     std::fs::write(
         root.join("config.toml"),
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint(&url)
@@ -647,7 +647,7 @@ async fn remote_prompt_uses_local_configuration_and_credentials_in_an_unconfigur
         let config = local.path().join("local.toml");
         std::fs::write(
             &config,
-            &TestConfig::new()
+            TestConfig::new()
                 .provider(
                     TestProvider::new("test")
                         .endpoint(&url)
@@ -727,7 +727,7 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
     let (url, model) = mock_tool_model("read_file", json!({"path":"proof.txt"}), None).await;
     std::fs::write(
         root.join("config.toml"),
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint(&url)
@@ -879,7 +879,7 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
         format!("/resume {saved_id}")
     );
     let legacy_window = store.open_tui_window().await.unwrap();
-    legacy_window.update(vec![id.clone()]).await.unwrap();
+    legacy_window.update(vec![saved_id.clone()]).await.unwrap();
     legacy_window.close().await.unwrap();
     let restored = client.request(json!({"method":"restore_sessions"})).await;
     assert!(
@@ -887,11 +887,11 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|session| session["id"] == id),
+            .any(|session| session["id"] == saved_id),
         "{restored}"
     );
     let deletion = client
-        .request(json!({"method":"admin","action":{"action":"delete_session","id":id}}))
+        .request(json!({"method":"admin","action":{"action":"delete_session","id":saved_id}}))
         .await;
     assert_eq!(deletion["type"], "report", "{deletion}");
     assert_eq!(
@@ -911,9 +911,6 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
     };
     use orbit_protocol::{Mode, Request, Response};
     use std::sync::Arc;
-    if std::env::var_os("ORBIT_TEST_REQUIRE_NO_SANDBOX").is_some() {
-        assert!(!Path::new("/usr/bin/bwrap").exists());
-    }
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let (url, model) = mock_tool_model(
@@ -925,7 +922,7 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
     let config = root.join("config.toml");
     std::fs::write(
         &config,
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint(&url)
@@ -1040,58 +1037,12 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
 }
 
 #[tokio::test]
-async fn native_execution_refuses_an_explicit_unavailable_sandbox() {
-    if orbit_runtime::execution::capabilities::check_sandbox()
-        .await
-        .is_ok()
-    {
-        assert!(
-            std::env::var_os("ORBIT_TEST_REQUIRE_NO_SANDBOX").is_none(),
-            "this CI scenario must not provide a sandbox"
-        );
-        return;
-    }
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path();
-    std::fs::write(
-        root.join("config.toml"),
-        &format!(
-            "{}{}",
-            "[command]\nsandbox = true\n",
-            TestConfig::new()
-                .provider(
-                    TestProvider::new("test")
-                        .endpoint("http://127.0.0.1:9/v1")
-                        .key("test-only")
-                        .models([TestModel::new("mock")])
-                )
-                .providers_toml()
-                .unwrap()
-        ),
-    )
-    .unwrap();
-    let mut client = Client::connect(root).await;
-    let opened = client
-        .request(json!({"method":"open","model":"test::mock"}))
-        .await;
-    assert_eq!(opened["type"], "error", "{opened}");
-    assert!(
-        opened["value"].as_str().unwrap().contains("sandbox"),
-        "{opened}"
-    );
-    assert_eq!(
-        client.request(json!({"method":"shutdown"})).await["type"],
-        "ok"
-    );
-}
-
-#[tokio::test]
 async fn packaged_service_lists_history_created_by_the_native_store() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::write(
         root.join("config.toml"),
-        &TestConfig::new()
+        TestConfig::new()
             .provider(
                 TestProvider::new("test")
                     .endpoint("http://127.0.0.1:1")
@@ -1147,10 +1098,11 @@ async fn packaged_service_lists_history_created_by_the_native_store() {
         completions["value"]["entries"][0]["name"],
         format!("/resume {history_id}")
     );
-    assert_eq!(
-        store.session(id).await.unwrap().project_id,
-        store.session(&history_id).await.unwrap().project_id
+    assert!(
+        store.session(id).await.is_err(),
+        "opening a draft must not persist it"
     );
+    assert!(store.session(&history_id).await.is_ok());
     assert_eq!(store.projects().await.unwrap().len(), 1);
     assert_eq!(
         client.request(json!({"method":"shutdown"})).await["type"],
@@ -1186,7 +1138,14 @@ async fn model_selection_is_explicit_and_catalog_refresh_never_switches_it() {
     assert_eq!(restored["value"]["model"], "test::chosen");
     std::fs::write(
         root.join("config.toml"),
-        config.replace(", { id = \"chosen\" }", ""),
+        TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint("http://127.0.0.1:1/v1")
+                    .models(["first"]),
+            )
+            .providers_toml()
+            .unwrap(),
     )
     .unwrap();
     let refreshed = client

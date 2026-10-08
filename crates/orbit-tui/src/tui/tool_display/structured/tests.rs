@@ -167,14 +167,6 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
                 "capability": { "path": long, "access": "read_write" }
             }),
         ),
-        tool(
-            "export_artifact",
-            json!({ "path": long, "name": "f.txt", "bytes": 128, "sha256": "abc" }),
-        ),
-        tool(
-            "git_export_patch",
-            json!({ "path": long, "bytes": 64, "sha256": "def" }),
-        ),
         tool("read_image", json!({ "path": long, "loaded": true })),
         tool(
             "extension_tool",
@@ -358,33 +350,7 @@ fn capability_view_formats_granted_and_denied() {
 }
 
 #[test]
-fn artifact_and_patch_and_image_views_format_cleanly() {
-    let artifact_row = tool(
-        "export_artifact",
-        json!({
-            "path": "/artifacts/chart.png",
-            "name": "chart.png",
-            "bytes": 2048,
-            "sha256": "abcdef1234567890abcdef"
-        }),
-    );
-    let rendered = text(&super::export_artifact(&artifact_row, true, 80).unwrap());
-    assert!(rendered.contains(&format!("{} 工件已成功导出", icons::PACKAGE_VARIANT_CLOSED)));
-    assert!(rendered.contains("chart.png (2.0 KB)"));
-    assert!(rendered.contains("sha256:abcdef1234567890…"));
-
-    let patch_row = tool(
-        "git_export_patch",
-        json!({
-            "path": "/artifacts/diff.patch",
-            "bytes": 1024,
-            "sha256": "123456"
-        }),
-    );
-    let rendered = text(&super::git_export_patch(&patch_row, true, 80).unwrap());
-    assert!(rendered.contains(&format!("{} Git 补丁已导出", icons::PACKAGE_VARIANT_CLOSED)));
-    assert!(rendered.contains("1.0 KB"));
-
+fn image_view_formats_cleanly() {
     let image_row = tool(
         "read_image",
         json!({

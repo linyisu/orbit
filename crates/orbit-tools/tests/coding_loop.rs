@@ -28,17 +28,15 @@ fn call(id: &str, name: &str, args: serde_json::Value) -> ChatCompletion {
 }
 
 #[tokio::test]
-#[ignore = "requires Linux user namespaces, Python, Node and ORBIT_TEST_RUST_TOOLCHAIN"]
-async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
-    let rust =
-        std::env::var_os("ORBIT_TEST_RUST_TOOLCHAIN").expect("set ORBIT_TEST_RUST_TOOLCHAIN");
+#[ignore = "requires Rust, Python and Node on PATH"]
+async fn rust_python_node_fail_edit_retest_in_workspace() {
     let cases = [
         (
             "lib.rs",
             "pub fn parse(s:&str)->Option<char> { Some(s.chars().next().unwrap()) }\n#[test] fn empty() {assert_eq!(parse(\"\"),None);}\n",
             "Some(s.chars().next().unwrap())",
             "s.chars().next()",
-            "rustc --test lib.rs -o /tmp/tests && /tmp/tests",
+            "rustc --test lib.rs -o tests && ./tests",
         ),
         (
             "parser.py",
@@ -72,10 +70,7 @@ async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
         tools.register(RunCommand::with_limits(
             workspace,
             tx,
-            CommandLimits {
-                rust_toolchain: Some(rust.clone().into()),
-                ..Default::default()
-            },
+            CommandLimits::default(),
         ));
         let backend = MockModel::new(vec![
             call("fail", "run_command", json!({ "command": command })),
@@ -137,11 +132,12 @@ async fn rust_python_node_fail_edit_retest_in_real_sandboxes() {
             std::fs::read_to_string(temp.path().join(path)).unwrap(),
             source.replace(old, new)
         );
-        assert_eq!(
-            std::fs::read_dir(temp.path()).unwrap().count(),
-            1,
-            "build products must stay out of host project"
-        );
+        if path == "lib.rs" {
+            assert!(
+                temp.path().join("tests").is_file(),
+                "compiled output stays in the project"
+            );
+        }
 
         approvals.await.unwrap();
     }

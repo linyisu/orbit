@@ -48,7 +48,7 @@ pub struct WorkspaceChange {
     pub undone: bool,
 }
 
-/// An actual completed sandbox command reconstructed from the event ledger.
+/// An actual completed command reconstructed from the event ledger.
 /// It is evidence of execution, not a claim that the model made in prose.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VerificationRecord {

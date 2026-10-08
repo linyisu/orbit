@@ -271,8 +271,24 @@ async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
     assert!(store.load(&id).await.is_err());
     assert!(store.session_storage_usage().await.unwrap().is_empty());
 
-    for extension in ["workspaces", "command-output", "artifacts"] {
-        assert!(!db.path().with_extension(extension).join(&id).exists());
+    assert!(
+        !db.path()
+            .with_extension("command-output")
+            .join(&id)
+            .exists()
+    );
+    // Files produced by commands belong to the user, including old export directories.
+    for extension in ["workspaces", "artifacts"] {
+        assert_eq!(
+            std::fs::read(
+                db.path()
+                    .with_extension(extension)
+                    .join(&id)
+                    .join("retained")
+            )
+            .unwrap(),
+            b"data"
+        );
     }
 
     assert!(!store.delete_session(&id).await.unwrap());
@@ -1052,11 +1068,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         input: baseline,
         output: None,
         platform: "linux-x86_64".into(),
-        isolation: "bubblewrap".into(),
-        rust_toolchain: None,
-        writable_snapshot: false,
-        persistent_scratch: true,
-        mounts: Vec::new(),
+        isolation: "native".into(),
     };
 
     writer

@@ -93,7 +93,6 @@ pub struct SessionState {
     writer: Option<SessionWriter>,
     persisted: bool,
     pub snapshot: Snapshot,
-    pub scratch: orbit_tools::run_command::ScratchDirectory,
     pub command_output: orbit_tools::run_command::CommandOutputDirectory,
     pub git_baseline: Option<serde_json::Value>,
     pub audit_workspace: Option<orbit_runtime::filesystem::Workspace>,
@@ -262,15 +261,11 @@ impl SessionState {
             title_task,
         } = prepared;
         let id = &snapshot.session.id;
-        let scratch = std::sync::Arc::new(std::sync::RwLock::new(
-            store.path().with_extension("workspaces").join(id),
-        ));
         let command_output = std::sync::Arc::new(std::sync::RwLock::new(
             store.path().with_extension("command-output").join(id),
         ));
 
         Self {
-            scratch,
             command_output,
             git_baseline,
             store,
@@ -719,11 +714,6 @@ impl SessionState {
             ws.clear_session_grants();
         }
 
-        *self.scratch.write().expect("scratch lock poisoned") = self
-            .store
-            .path()
-            .with_extension("workspaces")
-            .join(self.id());
         *self
             .command_output
             .write()

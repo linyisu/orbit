@@ -248,8 +248,8 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         .await
         .unwrap();
     let first = state.id().to_owned();
-    let scratch = state.scratch.clone();
-    let first_scratch = scratch.read().unwrap().clone();
+    let output = state.command_output.clone();
+    let first_output = output.read().unwrap().clone();
     let command_output = state.command_output.clone();
     let first_command_output = command_output.read().unwrap().clone();
     let history = vec![
@@ -275,7 +275,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     let second = state.id().to_owned();
 
     assert_ne!(first, second);
-    assert_ne!(*scratch.read().unwrap(), first_scratch);
+    assert_ne!(*output.read().unwrap(), first_output);
     assert_ne!(*command_output.read().unwrap(), first_command_output);
     assert!(state.snapshot.history.is_empty());
 
@@ -323,7 +323,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     drop(locked);
     state.resume(&first).await.unwrap();
 
-    assert_eq!(*scratch.read().unwrap(), first_scratch);
+    assert_eq!(*output.read().unwrap(), first_output);
     assert_eq!(*command_output.read().unwrap(), first_command_output);
     assert_eq!(state.snapshot.history, history);
     assert_eq!(state.snapshot.runs.len(), 1);
@@ -335,7 +335,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         .await
         .unwrap();
 
-    assert_eq!(*reopened.scratch.read().unwrap(), first_scratch);
+    assert_eq!(*reopened.command_output.read().unwrap(), first_output);
     assert_eq!(
         *reopened.command_output.read().unwrap(),
         first_command_output
