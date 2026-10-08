@@ -1,13 +1,9 @@
-use ratatui::{
-    layout::Rect,
-    style::Style,
-    widgets::{Block, Borders, Paragraph},
-};
+use ratatui::{layout::Rect, style::Style, widgets::Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use super::super::form::{self, ACCENT};
 use super::{Action, Panel, Target};
-use crate::tui::overlay;
+use crate::tui::components;
 
 pub(super) fn draw(
     panel: &mut Panel,
@@ -15,13 +11,7 @@ pub(super) fn draw(
     loading: bool,
 ) -> (Rect, Vec<(Rect, Target)>, usize) {
     let area = form::area(frame.area(), 100, frame.area().height.saturating_sub(4));
-    overlay::clear(frame, area);
-    let block = Block::default()
-        .title(" 连接服务 ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = components::surface(frame, area, components::panel().title(" 连接服务 "));
     let viewport = Rect::new(
         inner.x + 2,
         inner.y + 1,

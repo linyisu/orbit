@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use super::{ModelOption, app::UiState, commands::COMMANDS, icons};
@@ -971,7 +971,6 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         centered_area(frame.area())
     };
 
-    super::overlay::clear(frame, area);
     let title = if state.picker.is_some() {
         "恢复会话 · 当前项目"
     } else if state.model_picker.is_some() {
@@ -982,11 +981,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         "Orbit 帮助"
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::THEME.accent));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = super::components::surface(frame, area, super::components::panel());
     if state.btw.visible() {
         state.ime_cursor = None;
         let mut media = state.media.clone();
@@ -1151,10 +1146,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 )
             } else if selected {
                 (
-                    Style::default()
-                        .fg(crate::tui::theme::THEME.on_accent)
-                        .bg(crate::tui::theme::THEME.accent)
-                        .add_modifier(Modifier::BOLD),
+                    super::components::highlighted(),
                     Style::default().fg(crate::tui::theme::THEME.secondary),
                 )
             } else {
@@ -1267,10 +1259,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             let selected = index == picker.selected;
             let current = model.qualified_name() == picker.current;
             let style = if selected {
-                Style::default()
-                    .fg(crate::tui::theme::THEME.on_accent)
-                    .bg(crate::tui::theme::THEME.accent)
-                    .add_modifier(Modifier::BOLD)
+                super::components::highlighted()
             } else {
                 Style::default()
             };
@@ -1513,10 +1502,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 ));
                 let selected = index == dialog.selected_plugin;
                 let style = if selected {
-                    Style::default()
-                        .fg(crate::tui::theme::THEME.on_accent)
-                        .bg(crate::tui::theme::THEME.accent)
-                        .add_modifier(Modifier::BOLD)
+                    super::components::highlighted()
                 } else {
                     Style::default().add_modifier(Modifier::BOLD)
                 };
@@ -1597,10 +1583,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 ));
                 let selected = index == dialog.selected_market;
                 let style = if selected {
-                    Style::default()
-                        .fg(crate::tui::theme::THEME.on_accent)
-                        .bg(crate::tui::theme::THEME.accent)
-                        .add_modifier(Modifier::BOLD)
+                    super::components::highlighted()
                 } else {
                     Style::default().add_modifier(Modifier::BOLD)
                 };

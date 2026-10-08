@@ -13,7 +13,7 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::Line,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 use tokio_util::task::AbortOnDropHandle;
 
@@ -113,13 +113,11 @@ pub(super) async fn run(
                 height,
             );
 
-            super::overlay::clear(frame, area);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" 连接账号 ")
-                .border_style(Style::default().fg(crate::tui::theme::THEME.dialog_accent));
-            let inner = block.inner(area);
-            frame.render_widget(block, area);
+            let inner = super::components::surface(
+                frame,
+                area,
+                super::components::panel().title(" 连接账号 "),
+            );
 
             let mut lines = Vec::new();
             for (index, (provider, name, _)) in PROVIDERS.iter().enumerate() {
@@ -135,7 +133,7 @@ pub(super) async fn run(
                 let style = if index == selected {
                     Style::default()
                         .fg(crate::tui::theme::THEME.on_accent)
-                        .bg(crate::tui::theme::THEME.dialog_accent)
+                        .bg(crate::tui::theme::THEME.accent)
                 } else {
                     Style::default()
                 };
@@ -188,9 +186,9 @@ pub(super) async fn run(
                     let style = if hovered {
                         Style::default()
                             .fg(crate::tui::theme::THEME.on_accent)
-                            .bg(crate::tui::theme::THEME.dialog_accent)
+                            .bg(crate::tui::theme::THEME.accent)
                     } else {
-                        Style::default().fg(crate::tui::theme::THEME.dialog_accent)
+                        Style::default().fg(crate::tui::theme::THEME.accent)
                     };
 
                     frame.render_widget(Paragraph::new(label).style(style), area);

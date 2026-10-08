@@ -1,26 +1,16 @@
-use ratatui::{
-    Frame,
-    layout::Rect,
-    style::Style,
-    widgets::{Block, Borders, Paragraph},
-};
+use ratatui::{Frame, layout::Rect, style::Style, widgets::Paragraph};
 
-use crate::tui::{connect_custom::form, input::InputState, render, theme::THEME};
-
-pub(super) fn panel() -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(THEME.dialog_accent))
-}
+use crate::tui::{components, connect_custom::form, input::InputState, theme::THEME};
 
 pub(super) fn button(frame: &mut Frame<'_>, area: Rect, label: &str, focused: bool) {
-    frame.render_widget(
-        Paragraph::new(render::padded_label(label, area.width as usize, 1)).style(if focused {
-            Style::default().bg(THEME.dialog_accent).fg(THEME.on_accent)
-        } else {
-            Style::default().fg(THEME.dialog_accent)
-        }),
+    components::button(
+        frame,
         area,
+        label,
+        components::Control {
+            highlighted: focused,
+            ..Default::default()
+        },
     );
 }
 
@@ -57,7 +47,7 @@ pub(super) fn field(
 fn field_label(frame: &mut Frame<'_>, area: Rect, label: &str, focused: bool) -> Rect {
     frame.render_widget(
         Paragraph::new(label).style(Style::default().fg(if focused {
-            THEME.dialog_accent
+            THEME.accent
         } else {
             THEME.description
         })),

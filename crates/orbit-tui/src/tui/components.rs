@@ -28,18 +28,29 @@ pub(super) fn centered(bounds: Rect, width: u16, height: u16) -> Rect {
 
 /// Paint the modal surface; callers place content inside the returned inset.
 pub(super) fn modal(frame: &mut Frame<'_>, area: Rect) -> Rect {
-    super::overlay::clear(frame, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(accent());
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = surface(frame, area, panel());
     Rect::new(
         inner.x.saturating_add(1.min(inner.width)),
         inner.y,
         inner.width.saturating_sub(2),
         inner.height,
     )
+}
+
+pub(super) fn panel() -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(accent())
+}
+
+/// Framing shared by forms and rich transcript/image viewers. Insets belong to
+/// the content layout, so border titles do not consume an extra body row.
+pub(super) fn surface(frame: &mut Frame<'_>, area: Rect, block: Block<'_>) -> Rect {
+    let area = area.intersection(frame.area());
+    super::overlay::clear(frame, area);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    inner
 }
 
 pub(super) fn normal() -> Style {

@@ -8,14 +8,14 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::super::{input::InputState, overlay, terminal};
+use super::super::{components, input::InputState, terminal};
 
-pub(super) const ACCENT: Color = crate::tui::theme::THEME.dialog_accent;
+pub(super) const ACCENT: Color = crate::tui::theme::THEME.accent;
 const HINT_TEXT: Color = crate::tui::theme::THEME.placeholder;
 
 pub(super) struct Field {
@@ -180,13 +180,11 @@ pub(super) async fn choose(
                 choices.len().saturating_add(4).min(u16::MAX as usize) as u16,
             );
 
-            overlay::clear(frame, outer);
-            let block = Block::default()
-                .title(format!(" {title} "))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(ACCENT));
-            viewport = block.inner(outer);
-            frame.render_widget(block, outer);
+            viewport = components::surface(
+                frame,
+                outer,
+                components::panel().title(format!(" {title} ")),
+            );
             offset = offset.min(choices.len().saturating_sub(viewport.height as usize));
             if let Some(point) = pointer
                 && viewport.contains(point)

@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::{
-    tui::{connect_custom::form, input::InputState, overlay, render, theme::THEME},
+    tui::{components, connect_custom::form, input::InputState, render, theme::THEME},
     workspace::directories::Listing,
 };
 
@@ -327,16 +327,14 @@ impl Wizard {
             width,
             height,
         );
-        overlay::clear(frame, area);
         self.areas.clear();
-        frame.render_widget(
-            controls::panel().title(Span::styled(
-                " 远程工作区 ",
-                Style::default()
-                    .fg(THEME.dialog_accent)
-                    .add_modifier(Modifier::BOLD),
-            )),
+        components::surface(
+            frame,
             area,
+            components::panel().title(Span::styled(
+                " 远程工作区 ",
+                components::accent().add_modifier(Modifier::BOLD),
+            )),
         );
         let inner = area.inner(ratatui::layout::Margin::new(2, 1));
         if inner.height < 10 || inner.width < 20 {
@@ -358,7 +356,7 @@ impl Wizard {
                         format!("{text}   "),
                         if index == stage {
                             Style::default()
-                                .fg(THEME.dialog_accent)
+                                .fg(THEME.accent)
                                 .add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(THEME.muted)
@@ -430,7 +428,7 @@ impl Wizard {
                         if index == self.selected { "›" } else { " " }
                     ))
                     .style(if index == self.selected {
-                        Style::default().fg(THEME.on_accent).bg(THEME.dialog_accent)
+                        Style::default().fg(THEME.on_accent).bg(THEME.accent)
                     } else {
                         Style::default()
                     }),
@@ -447,7 +445,7 @@ impl Wizard {
             let style = Style::default().fg(if self.failed {
                 THEME.error
             } else {
-                THEME.dialog_accent
+                THEME.accent
             });
             lines.extend(
                 self.status
@@ -638,7 +636,7 @@ mod tests {
         terminal.draw(|frame| wizard.draw(frame)).unwrap();
         assert_eq!(
             terminal.backend().buffer()[(field.x, field.y)].fg,
-            THEME.dialog_accent
+            THEME.accent
         );
         wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), field));
         assert_eq!(wizard.form.as_ref().unwrap().focus, 1);
@@ -647,7 +645,7 @@ mod tests {
         terminal.draw(|frame| wizard.draw(frame)).unwrap();
         assert_eq!(
             terminal.backend().buffer()[(button.x, button.y)].bg,
-            THEME.dialog_accent
+            THEME.accent
         );
         assert!(matches!(
             wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), button)),
@@ -678,10 +676,7 @@ mod tests {
         terminal.draw(|frame| wizard.draw(frame)).unwrap();
         assert_eq!(wizard.directory_offset, offset);
         assert_eq!(wizard.selected, offset);
-        assert_eq!(
-            terminal.backend().buffer()[(row.x, row.y)].bg,
-            THEME.dialog_accent
-        );
+        assert_eq!(terminal.backend().buffer()[(row.x, row.y)].bg, THEME.accent);
         let expected = format!("/work/child-{}", offset - 2);
         assert!(
             matches!(wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), row)), Action::Browse(path) if path == expected)

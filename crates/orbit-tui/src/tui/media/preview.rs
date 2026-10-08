@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Alignment, Margin, Rect},
     style::{Modifier, Style},
     text::Line,
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{BorderType, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -97,13 +97,11 @@ impl Preview {
         if area.is_empty() {
             return;
         }
-        super::super::overlay::clear(frame, area);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(THEME.accent));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        let inner = crate::tui::components::surface(
+            frame,
+            area,
+            crate::tui::components::panel().border_type(BorderType::Rounded),
+        );
         let header = Rect::new(
             inner.x + 1,
             inner.y,

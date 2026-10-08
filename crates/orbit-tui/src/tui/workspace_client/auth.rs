@@ -2,13 +2,12 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
     text::Line,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use crate::{
-    tui::{connect_custom::form, input::InputState, overlay, render, theme::THEME},
+    tui::{components, connect_custom::form, input::InputState, render},
     workspace::interaction::Challenge,
 };
 
@@ -76,14 +75,8 @@ impl Prompt {
             width,
             height,
         );
-        overlay::clear(frame, area);
-        frame.render_widget(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" SSH 认证 ")
-                .border_style(Style::default().fg(THEME.dialog_accent)),
-            area,
-        );
+        components::surface(frame, area, components::panel().title(" SSH 认证 "));
+
         let inner = area.inner(ratatui::layout::Margin::new(2, 1));
         frame.render_widget(
             text,
