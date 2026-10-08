@@ -340,7 +340,7 @@ impl State {
                 if editable && !v.sending {
                     editor_ranges.push((start, rows.len(), prefix_width, width));
                     if v.focus == Focus::Text {
-                        caret = Some((prefix_width + pos.0 as u16, start + pos.1));
+                        caret = Some((prefix_width + pos.column as u16, start + pos.row));
                     }
                 }
             }
@@ -493,12 +493,12 @@ impl State {
             Paragraph::new(help).style(muted()),
             Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
         );
-        caret.and_then(|(col, row)| {
-            let y = row.checked_sub(v.offset as usize)?;
-            (y < height).then_some(Position::new(
-                body.x + col.min(body.width - 1),
-                body.y + y as u16,
-            ))
+        caret.and_then(|(column, row)| {
+            crate::tui::input::InputPosition {
+                column: column as usize,
+                row,
+            }
+            .in_viewport(body, v.offset as usize)
         })
     }
 }

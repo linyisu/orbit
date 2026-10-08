@@ -362,7 +362,8 @@ impl State {
         if self.feedback_page && self.editable() {
             self.editor = body;
             self.hits.push((body, Focus::Editor));
-            let (lines, (row, column)) = self.draft.visual_lines(body.width as usize);
+            let (lines, caret) = self.draft.visual_lines(body.width as usize);
+            let row = caret.row;
             if row < self.editor_offset {
                 self.editor_offset = row;
             }
@@ -384,10 +385,7 @@ impl State {
             };
             frame.render_widget(Paragraph::new(text), body);
             if self.focus == Some(Focus::Editor) && !self.sending {
-                cursor = Some(Position::new(
-                    body.x + column.min(body.width as usize - 1) as u16,
-                    body.y + (row - self.editor_offset).min(body.height as usize - 1) as u16,
-                ));
+                cursor = caret.in_viewport(body, self.editor_offset);
             }
         } else {
             let text = self.snapshot.plan.as_ref().map_or_else(|| "已进入只读规划。收起弹窗后发送任务，Agent 可以读取、搜索、调用探索子代理并向你提问。计划提交后会在这里等待确认。".into(),|p| format!("{}\n\n### 实施步骤\n{}",p.markdown,p.steps.iter().enumerate().map(|(i,s)|format!("{}. {}",i+1,s)).collect::<Vec<_>>().join("\n")));

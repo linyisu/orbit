@@ -1451,7 +1451,7 @@ fn draw_composer(
     state: &mut UiState,
     area: Rect,
     lines: Vec<String>,
-    cursor: (usize, usize),
+    cursor: super::input::InputPosition,
 ) {
     let area = Rect {
         x: area.x + 2,
@@ -1591,7 +1591,7 @@ pub(super) fn draw_prompt(
     state: &mut UiState,
     prompt_area: Rect,
     lines: Vec<String>,
-    cursor: (usize, usize),
+    cursor: super::input::InputPosition,
 ) {
     frame.render_widget(
         Paragraph::new(Span::styled(icons::PROMPT, Style::default().fg(ACCENT))),
@@ -1606,7 +1606,7 @@ pub(super) fn draw_prompt(
         ..prompt_area
     };
     let scroll = cursor
-        .1
+        .row
         .saturating_sub(text_area.height.saturating_sub(1) as usize);
     // The right padding also holds the caret before a newline after a full row.
     state.input_area = Rect {
@@ -1646,9 +1646,7 @@ pub(super) fn draw_prompt(
         && state.ssh_prompt.is_none()
         && state.attachment_cursor.is_none()
     {
-        let x = text_area.x + (cursor.0 as u16).min(state.input_area.width - 1);
-        let y = text_area.y + (cursor.1.saturating_sub(scroll) as u16).min(text_area.height - 1);
-        state.ime_cursor = Some((x, y).into());
+        state.ime_cursor = cursor.in_viewport(state.input_area, scroll);
     }
 }
 

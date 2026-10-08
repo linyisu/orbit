@@ -7,6 +7,31 @@ fn fixture() -> State {
     state.open();
     state
 }
+
+#[test]
+fn feedback_caret_and_mouse_edit_use_the_same_multiline_coordinates() {
+    let mut state = fixture();
+    state.activate(Focus::Feedback);
+    draw(&mut state);
+    state.handle(&Event::Paste("alpha\n中文x".into()));
+    let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
+    terminal
+        .draw(|frame| {
+            let cursor = state.draw(frame).unwrap();
+            assert_eq!(
+                cursor,
+                Position::new(state.editor.x + 5, state.editor.y + 1)
+            );
+        })
+        .unwrap();
+    state.handle(&mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        state.editor.x + 2,
+        state.editor.y + 1,
+    ));
+    state.handle(&Event::Paste("Z".into()));
+    assert_eq!(state.draft.text, "alpha\n中Z文x");
+}
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
     Event::Key(KeyEvent::new(code, modifiers))
 }

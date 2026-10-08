@@ -3,6 +3,30 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// Text coordinates before viewport scrolling; named axes prevent transposition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputPosition {
+    pub column: usize,
+    pub row: usize,
+}
+
+impl InputPosition {
+    pub(super) fn in_viewport(
+        self,
+        area: ratatui::layout::Rect,
+        offset: usize,
+    ) -> Option<ratatui::layout::Position> {
+        let row = self.row.checked_sub(offset)?;
+        if area.is_empty() || row >= area.height as usize {
+            return None;
+        }
+        Some(ratatui::layout::Position::new(
+            area.x + self.column.min(area.width as usize - 1) as u16,
+            area.y + row as u16,
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Motion {
     Left,
@@ -441,10 +465,10 @@ impl InputState {
             .collect()
     }
 
-    pub fn visual_lines(&self, width: usize) -> (Vec<String>, (usize, usize)) {
+    pub fn visual_lines(&self, width: usize) -> (Vec<String>, InputPosition) {
         let (lines, positions) = self.layout(width);
         let &(_, column, row) = positions.iter().find(|p| p.0 == self.cursor).unwrap();
-        (lines, (column, row))
+        (lines, InputPosition { column, row })
     }
 
     // A single layout supplies both drawing and byte-safe vertical navigation.
@@ -497,7 +521,10 @@ mod tests {
         input.insert("\u{200d}");
         assert_eq!(input.text, "👩‍💻");
         assert_eq!(input.cursor, input.text.len());
-        assert_eq!(input.visual_lines(10).1, (2, 0));
+        assert_eq!(
+            input.visual_lines(10).1,
+            InputPosition { column: 2, row: 0 }
+        );
         input.navigate(Motion::Up, 10, false);
         input.backspace();
         assert!(input.text.is_empty());
@@ -514,14 +541,20 @@ mod tests {
             }
 
             assert_eq!(input.text, "👩‍💻");
-            assert_eq!(input.visual_lines(10).1, (2, 0));
+            assert_eq!(
+                input.visual_lines(10).1,
+                InputPosition { column: 2, row: 0 }
+            );
         }
 
         input.set("\u{301}".into());
         input.home();
         input.insert("e");
         assert_eq!(input.cursor, input.text.len());
-        assert_eq!(input.visual_lines(10).1, (1, 0));
+        assert_eq!(
+            input.visual_lines(10).1,
+            InputPosition { column: 1, row: 0 }
+        );
     }
 
     #[test]
@@ -588,7 +621,7 @@ mod tests {
         let mut input = InputState::default();
         input.set("Orbit\n你好".into());
         input.set_cursor(5);
-        assert_eq!(input.visual_lines(5).1, (5, 0));
+        assert_eq!(input.visual_lines(5).1, InputPosition { column: 5, row: 0 });
         input.begin_selection(0);
         input.extend_selection(input.text.len());
         let cells = input.selection_cells(5);
@@ -620,16 +653,25 @@ mod tests {
         input.set("你好ab\nx\n世界cd".into());
         input.navigate(Motion::Up, 20, false);
 
-        assert_eq!(input.visual_lines(20).1, (1, 1));
+        assert_eq!(
+            input.visual_lines(20).1,
+            InputPosition { column: 1, row: 1 }
+        );
 
         input.navigate(Motion::Up, 20, false);
 
-        assert_eq!(input.visual_lines(20).1, (6, 0));
+        assert_eq!(
+            input.visual_lines(20).1,
+            InputPosition { column: 6, row: 0 }
+        );
 
         input.navigate(Motion::Down, 20, false);
         input.navigate(Motion::Down, 20, false);
 
-        assert_eq!(input.visual_lines(20).1, (6, 2));
+        assert_eq!(
+            input.visual_lines(20).1,
+            InputPosition { column: 6, row: 2 }
+        );
 
         input.navigate(Motion::Up, 20, false);
         input.navigate(Motion::Up, 20, false);
@@ -640,7 +682,10 @@ mod tests {
         assert_eq!(input.text, "old prompt");
         input.history_down();
         assert_eq!(input.text, "你好ab\nx\n世界cd");
-        assert_eq!(input.visual_lines(20).1, (6, 0));
+        assert_eq!(
+            input.visual_lines(20).1,
+            InputPosition { column: 6, row: 0 }
+        );
     }
 
     #[test]
@@ -648,11 +693,11 @@ mod tests {
         let mut input = InputState::default();
         input.set("你好e\u{301}👩‍💻xy".into());
 
-        assert_eq!(input.visual_lines(4).1, (1, 2));
+        assert_eq!(input.visual_lines(4).1, InputPosition { column: 1, row: 2 });
 
         input.navigate(Motion::Up, 4, false);
 
-        assert_eq!(input.visual_lines(4).1, (1, 1));
+        assert_eq!(input.visual_lines(4).1, InputPosition { column: 1, row: 1 });
         assert_eq!(&input.text[input.cursor..], "👩‍💻xy");
 
         input.navigate(Motion::Up, 4, false);
@@ -661,12 +706,12 @@ mod tests {
 
         input.navigate(Motion::Down, 4, false);
 
-        assert_eq!(input.visual_lines(4).1, (1, 1));
+        assert_eq!(input.visual_lines(4).1, InputPosition { column: 1, row: 1 });
 
         input.move_right(); // reset the preferred column after horizontal movement
         input.navigate(Motion::Up, 4, false);
 
-        assert_eq!(input.visual_lines(4).1, (2, 0));
+        assert_eq!(input.visual_lines(4).1, InputPosition { column: 2, row: 0 });
 
         input.backspace();
 
@@ -680,7 +725,7 @@ mod tests {
         input.begin_selection(0);
         input.extend_selection(input.position_at(5, 0, 5));
         assert_eq!(input.selected_text(), Some("Orbit"));
-        assert_eq!(input.visual_lines(5).1, (0, 1));
+        assert_eq!(input.visual_lines(5).1, InputPosition { column: 0, row: 1 });
     }
 
     #[test]
@@ -711,6 +756,6 @@ mod tests {
         let (lines, cursor) = input.visual_lines(4);
 
         assert_eq!(lines, ["你好", "ab", "世界", ""]);
-        assert_eq!(cursor, (0, 3));
+        assert_eq!(cursor, InputPosition { column: 0, row: 3 });
     }
 }
