@@ -256,13 +256,48 @@ fn interrupted_tool_is_no_longer_running_after_restore() {
 }
 
 #[test]
-fn nonvision_model_clears_queued_images() {
-    let (mut tab, _rx) = tab("本地");
-    tab.state.supports_vision = true;
-    tab.state.attachments.push(image());
-    let info: SessionInfo=serde_json::from_value(serde_json::json!({"id":"same-session","title":"","workspace":"/project","model":"mock","models":[],"supports_vision":false,"reasoning_effort":null,"reasoning_efforts":[],"context_tokens":1000,"input_context_tokens":900,"max_output_tokens":100})).unwrap();
-    apply_page(&mut tab, vec![Update::Profile(Box::new(info))]);
-    assert!(tab.state.attachments.is_empty());
+fn model_changes_preserve_image_drafts_and_only_send_to_a_compatible_model() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("draft.png");
+    image::RgbaImage::new(1, 1).save(&path).unwrap();
+    let attachment = orbit_model::types::Attachment::Image {
+        name: "draft.png".into(),
+        mime_type: "image/png".into(),
+        path,
+    };
+    let (mut tab, mut requests) = tab("本地");
+    tab.state.attachments.push(attachment.clone());
+    tab.state.input.set("describe this picture".into());
+    let mut info: SessionInfo = serde_json::from_value(serde_json::json!({"id":"same-session","title":"","workspace":"/project","model":"mock","models":[],"supports_vision":false,"reasoning_effort":null,"reasoning_efforts":[],"context_tokens":1000,"input_context_tokens":900,"max_output_tokens":100})).unwrap();
+    for supports_vision in [false, true] {
+        info.supports_vision = supports_vision;
+        let Response::Page(mut update) =
+            page(vec![Update::Profile(Box::new(info.clone()))], vec![])
+        else {
+            unreachable!()
+        };
+        update.busy = false;
+        tab.apply(Response::Page(update));
+        assert_eq!(tab.state.attachments, vec![attachment.clone()]);
+        tab.handle(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        if !supports_vision {
+            assert!(requests.try_recv().is_err());
+            assert_eq!(tab.state.input.text, "describe this picture");
+            assert_eq!(tab.state.attachments, vec![attachment.clone()]);
+            tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+                .unwrap();
+        } else {
+            assert!(
+                matches!(requests.try_recv().unwrap().request, Request::Start { images, prompt, .. }
+                if images.len() == 1 && prompt == "describe this picture")
+            );
+            assert!(tab.state.attachments.is_empty());
+        }
+    }
 }
 
 #[test]

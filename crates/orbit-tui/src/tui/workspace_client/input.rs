@@ -700,6 +700,13 @@ impl Tab {
             }
             _ => {
                 let compact = command == "/compact";
+                if !compact && !self.state.supports_vision && !self.state.attachments.is_empty() {
+                    self.state.input.set(prompt);
+                    self.state.report_local(TranscriptItem::Error(
+                        "当前模型不支持图片输入，文字和图片草稿已保留。请切换支持图片的模型，或移除图片后发送。".into(),
+                    ));
+                    return Ok(Action::None);
+                }
                 let images = match workspace::attachments::uploads(if compact {
                     &[]
                 } else {

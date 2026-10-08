@@ -440,13 +440,6 @@ impl Tab {
         self.state.model = info.model.clone();
         self.state.model_completions = info.models.clone();
         self.model_catalog = info.model_catalog.clone();
-        if !info.supports_vision && !self.state.attachments.is_empty() {
-            self.state.attachments.clear();
-            self.state.attachment_cursor = None;
-            self.state.report_local(TranscriptItem::Notice(
-                "所选模型不支持图片输入，已清除待发送的图片附件。".into(),
-            ));
-        }
         self.state.supports_vision = info.supports_vision;
         self.state.reasoning_effort = info
             .reasoning_effort
