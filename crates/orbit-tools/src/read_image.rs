@@ -148,7 +148,7 @@ mod tests {
 
         assert_eq!(output.attachments.len(), 1);
 
-        let orbit_model::types::Attachment::Image { path, .. } = &output.attachments[0];
+        let path = output.attachments[0].path();
 
         assert!(path.starts_with(data.path().join("orbit.attachments")));
         assert_eq!(std::fs::read_dir(workspace.path()).unwrap().count(), 1);

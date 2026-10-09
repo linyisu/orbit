@@ -47,10 +47,7 @@ pub async fn workspace_tools(
     tools.register(
         ReadFile::new(workspace.clone()).with_scan_budget(command_limits.read_file_scan_bytes),
     );
-    let mut document = ReadDocument::new(workspace.clone()).with_worker(std::env::current_exe()?);
-    if let Some(database) = database {
-        document = document.with_images(ImageAssets::for_database(database));
-    }
+    let document = ReadDocument::new(workspace.clone()).with_worker(std::env::current_exe()?);
     tools.register(document);
 
     if let Some(database) = database {

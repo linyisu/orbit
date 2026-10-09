@@ -15,8 +15,16 @@ pub(super) async fn run(
     use orbit_runtime::execution::{
         ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, ResourceLimits, execution_backend,
     };
-    let input = tempfile::tempdir().map_err(failed)?;
-    let temporary_output = tempfile::tempdir().map_err(failed)?;
+    use std::os::unix::fs::PermissionsExt;
+    let temporary = || {
+        tempfile::Builder::new()
+            .prefix("orbit-document-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in("/tmp")
+            .map_err(failed)
+    };
+    let input = temporary()?;
+    let temporary_output = temporary()?;
     std::fs::write(input.path().join(format!("source.{extension}")), bytes).map_err(failed)?;
     let source = input.path().join(format!("source.{extension}"));
     let output = temporary_output.path().join("result.json");

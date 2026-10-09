@@ -391,6 +391,7 @@ mod input_tests {
             ChatRequest::new(vec![ChatMessage::user_with_attachments(
                 "inspect",
                 vec![Attachment::Image {
+                    lease: None,
                     name: "pixel.png".into(),
                     mime_type: "image/png".into(),
                     path,

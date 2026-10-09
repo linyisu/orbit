@@ -107,6 +107,10 @@ impl Store {
 
     pub async fn archive_context(&self, session_id: &str, messages: &[ChatMessage]) -> Result<i64> {
         let session_id = session_id.to_owned();
+        let database = self.path().to_owned();
+        let attachments = crate::attachments::in_messages(messages)
+            .cloned()
+            .collect::<Vec<_>>();
         let messages = messages
             .iter()
             .map(serde_json::to_string)
@@ -118,6 +122,7 @@ impl Store {
 
         self.write_access(move |conn| async move {
             let tx = conn.begin().await?;
+            crate::attachments::register(&tx, &database, &session_id, attachments.iter()).await?;
             if let Some(row) = context_archives::Entity::find()
                 .filter(context_archives::Column::SessionId.eq(&session_id))
                 .filter(context_archives::Column::ContentSha256.eq(&fingerprint))

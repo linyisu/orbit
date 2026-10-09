@@ -1503,8 +1503,8 @@ fn draw_composer(
                 4.min(width.saturating_sub(label_width + 1)),
                 attachment_height,
             );
-            let orbit_model::types::Attachment::Image { path, .. } = attachment;
-            let source = super::media::Source::Image(path.to_string_lossy().into_owned());
+            let source =
+                super::media::Source::Image(attachment.path().to_string_lossy().into_owned());
             let mut composer_media = state.media.clone();
             composer_media.files = None;
             if let Some(picture) =

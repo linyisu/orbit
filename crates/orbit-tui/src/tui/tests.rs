@@ -405,6 +405,7 @@ fn clipboard_shortcuts_request_the_system_clipboard() {
 
 fn image(name: &str) -> orbit_model::types::Attachment {
     orbit_model::types::Attachment::Image {
+        lease: None,
         name: name.into(),
         mime_type: "image/png".into(),
         path: PathBuf::from(name),

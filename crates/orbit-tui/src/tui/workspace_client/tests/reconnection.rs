@@ -19,6 +19,7 @@ async fn every_target_reconnects_original_session_without_a_wizard_or_resubmissi
         tab.starting = Some("unconfirmed input".into());
         tab.starting_attachments
             .push(orbit_model::types::Attachment::Image {
+                lease: None,
                 name: "image.png".into(),
                 mime_type: "image/png".into(),
                 path: "/tmp/image.png".into(),

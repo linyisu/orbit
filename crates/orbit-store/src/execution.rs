@@ -36,6 +36,7 @@ impl Journal {
         let _guard = self.commit_lock.lock().await;
         let run = self.run;
         let session = self.session.clone();
+        let database = self.store.path().to_owned();
         // Keep queued facts until the SQLite transaction commits. A failed
         // checkpoint must not silently discard the only copy of new messages.
         let events = journal_lock(&self.pending).clone();
@@ -58,6 +59,14 @@ impl Journal {
                     .is_some();
                 ensure!(active, "checkpoint writer no longer owns an active run");
                 if let Some(checkpoint) = checkpoint {
+                    crate::attachments::register(
+                        &transaction,
+                        &database,
+                        &session,
+                        crate::attachments::in_messages(&checkpoint.history)
+                            .chain(checkpoint.attachments.iter()),
+                    )
+                    .await?;
                     execution_checkpoints::Entity::insert(execution_checkpoints::ActiveModel {
                         run_id: Set(run),
                         payload: Set(serde_json::to_string(&checkpoint)?),
@@ -78,6 +87,13 @@ impl Journal {
                         .await?
                         .map_or(0, |row| row.ordinal + 1);
                     for (ordinal, message) in (first..).zip(messages) {
+                        crate::attachments::register(
+                            &transaction,
+                            &database,
+                            &session,
+                            crate::attachments::in_messages(std::slice::from_ref(&message)),
+                        )
+                        .await?;
                         let payload = serde_json::to_string(&message)?;
                         let hash = Sha256::digest(payload.as_bytes())
                             .iter()

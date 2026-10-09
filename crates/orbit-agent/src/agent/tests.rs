@@ -262,6 +262,7 @@ fn provider_payload_keeps_only_the_four_most_recent_images() {
             ChatMessage::user_with_attachments(
                 format!("prompt {index}"),
                 vec![Attachment::Image {
+                    lease: None,
                     name: format!("{index}.png"),
                     mime_type: "image/png".into(),
                     path: format!("/stored/{index}.png").into(),
@@ -289,6 +290,7 @@ fn provider_payload_keeps_only_the_four_most_recent_images() {
         ChatMessage::user_with_attachments(
             "prompt 0",
             vec![Attachment::Image {
+                lease: None,
                 name: "0.png".into(),
                 mime_type: "image/png".into(),
                 path: "/stored/0.png".into(),
@@ -302,6 +304,7 @@ fn provider_payload_omits_all_images_for_text_only_model() {
     let history = vec![ChatMessage::user_with_attachments(
         "check this scene",
         vec![Attachment::Image {
+            lease: None,
             name: "scene.png".into(),
             mime_type: "image/png".into(),
             path: "/stored/scene.png".into(),
@@ -374,13 +377,17 @@ impl Tool for DocumentImageTool {
             if !context.supports_vision {
                 return Ok(ToolOutput::text("text only; images unavailable"));
             }
+            let directory = std::sync::Arc::new(tempfile::tempdir().unwrap());
+            let path = directory.path().join("page-3.png");
+            std::fs::write(&path, b"rendered page").unwrap();
             Ok(ToolOutput::with_attachments(
                 "PDF page 3 attached",
-                vec![Attachment::Image {
-                    name: "book.pdf — page 3.png".into(),
-                    mime_type: "image/png".into(),
-                    path: "/global/page-3.png".into(),
-                }],
+                vec![Attachment::temporary_image(
+                    "book.pdf — page 3.png".into(),
+                    "image/png".into(),
+                    path,
+                    directory,
+                )],
             ))
         })
     }
@@ -422,6 +429,70 @@ async fn document_vision_respects_model_and_image_capability_and_reaches_next_re
     }
 }
 
+#[tokio::test]
+async fn temporary_document_images_are_consumed_once_and_never_saved_as_dead_paths() {
+    let backend = MockModel::new(vec![
+        assistant_tool_call("doc", "read_document", "{}"),
+        assistant_tool_call("later", "echo", "{}"),
+        assistant_text("done"),
+    ])
+    .with_vision(true);
+    let mut tools = ToolRegistry::new();
+    tools.register(DocumentImageTool);
+    tools.register(ImageTool);
+    tools.register(ClosureTool::new("echo", "", json!({}), |_, _| async {
+        Ok("ok".into())
+    }));
+    let result = Agent::new(backend.clone(), tools, AgentConfig::default())
+        .run(request(), CancellationToken::new())
+        .await
+        .unwrap();
+    let requests = backend.requests();
+    let images = |request: &ChatRequest| {
+        request
+            .messages
+            .iter()
+            .flat_map(|message| match message {
+                ChatMessage::User { attachments, .. } => attachments.clone(),
+                _ => vec![],
+            })
+            .collect::<Vec<_>>()
+    };
+    let pages = images(&requests[1]);
+    assert_eq!(pages.len(), 1);
+    assert!(
+        pages[0].image().is_ok(),
+        "the image is readable when the model consumes it"
+    );
+    let path = pages[0].path().to_owned();
+    assert!(
+        images(&requests[2]).is_empty(),
+        "a later turn must not reattach consumed pages"
+    );
+    let checkpoint = crate::checkpoint::ExecutionCheckpoint {
+        history: requests[1].messages.clone(),
+        turns: 1,
+        tool_calls: 1,
+        in_flight: vec![],
+        attachments: pages.clone(),
+    };
+    let serialized = serde_json::to_string(&checkpoint).unwrap();
+    assert!(!serialized.contains(path.to_str().unwrap()));
+    let recovered: crate::checkpoint::ExecutionCheckpoint =
+        serde_json::from_str(&serialized).unwrap();
+    assert!(recovered.attachments.is_empty());
+    assert!(
+        !serde_json::to_string(&result.history)
+            .unwrap()
+            .contains(path.to_str().unwrap())
+    );
+    drop(checkpoint);
+    drop(pages);
+    drop(requests);
+    drop(backend);
+    assert!(!path.exists(), "last consumer releases rendered files");
+}
+
 impl Tool for ImageTool {
     fn definition(&self) -> orbit_model::types::ToolDefinition {
         orbit_model::types::ToolDefinition::function("read_image", "", json!({}))
@@ -432,6 +503,7 @@ impl Tool for ImageTool {
             Ok(ToolOutput::with_attachments(
                 r#"{"loaded":true}"#,
                 vec![Attachment::Image {
+                    lease: None,
                     name: "scene.png".into(),
                     mime_type: "image/png".into(),
                     path: "/global/scene.png".into(),
@@ -608,6 +680,7 @@ async fn scenario_4_resuming_failed_conversation_with_text_only_model() {
         ChatMessage::user_with_attachments(
             "The read_image tool loaded the following local image into this model request: 1.jpg. Analyze the actual image content directly.",
             vec![Attachment::Image {
+                lease: None,
                 name: "1.jpg".into(),
                 mime_type: "image/jpeg".into(),
                 path: "/stored/1.jpg".into(),

@@ -157,6 +157,7 @@ mod tests {
             let message = ChatMessage::user_with_attachments(
                 "",
                 vec![orbit_model::types::Attachment::Image {
+                    lease: None,
                     name: "clipboard.png".into(),
                     mime_type: "image/png".into(),
                     path: directory.path().join(asset),

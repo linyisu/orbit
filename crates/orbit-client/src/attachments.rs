@@ -1,25 +1,20 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use orbit_model::types::Attachment;
 use orbit_tools::image_assets::ImageAssets;
 
-fn cache() -> Result<ImageAssets> {
-    let root = std::env::var_os("XDG_CACHE_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .context("cannot locate the composer attachment cache")?;
-    Ok(ImageAssets::for_database(&root.join("orbit/composer")))
+fn temporary_assets() -> Result<ImageAssets> {
+    ImageAssets::temporary()
 }
 
 pub fn paths(paths: Vec<PathBuf>) -> Result<Vec<Attachment>> {
-    let assets = cache()?;
+    let assets = temporary_assets()?;
     paths.iter().map(|path| assets.import_path(path)).collect()
 }
 
 pub fn rgba(width: usize, height: usize, bytes: Vec<u8>) -> Result<Vec<Attachment>> {
-    Ok(vec![cache()?.import_rgba(
+    Ok(vec![temporary_assets()?.import_rgba(
         "clipboard.png",
         width,
         height,

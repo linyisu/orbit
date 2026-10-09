@@ -1514,6 +1514,7 @@ fn pending_images_render_as_chips_above_the_prompt() {
     state
         .attachments
         .push(orbit_model::types::Attachment::Image {
+            lease: None,
             name: "capture.png".into(),
             mime_type: "image/png".into(),
             path: "/tmp/unused.png".into(),

@@ -1,63 +1,44 @@
-use std::{
-    fs::OpenOptions,
-    io::Write,
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use orbit_model::types::Attachment;
-use sha2::{Digest, Sha256};
+use orbit_runtime::assets::AssetDirectory;
 
 pub const MAX_IMAGE_BYTES: usize = Attachment::MAX_IMAGE_BYTES;
 const MAX_ATTACHMENT_EDGE_PIXELS: u32 = 2048;
 
 #[derive(Clone)]
 pub struct ImageAssets {
-    directory: PathBuf,
+    directory: AssetDirectory,
+    temporary: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 impl ImageAssets {
     pub fn for_database(database: &Path) -> Self {
         Self {
-            directory: database.with_extension("attachments"),
+            directory: AssetDirectory::for_database(database),
+            temporary: None,
         }
+    }
+
+    /// Composer images are uploads in transit, not durable session attachments.
+    pub fn temporary() -> Result<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        let temporary = std::sync::Arc::new(
+            tempfile::Builder::new()
+                .prefix("orbit-composer-")
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir_in("/tmp")?,
+        );
+        Ok(Self {
+            directory: AssetDirectory::for_database(&temporary.path().join("images")),
+            temporary: Some(temporary),
+        })
     }
 
     /// Read an immutable asset after the caller has checked session ownership.
     pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
-        ensure!(
-            path.parent() == Some(self.directory.as_path()),
-            "not an image asset"
-        );
-        let expected = path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        ensure!(
-            expected.len() == 64 && expected.bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "invalid image asset name"
-        );
-        ensure!(
-            !self.directory.symlink_metadata()?.file_type().is_symlink(),
-            "image asset directory is a symlink"
-        );
-        use std::io::Read;
-        let workspace = orbit_runtime::filesystem::Workspace::new(&self.directory)?;
-        let file = workspace.authorize_read(path)?;
-        ensure!(
-            file.metadata()?.is_file(),
-            "image asset is not a regular file"
-        );
-        let mut bytes = Vec::new();
-        file.take(MAX_IMAGE_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)?;
-        ensure!(bytes.len() <= MAX_IMAGE_BYTES, "image exceeds 20 MiB");
-        let actual = Sha256::digest(&bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        ensure!(actual == expected, "image asset failed integrity check");
-        Ok(bytes)
+        self.directory.read(path, MAX_IMAGE_BYTES)
     }
 
     pub fn import_path(&self, source: &Path) -> Result<Attachment> {
@@ -77,53 +58,22 @@ impl ImageAssets {
         ensure!(bytes.len() <= MAX_IMAGE_BYTES, "图片不能超过 20 MiB");
 
         let (bytes, mime_type, extension) = normalize_image(bytes)?;
-        let digest = Sha256::digest(&bytes);
-        let hash = digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        std::fs::create_dir_all(&self.directory)?;
-        ensure!(
-            !self.directory.symlink_metadata()?.file_type().is_symlink(),
-            "图片存储目录不能是符号链接"
-        );
+        let (destination, lease) = self.directory.import(&bytes, extension)?;
 
-        let destination = self.directory.join(format!("{hash}.{extension}"));
-        let valid_existing = std::fs::read(&destination)
-            .ok()
-            .is_some_and(|existing| Sha256::digest(existing) == digest);
-
-        if !valid_existing {
-            let nonce = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_nanos();
-            let temporary = self
-                .directory
-                .join(format!(".{hash}.{}.{nonce}.tmp", std::process::id()));
-            let mut options = OpenOptions::new();
-            options.create_new(true).write(true);
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temporary)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-
-            if destination.exists() {
-                std::fs::remove_file(&destination)?;
-            }
-
-            std::fs::rename(&temporary, &destination)?;
+        if let Some(temporary) = &self.temporary {
+            return Ok(Attachment::temporary_image(
+                name.into(),
+                mime_type.into(),
+                destination,
+                temporary.clone(),
+            ));
         }
 
         Ok(Attachment::Image {
             name: name.into(),
             mime_type: mime_type.into(),
             path: destination,
+            lease: Some(lease),
         })
     }
 
@@ -204,9 +154,10 @@ mod tests {
     fn asset_reads_check_location_and_content() {
         let root = tempfile::tempdir().unwrap();
         let assets = ImageAssets::for_database(&root.path().join("sessions.db"));
-        let Attachment::Image { path, .. } = assets
+        let attachment = assets
             .import_rgba("clipboard.png", 1, 1, vec![255; 4])
             .unwrap();
+        let path = attachment.path().to_owned();
         let bytes = assets.read(&path).unwrap();
         let external = root.path().join(path.file_name().unwrap());
         std::fs::write(&external, &bytes).unwrap();

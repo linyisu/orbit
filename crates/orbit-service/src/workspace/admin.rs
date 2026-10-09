@@ -33,20 +33,34 @@ pub(super) async fn execute(
             )
         }
         Action::Sessions => crate::session::list_text(store).await?,
-        Action::SessionStorage => store
-            .session_storage_usage()
-            .await?
-            .into_iter()
-            .map(|usage| {
-                format!(
-                    "{}  {:>12} B  {}",
-                    usage.id,
-                    usage.payload_bytes,
-                    usage.title.replace(['\n', '\r', '\t'], " ")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Action::SessionStorage => {
+            let footprint = store.storage_footprint().await?;
+            let mut lines = vec![format!(
+                "文件大小快照（B）：数据库 {} · WAL {} · 共享内存 {} · 附件 {} · 旧命令日志 {}\n当前用户临时命令日志 {} B（跨数据库，任务结束清理）\n会话 ID  数据库载荷 B  关联图片 B  标题\n载荷不包含索引及空闲页；共享图片会出现在各个引用会话中，不能直接相加。",
+                footprint.database_bytes,
+                footprint.wal_bytes,
+                footprint.shared_memory_bytes,
+                footprint.attachment_bytes,
+                footprint.old_command_output_bytes,
+                footprint.temporary_command_output_bytes,
+            )];
+            lines.extend(
+                store
+                    .session_storage_usage()
+                    .await?
+                    .into_iter()
+                    .map(|usage| {
+                        format!(
+                            "{}  {:>12}  {:>12}  {}",
+                            usage.id,
+                            usage.payload_bytes,
+                            usage.attachment_bytes,
+                            usage.title.replace(['\n', '\r', '\t'], " ")
+                        )
+                    }),
+            );
+            lines.join("\n")
+        }
         Action::DeleteSession { id } => {
             let deleted = store.delete_session(&id).await?;
             let mut text = if deleted {

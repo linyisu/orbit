@@ -910,6 +910,7 @@ async fn resume_preserves_nonempty_tabs_and_new_always_adds_a_tab() {
             tab.state
                 .attachments
                 .push(orbit_model::types::Attachment::Image {
+                    lease: None,
                     name: "draft.png".into(),
                     mime_type: "image/png".into(),
                     path: "/draft.png".into(),

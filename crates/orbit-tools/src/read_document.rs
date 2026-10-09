@@ -100,7 +100,6 @@ impl Converted {
 pub struct ReadDocument {
     workspace: Workspace,
     worker: Option<std::path::PathBuf>,
-    images: Option<crate::image_assets::ImageAssets>,
     cache:
         tokio::sync::Mutex<std::collections::VecDeque<(String, String, std::sync::Arc<Converted>)>>,
 }
@@ -110,14 +109,8 @@ impl ReadDocument {
         Self {
             workspace,
             worker: None,
-            images: None,
             cache: tokio::sync::Mutex::new(Default::default()),
         }
-    }
-
-    pub fn with_images(mut self, images: crate::image_assets::ImageAssets) -> Self {
-        self.images = Some(images);
-        self
     }
 
     pub fn with_worker(mut self, worker: std::path::PathBuf) -> Self {

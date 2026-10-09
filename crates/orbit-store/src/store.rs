@@ -26,6 +26,19 @@ pub struct SessionStorageUsage {
     pub title: String,
     /// Stored payload bytes, excluding SQLite indexes and unused pages.
     pub payload_bytes: u64,
+    /// Referenced image bytes; shared assets appear in each owning session.
+    pub attachment_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StorageFootprint {
+    pub database_bytes: u64,
+    pub wal_bytes: u64,
+    pub shared_memory_bytes: u64,
+    pub attachment_bytes: u64,
+    pub old_command_output_bytes: u64,
+    /// Live temporary logs for this OS user, across Orbit databases.
+    pub temporary_command_output_bytes: u64,
 }
 
 // Holding the file keeps a process-scoped writer lease, including between runs.
@@ -48,7 +61,10 @@ impl Store {
         })
         .await??;
         let connection = Database::open(&path).await?;
-        Ok(Self { connection, path })
+        let store = Self { connection, path };
+        store.ensure_attachment_index().await?;
+        store.collect_attachment_garbage().await?;
+        Ok(store)
     }
     pub fn path(&self) -> &Path {
         &self.path
@@ -91,23 +107,33 @@ impl Store {
         session: &Session,
         history: &[orbit_model::types::ChatMessage],
     ) -> Result<SessionWriter> {
-        let history = serde_json::to_string(history)?;
+        let history = history.to_vec();
+        let database = self.path.clone();
         let mut session = session.clone();
         session.project_id = self.resolve_project(&session.workspace).await?.id;
         let id = session.id.clone();
         self.write_access(move |conn| async move {
+            let tx = conn.begin().await?;
             sessions::ActiveModel {
-                id: Set(session.id),
+                id: Set(session.id.clone()),
                 workspace: Set(session.workspace),
                 model: Set(session.model),
                 project_id: Set(Some(session.project_id)),
                 title: Set(session.title),
                 reasoning_effort: Set(session.reasoning_effort),
-                history: Set(history),
+                history: Set(serde_json::to_string(&history)?),
                 ..Default::default()
             }
-            .insert(&conn)
+            .insert(&tx)
             .await?;
+            crate::attachments::register(
+                &tx,
+                &database,
+                &session.id,
+                crate::attachments::in_messages(&history),
+            )
+            .await?;
+            tx.commit().await?;
             Ok(())
         })
         .await?;
@@ -231,13 +257,9 @@ impl Store {
                         attachments,
                     }) if content == prompt => attachments
                         .into_iter()
-                        .map(|attachment| match attachment {
-                            orbit_model::types::Attachment::Image { name, path, .. } => {
-                                orbit_protocol::MessageImage {
-                                    name,
-                                    path: path.to_string_lossy().into_owned(),
-                                }
-                            }
+                        .map(|attachment| orbit_protocol::MessageImage {
+                            name: attachment.name().to_owned(),
+                            path: attachment.path().to_string_lossy().into_owned(),
                         })
                         .collect(),
                     _ => Vec::new(),
@@ -407,10 +429,13 @@ impl Store {
         drop(leases);
         drop(parent_lease);
 
+        self.collect_attachment_garbage().await?;
+
         Ok(deleted)
     }
 
     pub async fn reclaim_unused_space(&self) -> Result<()> {
+        self.collect_attachment_garbage().await?;
         self.connection.reclaim().await
     }
 

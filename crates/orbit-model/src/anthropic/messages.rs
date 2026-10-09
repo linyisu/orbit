@@ -522,6 +522,7 @@ mod tests {
             ChatRequest::new(vec![ChatMessage::user_with_attachments(
                 "inspect",
                 vec![crate::types::Attachment::Image {
+                    lease: None,
                     name: "pixel.png".into(),
                     mime_type: "image/png".into(),
                     path,
@@ -557,6 +558,7 @@ mod tests {
                 ChatMessage::user_with_attachments(
                     "Analyze scene.png",
                     vec![crate::types::Attachment::Image {
+                        lease: None,
                         name: "scene.png".into(),
                         mime_type: "image/png".into(),
                         path,

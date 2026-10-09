@@ -95,6 +95,7 @@ impl SessionWriter {
             "cannot append idle context during a run"
         );
         let id = self.id.clone();
+        let database = self.store.path().to_owned();
         self.store
             .write_access(move |conn| async move {
                 let tx = conn.begin().await?;
@@ -104,6 +105,13 @@ impl SessionWriter {
                     .context("session not found")?;
                 let mut history: Vec<ChatMessage> = serde_json::from_str(&row.history)?;
                 history.push(message);
+                crate::attachments::register(
+                    &tx,
+                    &database,
+                    &id,
+                    crate::attachments::in_messages(&history),
+                )
+                .await?;
                 let mut row = row.into_active_model();
                 row.history = Set(serde_json::to_string(&history)?);
                 row.updated_at = Set(now());
@@ -290,6 +298,7 @@ impl SessionWriter {
             .map(|started| started.elapsed().as_millis().min(i64::MAX as u128) as i64);
         let status = status.to_owned();
         let id = self.id.clone();
+        let database = self.store.path().to_owned();
         self.store
             .write_access(move |conn| async move {
                 let transaction = conn.begin().await?;
@@ -341,6 +350,13 @@ impl SessionWriter {
                     ..Default::default()
                 };
                 if let Some(history) = history {
+                    crate::attachments::register(
+                        &transaction,
+                        &database,
+                        &id,
+                        crate::attachments::in_messages(&history),
+                    )
+                    .await?;
                     row.history = Set(serde_json::to_string(&history)?);
                 }
                 sessions::Entity::update_many()

@@ -778,7 +778,13 @@ fn records(messages: &[ChatMessage], pinned: Option<usize>) -> (String, Vec<Valu
                 "role": "user",
                 "field": "content",
                 "text": content,
-                "attachments": attachments
+                "attachments": attachments.iter().map(|attachment| {
+                    if attachment.is_temporary() {
+                        json!({"name": attachment.name(), "temporary": true, "note": "Reread the source document for page images; temporary renders are not retained."})
+                    } else {
+                        serde_json::to_value(attachment).expect("persistent image metadata is serializable")
+                    }
+                }).collect::<Vec<_>>()
             })),
 
             ChatMessage::Assistant {

@@ -2052,6 +2052,7 @@ fn attachment_chips_decode_tiny_thumbnails_without_showing_filenames() {
     state
         .attachments
         .push(orbit_model::types::Attachment::Image {
+            lease: None,
             name: "private-filename.png".into(),
             mime_type: "image/png".into(),
             path,

@@ -121,7 +121,10 @@ async fn imports_images_into_the_orbit_asset_directory_by_content_hash() {
 
     let Attachment::Image {
         path, mime_type, ..
-    } = first;
+    } = first
+    else {
+        panic!("uploaded image must be persistent")
+    };
 
     assert_eq!(mime_type, "image/png");
     assert!(path.starts_with(tmp.path().join("sessions.attachments")));
@@ -133,7 +136,11 @@ async fn imports_images_into_the_orbit_asset_directory_by_content_hash() {
         name,
         path,
         mime_type,
-    } = clipboard;
+        ..
+    } = clipboard
+    else {
+        panic!("uploaded image must be persistent")
+    };
 
     assert!(name.starts_with("clipboard-") && name.ends_with(".png"));
     assert_eq!(mime_type, "image/png");
@@ -521,6 +528,7 @@ async fn test_resume_preserves_attachments_losslessly_and_projects_for_text_only
                 ChatMessage::user_with_attachments(
                     "check this",
                     vec![orbit_model::types::Attachment::Image {
+                        lease: None,
                         name: "pic.png".into(),
                         mime_type: "image/png".into(),
                         path: "/path/to/pic.png".into(),
@@ -591,6 +599,7 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
         ChatMessage::user_with_attachments(
             "analyze this",
             vec![orbit_model::types::Attachment::Image {
+                lease: None,
                 name: "photo.png".into(),
                 mime_type: "image/png".into(),
                 path: "/path/to/photo.png".into(),

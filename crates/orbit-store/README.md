@@ -12,7 +12,7 @@
 - [store/writer.rs](src/store/writer.rs)：运行开始、journal 创建、消息与子任务结果的事务性终态提交。`SessionWriter` 的公共接口和租约所有权保持不变。
 - [session_log.rs](src/session_log.rs)、[execution.rs](src/execution.rs)：规范消息、检查点和持久化接口；[subagents.rs](src/subagents.rs) 存储子代理；[live_context.rs](src/live_context.rs) 只读获取当前执行上下文。
 
-迁移回归在 [tests/migrations.rs](tests/migrations.rs)，验证每个已发布版本升级后的数据、列、外键、索引、幂等性及失败回滚。旧 SQL 仅存于 `tests/fixtures/schema`，作为独立的历史数据库样本生成器，不进入生产迁移；仓库不保存数据库二进制模板。历史恢复回归在 [tests/sessions.rs](tests/sessions.rs)。流式 journal 的 250 ms / 256 条提交触发策略由 `orbit-agent` 维护，store 负责执行相应事务。
+迁移回归在 [src/tests/migrations.rs](src/tests/migrations.rs)，验证每个已发布版本升级后的数据、列、外键、索引、幂等性及失败回滚。生产迁移和历史测试样本都由 Rust 生成，仓库不保存 SQL 或数据库二进制模板。历史恢复回归在 [src/tests/sessions.rs](src/tests/sessions.rs)。流式 journal 的 250 ms / 256 条提交触发策略由 `orbit-agent` 维护，store 负责执行相应事务。
 
 ## 架构与核心组件
 
@@ -34,6 +34,8 @@ orbit.db
 ├── runs                      # 用户交互轮次与执行状态 (running, completed, interrupted)
 ├── events                    # 细粒度界面渲染事件流 (thinking, text, tool_call, tool_result)
 ├── session_messages          # 只追加的规范消息日志 (带 SHA-256 完整性哈希)
+├── session_attachments       # 会话与不可变图片文件的归属，删除会话级联释放
+├── storage_maintenance       # 历史附件索引的完成标记
 ├── context_archives          # 原始上下文压缩前快照 (带哈希去重与分页检索)
 ├── compaction_progress       # 结构化增量摘要进度与来源指纹游标
 ├── agent_sessions            # 父子会话关系及只读角色
@@ -59,6 +61,10 @@ Orbit 将“展示事件”、“当前模型上下文”与“规范原始消�
    在精简工具大文本前，将整段历史完整持久化为只读快照。相同内容通过哈希复用归档 ID，供模型通过 `read_history` 安全分页检索。归档列表仅查询当前会话的 ID、创建时间与消息数量，按最新优先分页，每页最多 20 个；尚未归档时返回空列表，不加载消息正文或暴露其他会话的归档。
 4. **`compaction_progress`（摘要检查点）**：
    记录已成功完成的结构化摘要内容、来源指纹及进度游标。当后续任务失败或中断时，已保存的有效摘要可被复用，无需从头重算。
+
+图片上传和 `read_image` 使用不可变去重附件库，总容量上限 512 MiB。`session_attachments` 在消息、检查点、归档或上下文提交时同事务记录归属；显式删除最后一个引用会话后回收文件，上传和读取租约仍占用的文件稍后再回收。首次升级先索引已有历史，索引失败不会开始删除；开启数据库、删除会话和显式回收空间时收集无归属附件。达到容量上限时拒绝新增图片，不自动删除会话中的图片。PDF 页图和待发送图片只在 `/tmp` 中临时存在。
+
+`session_storage_usage` 区分数据库载荷与关联图片大小，共享图片计入每个归属会话，不能直接相加。`storage_footprint` 单独报告数据库文件、WAL、SHM、附件库及命令日志的文件大小快照；索引和空闲页体现在数据库文件中，不伪装成某个会话的载荷。
 
 ---
 

@@ -13,6 +13,7 @@ pub struct ExecutionCheckpoint {
     pub tool_calls: usize,
     #[serde(default, deserialize_with = "read_in_flight")]
     pub in_flight: Vec<String>,
+    #[serde(serialize_with = "Attachment::serialize_persistent")]
     pub attachments: Vec<Attachment>,
 }
 

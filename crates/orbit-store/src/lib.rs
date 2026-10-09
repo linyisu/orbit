@@ -29,5 +29,6 @@ mod memories;
 mod plugins;
 pub mod tasks;
 
+mod attachments;
 #[cfg(test)]
 mod tests;

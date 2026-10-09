@@ -76,7 +76,7 @@ pub(super) async fn attach(
             vision["warning"] = json!(
                 "Current model cannot receive images, or image capability is disabled. Only extracted text is available; switch to a vision model to read these pages."
             );
-        } else if let (Some(executable), Some(assets)) = (&tool.worker, &tool.images) {
+        } else if let Some(executable) = &tool.worker {
             let pages_arg = selected
                 .iter()
                 .map(u32::to_string)
@@ -106,7 +106,7 @@ pub(super) async fn attach(
                     );
                 }
                 Ok(temporary_output) => {
-                    let assets = assets.clone();
+                    let temporary_output = std::sync::Arc::new(temporary_output);
                     let name = Path::new(&args.path)
                         .file_name()
                         .unwrap_or_default()
@@ -114,7 +114,7 @@ pub(super) async fn attach(
                         .into_owned();
                     let selected_copy = selected.clone();
                     let imported = tokio::task::spawn_blocking(move || {
-                        import_pages(temporary_output.path(), &selected_copy, &assets, &name)
+                        import_pages(temporary_output, &selected_copy, &name)
                     })
                     .await
                     .map_err(failed)
@@ -149,13 +149,12 @@ pub(super) async fn attach(
             // Failed pages are explicit and may be retried; this cursor covers the remaining batch.
             vision["next_image_start_page"] = json!(next);
             vision["note"] = json!(
-                "Attachments are full physical PDF pages in ascending page order, named with their page numbers. Inspect the actual images to read diagrams and missing text. Text extraction warnings do not mean attached images are unreadable. Follow next_image_start_page with the SAME start_page/end_page to load remaining pages."
+                "Attachments are temporary full physical PDF pages in ascending order, named with page numbers. Inspect the images now to read diagrams and missing text. They are discarded after this model request and are not saved in history or checkpoints; reread the source document when needed. Text warnings do not mean images are unreadable. Follow next_image_start_page with the SAME start_page/end_page to load remaining pages."
             );
         } else {
             vision["status"] = json!("unavailable");
-            vision["warning"] = json!(
-                "PDF image worker or attachment store is unavailable. Only extracted text is available."
-            );
+            vision["warning"] =
+                json!("PDF image worker is unavailable. Only extracted text is available.");
         }
     }
     if cancellation.is_cancelled() {
@@ -166,11 +165,11 @@ pub(super) async fn attach(
 }
 
 fn import_pages(
-    directory: &Path,
+    temporary: std::sync::Arc<tempfile::TempDir>,
     selected: &[u32],
-    assets: &crate::image_assets::ImageAssets,
     name: &str,
 ) -> Result<(Vec<orbit_model::types::Attachment>, Vec<RenderedPage>), ToolError> {
+    let directory = temporary.path();
     let file = std::fs::File::open(directory.join("result.json")).map_err(failed)?;
     let results: Vec<RenderedPage> =
         serde_json::from_reader(file.take(64 * 1024)).map_err(failed)?;
@@ -191,9 +190,17 @@ fn import_pages(
                         file.take(crate::image_assets::MAX_IMAGE_BYTES as u64 + 1)
                             .read_to_end(&mut bytes)
                             .map_err(failed)?;
-                        assets
-                            .import_bytes(format!("{name} — page {page}.png"), bytes)
-                            .map_err(failed)
+                        if bytes.len() > crate::image_assets::MAX_IMAGE_BYTES {
+                            return Err(failed("rendered page exceeds image byte limit"));
+                        }
+                        image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+                            .map_err(failed)?;
+                        Ok(orbit_model::types::Attachment::temporary_image(
+                            format!("{name} — page {page}.png"),
+                            "image/png".into(),
+                            path,
+                            temporary.clone(),
+                        ))
                     });
                 match loaded {
                     Ok(image) => {

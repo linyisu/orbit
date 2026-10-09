@@ -71,13 +71,9 @@ pub(super) async fn start(
         .await??;
     let image_assets = attachments
         .iter()
-        .map(|attachment| match attachment {
-            orbit_model::types::Attachment::Image { name, path, .. } => {
-                orbit_protocol::MessageImage {
-                    name: name.clone(),
-                    path: path.to_string_lossy().into_owned(),
-                }
-            }
+        .map(|attachment| orbit_protocol::MessageImage {
+            name: attachment.name().to_owned(),
+            path: attachment.path().to_string_lossy().into_owned(),
         })
         .collect();
     let started = crate::execution::start(

@@ -11,6 +11,7 @@ fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
 }
 fn image() -> orbit_model::types::Attachment {
     orbit_model::types::Attachment::Image {
+        lease: None,
         name: "draft.png".into(),
         mime_type: "image/png".into(),
         path: "/tmp/draft.png".into(),
@@ -245,6 +246,7 @@ fn model_changes_preserve_image_drafts_and_only_send_to_a_compatible_model() {
     let path = directory.path().join("draft.png");
     image::RgbaImage::new(1, 1).save(&path).unwrap();
     let attachment = orbit_model::types::Attachment::Image {
+        lease: None,
         name: "draft.png".into(),
         mime_type: "image/png".into(),
         path,

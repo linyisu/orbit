@@ -1,7 +1,7 @@
 //! Aggregate payload sizes in SQLite, without materializing large history bodies.
 use crate::{
     entities::*,
-    store::{SessionStorageUsage, Store},
+    store::{SessionStorageUsage, StorageFootprint, Store},
 };
 use anyhow::Result;
 use sea_orm::sea_query::Expr;
@@ -37,6 +37,7 @@ impl Store {
                             id,
                             title,
                             payload_bytes: size.max(0) as u64,
+                            attachment_bytes: 0,
                         },
                     )
                 })
@@ -87,6 +88,22 @@ impl Store {
             related!(events, runs, Run);
             related!(execution_checkpoints, runs, Run);
             related!(context_archive_messages, context_archives, Archive);
+            let attachment_sizes: Vec<(String, i64)> = session_attachments::Entity::find()
+                .select_only()
+                .column(session_attachments::Column::SessionId)
+                .column_as(
+                    Expr::col(session_attachments::Column::ByteSize).sum(),
+                    "bytes",
+                )
+                .group_by(session_attachments::Column::SessionId)
+                .into_tuple()
+                .all(&tx)
+                .await?;
+            for (id, bytes) in attachment_sizes {
+                if let Some(row) = usage.get_mut(&id) {
+                    row.attachment_bytes = bytes.max(0) as u64;
+                }
+            }
             let mut rows = usage.into_values().collect::<Vec<_>>();
             rows.sort_by(|a, b| {
                 b.payload_bytes
@@ -98,4 +115,54 @@ impl Store {
         })
         .await
     }
+
+    /// Physical files and logical payloads are deliberately separate. SQLite
+    /// pages/indexes/free space cannot be apportioned accurately per session.
+    pub async fn storage_footprint(&self) -> Result<StorageFootprint> {
+        let database = self.path().to_owned();
+        tokio::task::spawn_blocking(move || {
+            let sidecar = |suffix: &str| {
+                let mut path = database.as_os_str().to_os_string();
+                path.push(suffix);
+                std::path::PathBuf::from(path)
+            };
+            Ok(StorageFootprint {
+                database_bytes: disk_bytes(&database)?,
+                wal_bytes: disk_bytes(&sidecar("-wal"))?,
+                shared_memory_bytes: disk_bytes(&sidecar("-shm"))?,
+                attachment_bytes: disk_bytes(&database.with_extension("attachments"))?,
+                old_command_output_bytes: disk_bytes(&database.with_extension("command-output"))?,
+                temporary_command_output_bytes: disk_bytes(
+                    &orbit_runtime::execution::output::CommandOutputs::root(),
+                )?,
+            })
+        })
+        .await?
+    }
+}
+
+fn disk_bytes(path: &std::path::Path) -> Result<u64> {
+    let metadata = match path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(0);
+    }
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+    let mut bytes = 0u64;
+    if metadata.is_dir() {
+        let entries = match std::fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            bytes = bytes.saturating_add(disk_bytes(&entry?.path())?);
+        }
+    }
+    Ok(bytes)
 }

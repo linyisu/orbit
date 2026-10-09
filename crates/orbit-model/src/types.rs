@@ -24,7 +24,11 @@ pub enum ChatMessage {
 
     User {
         content: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            serialize_with = "Attachment::serialize_persistent"
+        )]
         attachments: Vec<Attachment>,
     },
 
@@ -97,15 +101,53 @@ impl ChatMessage {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Attachment {
     Image {
         name: String,
         mime_type: String,
         path: PathBuf,
+        #[serde(skip)]
+        lease: Option<std::sync::Arc<dyn AttachmentLease>>,
+    },
+    /// Rendered source material lives only until its model request completes.
+    /// Never serialize temporary paths into conversation or recovery records.
+    #[serde(skip)]
+    TemporaryImage {
+        name: String,
+        mime_type: String,
+        image: std::sync::Arc<TemporaryImage>,
     },
 }
+
+impl PartialEq for Attachment {
+    fn eq(&self, other: &Self) -> bool {
+        self.name() == other.name()
+            && self.path() == other.path()
+            && self.mime_type() == other.mime_type()
+            && self.is_temporary() == other.is_temporary()
+    }
+}
+impl Eq for Attachment {}
+
+/// An opaque resource owner keeps an imported file alive through delivery and
+/// persistence. Model adapters do not depend on a particular storage backend.
+pub trait AttachmentLease: std::fmt::Debug + Send + Sync {}
+impl<T: std::fmt::Debug + Send + Sync> AttachmentLease for T {}
+
+#[derive(Debug)]
+pub struct TemporaryImage {
+    path: PathBuf,
+    _directory: std::sync::Arc<tempfile::TempDir>,
+}
+
+impl PartialEq for TemporaryImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+impl Eq for TemporaryImage {}
 
 impl Attachment {
     /// Shared byte limit for imported, transmitted and displayed images.
@@ -113,8 +155,56 @@ impl Attachment {
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Image { name, .. } => name,
+            Self::Image { name, .. } | Self::TemporaryImage { name, .. } => name,
         }
+    }
+
+    fn mime_type(&self) -> &str {
+        match self {
+            Self::Image { mime_type, .. } | Self::TemporaryImage { mime_type, .. } => mime_type,
+        }
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        match self {
+            Self::Image { path, .. } => path,
+            Self::TemporaryImage { image, .. } => &image.path,
+        }
+    }
+
+    pub fn is_temporary(&self) -> bool {
+        matches!(self, Self::TemporaryImage { .. })
+    }
+
+    pub fn temporary_image(
+        name: String,
+        mime_type: String,
+        path: PathBuf,
+        directory: std::sync::Arc<tempfile::TempDir>,
+    ) -> Self {
+        Self::TemporaryImage {
+            name,
+            mime_type,
+            image: std::sync::Arc::new(TemporaryImage {
+                path,
+                _directory: directory,
+            }),
+        }
+    }
+
+    pub fn serialize_persistent<S: serde::Serializer>(
+        attachments: &[Self],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut sequence = serializer.serialize_seq(None)?;
+        for attachment in attachments
+            .iter()
+            .filter(|attachment| !attachment.is_temporary())
+        {
+            sequence.serialize_element(attachment)?;
+        }
+        sequence.end()
     }
 
     pub fn image(&self) -> Result<(&str, String), crate::error::ModelError> {
@@ -123,6 +213,12 @@ impl Attachment {
                 mime_type, path, ..
             } => {
                 let bytes = Self::read_image_bytes(path)?;
+                Ok((mime_type, STANDARD.encode(bytes)))
+            }
+            Self::TemporaryImage {
+                mime_type, image, ..
+            } => {
+                let bytes = Self::read_image_bytes(&image.path)?;
                 Ok((mime_type, STANDARD.encode(bytes)))
             }
         }

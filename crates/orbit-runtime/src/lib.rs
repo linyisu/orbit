@@ -23,3 +23,4 @@ pub use policy::{
     BasePolicy, EffectivePolicy, FilesystemGrant, PolicyDecision, PolicyEngine, SessionGrantStore,
 };
 pub use verification::{FileFingerprint, VerificationEvidence, WorkspaceFingerprint};
+pub mod assets;

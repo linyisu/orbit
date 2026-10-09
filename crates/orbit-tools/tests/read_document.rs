@@ -64,13 +64,9 @@ fn mixed_pdf() -> Vec<u8> {
 #[tokio::test]
 async fn pdf_images_work_in_the_native_document_worker() {
     let root = tempfile::tempdir().unwrap();
-    let data = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("mixed.pdf"), mixed_pdf()).unwrap();
     let tool = ReadDocument::new(Workspace::new(root.path()).unwrap())
-        .with_worker(env!("CARGO_BIN_EXE_orbit-document-worker").into())
-        .with_images(orbit_tools::image_assets::ImageAssets::for_database(
-            &data.path().join("orbit.db"),
-        ));
+        .with_worker(env!("CARGO_BIN_EXE_orbit-document-worker").into());
     let output = tool
         .execute(
             ToolCall::function(
@@ -95,13 +91,9 @@ async fn pdf_images_work_in_the_native_document_worker() {
 #[tokio::test]
 async fn pdf_images_reach_attachments_with_page_numbers_and_bounded_continuation() {
     let root = tempfile::tempdir().unwrap();
-    let data = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("mixed.pdf"), mixed_pdf()).unwrap();
-    let assets =
-        orbit_tools::image_assets::ImageAssets::for_database(&data.path().join("orbit.db"));
     let tool = ReadDocument::new(Workspace::new(root.path()).unwrap())
-        .with_worker(env!("CARGO_BIN_EXE_orbit-document-worker").into())
-        .with_images(assets.clone());
+        .with_worker(env!("CARGO_BIN_EXE_orbit-document-worker").into());
     let call = |extra: Value| {
         let mut args = json!({"path":"mixed.pdf","start_page":1,"end_page":7});
         args.as_object_mut()
@@ -126,13 +118,26 @@ async fn pdf_images_reach_attachments_with_page_numbers_and_bounded_continuation
             .contains("Page 1 readable text")
     );
     assert_eq!(output.attachments.len(), 4);
-    let orbit_model::types::Attachment::Image { name, path, .. } = &output.attachments[0];
-    assert!(name.contains("page 2"));
-    let image = image::load_from_memory(&assets.read(path).unwrap())
-        .unwrap()
-        .to_rgb8();
+    let attachment = &output.attachments[0];
+    assert!(attachment.name().contains("page 2"));
+    let temporary_path = attachment.path().to_owned();
+    assert!(attachment.is_temporary());
+    let image = image::load_from_memory(
+        &orbit_model::types::Attachment::read_image_bytes(attachment.path()).unwrap(),
+    )
+    .unwrap()
+    .to_rgb8();
     assert_eq!(image.width().max(image.height()), 2048);
     assert!(image.pixels().any(|pixel| pixel.0[0] < 150));
+    let message = orbit_model::types::ChatMessage::user_with_attachments(
+        "document pages",
+        output.attachments.clone(),
+    );
+    let saved = serde_json::to_string(&message).unwrap();
+    assert!(!saved.contains(temporary_path.to_str().unwrap()));
+    drop(message);
+    drop(output);
+    assert!(!temporary_path.exists());
     let next = tool
         .execute(
             call(json!({"image_start_page":6})),
@@ -197,11 +202,7 @@ async fn render_failure_preserves_extracted_text() {
     let real = shlex::try_join([env!("CARGO_BIN_EXE_orbit-document-worker")]).unwrap();
     std::fs::write(&wrapper, format!("#!/bin/sh\nif [ \"$1\" = --internal-pdf-render-worker ]; then exit 7; fi\nexec {real} \"$@\"\n")).unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let tool = ReadDocument::new(Workspace::new(root.path()).unwrap())
-        .with_worker(wrapper)
-        .with_images(orbit_tools::image_assets::ImageAssets::for_database(
-            &data.path().join("orbit.db"),
-        ));
+    let tool = ReadDocument::new(Workspace::new(root.path()).unwrap()).with_worker(wrapper);
     let output = tool
         .execute(
             ToolCall::function("doc", "read_document", json!({"path":"mixed.pdf"})),
