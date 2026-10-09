@@ -122,7 +122,21 @@ fn tool_details(row: &ToolRow, expanded: bool, width: u16) -> Vec<LinkedLine> {
                             text.push('\n');
                         }
                         text.push_str(&format!(
-                            "[完整输出已留存: {output_id} · 可使用 read_command_output 查询]"
+                            "[{}: {output_id} · 可使用 read_command_output 查询]",
+                            if value["retained_output_truncated"].as_bool() == Some(true) {
+                                "部分输出已留存"
+                            } else {
+                                "完整输出已留存"
+                            },
+                        ));
+                    }
+
+                    if let Some(error) = value["retained_output_error"].as_str() {
+                        if !text.is_empty() && !text.ends_with('\n') {
+                            text.push('\n');
+                        }
+                        text.push_str(&format!(
+                            "[输出日志不完整：{error} · 命令结果与尾部输出仍可用]"
                         ));
                     }
 

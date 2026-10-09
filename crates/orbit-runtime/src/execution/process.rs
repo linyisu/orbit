@@ -53,6 +53,8 @@ pub struct CommandResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_id: Option<String>,
     pub retained_output_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_output_error: Option<String>,
     pub sandbox: &'static str,
     pub workspace_files: usize,
     pub skipped_entries: usize,

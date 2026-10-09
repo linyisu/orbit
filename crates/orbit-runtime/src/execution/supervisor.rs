@@ -13,6 +13,7 @@ struct Captured {
     bytes: Vec<u8>,
     total: u64,
     retained_truncated: bool,
+    retained_error: Option<String>,
     interrupted: bool,
 }
 
@@ -32,6 +33,7 @@ async fn capture(
     };
     tokio::pin!(deadline);
     let mut interrupted = false;
+    let mut retained_error = None;
     loop {
         let count = tokio::select! {
             count = pipe.read(&mut buffer) => count?,
@@ -46,24 +48,33 @@ async fn capture(
                 bytes.drain(..partial);
             }
 
-            if let Some(file) = retained.as_mut() {
-                file.flush().await?;
+            if let Some(file) = retained.as_mut()
+                && let Err(error) = file.flush().await
+            {
+                retained_error = Some(error.to_string());
             }
 
             return Ok(Captured {
                 bytes,
                 total,
                 interrupted,
+                retained_error: retained_error.clone(),
                 retained_truncated: retaining
                     && (interrupted
+                        || retained_error.is_some()
                         || retained.as_ref().is_some_and(|file| file.written() < total)),
             });
         }
 
         total = total.saturating_add(count as u64);
 
-        if let Some(file) = retained.as_mut() {
-            file.append(&buffer[..count]).await?;
+        if let Some(file) = retained.as_mut()
+            && let Err(error) = file.append(&buffer[..count]).await
+        {
+            // Retention is optional. Keep draining the pipe and capturing the
+            // bounded tail even if the temporary disk becomes unavailable.
+            retained_error = Some(error.to_string());
+            retained = None;
         }
 
         let overflow = (tail.len() + count).saturating_sub(MAX_OUTPUT);
@@ -147,6 +158,12 @@ pub(crate) async fn run_child_process(
         || stdout.total > MAX_OUTPUT as u64
         || stderr.total > MAX_OUTPUT as u64;
     let retained_output_truncated = stdout.retained_truncated || stderr.retained_truncated;
+    let retained_output_error = match (stdout.retained_error, stderr.retained_error) {
+        (None, None) => None,
+        (Some(error), None) => Some(format!("stdout: {error}")),
+        (None, Some(error)) => Some(format!("stderr: {error}")),
+        (Some(stdout), Some(stderr)) => Some(format!("stdout: {stdout}; stderr: {stderr}")),
+    };
     let stdout = String::from_utf8_lossy(&stdout.bytes).into_owned();
     let stderr = String::from_utf8_lossy(&stderr.bytes).into_owned();
 
@@ -162,6 +179,7 @@ pub(crate) async fn run_child_process(
         stderr_total_bytes,
         output_id,
         retained_output_truncated,
+        retained_output_error,
         sandbox: sandbox_label,
         workspace_files,
         skipped_entries,

@@ -1,5 +1,5 @@
 //! Task-scoped stdout/stderr. Drafts allocate nothing; the first command lazily
-//! opens a private directory under /tmp. Leases protect active readers/writers.
+//! opens a private directory under the system temporary directory. Leases protect active readers/writers.
 use std::{
     fs::{File, OpenOptions},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -43,7 +43,7 @@ impl CommandOutputs {
     pub fn root() -> PathBuf {
         // Native command execution is Unix-only. Include the effective user so
         // separate OS accounts never share the maintenance directory.
-        Path::new("/tmp").join(format!("orbit-command-output-{}", unsafe {
+        std::env::temp_dir().join(format!("orbit-command-output-{}", unsafe {
             libc::geteuid()
         }))
     }

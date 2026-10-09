@@ -501,6 +501,29 @@ fn tool_previews_bound_single_line_payloads_without_changing_results() {
 }
 
 #[test]
+fn incomplete_command_logs_are_not_presented_as_complete() {
+    let row = super::super::app::ToolRow {
+        id: "command".into(),
+        name: "run_command".into(),
+        arguments: serde_json::json!({"command":"example"}).to_string(),
+        status: ToolStatus::Finished,
+        output: serde_json::json!({
+            "stdout":"tail", "exit_code":0, "output_id":"sample",
+            "retained_output_truncated":true,
+            "retained_output_error":"disk full",
+        })
+        .to_string(),
+    };
+    let text = tool_card(&row, true, 100)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("部分输出已留存") && text.contains("disk full") && text.contains("tail"));
+    assert!(!text.contains("完整输出已留存"));
+}
+
+#[test]
 fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
     use super::super::app::ToolRow;
     use ratatui::layout::Rect;

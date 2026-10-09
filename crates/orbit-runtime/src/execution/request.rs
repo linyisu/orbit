@@ -62,6 +62,8 @@ pub struct ExecutionResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_id: Option<String>,
     pub retained_output_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_output_error: Option<String>,
     pub sandbox: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verification_error: Option<String>,
@@ -83,6 +85,7 @@ impl From<super::process::CommandResult> for ExecutionResult {
             stderr_total_bytes: result.stderr_total_bytes,
             output_id: result.output_id,
             retained_output_truncated: result.retained_output_truncated,
+            retained_output_error: result.retained_output_error,
             sandbox: result.sandbox,
             verification_error: result.verification_error,
             verification: result.verification,
@@ -136,6 +139,7 @@ mod tests {
             stderr_total_bytes: 0,
             output_id: None,
             retained_output_truncated: false,
+            retained_output_error: None,
             sandbox: "native",
             verification_error: None,
             verification: None,
@@ -156,6 +160,7 @@ mod tests {
             stderr_total_bytes: 0,
             output_id: None,
             retained_output_truncated: false,
+            retained_output_error: None,
             sandbox: "native",
             verification_error: None,
             verification: None,

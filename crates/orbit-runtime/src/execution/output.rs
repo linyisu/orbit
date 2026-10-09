@@ -248,6 +248,41 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn failed_log_writes_preserve_exit_status_and_drain_large_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut log = OutputLog::create(directory.path()).await.unwrap();
+        // A real read-only descriptor makes retention fail independently of
+        // the pipe, without relying on disk exhaustion or device files.
+        log.stdout = tokio::fs::File::open(directory.path().join(format!("{}.stdout", log.id())))
+            .await
+            .unwrap();
+        let child = tokio::process::Command::new("/bin/sh")
+            .args(["-c", "i=0; while [ $i -lt 20000 ]; do printf 'sample output\\n'; i=$((i+1)); done; printf 'FINAL'; printf 'stderr intact' >&2"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn().unwrap();
+        let result = super::super::supervisor::run_child_process(
+            child,
+            std::time::Duration::from_secs(10),
+            tokio_util::sync::CancellationToken::new(),
+            Some(log),
+            "native",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.stdout_total_bytes, 280005);
+        assert!(result.stdout.ends_with("FINAL") && result.stdout.len() <= MAX_OUTPUT);
+        assert_eq!(result.stderr, "stderr intact");
+        assert!(result.retained_output_truncated && result.retained_output_error.is_some());
+        assert!(!result.timed_out);
+    }
+
+    #[tokio::test]
     async fn concurrent_logs_share_the_task_byte_budget() {
         let directory = tempfile::tempdir().unwrap();
         let first = OutputLog::create(directory.path()).await.unwrap();

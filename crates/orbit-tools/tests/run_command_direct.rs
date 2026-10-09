@@ -10,6 +10,33 @@ use std::fs;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
+async fn unavailable_output_retention_does_not_prevent_command_execution() {
+    let root = tempfile::tempdir().unwrap();
+    let (sender, mut receiver) = approval::channel();
+    let tool = RunCommand::new(Workspace::new(root.path()).unwrap(), sender)
+        .with_output_store(orbit_runtime::execution::output::CommandOutputs::default());
+    let task = tokio::spawn(async move {
+        tool.execute(
+            ToolCall::function(
+                "output",
+                "run_command",
+                json!({"command": "printf 'result'; exit 7"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+    });
+    receiver.recv().await.unwrap().decision.send(true).unwrap();
+    let output = task.await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(result["exit_code"], 7);
+    assert_eq!(result["stdout"], "result");
+    assert_eq!(result["retained_output_truncated"], true);
+    assert!(result["output_id"].is_null());
+    assert!(result["retained_output_error"].as_str().is_some());
+}
+
+#[tokio::test]
 async fn auto_native_network_enabled_script_executes_in_requested_workspace_directory() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("src")).unwrap();

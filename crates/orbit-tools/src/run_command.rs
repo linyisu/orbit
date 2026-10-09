@@ -327,9 +327,15 @@ impl Tool for RunCommand {
                 ));
             }
 
-            let output_log = match &self.output_store {
-                Some(outputs) => Some(outputs.create_log().await?),
-                None => None,
+            let (output_log, retention_error) = match &self.output_store {
+                Some(outputs) => match outputs.create_log().await {
+                    Ok(log) => (Some(log), None),
+                    Err(error) => (
+                        None,
+                        Some(format!("command output retention unavailable: {error}")),
+                    ),
+                },
+                None => (None, None),
             };
 
             if let Some(jobs) = &self.jobs
@@ -389,6 +395,11 @@ impl Tool for RunCommand {
                         token.clone(),
                     )
                     .await?;
+
+                if let Some(error) = retention_error {
+                    result.retained_output_truncated = true;
+                    result.retained_output_error = Some(error);
+                }
 
                 let post_scan =
                     orbit_runtime::execution::scan_workspace_summary(workspace, token, scan_limits)

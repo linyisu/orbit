@@ -14,7 +14,8 @@ async fn task_end_expires_access_but_keeps_outstanding_io_alive() {
     let log = outputs.create_log().await.unwrap();
     let lease = outputs.lease().unwrap();
     let path = lease.path().to_owned();
-    assert!(path.starts_with("/tmp"));
+    assert!(path.starts_with(CommandOutputs::root()));
+    assert!(path.starts_with(std::env::temp_dir()));
     assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o700);
     let (id, mut stdout, stderr) = log.split();
     stdout.append(b"first page").await.unwrap();
