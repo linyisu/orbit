@@ -125,6 +125,109 @@ async fn service_handover_respects_busy_refusal_and_uses_orderly_shutdown() {
 }
 
 #[tokio::test]
+async fn handover_negotiates_the_running_daemon_version_without_forcing_busy_shutdown() {
+    for (version, generation, busy) in [
+        (protocol::VERSION - 1, 0, false),
+        (protocol::VERSION - 1, 0, true),
+        (protocol::VERSION + 1, u64::MAX, false),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("service.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let mut client = UnixStream::connect(&socket).await.unwrap();
+        let fake = tokio::spawn(async move {
+            let (mut daemon, _) = listener.accept().await.unwrap();
+            let _: ConnectionContext = protocol::read(&mut daemon).await.unwrap();
+            assert!(matches!(
+                protocol::read::<Request>(&mut daemon).await.unwrap(),
+                Request::Hello {
+                    version: protocol::VERSION,
+                    ..
+                }
+            ));
+            protocol::write(
+                &mut daemon,
+                &Response::Error(format!("workspace protocol mismatch; expected {version}")),
+            )
+            .await
+            .unwrap();
+            drop(daemon);
+            let (mut daemon, _) = listener.accept().await.unwrap();
+            let context: ConnectionContext = protocol::read(&mut daemon).await.unwrap();
+            assert!(
+                matches!(protocol::read::<Request>(&mut daemon).await.unwrap(),
+                Request::Hello { version: requested, .. } if requested == version)
+            );
+            protocol::write(
+                &mut daemon,
+                &Response::Hello {
+                    version,
+                    build_generation: generation,
+                    workspace: context.workspace.to_string_lossy().into_owned(),
+                    capabilities: orbit_protocol::Capabilities {
+                        system: "Linux".into(),
+                        architecture: "x86_64".into(),
+                        shell: "sh".into(),
+                        native_processes: true,
+                        files: true,
+                        features: vec![],
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            if generation == u64::MAX {
+                use tokio::io::AsyncReadExt;
+                assert_eq!(
+                    daemon.read(&mut [0]).await.unwrap(),
+                    0,
+                    "newer daemons must not be downgraded"
+                );
+            } else {
+                assert!(matches!(
+                    protocol::read::<Request>(&mut daemon).await.unwrap(),
+                    Request::Shutdown
+                ));
+                protocol::write(
+                    &mut daemon,
+                    &if busy {
+                        Response::Error("workspace has active tasks".into())
+                    } else {
+                        Response::Ok
+                    },
+                )
+                .await
+                .unwrap();
+            }
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            retire(
+                &mut client,
+                &ServiceOptions {
+                    workspace: root.path().to_string_lossy().into_owned(),
+                    daemon: false,
+                    allow_mcp_start: false,
+                },
+                &root.path().join("config"),
+                &root.path().join("auth"),
+            ),
+        )
+        .await
+        .unwrap();
+        if busy {
+            assert!(result.unwrap_err().to_string().contains("active tasks"));
+        } else if generation == u64::MAX {
+            assert!(result.unwrap_err().to_string().contains("请更新客户端"));
+        } else {
+            assert!(result.unwrap());
+        }
+        drop(client);
+        fake.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn startup_lock_serializes_concurrent_handover_and_releases_on_cancellation() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("startup");

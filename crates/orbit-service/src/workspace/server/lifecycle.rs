@@ -189,27 +189,53 @@ async fn retire_version(
     args: &ServiceOptions,
     config: &Path,
     auth: &Path,
-    version: u32,
+    mut version: u32,
 ) -> Result<bool> {
-    protocol::write(
-        stream,
-        &ConnectionContext {
-            config: config.into(),
-            auth: auth.into(),
-            allow_mcp_start: args.allow_mcp_start,
-            workspace: expand_home(&args.workspace)?.canonicalize()?,
-        },
-    )
-    .await?;
-    protocol::write(
-        stream,
-        &Request::Hello {
-            version,
-            workspace: None,
-        },
-    )
-    .await?;
-    let hello: Response = protocol::read(stream).await?;
+    let owner = verify_owner(stream)?;
+    let mut retried = false;
+    let hello = loop {
+        protocol::write(
+            stream,
+            &ConnectionContext {
+                config: config.into(),
+                auth: auth.into(),
+                allow_mcp_start: args.allow_mcp_start,
+                workspace: expand_home(&args.workspace)?.canonicalize()?,
+            },
+        )
+        .await?;
+        protocol::write(
+            stream,
+            &Request::Hello {
+                version,
+                workspace: None,
+            },
+        )
+        .await?;
+        let hello: Response = protocol::read(stream).await?;
+        if let Response::Error(error) = &hello
+            && !retried
+            && let Some(expected) = error
+                .strip_prefix("workspace protocol mismatch; expected ")
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|expected| *expected > 0 && *expected != version)
+        {
+            // Released daemons close a mismatched Hello. Reconnect using the
+            // announced version only for Hello/Shutdown, never for sessions.
+            let address = stream.peer_addr()?;
+            let socket = address.as_pathname().context("后台服务没有可重连的地址")?;
+            let replacement = UnixStream::connect(socket).await?;
+            ensure!(
+                verify_owner(&replacement)? == owner,
+                "协商更新时后台服务发生了变化，请重试"
+            );
+            *stream = replacement;
+            version = expected;
+            retried = true;
+            continue;
+        }
+        break hello;
+    };
     let Response::Hello {
         version: negotiated,
         build_generation: active,
@@ -220,6 +246,11 @@ async fn retire_version(
     };
     ensure!(negotiated == version, "workspace update protocol mismatch");
     if active >= build_generation() {
+        ensure!(
+            orbit_protocol::supports_version(negotiated),
+            "后台服务使用协议 {negotiated}，当前客户端使用协议 {}；请更新客户端",
+            protocol::VERSION
+        );
         // Every compatible frontend uses the newest shared daemon. A terminal
         // with an older embedded server must never downgrade it.
         return Ok(false);
