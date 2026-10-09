@@ -127,6 +127,58 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn steering_receipt_confirms_persistence_while_the_model_is_still_waiting() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
+    let session = fixture.handle.info.id.clone();
+    fixture
+        .request(Request::Start {
+            session: session.clone(),
+            request_id: "steering-receipt".into(),
+            prompt: "initial question".into(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
+        .await
+        .unwrap();
+    // Keep the model HTTP request open without returning any response.
+    let (_socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let response = tokio::time::timeout(
+        Duration::from_secs(3),
+        fixture.request(Request::Steer {
+            session: session.clone(),
+            message: "  new instruction  ".into(),
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let Response::InputQueued { message_id } = response else {
+        panic!("missing durable input receipt");
+    };
+    let queued = fixture
+        .handle
+        .store
+        .pending_agent_messages(&session)
+        .await
+        .unwrap();
+    assert!(
+        queued
+            .iter()
+            .any(|input| input.id == message_id && input.content == "new instruction")
+    );
+    let page = fixture.page(0).await;
+    assert!(page.busy);
+    assert!(!page.updates.iter().any(|update| matches!(update, protocol::Update::Agent(event) if matches!(event.as_ref(), orbit_agent::events::AgentEvent::InputReceived { .. }))));
+    fixture.request(Request::Cancel { session }).await.unwrap();
+    fixture.wait(|page| !page.busy).await;
+}
+
+#[tokio::test]
 async fn sent_images_are_readable_only_through_the_owning_session() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");

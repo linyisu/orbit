@@ -84,6 +84,7 @@ pub enum TranscriptItem {
 
 #[derive(Debug)]
 pub struct UiState {
+    pub(super) pending_input: super::pending_input::State,
     pub(super) feedback: super::feedback::Feedback,
     pub(super) connection_label: Option<String>,
     pub(super) media: super::media::Context,
@@ -405,6 +406,7 @@ impl UiState {
 
     pub fn new(model: impl Into<String>) -> Self {
         Self {
+            pending_input: Default::default(),
             feedback: Default::default(),
             connection_label: None,
             media: Default::default(),
@@ -701,7 +703,11 @@ impl UiState {
             AgentEvent::ToolBackgrounded { call, content, .. } => {
                 self.update_tool(&call, ToolStatus::Running, content);
             }
-            AgentEvent::InputReceived { content, .. } => {
+            AgentEvent::InputReceived {
+                message_id,
+                content,
+            } => {
+                self.pending_input.received(message_id);
                 self.finish_thinking();
                 self.finish_assistant();
                 let first = self.transcript.len();

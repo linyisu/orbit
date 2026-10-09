@@ -592,6 +592,83 @@ fn compaction_and_images_use_the_same_request_for_every_target() {
 }
 
 #[test]
+fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
+    use orbit_agent::events::AgentEvent;
+    use orbit_model::types::StreamEvent;
+    for receipt_first in [true, false] {
+        let (mut tab, mut requests) = tab("local");
+        tab.state.submit("initial question".into());
+        tab.busy = true;
+        tab.state
+            .apply(AgentEvent::Model(StreamEvent::TextDelta("before ".into())));
+        let mut replies = Vec::new();
+        for _ in 0..2 {
+            tab.state.input.set("same message".into());
+            assert!(matches!(
+                tab.handle(Event::Key(KeyEvent::new(
+                    KeyCode::Enter,
+                    KeyModifiers::NONE
+                )))
+                .unwrap(),
+                Action::Redraw
+            ));
+            replies.push(requests.try_recv().unwrap().reply.unwrap());
+        }
+        let screen = render_screen(&mut tab.state);
+        assert!(screen.contains("same message") && screen.replace(' ', "").contains("发送中"));
+        assert_eq!(tab.state.pending_input.height(), 2);
+        tab.state
+            .apply(AgentEvent::Model(StreamEvent::TextDelta("after".into())));
+        assert!(
+            matches!(tab.state.transcript.last(), Some(TranscriptItem::Assistant(text)) if text == "before after")
+        );
+        if receipt_first {
+            for (id, reply) in [10, 11].into_iter().zip(replies.drain(..)) {
+                reply
+                    .send(Ok(Response::InputQueued { message_id: id }))
+                    .unwrap();
+            }
+            tab.poll_submissions();
+            assert!(
+                render_screen(&mut tab.state)
+                    .replace(' ', "")
+                    .contains("已发送，等待处理")
+            );
+        }
+        // Another client can submit identical text; it must not consume our pending rows.
+        tab.state.apply(AgentEvent::InputReceived {
+            message_id: 20,
+            content: "same message".into(),
+        });
+        assert_eq!(tab.state.pending_input.height(), 2);
+        for id in [10, 11] {
+            tab.state.apply(AgentEvent::InputReceived {
+                message_id: id,
+                content: "same message".into(),
+            });
+        }
+        if !receipt_first {
+            for (id, reply) in [10, 11].into_iter().zip(replies) {
+                reply
+                    .send(Ok(Response::InputQueued { message_id: id }))
+                    .unwrap();
+            }
+            tab.poll_submissions();
+        }
+        assert_eq!(tab.state.pending_input.height(), 0);
+        assert_eq!(
+            tab.state
+                .transcript
+                .iter()
+                .filter(|item| matches!(item, TranscriptItem::User(text) if text == "same message"))
+                .count(),
+            3
+        );
+        assert!(tab.state.input.text.is_empty());
+    }
+}
+
+#[test]
 fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
     let (mut tab, mut requests) = tab("local");
     tab.submit_with_receipt(
@@ -601,6 +678,7 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
         },
         submissions::Draft::Composer("more context".into()),
     );
+    assert_eq!(tab.state.pending_input.height(), 1);
     requests
         .try_recv()
         .unwrap()
@@ -609,6 +687,7 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
         .send(Ok(Response::Error("session is idle".into())))
         .unwrap();
     assert!(tab.poll_submissions());
+    assert_eq!(tab.state.pending_input.height(), 0);
     assert_eq!(tab.state.input.text, "more context");
     tab.state.input.set("new draft".into());
     tab.submit_with_receipt(
@@ -620,6 +699,7 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
     );
     drop(requests.try_recv().unwrap());
     tab.poll_submissions();
+    assert_eq!(tab.state.pending_input.height(), 0);
     assert_eq!(tab.state.input.text, "new draft");
     assert!(render_screen(&mut tab.state).contains("previous"));
     assert!(tab.state.info_dialog.is_none());

@@ -67,6 +67,7 @@ pub enum Command {
     },
     Steer {
         message: String,
+        accepted: oneshot::Sender<i64>,
     },
     Undo {
         path: Option<String>,

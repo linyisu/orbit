@@ -240,6 +240,17 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         areas[6] = Rect::new(x, areas[4].bottom(), content_width, 1);
     }
 
+    let pending_height = state
+        .pending_input
+        .height()
+        .min(areas[1].height.saturating_sub(1));
+    let pending_area = Rect::new(
+        areas[1].x,
+        areas[1].bottom().saturating_sub(pending_height),
+        areas[1].width,
+        pending_height,
+    );
+    areas[1].height = areas[1].height.saturating_sub(pending_height);
     let parent_area = areas[3];
     let menu_height = panel_height.min(areas[4].y.saturating_sub(area.y + 1));
     areas[3] = Rect::new(
@@ -273,6 +284,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         super::approval::draw_in(frame, state, areas[2]);
         state.selection.approval = areas[2];
     }
+    state.pending_input.draw(frame, pending_area);
 
     if menu_height == 0 {
         super::subagents::draw_parent(frame, state, parent_area);

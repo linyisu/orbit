@@ -14,6 +14,7 @@ pub(super) enum Draft {
 pub(super) struct Submission {
     response: oneshot::Receiver<Result<Response>>,
     draft: Draft,
+    pending_input: Option<u64>,
 }
 
 impl Submission {
@@ -37,8 +38,21 @@ impl Tab {
     }
 
     pub(super) fn submit_with_receipt(&mut self, request: Request, draft: Draft) {
+        let steering = matches!(&request, Request::Steer { .. });
         match self.request(request) {
-            Ok(response) => self.submissions.push(Submission { response, draft }),
+            Ok(response) => {
+                let pending_input = if steering && let Draft::Composer(text) = &draft {
+                    self.state.selection.clear();
+                    Some(self.state.pending_input.sending(text.clone()))
+                } else {
+                    None
+                };
+                self.submissions.push(Submission {
+                    response,
+                    draft,
+                    pending_input,
+                });
+            }
             Err(error) => self.rejected(draft, error),
         }
         self.sync_pending_permissions();
@@ -139,6 +153,20 @@ impl Tab {
             };
             let submission = self.submissions.remove(index);
             changed = true;
+            if let Some(ticket) = submission.pending_input {
+                if let Ok(Response::InputQueued { message_id }) = &result {
+                    self.state.pending_input.queued(ticket, *message_id);
+                    continue;
+                }
+                self.state.pending_input.reject(ticket);
+                let error = match result {
+                    Ok(Response::Error(error)) => anyhow::anyhow!(error),
+                    Err(error) => error,
+                    _ => anyhow::anyhow!("工作区未确认消息已入队"),
+                };
+                self.rejected(submission.draft, error);
+                continue;
+            }
             match result {
                 Ok(Response::Profile(info))
                     if matches!(submission.draft, Draft::Permissions(_)) =>
@@ -183,6 +211,9 @@ impl Tab {
     pub(super) fn abandon_submissions(&mut self) {
         let pending = std::mem::take(&mut self.submissions);
         for submission in pending {
+            if let Some(ticket) = submission.pending_input {
+                self.state.pending_input.reject(ticket);
+            }
             self.rejected(
                 submission.draft,
                 anyhow::anyhow!("连接已断开，请重连后确认请求结果"),

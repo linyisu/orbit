@@ -606,11 +606,14 @@ impl Service {
                 Ok(Response::Ok)
             }
             Request::Steer { session, message } => {
+                let (accepted, receipt) = tokio::sync::oneshot::channel();
                 self.session(&session)
                     .await?
-                    .command(session::Command::Steer { message })
+                    .command(session::Command::Steer { message, accepted })
                     .await?;
-                Ok(Response::Ok)
+                Ok(Response::InputQueued {
+                    message_id: receipt.await?,
+                })
             }
             Request::EnableUserInput { session } => {
                 self.session(&session)

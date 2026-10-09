@@ -10,9 +10,9 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 14;
-// Both ends must understand typed runtime-state messages in saved contexts.
-pub const MIN_COMPATIBLE_VERSION: u32 = 14;
+pub const VERSION: u32 = 15;
+// Steering receipts identify the durable input independently of its consumption.
+pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
 pub fn supports_version(version: u32) -> bool {
     (MIN_COMPATIBLE_VERSION..=VERSION).contains(&version)
@@ -339,6 +339,9 @@ pub enum Response<E, A> {
     Report(Report),
     Plugins(plugins::Catalog),
     File(String),
+    InputQueued {
+        message_id: i64,
+    },
     Ok,
     Error(String),
 }

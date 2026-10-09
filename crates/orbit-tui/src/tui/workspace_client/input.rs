@@ -372,7 +372,7 @@ impl Tab {
                     },
                     submissions::Draft::Composer(prompt),
                 );
-                Ok(Action::None)
+                Ok(Action::Redraw)
             }
             tui::Action::Cancel => {
                 if let Some(session) = &self.id {

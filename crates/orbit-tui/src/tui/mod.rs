@@ -25,6 +25,7 @@ mod markdown;
 mod media;
 mod navigation;
 mod overlay;
+mod pending_input;
 mod permissions;
 mod pointer;
 mod project_label;

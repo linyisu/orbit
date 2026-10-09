@@ -383,7 +383,7 @@ impl Actor {
                     && self.setup.resources.budget.input_context_tokens < previous_limit;
                 self.profile().await;
             }
-            Command::Steer { message } => {
+            Command::Steer { message, accepted } => {
                 let message = message.trim().to_owned();
                 ensure!(
                     !message.is_empty() && message.len() <= 1024 * 1024,
@@ -404,6 +404,7 @@ impl Actor {
                             .map_err(|error| {
                                 orbit_agent::tool::ToolError::ExecutionFailed(error.to_string())
                             })?;
+                        let _ = accepted.send(id);
                         Ok(InboxMessage {
                             id,
                             content: message,

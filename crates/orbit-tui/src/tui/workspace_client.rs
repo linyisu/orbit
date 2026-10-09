@@ -338,6 +338,11 @@ impl Tab {
     fn install(&mut self, opened: Opened) {
         self.abandon_submissions();
         let draft = self.state.input.text.clone();
+        let pending_input = if self.id.as_deref() == Some(&opened.info.id) {
+            std::mem::take(&mut self.state.pending_input)
+        } else {
+            Default::default()
+        };
         let attachments = std::mem::take(&mut self.state.attachments);
         let attachment_cursor = self.state.attachment_cursor;
         let user_input = if self.id.as_deref() == Some(&opened.info.id) {
@@ -353,6 +358,7 @@ impl Tab {
         let media = self.state.media.clone();
         let cursor_trail = self.state.cursor_motion.enabled;
         self.state = UiState::new(&opened.info.model);
+        self.state.pending_input = pending_input;
         self.state.media = media;
         self.state.user_input = user_input;
         self.state.planning = planning;
