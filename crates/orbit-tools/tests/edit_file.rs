@@ -110,6 +110,48 @@ async fn rejects_ambiguous_missing_invalid_noop_and_oversized_edits_before_appro
 }
 
 #[tokio::test]
+async fn failed_edits_return_bounded_current_text_without_approval_or_modification() {
+    let root = tempfile::tempdir().unwrap();
+    let before = "// 中文\r\n    fn parse() {\r\n        finish();\r\n    }\r\n";
+    fs::write(root.path().join("file"), before).unwrap();
+    for (old, code) in [
+        ("fn parse() {\n  finish();\n}", "text_not_found"),
+        (" ", "ambiguous_match"),
+    ] {
+        let (task, mut rx) = start(
+            root.path(),
+            json!({"path":"file","old_text":old,"new_text":"replacement"}),
+            CancellationToken::new(),
+        );
+        let ToolError::ExecutionFailed(error) = task.await.unwrap().unwrap_err() else {
+            panic!("match diagnostic")
+        };
+        let feedback: Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(feedback["error"], code);
+        if code == "text_not_found" {
+            assert_eq!(feedback["exact_matches"], 0);
+        }
+        let candidates = feedback["candidates"].as_array().unwrap();
+        assert!(!candidates.is_empty() && candidates.len() <= 3);
+        if code == "text_not_found" {
+            assert_eq!(candidates[0]["line"], 2);
+            assert!(
+                candidates[0]["current_text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("        finish();\r\n")
+            );
+        }
+        assert!(error.len() < 5000);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            fs::read_to_string(root.path().join("file")).unwrap(),
+            before
+        );
+    }
+}
+
+#[tokio::test]
 async fn denial_cancellation_and_concurrent_changes_never_overwrite_the_file() {
     for action in ["deny", "cancel", "conflict"] {
         let root = tempfile::tempdir().unwrap();

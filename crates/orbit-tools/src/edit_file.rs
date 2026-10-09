@@ -7,6 +7,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{approval::ApprovalSender, write_file::WriteFile};
 
+mod feedback;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Arguments {
@@ -37,7 +39,7 @@ impl Tool for EditFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "edit_file",
-            "Edit an existing UTF-8 file (inside workspace or outside path granted via request_capability) by exact text replacement under the selected approval policy. Auto mode allows workspace-local edits; external writes still require approval. Read the file first. old_text must be nonempty and match exactly once unless replace_all is explicitly true. Include surrounding context to disambiguate. new_text may be empty to delete; include the existing anchor in new_text to insert. Whitespace and line endings must match exactly; no regex or fuzzy matching. Old and new files are limited to 1 MiB. Uses the same protected-path and conflict checks as write_file. Never retry a denied edit without a new user request.",
+            "Edit an existing UTF-8 file (inside workspace or outside path granted via request_capability) by exact text replacement under the selected approval policy. Auto mode allows workspace-local edits; external writes still require approval. Read the file first. old_text must be nonempty and match exactly once unless replace_all is explicitly true. Include surrounding context to disambiguate. new_text may be empty to delete; include the existing anchor in new_text to insert. Whitespace and line endings must match exactly; no regex or fuzzy matching. A mismatch returns a file fingerprint and bounded candidate locations/current text to help correct old_text; it never applies an approximate edit. Old and new files are limited to 1 MiB. Uses the same protected-path and conflict checks as write_file. Never retry a denied edit without a new user request.",
             json!({
                 "type": "object",
                 "properties": {
@@ -71,34 +73,46 @@ impl Tool for EditFile {
                 return Err(ToolError::InvalidArguments { tool: "edit_file".into(), message: "path and old_text must be nonempty; old_text and new_text must be text without NUL, at most 1 MiB each".into() });
             }
 
-            self.writer.edit(args.path, move |before| {
-                // Count overlapping candidates too: `aa` in `aaa` is ambiguous.
-                let count = before
-                    .char_indices()
-                    .filter(|(index, _)| before[*index..].starts_with(&args.old_text))
-                    .count();
+            self.writer
+                .edit(
+                    args.path,
+                    move |before| {
+                        // Count overlapping candidates too: `aa` in `aaa` is ambiguous.
+                        let positions: Vec<_> = before
+                            .char_indices()
+                            .filter(|(index, _)| before[*index..].starts_with(&args.old_text))
+                            .map(|(index, _)| index)
+                            .collect();
+                        let count = positions.len();
 
-                if count == 0 {
-                    return Err(ToolError::ExecutionFailed("old_text was not found; read the current file and use exact text".into()));
-                }
-                if count != 1 && !args.replace_all {
-                    return Err(ToolError::ExecutionFailed(format!("old_text matches {count} locations; include more context or explicitly set replace_all")));
-                }
+                        if count == 0 {
+                            return Err(feedback::mismatch(before, &args.old_text, &positions));
+                        }
+                        if count != 1 && !args.replace_all {
+                            return Err(feedback::mismatch(before, &args.old_text, &positions));
+                        }
 
-                // replace_all uses left-to-right, non-overlapping replacement.
-                let count = before.matches(&args.old_text).count();
-                let new_len = before.len() - count * args.old_text.len();
+                        // replace_all uses left-to-right, non-overlapping replacement.
+                        let count = before.matches(&args.old_text).count();
+                        let new_len = before.len() - count * args.old_text.len();
 
-                if args.new_text.len()
-                    .checked_mul(count)
-                    .and_then(|n| new_len.checked_add(n))
-                    .is_none_or(|n| n > 1024 * 1024)
-                {
-                    return Err(ToolError::ExecutionFailed("edited file would exceed 1 MiB".into()));
-                }
+                        if args
+                            .new_text
+                            .len()
+                            .checked_mul(count)
+                            .and_then(|n| new_len.checked_add(n))
+                            .is_none_or(|n| n > 1024 * 1024)
+                        {
+                            return Err(ToolError::ExecutionFailed(
+                                "edited file would exceed 1 MiB".into(),
+                            ));
+                        }
 
-                Ok(before.replace(&args.old_text, &args.new_text))
-            }, cancellation).await
+                        Ok(before.replace(&args.old_text, &args.new_text))
+                    },
+                    cancellation,
+                )
+                .await
         })
     }
 }
