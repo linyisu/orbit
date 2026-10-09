@@ -176,8 +176,6 @@ TUI 使用 `/mode` 切换 `ask` / `auto` / `yolo`；非交互 `orbit-cli chat --
 # 运行 orbit-tools 单元与集成测试
 cargo test -p orbit-tools --offline
 
-# 运行开发工具链集成测试（需 Rust、Python、Node.js）
-cargo test -p orbit-tools --test coding_loop -- --ignored
 ```
 
 ## 显式模板授权

@@ -113,12 +113,6 @@ cargo test --workspace
 
 依赖已缓存时可为 Clippy 和测试增加 `--offline`。部分测试启动本地回环 HTTP 服务，需要允许本地监听，不需要真实供应商账号。CI 配置见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
 
-标记为 ignored 的开发工具链测试需要 PATH 中有 Rust、Python 和 Node，单独运行：
-
-```sh
-cargo test -p orbit-tools --test coding_loop -- --ignored
-```
-
 代码维护约定：
 
 - 按职责归属共享类型、策略和接口，调用方复用所属模块的实现；局部实现保持私有，不为测试扩大公共 API。

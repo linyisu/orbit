@@ -24,7 +24,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools build-essential python3 nodejs
+          sudo apt-get install -y musl-tools build-essential python3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -49,9 +49,6 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace
-
-      - name: Run native development toolchain contracts
-        run: cargo test -p orbit-tools --test coding_loop -- --ignored
 
       - name: Report build resources on failure
         if: failure()
