@@ -88,45 +88,6 @@ fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
 }
 
 #[test]
-fn home_errors_leave_no_transcript_and_keep_dialogs_safe_at_small_sizes() {
-    let mut state = UiState::new("orbit::model");
-    for (width, height) in [(141, 41), (28, 18), (10, 3), (1, 1)] {
-        state.report_local(super::super::app::TranscriptItem::CommandError(
-            "Orbit 操作失败：\u{1b}[31m".into(),
-        ));
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| super::super::render::draw(frame, &mut state))
-            .unwrap();
-        assert!(state.transcript.is_empty());
-        assert!(state.ime_cursor.is_none());
-        let buffer = terminal.backend().buffer();
-        assert!(
-            buffer
-                .content
-                .iter()
-                .all(|cell| !cell.symbol().contains('\u{1b}'))
-        );
-        if width > 20 {
-            let border = buffer
-                .content
-                .iter()
-                .position(|cell| cell.symbol() == "┌")
-                .unwrap();
-            let x = border as u16 % width;
-            let panel_width = width.saturating_sub(4).min(96);
-            assert!(width - x - panel_width - x <= 1);
-        }
-
-        handle(
-            &mut state,
-            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        );
-        assert!(state.info_dialog.is_none());
-    }
-}
-
-#[test]
 fn delete_requires_two_presses_to_confirm_and_any_other_key_cancels() {
     let mut picker = SessionPicker::new(vec![
         session("keep", "保留的会话"),

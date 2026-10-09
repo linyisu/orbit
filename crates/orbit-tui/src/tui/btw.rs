@@ -279,8 +279,7 @@ impl Questions {
             dialog
                 .view
                 .ui
-                .transcript
-                .push(TranscriptItem::Error(format!("无法打开链接：{error}")));
+                .report_local(TranscriptItem::Error(format!("无法打开链接：{error}")));
         }
     }
 }

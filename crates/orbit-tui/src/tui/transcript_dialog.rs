@@ -251,9 +251,21 @@ impl TranscriptDialog {
             preview.draw(frame);
             self.ui.ime_cursor = None;
         }
+        if self.ui.info_dialog.is_some() {
+            super::dialogs::draw(frame, &mut self.ui);
+            self.ui.ime_cursor = None;
+        }
+        self.ui.feedback.draw(frame, area);
     }
 
     pub fn handle(&mut self, event: &Event) -> std::io::Result<Action> {
+        if self.ui.handle_feedback(event) {
+            return Ok(Action::Redraw);
+        }
+        if self.ui.info_dialog.is_some() {
+            super::dialogs::handle(&mut self.ui, event.clone());
+            return Ok(Action::Redraw);
+        }
         if let Some(preview) = &mut self.ui.media_preview {
             let (_, close) = preview.handle(event);
             if close {

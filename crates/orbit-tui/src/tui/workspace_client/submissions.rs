@@ -112,14 +112,13 @@ impl Tab {
             Draft::Question(Some(text)) => self.rejected(Draft::Composer(text), error),
             Draft::Question(None) => self.state.btw.submit_error(&error),
             Draft::Composer(text) => {
-                if self.state.input.text.is_empty() {
+                let message = if self.state.input.text.is_empty() {
                     self.state.input.set(text);
+                    error.to_string()
                 } else {
-                    self.state
-                        .report_local(TranscriptItem::Error(format!("尚未确认的输入：{text}")));
-                }
-                self.state
-                    .report_local(TranscriptItem::Error(error.to_string()));
+                    format!("{error}\n尚未确认的输入：{text}")
+                };
+                self.state.report_local(TranscriptItem::Error(message));
             }
         }
     }

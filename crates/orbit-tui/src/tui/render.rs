@@ -51,6 +51,20 @@ const MUTED: Color = Color::Reset;
 const BORDER: Color = THEME.border;
 pub(super) const MAX_COMPLETION_ITEMS: usize = 8;
 
+/// Notices paint after selection snapshots, including a frozen transcript.
+/// They must never become part of the selectable/frozen conversation image.
+pub(super) fn draw_frame(frame: &mut Frame<'_>, state: &mut UiState) {
+    super::overlay::prepare(state);
+    if !state.selection.draw_frozen(frame) {
+        draw(frame, state);
+        state.selection.paint(frame);
+        state
+            .cursor_motion
+            .paint(frame.buffer_mut(), std::time::Instant::now());
+    }
+    state.feedback.draw(frame, frame.area());
+}
+
 pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     super::overlay::prepare(state);
     let hover = state.pending_list_hover.take();
@@ -92,17 +106,26 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     {
         state.ime_cursor = None;
     }
-    if let Some(position) = state.ime_cursor.filter(|p| frame.area().contains(*p)) {
-        frame.set_cursor_position(position);
-    }
-    if let Some(preview) = &mut state.media_preview {
+    if state.info_dialog.is_none()
+        && let Some(preview) = &mut state.media_preview
+    {
         preview.draw(frame);
     }
-    if let Some(wizard) = &mut state.workspace_wizard {
+    if state.info_dialog.is_none()
+        && let Some(wizard) = &mut state.workspace_wizard
+    {
         wizard.draw(frame);
     }
-    if let Some(prompt) = &state.ssh_prompt {
+    if state.info_dialog.is_none()
+        && let Some(prompt) = &state.ssh_prompt
+    {
         prompt.draw(frame);
+    }
+    if state.info_dialog.is_some() {
+        super::dialogs::draw(frame, state);
+    }
+    if let Some(position) = state.ime_cursor.filter(|p| frame.area().contains(*p)) {
+        frame.set_cursor_position(position);
     }
     state.overlay_needs_layout = false;
 }
@@ -269,14 +292,14 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.footer = areas[6];
     draw_context_tooltip(frame, state);
     state.planning.draw_badge(frame);
-    if state.planning.visible() {
+    if state.info_dialog.is_none() && state.planning.visible() {
         state.ime_cursor = state.planning.draw(frame);
         return;
     }
     state.user_input.draw_badge(frame);
-    if state.user_input.visible() {
+    if state.info_dialog.is_none() && state.user_input.visible() {
         state.ime_cursor = state.user_input.draw(frame);
-    } else {
+    } else if state.info_dialog.is_none() {
         super::dialogs::draw(frame, state);
     }
 }

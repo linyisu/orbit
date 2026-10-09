@@ -15,6 +15,21 @@ fn tab(label: &str) -> (Tab, mpsc::Receiver<Call>) {
     (tab, receiver)
 }
 
+fn render_screen(state: &mut UiState) -> String {
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| crate::tui::render::draw_frame(frame, state))
+        .unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect()
+}
+
 #[test]
 fn help_is_discoverable_and_opens_the_same_dialog_on_home_and_during_a_run() {
     for label in ["本地", "SSH dev", "WSL Ubuntu"] {
@@ -543,14 +558,8 @@ fn file_paths_are_sent_as_messages_on_every_target() {
         let (mut tab, mut requests) = tab(target);
         tab.submit("/stauts".into()).unwrap();
         assert!(requests.try_recv().is_err());
-        assert!(
-            tab.state
-                .info_dialog
-                .as_ref()
-                .unwrap()
-                .content
-                .contains("/status")
-        );
+        assert!(render_screen(&mut tab.state).contains("/status"));
+        assert!(tab.state.info_dialog.is_none());
     }
 }
 
@@ -612,14 +621,8 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
     drop(requests.try_recv().unwrap());
     tab.poll_submissions();
     assert_eq!(tab.state.input.text, "new draft");
-    assert!(
-        tab.state
-            .info_dialog
-            .as_ref()
-            .unwrap()
-            .content
-            .contains("previous")
-    );
+    assert!(render_screen(&mut tab.state).contains("previous"));
+    assert!(tab.state.info_dialog.is_none());
     assert!(tab.state.transcript.is_empty());
 }
 

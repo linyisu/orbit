@@ -84,6 +84,7 @@ pub enum TranscriptItem {
 
 #[derive(Debug)]
 pub struct UiState {
+    pub(super) feedback: super::feedback::Feedback,
     pub(super) connection_label: Option<String>,
     pub(super) media: super::media::Context,
     pub(super) media_preview: Option<super::media::Preview>,
@@ -222,19 +223,12 @@ impl UiState {
 
     /// Local feedback must not become conversation history on the home screen.
     pub(super) fn report_local(&mut self, item: TranscriptItem) {
+        if let TranscriptItem::Error(text) | TranscriptItem::CommandError(text) = &item {
+            self.feedback.error(text);
+            return;
+        }
         if self.is_home() {
             match item {
-                TranscriptItem::Error(text) | TranscriptItem::CommandError(text) => {
-                    if let Some(dialog) = &mut self.info_dialog
-                        && dialog.title == "操作失败"
-                    {
-                        dialog.content.push('\n');
-                        dialog.content.push_str(&text);
-                    } else {
-                        self.info_dialog = Some(super::dialogs::InfoDialog::new("操作失败", text));
-                    }
-                }
-
                 TranscriptItem::Notice(_)
                 | TranscriptItem::Maintenance(_)
                 | TranscriptItem::CommandResult(_) => {}
@@ -242,6 +236,17 @@ impl UiState {
             }
         } else {
             self.transcript.push(item);
+        }
+    }
+
+    pub(super) fn handle_feedback(&mut self, event: &crossterm::event::Event) -> bool {
+        match self.feedback.handle(event) {
+            super::feedback::Action::None => false,
+            super::feedback::Action::Redraw => true,
+            super::feedback::Action::Details(text) => {
+                self.info_dialog = Some(super::dialogs::InfoDialog::new("操作失败", text));
+                true
+            }
         }
     }
 
@@ -400,6 +405,7 @@ impl UiState {
 
     pub fn new(model: impl Into<String>) -> Self {
         Self {
+            feedback: Default::default(),
             connection_label: None,
             media: Default::default(),
             media_preview: None,
@@ -723,6 +729,9 @@ impl UiState {
                 self.finish_pending_tools("运行已中断；已请求取消未完成命令。");
                 self.status = RunStatus::Failed;
                 self.finish_clock();
+                if !self.remote_replay {
+                    self.feedback.error(&error);
+                }
                 self.transcript.push(TranscriptItem::Error(error));
             }
 

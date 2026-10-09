@@ -13,6 +13,7 @@ mod connection_spec;
 mod cursor;
 mod dialogs;
 mod directory;
+mod feedback;
 mod frames;
 mod icons;
 pub mod input;

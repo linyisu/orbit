@@ -63,12 +63,8 @@ fn permissions_follow_confirmation_and_ignore_stale_snapshots() {
     tab.poll_submissions();
     assert_eq!(tab.state.permissions.mode, Mode::Ask);
     assert_eq!(tab.state.permissions.pending, None);
-    assert!(
-        tab.state
-            .info_dialog
-            .as_ref()
-            .is_some_and(|dialog| dialog.content.contains("cannot save"))
-    );
+    assert!(render_screen(&mut tab.state).contains("cannot save"));
+    assert!(tab.state.info_dialog.is_none());
 
     tab.submit("/permissions yolo".into()).unwrap();
     let late = rx.try_recv().unwrap().reply.unwrap();

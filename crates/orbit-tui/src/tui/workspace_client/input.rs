@@ -19,6 +19,13 @@ impl Tab {
     }
 
     fn handle_event(&mut self, mut event: Event) -> Result<Action> {
+        if self.state.handle_feedback(&event) {
+            return Ok(Action::Redraw);
+        }
+        if self.state.info_dialog.is_some() {
+            tui::dialogs::handle(&mut self.state, event);
+            return Ok(Action::Redraw);
+        }
         let layer = tui::overlay::active(&self.state);
         if let Some(prompt) = &mut self.state.ssh_prompt {
             if prompt.handle(&event) {

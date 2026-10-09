@@ -516,6 +516,12 @@ impl InfoDialog {
 }
 
 pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
+    if let Some(dialog) = &mut state.info_dialog {
+        if dialog.handle(&event) {
+            state.info_dialog = None;
+        }
+        return None;
+    }
     if state.model_picker.is_some() {
         match &event {
             Event::Mouse(mouse) => {
@@ -536,12 +542,6 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             }
             _ => {}
         }
-    }
-    if let Some(dialog) = &mut state.info_dialog {
-        if dialog.handle(&event) {
-            state.info_dialog = None;
-        }
-        return None;
     }
 
     if matches!(&event, Event::Key(_) | Event::Paste(_)) {
@@ -967,11 +967,15 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         return;
     }
 
-    if let Some(picker) = &mut state.restore_picker {
+    if state.info_dialog.is_none()
+        && let Some(picker) = &mut state.restore_picker
+    {
         state.ime_cursor = picker.draw(frame, frame.area());
         return;
     }
-    let area = if state.btw.visible() || state.subagent_dialog.is_some() {
+    let area = if state.info_dialog.is_some() {
+        centered_area(frame.area())
+    } else if state.btw.visible() || state.subagent_dialog.is_some() {
         transcript_area(frame.area())
     } else if let Some(picker) = &state.model_picker {
         centered_size(
@@ -994,7 +998,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     };
 
     let inner = super::components::surface(frame, area, super::components::panel());
-    if state.btw.visible() {
+    if state.info_dialog.is_none() && state.btw.visible() {
         state.ime_cursor = None;
         let mut media = state.media.clone();
         media.workspace = state.workspace.clone().into();
@@ -1003,7 +1007,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         return;
     }
 
-    if let Some(viewer) = &mut state.subagent_dialog {
+    if state.info_dialog.is_none()
+        && let Some(viewer) = &mut state.subagent_dialog
+    {
         state.ime_cursor = None;
         let mut media = state.media.clone();
         media.workspace = state.workspace.clone().into();

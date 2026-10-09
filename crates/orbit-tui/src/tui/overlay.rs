@@ -11,6 +11,7 @@ use super::app::UiState;
 /// Ordered like painting: input belongs to the foremost visible surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Layer {
+    Info,
     Authentication,
     Connection,
     Image,
@@ -19,7 +20,6 @@ pub(super) enum Layer {
     Restore,
     Btw,
     Subagent,
-    Info,
     Sessions,
     Models,
     Plugins,
@@ -28,6 +28,7 @@ pub(super) enum Layer {
 
 pub(super) fn active(state: &UiState) -> Option<Layer> {
     [
+        (state.info_dialog.is_some(), Layer::Info),
         (state.ssh_prompt.is_some(), Layer::Authentication),
         (state.workspace_wizard.is_some(), Layer::Connection),
         (state.media_preview.is_some(), Layer::Image),
@@ -36,7 +37,6 @@ pub(super) fn active(state: &UiState) -> Option<Layer> {
         (state.restore_picker.is_some(), Layer::Restore),
         (state.btw.visible(), Layer::Btw),
         (state.subagent_dialog.is_some(), Layer::Subagent),
-        (state.info_dialog.is_some(), Layer::Info),
         (state.picker.is_some(), Layer::Sessions),
         (state.model_picker.is_some(), Layer::Models),
         (state.marketplace_dialog.is_some(), Layer::Plugins),
