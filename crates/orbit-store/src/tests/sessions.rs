@@ -1,11 +1,15 @@
-mod support;
+use super::support;
+use super::support::insert;
+use crate::database::sqlite;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm_migration::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::store::Store;
+use crate::types::{MemoryCategory, ProjectPlugin, TaskStatus};
 use orbit_agent::events::AgentEvent;
 use orbit_agent::tool::FileChange;
 use orbit_model::types::{ChatMessage, StreamEvent, ToolCall};
-use orbit_store::store::Store;
-use orbit_store::types::{MemoryCategory, ProjectPlugin, TaskStatus};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -184,7 +188,7 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
 }
 
 #[tokio::test]
-async fn invalid_finish_keeps_run_recoverable_and_migration_can_be_replayed() {
+async fn invalid_finish_keeps_run_recoverable() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
@@ -203,14 +207,6 @@ async fn invalid_finish_keeps_run_recoverable_and_migration_can_be_replayed() {
     writer.finish("failed", vec![], None).await.unwrap();
     drop(writer);
     drop(store);
-    let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection
-        .execute_batch(
-            "ALTER TABLE sessions ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
-            DROP TABLE seaql_migrations; PRAGMA user_version=14",
-        )
-        .unwrap();
-    drop(connection);
 
     assert!(Store::open(db.path()).await.is_ok());
 }
@@ -220,14 +216,12 @@ async fn rejects_a_database_from_a_newer_schema() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     drop(store);
-    let connection = rusqlite::Connection::open(db.path()).unwrap();
-    let current: u32 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
+    let connection = support::connect(db.path()).await;
+    let current = sqlite::schema_version(&connection).await.unwrap();
+    sqlite::set_schema_version(&connection, (current + 1).try_into().unwrap())
+        .await
         .unwrap();
-    connection
-        .pragma_update(None, "user_version", current + 1)
-        .unwrap();
-    drop(connection);
+    connection.close().await.unwrap();
 
     let error = Store::open(db.path())
         .await
@@ -308,18 +302,20 @@ async fn finalization_rolls_back_events_status_and_context_together() {
         .await
         .unwrap();
     writer.begin("prompt".into(), "mock".into()).await.unwrap();
-    let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("CREATE TRIGGER reject_history BEFORE UPDATE OF history ON sessions BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;").unwrap();
+    let connection = support::connect(db.path()).await;
+    support::restrict_history(&connection, true).await;
 
+    let error = writer
+        .finish(
+            "completed",
+            vec![text("final")],
+            Some(vec![ChatMessage::user("prompt")]),
+        )
+        .await
+        .unwrap_err();
     assert!(
-        writer
-            .finish(
-                "completed",
-                vec![text("final")],
-                Some(vec![ChatMessage::user("prompt")])
-            )
-            .await
-            .is_err()
+        error.to_string().contains("CHECK constraint failed"),
+        "{error:#}"
     );
 
     let snapshot = store.load(writer.id()).await.unwrap();
@@ -328,9 +324,8 @@ async fn finalization_rolls_back_events_status_and_context_together() {
     assert!(snapshot.runs[0].events.is_empty());
     assert_eq!(snapshot.runs[0].status, "running");
 
-    connection
-        .execute_batch("DROP TRIGGER reject_history")
-        .unwrap();
+    support::restrict_history(&connection, false).await;
+    connection.close().await.unwrap();
     writer
         .finish(
             "completed",
@@ -528,36 +523,50 @@ async fn explicit_link_rejects_copies_active_writers_and_populated_destinations(
 async fn schema_one_migration_preserves_sessions_runs_and_context() {
     let db = Database::new();
     std::fs::create_dir_all(&db.0).unwrap();
-    let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, demo INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0, history TEXT NOT NULL DEFAULT '[]');
-    CREATE TABLE runs (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), prompt TEXT NOT NULL, status TEXT NOT NULL);
-    CREATE TABLE events (id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES runs(id), payload TEXT NOT NULL);
-    PRAGMA user_version=1;").unwrap();
+    let connection = support::connect(db.path()).await;
+    support::legacy_schema(&connection, 1).await;
     let id = "a".repeat(32);
     let history = vec![ChatMessage::user("old conversation")];
-    connection
-        .execute(
-            "INSERT INTO sessions(id,workspace,model,demo,history) VALUES(?1,?2,'mock',1,?3)",
-            rusqlite::params![
-                id,
-                db.0.to_str().unwrap(),
-                serde_json::to_string(&history).unwrap()
-            ],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO runs VALUES(1,?1,'old conversation','completed')",
-            [&id],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO events VALUES(1,1,?1)",
-            [serde_json::to_string(&text("old answer")).unwrap()],
-        )
-        .unwrap();
-    drop(connection);
+    insert(
+        &connection,
+        "sessions",
+        &[
+            ("id", id.clone().into()),
+            ("workspace", db.0.to_str().unwrap().into()),
+            ("model", "mock".into()),
+            ("demo", true.into()),
+            ("history", serde_json::to_string(&history).unwrap().into()),
+        ],
+    )
+    .await
+    .unwrap();
+    insert(
+        &connection,
+        "runs",
+        &[
+            ("id", 1.into()),
+            ("session_id", id.clone().into()),
+            ("prompt", "old conversation".into()),
+            ("status", "completed".into()),
+        ],
+    )
+    .await
+    .unwrap();
+    insert(
+        &connection,
+        "events",
+        &[
+            ("id", 1.into()),
+            ("run_id", 1.into()),
+            (
+                "payload",
+                serde_json::to_string(&text("old answer")).unwrap().into(),
+            ),
+        ],
+    )
+    .await
+    .unwrap();
+    connection.close().await.unwrap();
     let store = Store::open(db.path()).await.unwrap();
     let snapshot = store.load(&id).await.unwrap();
 
@@ -581,30 +590,48 @@ async fn schema_one_migration_preserves_sessions_runs_and_context() {
 async fn project_memory_migration_keeps_only_unambiguous_session_ownership() {
     let db = Database::new();
     std::fs::create_dir_all(&db.0).unwrap();
-    let connection = rusqlite::Connection::open(db.path()).unwrap();
-    // Use a complete released v9 schema, so the test exercises a real upgrade.
-    support::legacy_schema(&connection, 9);
-    connection
-        .execute("INSERT INTO projects(id) VALUES('many'),('one')", [])
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO sessions(id,project_id,workspace,model,demo) VALUES
-             ('first','many','/many','model',0),('second','many','/many','model',0),('only','one','/one','model',0)",
-            [],
+    let connection = support::connect(db.path()).await;
+    support::legacy_schema(&connection, 9).await;
+    for project in ["many", "one"] {
+        insert(&connection, "projects", &[("id", project.into())])
+            .await
+            .unwrap();
+    }
+    for (session, project) in [("first", "many"), ("second", "many"), ("only", "one")] {
+        insert(
+            &connection,
+            "sessions",
+            &[
+                ("id", session.into()),
+                ("project_id", project.into()),
+                ("workspace", format!("/{project}").into()),
+                ("model", "model".into()),
+                ("demo", false.into()),
+            ],
         )
+        .await
         .unwrap();
-    connection
-        .execute(
-            "INSERT INTO project_memories(project_id,category,title,content,source_session_id)
-             VALUES
-             ('many','fact','Attributed','belongs to first','first'),
-             ('many','fact','Ambiguous','must remain archived',NULL),
-             ('one','fact','Single session','may migrate safely',NULL)",
-            [],
+    }
+    for (project, title, content, source) in [
+        ("many", "Attributed", "belongs to first", Some("first")),
+        ("many", "Ambiguous", "must remain archived", None),
+        ("one", "Single session", "may migrate safely", None),
+    ] {
+        insert(
+            &connection,
+            "project_memories",
+            &[
+                ("project_id", project.into()),
+                ("category", "fact".into()),
+                ("title", title.into()),
+                ("content", content.into()),
+                ("source_session_id", source.into()),
+            ],
         )
+        .await
         .unwrap();
-    drop(connection);
+    }
+    connection.close().await.unwrap();
 
     let store = Store::open(db.path()).await.unwrap();
     let first = store.session_memories("first", true).await.unwrap();
@@ -697,20 +724,24 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
 
     let mut writer = store.acquire(&id).await.unwrap();
     writer.begin("retry".into(), "mock".into()).await.unwrap();
-    let connection = rusqlite::Connection::open(db.path()).unwrap();
-    connection.execute_batch("CREATE TRIGGER reject_history BEFORE UPDATE OF history ON sessions BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+    let connection = support::connect(db.path()).await;
+    support::restrict_history(&connection, true).await;
+    connection.close().await.unwrap();
 
+    let error = writer
+        .finish(
+            "completed",
+            vec![AgentEvent::CompactionRecorded { record }],
+            Some(vec![ChatMessage::user("replacement context")]),
+        )
+        .await
+        .unwrap_err();
     assert!(
-        writer
-            .finish(
-                "completed",
-                vec![AgentEvent::CompactionRecorded { record }],
-                Some(original)
-            )
-            .await
-            .is_err()
+        error.to_string().contains("CHECK constraint failed"),
+        "{error:#}"
     );
     assert_eq!(store.compactions(&id).await.unwrap().len(), 1);
+    assert_eq!(store.load(&id).await.unwrap().history, original);
     assert!(store.compactions("missing").await.is_err());
 }
 
@@ -1166,47 +1197,91 @@ async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace()
 async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions() {
     for had_grants in [false, true] {
         let db = Database::new();
-        let store = Store::open(db.path()).await.unwrap();
-        let latest: u32 = rusqlite::Connection::open(db.path())
-            .unwrap()
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        let mut writer = store
-            .create(db.0.to_string_lossy().into_owned(), "mock".into())
-            .await
-            .unwrap();
-        let id = writer.id().to_owned();
-        writer
-            .begin("preserve my conversation".into(), "mock".into())
-            .await
-            .unwrap();
-        writer
-            .finish(
-                "completed",
-                vec![text("saved answer")],
-                Some(vec![ChatMessage::user("saved prompt")]),
-            )
-            .await
-            .unwrap();
-        store.set_tui_mode(&id, "ask").await.unwrap();
-        store.remember_tui_tab(&id).await.unwrap();
-        store.grant_tui_file(&id, "existing.txt").await.unwrap();
-        drop(writer);
-        drop(store);
-        let connection = rusqlite::Connection::open(db.path()).unwrap();
-        if !had_grants {
-            connection
-                .execute_batch("DROP TABLE tui_file_grants;")
-                .unwrap();
+        std::fs::create_dir_all(&db.0).unwrap();
+        let connection = support::connect(db.path()).await;
+        support::legacy_schema(&connection, 19).await;
+        if had_grants {
+            support::released_migration(&connection, 20).await;
         }
-
-        connection
-            .execute_batch(
-                "ALTER TABLE sessions ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
-                DROP TABLE seaql_migrations; PRAGMA user_version=19;",
-            )
+        let id = "a".repeat(32);
+        insert(&connection, "projects", &[("id", "project".into())])
+            .await
             .unwrap();
-        drop(connection);
+        insert(
+            &connection,
+            "sessions",
+            &[
+                ("id", id.clone().into()),
+                ("project_id", "project".into()),
+                ("workspace", db.0.to_str().unwrap().into()),
+                ("model", "mock".into()),
+                ("demo", false.into()),
+                ("title", "saved".into()),
+                (
+                    "history",
+                    serde_json::to_string(&vec![ChatMessage::user("saved prompt")])
+                        .unwrap()
+                        .into(),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        insert(
+            &connection,
+            "runs",
+            &[
+                ("id", 1.into()),
+                ("session_id", id.clone().into()),
+                ("prompt", "preserve my conversation".into()),
+                ("status", "completed".into()),
+            ],
+        )
+        .await
+        .unwrap();
+        insert(
+            &connection,
+            "events",
+            &[
+                ("run_id", 1.into()),
+                (
+                    "payload",
+                    serde_json::to_string(&text("saved answer")).unwrap().into(),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        insert(
+            &connection,
+            "tui_session_state",
+            &[
+                ("session_id", id.clone().into()),
+                ("permission_mode", "ask".into()),
+            ],
+        )
+        .await
+        .unwrap();
+        insert(
+            &connection,
+            "tui_tabs",
+            &[("session_id", id.clone().into())],
+        )
+        .await
+        .unwrap();
+        if had_grants {
+            insert(
+                &connection,
+                "tui_file_grants",
+                &[
+                    ("session_id", id.clone().into()),
+                    ("path", "existing.txt".into()),
+                ],
+            )
+            .await
+            .unwrap();
+        }
+        connection.close().await.unwrap();
 
         let store = Store::open(db.path()).await.unwrap();
         let saved = store.load(&id).await.unwrap();
@@ -1237,13 +1312,12 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
                 .unwrap()
                 .contains("new.txt")
         );
-        let connection = rusqlite::Connection::open(db.path()).unwrap();
+        let connection = support::connect(db.path()).await;
         assert_eq!(
-            connection
-                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
-                .unwrap(),
-            latest
+            sqlite::schema_version(&connection).await.unwrap(),
+            crate::migrations::Migrator::migrations().len() as i64
         );
+        connection.close().await.unwrap();
     }
 }
 
@@ -1286,38 +1360,62 @@ async fn write_transactions_serialize_across_independent_store_connections() {
 async fn developer_role_migration_preserves_children_and_queued_messages() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("sessions.db");
-    let store = Store::open(path.clone()).await.unwrap();
-    let mut parent = store
-        .create(root.path().to_string_lossy().into_owned(), "mock".into())
+    let connection = support::connect(&path).await;
+    support::legacy_schema(&connection, 23).await;
+    let parent_id = "a".repeat(32);
+    let child_id = "b".repeat(32);
+    insert(&connection, "projects", &[("id", "project".into())])
         .await
         .unwrap();
-    parent.begin("parent".into(), "mock".into()).await.unwrap();
-    let child = store
-        .create_subagent(
-            parent.id(),
-            "mock".into(),
-            "explore".into(),
-            "inspect".into(),
+    for id in [&parent_id, &child_id] {
+        insert(
+            &connection,
+            "sessions",
+            &[
+                ("id", id.clone().into()),
+                ("project_id", "project".into()),
+                ("workspace", root.path().to_str().unwrap().into()),
+                ("model", "mock".into()),
+                ("demo", false.into()),
+            ],
         )
         .await
         .unwrap();
-    let parent_id = parent.id().to_owned();
-    let child_id = child.id().to_owned();
-    store
-        .queue_agent_message(&parent_id, &child_id, "preserve queued input".into())
-        .await
-        .unwrap();
-    drop(child);
-    drop(parent);
-    drop(store);
-    let connection = rusqlite::Connection::open(&path).unwrap();
-    connection
-        .execute_batch(
-            "ALTER TABLE sessions ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
-            DROP TABLE seaql_migrations; PRAGMA user_version=23;",
-        )
-        .unwrap();
-    drop(connection);
+    }
+    insert(
+        &connection,
+        "runs",
+        &[
+            ("session_id", parent_id.clone().into()),
+            ("prompt", "parent".into()),
+            ("status", "completed".into()),
+        ],
+    )
+    .await
+    .unwrap();
+    insert(
+        &connection,
+        "agent_sessions",
+        &[
+            ("session_id", child_id.clone().into()),
+            ("parent_session_id", parent_id.clone().into()),
+            ("role", "explore".into()),
+            ("task", "inspect".into()),
+        ],
+    )
+    .await
+    .unwrap();
+    insert(
+        &connection,
+        "agent_messages",
+        &[
+            ("session_id", child_id.clone().into()),
+            ("content", "preserve queued input".into()),
+        ],
+    )
+    .await
+    .unwrap();
+    connection.close().await.unwrap();
     let store = Store::open(path).await.unwrap();
     assert_eq!(
         store.subagent_parent(&child_id).await.unwrap(),
@@ -1374,13 +1472,14 @@ async fn resume_history_excludes_drafts_but_keeps_failed_and_untitled_runs() {
         .finish("failed", Vec::new(), None)
         .await
         .unwrap();
-    rusqlite::Connection::open(db.path())
-        .unwrap()
-        .execute(
-            "UPDATE sessions SET title='' WHERE id=?1",
-            [conversation.id()],
-        )
+    let connection = support::connect(db.path()).await;
+    crate::entities::sessions::Entity::update_many()
+        .col_expr(crate::entities::sessions::Column::Title, Expr::value(""))
+        .filter(crate::entities::sessions::Column::Id.eq(conversation.id()))
+        .exec(&connection)
+        .await
         .unwrap();
+    connection.close().await.unwrap();
     let history = store.list_resumable().await.unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].id, conversation.id());

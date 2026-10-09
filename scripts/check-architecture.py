@@ -47,8 +47,10 @@ def check() -> list[str]:
             dependencies |= set(target.get("dependencies", {})) | set(target.get("build-dependencies", {}))
         if name != "orbit-store" and dependencies & DATABASE:
             errors.append(f"{name}: database access belongs to orbit-store: {sorted(dependencies & DATABASE)}")
-        if name == "orbit-store" and dependencies & {"rusqlite", "diesel", "sqlx"}:
-            errors.append(f"{name}: production database access must use SeaORM")
+        if name == "orbit-store":
+            storage_dependencies = dependencies | set(manifest.get("dev-dependencies", {}))
+            if storage_dependencies & {"rusqlite", "diesel", "sqlx"}:
+                errors.append(f"{name}: application and test database access must use SeaORM")
         # TUI tests exercise protocol consumers, never a second in-process service.
         # Include dev dependencies so cfg(test) cannot bypass that boundary.
         if name == "orbit-tui":
@@ -76,6 +78,15 @@ def check() -> list[str]:
     for source in [migrations.with_suffix(".rs"), *migrations.rglob("*.rs")]:
         if re.search(r"\b(?:execute_unprepared|from_sql_and_values|from_string|include_str)\s*[!(]", source.read_text()):
             errors.append(f"{source.relative_to(ROOT)}: migrations must use Rust schema/query builders; SQLite connection controls belong to database/sqlite.rs")
+    store = ROOT / "crates/orbit-store"
+    for source in store.rglob("*.sql"):
+        errors.append(f"{source.relative_to(ROOT)}: database fixtures must use Rust migration/schema builders")
+    sqlite_controls = {store / "src/database.rs", store / "src/database/sqlite.rs"}
+    for source in store.rglob("*.rs"):
+        if source not in sqlite_controls and re.search(
+            r"\b(?:execute_unprepared|execute_batch|from_sql_and_values|from_string)\s*\(", source.read_text()
+        ):
+            errors.append(f"{source.relative_to(ROOT)}: database access must use Rust schema/query builders")
     return errors
 
 

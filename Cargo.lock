@@ -3298,7 +3298,6 @@ dependencies = [
  "orbit-model",
  "orbit-protocol",
  "orbit-runtime",
- "rusqlite",
  "rustix 1.1.4",
  "sea-orm",
  "sea-orm-migration",

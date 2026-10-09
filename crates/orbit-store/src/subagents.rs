@@ -330,42 +330,53 @@ mod tests {
     async fn migration_preserves_child_inputs_and_allows_root_session_inputs() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("orbit.db");
-        let store = Store::open(&path).await.unwrap();
-        let parent = store
-            .create(dir.path().display().to_string(), "model".into())
+        use crate::tests::support::{self, insert};
+        let connection = support::connect(&path).await;
+        support::legacy_schema(&connection, 26).await;
+        let parent_id = "a".repeat(32);
+        let child_id = "b".repeat(32);
+        insert(&connection, "projects", &[("id", "project".into())])
             .await
             .unwrap();
-        let child = store
-            .create_subagent(
-                parent.id(),
-                "model".into(),
-                "review".into(),
-                "review".into(),
+        for id in [&parent_id, &child_id] {
+            insert(
+                &connection,
+                "sessions",
+                &[
+                    ("id", id.clone().into()),
+                    ("project_id", "project".into()),
+                    ("workspace", dir.path().to_str().unwrap().into()),
+                    ("model", "model".into()),
+                    ("demo", false.into()),
+                ],
             )
             .await
             .unwrap();
-        let parent_id = parent.id().to_owned();
-        let child_id = child.id().to_owned();
-        let child_input = store
-            .queue_agent_message(&parent_id, &child_id, "pending child".into())
-            .await
-            .unwrap();
-        drop(child);
-        drop(parent);
-        drop(store);
-        // Recreate the v26 schema, preserving queued data.
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.execute_batch("PRAGMA foreign_keys=OFF;
-            ALTER TABLE sessions ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
-            CREATE TABLE old_inputs (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-                content TEXT NOT NULL, received INTEGER NOT NULL DEFAULT 0 CHECK(received IN (0,1)));
-            INSERT INTO old_inputs SELECT * FROM agent_messages;
-            DROP TABLE agent_messages;
-            ALTER TABLE old_inputs RENAME TO agent_messages;
-            DROP TABLE seaql_migrations;
-            PRAGMA user_version=26;").unwrap();
-        drop(connection);
+        }
+        insert(
+            &connection,
+            "agent_sessions",
+            &[
+                ("session_id", child_id.clone().into()),
+                ("parent_session_id", parent_id.clone().into()),
+                ("role", "review".into()),
+                ("task", "review".into()),
+            ],
+        )
+        .await
+        .unwrap();
+        let child_input = insert(
+            &connection,
+            "agent_messages",
+            &[
+                ("session_id", child_id.clone().into()),
+                ("content", "pending child".into()),
+            ],
+        )
+        .await
+        .unwrap()
+        .last_insert_id() as i64;
+        connection.close().await.unwrap();
         let store = Store::open(&path).await.unwrap();
         let pending = store.pending_agent_messages(&child_id).await.unwrap();
         assert_eq!(pending[0].id, child_input);

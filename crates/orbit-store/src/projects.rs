@@ -368,17 +368,6 @@ impl Store {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use rusqlite::params;
-
-    // Construct legacy identity states independently of the ORM being tested.
-    async fn fixture(
-        store: &Store,
-        change: impl FnOnce(&rusqlite::Connection) -> Result<()> + Send + 'static,
-    ) -> Result<()> {
-        let path = store.path().to_owned();
-        tokio::task::spawn_blocking(move || change(&rusqlite::Connection::open(path)?)).await?
-    }
-
     #[tokio::test]
     async fn established_history_survives_a_duplicate_without_birth_time() {
         let temporary = tempfile::tempdir().unwrap();
@@ -394,26 +383,40 @@ mod tests {
         );
         let id = original.id.clone();
         let path = temporary.path().display().to_string();
-        fixture(&store, move |conn| {
-            let identity: String =
-                conn.query_row("SELECT identity FROM projects WHERE id=?1", [&id], |row| {
-                    row.get(0)
-                })?;
-            assert!(!identity.ends_with(":unknown"));
-            let (object, _) = identity.rsplit_once(':').unwrap();
-            conn.execute("UPDATE projects SET path=NULL WHERE id=?1", [&id])?;
-            conn.execute(
-                "INSERT INTO projects(id,path,identity,strong) VALUES('weak',?1,?2,0)",
-                params![path, format!("{object}:unknown")],
-            )?;
-            conn.execute(
-                "INSERT INTO project_paths(project_id,path) VALUES('weak',?1)",
-                [&path],
-            )?;
-            Ok(())
-        })
-        .await
-        .unwrap();
+        store
+            .write_access(move |conn| async move {
+                let identity = projects::Entity::find_by_id(id.clone())
+                    .one(&conn)
+                    .await?
+                    .unwrap()
+                    .identity
+                    .unwrap();
+                assert!(!identity.ends_with(":unknown"));
+                let (object, _) = identity.rsplit_once(':').unwrap();
+                projects::Entity::update_many()
+                    .col_expr(projects::Column::Path, Expr::value(Option::<String>::None))
+                    .filter(projects::Column::Id.eq(id))
+                    .exec(&conn)
+                    .await?;
+                projects::ActiveModel {
+                    id: Set("weak".into()),
+                    path: Set(Some(path.clone())),
+                    identity: Set(Some(format!("{object}:unknown"))),
+                    strong: Set(false),
+                    ..Default::default()
+                }
+                .insert(&conn)
+                .await?;
+                project_paths::ActiveModel {
+                    project_id: Set("weak".into()),
+                    path: Set(path),
+                }
+                .insert(&conn)
+                .await?;
+                Ok(())
+            })
+            .await
+            .unwrap();
         assert_eq!(
             store.resolve_project(temporary.path()).await.unwrap().id,
             original.id
@@ -442,24 +445,31 @@ mod tests {
             writer.finish("failed", Vec::new(), None).await.unwrap();
             drop(writer);
             let id = original.id.clone();
-            fixture(&store, move |conn| {
-                let identity: String =
-                    conn.query_row("SELECT identity FROM projects WHERE id=?1", [&id], |row| {
-                        row.get(0)
-                    })?;
-                let mut fields: Vec<_> = identity.split(':').map(str::to_owned).collect();
-                if !same_inode {
-                    fields[2] = "0".into();
-                }
-                fields[3] = "unknown".into();
-                conn.execute(
-                    "UPDATE projects SET identity=?2,strong=0 WHERE id=?1",
-                    params![id, fields.join(":")],
-                )?;
-                Ok(())
-            })
-            .await
-            .unwrap();
+            store
+                .write_access(move |conn| async move {
+                    let identity = projects::Entity::find_by_id(id.clone())
+                        .one(&conn)
+                        .await?
+                        .unwrap()
+                        .identity
+                        .unwrap();
+                    let mut fields: Vec<_> = identity.split(':').map(str::to_owned).collect();
+                    if !same_inode {
+                        fields[2] = "0".into();
+                    }
+                    fields[3] = "unknown".into();
+                    projects::ActiveModel {
+                        id: Set(id),
+                        identity: Set(Some(fields.join(":"))),
+                        strong: Set(false),
+                        ..Default::default()
+                    }
+                    .update(&conn)
+                    .await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
             let resolved = store.resolve_project(temporary.path()).await.unwrap();
             assert_eq!(resolved.id == original.id, same_inode);
             assert_eq!(store.list_resumable().await.unwrap().len(), 1);
@@ -487,30 +497,49 @@ mod tests {
 
         let original_id = original.id.clone();
         let workspace_text = workspace.display().to_string();
-        fixture(&store, move |conn| {
-                let current: String = conn.query_row(
-                    "SELECT identity FROM projects WHERE id=?1",
-                    [&original_id],
-                    |row| row.get(0),
-                )?;
+        store
+            .write_access(move |conn| async move {
+                let current = projects::Entity::find_by_id(original_id.clone())
+                    .one(&conn)
+                    .await?
+                    .unwrap()
+                    .identity
+                    .unwrap();
                 let fields: Vec<_> = current.split(':').collect();
                 let previous_mount = format!("linux:999999:{}:{}", fields[2], fields[3]);
-                conn.execute(
-                    "UPDATE projects SET identity=?1,path=NULL WHERE id=?2",
-                    params![previous_mount, original_id],
-                )?;
-                conn.execute(
-                    "INSERT INTO projects(id,path,identity,strong,legacy) VALUES('duplicate',?1,?2,1,0)",
-                    params![workspace_text, current],
-                )?;
-                conn.execute(
-                    "INSERT INTO project_paths(project_id,path) VALUES('duplicate',?1)",
-                    [&workspace_text],
-                )?;
-                conn.execute(
-                    "INSERT INTO sessions(id,workspace,model,title,project_id) VALUES('new-session',?1,'model','new','duplicate')",
-                    [&workspace_text],
-                )?;
+                projects::ActiveModel {
+                    id: Set(original_id),
+                    identity: Set(Some(previous_mount)),
+                    path: Set(None),
+                    ..Default::default()
+                }
+                .update(&conn)
+                .await?;
+                projects::ActiveModel {
+                    id: Set("duplicate".into()),
+                    path: Set(Some(workspace_text.clone())),
+                    identity: Set(Some(current)),
+                    strong: Set(true),
+                    legacy: Set(false),
+                }
+                .insert(&conn)
+                .await?;
+                project_paths::ActiveModel {
+                    project_id: Set("duplicate".into()),
+                    path: Set(workspace_text.clone()),
+                }
+                .insert(&conn)
+                .await?;
+                sessions::ActiveModel {
+                    id: Set("new-session".into()),
+                    workspace: Set(workspace_text),
+                    model: Set("model".into()),
+                    title: Set("new".into()),
+                    project_id: Set(Some("duplicate".into())),
+                    ..Default::default()
+                }
+                .insert(&conn)
+                .await?;
 
                 Ok(())
             })
