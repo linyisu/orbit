@@ -79,6 +79,10 @@ async fn connect(path: &Path, read_only: bool) -> Result<DatabaseConnection> {
                 .foreign_keys(true)
                 .busy_timeout(Duration::from_secs(3))
                 .pragma("journal_mode", "WAL")
+                // Keep committed conversation/approval receipts durable across
+                // power loss. WAL + NORMAL preserves consistency, but may lose
+                // recent commits after an OS crash; optimize transaction volume
+                // before weakening this guarantee. See examples/write_latency.rs.
                 .pragma("synchronous", "FULL")
         });
     Ok(sea_orm::Database::connect(options).await?)
