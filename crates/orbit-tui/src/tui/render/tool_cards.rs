@@ -5,6 +5,7 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
+use unicode_width::UnicodeWidthStr;
 
 use super::text::{compact_preview, parse_ansi_to_spans, safe_output, sanitize_linked_line};
 use super::{TOOL_FAILED, TOOL_FINISHED, TOOL_RUNNING};
@@ -276,7 +277,14 @@ fn tool_title_with_summary(
                 .find_map(|key| value[*key].as_str())
         })
         .unwrap_or("");
-    let command = if let Some(summary) = summary {
+    let command = if !expanded
+        && let Some(command) = arguments.as_ref().and_then(|args| args["command"].as_str())
+    {
+        tool_display::command_preview(
+            command,
+            usize::from(width).saturating_sub(row.name.width() + 1),
+        )
+    } else if let Some(summary) = summary {
         summary
     } else if !expanded {
         tool_display::tool_summary(&row.name, &row.arguments, &row.output)
@@ -426,24 +434,7 @@ pub(in crate::tui) fn default_tool_summary(arguments: &str) -> String {
         return String::new();
     };
     if let Some(command) = value["command"].as_str() {
-        let lines: Vec<_> = command
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
-        let target = lines
-            .iter()
-            .copied()
-            .find(|line| !is_shell_preamble(line))
-            .or_else(|| lines.first().copied())
-            .unwrap_or_default();
-        let mut summary = compact_preview(target, 160);
-
-        if lines.len() > 1 {
-            summary.push_str(" …");
-        }
-
-        return summary;
+        return tool_display::command_preview(command, 160);
     }
 
     let target = value["path"]
@@ -462,12 +453,4 @@ pub(in crate::tui) fn default_tool_summary(arguments: &str) -> String {
     }
 
     summary
-}
-
-pub(in crate::tui) fn is_shell_preamble(line: &str) -> bool {
-    let compact = line.split_whitespace().collect::<String>();
-    compact.starts_with("set-")
-        && compact[4..]
-            .chars()
-            .all(|ch| ch.is_ascii_alphabetic() || ch == 'o')
 }

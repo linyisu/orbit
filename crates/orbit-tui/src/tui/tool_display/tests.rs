@@ -90,7 +90,7 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
 
     tool.arguments = args.clone();
     let original = tool.output.clone();
-    assert_eq!(group_target_summary(&tool), "审查 Orbit 渲染逻辑");
+    assert_eq!(group_target_summary(&tool, 100), "审查 Orbit 渲染逻辑");
     assert_eq!(group_call_summary(&tool), "最终结果 · ## 修复中文字符边界");
     let summary = tool_summary(&tool.name, &tool.arguments, &tool.output);
     assert_eq!(

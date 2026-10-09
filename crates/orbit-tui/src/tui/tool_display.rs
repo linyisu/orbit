@@ -241,9 +241,52 @@ fn agent_read_summary(arguments: &str, output: &str) -> String {
     }
 }
 
-pub(super) fn group_target_summary(row: &ToolRow) -> String {
+/// Fold a shell program into a display-only row. Quotes remain literal; only
+/// whitespace is compacted, and truncation follows terminal columns.
+pub(super) fn command_preview(command: &str, width: usize) -> String {
+    let lines = command
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let start = lines
+        .iter()
+        .position(|line| !is_shell_preamble(line))
+        .unwrap_or(0);
+    let mut preview = String::new();
+    let mut columns = 0;
+    for word in lines[start..]
+        .iter()
+        .flat_map(|line| line.split_whitespace())
+    {
+        if !preview.is_empty() {
+            preview.push(' ');
+            columns += 1;
+        }
+        let word = safe_output(word);
+        for glyph in word.graphemes(true) {
+            preview.push_str(glyph);
+            columns += glyph.width();
+            if columns > width {
+                return clipped(&preview, width);
+            }
+        }
+    }
+    preview
+}
+
+fn is_shell_preamble(line: &str) -> bool {
+    let compact = line.split_whitespace().collect::<String>();
+    compact.starts_with("set-")
+        && compact[4..]
+            .chars()
+            .all(|ch| ch.is_ascii_alphabetic() || ch == 'o')
+}
+
+pub(super) fn group_target_summary(row: &ToolRow, width: usize) -> String {
     let args: Value = serde_json::from_str(&row.arguments).unwrap_or_default();
     match row.name.as_str() {
+        "run_command" => command_preview(args["command"].as_str().unwrap_or_default(), width),
         "read_agent" if args["agent_id"].as_str().is_some() => {
             agent_read_target(&serde_json::from_str(&row.output).unwrap_or_default())
         }

@@ -191,9 +191,9 @@ pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> Link
         format!(" · {} 次调用", items.len()),
         Style::default().fg(THEME.tool_summary),
     ));
-    let target = super::tool_display::group_target_summary(first);
     let available = usize::from(content_width)
         .saturating_sub(spans.iter().chain(&suffix).map(Span::width).sum::<usize>() + 3);
+    let target = super::tool_display::group_target_summary(first, available);
     if !target.is_empty() && available > 0 {
         let tail = matches!(
             first.name.as_str(),

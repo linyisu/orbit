@@ -1111,6 +1111,48 @@ fn hovering_wrapped_tool_titles_highlights_all_title_rows_without_changing_bodie
 }
 
 #[test]
+fn collapsed_multiline_command_titles_fill_the_row_instead_of_stopping_at_quotes() {
+    use super::super::app::ToolRow;
+    let command = format!(
+        "python3 -c \"\n    import pathlib\n    target = '{}'\n    print(target)\n\"",
+        "中文 e\u{301} long_value_".repeat(40)
+    );
+    let arguments = serde_json::json!({"command":command}).to_string();
+    let row = ToolRow {
+        id: "multiline".into(),
+        name: "run_command".into(),
+        arguments: arguments.clone(),
+        output: String::new(),
+        status: ToolStatus::Finished,
+    };
+    for width in [48, 240] {
+        let standalone = super::tool_cards::tool_title_with_links(&row, false, width);
+        let child = tool_group_title_with_links(&row, width);
+        let parent = super::super::tool_groups::header(
+            &[
+                TranscriptItem::Tool(row.clone()),
+                TranscriptItem::Tool(row.clone()),
+            ],
+            width,
+            false,
+        );
+        assert_eq!(standalone.len(), 1);
+        assert_eq!(child.len(), 1);
+        for header in [&standalone[0], &child[0], &parent] {
+            let text = header.text();
+            assert!(text.contains("import"), "{text}");
+            assert!(!text.contains("\\n") && !text.contains('\n'));
+            assert!(text.contains('…'));
+            assert!(
+                (usize::from(width) - 1..=usize::from(width)).contains(&header.line.width()),
+                "{text}"
+            );
+        }
+    }
+    assert_eq!(row.arguments, arguments);
+}
+
+#[test]
 fn command_preview_skips_a_shell_safety_preamble() {
     let summary = tool_summary(
         &serde_json::json!({ "command": "set -e\ncargo test --workspace --all-features" })
