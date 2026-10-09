@@ -2,7 +2,7 @@
 //! Scrolling reuses parsed rows, including their link, syntax and media metadata.
 use super::*;
 
-const BODY_HEIGHT: usize = 8;
+const MAX_TOOL_BODY_ROWS: usize = 15;
 
 #[derive(Debug)]
 pub(super) struct ToolViewport {
@@ -19,7 +19,7 @@ impl Entry {
         }
         let top = self.rows[rows.start].start;
         let total = self.rows[rows.end - 1].start + self.rows[rows.end - 1].height - top;
-        if total <= BODY_HEIGHT {
+        if total <= MAX_TOOL_BODY_ROWS {
             return;
         }
         let mut source = self.rows[rows.clone()].to_vec();
@@ -39,8 +39,8 @@ impl Entry {
     }
 
     fn set_tool_offset(&mut self, mut view: ToolViewport, offset: usize, width: u16) {
-        view.offset = offset.min(view.total.saturating_sub(BODY_HEIGHT));
-        let bottom = (view.offset + BODY_HEIGHT).min(view.total);
+        view.offset = offset.min(view.total.saturating_sub(MAX_TOOL_BODY_ROWS));
+        let bottom = (view.offset + MAX_TOOL_BODY_ROWS).min(view.total);
         let mut visible = Vec::new();
         let first = view
             .source
@@ -90,9 +90,9 @@ impl Entry {
         self.rows.splice(old, visible);
         view.rows.end = new_end;
 
-        // Put the position in the existing lower border: eight content rows
-        // remain eight rows, with no extra hint line inside the card.
-        if view.total > BODY_HEIGHT
+        // Put the position in the existing lower border without consuming
+        // any of the content rows reserved by MAX_TOOL_BODY_ROWS.
+        if view.total > MAX_TOOL_BODY_ROWS
             && let Some(border) = self.rows.get_mut(new_end)
         {
             let text = border.line.to_string();
@@ -168,13 +168,13 @@ impl TranscriptLayout {
             .rows
             .get(view.rows.end)
             .map_or(entry.height, |row| row.start + row.height);
-        if view.total <= BODY_HEIGHT || !(start + top..start + bottom).contains(&absolute) {
+        if view.total <= MAX_TOOL_BODY_ROWS || !(start + top..start + bottom).contains(&absolute) {
             return false;
         }
         let next = view
             .offset
             .saturating_add_signed(lines)
-            .min(view.total.saturating_sub(BODY_HEIGHT));
+            .min(view.total.saturating_sub(MAX_TOOL_BODY_ROWS));
         if next != view.offset {
             let view = entry.tool_body.take().unwrap();
             entry.set_tool_offset(view, next, self.width);
@@ -283,7 +283,7 @@ mod tests {
         )];
         let mut layout = TranscriptLayout::default();
         layout.update(&items, Some(0), 24);
-        assert_eq!(body(&layout).len(), 8);
+        assert_eq!(body(&layout).len(), MAX_TOOL_BODY_ROWS);
         let entry = &layout.entries[0];
         let view = entry.tool_body.as_ref().unwrap();
         assert!(
@@ -296,7 +296,7 @@ mod tests {
         let height = layout.height();
         assert!(layout.scroll_tool_body(area, 0, point, 3));
         assert_ne!(body(&layout), initial);
-        assert_eq!(body(&layout).len(), 8);
+        assert_eq!(body(&layout).len(), MAX_TOOL_BODY_ROWS);
         assert_eq!(layout.height(), height);
         let scrolled = body(&layout);
         layout.update(&items, Some(0), 24);
@@ -305,7 +305,7 @@ mod tests {
         layout.update(&items, Some(0), 24);
         assert_eq!(body(&layout), scrolled);
         layout.update(&items, Some(0), 80);
-        assert_eq!(body(&layout).len(), 8);
+        assert_eq!(body(&layout).len(), MAX_TOOL_BODY_ROWS);
         assert_eq!(layout.entries[0].tool_body.as_ref().unwrap().offset, 3);
 
         let area = Rect::new(0, 0, 80, layout.height() as u16);
