@@ -1,5 +1,9 @@
 //! Shared build-time support for embedding the portable workspace server in clients.
-use std::{env, path::PathBuf, process::Command};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// Build or locate a static server and expose its path to the calling client's build.
 pub fn embed_workspace_server() {
@@ -99,15 +103,25 @@ pub fn embed_workspace_server() {
 }
 
 fn publish(server: PathBuf) {
+    verify_static_server(&server).expect("portable workspace server verification");
+    println!("cargo:rustc-env=ORBIT_EMBEDDED_SERVER={}", server.display());
+}
+
+/// Check that a server can start without a system ELF loader or shared libraries.
+pub fn verify_static_server(server: &Path) -> Result<(), String> {
     let inspection = Command::new("readelf")
         .args(["-l", "-d"])
-        .arg(&server)
+        .arg(server)
         .output()
-        .expect("readelf is required to verify the portable workspace server");
+        .map_err(|error| {
+            format!("readelf is required to verify the portable workspace server: {error}")
+        })?;
     let headers = String::from_utf8_lossy(&inspection.stdout);
-    assert!(
-        inspection.status.success() && !headers.contains("INTERP") && !headers.contains("NEEDED"),
-        "The embedded workspace server must have no interpreter or shared-library dependencies"
-    );
-    println!("cargo:rustc-env=ORBIT_EMBEDDED_SERVER={}", server.display());
+    if !inspection.status.success() || headers.contains("INTERP") || headers.contains("NEEDED") {
+        return Err(
+            "The embedded workspace server must have no interpreter or shared-library dependencies"
+                .into(),
+        );
+    }
+    Ok(())
 }

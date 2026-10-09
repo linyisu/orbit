@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/orbit-build",
+    "crates/orbit-xtask",
     "crates/orbit-auth",
     "crates/orbit-model",
     "crates/orbit-agent",

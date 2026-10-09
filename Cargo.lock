@@ -3407,6 +3407,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-xtask"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "orbit-build",
+ "orbit-protocol",
+ "regex",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "ordered-float"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

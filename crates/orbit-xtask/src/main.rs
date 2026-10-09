@@ -1,0 +1,93 @@
+//! Repository maintenance and release verification; never linked into Orbit clients.
+mod architecture;
+mod bundle;
+mod process;
+mod remote;
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Result, bail};
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Parser)]
+#[command(about = "Orbit repository checks and release tooling")]
+struct Arguments {
+    #[command(subcommand)]
+    command: Task,
+}
+
+#[derive(Subcommand)]
+enum Task {
+    /// Check workspace dependency and source ownership boundaries.
+    Check,
+    /// Build and collect clients with their embedded static workspace server.
+    Bundle {
+        #[arg(value_enum, default_value_t = Profile::Release)]
+        profile: Profile,
+    },
+    /// Verify standalone deployment, protocol and cache reuse in Ubuntu 20.04.
+    VerifyBundle { directory: Option<PathBuf> },
+    /// Archive a prepared bundle, preserving executable permissions.
+    Archive {
+        directory: Option<PathBuf>,
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Profile {
+    Debug,
+    Release,
+}
+
+fn root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // The portable-bundle test uses this Rust executable as its SSH transport stand-in.
+    if std::env::current_exe()?
+        .file_name()
+        .is_some_and(|name| name == "ssh")
+        || std::env::args_os().next().is_some_and(|name| {
+            Path::new(&name)
+                .file_name()
+                .is_some_and(|name| name == "ssh")
+        })
+    {
+        return remote::transport().await;
+    }
+    match Arguments::parse().command {
+        Task::Check => {
+            let errors = architecture::check(root())?;
+            if !errors.is_empty() {
+                bail!("{}", errors.join("\n"));
+            }
+            println!("Workspace architecture checks passed.");
+        }
+        Task::Bundle { profile } => bundle::build(root(), profile).await?,
+        Task::VerifyBundle { directory } => {
+            let directory = match directory {
+                Some(path) => path,
+                None => bundle::target_directory(root()).await?.join("bundle"),
+            };
+            remote::verify(&directory).await?;
+        }
+        Task::Archive { directory, output } => {
+            let target = bundle::target_directory(root()).await?;
+            bundle::archive(
+                &directory.unwrap_or_else(|| target.join("bundle")),
+                &output.unwrap_or_else(|| {
+                    target.join(format!("orbit-linux-{}.tar.gz", std::env::consts::ARCH))
+                }),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}

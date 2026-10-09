@@ -24,7 +24,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools build-essential python3
+          sudo apt-get install -y musl-tools build-essential
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -39,10 +39,10 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Check architecture
-        run: python3 scripts/check-architecture.py
+        run: cargo xtask check
 
-      - name: Test CI scripts
-        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+      - name: Test repository tooling
+        run: cargo test -p orbit-xtask
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -69,11 +69,11 @@ jobs:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - name: Build client with embedded portable server
-        run: scripts/build-bundle.sh
+        run: cargo xtask bundle
       - name: Verify standalone client on older Linux
-        run: python3 scripts/test-remote-bundle.py target/bundle
+        run: cargo xtask verify-bundle target/bundle
       - name: Package executable with permissions
-        run: tar -czf target/orbit-linux-x86_64.tar.gz -C target/bundle orbit orbit-cli
+        run: cargo xtask archive target/bundle target/orbit-linux-x86_64.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: orbit-linux-x86_64

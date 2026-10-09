@@ -1,0 +1,17 @@
+[package]
+name = "orbit-xtask"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+orbit-build.workspace = true
+orbit-protocol.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+toml.workspace = true

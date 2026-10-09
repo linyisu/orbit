@@ -12,7 +12,7 @@ cargo run --release -p orbit-tui
 ./target/release/orbit
 ```
 
-普通 `cargo build` 会自动构建并内置同架构的静态远端服务；首次构建会多花一些时间，后续复用独立的构建缓存。每个前端可执行文件内置服务资源，分发、安装或移动时无需伴随服务文件，用户无需安装 musl 工具链、准备额外服务文件或升级服务器 glibc。`scripts/build-bundle.sh` 将两个前端复制到 `target/bundle/`。
+普通 `cargo build` 会自动构建并内置同架构的静态远端服务；首次构建会多花一些时间，后续复用独立的构建缓存。每个前端可执行文件内置服务资源，分发、安装或移动时无需伴随服务文件，用户无需安装 musl 工具链、准备额外服务文件或升级服务器 glibc。`cargo xtask bundle` 将两个前端复制到 Cargo 输出目录下的 `bundle/`，默认是 `target/bundle/`。
 
 在 TUI 内用 `/ssh HOST [PATH]`、`/wsl DISTRO [PATH]` 打开远端标签，本地与多个远端会话可同时运行；`/new` 在当前环境新建会话，`/local` 新建本地标签。界面在本机渲染，Agent 与工具在各自环境运行。也保留实验性的命令行连接入口：
 
@@ -52,6 +52,7 @@ TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel �
 | `orbit-service` | 会话、工具装配、任务与工作区服务 | [README](crates/orbit-service/README.md) |
 | `orbit-server` | 无界面服务可执行入口 | [README](crates/orbit-server/README.md) |
 | `orbit-build` | CLI/TUI 共用的静态服务构建与内嵌辅助库 | [源码](crates/orbit-build/src/lib.rs) |
+| `orbit-xtask` | Rust 开发工具：架构检查、打包与部署验证 | [源码](crates/orbit-xtask/src/main.rs) |
 | `orbit-agent` | 模型/工具执行循环、消息边界、后台等待、上下文整理 | [README](crates/orbit-agent/README.md) |
 | `orbit-model` | 通用消息类型、供应商协议、模型目录与思考参数适配 | [README](crates/orbit-model/README.md) |
 | `orbit-auth` | 凭据存储、OAuth 回调、令牌刷新与服务地址绑定 | [README](crates/orbit-auth/README.md) |
@@ -82,7 +83,7 @@ flowchart TD
     MODEL --> AUTH
 ```
 
-界面持有布局、选区和显示状态，应用层持有运行资源和执行任务。依赖向领域库流动，领域库独立于前端。`scripts/check-architecture.py` 检查包依赖与前端执行边界。
+界面持有布局、选区和显示状态，应用层持有运行资源和执行任务。依赖向领域库流动，领域库独立于前端。`cargo xtask check` 检查包依赖与前端执行边界。
 
 ## 任务与会话
 
@@ -106,7 +107,7 @@ flowchart TD
 ## 开发与验证
 
 ```sh
-python3 scripts/check-architecture.py
+cargo xtask check
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

@@ -26,4 +26,4 @@ cargo build --release -p orbit-server --target x86_64-unknown-linux-musl
 
 ## 验证
 
-工作区协议集成测试位于 [orbit-cli/tests/workspace_service.rs](../orbit-cli/tests/workspace_service.rs)。[test-remote-bundle.py](../../scripts/test-remote-bundle.py) 在隔离的 Ubuntu 20.04 容器中验证独立客户端的服务部署、配置传递、握手和缓存复用。
+工作区协议集成测试位于 [orbit-cli/tests/workspace_service.rs](../orbit-cli/tests/workspace_service.rs)。`cargo xtask verify-bundle target/bundle` 在隔离的 Ubuntu 20.04 容器中验证独立客户端的服务部署、配置传递、握手和缓存复用；`cargo xtask archive` 将准备好的客户端打成压缩包。这些命令由 [orbit-xtask](../orbit-xtask/src/main.rs) 实现，验证需要 Docker，静态文件检查需要 `readelf`。

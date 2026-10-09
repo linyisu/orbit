@@ -604,27 +604,22 @@ async fn cancelling_a_disconnected_pending_approval_does_not_write_the_file() {
 }
 
 fn transport_launchers(root: &Path) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let bin = root.join("bin");
     std::fs::create_dir(&bin).unwrap();
+    let executable = bin.join("transport-launcher");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/transport.rs");
+    let status =
+        std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .arg("--edition=2024")
+            .arg("--crate-name=orbit_transport_fixture")
+            .arg(source)
+            .arg("-o")
+            .arg(&executable)
+            .status()
+            .unwrap();
+    assert!(status.success(), "cannot compile native transport fixture");
     for program in ["ssh", "wsl.exe"] {
-        let path = bin.join(program);
-        std::fs::write(
-            &path,
-            r#"#!/usr/bin/python3
-import os,sys
-print('test login banner', flush=True)
-if os.path.basename(sys.argv[0]) == 'ssh':
-    assert sys.argv[-2] == 'test-alias'
-    os.execvp('sh', ['sh', '-c', sys.argv[-1]])
-else:
-    assert sys.argv[1:3] == ['--distribution', 'Test Distro']
-    args = sys.argv[sys.argv.index('--exec')+1:]
-    os.execvp(args[0], args)
-"#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(&executable, bin.join(program)).unwrap();
     }
     bin
 }
