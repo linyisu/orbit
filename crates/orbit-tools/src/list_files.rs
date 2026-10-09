@@ -49,6 +49,10 @@ impl ListFiles {
 }
 
 impl Tool for ListFiles {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::READ
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "list_files",

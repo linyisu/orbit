@@ -54,6 +54,10 @@ impl ProjectOverview {
 }
 
 impl Tool for ProjectOverview {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::READ
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "project_overview",

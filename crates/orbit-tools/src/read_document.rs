@@ -127,6 +127,10 @@ impl ReadDocument {
 }
 
 impl Tool for ReadDocument {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::READ
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_document",

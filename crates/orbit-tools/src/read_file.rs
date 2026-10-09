@@ -80,6 +80,10 @@ impl ReadFile {
 }
 
 impl Tool for ReadFile {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::READ
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_file",

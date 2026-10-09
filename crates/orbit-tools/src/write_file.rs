@@ -259,6 +259,10 @@ impl DeletePrepared {
 }
 
 impl Tool for WriteFile {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::WRITE
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "write_file",

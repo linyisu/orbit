@@ -73,22 +73,7 @@ struct ChildRun {
 }
 
 pub fn restrict_child_tools(tools: &mut ToolRegistry) {
-    const READ_TOOLS: &[&str] = &[
-        "read_file",
-        "list_files",
-        "search_text",
-        "project_overview",
-        "read_document",
-        "read_image",
-        "web_fetch",
-        "web_search",
-        "read_history",
-    ];
-    for definition in tools.definitions() {
-        if !READ_TOOLS.contains(&definition.function.name.as_str()) {
-            tools.remove(&definition.function.name);
-        }
-    }
+    tools.retain(|capabilities| capabilities.in_child(false));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -174,6 +159,26 @@ struct AgentTool {
 }
 
 impl Tool for AgentTool {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::AGENT_CONTROL
+    }
+
+    fn call_capabilities(&self, call: &ToolCall) -> orbit_agent::tool::ToolCapabilities {
+        if matches!(self.action, Action::Spawn)
+            && !call.arguments_json().is_ok_and(|args| {
+                matches!(
+                    args.get("role")
+                        .and_then(Value::as_str)
+                        .unwrap_or("explore"),
+                    "explore" | "review"
+                )
+            })
+        {
+            return orbit_agent::tool::ToolCapabilities::WRITE;
+        }
+        self.capabilities()
+    }
+
     fn definition(&self) -> ToolDefinition {
         let (description, schema) = match self.action {
             Action::Spawn => (
@@ -448,7 +453,7 @@ impl Service {
                         || self
                             .tool_policy
                             .as_ref()
-                            .is_none_or(|p| p.visible("write_file")),
+                            .is_none_or(|p| p.visible(orbit_agent::tool::ToolCapabilities::WRITE)),
                     "Plan 模式不能继续开发子代理，请使用 explore 或 review"
                 );
                 let active = self.active.lock().await;
@@ -704,13 +709,7 @@ impl Service {
         )
         .await?;
         let mut tools = runtime.tools;
-        if agent.role == "develop" {
-            for name in ["request_capability", "git_push"] {
-                tools.remove(name);
-            }
-        } else {
-            restrict_child_tools(&mut tools);
-        }
+        tools.retain(|capabilities| capabilities.in_child(agent.role == "develop"));
         for definition in tools.definitions() {
             if !self.allowed_tools.contains(&definition.function.name) {
                 tools.remove(&definition.function.name);

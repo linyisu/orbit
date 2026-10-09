@@ -227,7 +227,7 @@ impl Skills {
                     }).to_string())
                 }
             },
-        ));
+        ).with_capabilities(orbit_agent::tool::ToolCapabilities::READ));
     }
 }
 

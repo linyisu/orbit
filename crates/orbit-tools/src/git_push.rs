@@ -107,6 +107,13 @@ fn validate(args: &Arguments) -> Result<url::Url, ToolError> {
 }
 
 impl Tool for GitPush {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::exclusive(
+            orbit_agent::tool::ToolEffect::HostExecution,
+            false,
+        )
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "git_push",

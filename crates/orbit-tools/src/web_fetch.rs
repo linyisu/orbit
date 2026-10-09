@@ -158,6 +158,10 @@ impl WebSearch {
 }
 
 impl Tool for WebSearch {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::READ
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "web_search",
@@ -199,6 +203,10 @@ impl Tool for WebSearch {
 }
 
 impl Tool for WebFetch {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::READ
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "web_fetch",

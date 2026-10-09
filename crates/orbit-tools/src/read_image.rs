@@ -37,6 +37,10 @@ impl ReadImage {
 }
 
 impl Tool for ReadImage {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::READ
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_image",

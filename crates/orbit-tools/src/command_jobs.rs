@@ -49,6 +49,15 @@ impl CommandJobs {
 }
 
 impl Tool for CommandJobs {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        use orbit_agent::tool::{ToolCapabilities, ToolEffect};
+        match self.action {
+            CommandJobAction::Status => ToolCapabilities::READ,
+            CommandJobAction::Wait => ToolCapabilities::exclusive(ToolEffect::Observation, true),
+            CommandJobAction::Cancel => ToolCapabilities::COMMAND,
+        }
+    }
+
     fn definition(&self) -> ToolDefinition {
         let description = match self.action {
             CommandJobAction::Status => {

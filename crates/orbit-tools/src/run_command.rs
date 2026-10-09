@@ -166,6 +166,10 @@ impl RunCommand {
 }
 
 impl Tool for RunCommand {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::COMMAND
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "run_command",

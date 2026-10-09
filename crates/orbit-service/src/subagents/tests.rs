@@ -726,17 +726,26 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
         .await
         .unwrap();
     let mut tools = ToolRegistry::new();
-    for name in [
-        "read_file",
-        "write_file",
-        "run_command",
-        "spawn_agent",
-        "memory_list",
-        "mcp__orbit__write",
+    for (name, capabilities) in [
+        ("read_file", orbit_agent::tool::ToolCapabilities::READ),
+        ("write_file", orbit_agent::tool::ToolCapabilities::WRITE),
+        ("run_command", orbit_agent::tool::ToolCapabilities::COMMAND),
+        (
+            "spawn_agent",
+            orbit_agent::tool::ToolCapabilities::AGENT_CONTROL,
+        ),
+        ("memory_list", orbit_agent::tool::ToolCapabilities::READ),
+        (
+            "mcp__orbit__write",
+            orbit_agent::tool::ToolCapabilities::UNKNOWN,
+        ),
     ] {
-        tools.register(ClosureTool::new(name, "", json!({}), |_, _| async {
-            Ok::<_, ToolError>("unused".into())
-        }));
+        tools.register(
+            ClosureTool::new(name, "", json!({}), |_, _| async {
+                Ok::<_, ToolError>("unused".into())
+            })
+            .with_capabilities(capabilities),
+        );
     }
 
     register(
@@ -761,7 +770,7 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
             .iter()
             .map(|t| t.function.name.as_str())
             .collect::<Vec<_>>(),
-        ["read_file"]
+        ["memory_list", "read_file"]
     );
 }
 
@@ -812,6 +821,33 @@ fn validates_subagent_limits_and_defaults_to_eight() {
         .validate()
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn delegation_effects_follow_role_and_unknown_roles_cannot_bypass_plan() {
+    use orbit_agent::tool::ToolCapabilities;
+    let directory = tempfile::tempdir().unwrap();
+    let (service, _parent) = fixture(directory.path(), GatedModel::new(), Default::default()).await;
+    let tool = AgentTool {
+        service,
+        action: Action::Spawn,
+    };
+    for args in [
+        json!({}),
+        json!({"role":"explore"}),
+        json!({"role":"review"}),
+    ] {
+        assert!(
+            tool.call_capabilities(&ToolCall::function("spawn", "spawn_agent", args))
+                .in_plan()
+        );
+    }
+    for args in [json!({"role":"develop"}), json!({"role":"unknown"})] {
+        assert_eq!(
+            tool.call_capabilities(&ToolCall::function("spawn", "spawn_agent", args)),
+            ToolCapabilities::WRITE
+        );
+    }
 }
 
 #[tokio::test]

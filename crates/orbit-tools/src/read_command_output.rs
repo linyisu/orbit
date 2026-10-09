@@ -64,6 +64,10 @@ impl ReadCommandOutput {
 }
 
 impl Tool for ReadCommandOutput {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::READ
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_command_output",

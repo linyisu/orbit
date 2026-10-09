@@ -51,7 +51,7 @@ pub fn register(
                     .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
             }
         },
-    ));
+    ).with_capabilities(orbit_agent::tool::ToolCapabilities::READ));
 }
 
 pub async fn report(

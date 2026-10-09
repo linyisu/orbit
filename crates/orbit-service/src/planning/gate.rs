@@ -1,6 +1,6 @@
 use orbit_agent::{
     background::{BackgroundJobs, JobStatus},
-    tool::{ToolError, ToolPolicy},
+    tool::{ToolCapabilities, ToolEffect, ToolError, ToolPolicy},
 };
 use orbit_model::types::ToolCall;
 use std::sync::{Arc, Mutex, RwLock};
@@ -15,32 +15,6 @@ pub(super) struct Gate {
     access: Arc<Mutex<Access>>,
     jobs: Arc<RwLock<Vec<BackgroundJobs>>>,
     context: Arc<RwLock<Option<String>>>,
-}
-fn safe(name: &str) -> bool {
-    matches!(
-        name,
-        "read_file"
-            | "list_files"
-            | "search_text"
-            | "project_overview"
-            | "read_document"
-            | "read_image"
-            | "web_search"
-            | "web_fetch"
-            | "git_inspect"
-            | "read_history"
-            | "load_skill"
-            | "task_list"
-            | "memory_list"
-            | "memory_search"
-            | "ask_user"
-            | "read_agent"
-            | "wait_agents"
-            | "cancel_agents"
-            | "enter_plan"
-            | "update_plan"
-            | "submit_plan"
-    )
 }
 impl Gate {
     pub fn context(&self, text: String) {
@@ -80,25 +54,22 @@ impl ToolPolicy for Gate {
     fn context(&self) -> Option<String> {
         self.context.read().unwrap().clone()
     }
-    fn visible(&self, name: &str) -> bool {
-        !self.access.lock().unwrap().read_only
-            || safe(name)
-            || matches!(name, "spawn_agent" | "send_agent_message")
+    fn visible(&self, capabilities: ToolCapabilities) -> bool {
+        !self.access.lock().unwrap().read_only || capabilities.in_plan()
     }
-    fn acquire(&self, call: &ToolCall) -> Result<Box<dyn Send>, ToolError> {
+    fn acquire(
+        &self,
+        call: &ToolCall,
+        capabilities: ToolCapabilities,
+    ) -> Result<Box<dyn Send>, ToolError> {
         let mut access = self.access.lock().unwrap();
         let name = call.function.name.as_str();
-        if safe(name) {
+        // Planning controls acquire their own transition guard; counting the
+        // enter_plan call itself would prevent the transition from ever being idle.
+        if capabilities.effect == ToolEffect::Planning {
             return Ok(Box::new(()));
         }
-        let explore = name == "spawn_agent"
-            && call.arguments_json().is_ok_and(|v| {
-                matches!(
-                    v.get("role").and_then(|r| r.as_str()).unwrap_or("explore"),
-                    "explore" | "review"
-                )
-            });
-        if access.read_only && !explore && name != "send_agent_message" {
+        if access.read_only && !capabilities.in_plan() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Plan 为只读模式，禁止 {name}；请提交计划并等待用户明确选择开始执行"
             )));

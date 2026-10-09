@@ -389,6 +389,10 @@ struct PlanTool {
     name: &'static str,
 }
 impl Tool for PlanTool {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::PLANNING
+    }
+
     fn definition(&self) -> ToolDefinition {
         let (description, schema) = match self.name {
             "enter_plan" => (

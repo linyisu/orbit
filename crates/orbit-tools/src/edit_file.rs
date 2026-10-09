@@ -30,6 +30,10 @@ impl EditFile {
 }
 
 impl Tool for EditFile {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::WRITE
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "edit_file",

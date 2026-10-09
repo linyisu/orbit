@@ -178,6 +178,10 @@ struct AskUser {
     source: Option<String>,
 }
 impl Tool for AskUser {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::INTERACTION
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "ask_user",

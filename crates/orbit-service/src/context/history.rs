@@ -154,7 +154,7 @@ pub fn register(tools: &mut ToolRegistry, store: Store, scope: MemoryScope) {
                 }
             }
         },
-    ));
+    ).with_capabilities(orbit_agent::tool::ToolCapabilities::READ));
 }
 
 #[cfg(test)]

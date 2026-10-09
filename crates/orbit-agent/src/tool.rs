@@ -4,6 +4,9 @@ use orbit_model::types::{Attachment, ToolCall, ToolDefinition};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+mod capabilities;
+pub use capabilities::{ToolCapabilities, ToolEffect};
+
 pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,6 +107,16 @@ pub struct ToolContext {
 pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
+    /// Unknown tools are exclusive and unavailable in read-only modes.
+    fn capabilities(&self) -> ToolCapabilities {
+        ToolCapabilities::UNKNOWN
+    }
+
+    /// Refine effects when an action's arguments select different capabilities.
+    fn call_capabilities(&self, _call: &ToolCall) -> ToolCapabilities {
+        self.capabilities()
+    }
+
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a>;
 
     fn execute_with_context<'a>(
@@ -122,8 +135,12 @@ pub trait ToolPolicy: Send + Sync {
     fn context(&self) -> Option<String> {
         None
     }
-    fn visible(&self, name: &str) -> bool;
-    fn acquire(&self, call: &ToolCall) -> Result<Box<dyn Send>, ToolError>;
+    fn visible(&self, capabilities: ToolCapabilities) -> bool;
+    fn acquire(
+        &self,
+        call: &ToolCall,
+        capabilities: ToolCapabilities,
+    ) -> Result<Box<dyn Send>, ToolError>;
 }
 
 #[derive(Clone, Default)]
@@ -148,6 +165,18 @@ impl ToolRegistry {
     }
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.tools.keys().map(String::as_str)
+    }
+
+    pub fn retain(&mut self, predicate: impl Fn(ToolCapabilities) -> bool) {
+        Arc::make_mut(&mut self.tools).retain(|_, tool| predicate(tool.capabilities()));
+    }
+
+    pub fn call_capabilities(&self, call: &ToolCall) -> ToolCapabilities {
+        self.tools
+            .get(&call.function.name)
+            .map_or(ToolCapabilities::UNKNOWN, |tool| {
+                tool.call_capabilities(call)
+            })
     }
 
     pub fn policy(&self) -> Option<Arc<dyn ToolPolicy>> {
@@ -204,12 +233,12 @@ impl ToolRegistry {
         let mut definitions = self
             .tools
             .values()
-            .map(|tool| tool.definition())
-            .filter(|d| {
+            .filter(|tool| {
                 self.policy
                     .as_ref()
-                    .is_none_or(|p| p.visible(&d.function.name))
+                    .is_none_or(|p| p.visible(tool.capabilities()))
             })
+            .map(|tool| tool.definition())
             .collect::<Vec<_>>();
 
         definitions.sort_by(|left, right| left.function.name.cmp(&right.function.name));
@@ -277,7 +306,11 @@ impl ToolRegistry {
                 return Err(ToolError::Cancelled);
             }
 
-            let _lease = policy.as_ref().map(|p| p.acquire(&call)).transpose()?;
+            let capabilities = tool.call_capabilities(&call);
+            let _lease = policy
+                .as_ref()
+                .map(|p| p.acquire(&call, capabilities))
+                .transpose()?;
             tool.execute_with_context(call, cancellation, context).await
         })
     }
@@ -285,6 +318,7 @@ impl ToolRegistry {
 
 pub struct ClosureTool<F> {
     definition: ToolDefinition,
+    capabilities: ToolCapabilities,
     execute: F,
 }
 
@@ -301,8 +335,14 @@ where
     ) -> Self {
         Self {
             definition: ToolDefinition::function(name, description, parameters),
+            capabilities: ToolCapabilities::UNKNOWN,
             execute,
         }
+    }
+
+    pub fn with_capabilities(mut self, capabilities: ToolCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
     }
 }
 
@@ -313,6 +353,10 @@ where
 {
     fn definition(&self) -> ToolDefinition {
         self.definition.clone()
+    }
+
+    fn capabilities(&self) -> ToolCapabilities {
+        self.capabilities
     }
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {

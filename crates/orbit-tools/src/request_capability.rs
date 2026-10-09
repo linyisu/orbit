@@ -37,6 +37,10 @@ impl RequestCapability {
 }
 
 impl Tool for RequestCapability {
+    fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
+        orbit_agent::tool::ToolCapabilities::PERMISSION
+    }
+
     fn definition(&self) -> ToolDefinition {
         let description = format!(
             "Request session permission for an existing file or directory outside the workspace. Only eligible paths prompt the user for approval. Existing workspace access needs no request. To create external files, request read_write for an existing eligible parent directory. Policy denials are permanent and never open an approval dialog: workspace ancestors, protected files/directories and these exact host paths: {}; these host directories and all descendants: {}. The whole host /tmp is reserved, but an existing specific /tmp child may be eligible. File-tool grants do not isolate shell commands; run_command uses real host paths. Approved grants last for this session.",

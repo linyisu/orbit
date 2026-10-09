@@ -153,7 +153,7 @@ fn register_tasks(tools: &mut ToolRegistry, store: Store, scope: MemoryScope) {
                 Ok(json!({ "tasks": tasks, "source_kind": "project_task_state" }).to_string())
             }
         },
-    ));
+    ).with_capabilities(orbit_agent::tool::ToolCapabilities::READ));
 
     tools.register(ClosureTool::new(
         "task_update",
@@ -250,7 +250,7 @@ fn register_tasks(tools: &mut ToolRegistry, store: Store, scope: MemoryScope) {
                 Ok(json!({ "task": task, "source_kind": "project_task_state" }).to_string())
             }
         },
-    ));
+    ).with_capabilities(orbit_agent::tool::ToolCapabilities::PROJECT_STATE));
 }
 
 fn register_memories(tools: &mut ToolRegistry, store: Store, memory_scope: MemoryScope) {
@@ -281,7 +281,7 @@ fn register_memories(tools: &mut ToolRegistry, store: Store, memory_scope: Memor
                 Ok(json!({ "memories": memories, "source_kind": "session_memory" }).to_string())
             }
         },
-    ));
+    ).with_capabilities(orbit_agent::tool::ToolCapabilities::READ));
 
     let search_store = store.clone();
     let search_scope = memory_scope.clone();
@@ -312,7 +312,7 @@ fn register_memories(tools: &mut ToolRegistry, store: Store, memory_scope: Memor
                 Ok(json!({ "query": arguments.query, "memories": memories, "source_kind": "session_memory_local_search" }).to_string())
             }
         },
-    ));
+    ).with_capabilities(orbit_agent::tool::ToolCapabilities::READ));
 
     let save_store = store.clone();
     let save_scope = memory_scope.clone();
@@ -351,7 +351,7 @@ fn register_memories(tools: &mut ToolRegistry, store: Store, memory_scope: Memor
                 Ok(json!({ "memory": memory, "source_kind": "session_memory" }).to_string())
             }
         },
-    ));
+    ).with_capabilities(orbit_agent::tool::ToolCapabilities::PROJECT_STATE));
 
     tools.register(ClosureTool::new(
         "memory_forget",
@@ -379,7 +379,7 @@ fn register_memories(tools: &mut ToolRegistry, store: Store, memory_scope: Memor
                 Ok(json!({ "memory": memory, "source_kind": "session_memory" }).to_string())
             }
         },
-    ));
+    ).with_capabilities(orbit_agent::tool::ToolCapabilities::PROJECT_STATE));
 }
 
 #[derive(Default, Deserialize)]

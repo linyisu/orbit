@@ -1,5 +1,5 @@
 use super::*;
-use orbit_agent::tool::{ClosureTool, ToolPolicy};
+use orbit_agent::tool::{ClosureTool, ToolCapabilities, ToolPolicy};
 use serde_json::json;
 
 async fn fixture() -> (
@@ -53,18 +53,20 @@ async fn reviewing(
 async fn plan_read_only_checks_executions_not_only_tool_definitions() {
     let (_dir, plan, _writer) = fixture().await;
     let mut registry = ToolRegistry::new();
-    for name in [
-        "write_file",
-        "run_command",
-        "mcp__unsafe",
-        "request_capability",
-        "read_file",
-        "ask_user",
-        "spawn_agent",
+    for (name, capabilities) in [
+        ("write_file", ToolCapabilities::WRITE),
+        ("run_command", ToolCapabilities::COMMAND),
+        ("mcp__unsafe", ToolCapabilities::UNKNOWN),
+        ("request_capability", ToolCapabilities::PERMISSION),
+        ("read_file", ToolCapabilities::READ),
+        ("ask_user", ToolCapabilities::INTERACTION),
     ] {
-        registry.register(ClosureTool::new(name, "test", json!({}), |_, _| async {
-            Ok("executed".into())
-        }));
+        registry.register(
+            ClosureTool::new(name, "test", json!({}), |_, _| async {
+                Ok("executed".into())
+            })
+            .with_capabilities(capabilities),
+        );
     }
     plan.install_policy(&mut registry);
     let copy = registry.clone();
@@ -100,21 +102,25 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
             .is_ok()
         );
     }
+    // Delegation is classified by the concrete tool's call arguments; test the
+    // gate against the resulting effects rather than imitating it by tool name.
     assert!(
-        copy.execute(
-            ToolCall::function("c", "spawn_agent", json!({"role":"develop"})),
-            CancellationToken::new()
-        )
-        .await
-        .is_err()
+        plan.0
+            .gate
+            .acquire(
+                &ToolCall::function("c", "spawn_agent", json!({})),
+                ToolCapabilities::WRITE
+            )
+            .is_err()
     );
-    assert!(
-        copy.execute(
-            ToolCall::function("c", "spawn_agent", json!({"role":"explore"})),
-            CancellationToken::new()
-        )
-        .await
-        .is_ok()
+    drop(
+        plan.0
+            .gate
+            .acquire(
+                &ToolCall::function("c", "spawn_agent", json!({})),
+                ToolCapabilities::AGENT_CONTROL,
+            )
+            .unwrap(),
     );
     // A child's cloned policy observes the same transitions.
     let mut child = ToolRegistry::new();
@@ -141,7 +147,10 @@ async fn plan_cannot_enter_until_mutating_tool_lease_finishes() {
     let lease = plan
         .0
         .gate
-        .acquire(&ToolCall::function("write", "write_file", json!({})))
+        .acquire(
+            &ToolCall::function("write", "write_file", json!({})),
+            ToolCapabilities::WRITE,
+        )
         .unwrap();
     assert!(plan.enter().await.is_err());
     assert_eq!(plan.snapshot().await.mode, WorkMode::Build);
