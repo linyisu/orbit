@@ -248,10 +248,8 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         .await
         .unwrap();
     let first = state.id().to_owned();
-    let output = state.command_output.clone();
-    let first_output = output.read().unwrap().clone();
     let command_output = state.command_output.clone();
-    let first_command_output = command_output.read().unwrap().clone();
+    assert!(command_output.lease().is_none());
     let history = vec![
         ChatMessage::user("first question"),
         ChatMessage::assistant("first answer"),
@@ -262,11 +260,16 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         .unwrap();
 
     assert!(state.resume("missing").await.is_err());
+    let log = command_output.create_log().await.unwrap();
+    let first_command_output = command_output.lease().unwrap().path().to_owned();
+    drop(log);
 
     state
         .finish("completed", Some(history.clone()))
         .await
         .unwrap();
+    assert!(command_output.lease().is_none());
+    assert!(!first_command_output.exists());
     state.resume(&first).await.unwrap();
 
     assert_eq!(state.snapshot.history, history);
@@ -275,8 +278,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     let second = state.id().to_owned();
 
     assert_ne!(first, second);
-    assert_ne!(*output.read().unwrap(), first_output);
-    assert_ne!(*command_output.read().unwrap(), first_command_output);
+    assert!(command_output.lease().is_none());
     assert!(state.snapshot.history.is_empty());
 
     let foreign_path = tmp.path().join("foreign");
@@ -308,8 +310,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     drop(locked);
     state.resume(&first).await.unwrap();
 
-    assert_eq!(*output.read().unwrap(), first_output);
-    assert_eq!(*command_output.read().unwrap(), first_command_output);
+    assert!(command_output.lease().is_none());
     assert_eq!(state.snapshot.history, history);
     assert_eq!(state.snapshot.runs.len(), 1);
     assert!(state.store.load(&second).await.is_err());
@@ -320,11 +321,41 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         .await
         .unwrap();
 
-    assert_eq!(*reopened.command_output.read().unwrap(), first_output);
-    assert_eq!(
-        *reopened.command_output.read().unwrap(),
-        first_command_output
-    );
+    assert!(reopened.command_output.lease().is_none());
+    assert!(reopened.command_output.create_log().await.is_err());
+}
+
+#[tokio::test]
+async fn failed_cancelled_and_dropped_tasks_release_temporary_command_logs() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database = temporary.path().join("sessions.db");
+    let mut session = SessionState::open(database.clone(), None, "model".into())
+        .await
+        .unwrap();
+    for status in ["failed", "cancelled"] {
+        session
+            .begin("run a command".into(), "model".into())
+            .await
+            .unwrap();
+        let log = session.command_output.create_log().await.unwrap();
+        let directory = session.command_output.lease().unwrap().path().to_owned();
+        drop(log);
+        session.finish(status, None).await.unwrap();
+        assert!(session.command_output.lease().is_none());
+        assert!(!directory.exists());
+    }
+    assert!(!database.with_extension("command-output").exists());
+    session
+        .begin("interrupted".into(), "model".into())
+        .await
+        .unwrap();
+    let outputs = session.command_output.clone();
+    let log = outputs.create_log().await.unwrap();
+    let directory = outputs.lease().unwrap().path().to_owned();
+    drop(log);
+    drop(session);
+    assert!(outputs.lease().is_none());
+    assert!(!directory.exists());
 }
 
 #[tokio::test]

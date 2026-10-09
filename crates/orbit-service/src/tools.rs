@@ -32,7 +32,7 @@ pub async fn workspace_tools(
     web: orbit_tools::web_fetch::WebConfig,
     mcp: orbit_tools::mcp::McpConfig,
     allow_mcp_start: bool,
-    command_output: Option<orbit_tools::run_command::CommandOutputDirectory>,
+    command_output: Option<orbit_runtime::execution::output::CommandOutputs>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
 ) -> Result<WorkspaceRuntime> {
     let workspace = protected_workspace(
@@ -107,7 +107,7 @@ pub async fn workspace_tools(
             .with_background_jobs(jobs);
         if let Some(command_output) = command_output {
             tools.register(ReadCommandOutput::new(command_output.clone()));
-            tools.register(command.with_output_directory(command_output));
+            tools.register(command.with_output_store(command_output));
         } else {
             tools.register(command);
         }
@@ -164,6 +164,8 @@ fn protected_workspace(
     workspace.protect_opaque_runtime_root(crate::workspace::runtime_directory()?)?;
     workspace.protect(config)?;
     workspace.protect(auth_directory)?;
+    workspace
+        .protect_opaque_runtime_root(orbit_runtime::execution::output::CommandOutputs::root())?;
 
     if let Some(database) = database {
         workspace.protect(database)?;

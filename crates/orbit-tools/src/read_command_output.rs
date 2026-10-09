@@ -1,17 +1,11 @@
-use std::{
-    io::Read,
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::{io::Read, path::PathBuf};
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
-use orbit_runtime::execution::MAX_RETAINED_OUTPUT_PER_STREAM;
+use orbit_runtime::execution::{MAX_RETAINED_OUTPUT_PER_STREAM, output::CommandOutputs};
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-
-pub type CommandOutputDirectory = Arc<RwLock<PathBuf>>;
 
 use crate::limits::MAX_TEXT_OUTPUT_BYTES;
 
@@ -51,15 +45,14 @@ impl Stream {
     }
 }
 
-/// Read a bounded page of a prior run_command invocation's host-side log.
-/// The directory is session-scoped and changes with /new and /resume.
+/// Read a bounded page of a command in the current task's temporary log store.
 pub struct ReadCommandOutput {
-    directory: CommandOutputDirectory,
+    outputs: CommandOutputs,
 }
 
 impl ReadCommandOutput {
-    pub fn new(directory: CommandOutputDirectory) -> Self {
-        Self { directory }
+    pub fn new(outputs: CommandOutputs) -> Self {
+        Self { outputs }
     }
 }
 
@@ -71,7 +64,7 @@ impl Tool for ReadCommandOutput {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_command_output",
-            "Read one page of a previous run_command stdout or stderr log. run_command returns an output_id when retained output is available. offset and max_bytes are byte counts; use the returned next_offset to continue across UTF-8 boundaries. Use them to inspect the beginning, middle, or later portions without placing an entire build log in context. Logs are private to the current Orbit session, retained outside the project, capped at 16 MiB per stream and 128 MiB per session, and may be evicted when newer command logs need space.",
+            "Read one page of a run_command stdout or stderr log from the CURRENT task. run_command returns an opaque output_id; never guess file paths. offset and max_bytes are byte counts; use next_offset to continue across UTF-8 boundaries. Logs are private temporary files under /tmp, capped at 16 MiB per stream and 128 MiB per task, and may be evicted when newer logs need space. They are deleted when the task finishes, fails or is cancelled, and are unavailable after restart or in a later task. Do not retry expired IDs; use the bounded result already in history or ask before rerunning a command.",
             json!({
                 "type": "object",
                 "properties": {
@@ -102,13 +95,13 @@ impl Tool for ReadCommandOutput {
                 return Err(ToolError::Cancelled);
             }
 
-            let directory = self
-                .directory
-                .read()
-                .expect("command output lock poisoned")
-                .clone();
+            let lease = self.outputs.lease().ok_or_else(|| failed(
+                "command output is unavailable or expired; raw logs exist only during their originating task",
+            ))?;
             let token = cancellation.clone();
-            let task = tokio::task::spawn_blocking(move || read(directory, arguments, token));
+            let task = tokio::task::spawn_blocking(move || {
+                read(lease.path().to_owned(), arguments, token)
+            });
 
             tokio::select! {
                 _ = cancellation.cancelled() => Err(ToolError::Cancelled),
@@ -156,7 +149,7 @@ fn read(
     let path = directory.join(name);
     let metadata = std::fs::symlink_metadata(&path).map_err(|_| {
         ToolError::ExecutionFailed(
-            "command output was not found; it may have been evicted or was not retained".into(),
+            "command output was not found in the current task; it may have expired, been evicted or was not retained. Do not automatically rerun the command".into(),
         )
     })?;
 
@@ -249,6 +242,66 @@ fn failed(error: impl std::fmt::Display) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn temporary_output_api_is_task_scoped_and_does_not_reopen_expired_ids() {
+        let outputs = CommandOutputs::default();
+        let tool = ReadCommandOutput::new(outputs.clone());
+        let task = outputs.begin_run().unwrap();
+        let log = outputs.create_log().await.unwrap();
+        let id = log.id().to_owned();
+        let path = outputs.lease().unwrap().path().to_owned();
+        std::fs::write(path.join(format!("{id}.stdout")), "甲乙丙").unwrap();
+        drop(log);
+        let call = |offset| {
+            ToolCall::function(
+                "page",
+                "read_command_output",
+                json!({
+                    "output_id":id,"offset":offset,"max_bytes":4
+                }),
+            )
+        };
+        let first = tool
+            .execute(call(0), CancellationToken::new())
+            .await
+            .unwrap();
+        let first: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(first["content"], "甲");
+        let second = tool
+            .execute(
+                call(first["next_offset"].as_u64().unwrap()),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&second).unwrap()["content"],
+            "乙"
+        );
+        let other = ReadCommandOutput::new(CommandOutputs::default());
+        assert!(
+            other
+                .execute(call(0), CancellationToken::new())
+                .await
+                .is_err()
+        );
+
+        drop(task);
+        assert!(!path.exists());
+        let error = tool
+            .execute(call(0), CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("expired"));
+        let _next = outputs.begin_run().unwrap();
+        let _log = outputs.create_log().await.unwrap();
+        assert!(
+            tool.execute(call(0), CancellationToken::new())
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn rejects_traversal_and_accepts_opaque_ids() {

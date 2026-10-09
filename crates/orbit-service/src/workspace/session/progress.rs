@@ -49,16 +49,14 @@ impl Progress {
     pub async fn snapshot(
         &self,
         tools: &ToolRegistry,
-        output: &orbit_tools::run_command::CommandOutputDirectory,
+        output: &orbit_runtime::execution::output::CommandOutputs,
     ) -> Vec<ToolProgress> {
         if self.calls.is_empty() {
             return Vec::new();
         }
         let calls = self.calls.clone();
         let tools = tools.clone();
-        let Ok(directory) = output.read().map(|directory| directory.clone()) else {
-            return Vec::new();
-        };
+        let lease = output.lease();
         tokio::task::spawn_blocking(move || {
             calls
                 .into_iter()
@@ -68,7 +66,10 @@ impl Progress {
                         let stdout = jobs
                             .output_id_for_call(&call_id)
                             .and_then(|id| {
-                                crate::tools::command_output::read_command_stdout(&directory, &id)
+                                crate::tools::command_output::read_command_stdout(
+                                    lease.as_ref()?.path(),
+                                    &id,
+                                )
                             })
                             .filter(|text| !text.is_empty());
                         let elapsed = jobs
@@ -109,12 +110,14 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn command_progress_follows_current_stdout_and_stops_when_the_call_finishes() {
-        let directory = tempfile::tempdir().unwrap();
+        let output = orbit_runtime::execution::output::CommandOutputs::default();
+        let _task = output.begin_run().unwrap();
+        let _log = output.create_log().await.unwrap();
+        let directory = output.lease().unwrap();
         let tools = ToolRegistry::default();
         tools
             .background_jobs()
             .track_output("active-call", "cmd-orbit-preview");
-        let output = std::sync::Arc::new(std::sync::RwLock::new(directory.path().to_path_buf()));
         let call = orbit_model::types::ToolCall::function(
             "active-call",
             "run_command",

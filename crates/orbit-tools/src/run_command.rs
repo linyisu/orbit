@@ -7,9 +7,7 @@ use orbit_agent::{
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::{
     RuntimeError,
-    execution::{
-        ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, OutputLog, execution_backend,
-    },
+    execution::{ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, execution_backend},
     filesystem::Workspace,
 };
 use serde::Deserialize;
@@ -22,14 +20,12 @@ use crate::approval::{
 };
 use crate::limits::DEFAULT_FILE_SCAN_BYTES;
 
-pub type CommandOutputDirectory = crate::read_command_output::CommandOutputDirectory;
-
 #[derive(Clone)]
 pub struct RunCommand {
     workspace: Workspace,
     approvals: ApprovalSender,
     limits: CommandLimits,
-    output_directory: Option<CommandOutputDirectory>,
+    output_store: Option<orbit_runtime::execution::output::CommandOutputs>,
     jobs: Option<BackgroundJobs>,
 }
 
@@ -149,7 +145,7 @@ impl RunCommand {
             workspace,
             approvals,
             limits,
-            output_directory: None,
+            output_store: None,
             jobs: None,
         }
     }
@@ -159,8 +155,11 @@ impl RunCommand {
         self
     }
 
-    pub fn with_output_directory(mut self, output_directory: CommandOutputDirectory) -> Self {
-        self.output_directory = Some(output_directory);
+    pub fn with_output_store(
+        mut self,
+        output_store: orbit_runtime::execution::output::CommandOutputs,
+    ) -> Self {
+        self.output_store = Some(output_store);
         self
     }
 }
@@ -174,7 +173,7 @@ impl Tool for RunCommand {
         ToolDefinition::function(
             "run_command",
             format!(
-                "Run a command with the target user's shell, real working directory, HOME and development environment. There is no filesystem or network sandbox. workspace_access and network declare intended effects for approval, not OS restrictions. Use real host paths and save generated files directly in the project or a user-specified location. Outputs belong to the user; Orbit does not export or clean project artifacts. Use native Git with the target user's configured SSH or HTTPS authentication. Auto mode automatically approves all commands started in the workspace, including scripts and networked commands. Ask mode requests confirmation; Yolo approves automatically. Approval does not restrict a native command to its starting directory. Timeout, cancellation, bounded output and process resource limits apply. background=true returns a managed job_id; use wait_commands when idle and read_command_output for retained output. Jobs do not survive a service restart. Verification commands: {}.",
+                "Run a command with the target user's shell, real working directory, HOME and development environment. There is no filesystem or network sandbox. workspace_access and network declare intended effects for approval, not OS restrictions. Use real host paths and save generated files directly in the project or a user-specified location. Outputs belong to the user; Orbit does not export or clean project artifacts. Use native Git with the target user's configured SSH or HTTPS authentication. Auto mode automatically approves all commands started in the workspace, including scripts and networked commands. Ask mode requests confirmation; Yolo approves automatically. Approval does not restrict a native command to its starting directory. Timeout, cancellation, bounded output and process resource limits apply. background=true returns a managed job_id; use wait_commands when idle and read_command_output for temporary raw output during this task. Raw logs are deleted when this task ends; only bounded tool results remain in history. Jobs do not survive a service restart. Verification commands: {}.",
                 serde_json::to_string(&self.limits.verification_commands).unwrap_or_default()
             ),
             json!({
@@ -328,15 +327,8 @@ impl Tool for RunCommand {
                 ));
             }
 
-            let output_log = match &self.output_directory {
-                Some(directory) => {
-                    let directory = directory
-                        .read()
-                        .expect("command output lock poisoned")
-                        .clone();
-                    Some(OutputLog::create(&directory).await?)
-                }
-
+            let output_log = match &self.output_store {
+                Some(outputs) => Some(outputs.create_log().await?),
                 None => None,
             };
 

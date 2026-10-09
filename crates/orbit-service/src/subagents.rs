@@ -70,6 +70,7 @@ struct ChildRun {
     child: Agent<Arc<dyn ModelBackend>>,
     request: ChatRequest,
     permit: tokio::sync::OwnedSemaphorePermit,
+    output_run: orbit_runtime::execution::output::OutputRun,
 }
 
 pub fn restrict_child_tools(tools: &mut ToolRegistry) {
@@ -687,6 +688,8 @@ impl Service {
     ) -> Result<ToolOutput> {
         let snapshot = self.store.load(&agent.id).await?;
         let workspace = PathBuf::from(&snapshot.session.workspace);
+        let outputs = orbit_runtime::execution::output::CommandOutputs::default();
+        let output_run = outputs.begin_run()?;
         let runtime = crate::runtime::workspace_tools(
             &workspace,
             &self.config_path,
@@ -699,12 +702,7 @@ impl Service {
             config.web.clone(),
             Default::default(),
             false,
-            Some(Arc::new(std::sync::RwLock::new(
-                self.store
-                    .path()
-                    .with_extension("command-output")
-                    .join(&agent.id),
-            ))),
+            Some(outputs),
             Some(config.permissions.clone()),
         )
         .await?;
@@ -801,6 +799,7 @@ impl Service {
             child,
             request,
             permit,
+            output_run,
         })));
         let queued = child_run.clone();
         let receipt = self.jobs.start(
@@ -865,8 +864,10 @@ impl Service {
             child,
             request,
             permit,
+            output_run,
         } = run;
         let _permit = permit;
+        let _output_run = output_run;
         let started = std::time::Instant::now();
         let execution =
             std::panic::AssertUnwindSafe(child.run(request, cancel.clone())).catch_unwind();

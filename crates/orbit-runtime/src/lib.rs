@@ -10,7 +10,7 @@ pub use capability::{EnvironmentId, FilesystemAccess, FilesystemCapability, Netw
 pub use error::RuntimeError;
 pub use execution::{
     CommandResult, DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_MAX_MEMORY_BYTES, DEFAULT_MAX_OPEN_FILES,
-    MAX_OUTPUT, MAX_RETAINED_OUTPUT_PER_SESSION, MAX_RETAINED_OUTPUT_PER_STREAM, MIB, OutputLog,
+    MAX_OUTPUT, MAX_RETAINED_OUTPUT_PER_RUN, MAX_RETAINED_OUTPUT_PER_STREAM, MIB, OutputLog,
     ProcessLimits, WorkspaceScanLimits, content_hash, fingerprint, fingerprint_configured,
     scan_workspace_summary,
 };

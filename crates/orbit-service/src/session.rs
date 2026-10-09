@@ -93,7 +93,8 @@ pub struct SessionState {
     writer: Option<SessionWriter>,
     persisted: bool,
     pub snapshot: Snapshot,
-    pub command_output: orbit_tools::run_command::CommandOutputDirectory,
+    pub command_output: orbit_runtime::execution::output::CommandOutputs,
+    output_run: Option<orbit_runtime::execution::output::OutputRun>,
     pub git_baseline: Option<serde_json::Value>,
     pub audit_workspace: Option<orbit_runtime::filesystem::Workspace>,
     pub audit_limits: orbit_tools::run_command::CommandLimits,
@@ -259,13 +260,9 @@ impl SessionState {
             git_baseline,
             title_task,
         } = prepared;
-        let id = &snapshot.session.id;
-        let command_output = std::sync::Arc::new(std::sync::RwLock::new(
-            store.path().with_extension("command-output").join(id),
-        ));
-
         Self {
-            command_output,
+            command_output: Default::default(),
+            output_run: None,
             git_baseline,
             store,
             writer,
@@ -491,12 +488,14 @@ impl SessionState {
             return Err(SessionRefreshRequired.into());
         }
 
+        let output_run = self.command_output.begin_run()?;
         if let Err(error) = self.writer.as_mut().unwrap().begin(prompt, model).await {
             self.release_idle_writer();
             return Err(error);
         }
 
         self.active = true;
+        self.output_run = Some(output_run);
         self.journal = None;
         Ok(())
     }
@@ -515,6 +514,9 @@ impl SessionState {
     }
 
     pub async fn finish(&mut self, status: &str, history: Option<Vec<ChatMessage>>) -> Result<()> {
+        // The executor has stopped. A later persistence error must not extend
+        // the lifetime of temporary raw logs or expose them to a future task.
+        self.output_run = None;
         if let Some(journal) = &self.journal {
             journal.flush().await?;
         }
@@ -710,14 +712,7 @@ impl SessionState {
             ws.clear_session_grants();
         }
 
-        *self
-            .command_output
-            .write()
-            .expect("command output lock poisoned") = self
-            .store
-            .path()
-            .with_extension("command-output")
-            .join(self.id());
+        self.output_run = None;
 
         previous
     }

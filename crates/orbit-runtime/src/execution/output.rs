@@ -1,3 +1,6 @@
+mod temporary;
+pub use temporary::{CommandOutputs, OutputLease, OutputRun};
+
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -11,7 +14,7 @@ use crate::error::{RuntimeError, failed};
 
 pub const MAX_OUTPUT: usize = 32 * 1024;
 pub const MAX_RETAINED_OUTPUT_PER_STREAM: u64 = 16 * 1024 * 1024;
-pub const MAX_RETAINED_OUTPUT_PER_SESSION: u64 = 128 * 1024 * 1024;
+pub const MAX_RETAINED_OUTPUT_PER_RUN: u64 = 128 * 1024 * 1024;
 
 static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static OUTPUT_BUDGETS: OnceLock<Mutex<HashMap<PathBuf, Weak<OutputBudget>>>> = OnceLock::new();
@@ -25,6 +28,7 @@ struct OutputBudget {
 struct ActiveLog {
     id: String,
     budget: Arc<OutputBudget>,
+    directory: Option<Arc<temporary::RunDirectory>>,
 }
 
 impl Drop for ActiveLog {
@@ -51,10 +55,10 @@ impl RetainedOutput {
         let used = &self.lease.budget.used;
         let prior = used
             .try_update(Ordering::AcqRel, Ordering::Acquire, |prior| {
-                Some(prior + requested.min(MAX_RETAINED_OUTPUT_PER_SESSION.saturating_sub(prior)))
+                Some(prior + requested.min(MAX_RETAINED_OUTPUT_PER_RUN.saturating_sub(prior)))
             })
             .expect("output budget update always succeeds");
-        let allowed = requested.min(MAX_RETAINED_OUTPUT_PER_SESSION.saturating_sub(prior));
+        let allowed = requested.min(MAX_RETAINED_OUTPUT_PER_RUN.saturating_sub(prior));
         if allowed != 0 {
             self.file.write_all(&bytes[..allowed as usize]).await?;
             self.written += allowed;
@@ -153,6 +157,7 @@ impl OutputLog {
         let lease = Arc::new(ActiveLog {
             id: id.clone(),
             budget,
+            directory: None,
         });
         Ok(Self {
             id,
@@ -220,7 +225,7 @@ fn prune_output_directory(
 
     for (path, size, _) in entries {
         if budget.used.load(Ordering::Acquire)
-            <= MAX_RETAINED_OUTPUT_PER_SESSION.saturating_sub(2 * MAX_RETAINED_OUTPUT_PER_STREAM)
+            <= MAX_RETAINED_OUTPUT_PER_RUN.saturating_sub(2 * MAX_RETAINED_OUTPUT_PER_STREAM)
         {
             break;
         }
@@ -243,7 +248,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn concurrent_logs_share_the_session_byte_budget() {
+    async fn concurrent_logs_share_the_task_byte_budget() {
         let directory = tempfile::tempdir().unwrap();
         let first = OutputLog::create(directory.path()).await.unwrap();
         let second = OutputLog::create(directory.path()).await.unwrap();
@@ -252,7 +257,7 @@ mod tests {
             .lease
             .budget
             .used
-            .store(MAX_RETAINED_OUTPUT_PER_SESSION - 10, Ordering::Release);
+            .store(MAX_RETAINED_OUTPUT_PER_RUN - 10, Ordering::Release);
         let (_, mut first_stdout, first_stderr) = first.split();
         let (_, mut second_stdout, second_stderr) = second.split();
         let (first, second) = tokio::join!(
@@ -264,7 +269,7 @@ mod tests {
         assert_eq!(first_stdout.written() + second_stdout.written(), 10);
         assert_eq!(
             first_stdout.lease.budget.used.load(Ordering::Acquire),
-            MAX_RETAINED_OUTPUT_PER_SESSION
+            MAX_RETAINED_OUTPUT_PER_RUN
         );
         assert!(first_stdout.written() <= 10 && second_stdout.written() <= 10);
         drop((first_stdout, second_stdout, first_stderr, second_stderr));

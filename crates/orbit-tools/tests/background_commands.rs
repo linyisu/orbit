@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::time::Duration;
 
 use orbit_agent::{
     background::{BackgroundJobs, JobStatus},
@@ -20,7 +17,8 @@ use tokio_util::sync::CancellationToken;
 #[tokio::test]
 async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
     let root = tempfile::tempdir().unwrap();
-    let logs = tempfile::tempdir().unwrap();
+    let logs = orbit_runtime::execution::output::CommandOutputs::default();
+    let task = logs.begin_run().unwrap();
     let jobs = BackgroundJobs::default();
     let (sender, mut approvals) = approval::channel();
     let approver = tokio::spawn(async move {
@@ -30,7 +28,7 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
     });
     let command = RunCommand::new(Workspace::new(root.path()).unwrap(), sender)
         .with_background_jobs(jobs.clone())
-        .with_output_directory(Arc::new(RwLock::new(logs.path().to_owned())));
+        .with_output_store(logs.clone());
     let mut ids = Vec::new();
     let mut outputs = Vec::new();
     for name in ["orbit-first", "orbit-second"] {
@@ -96,8 +94,13 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
                 .unwrap()
                 .contains("workspace changed")
         );
-        let log = std::fs::read_to_string(logs.path().join(format!("{}.stdout", outputs[index])))
-            .unwrap();
+        let log = std::fs::read_to_string(
+            logs.lease()
+                .unwrap()
+                .path()
+                .join(format!("{}.stdout", outputs[index])),
+        )
+        .unwrap();
         let own = if index == 0 {
             "orbit-first"
         } else {
@@ -114,6 +117,9 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
     }
 
     drop(command);
+    let log_path = logs.lease().unwrap().path().to_owned();
+    drop(task);
+    assert!(!log_path.exists());
     approver.await.unwrap();
 }
 
@@ -222,13 +228,16 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
 #[tokio::test]
 async fn cancelling_a_live_native_command_waits_for_process_cleanup() {
     let root = tempfile::tempdir().unwrap();
+    let outputs = orbit_runtime::execution::output::CommandOutputs::default();
+    let task = outputs.begin_run().unwrap();
     let jobs = BackgroundJobs::default();
     let (sender, mut approvals) = approval::channel();
     let approver = tokio::spawn(async move {
         approvals.recv().await.unwrap().decision.send(true).unwrap();
     });
     let command = RunCommand::new(Workspace::new(root.path()).unwrap(), sender)
-        .with_background_jobs(jobs.clone());
+        .with_background_jobs(jobs.clone())
+        .with_output_store(outputs.clone());
     let output = command
         .execute(
             ToolCall::function(
@@ -270,6 +279,9 @@ async fn cancelling_a_live_native_command_waits_for_process_cleanup() {
     assert_eq!(completed[0].status, JobStatus::Cancelled);
     assert_eq!(completed[0].result.as_ref().unwrap()["cancelled"], true);
     assert!(!root.path().join("orbit.finished").exists());
+    let directory = outputs.lease().unwrap().path().to_owned();
+    drop(task);
+    assert!(!directory.exists());
 }
 
 #[tokio::test]
