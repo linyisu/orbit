@@ -866,7 +866,10 @@ fn ctrl_o_and_collapse_from_scrolled_details_return_to_the_group_header() {
 }
 
 #[test]
-fn expanded_children_each_have_eight_rows_and_scroll_independently() {
+fn expanded_children_respect_the_body_limit_and_scroll_independently() {
+    use crate::tui::transcript::MAX_TOOL_BODY_ROWS;
+    let first_hidden = format!("{MAX_TOOL_BODY_ROWS:02}");
+    let last_start = 24 - MAX_TOOL_BODY_ROWS;
     let mut state = UiState::new("orbit-model");
     state.transcript = (0..2)
         .map(|i| {
@@ -890,12 +893,17 @@ fn expanded_children_each_have_eight_rows_and_scroll_independently() {
     state.scroll = state.max_scroll;
     let initial = text(&render(&mut state, 90, 50));
     for i in 0..2 {
-        for line in 0..8 {
+        for line in 0..MAX_TOOL_BODY_ROWS {
             assert!(initial.contains(&format!("https://orbit.example/{i}/{line:02}")));
         }
-        assert!(!initial.contains(&format!("https://orbit.example/{i}/08")));
+        assert!(!initial.contains(&format!("https://orbit.example/{i}/{first_hidden}")));
     }
-    assert_eq!(initial.matches("1–8 / 24").count(), 2);
+    assert_eq!(
+        initial
+            .matches(&format!("1–{MAX_TOOL_BODY_ROWS} / 24"))
+            .count(),
+        2
+    );
     let area = state.selection.viewport;
     let child_point = (area.y..area.bottom())
         .find_map(|y| {
@@ -921,15 +929,15 @@ fn expanded_children_each_have_eight_rows_and_scroll_independently() {
         let shown = text(&render(&mut state, 90, 50));
         assert_eq!((state.scroll, state.max_scroll, state.follow_bottom), outer);
         assert!(shown.contains("https://orbit.example/0/00"));
-        assert!(!shown.contains("https://orbit.example/0/08"));
+        assert!(!shown.contains(&format!("https://orbit.example/0/{first_hidden}")));
     }
     let shown = text(&render(&mut state, 90, 50));
-    assert!(shown.contains("17–24 / 24"));
+    assert!(shown.contains(&format!("{}–24 / 24", last_start + 1)));
     assert_eq!(
         state.transcript_layout.link_at(area, 0, child_point),
-        Some("https://orbit.example/1/16")
+        Some(format!("https://orbit.example/1/{last_start:02}").as_str())
     );
-    assert!(!shown.contains("https://orbit.example/1/15"));
+    assert!(!shown.contains(&format!("https://orbit.example/1/{:02}", last_start - 1)));
     assert!(shown.contains("https://orbit.example/1/23"));
 
     // Outside the tool body, the transcript still owns the wheel.

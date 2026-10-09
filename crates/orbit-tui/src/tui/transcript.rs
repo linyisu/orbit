@@ -15,6 +15,8 @@ use unicode_width::UnicodeWidthStr;
 use super::{app::TranscriptItem, render, theme::THEME};
 
 mod tool_viewport;
+#[cfg(test)]
+pub(super) use tool_viewport::MAX_TOOL_BODY_ROWS;
 use tool_viewport::ToolViewport;
 
 #[derive(Debug, Clone, Default)]

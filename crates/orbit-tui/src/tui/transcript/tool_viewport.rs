@@ -2,7 +2,7 @@
 //! Scrolling reuses parsed rows, including their link, syntax and media metadata.
 use super::*;
 
-const MAX_TOOL_BODY_ROWS: usize = 15;
+pub(in crate::tui) const MAX_TOOL_BODY_ROWS: usize = 15;
 
 #[derive(Debug)]
 pub(super) struct ToolViewport {

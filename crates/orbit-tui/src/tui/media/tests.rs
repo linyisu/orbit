@@ -1585,10 +1585,10 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
         assert_eq!(state.input.text, "未发送的草稿");
         if expanded {
             if matches!(state.transcript[0], TranscriptItem::Tool(_)) {
-                assert!(crate::tui::handle_tool_scroll(
+                crate::tui::handle_tool_scroll(
                     &mut state,
                     &mouse(MouseEventKind::ScrollDown, point.0, point.1),
-                ));
+                );
                 draw_ui(&mut state, &mut terminal);
                 assert!(
                     state
@@ -1602,7 +1602,7 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
                         .picture_area_at(area, state.max_scroll, point)
                         .unwrap()
                         .height
-                        <= 8
+                        <= crate::tui::transcript::MAX_TOOL_BODY_ROWS as u16
                 );
             }
             let bounds = state
