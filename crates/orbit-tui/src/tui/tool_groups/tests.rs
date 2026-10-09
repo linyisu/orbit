@@ -866,6 +866,115 @@ fn ctrl_o_and_collapse_from_scrolled_details_return_to_the_group_header() {
 }
 
 #[test]
+fn expanding_a_bottom_tool_reveals_its_content_without_jumping_to_later_messages() {
+    // Standalone cards, group headings and second-level children use the same
+    // reveal behavior, both at the end of a run and while browsing history.
+    for kind in 0..3 {
+        for later_messages in [false, true] {
+            let mut state = UiState::new("orbit-model");
+            state
+                .transcript
+                .push(TranscriptItem::Assistant("earlier\n".repeat(60)));
+            let calls = if kind == 0 { 1 } else { 2 };
+            state.transcript.extend((0..calls).map(|i| {
+                let mut item = tool(i, "read_file", ToolStatus::Finished);
+                let TranscriptItem::Tool(row) = &mut item else {
+                    unreachable!()
+                };
+                row.output = (0..30).map(|n| format!("detail {n}\n")).collect();
+                item
+            }));
+            let after = state.transcript.len();
+            if later_messages {
+                state
+                    .transcript
+                    .push(TranscriptItem::Assistant("later\n".repeat(100)));
+            }
+            if kind == 2 {
+                state.expanded_tool_groups.insert(1);
+            }
+            render(&mut state, 90, 30);
+            let index = if kind == 2 { 2 } else { 1 };
+            let group = kind == 1;
+            let start = state.transcript_layout.item_offset(index).unwrap();
+            let height = usize::from(state.selection.viewport.height);
+            let old_offset = start.saturating_sub(height - 3).min(state.max_scroll);
+            state.follow_bottom = false;
+            state.scroll = state.max_scroll - old_offset;
+            render(&mut state, 90, 30);
+            let clicked = point(&state, index, group);
+            assert!(super::super::toggle_transcript_at(&mut state, clicked));
+            let shown = text(&render(&mut state, 90, 30));
+            let offset = state.max_scroll - state.scroll;
+            let end = state
+                .transcript_layout
+                .item_offset(if group { after } else { index + 1 })
+                .unwrap_or_else(|| state.transcript_layout.height());
+            assert!(
+                offset > old_offset,
+                "expansion at the bottom must move down"
+            );
+            assert!(
+                end <= offset + height,
+                "the expanded card fits inside the viewport"
+            );
+            assert!(start >= offset, "its title must remain visible");
+            if !group {
+                assert!(shown.contains("detail 14"), "{shown}");
+            }
+            if later_messages {
+                assert!(
+                    state.scroll > 0,
+                    "opening history must not jump to the live bottom"
+                );
+            }
+            render(&mut state, 90, 30);
+            assert_eq!(
+                state.max_scroll - state.scroll,
+                offset,
+                "redraw must not jump again"
+            );
+        }
+    }
+}
+
+#[test]
+fn expanding_visible_content_does_not_scroll_and_oversized_groups_keep_their_title() {
+    for calls in [2, 40] {
+        let mut state = UiState::new("orbit-model");
+        state
+            .transcript
+            .push(TranscriptItem::Assistant("earlier\n".repeat(60)));
+        state
+            .transcript
+            .extend((0..calls).map(|i| tool(i, "read_file", ToolStatus::Finished)));
+        state
+            .transcript
+            .push(TranscriptItem::Assistant("later\n".repeat(100)));
+        render(&mut state, 90, 30);
+        let start = state.transcript_layout.item_offset(1).unwrap();
+        let old_offset = start - 2;
+        state.follow_bottom = false;
+        state.scroll = state.max_scroll - old_offset;
+        render(&mut state, 90, 30);
+        let clicked = point(&state, 1, true);
+        assert!(super::super::toggle_transcript_at(&mut state, clicked));
+        render(&mut state, 90, 30);
+        let offset = state.max_scroll - state.scroll;
+        assert_eq!(
+            offset,
+            if calls == 2 {
+                old_offset
+            } else {
+                state.transcript_layout.item_offset(1).unwrap()
+            }
+        );
+        let heading = point(&state, 1, true);
+        assert!(state.selection.viewport.contains(heading.into()));
+    }
+}
+
+#[test]
 fn expanded_children_respect_the_body_limit_and_scroll_independently() {
     use crate::tui::transcript::MAX_TOOL_BODY_ROWS;
     let first_hidden = format!("{MAX_TOOL_BODY_ROWS:02}");

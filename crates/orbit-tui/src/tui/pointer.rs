@@ -273,18 +273,21 @@ pub(super) fn toggle_transcript(state: &mut UiState, index: usize, group: bool) 
         &mut state.expanded
     };
     let collapsing = expanded.contains(&index);
+    let viewport_height = usize::from(state.selection.viewport.height);
     let start = state.transcript_layout.item_offset(index).unwrap_or(offset);
+    let after = if group {
+        state
+            .transcript_layout
+            .group_range(index)
+            .map_or(index + 1, |range| range.end)
+    } else {
+        index + 1
+    };
     let end = state
         .transcript_layout
-        .item_offset(if group {
-            state
-                .transcript_layout
-                .group_range(index)
-                .map_or(index + 1, |range| range.end)
-        } else {
-            index + 1
-        })
+        .item_offset(after)
         .unwrap_or_else(|| state.transcript_layout.height());
+    let visible = start < offset.saturating_add(viewport_height) && end > offset;
     let viewport_in_collapsing_item = collapsing && (start..end).contains(&offset);
     if collapsing {
         expanded.remove(&index);
@@ -311,13 +314,25 @@ pub(super) fn toggle_transcript(state: &mut UiState, index: usize, group: bool) 
         .transcript_layout
         .height()
         .saturating_sub(usize::from(state.selection.viewport.height));
-    let target = if viewport_in_collapsing_item {
+    let mut target = if viewport_in_collapsing_item {
         state.transcript_layout.item_offset(index).unwrap_or(offset)
     } else {
         anchor
             .and_then(|anchor| state.transcript_layout.offset_for_anchor(anchor))
             .unwrap_or(offset)
     };
+
+    if !collapsing && visible {
+        let start = state.transcript_layout.item_offset(index).unwrap_or(start);
+        let end = state
+            .transcript_layout
+            .item_offset(after)
+            .unwrap_or_else(|| state.transcript_layout.height());
+        // Reveal newly inserted rows with the smallest downward movement. For
+        // cards taller than the viewport, keep their title instead of jumping
+        // to the tail of their output (or to unrelated later messages).
+        target = target.max(end.saturating_sub(viewport_height).min(start));
+    }
 
     state.scroll = state.max_scroll.saturating_sub(target);
 }
