@@ -225,10 +225,6 @@ impl Actor {
 
     async fn command(&mut self, command: Command) -> Result<()> {
         match command {
-            Command::Persist => {
-                self.setup.start_session().await?;
-                self.profile().await;
-            }
             Command::Plan { action } => {
                 use orbit_protocol::plan::Action;
                 if matches!(action, Action::Enable | Action::Enter) {

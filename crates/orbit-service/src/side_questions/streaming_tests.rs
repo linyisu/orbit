@@ -61,18 +61,7 @@ async fn settle(questions: &mut SideQuestions) {
 }
 
 #[tokio::test]
-async fn streaming_preserves_main_run_and_persists_for_reopen() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
-    let mut writer = store
-        .create(dir.path().display().to_string(), "orbit-fast".into(), false)
-        .await
-        .unwrap();
-    writer
-        .begin("Orbit 主任务".into(), "orbit-fast".into())
-        .await
-        .unwrap();
-    let before = store.load(writer.id()).await.unwrap();
+async fn streaming_applies_model_options_and_keeps_answer_until_cleared() {
     let (sender, receiver) = mpsc::channel(16);
     let backend = Arc::new(StreamingModel {
         receiver: Mutex::new(Some(receiver)),
@@ -81,16 +70,16 @@ async fn streaming_preserves_main_run_and_persists_for_reopen() {
     let mut questions = SideQuestions::default();
     questions
         .start(
-            &store,
-            writer.id(),
             &client(),
-            &[ChatMessage::system("Orbit 系统提示")],
+            &[
+                ChatMessage::system("Orbit 系统提示"),
+                ChatMessage::user("main context"),
+            ],
             "解释一下",
             20_000,
             backend.clone(),
             None,
         )
-        .await
         .unwrap();
     sender
         .send(Ok(StreamEvent::TextDelta("中文回答".into())))
@@ -112,28 +101,19 @@ async fn streaming_preserves_main_run_and_persists_for_reopen() {
         assert!(sent[0].tools.is_empty());
         assert_eq!(sent[0].max_tokens, Some(8192));
         assert_eq!(sent[0].reasoning_effort, Some(ReasoningEffort::High));
+        assert!(
+            sent[0]
+                .messages
+                .contains(&ChatMessage::user("main context"))
+        );
     }
-    let after = store.load(writer.id()).await.unwrap();
-    assert_eq!(before.history, after.history);
-    assert_eq!(after.runs[0].status, "running");
-    let mut reopened = SideQuestions::default();
-    reopened.load(&store, writer.id()).await.unwrap();
-    assert_eq!(reopened.records()[0].answer, "中文回答");
-    assert!(!reopened.running());
+    questions.clear();
+    assert!(questions.records().is_empty());
+    assert!(SideQuestions::default().records().is_empty());
 }
 
 #[tokio::test]
 async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
-    let mut writer = store
-        .create(dir.path().display().to_string(), "orbit-fast".into(), false)
-        .await
-        .unwrap();
-    writer
-        .begin("Orbit 主任务".into(), "orbit-fast".into())
-        .await
-        .unwrap();
     let (sender, receiver) = mpsc::channel(16);
     let backend = Arc::new(StreamingModel {
         receiver: Mutex::new(Some(receiver)),
@@ -141,17 +121,7 @@ async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
     });
     let mut questions = SideQuestions::default();
     questions
-        .start(
-            &store,
-            writer.id(),
-            &client(),
-            &[],
-            "取消问题",
-            4096,
-            backend,
-            None,
-        )
-        .await
+        .start(&client(), &[], "取消问题", 4096, backend, None)
         .unwrap();
     assert!(questions.cancel(0));
     settle(&mut questions).await;
@@ -168,8 +138,6 @@ async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
 
     questions
         .start(
-            &store,
-            writer.id(),
             &client(),
             &[],
             "需要工具",
@@ -177,7 +145,6 @@ async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
             Arc::new(calls.clone()),
             None,
         )
-        .await
         .unwrap();
     settle(&mut questions).await;
     assert_eq!(questions.records()[1].status, "failed");
@@ -188,38 +155,16 @@ async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
             .unwrap()
             .contains("尝试调用工具")
     );
-    assert!(!dir.path().join("orbit.rs").exists());
     assert_eq!(calls.requests().len(), 1);
-    assert_eq!(
-        store.load(writer.id()).await.unwrap().runs[0].status,
-        "running"
-    );
-    assert_eq!(store.side_questions(writer.id()).await.unwrap().len(), 2);
 }
 
 #[tokio::test]
 async fn independent_questions_do_not_import_other_side_answers() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
-    let writer = store
-        .create(dir.path().display().to_string(), "orbit-fast".into(), false)
-        .await
-        .unwrap();
     let backend = MockModel::new([completion("第一个独立回答"), completion("第二个独立回答")]);
     let mut questions = SideQuestions::default();
     for text in ["第一个问题", "第二个问题"] {
         questions
-            .start(
-                &store,
-                writer.id(),
-                &client(),
-                &[],
-                text,
-                4096,
-                Arc::new(backend.clone()),
-                None,
-            )
-            .await
+            .start(&client(), &[], text, 4096, Arc::new(backend.clone()), None)
             .unwrap();
         settle(&mut questions).await;
     }
@@ -229,18 +174,10 @@ async fn independent_questions_do_not_import_other_side_answers() {
             .unwrap()
             .contains("第一个独立回答")
     );
-    assert!(store.load(writer.id()).await.unwrap().runs.is_empty());
 }
 
 #[tokio::test]
-async fn follow_ups_keep_their_thread_after_restart_and_leave_other_questions_independent() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
-    let writer = store
-        .create(dir.path().display().to_string(), "orbit-fast".into(), false)
-        .await
-        .unwrap();
-    let before = store.load(writer.id()).await.unwrap();
+async fn follow_ups_keep_their_live_thread_and_leave_other_questions_independent() {
     let backend = MockModel::new([
         completion("Orbit 原回答"),
         completion("Orbit 另一回答"),
@@ -250,8 +187,6 @@ async fn follow_ups_keep_their_thread_after_restart_and_leave_other_questions_in
     for prompt in ["Orbit 原问题", "Orbit 另一问题"] {
         questions
             .start(
-                &store,
-                writer.id(),
                 &client(),
                 &[],
                 prompt,
@@ -259,29 +194,12 @@ async fn follow_ups_keep_their_thread_after_restart_and_leave_other_questions_in
                 Arc::new(backend.clone()),
                 None,
             )
-            .await
             .unwrap();
         settle(&mut questions).await;
     }
 
-    let mut restored = SideQuestions::default();
-    restored
+    questions
         .start(
-            &store,
-            writer.id(),
-            &client(),
-            &[],
-            "",
-            4096,
-            Arc::new(backend.clone()),
-            None,
-        )
-        .await
-        .unwrap();
-    restored
-        .start(
-            &store,
-            writer.id(),
             &client(),
             &[],
             "再解释 Orbit",
@@ -289,51 +207,32 @@ async fn follow_ups_keep_their_thread_after_restart_and_leave_other_questions_in
             Arc::new(backend.clone()),
             Some(0),
         )
-        .await
         .unwrap();
-    settle(&mut restored).await;
+    settle(&mut questions).await;
     assert_eq!(
-        restored.records()[0].thread_id,
-        restored.records()[2].thread_id
+        questions.records()[0].thread_id,
+        questions.records()[2].thread_id
     );
     assert_ne!(
-        restored.records()[1].thread_id,
-        restored.records()[2].thread_id
+        questions.records()[1].thread_id,
+        questions.records()[2].thread_id
     );
     let sent = serde_json::to_string(&backend.requests()[2].messages).unwrap();
     for expected in ["Orbit 原问题", "Orbit 原回答", "再解释 Orbit"] {
         assert!(sent.contains(expected));
     }
     assert!(!sent.contains("Orbit 另一回答"));
-    let after = store.load(writer.id()).await.unwrap();
-    assert_eq!(before.history, after.history);
-    assert!(after.runs.is_empty());
-    let mut again = SideQuestions::default();
-    again
-        .start(
-            &store,
-            writer.id(),
-            &client(),
-            &[],
-            "",
-            4096,
-            Arc::new(backend),
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(again.records().len(), 3);
-    assert_eq!(again.records()[0].thread_id, again.records()[2].thread_id);
+    questions.clear();
+    assert!(questions.records().is_empty());
+    assert!(
+        questions
+            .start(&client(), &[], "", 4096, Arc::new(backend), None)
+            .is_err()
+    );
 }
 
 #[tokio::test]
 async fn interrupted_or_empty_streams_preserve_partial_answers_and_fail_locally() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
-    let writer = store
-        .create(dir.path().display().to_string(), "orbit-fast".into(), false)
-        .await
-        .unwrap();
     let (sender, receiver) = mpsc::channel(16);
     let backend = Arc::new(StreamingModel {
         receiver: Mutex::new(Some(receiver)),
@@ -341,17 +240,7 @@ async fn interrupted_or_empty_streams_preserve_partial_answers_and_fail_locally(
     });
     let mut questions = SideQuestions::default();
     questions
-        .start(
-            &store,
-            writer.id(),
-            &client(),
-            &[],
-            "问题",
-            4096,
-            backend,
-            None,
-        )
-        .await
+        .start(&client(), &[], "问题", 4096, backend, None)
         .unwrap();
     sender
         .send(Ok(StreamEvent::TextDelta("已生成部分".into())))
@@ -363,17 +252,7 @@ async fn interrupted_or_empty_streams_preserve_partial_answers_and_fail_locally(
     assert_eq!(questions.records()[0].status, "failed");
     let backend = MockModel::new([completion("")]);
     questions
-        .start(
-            &store,
-            writer.id(),
-            &client(),
-            &[],
-            "空回答",
-            4096,
-            Arc::new(backend),
-            None,
-        )
-        .await
+        .start(&client(), &[], "空回答", 4096, Arc::new(backend), None)
         .unwrap();
     settle(&mut questions).await;
     assert!(
@@ -383,4 +262,35 @@ async fn interrupted_or_empty_streams_preserve_partial_answers_and_fail_locally(
             .unwrap()
             .contains("未返回旁路回答")
     );
+}
+
+#[tokio::test]
+async fn clearing_a_running_question_closes_the_stream_and_drops_all_records() {
+    let (sender, receiver) = mpsc::channel(16);
+    let backend = Arc::new(StreamingModel {
+        receiver: Mutex::new(Some(receiver)),
+        requests: Mutex::new(vec![]),
+    });
+    let mut questions = SideQuestions::default();
+    questions
+        .start(&client(), &[], "question", 4096, backend.clone(), None)
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while backend.requests.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    sender
+        .send(Ok(StreamEvent::TextDelta("partial answer".into())))
+        .await
+        .unwrap();
+    questions.clear();
+    tokio::time::timeout(Duration::from_secs(5), sender.closed())
+        .await
+        .unwrap();
+    assert!(!questions.running());
+    assert!(!questions.poll());
+    assert!(questions.records().is_empty());
 }

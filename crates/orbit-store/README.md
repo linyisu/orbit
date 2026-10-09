@@ -10,7 +10,7 @@
 - [database.rs](src/database.rs)：SeaORM 连接池、只读连接和跨进程写入调度；[database/sqlite.rs](src/database/sqlite.rs) 集中处理 SQLite 特有的版本及外键 PRAGMA。
 - [store.rs](src/store.rs)：会话和项目的存储接口。
 - [store/writer.rs](src/store/writer.rs)：运行开始、journal 创建、消息与子任务结果的事务性终态提交。`SessionWriter` 的公共接口和租约所有权保持不变。
-- [session_log.rs](src/session_log.rs)、[execution.rs](src/execution.rs)：规范消息、检查点和持久化接口；[subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs) 分别存储子代理与旁路对话。
+- [session_log.rs](src/session_log.rs)、[execution.rs](src/execution.rs)：规范消息、检查点和持久化接口；[subagents.rs](src/subagents.rs) 存储子代理；[live_context.rs](src/live_context.rs) 只读获取当前执行上下文。
 
 迁移回归在 [tests/migrations.rs](tests/migrations.rs)，验证每个已发布版本升级后的数据、列、外键、索引、幂等性及失败回滚。旧 SQL 仅存于 `tests/fixtures/schema`，作为独立的历史数据库样本生成器，不进入生产迁移；仓库不保存数据库二进制模板。历史恢复回归在 [tests/sessions.rs](tests/sessions.rs)。流式 journal 的 250 ms / 256 条提交触发策略由 `orbit-agent` 维护，store 负责执行相应事务。
 
@@ -39,7 +39,7 @@ orbit.db
 ├── agent_sessions            # 父子会话关系及只读角色
 ├── agent_invocations         # 子任务调用、持久结果与投递确认
 ├── agent_messages            # 子任务补充消息与接收确认
-├── side_questions            # 独立的旁路提问与回答，不进入主会话上下文
+├── side_questions            # 历史版本遗留表，新旁路对话不写入此表
 ├── workspace_requests        # 工作区请求 ID、内容指纹及接收结果，重接和重启后去重
 ├── execution_checkpoints     # 工具调用执行检查点 (用于故障中断识别)
 └── tui_windows               # 活跃 TUI 窗口注册与跨会话恢复快照
@@ -125,4 +125,4 @@ orbit-cli sessions compactions <SESSION_ID>
 cargo test -p orbit-store --offline
 ```
 
-旁路提问使用独立的 `side_questions` 表，保存已结束的问题、回答和状态，不追加到主会话的消息日志或模型历史。当前旁路上下文通过只读事务读取原始执行检查点与流式事件，不获取写入租约，不触发中断恢复。删除会话时旁路记录随之删除。
+旁路提问不持久化。`live_context` 通过只读事务读取主会话执行检查点与流式事件，不获取写入租约，不触发中断恢复。历史版本的 `side_questions` 表保留既有数据与存储统计，但不再提供写入或恢复接口。

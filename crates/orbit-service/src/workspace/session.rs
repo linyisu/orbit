@@ -25,7 +25,6 @@ pub struct Handle {
 }
 
 pub enum Command {
-    Persist,
     DiscardDraft {
         result: oneshot::Sender<bool>,
     },

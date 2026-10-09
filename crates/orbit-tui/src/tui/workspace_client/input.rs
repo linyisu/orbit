@@ -127,7 +127,8 @@ impl Tab {
                         self.state.btw.link_error(&error);
                     }
                 }
-                DialogAction::None | DialogAction::Redraw | DialogAction::Close => {}
+                DialogAction::Close => self.close_questions(),
+                DialogAction::None | DialogAction::Redraw => {}
             }
             if let Some(index) = self.state.btw.take_cancel() {
                 self.send(Request::CancelQuestion {

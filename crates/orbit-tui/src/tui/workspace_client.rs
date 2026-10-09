@@ -75,6 +75,7 @@ pub(super) struct Tab {
     reconnect_attempts: u32,
     subagent: Option<subagents::Remote>,
     question_revision: Option<u64>,
+    question_closing: bool,
     question_poll: Option<tokio::sync::oneshot::Receiver<Result<Response>>>,
     submissions: Vec<submissions::Submission>,
     completion_input: String,
@@ -234,6 +235,7 @@ impl Tab {
             reconnect_attempts: 0,
             subagent: None,
             question_revision: None,
+            question_closing: false,
             question_poll: None,
             submissions: Vec::new(),
             completion_input: String::new(),
@@ -834,6 +836,10 @@ impl Tab {
             self.id = None;
         }
         self.abandon_submissions();
+        self.state.btw.clear();
+        self.question_poll = None;
+        self.question_revision = None;
+        self.question_closing = false;
         self.restore_submission();
         if let Some(wizard) = &mut self.state.workspace_wizard {
             wizard.failed = true;

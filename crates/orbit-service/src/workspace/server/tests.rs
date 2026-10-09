@@ -78,7 +78,9 @@ impl Fixture {
     }
 
     async fn request(&self, request: Request) -> Result<Response> {
-        self.service.dispatch(request, &self.service.options).await
+        self.service
+            .dispatch(request, &self.service.options, 0)
+            .await
     }
 
     async fn mode(&self, mode: Mode) -> SessionInfo {
@@ -219,6 +221,7 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
                 path: path.clone(),
             },
             &service.options,
+            0,
         )
         .await
         .unwrap();
@@ -232,7 +235,8 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
                     session: other.info.id.clone(),
                     path,
                 },
-                &service.options
+                &service.options,
+                0
             )
             .await
             .is_err()

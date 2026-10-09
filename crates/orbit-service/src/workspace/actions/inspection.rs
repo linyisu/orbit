@@ -64,7 +64,7 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
         Inspection::Status => report("会话状态", status(setup).await?),
         Inspection::Context => {
             let mut history = if session.is_persisted() {
-                session.store.side_question_context(session.id()).await?
+                session.store.live_context(session.id()).await?
             } else {
                 session.snapshot.history.clone()
             };

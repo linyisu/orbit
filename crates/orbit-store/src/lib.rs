@@ -18,7 +18,7 @@ pub mod tui_windows;
 
 pub mod subagents;
 
-pub mod side_questions;
+pub mod live_context;
 pub mod workspace_requests;
 
 pub mod plans;

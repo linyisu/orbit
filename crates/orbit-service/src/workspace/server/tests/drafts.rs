@@ -61,19 +61,7 @@ async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume
         .unwrap();
     assert!(store.list().await.unwrap().is_empty());
     assert!(store.projects().await.unwrap().is_empty());
-    // Opening and configuring a draft must not create any domain records.
-    let db = rusqlite::Connection::open(store.path()).unwrap();
-    let tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'seaql_migrations'").unwrap()
-        .query_map([], |row| row.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
-    for table in tables {
-        let count: i64 = db
-            .query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(count, 0, "draft wrote records to {table}");
-    }
-    drop(db);
+    assert_no_domain_records(store);
     assert_eq!(fixture.handle.current_info().await.mode, Mode::Yolo);
     assert!(
         fixture
@@ -163,9 +151,15 @@ async fn last_client_releases_only_unstarted_drafts() {
         })
         .await
         .unwrap();
-    fixture.service.release_client(vec![info.id.clone()]).await;
+    fixture
+        .service
+        .release_client(vec![info.id.clone()], 0)
+        .await;
     assert!(fixture.service.session(&info.id).await.is_ok());
-    fixture.service.release_client(vec![info.id.clone()]).await;
+    fixture
+        .service
+        .release_client(vec![info.id.clone()], 0)
+        .await;
     assert!(fixture.service.session(&info.id).await.is_err());
     assert!(fixture.handle.store.list().await.unwrap().is_empty());
 
@@ -194,9 +188,148 @@ async fn last_client_releases_only_unstarted_drafts() {
         .unwrap();
     fixture
         .service
-        .release_client(vec![started.id.clone()])
+        .release_client(vec![started.id.clone()], 0)
         .await;
     assert!(fixture.service.session(&started.id).await.is_ok());
     assert_eq!(fixture.handle.store.list().await.unwrap().len(), 1);
     handle.command(session::Command::Cancel).await.unwrap();
+}
+
+#[tokio::test]
+async fn btw_is_ephemeral_and_last_viewer_close_or_disconnect_discards_it() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let id = fixture.handle.info.id.clone();
+    let request = |viewer, request| {
+        fixture
+            .service
+            .dispatch(request, &fixture.service.options, viewer)
+    };
+    let Response::Questions(initial) = request(
+        10,
+        Request::Ask {
+            session: id.clone(),
+            question: "independent question".into(),
+            follow_up: None,
+        },
+    )
+    .await
+    .unwrap() else {
+        panic!("missing side answer")
+    };
+    assert_eq!(initial.records.unwrap().len(), 1);
+    assert!(fixture.handle.store.list().await.unwrap().is_empty());
+    let Response::Questions(shared) = request(
+        20,
+        Request::OpenQuestions {
+            session: id.clone(),
+        },
+    )
+    .await
+    .unwrap() else {
+        panic!("missing shared answer")
+    };
+    assert_eq!(shared.records.unwrap()[0].question, "independent question");
+
+    // Closing repeatedly, or disconnecting a non-viewer, must not release another viewer.
+    for viewer in [10, 10, 30] {
+        request(
+            viewer,
+            Request::CloseQuestions {
+                session: id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    assert!(
+        request(
+            10,
+            Request::ReadQuestions {
+                session: id.clone(),
+                after: None
+            }
+        )
+        .await
+        .is_err()
+    );
+    let Response::Questions(shared) = request(
+        20,
+        Request::ReadQuestions {
+            session: id.clone(),
+            after: None,
+        },
+    )
+    .await
+    .unwrap() else {
+        panic!("missing shared answer")
+    };
+    assert_eq!(shared.records.unwrap().len(), 1);
+    // A disconnect follows the same release path even when the main session stays open.
+    fixture.service.release_client(vec![], 20).await;
+    assert!(
+        request(
+            20,
+            Request::OpenQuestions {
+                session: id.clone()
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert!(!fixture.handle.questions.running().await);
+    assert!(fixture.handle.store.list().await.unwrap().is_empty());
+    assert!(
+        request(
+            20,
+            Request::Ask {
+                session: id.clone(),
+                question: "stale follow-up".into(),
+                follow_up: Some(0)
+            }
+        )
+        .await
+        .is_err()
+    );
+    let Response::Questions(fresh) = request(
+        20,
+        Request::Ask {
+            session: id.clone(),
+            question: "fresh question".into(),
+            follow_up: None,
+        },
+    )
+    .await
+    .unwrap() else {
+        panic!("missing fresh question")
+    };
+    assert_eq!(fresh.records.unwrap().len(), 1);
+    assert!(fresh.revision > shared.revision);
+    request(
+        20,
+        Request::CloseQuestions {
+            session: id.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        request(20, Request::OpenQuestions { session: id })
+            .await
+            .is_err()
+    );
+    assert_no_domain_records(&fixture.handle.store);
+}
+
+fn assert_no_domain_records(store: &orbit_store::store::Store) {
+    let db = rusqlite::Connection::open(store.path()).unwrap();
+    let tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'seaql_migrations'").unwrap()
+        .query_map([], |row| row.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+    for table in tables {
+        let count: i64 = db
+            .query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "draft wrote records to {table}");
+    }
 }

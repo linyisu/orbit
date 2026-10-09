@@ -87,9 +87,22 @@ async fn failed_permission_persistence_never_publishes_or_confirms_the_change() 
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
     fixture
         .handle
-        .command(session::Command::Persist)
+        .command(session::Command::Start {
+            request_id: "first".into(),
+            prompt: "hello".into(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
         .await
         .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.handle.running().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     let before = fixture.mode(Mode::Ask).await;
     let cursor = fixture.page(0).await.next;
     let db = rusqlite::Connection::open(&fixture.service.options.database).unwrap();

@@ -658,32 +658,13 @@ fn side_question_receipts_open_the_existing_modal_and_keep_main_draft() {
     tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
         .unwrap();
     assert!(!tab.state.btw.visible());
-    assert!(tab.state.btw.running());
-    tab.poll_questions();
-    let call = requests.try_recv().unwrap();
+    assert!(!tab.state.btw.has_records());
     assert!(matches!(
-        call.request,
-        Request::ReadQuestions { after: Some(1), .. }
+        requests.try_recv().unwrap().request,
+        Request::CloseQuestions { .. }
     ));
-    call.reply
-        .unwrap()
-        .send(Ok(Response::Questions(orbit_protocol::Questions {
-            revision: 2,
-            selected: None,
-            running: false,
-            records: Some(vec![orbit_protocol::SideQuestion {
-                thread_id: "one".into(),
-                model: "mock".into(),
-                question: "why?".into(),
-                answer: "done".into(),
-                status: "completed".into(),
-                error: None,
-            }]),
-        })))
-        .unwrap();
     tab.poll_questions();
-    assert!(!tab.state.btw.running());
-    assert!(!tab.state.btw.visible());
+    assert!(requests.try_recv().is_err());
     assert_eq!(tab.state.input.text, "main draft");
 }
 
@@ -1377,4 +1358,67 @@ fn local_commands_and_service_reports_do_not_create_a_conversation_on_home() {
     assert!(tab.state.is_home());
     assert!(tab.state.transcript.is_empty());
     assert_eq!(tab.state.input_area, input_area);
+}
+
+#[test]
+fn closing_btw_drops_late_receipts_and_retries_a_full_transport_queue() {
+    let (mut tab, mut requests) = tab("本地");
+    tab.ask("follow-up".into(), Some(0));
+    let late_reply = requests.try_recv().unwrap().reply.unwrap();
+    tab.poll_questions();
+    // Fill the actual transport queue: closing must eventually reach the server.
+    for _ in 0..CHANNEL_CAPACITY {
+        assert!(tab.send(Request::ReadQuestions {
+            session: "same-session".into(),
+            after: None
+        }));
+    }
+    tab.close_questions();
+    assert!(tab.question_closing);
+    assert!(tab.submissions.is_empty());
+    assert!(
+        late_reply
+            .send(Ok(Response::Questions(orbit_protocol::Questions {
+                revision: 3,
+                selected: Some(0),
+                running: false,
+                records: Some(vec![]),
+            })))
+            .is_err()
+    );
+    requests.try_recv().unwrap();
+    tab.poll_questions();
+    assert!(!tab.question_closing);
+    let mut closes = 0;
+    while let Ok(call) = requests.try_recv() {
+        closes += usize::from(matches!(call.request, Request::CloseQuestions { .. }));
+    }
+    assert_eq!(closes, 1);
+    assert!(!tab.state.btw.visible());
+    assert!(!tab.state.btw.has_records());
+}
+
+#[test]
+fn closing_btw_drops_an_outstanding_poll_without_preserving_a_draft_session() {
+    let (mut tab, mut requests) = tab("本地");
+    tab.ask("why?".into(), None);
+    assert!(!tab.submissions[0].starts_session());
+    requests.try_recv().unwrap();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    tab.question_poll = Some(response);
+    tab.close_questions();
+    assert!(
+        reply
+            .send(Ok(Response::Questions(orbit_protocol::Questions {
+                revision: 3,
+                selected: None,
+                running: true,
+                records: Some(vec![]),
+            })))
+            .is_err()
+    );
+    tab.poll_submissions();
+    tab.poll_questions();
+    assert!(!tab.state.btw.visible());
+    assert!(tab.question_poll.is_none());
 }

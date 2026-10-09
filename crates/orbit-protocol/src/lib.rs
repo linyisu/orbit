@@ -10,10 +10,10 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 11;
-// Configuration snapshots use compact model IDs and explicit overrides.
-// Both ends must understand the same provider schema.
-pub const MIN_COMPATIBLE_VERSION: u32 = 11;
+pub const VERSION: u32 = 12;
+// BTW viewers are connection scoped and must explicitly release ephemeral state.
+// Both ends must implement the same open/close lifecycle.
+pub const MIN_COMPATIBLE_VERSION: u32 = 12;
 
 pub fn supports_version(version: u32) -> bool {
     (MIN_COMPATIBLE_VERSION..=VERSION).contains(&version)
@@ -106,6 +106,12 @@ pub enum Request {
     UserInputHistory {
         session: String,
         before: Option<i64>,
+    },
+    OpenQuestions {
+        session: String,
+    },
+    CloseQuestions {
+        session: String,
     },
     ReadQuestions {
         session: String,

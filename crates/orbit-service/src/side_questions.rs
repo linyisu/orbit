@@ -7,13 +7,15 @@ use orbit_model::{
     client::ModelClient,
     types::{ChatMessage, ChatRequest, ReasoningEffort, StreamEvent},
 };
-use orbit_store::{side_questions::SideQuestion, store::Store};
+use orbit_protocol::SideQuestion;
 use tokio::sync::mpsc;
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 
 const MAX_QUESTION_CHARS: usize = 32_768;
 const MAX_OUTPUT_TOKENS: u32 = 8192;
 const MAX_ANSWER_BYTES: usize = 2 * 1024 * 1024;
+const MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
+const MAX_RECORDS: usize = 64;
 const EVENT_CAPACITY: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -31,7 +33,6 @@ struct Request {
 
 #[derive(Default)]
 pub struct SideQuestions {
-    loaded: bool,
     records: Vec<SideQuestion>,
     request: Option<Request>,
 }
@@ -43,13 +44,10 @@ impl Drop for Request {
 }
 
 impl SideQuestions {
-    pub async fn load(&mut self, store: &Store, session: &str) -> Result<()> {
-        if !self.loaded {
-            store.interrupt_side_questions(session).await?;
-            self.records = store.side_questions(session).await?;
-            self.loaded = true;
-        }
-        Ok(())
+    /// Drop the request before its records so no late stream update can be applied.
+    pub fn clear(&mut self) {
+        self.request = None;
+        self.records = Vec::new();
     }
 
     pub fn records(&self) -> &[SideQuestion] {
@@ -71,11 +69,8 @@ impl SideQuestions {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn start(
+    pub fn start(
         &mut self,
-        store: &Store,
-        session: &str,
         model: &ModelClient,
         history: &[ChatMessage],
         question: &str,
@@ -84,12 +79,9 @@ impl SideQuestions {
         follow_up: Option<usize>,
     ) -> Result<usize> {
         self.poll();
-        self.load(store, session).await?;
 
-        if question.is_empty() {
-            ensure!(!self.records.is_empty(), "没有旁路问题记录。");
-            return Ok(self.records.len() - 1);
-        }
+        let question = question.trim();
+        ensure!(!question.is_empty(), "问题不能为空。");
 
         if self.request.is_some() {
             bail!("旁路问题仍在生成，请先结束当前请求。");
@@ -98,6 +90,18 @@ impl SideQuestions {
             question.chars().count() <= MAX_QUESTION_CHARS,
             "旁路问题过长。"
         );
+        let retained: usize = self
+            .records
+            .iter()
+            .map(|r| r.question.len() + r.answer.len())
+            .sum();
+        let answer_budget = MAX_RETAINED_BYTES
+            .saturating_sub(retained.saturating_add(question.len()))
+            .min(MAX_ANSWER_BYTES);
+        ensure!(
+            self.records.len() < MAX_RECORDS && answer_budget > 0,
+            "旁路对话已达到内存上限，请关闭后重新提问。"
+        );
         let thread_id = if let Some(index) = follow_up {
             self.records
                 .get(index)
@@ -105,7 +109,7 @@ impl SideQuestions {
                 .thread_id
                 .clone()
         } else {
-            store.new_side_question_thread().await?
+            format!("thread-{}", self.records.len())
         };
         let previous = self
             .records
@@ -128,18 +132,11 @@ impl SideQuestions {
             status: "running".into(),
             error: None,
         };
-        let checkpoint = store.begin_side_question(session, &initial).await?;
         self.records.push(initial);
         let cancellation = CancellationToken::new();
         let token = cancellation.clone();
         let (sender, receiver) = mpsc::channel(EVENT_CAPACITY);
-        let store = store.clone();
-        let session = session.to_owned();
-        let systems: Vec<_> = history
-            .iter()
-            .filter(|m| matches!(m, ChatMessage::System { .. }))
-            .cloned()
-            .collect();
+        let context = history.to_vec();
         let mut record = self.records[index].clone();
         let effort = model.config().reasoning_effort;
         let max_tokens = max_tokens.min(MAX_OUTPUT_TOKENS);
@@ -147,7 +144,7 @@ impl SideQuestions {
             let result = tokio::select! {
                 biased;
                 _ = token.cancelled() => { record.status = "cancelled".into(); Ok(()) },
-                result = tokio::time::timeout(REQUEST_TIMEOUT, answer(&store, &session, checkpoint, &systems, &previous, &mut record, backend, effort, max_tokens, &sender, token.clone())) => {
+                result = tokio::time::timeout(REQUEST_TIMEOUT, answer(context, &previous, &mut record, backend, effort, max_tokens, answer_budget, &sender, token.clone())) => {
                     match result { Ok(result) => result, Err(_) => Err(anyhow::anyhow!("旁路提问超过 5 分钟，已停止等待。")) }
                 }
             };
@@ -157,20 +154,6 @@ impl SideQuestions {
                 record.error = Some(format!("{error:#}"));
             } else if record.status == "running" {
                 record.status = "completed".into();
-            }
-
-            if let Err(error) = store
-                .checkpoint_side_question(&session, checkpoint, &record)
-                .await
-            {
-                record.error = Some(format!(
-                    "{}无法保存旁路记录：{error}",
-                    record
-                        .error
-                        .as_ref()
-                        .map(|text| format!("{text}\n"))
-                        .unwrap_or_default()
-                ));
             }
 
             let _ = sender.send(Update::Finished(record)).await;
@@ -291,48 +274,25 @@ pub(crate) fn request(
 
 #[allow(clippy::too_many_arguments)]
 async fn answer(
-    store: &Store,
-    session: &str,
-    checkpoint: i64,
-    systems: &[ChatMessage],
+    context: Vec<ChatMessage>,
     previous: &[ChatMessage],
     record: &mut SideQuestion,
     backend: Arc<dyn ModelBackend>,
     effort: Option<ReasoningEffort>,
     max_tokens: u32,
+    answer_budget: usize,
     sender: &mpsc::Sender<Update>,
     cancellation: CancellationToken,
 ) -> Result<()> {
-    let context = store.side_question_context(session).await?;
     let context = orbit_agent::agent::model_messages(&context, backend.supports_vision());
-    let request = request(
-        context,
-        systems,
-        previous,
-        &record.question,
-        effort,
-        max_tokens,
-    );
+    let request = request(context, &[], previous, &record.question, effort, max_tokens);
     let mut stream = backend.stream(request, cancellation).await?;
     let mut completed = false;
-    let mut flush = tokio::time::interval(Duration::from_secs(1));
-    flush.tick().await;
-    let mut persisted = 0;
-    loop {
-        let event = tokio::select! {
-            event = stream.next() => match event { Some(event) => event, None => break },
-            _ = flush.tick() => {
-                if persisted != record.answer.len() {
-                    store.checkpoint_side_question(session, checkpoint, record).await?;
-                    persisted = record.answer.len();
-                }
-                continue;
-            }
-        };
+    while let Some(event) = stream.next().await {
         match event? {
             StreamEvent::TextDelta(delta) => {
                 ensure!(
-                    record.answer.len().saturating_add(delta.len()) <= MAX_ANSWER_BYTES,
+                    record.answer.len().saturating_add(delta.len()) <= answer_budget,
                     "旁路回答过长，已停止生成。"
                 );
                 record.answer.push_str(&delta);

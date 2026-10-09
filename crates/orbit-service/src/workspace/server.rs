@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -288,13 +288,15 @@ impl Service {
             },
         )
         .await?;
+        static NEXT_CLIENT: AtomicU64 = AtomicU64::new(1);
+        let viewer = NEXT_CLIENT.fetch_add(1, Ordering::Relaxed);
         let mut opened = Vec::new();
         let result = async {
             loop {
                 let request = protocol::read::<Request>(&mut reader).await?;
                 *self.last_activity.lock().await = tokio::time::Instant::now();
                 let shutdown = matches!(request, Request::Shutdown);
-                let response = match self.dispatch(request, &options).await {
+                let response = match self.dispatch(request, &options, viewer).await {
                     Ok(response) => response,
                     Err(error) => Response::Error(format!("{error:#}")),
                 };
@@ -310,13 +312,16 @@ impl Service {
             }
         }
         .await;
-        self.release_client(opened).await;
+        self.release_client(opened, viewer).await;
         result
     }
 
-    async fn release_client(&self, opened: Vec<String>) {
+    async fn release_client(&self, opened: Vec<String>, viewer: u64) {
         let _opening = self.opening.lock().await;
         let mut sessions = self.sessions.lock().await;
+        for handle in sessions.values() {
+            handle.questions.release(viewer).await;
+        }
         for id in opened {
             let Some(handle) = sessions.get(&id) else {
                 continue;
@@ -340,6 +345,7 @@ impl Service {
         &self,
         request: Request,
         connection_options: &crate::WorkspaceOptions,
+        viewer: u64,
     ) -> Result<Response> {
         match request {
             Request::RestoreSessions => {
@@ -517,21 +523,41 @@ impl Service {
                 );
                 let session = self.session(&session).await?;
                 ensure!(!question.trim().is_empty(), "问题不能为空");
-                session.command(session::Command::Persist).await?;
-                let selected = session.questions.start(&question, follow_up).await?;
+                let selected = session
+                    .questions
+                    .start(viewer, &question, follow_up)
+                    .await?;
                 Ok(Response::Questions(
-                    session.questions.snapshot(None, Some(selected)).await?,
+                    session
+                        .questions
+                        .snapshot(viewer, None, Some(selected))
+                        .await?,
                 ))
+            }
+            Request::OpenQuestions { session } => Ok(Response::Questions(
+                self.session(&session).await?.questions.open(viewer).await?,
+            )),
+            Request::CloseQuestions { session } => {
+                self.session(&session)
+                    .await?
+                    .questions
+                    .release(viewer)
+                    .await;
+                Ok(Response::Ok)
             }
             Request::ReadQuestions { session, after } => Ok(Response::Questions(
                 self.session(&session)
                     .await?
                     .questions
-                    .snapshot(after, None)
+                    .snapshot(viewer, after, None)
                     .await?,
             )),
             Request::CancelQuestion { session, index } => {
-                self.session(&session).await?.questions.cancel(index).await;
+                self.session(&session)
+                    .await?
+                    .questions
+                    .cancel(viewer, index)
+                    .await;
                 Ok(Response::Ok)
             }
             Request::SessionAction { session, action } => {

@@ -13,7 +13,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/btw",
-        description: "独立询问当前上下文；不打断主任务，再次输入可查看记录",
+        description: "独立询问当前上下文；不打断主任务，关闭后丢弃",
     },
     Command {
         name: "/build",

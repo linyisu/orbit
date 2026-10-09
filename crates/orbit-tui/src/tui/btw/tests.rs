@@ -152,9 +152,10 @@ fn incoming_threads_navigate_and_cancel_without_executing_a_local_model() {
         .handle(&key(KeyCode::Esc, KeyModifiers::NONE))
         .unwrap();
     assert!(!questions.visible());
-    assert!(questions.running());
+    assert!(!questions.running);
+    assert!(!questions.has_records());
     for (width, height) in [(100, 30), (30, 12), (10, 3), (1, 1)] {
-        questions.receive(None, false, Some(0));
+        questions.receive(Some(vec![record("answer", "completed")]), false, Some(0));
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| {

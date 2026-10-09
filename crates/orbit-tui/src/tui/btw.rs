@@ -40,6 +40,10 @@ impl std::fmt::Debug for Questions {
 }
 
 impl Questions {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
     pub fn receive(
         &mut self,
         records: Option<Vec<orbit_protocol::SideQuestion>>,
@@ -74,10 +78,6 @@ impl Questions {
 
     pub fn has_records(&self) -> bool {
         !self.records.is_empty()
-    }
-
-    pub fn running(&self) -> bool {
-        self.running
     }
 
     pub fn visible(&self) -> bool {
@@ -201,7 +201,7 @@ impl Questions {
 
         let action = dialog.view.handle(event)?;
         if matches!(action, Action::Close) {
-            self.dialog = None;
+            self.clear();
         }
         Ok(action)
     }

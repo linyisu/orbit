@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) enum Draft {
     Composer(String),
-    Question,
+    Question(Option<String>),
     UserInput(String),
     Plan,
     Model(String),
@@ -18,7 +18,7 @@ pub(super) struct Submission {
 
 impl Submission {
     pub(super) fn starts_session(&self) -> bool {
-        matches!(self.draft, Draft::Composer(_) | Draft::Question)
+        matches!(self.draft, Draft::Composer(_))
     }
 }
 
@@ -46,19 +46,57 @@ impl Tab {
 
     pub(super) fn ask(&mut self, question: String, follow_up: Option<usize>) {
         let question = question.trim().to_owned();
-        let draft = if follow_up.is_some() {
-            Draft::Question
+        let draft = Draft::Question(follow_up.is_none().then(|| format!("/btw {question}")));
+        self.flush_question_close();
+        if self.question_closing {
+            self.rejected(
+                draft,
+                anyhow::anyhow!("连接繁忙，正在关闭旁路对话，请稍后重试。"),
+            );
+            return;
+        }
+        let session = self.id.clone().unwrap_or_default();
+        let request = if question.is_empty() {
+            Request::OpenQuestions { session }
         } else {
-            Draft::Composer(format!("/btw {question}"))
-        };
-        self.submit_with_receipt(
             Request::Ask {
-                session: self.id.clone().unwrap_or_default(),
+                session,
                 question,
                 follow_up,
+            }
+        };
+        self.submit_with_receipt(request, draft);
+    }
+
+    pub(super) fn close_questions(&mut self) {
+        self.state.btw.clear();
+        self.question_poll = None;
+        self.question_revision = None;
+        // The transport still processes queued requests in order. Drop receipts
+        // here so a follow-up acknowledgement cannot reopen the closed dialog.
+        self.submissions
+            .retain(|s| !matches!(s.draft, Draft::Question(_)));
+        self.question_closing = true;
+        self.flush_question_close();
+    }
+
+    fn flush_question_close(&mut self) {
+        if !self.question_closing {
+            return;
+        }
+        let Some(commands) = &self.commands else {
+            self.question_closing = false;
+            return;
+        };
+        // Retry a full transport queue before accepting a new BTW request.
+        // Never leave an invisible viewer keeping the shared request alive.
+        let result = commands.try_send(Call {
+            request: Request::CloseQuestions {
+                session: self.id.clone().unwrap_or_default(),
             },
-            draft,
-        );
+            reply: None,
+        });
+        self.question_closing = matches!(result, Err(mpsc::error::TrySendError::Full(_)));
     }
 
     fn rejected(&mut self, draft: Draft, error: anyhow::Error) {
@@ -71,7 +109,8 @@ impl Tab {
                 .state
                 .user_input
                 .submission_error(&id, error.to_string()),
-            Draft::Question => self.state.btw.submit_error(&error),
+            Draft::Question(Some(text)) => self.rejected(Draft::Composer(text), error),
+            Draft::Question(None) => self.state.btw.submit_error(&error),
             Draft::Composer(text) => {
                 if self.state.input.text.is_empty() {
                     self.state.input.set(text);
@@ -165,6 +204,7 @@ impl Tab {
     }
 
     pub(super) fn poll_questions(&mut self) -> bool {
+        self.flush_question_close();
         let mut changed = false;
         if let Some(pending) = &mut self.question_poll {
             match pending.try_recv() {
@@ -180,7 +220,7 @@ impl Tab {
             }
         }
         if self.question_poll.is_none()
-            && (self.state.btw.visible() || self.state.btw.running())
+            && self.state.btw.visible()
             && self.next_questions <= std::time::Instant::now()
         {
             if let Some(session) = &self.id {
