@@ -152,6 +152,51 @@ async fn failed_edits_return_bounded_current_text_without_approval_or_modificati
 }
 
 #[tokio::test]
+async fn mismatch_diagnostics_locate_long_blocks_and_inline_changes_without_writing() {
+    let block = (0..150)
+        .map(|n| format!("    process_{n}(value);\n"))
+        .collect::<String>();
+    let changed = block.replace("process_93(value)", "process_93(other)");
+    for (before, old, line, column) in [
+        (format!("// prefix\n{changed}// suffix\n"), block, 95, 16),
+        (
+            "结果 = parse(\"数据\",  other);\n".into(),
+            "结果 = parse(\"数据\", other);".into(),
+            1,
+            18,
+        ),
+        (
+            "unicode_甲甲甲甲甲甲甲甲();\n".into(),
+            "unicode_甲乙甲甲甲甲甲甲();".into(),
+            1,
+            10,
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("file"), &before).unwrap();
+        let (task, mut rx) = start(
+            root.path(),
+            json!({"path":"file","old_text":old,"new_text":"replacement"}),
+            CancellationToken::new(),
+        );
+        let ToolError::ExecutionFailed(error) = task.await.unwrap().unwrap_err() else {
+            panic!("diagnostic expected")
+        };
+        let feedback: Value = serde_json::from_str(&error).unwrap();
+        let candidate = &feedback["candidates"][0];
+        assert!(candidate.is_object(), "{feedback}");
+        assert_eq!(candidate["first_difference"]["line"], line);
+        assert_eq!(candidate["first_difference"]["column"], column);
+        assert!(error.len() < 6000);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            fs::read_to_string(root.path().join("file")).unwrap(),
+            before
+        );
+    }
+}
+
+#[tokio::test]
 async fn denial_cancellation_and_concurrent_changes_never_overwrite_the_file() {
     for action in ["deny", "cancel", "conflict"] {
         let root = tempfile::tempdir().unwrap();
