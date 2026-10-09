@@ -229,23 +229,26 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
         .begin("child task".into(), "child-model".into())
         .await
         .unwrap();
-    child
-        .append(
-            (0..140)
-                .map(|_| {
-                    orbit_agent::events::AgentEvent::Model(
-                        orbit_model::types::StreamEvent::TextDelta("child answer\n".into()),
-                    )
-                })
-                .collect(),
-        )
-        .await
-        .unwrap();
+    // Text fragments can be compacted in storage; turn boundaries remain
+    // distinct and let this exercise pagination regardless of stream chunking.
+    let turns = orbit_protocol::PAGE_EVENTS / 2 + 1;
+    let child_events: Vec<_> = (1..=turns)
+        .flat_map(|turn| {
+            [
+                orbit_agent::events::AgentEvent::TurnStarted { turn },
+                orbit_agent::events::AgentEvent::Model(orbit_model::types::StreamEvent::TextDelta(
+                    format!("child answer {turn}\n"),
+                )),
+            ]
+        })
+        .collect();
+    child.append(child_events.clone()).await.unwrap();
     let child_page = client
         .request(json!({"method":"read_subagent","session":id,"agent":child.id(),"after":0}))
         .await;
     assert_eq!(child_page["type"], "subagent");
     assert_eq!(child_page["value"]["more"], true);
+    let mut child_updates = child_page["value"]["updates"].as_array().unwrap().clone();
     let cursor = child_page["value"]["next"].as_u64().unwrap();
     child
         .finish("completed", vec![], Some(vec![]))
@@ -254,7 +257,20 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     let child_page = client
         .request(json!({"method":"read_subagent","session":id,"agent":child.id(),"after":cursor}))
         .await;
+    assert_eq!(child_page["type"], "subagent", "{child_page}");
     assert_eq!(child_page["value"]["busy"], false);
+    assert_eq!(child_page["value"]["more"], false);
+    child_updates.extend(child_page["value"]["updates"].as_array().unwrap().clone());
+    assert_eq!(
+        child_updates
+            .iter()
+            .filter_map(|update| update.get("Agent").cloned())
+            .collect::<Vec<_>>(),
+        child_events
+            .iter()
+            .map(|event| serde_json::to_value(event).unwrap())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         child_page["value"]["updates"]
             .as_array()
