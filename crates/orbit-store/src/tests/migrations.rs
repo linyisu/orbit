@@ -243,7 +243,12 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
     reference.close().await.unwrap();
     // Cover databases made before SeaORM and databases that already have its ledger.
     for ledger in [false, true] {
-        for version in 0..=27 {
+        let latest: u32 = if ledger {
+            Migrator::migrations().len().try_into().unwrap()
+        } else {
+            27
+        };
+        for version in 0..=latest {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("legacy.db");
             let legacy = support::connect(&path).await;
@@ -267,9 +272,15 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
                     ("id", "session".into()),
                     ("workspace", "/workspace".into()),
                     ("model", "model".into()),
-                    ("demo", true.into()),
                     ("title", "Keep me".into()),
                 ];
+                if SchemaManager::new(&legacy)
+                    .has_column("sessions", "demo")
+                    .await
+                    .unwrap()
+                {
+                    values.push(("demo", true.into()));
+                }
                 if version >= 2 {
                     values.push(("project_id", "project".into()));
                 }

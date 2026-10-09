@@ -35,6 +35,7 @@ mod m00000000000025_questions;
 mod m00000000000026_plans;
 mod m00000000000027_input_sequence;
 mod m00000000000028_remove_demo;
+mod m00000000000029_task_collaboration;
 const LEGACY_VERSION: i64 = 27;
 fn timestamp_default() -> SimpleExpr {
     // SQLite expression defaults need parentheses; a single-item tuple supplies them.
@@ -73,6 +74,7 @@ impl MigratorTrait for Migrator {
             Box::new(m00000000000026_plans::Migration),
             Box::new(m00000000000027_input_sequence::Migration),
             Box::new(m00000000000028_remove_demo::Migration),
+            Box::new(m00000000000029_task_collaboration::Migration),
         ]
     }
 }

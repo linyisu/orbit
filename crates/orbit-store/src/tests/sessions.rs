@@ -770,20 +770,24 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
     let parent = store
         .create_task(
             &project.id,
-            None,
-            "Ship the project overview".into(),
-            "Make the plan visible in every session.".into(),
-            10,
+            crate::tasks::NewTask {
+                title: "Ship the project overview".into(),
+                details: "Make the plan visible in every session.".into(),
+                priority: 10,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
     let child = store
         .create_task(
             &project.id,
-            Some(parent.id),
-            "Add the task command".into(),
-            String::new(),
-            5,
+            crate::tasks::NewTask {
+                parent_id: Some(parent.id),
+                title: "Add the task command".into(),
+                priority: 5,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -791,10 +795,11 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
         .update_task(
             &project.id,
             child.id,
-            None,
-            None,
-            Some(TaskStatus::InProgress),
-            None,
+            crate::tasks::TaskChanges {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            crate::tasks::TaskActor::User,
         )
         .await
         .unwrap();
@@ -1339,10 +1344,7 @@ async fn write_transactions_serialize_across_independent_store_connections() {
                 connection
                     .create_task(
                         &project,
-                        None,
-                        format!("task {worker}/{item}"),
-                        String::new(),
-                        0,
+                        crate::tasks::NewTask::new(format!("task {worker}/{item}")),
                     )
                     .await
                     .unwrap();

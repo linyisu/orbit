@@ -65,6 +65,7 @@ pub struct Agent<B> {
     journal: Option<std::sync::Arc<dyn crate::checkpoint::ExecutionJournal>>,
     inbox: Option<crate::inbox::AgentInbox>,
     record_initial_input: bool,
+    state_source: Option<std::sync::Arc<dyn crate::runtime_state::StateSource>>,
 }
 
 impl<B> Agent<B>
@@ -85,6 +86,7 @@ where
             journal: None,
             inbox: None,
             record_initial_input: true,
+            state_source: None,
             calibration: Default::default(),
             observation_profile: String::new(),
             compaction: Default::default(),
@@ -93,6 +95,14 @@ where
 
     pub fn with_inbox(mut self, inbox: crate::inbox::AgentInbox) -> Self {
         self.inbox = Some(inbox);
+        self
+    }
+
+    pub fn with_state_source(
+        mut self,
+        source: std::sync::Arc<dyn crate::runtime_state::StateSource>,
+    ) -> Self {
+        self.state_source = Some(source);
         self
     }
 
@@ -368,6 +378,15 @@ where
                     orbit_model::types::RuntimeStateKind::ToolPolicy,
                     context,
                 );
+            }
+            if let Some(source) = &self.state_source {
+                let states = tokio::select! {
+                    _ = cancellation.cancelled() => return Err(AgentError::Cancelled),
+                    states = source.snapshot() => states?,
+                };
+                for (kind, content) in states {
+                    orbit_model::runtime_context::append_state(&mut history, kind, content);
+                }
             }
             let output = request.max_tokens.unwrap_or(4096) as usize;
             let local_limit = recovery_limit

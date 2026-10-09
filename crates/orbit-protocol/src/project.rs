@@ -9,6 +9,13 @@ pub struct ProjectTask {
     pub details: String,
     pub status: TaskStatus,
     pub priority: i64,
+    #[serde(default)]
+    pub owner_session_id: Option<String>,
+    #[serde(default)]
+    pub depends_on: Vec<i64>,
+    /// Dependencies that are currently not completed.
+    #[serde(default)]
+    pub blocked_by: Vec<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -116,6 +123,7 @@ pub enum TaskAction {
     List { include_completed: bool },
     Add { title: String },
     SetStatus { id: i64, status: TaskStatus },
+    Release { id: i64 },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

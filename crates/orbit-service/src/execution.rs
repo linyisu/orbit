@@ -102,6 +102,12 @@ pub async fn start(
         }
     }
     let mut agent = Agent::new(backend.clone(), tools.clone(), config)
+        .with_state_source(std::sync::Arc::new(
+            crate::project_state::ProjectStateSource::new(
+                session.store.clone(),
+                session.id().into(),
+            ),
+        ))
         .with_inbox(inbox.clone())
         .with_calibration(options.model_name.clone(), options.calibration)
         .with_compaction(options.compaction.clone())

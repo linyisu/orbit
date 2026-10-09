@@ -26,7 +26,7 @@ pub mod user_input;
 
 mod memories;
 mod plugins;
-mod tasks;
+pub mod tasks;
 
 #[cfg(test)]
 mod tests;

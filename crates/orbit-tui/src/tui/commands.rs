@@ -137,7 +137,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/tasks",
-        description: "查看或更新当前项目的任务计划",
+        description: "查看或更新项目任务；/tasks release <编号> 释放认领",
     },
     Command {
         name: "/undo",

@@ -20,6 +20,8 @@ pub(crate) mod session_plans;
 pub(crate) mod session_workspace_baselines;
 pub(crate) mod sessions;
 pub(crate) mod side_questions;
+pub(crate) mod task_claims;
+pub(crate) mod task_dependencies;
 pub(crate) mod tui_file_grants;
 pub(crate) mod tui_session_state;
 pub(crate) mod tui_tabs;

@@ -709,6 +709,11 @@ impl Service {
         )
         .await?;
         let mut tools = runtime.tools;
+        crate::project_state::register_tasks(
+            &mut tools,
+            self.store.clone(),
+            crate::project_state::MemoryScope::new(agent.id.clone()),
+        );
         tools.retain(|capabilities| capabilities.in_child(agent.role == "develop"));
         for definition in tools.definitions() {
             if !self.allowed_tools.contains(&definition.function.name) {
@@ -776,6 +781,10 @@ impl Service {
             },
         )
         .with_execution_journal(journal)
+        .with_state_source(Arc::new(crate::project_state::ProjectStateSource::new(
+            self.store.clone(),
+            agent.id.clone(),
+        )))
         .with_inbox(inbox.clone())
         .with_initial_input_recording(record_initial_input)
         .with_context_archive(Arc::new(crate::history::SessionArchive::new(

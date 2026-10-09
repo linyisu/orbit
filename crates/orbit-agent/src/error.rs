@@ -5,6 +5,8 @@ use crate::tool::ToolError;
 
 #[derive(Debug, Error)]
 pub enum AgentError {
+    #[error("runtime state refresh failed: {0}")]
+    RuntimeState(String),
     #[error("execution checkpoint failed: {0}")]
     Checkpoint(String),
     #[error("model failed: {0}")]

@@ -1,20 +1,60 @@
-//! Project task repository. Parent ownership and updates are transactional.
+//! Shared project tasks: dependencies, ownership and state changes commit together.
+mod dependencies;
+mod state;
 use crate::{
     database::now,
-    entities::{project_tasks as tasks, projects},
+    entities::{
+        project_tasks as tasks, projects, task_claims as claims, task_dependencies as deps,
+    },
     store::Store,
     types::{ProjectTask, TaskStatus},
 };
 use anyhow::{Context, Result, ensure};
 use sea_orm::*;
+pub(crate) use state::release_unfinished;
+
+#[derive(Default)]
+pub struct NewTask {
+    pub parent_id: Option<i64>,
+    pub title: String,
+    pub details: String,
+    pub priority: i64,
+    pub depends_on: Vec<i64>,
+}
+impl NewTask {
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct TaskChanges {
+    pub title: Option<String>,
+    pub details: Option<String>,
+    pub status: Option<TaskStatus>,
+    pub priority: Option<i64>,
+    /// None leaves dependencies unchanged; Some([]) clears them.
+    pub depends_on: Option<Vec<i64>>,
+}
+
+#[derive(Clone, Copy)]
+pub enum TaskActor<'a> {
+    User,
+    Session(&'a str),
+}
+
 impl Store {
-    pub async fn tasks(&self, project_id: &str, include_closed: bool) -> Result<Vec<ProjectTask>> {
+    pub async fn tasks(&self, project: &str, include_closed: bool) -> Result<Vec<ProjectTask>> {
         self.read_access(|conn| async move {
-            let mut query = tasks::Entity::find().filter(tasks::Column::ProjectId.eq(project_id));
+            let tx = conn.begin().await?;
+            let mut query = tasks::Entity::find().filter(tasks::Column::ProjectId.eq(project));
             if !include_closed {
                 query = query.filter(tasks::Column::Status.is_not_in(["completed", "cancelled"]));
             }
-            let mut rows = query.all(&conn).await?;
+            let mut rows = query.all(&tx).await?;
             rows.sort_by_key(|row| {
                 (
                     match row.status.as_str() {
@@ -26,128 +66,167 @@ impl Store {
                     row.id,
                 )
             });
-            rows.into_iter().map(task).collect()
+            let result = state::hydrate(&tx, rows).await?;
+            tx.commit().await?;
+            Ok(result)
         })
         .await
     }
-    pub async fn create_task(
-        &self,
-        project_id: &str,
-        parent_id: Option<i64>,
-        title: String,
-        details: String,
-        priority: i64,
-    ) -> Result<ProjectTask> {
-        validate_task_fields(&title, &details, priority)?;
+
+    pub async fn create_task(&self, project: &str, task: NewTask) -> Result<ProjectTask> {
+        state::validate(&task.title, &task.details, task.priority)?;
         self.write_access(|conn| async move {
             let tx = conn.begin().await?;
             ensure!(
-                projects::Entity::find_by_id(project_id)
+                projects::Entity::find_by_id(project)
                     .one(&tx)
                     .await?
                     .is_some(),
                 "project not found"
             );
-            if let Some(parent) = parent_id {
-                ensure!(
-                    tasks::Entity::find_by_id(parent)
-                        .filter(tasks::Column::ProjectId.eq(project_id))
-                        .one(&tx)
-                        .await?
-                        .is_some(),
-                    "parent task does not belong to this project"
-                );
+            if let Some(parent) = task.parent_id {
+                state::row(&tx, project, parent).await?;
             }
             let row = tasks::ActiveModel {
-                project_id: Set(project_id.into()),
-                parent_id: Set(parent_id),
-                title: Set(title),
-                details: Set(details),
-                priority: Set(priority),
+                project_id: Set(project.into()),
+                parent_id: Set(task.parent_id),
+                title: Set(task.title),
+                details: Set(task.details),
+                priority: Set(task.priority),
                 ..Default::default()
             }
             .insert(&tx)
             .await?;
-            let result = task(row)?;
+            dependencies::replace(&tx, project, row.id, task.depends_on).await?;
+            let result = state::one(&tx, project, row.id).await?;
             tx.commit().await?;
             Ok(result)
         })
         .await
     }
+
     pub async fn update_task(
         &self,
-        project_id: &str,
+        project: &str,
         id: i64,
-        title: Option<String>,
-        details: Option<String>,
-        status: Option<TaskStatus>,
-        priority: Option<i64>,
+        changes: TaskChanges,
+        actor: TaskActor<'_>,
     ) -> Result<ProjectTask> {
-        if let Some(title) = &title {
-            validate_task_fields(
-                title,
-                details.as_deref().unwrap_or(""),
-                priority.unwrap_or(0),
-            )?;
-        }
-        if let Some(details) = &details {
-            ensure!(details.len() <= 8192, "task details exceed 8192 bytes");
-        }
-        if let Some(priority) = priority {
-            ensure!(
-                (-100..=100).contains(&priority),
-                "task priority must be between -100 and 100"
-            );
-        }
+        ensure!(
+            changes.title.is_some()
+                || changes.details.is_some()
+                || changes.status.is_some()
+                || changes.priority.is_some()
+                || changes.depends_on.is_some(),
+            "task update must change a field"
+        );
         self.write_access(|conn| async move {
             let tx = conn.begin().await?;
-            let mut row = tasks::Entity::find_by_id(id)
-                .filter(tasks::Column::ProjectId.eq(project_id))
-                .one(&tx)
-                .await?
-                .context("task not found in this project")?
-                .into_active_model();
-            if let Some(title) = title {
-                row.title = Set(title);
+            let row = state::row(&tx, project, id).await?;
+            let owner = state::authorize(&tx, project, id, actor).await?;
+            let status = changes
+                .status
+                .unwrap_or(TaskStatus::parse(&row.status).context("invalid task status")?);
+            let title = changes.title.unwrap_or(row.title);
+            let details = changes.details.unwrap_or(row.details);
+            let priority = changes.priority.unwrap_or(row.priority);
+            state::validate(&title, &details, priority)?;
+            if row.status == "completed" && status != TaskStatus::Completed {
+                dependencies::can_reopen(&tx, id).await?;
             }
-            if let Some(details) = details {
-                row.details = Set(details);
+            if let Some(dependencies) = changes.depends_on {
+                dependencies::replace(&tx, project, id, dependencies).await?;
             }
-            if let Some(status) = status {
-                row.status = Set(status.as_str().into());
+            if matches!(status, TaskStatus::InProgress | TaskStatus::Completed) {
+                state::ready(&tx, id).await?;
+                if let TaskActor::Session(session) = actor {
+                    ensure!(
+                        owner.as_deref() == Some(session),
+                        "claim the task before starting or completing it"
+                    );
+                }
             }
-            if let Some(priority) = priority {
-                row.priority = Set(priority);
+            tasks::ActiveModel {
+                id: Set(id),
+                title: Set(title),
+                details: Set(details),
+                status: Set(status.as_str().into()),
+                priority: Set(priority),
+                updated_at: Set(now()),
+                ..Default::default()
             }
-            row.updated_at = Set(now());
-            let result = task(row.update(&tx).await?)?;
+            .update(&tx)
+            .await?;
+            let result = state::one(&tx, project, id).await?;
+            tx.commit().await?;
+            Ok(result)
+        })
+        .await
+    }
+
+    /// The per-database writer lease and primary key make competing claims
+    /// atomic even when agents use independent Store connections/processes.
+    pub async fn claim_task(&self, project: &str, id: i64, session: &str) -> Result<ProjectTask> {
+        self.write_access(|conn| async move {
+            let tx = conn.begin().await?;
+            let row = state::row(&tx, project, id).await?;
+            let owner = state::authorize(&tx, project, id, TaskActor::Session(session)).await?;
+            ensure!(
+                !matches!(row.status.as_str(), "completed" | "cancelled"),
+                "closed task cannot be claimed"
+            );
+            state::ready(&tx, id).await?;
+            if owner.is_none() {
+                claims::ActiveModel {
+                    task_id: Set(id),
+                    session_id: Set(session.into()),
+                }
+                .insert(&tx)
+                .await?;
+            }
+            tasks::ActiveModel {
+                id: Set(id),
+                status: Set("in_progress".into()),
+                updated_at: Set(now()),
+                ..Default::default()
+            }
+            .update(&tx)
+            .await?;
+            let result = state::one(&tx, project, id).await?;
+            tx.commit().await?;
+            Ok(result)
+        })
+        .await
+    }
+
+    pub async fn release_task(
+        &self,
+        project: &str,
+        id: i64,
+        actor: TaskActor<'_>,
+    ) -> Result<ProjectTask> {
+        self.write_access(|conn| async move {
+            let tx = conn.begin().await?;
+            let row = state::row(&tx, project, id).await?;
+            state::authorize(&tx, project, id, actor).await?;
+            claims::Entity::delete_by_id(id).exec(&tx).await?;
+            if row.status == "in_progress" {
+                tasks::ActiveModel {
+                    id: Set(id),
+                    status: Set("pending".into()),
+                    updated_at: Set(now()),
+                    ..Default::default()
+                }
+                .update(&tx)
+                .await?;
+            }
+            let result = state::one(&tx, project, id).await?;
             tx.commit().await?;
             Ok(result)
         })
         .await
     }
 }
-fn task(row: tasks::Model) -> Result<ProjectTask> {
-    Ok(ProjectTask {
-        id: row.id,
-        project_id: row.project_id,
-        parent_id: row.parent_id,
-        title: row.title,
-        details: row.details,
-        status: TaskStatus::parse(&row.status).context("invalid stored task status")?,
-        priority: row.priority,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-    })
-}
-fn validate_task_fields(title: &str, details: &str, priority: i64) -> Result<()> {
-    ensure!(!title.trim().is_empty(), "task title must not be empty");
-    ensure!(title.len() <= 512, "task title exceeds 512 bytes");
-    ensure!(details.len() <= 8192, "task details exceed 8192 bytes");
-    ensure!(
-        (-100..=100).contains(&priority),
-        "task priority must be between -100 and 100"
-    );
 
-    Ok(())
-}
+#[cfg(test)]
+mod tests;

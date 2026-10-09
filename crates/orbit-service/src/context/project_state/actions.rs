@@ -39,14 +39,28 @@ pub async fn task(
             TaskResult::Added(
                 session
                     .store
-                    .create_task(project, None, title.trim().into(), String::new(), 0)
+                    .create_task(project, orbit_store::tasks::NewTask::new(title.trim()))
                     .await?,
             )
         }
         TaskAction::SetStatus { id, status } => TaskResult::Updated(
             session
                 .store
-                .update_task(project, id, None, None, Some(status), None)
+                .update_task(
+                    project,
+                    id,
+                    orbit_store::tasks::TaskChanges {
+                        status: Some(status),
+                        ..Default::default()
+                    },
+                    orbit_store::tasks::TaskActor::User,
+                )
+                .await?,
+        ),
+        TaskAction::Release { id } => TaskResult::Updated(
+            session
+                .store
+                .release_task(project, id, orbit_store::tasks::TaskActor::User)
                 .await?,
         ),
     };

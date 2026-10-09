@@ -31,7 +31,12 @@ pub(super) fn parse(command: &str, argument: &str) -> Result<SessionAction> {
                         _ => TaskStatus::Cancelled,
                     },
                 },
-                _ => bail!("用法：/tasks [list|all|add|start|done|block|cancel]"),
+                "release" => TaskAction::Release {
+                    id: rest
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("请输入任务编号"))?,
+                },
+                _ => bail!("用法：/tasks [list|all|add|start|done|block|cancel|release]"),
             },
         },
         "/memory" => SessionAction::Memory {

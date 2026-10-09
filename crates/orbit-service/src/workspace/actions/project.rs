@@ -8,10 +8,13 @@ pub(super) fn task_report(result: TaskResult) -> Report {
             .iter()
             .map(|task| {
                 format!(
-                    "#{} [{}] {}{}",
+                    "#{} [{}] {}\n  认领：{} · 依赖：{:?} · 未完成：{:?}{}",
                     task.id,
                     task.status.as_str(),
                     task.title,
+                    task.owner_session_id.as_deref().unwrap_or("无"),
+                    task.depends_on,
+                    task.blocked_by,
                     if task.details.is_empty() {
                         String::new()
                     } else {

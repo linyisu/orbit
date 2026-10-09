@@ -20,7 +20,13 @@ impl SessionWriter {
         directory: &Path,
         git_baseline: Option<serde_json::Value>,
     ) -> Result<crate::types::Session> {
-        let project = self.store.resolve_project(directory).await?;
+        // A worktree changes a child's execution directory, not the logical
+        // project whose task board it shares with its parent.
+        let project_id = if self.store.is_subagent(&self.id).await? {
+            self.store.session(&self.id).await?.project_id
+        } else {
+            self.store.resolve_project(directory).await?.id
+        };
         let path = directory.canonicalize()?.to_string_lossy().into_owned();
         let id = self.id.clone();
         let baseline = git_baseline
@@ -45,7 +51,7 @@ impl SessionWriter {
                     .map_or(0, |run| run.id);
                 sessions::Entity::update_many()
                     .set(sessions::ActiveModel {
-                        project_id: Set(Some(project.id)),
+                        project_id: Set(Some(project_id.clone())),
                         workspace: Set(path),
                         workspace_since_run: Set(last),
                         updated_at: Set(now()),
@@ -54,6 +60,7 @@ impl SessionWriter {
                     .filter(sessions::Column::Id.eq(&id))
                     .exec(&tx)
                     .await?;
+                crate::tasks::release_unfinished(&tx, &id, Some(&project_id)).await?;
                 tui_file_grants::Entity::delete_many()
                     .filter(tui_file_grants::Column::SessionId.eq(&id))
                     .exec(&tx)
@@ -308,6 +315,7 @@ impl SessionWriter {
                 }
 
                 if let Some((parent, invocation, result)) = agent_result {
+                    crate::tasks::release_unfinished(&transaction, &id, None).await?;
                     let updated = agent_invocations::Entity::update_many()
                         .col_expr(
                             agent_invocations::Column::Result,
