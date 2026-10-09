@@ -10,7 +10,7 @@ use orbit_agent::events::AgentEvent;
 use orbit_model::types::ChatMessage;
 use sea_orm::*;
 
-use super::{SessionWriter, now_millis};
+use super::SessionWriter;
 
 impl SessionWriter {
     /// Move only this locked session. Historical messages and events remain intact.
@@ -220,16 +220,7 @@ impl SessionWriter {
             .write_access(move |conn| async move {
                 let transaction = conn.begin().await?;
 
-                for event in events {
-                    events::ActiveModel {
-                        run_id: Set(run),
-                        payload: Set(serde_json::to_string(&event)?),
-                        created_at_ms: Set(Some(now_millis())),
-                        ..Default::default()
-                    }
-                    .insert(&transaction)
-                    .await?;
-                }
+                crate::event_log::append(&transaction, run, events).await?;
 
                 transaction.commit().await?;
 
@@ -303,16 +294,7 @@ impl SessionWriter {
             .write_access(move |conn| async move {
                 let transaction = conn.begin().await?;
 
-                for event in events {
-                    events::ActiveModel {
-                        run_id: Set(run),
-                        payload: Set(serde_json::to_string(&event)?),
-                        created_at_ms: Set(Some(now_millis())),
-                        ..Default::default()
-                    }
-                    .insert(&transaction)
-                    .await?;
-                }
+                crate::event_log::append(&transaction, run, events).await?;
 
                 if let Some((parent, invocation, result)) = agent_result {
                     crate::tasks::release_unfinished(&transaction, &id, None).await?;

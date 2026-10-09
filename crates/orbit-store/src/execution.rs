@@ -95,8 +95,8 @@ impl Journal {
                         .await?;
                     }
                 }
-                for event in events {
-                    match &event {
+                for event in &events {
+                    match event {
                         AgentEvent::InputReceived { message_id, .. } => {
                             agent_messages::Entity::update_many()
                                 .col_expr(agent_messages::Column::Received, Expr::value(true))
@@ -129,15 +129,8 @@ impl Journal {
                         }
                         _ => {}
                     }
-                    events::ActiveModel {
-                        run_id: Set(run),
-                        payload: Set(serde_json::to_string(&event)?),
-                        created_at_ms: Set(Some(crate::store::now_millis())),
-                        ..Default::default()
-                    }
-                    .insert(&transaction)
-                    .await?;
                 }
+                crate::event_log::append(&transaction, run, events).await?;
                 transaction.commit().await?;
                 Ok(())
             })

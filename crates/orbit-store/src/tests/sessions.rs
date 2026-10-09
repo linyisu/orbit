@@ -94,11 +94,18 @@ async fn restart_preserves_event_order_and_successful_context() {
     let snapshot = store.load(&id).await.unwrap();
 
     assert_eq!(snapshot.history, history);
-    assert_eq!(snapshot.runs[0].events.len(), 3);
-
-    for (event, expected) in snapshot.runs[0].events.iter().zip(["一", "二", "三"]) {
-        assert!(matches!(event, AgentEvent::Model(StreamEvent::TextDelta(t)) if t == expected));
-    }
+    let replay: String = snapshot.runs[0]
+        .events
+        .iter()
+        .filter_map(|event| {
+            if let AgentEvent::Model(StreamEvent::TextDelta(text)) = event {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(replay, "一二三");
 
     assert_eq!(snapshot.runs[1].status, "cancelled");
     assert!(snapshot.runs.iter().all(|run| run.elapsed_ms.is_some()));

@@ -196,25 +196,31 @@ impl Store {
                 .map(|r| r.id)
                 .max()
                 .unwrap_or(0);
+            let mut run_events = crate::event_log::load_by_session(&transaction, &id).await?;
+            let mut first_messages = session_messages::Entity::find()
+                .filter(session_messages::Column::SessionId.eq(&id))
+                .filter(session_messages::Column::Ordinal.eq(0))
+                .all(&transaction)
+                .await?
+                .into_iter()
+                .map(|message| (message.run_id, message))
+                .collect::<std::collections::HashMap<_, _>>();
             let mut runs = Vec::new();
             for row in rows {
                 let run_id = row.id;
                 let prompt = row.prompt;
                 let status = row.status;
                 let elapsed_ms = row.elapsed_ms.map(|ms| ms.max(0) as u64);
-                let decoded = events::Entity::find()
-                    .filter(events::Column::RunId.eq(run_id))
-                    .order_by_asc(events::Column::Id)
-                    .all(&transaction)
-                    .await?
+                let decoded = run_events
+                    .remove(&run_id)
+                    .unwrap_or_default()
                     .into_iter()
-                    .map(|event| serde_json::from_str(&event.payload))
+                    .map(|event| {
+                        serde_json::from_str::<orbit_agent::events::AgentEvent>(&event.payload)
+                    })
                     .collect::<std::result::Result<Vec<_>, _>>()?;
-                let message = session_messages::Entity::find()
-                    .filter(session_messages::Column::RunId.eq(run_id))
-                    .order_by_asc(session_messages::Column::Ordinal)
-                    .one(&transaction)
-                    .await?
+                let message = first_messages
+                    .remove(&run_id)
                     .map(|row| {
                         crate::session_log::decode(row.id, row.run_id, row.payload, row.sha256)
                     })

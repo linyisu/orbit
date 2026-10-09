@@ -3,6 +3,7 @@ pub mod context_archive;
 mod database;
 pub mod diagnostics;
 mod entities;
+mod event_log;
 mod execution;
 mod migrations;
 pub mod project;

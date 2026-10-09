@@ -56,17 +56,15 @@ impl Store {
                 .order_by_asc(runs::Column::Id)
                 .all(&tx)
                 .await?;
+            let mut events = crate::event_log::load_by_session(&tx, &session_id).await?;
             let mut diagnostics = Vec::with_capacity(runs.len());
             for row in runs {
-                let events = events::Entity::find()
-                    .select_only()
-                    .column(events::Column::Payload)
-                    .column(events::Column::CreatedAtMs)
-                    .filter(events::Column::RunId.eq(row.id))
-                    .order_by_asc(events::Column::Id)
-                    .into_tuple()
-                    .all(&tx)
-                    .await?;
+                let events = events
+                    .remove(&row.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|event| (event.payload, event.created_at_ms))
+                    .collect();
                 diagnostics.push(summarize(
                     row.id,
                     row.status,

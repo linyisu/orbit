@@ -31,11 +31,20 @@ impl Store {
             let tx = conn.begin().await?;
             let mut select = context_archives::Entity::find().filter(context_archives::Column::SessionId.eq(session_id));
             if let Some(before) = before_archive { select = select.filter(context_archives::Column::Id.lt(before)); }
-            let rows = select.order_by_desc(context_archives::Column::Id).limit((ARCHIVE_LIST_LIMIT + 1) as u64).all(&tx).await?;
+            let rows: Vec<(i64, i64, i64)> = select
+                .select_only()
+                .column(context_archives::Column::Id)
+                .column(context_archives::Column::CreatedAt)
+                .column_as(Expr::col((context_archive_messages::Entity, context_archive_messages::Column::Ordinal)).count(), "message_count")
+                .join(JoinType::LeftJoin, context_archive_messages::Relation::Archive.def().rev())
+                .group_by(context_archives::Column::Id)
+                .group_by(context_archives::Column::CreatedAt)
+                .order_by_desc(context_archives::Column::Id)
+                .limit((ARCHIVE_LIST_LIMIT + 1) as u64)
+                .into_tuple().all(&tx).await?;
             let mut archives = Vec::with_capacity(rows.len());
-            for row in rows {
-                let count = context_archive_messages::Entity::find().filter(context_archive_messages::Column::ArchiveId.eq(row.id)).count(&tx).await?;
-                archives.push(json!({"archive_id": row.id, "created_at": row.created_at, "message_count": count}));
+            for (id, created_at, count) in rows {
+                archives.push(json!({"archive_id": id, "created_at": created_at, "message_count": count}));
             }
             let has_more = archives.len() > ARCHIVE_LIST_LIMIT;
             archives.truncate(ARCHIVE_LIST_LIMIT);
