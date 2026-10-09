@@ -16,6 +16,8 @@ use crate::{error::AgentError, events::AgentEvent, model::ModelBackend, tool::To
 const JOURNAL_FLUSH_EVENTS: usize = 256;
 const JOURNAL_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
+mod tool_execution;
+
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
     pub max_turns: usize,
@@ -134,7 +136,7 @@ where
         history: &[ChatMessage],
         turns: usize,
         tool_calls: usize,
-        in_flight: Option<String>,
+        in_flight: impl IntoIterator<Item = String>,
         attachments: &[orbit_model::types::Attachment],
         event: Option<AgentEvent>,
     ) -> Result<(), AgentError> {
@@ -145,7 +147,7 @@ where
                         history: history.to_vec(),
                         turns,
                         tool_calls,
-                        in_flight,
+                        in_flight: in_flight.into_iter().collect(),
                         attachments: attachments.to_vec(),
                     },
                     event,
@@ -527,146 +529,18 @@ where
                 });
             }
 
-            let mut loaded_attachments = Vec::new();
-
-            for call in calls {
-                if cancellation.is_cancelled() {
-                    return Err(AgentError::Cancelled);
-                }
-
-                tool_calls += 1;
-                let event = AgentEvent::ToolStarted { call: call.clone() };
-                self.checkpoint(
-                    &history,
+            self.execute_calls(
+                calls,
+                tool_execution::Execution {
+                    history: &mut history,
                     turns,
-                    tool_calls,
-                    Some(call.id.clone()),
-                    &loaded_attachments,
-                    Some(event.clone()),
-                )
-                .await?;
-                emit(event).await?;
-
-                if call.function.name == "read_image" && !self.backend.supports_vision() {
-                    let message = "current model does not support image input".to_string();
-                    let event = AgentEvent::ToolFailed {
-                        call: call.clone(),
-                        error: message.clone(),
-                    };
-                    let result = ChatMessage::tool(call.id, format!("tool error: {message}"));
-                    history.push(result.clone());
-
-                    if let Some(journal) = &self.journal {
-                        journal.record_message(result);
-                    }
-
-                    self.checkpoint(
-                        &history,
-                        turns,
-                        tool_calls,
-                        None,
-                        &loaded_attachments,
-                        Some(event.clone()),
-                    )
-                    .await?;
-                    emit(event).await?;
-                    continue;
-                }
-
-                match self
-                    .tools
-                    .execute_with_context(
-                        call.clone(),
-                        cancellation.clone(),
-                        crate::tool::ToolContext {
-                            supports_vision: self.backend.supports_vision()
-                                && self.tools.contains("read_image"),
-                        },
-                    )
-                    .await
-                {
-                    Ok(output) => {
-                        files.observe(&call, &output.content);
-
-                        if let Some(evidence) = output.verification {
-                            emit(AgentEvent::VerificationRecorded {
-                                call_id: call.id.clone(),
-                                evidence,
-                            })
-                            .await?;
-                        }
-
-                        let event = match output.background_job {
-                            Some(job_id) => AgentEvent::ToolBackgrounded {
-                                call: call.clone(),
-                                job_id,
-                                content: output.content.clone(),
-                            },
-
-                            None => AgentEvent::ToolFinished {
-                                call: call.clone(),
-                                content: output.content.clone(),
-                                changes: output.changes.clone(),
-                            },
-                        };
-                        let result = ChatMessage::tool(call.id, output.content);
-                        history.push(result.clone());
-
-                        if let Some(journal) = &self.journal {
-                            journal.record_message(result);
-                        }
-
-                        loaded_attachments.extend(output.attachments);
-                        self.checkpoint(
-                            &history,
-                            turns,
-                            tool_calls,
-                            None,
-                            &loaded_attachments,
-                            Some(event.clone()),
-                        )
-                        .await?;
-                        emit(event).await?;
-                    }
-
-                    Err(error) => {
-                        let message = error.to_string();
-                        let event = AgentEvent::ToolFailed {
-                            call: call.clone(),
-                            error: message.clone(),
-                        };
-                        let result = ChatMessage::tool(call.id, format!("tool error: {message}"));
-                        history.push(result.clone());
-
-                        if let Some(journal) = &self.journal {
-                            journal.record_message(result);
-                        }
-
-                        self.checkpoint(
-                            &history,
-                            turns,
-                            tool_calls,
-                            None,
-                            &loaded_attachments,
-                            Some(event.clone()),
-                        )
-                        .await?;
-                        emit(event).await?;
-                    }
-                }
-            }
-
-            let before_attachments = history.len();
-            append_loaded_attachments(&mut history, loaded_attachments);
-
-            if let Some(journal) = &self.journal {
-                for message in &history[before_attachments..] {
-                    journal.record_message(message.clone());
-                }
-            }
-
-            self.checkpoint(&history, turns, tool_calls, None, &[], None)
-                .await?;
+                    tool_calls: &mut tool_calls,
+                    files: &mut files,
+                },
+                cancellation.clone(),
+                emit,
+            )
+            .await?;
         }
     }
 

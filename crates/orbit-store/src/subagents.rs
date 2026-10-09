@@ -508,7 +508,7 @@ mod tests {
             history: vec![input.clone()],
             turns: 0,
             tool_calls: 0,
-            in_flight: None,
+            in_flight: Vec::new(),
             attachments: vec![],
         };
         let child_journal = child.execution_journal().unwrap();

@@ -961,7 +961,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
                 history: history.clone(),
                 turns: 1,
                 tool_calls: 1,
-                in_flight: None,
+                in_flight: Vec::new(),
                 attachments: vec![],
             },
             Some(AgentEvent::ToolFinished {
@@ -978,7 +978,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
                 history: history.clone(),
                 turns: 1,
                 tool_calls: 2,
-                in_flight: Some("1".into()),
+                in_flight: vec!["1".into()],
                 attachments: vec![],
             },
             Some(AgentEvent::ToolStarted {
@@ -1041,7 +1041,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
                     history,
                     turns: 1,
                     tool_calls: 2,
-                    in_flight: None,
+                    in_flight: Vec::new(),
                     attachments: vec![]
                 },
                 None

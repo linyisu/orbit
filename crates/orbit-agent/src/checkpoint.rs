@@ -11,7 +11,8 @@ pub struct ExecutionCheckpoint {
     pub history: Vec<ChatMessage>,
     pub turns: usize,
     pub tool_calls: usize,
-    pub in_flight: Option<String>,
+    #[serde(default, deserialize_with = "read_in_flight")]
+    pub in_flight: Vec<String>,
     pub attachments: Vec<Attachment>,
 }
 
@@ -42,7 +43,7 @@ impl ExecutionCheckpoint {
 
             for call in missing {
                 unresolved += 1;
-                let message = if self.in_flight.as_deref() == Some(&call.id) {
+                let message = if self.in_flight.contains(&call.id) {
                     "Execution interrupted while this tool was in flight. Its side effects are UNKNOWN. Do not automatically repeat it. Inspect files or external state and reconcile with the user's task before deciding any further action."
                 } else {
                     "Execution interrupted before this tool started. It was NOT executed. Re-evaluate whether it is still needed; this message is a recovery status, not a tool result."
@@ -61,6 +62,26 @@ impl ExecutionCheckpoint {
 
         (history, unresolved)
     }
+}
+
+// Stored checkpoints from serial execution contain null or a single id.
+// Preserve their uncertainty when recovering after an upgrade.
+fn read_in_flight<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Saved {
+        Batch(Vec<String>),
+        Single(String),
+    }
+    Ok(
+        match <Option<Saved> as serde::Deserialize>::deserialize(deserializer)? {
+            Some(Saved::Batch(ids)) => ids,
+            Some(Saved::Single(id)) => vec![id],
+            None => Vec::new(),
+        },
+    )
 }
 
 pub type CheckpointFuture<'a> = Pin<Box<dyn Future<Output = Result<(), AgentError>> + Send + 'a>>;

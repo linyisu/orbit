@@ -7,6 +7,8 @@ use crate::{
     tool::{ClosureTool, Tool, ToolError, ToolFuture, ToolOutput},
 };
 
+mod tool_execution;
+
 fn assistant_text(text: &str) -> ChatCompletion {
     ChatCompletion {
         id: None,
