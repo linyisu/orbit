@@ -12,6 +12,7 @@ pub mod read_command_output;
 pub mod read_document;
 pub mod read_file;
 pub mod read_image;
+pub mod repository;
 pub mod request_capability;
 pub mod run_command;
 pub mod search_text;

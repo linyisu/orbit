@@ -56,7 +56,7 @@ fn target(row: &ToolRow) -> Option<Value> {
             args["include_hidden"].as_bool().unwrap_or(false)
         ]),
 
-        "project_overview" => json!([
+        "project_overview" | "code_symbols" => json!([
             args["path"].as_str().unwrap_or("."),
             args["query"].as_str().unwrap_or_default()
         ]),
@@ -205,6 +205,7 @@ pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> Link
                 | "request_capability"
                 | "list_files"
                 | "project_overview"
+                | "code_symbols"
         );
         let target = super::render::fit_label(&target, available, tail);
         spans.push(Span::styled(

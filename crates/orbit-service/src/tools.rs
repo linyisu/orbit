@@ -62,8 +62,14 @@ pub async fn workspace_tools(
 
     tools.register(ListFiles::new(workspace.clone()));
     tools.register(SearchText::new(workspace.clone()));
-    tools.register(orbit_tools::project_overview::ProjectOverview::new(
+    let index = orbit_tools::repository::RepositoryIndex::default();
+    tools.register(
+        orbit_tools::project_overview::ProjectOverview::new(workspace.clone())
+            .with_index(index.clone()),
+    );
+    tools.register(orbit_tools::project_overview::CodeSymbols::new(
         workspace.clone(),
+        index,
     ));
     // Model-facing Git commands use run_command; GitInspect supplies internal snapshots.
 

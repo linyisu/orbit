@@ -3,6 +3,22 @@ use serde_json::json;
 use super::*;
 
 #[test]
+fn symbol_lookup_uses_shared_evidence_view_without_requiring_an_inventory() {
+    let value = json!({"symbols":[{"path":"src/parser.rs","line":12,"name":"parse","signature":"pub fn parse()","kind":"function"}],"references":[{"path":"tests/parser.rs","line":4,"name":"parse","targets":[{"path":"src/parser.rs","line":12}]}],"truncated":{}});
+    let tool = row("code_symbols", value);
+    for expanded in [false, true] {
+        let rendered = lines(&tool, expanded, 80)
+            .unwrap()
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("src/parser.rs") && rendered.contains("parse"));
+        assert!(!rendered.contains("0 个文件"));
+    }
+}
+
+#[test]
 fn overview_preview_has_readable_evidence_and_expand_controls() {
     let value = json!({
         "inventory": {

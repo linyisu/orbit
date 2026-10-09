@@ -251,7 +251,7 @@ pub(super) fn group_target_summary(row: &ToolRow) -> String {
         "read_file" | "write_file" | "edit_file" | "read_image" | "read_document"
         | "request_capability" => safe_output(args["path"].as_str().unwrap_or_default()),
 
-        "list_files" | "project_overview" => {
+        "list_files" | "project_overview" | "code_symbols" => {
             safe_output(args["path"].as_str().unwrap_or("当前目录"))
         }
         _ => tool_summary(&row.name, &row.arguments, &row.output),
@@ -529,7 +529,7 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
         "edit_file" => edit_file_preview(&row.arguments, width),
         "list_files" => structured::files(row, expanded, width),
         "git_inspect" => structured::git(row, expanded, width),
-        "project_overview" => overview(
+        "project_overview" | "code_symbols" => overview(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
             width,
@@ -565,9 +565,23 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
 }
 
 fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
-    let inventory = value["inventory"].as_object()?;
-    let files_count = inventory.get("files").and_then(|v| v.as_u64()).unwrap_or(0);
-    let languages = inventory.get("languages").and_then(|v| v.as_object());
+    let inventory = value["inventory"].as_object();
+    let files_count = inventory
+        .and_then(|i| i.get("files"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let languages = inventory
+        .and_then(|i| i.get("languages"))
+        .and_then(|v| v.as_object());
+    let heading = if inventory.is_some() {
+        format!("{files_count} 个文件")
+    } else {
+        format!(
+            "{} 个符号 · {} 处候选引用",
+            value["symbols"].as_array()?.len(),
+            value["references"].as_array().map_or(0, Vec::len)
+        )
+    };
 
     let lang_summary = if let Some(langs) = languages {
         let mut sorted: Vec<_> = langs.iter().collect();
@@ -583,11 +597,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
 
     if !expanded {
         let mut out = Vec::new();
-        note(
-            &mut out,
-            &format!("{files_count} 个文件  {lang_summary}"),
-            width,
-        );
+        note(&mut out, &format!("{heading}  {lang_summary}"), width);
         if let Some(manifests) = value["manifests"].as_array() {
             for manifest in manifests.iter().take(3) {
                 let path = manifest["path"].as_str().unwrap_or_default();
@@ -596,6 +606,20 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                     .map(|n| format!("  {n}"))
                     .unwrap_or_default();
                 note(&mut out, &format!("{path}{pkg}"), width);
+            }
+        }
+        if inventory.is_none() {
+            for symbol in value["symbols"].as_array()?.iter().take(3) {
+                note(
+                    &mut out,
+                    &format!(
+                        "{}:{} · {}",
+                        symbol["path"].as_str().unwrap_or_default(),
+                        symbol["line"].as_u64().unwrap_or(0),
+                        symbol["name"].as_str().unwrap_or_default()
+                    ),
+                    width,
+                );
             }
         }
 
@@ -626,7 +650,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         lines.push(Line::from(""));
     };
 
-    let mut header_spans = vec![Span::styled(format!("{files_count} 个文件"), strong_style)];
+    let mut header_spans = vec![Span::styled(heading, strong_style)];
     if let Some(langs) = languages {
         let mut sorted: Vec<_> = langs.iter().collect();
         sorted.sort_by_key(|(_, c)| std::cmp::Reverse(c.as_u64().unwrap_or(0)));
@@ -807,7 +831,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
     }
 
     if let Some(dirs) = inventory
-        .get("directories")
+        .and_then(|i| i.get("directories"))
         .and_then(|v| v.as_array())
         .filter(|d| !d.is_empty())
     {
@@ -941,7 +965,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             &mut raw_lines,
             0,
             vec![Span::styled(
-                format!("{} 跨文件引用 (References):", icons::LINK_VARIANT),
+                format!("{} 跨文件引用候选:", icons::LINK_VARIANT),
                 strong_style,
             )],
         );
@@ -971,7 +995,7 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             &mut raw_lines,
             0,
             vec![Span::styled(
-                format!("{} 代码大纲 (AST):", icons::MAGNIFY),
+                format!("{} 符号与签名:", icons::MAGNIFY),
                 strong_style,
             )],
         );
