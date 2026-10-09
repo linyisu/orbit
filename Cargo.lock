@@ -3127,6 +3127,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-build"
+version = "0.1.0"
+
+[[package]]
 name = "orbit-cli"
 version = "0.1.0"
 dependencies = [
@@ -3135,6 +3139,7 @@ dependencies = [
  "crossterm",
  "orbit-agent",
  "orbit-auth",
+ "orbit-build",
  "orbit-client",
  "orbit-config",
  "orbit-model",
@@ -3369,6 +3374,7 @@ dependencies = [
  "image",
  "orbit-agent",
  "orbit-auth",
+ "orbit-build",
  "orbit-client",
  "orbit-config",
  "orbit-model",

@@ -9,6 +9,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPENDENCIES = {
+    "orbit-build": set(),
     "orbit-auth": set(),
     "orbit-protocol": set(),
     "orbit-config": {"orbit-agent", "orbit-auth", "orbit-model", "orbit-runtime", "orbit-tools"},
@@ -23,10 +24,11 @@ DEPENDENCIES = {
         "orbit-store", "orbit-tools", "orbit-config", "orbit-protocol",
     },
     "orbit-tui": {
+        "orbit-build",
         "orbit-config", "orbit-agent", "orbit-auth", "orbit-model",
         "orbit-runtime", "orbit-tools", "orbit-client", "orbit-protocol",
     },
-    "orbit-cli": {"orbit-protocol", "orbit-config", "orbit-client", "orbit-agent", "orbit-auth", "orbit-model"},
+    "orbit-cli": {"orbit-build", "orbit-protocol", "orbit-config", "orbit-client", "orbit-agent", "orbit-auth", "orbit-model"},
     "orbit-server": {"orbit-service"},
 }
 DATABASE = {"sea-orm", "sea-orm-migration", "sqlx", "diesel", "rusqlite"}

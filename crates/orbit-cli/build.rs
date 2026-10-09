@@ -1,6 +1,3 @@
-#[path = "../../build-support/server.rs"]
-mod portable;
-
 fn main() {
-    portable::bundle();
+    orbit_build::embed_workspace_server();
 }

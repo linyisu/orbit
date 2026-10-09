@@ -51,6 +51,7 @@ TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel �
 | `orbit-config` | 共享配置、模型目录与连接编辑 | [README](crates/orbit-config/README.md) |
 | `orbit-service` | 会话、工具装配、任务与工作区服务 | [README](crates/orbit-service/README.md) |
 | `orbit-server` | 无界面服务可执行入口 | [README](crates/orbit-server/README.md) |
+| `orbit-build` | CLI/TUI 共用的静态服务构建与内嵌辅助库 | [源码](crates/orbit-build/src/lib.rs) |
 | `orbit-agent` | 模型/工具执行循环、消息边界、后台等待、上下文整理 | [README](crates/orbit-agent/README.md) |
 | `orbit-model` | 通用消息类型、供应商协议、模型目录与思考参数适配 | [README](crates/orbit-model/README.md) |
 | `orbit-auth` | 凭据存储、OAuth 回调、令牌刷新与服务地址绑定 | [README](crates/orbit-auth/README.md) |

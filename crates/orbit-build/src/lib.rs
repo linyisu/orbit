@@ -1,6 +1,8 @@
+//! Shared build-time support for embedding the portable workspace server in clients.
 use std::{env, path::PathBuf, process::Command};
 
-pub fn bundle() {
+/// Build or locate a static server and expose its path to the calling client's build.
+pub fn embed_workspace_server() {
     println!("cargo:rerun-if-env-changed=ORBIT_WORKSPACE_SERVER");
     if let Some(server) = env::var_os("ORBIT_WORKSPACE_SERVER") {
         let server = PathBuf::from(server)
@@ -29,12 +31,7 @@ pub fn bundle() {
         }
     });
 
-    for path in [
-        "Cargo.toml",
-        "Cargo.lock",
-        "build-support/server.rs",
-        "vendor",
-    ] {
+    for path in ["Cargo.toml", "Cargo.lock", "crates/orbit-build", "vendor"] {
         println!("cargo:rerun-if-changed={}", root.join(path).display());
     }
     for package in [

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/orbit-build",
     "crates/orbit-auth",
     "crates/orbit-model",
     "crates/orbit-agent",
@@ -29,6 +30,7 @@ orbit-client = { path = "crates/orbit-client" }
 orbit-config = { path = "crates/orbit-config" }
 orbit-protocol = { path = "crates/orbit-protocol" }
 # Internal workspace crates
+orbit-build = { path = "crates/orbit-build" }
 orbit-service = { path = "crates/orbit-service" }
 orbit-tui = { path = "crates/orbit-tui" }
 orbit-agent = { path = "crates/orbit-agent" }

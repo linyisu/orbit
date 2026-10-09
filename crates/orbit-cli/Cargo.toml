@@ -24,6 +24,9 @@ tokio-util.workspace = true
 tokio.workspace = true
 toml.workspace = true
 
+[build-dependencies]
+orbit-build.workspace = true
+
 [dev-dependencies]
 orbit-config = { workspace = true, features = ["test-support"] }
 orbit-store.workspace = true

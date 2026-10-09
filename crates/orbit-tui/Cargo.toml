@@ -51,6 +51,7 @@ unicode-width.workspace = true
 url.workspace = true
 
 [build-dependencies]
+orbit-build.workspace = true
 syntect.workspace = true
 two-face.workspace = true
 

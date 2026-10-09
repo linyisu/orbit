@@ -49,7 +49,7 @@ orbit-cli connect --workspace /path/to/project --stop
 | [auth_cli.rs](src/auth_cli.rs) | 认证子命令与隐藏终端输入 |
 | [connect_args.rs](src/connect_args.rs) | 连接与服务参数 |
 | [connect.rs](src/connect.rs) | 连接命令输出与无交互事件呈现 |
-| [build-support/server.rs](../../build-support/server.rs) | 构建并验证内置静态服务文件 |
+| [orbit-build](../orbit-build/src/lib.rs) | 共用的构建期库，构建并验证内置静态服务文件 |
 
 普通 Linux 构建将 [orbit-server](../orbit-server/README.md) 的 musl 二进制作为资源内置到客户端，启动时交给客户端的部署接口。发布包包含 `orbit` 终端界面和 `orbit-cli` 命令行工具。
 

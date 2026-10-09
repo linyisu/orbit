@@ -1,10 +1,7 @@
-#[path = "../../build-support/server.rs"]
-mod portable;
-
 use syntect::parsing::{SyntaxDefinition, SyntaxSetBuilder};
 
 fn main() {
-    portable::bundle();
+    orbit_build::embed_workspace_server();
     println!("cargo:rerun-if-changed=assets/VisualBasic.sublime-syntax");
     println!("cargo:rerun-if-changed=assets/MarkdownInline.sublime-syntax");
     let bundled = two_face::syntax::extra_no_newlines().into_builder();
