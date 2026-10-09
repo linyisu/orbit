@@ -230,19 +230,21 @@ async fn compaction_source_history(
         .store
         .load_context_archive(session.id(), archive_id)
         .await?;
-    // Current injected instructions can change across restarts. Keep them,
-    // while restoring the original conversation messages from the archive.
+    // Restore conversation data, but keep current instructions and runtime
+    // state: an archived permission or task projection may be obsolete.
     let mut restored = history
         .iter()
-        .take_while(|message| matches!(message, ChatMessage::System { .. }))
+        .filter(|message| matches!(message, ChatMessage::System { .. }))
         .cloned()
         .collect::<Vec<_>>();
 
-    restored.extend(
-        source
-            .into_iter()
-            .skip_while(|message| matches!(message, ChatMessage::System { .. })),
-    );
+    restored.extend(source.into_iter().filter(|message| {
+        !matches!(
+            message,
+            ChatMessage::System { .. } | ChatMessage::Runtime { .. }
+        )
+    }));
+    restored.extend(orbit_model::runtime_context::latest(history));
 
     Ok(restored)
 }

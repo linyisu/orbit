@@ -42,15 +42,27 @@ pub async fn inject(
     project_id: &str,
     session_id: &str,
 ) -> Result<()> {
-    history.retain(|message| {
-        !matches!(message, ChatMessage::System { content } if content.starts_with(PROJECT_STATE_PREFIX))
-    });
     let (tasks, memories) = tokio::try_join!(
         store.tasks(project_id, false),
         store.session_memories(session_id, false),
     )?;
 
     if tasks.is_empty() && memories.is_empty() {
+        if history.iter().any(|message| {
+            matches!(
+                message,
+                ChatMessage::Runtime {
+                    kind: orbit_model::types::RuntimeStateKind::ProjectState,
+                    ..
+                }
+            )
+        }) {
+            orbit_model::runtime_context::append_state(
+                history,
+                orbit_model::types::RuntimeStateKind::ProjectState,
+                "No active project tasks or session memories.".into(),
+            );
+        }
         return Ok(());
     }
 
@@ -102,11 +114,11 @@ pub async fn inject(
         }
     }
 
-    let position = history
-        .iter()
-        .take_while(|message| matches!(message, ChatMessage::System { .. }))
-        .count();
-    history.insert(position, ChatMessage::system(content));
+    orbit_model::runtime_context::append_state(
+        history,
+        orbit_model::types::RuntimeStateKind::ProjectState,
+        content,
+    );
 
     Ok(())
 }
@@ -515,19 +527,27 @@ mod tests {
             .unwrap();
         let states = history
             .iter()
-            .filter(|message| matches!(message, ChatMessage::System { content } if content.starts_with(PROJECT_STATE_PREFIX)))
+            .filter(|message| {
+                matches!(
+                    message,
+                    ChatMessage::Runtime {
+                        kind: orbit_model::types::RuntimeStateKind::ProjectState,
+                        ..
+                    }
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(states.len(), 1);
 
-        let ChatMessage::System { content } = states[0] else {
+        let ChatMessage::Runtime { content, .. } = states[0] else {
             unreachable!()
         };
 
         assert!(content.contains("Verify release"));
         assert!(content.contains("No workspace state"));
         assert!(!content.contains("Other conversation"));
-        assert_eq!(history.last(), Some(&ChatMessage::user("continue")));
+        assert_eq!(history[1], ChatMessage::user("continue"));
     }
 
     #[tokio::test]

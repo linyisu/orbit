@@ -361,10 +361,11 @@ where
             }
 
             if let Some(context) = self.tools.policy_context() {
-                history.retain(|m| !matches!(m, ChatMessage::System { content } if content.starts_with("ORBIT_TOOL_POLICY_V1\n")));
-                history.push(ChatMessage::system(format!(
-                    "ORBIT_TOOL_POLICY_V1\n{context}"
-                )));
+                orbit_model::runtime_context::append_state(
+                    &mut history,
+                    orbit_model::types::RuntimeStateKind::ToolPolicy,
+                    context,
+                );
             }
             let output = request.max_tokens.unwrap_or(4096) as usize;
             let local_limit = recovery_limit
@@ -1154,6 +1155,10 @@ fn merge_usage(current: &mut Option<Usage>, update: Option<Usage>) {
         current.prompt_tokens = update.prompt_tokens.or(current.prompt_tokens);
         current.completion_tokens = update.completion_tokens.or(current.completion_tokens);
         current.total_tokens = update.total_tokens.or(current.total_tokens);
+        current.cached_input_tokens = update.cached_input_tokens.or(current.cached_input_tokens);
+        current.cache_write_input_tokens = update
+            .cache_write_input_tokens
+            .or(current.cache_write_input_tokens);
     } else {
         *current = Some(update);
     }

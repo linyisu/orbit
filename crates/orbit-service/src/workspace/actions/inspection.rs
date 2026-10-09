@@ -86,20 +86,30 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
                 orbit_agent::context::estimate_tokens(&history, &resources.tools.definitions());
             let calibration = session.calibration(&resources.model_name);
             let system = estimate_part(&history, |message| {
-                matches!(message,ChatMessage::System{content} if !content.starts_with("ORBIT_PROJECT_STATE_V1\n"))
+                matches!(message, ChatMessage::System { .. })
                     && !crate::instructions::is_orbit_instruction(message)
             });
             let rules = estimate_part(&history, crate::instructions::is_orbit_instruction);
             let conversation = estimate_part(&history, |message| {
-                !matches!(message, ChatMessage::System { .. })
+                matches!(
+                    message,
+                    ChatMessage::User { .. }
+                        | ChatMessage::Assistant { .. }
+                        | ChatMessage::Tool { .. }
+                )
             });
             let definitions =
                 orbit_agent::context::estimate_tokens(&[], &resources.tools.definitions());
             let overview = tool_context_tokens(&history, "project_overview");
-            let project_state = estimate_part(
-                &history,
-                |message| matches!(message,ChatMessage::System{content} if content.starts_with("ORBIT_PROJECT_STATE_V1\n")),
-            );
+            let project_state = estimate_part(&history, |message| {
+                matches!(
+                    message,
+                    ChatMessage::Runtime {
+                        kind: orbit_model::types::RuntimeStateKind::ProjectState,
+                        ..
+                    }
+                )
+            });
             report(
                 "上下文预算",
                 format!(

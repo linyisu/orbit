@@ -10,6 +10,10 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
         .unwrap();
     let original = vec![
         ChatMessage::system("old instructions"),
+        ChatMessage::runtime(
+            orbit_model::types::RuntimeStateKind::ToolPolicy,
+            "obsolete policy",
+        ),
         ChatMessage::user("original work"),
         ChatMessage::assistant("original answer"),
     ];
@@ -65,6 +69,10 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
     };
     let projected = vec![
         ChatMessage::system("current instructions"),
+        ChatMessage::runtime(
+            orbit_model::types::RuntimeStateKind::ToolPolicy,
+            "current policy",
+        ),
         ChatMessage::user(format!(
             "BEGIN_UNTRUSTED_COMPACTION_RECORD\nread_history archive_id={id}; search with query"
         )),
@@ -86,6 +94,10 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
             ChatMessage::system("current instructions"),
             ChatMessage::user("original work"),
             ChatMessage::assistant("original answer"),
+            ChatMessage::runtime(
+                orbit_model::types::RuntimeStateKind::ToolPolicy,
+                "current policy"
+            ),
         ]
     );
     assert_eq!(

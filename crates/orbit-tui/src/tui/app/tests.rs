@@ -318,6 +318,7 @@ fn context_indicator_tracks_each_model_request_during_a_run() {
             prompt_tokens: Some(13_000),
             completion_tokens: None,
             total_tokens: None,
+            ..Default::default()
         }),
         elapsed_ms: 100,
     });

@@ -16,6 +16,12 @@ pub enum ChatMessage {
         content: String,
     },
 
+    /// Server-owned state projection, distinct from instructions and user input.
+    Runtime {
+        kind: RuntimeStateKind,
+        content: String,
+    },
+
     User {
         content: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -34,7 +40,21 @@ pub enum ChatMessage {
     },
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeStateKind {
+    ToolPolicy,
+    ProjectState,
+}
+
 impl ChatMessage {
+    pub fn runtime(kind: RuntimeStateKind, content: impl Into<String>) -> Self {
+        Self::Runtime {
+            kind,
+            content: content.into(),
+        }
+    }
+
     pub fn system(content: impl Into<String>) -> Self {
         Self::System {
             content: content.into(),
@@ -315,10 +335,48 @@ pub struct ChatCompletion {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(from = "WireUsage")]
 pub struct Usage {
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct WireUsage {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+    cached_input_tokens: Option<u64>,
+    cache_write_input_tokens: Option<u64>,
+    prompt_tokens_details: Option<TokenDetails>,
+    prompt_cache_hit_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct TokenDetails {
+    pub cached_tokens: Option<u64>,
+}
+
+impl From<WireUsage> for Usage {
+    fn from(value: WireUsage) -> Self {
+        Self {
+            prompt_tokens: value.prompt_tokens,
+            completion_tokens: value.completion_tokens,
+            total_tokens: value.total_tokens,
+            cached_input_tokens: value
+                .cached_input_tokens
+                .or(value
+                    .prompt_tokens_details
+                    .and_then(|details| details.cached_tokens))
+                .or(value.prompt_cache_hit_tokens),
+            cache_write_input_tokens: value.cache_write_input_tokens,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

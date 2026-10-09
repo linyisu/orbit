@@ -16,6 +16,10 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
 
     for message in request.messages {
         let (role, parts) = match message {
+            ChatMessage::Runtime { kind, content } => (
+                "user",
+                vec![json!({ "text": crate::runtime_context::render(kind, &content) })],
+            ),
             ChatMessage::System { content } => {
                 system.push(json!({ "text": content }));
                 continue;
@@ -260,6 +264,8 @@ fn decode(
                 prompt_tokens: usage["promptTokenCount"].as_u64(),
                 completion_tokens: Some(output),
                 total_tokens: usage["totalTokenCount"].as_u64(),
+                cached_input_tokens: usage["cachedContentTokenCount"].as_u64(),
+                cache_write_input_tokens: None,
             }),
         });
     }

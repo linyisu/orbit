@@ -816,6 +816,7 @@ impl ModelBackend for UsageTailModel {
                         prompt_tokens: Some(10),
                         completion_tokens: Some(5),
                         total_tokens: Some(15),
+                        ..Default::default()
                     }),
                 }),
             ])) as orbit_model::types::ModelStream)
@@ -1433,6 +1434,7 @@ fn usage_events_combine_input_and_output_counts() {
             prompt_tokens: Some(321),
             completion_tokens: None,
             total_tokens: None,
+            ..Default::default()
         }),
     );
     merge_usage(
@@ -1441,6 +1443,7 @@ fn usage_events_combine_input_and_output_counts() {
             prompt_tokens: None,
             completion_tokens: Some(16384),
             total_tokens: None,
+            ..Default::default()
         }),
     );
 
@@ -1450,6 +1453,7 @@ fn usage_events_combine_input_and_output_counts() {
             prompt_tokens: Some(321),
             completion_tokens: Some(16384),
             total_tokens: None,
+            ..Default::default()
         })
     );
 }

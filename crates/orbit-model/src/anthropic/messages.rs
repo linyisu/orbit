@@ -32,6 +32,20 @@ pub(crate) fn encode(
 
     for message in request.messages {
         match message {
+            ChatMessage::Runtime { kind, content } => {
+                let block = json!({ "type": "text", "text": crate::runtime_context::render(kind, &content) });
+                if let Some(last) = messages
+                    .last_mut()
+                    .filter(|message| message["role"] == "user")
+                {
+                    last["content"]
+                        .as_array_mut()
+                        .expect("user content blocks")
+                        .push(block);
+                } else {
+                    messages.push(json!({ "role": "user", "content": [block] }));
+                }
+            }
             ChatMessage::System { .. } => {}
 
             ChatMessage::User {
@@ -122,6 +136,7 @@ pub(crate) fn encode(
         "max_tokens": request.max_tokens.unwrap_or(4096),
         "system": system,
         "messages": messages,
+        "cache_control": { "type": "ephemeral" },
         "stream": stream
     });
 
@@ -341,6 +356,8 @@ impl From<AnthropicUsage> for Usage {
             },
             completion_tokens: value.output_tokens,
             total_tokens: None,
+            cached_input_tokens: value.cache_read_input_tokens,
+            cache_write_input_tokens: value.cache_creation_input_tokens,
         }
     }
 }
@@ -570,6 +587,8 @@ mod cache_usage_tests {
         .into();
 
         assert_eq!(usage.prompt_tokens, Some(1212));
+        assert_eq!(usage.cached_input_tokens, Some(1000));
+        assert_eq!(usage.cache_write_input_tokens, Some(200));
 
         let tail: Usage =
             serde_json::from_value::<AnthropicUsage>(serde_json::json!({ "output_tokens": 10 }))

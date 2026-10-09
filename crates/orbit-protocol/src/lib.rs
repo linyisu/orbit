@@ -10,10 +10,9 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 13;
-// Session summaries no longer contain the removed demo-mode field.
-// Both ends must understand the same session schema.
-pub const MIN_COMPATIBLE_VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
+// Both ends must understand typed runtime-state messages in saved contexts.
+pub const MIN_COMPATIBLE_VERSION: u32 = 14;
 
 pub fn supports_version(version: u32) -> bool {
     (MIN_COMPATIBLE_VERSION..=VERSION).contains(&version)

@@ -39,6 +39,9 @@ pub(crate) fn encode(
 
     for message in request.messages {
         match message {
+            ChatMessage::Runtime { kind, content } => {
+                input.push(json!({ "role": "user", "content": [{ "type": "input_text", "text": crate::runtime_context::render(kind, &content) }] }));
+            }
             ChatMessage::System { .. } => {}
             ChatMessage::User {
                 content,
@@ -339,6 +342,7 @@ struct ResponsesUsage {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     total_tokens: Option<u64>,
+    input_tokens_details: Option<crate::types::TokenDetails>,
 }
 
 impl From<ResponsesUsage> for Usage {
@@ -347,6 +351,10 @@ impl From<ResponsesUsage> for Usage {
             prompt_tokens: value.input_tokens,
             completion_tokens: value.output_tokens,
             total_tokens: value.total_tokens,
+            cached_input_tokens: value
+                .input_tokens_details
+                .and_then(|details| details.cached_tokens),
+            cache_write_input_tokens: None,
         }
     }
 }

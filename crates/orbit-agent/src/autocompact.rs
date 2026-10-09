@@ -158,11 +158,12 @@ fn plan_for(
     let available = limit.checked_sub(output)?;
     let before_tokens = estimate_tokens(history, tools);
     let summary_tokens = (available / 8).clamp(256, summary_cap.max(256));
-    let systems: Vec<_> = history
+    let mut systems: Vec<_> = history
         .iter()
         .filter(|m| matches!(m, ChatMessage::System { .. }))
         .cloned()
         .collect();
+    systems.extend(orbit_model::runtime_context::latest(history));
     let fixed = estimate_tokens(&systems, tools);
     let recent_budget = (available / 6).min(RECENT_TOKENS);
     let target_tokens = (fixed + recent_budget + summary_tokens + 512).min(available);
@@ -221,7 +222,10 @@ fn plan_for(
     let weights: Vec<_> = history
         .iter()
         .map(|message| {
-            if matches!(message, ChatMessage::System { .. }) {
+            if matches!(
+                message,
+                ChatMessage::System { .. } | ChatMessage::Runtime { .. }
+            ) {
                 0
             } else {
                 estimate_tokens(std::slice::from_ref(message), &[])
@@ -252,7 +256,7 @@ fn plan_for(
     retained.extend(
         history[cutoff..]
             .iter()
-            .filter(|m| !matches!(m, ChatMessage::System { .. }))
+            .filter(|m| !matches!(m, ChatMessage::System { .. } | ChatMessage::Runtime { .. }))
             .cloned(),
     );
     let retained_tokens = estimate_tokens(&retained, tools);
@@ -765,7 +769,7 @@ fn records(messages: &[ChatMessage], pinned: Option<usize>) -> (String, Vec<Valu
         }
 
         match message {
-            ChatMessage::System { .. } => {}
+            ChatMessage::System { .. } | ChatMessage::Runtime { .. } => {}
             ChatMessage::User {
                 content,
                 attachments,
@@ -1247,6 +1251,34 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compaction_keeps_latest_runtime_state_without_pinning_obsolete_states() {
+        use orbit_model::types::RuntimeStateKind;
+        let current = ChatMessage::runtime(RuntimeStateKind::ToolPolicy, "plan");
+        let mut history = vec![
+            ChatMessage::system("rules"),
+            ChatMessage::runtime(RuntimeStateKind::ToolPolicy, "build"),
+            ChatMessage::user("old request"),
+            current.clone(),
+        ];
+        for _ in 0..12 {
+            history.push(ChatMessage::assistant("old work ".repeat(400)));
+            history.push(ChatMessage::user("continue"));
+        }
+        let plan = plan_manual(&history, &[], 256, 8192).unwrap();
+        assert_eq!(
+            orbit_model::runtime_context::latest(&plan.retained),
+            vec![current]
+        );
+        assert_eq!(
+            plan.retained
+                .iter()
+                .filter(|message| matches!(message, ChatMessage::Runtime { .. }))
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn an_unclosed_record_prefix_in_user_text_is_still_a_user_request() {

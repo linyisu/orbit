@@ -29,6 +29,9 @@ pub(crate) fn encode(
 
     for message in request.messages {
         match message {
+            ChatMessage::Runtime { kind, content } => {
+                messages.push(json!({ "role": "user", "content": crate::runtime_context::render(kind, &content) }));
+            }
             ChatMessage::System { content } => {
                 messages.push(json!({ "role": "system", "content": content }));
             }

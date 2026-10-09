@@ -350,6 +350,7 @@ async fn calibration_restores_per_profile_without_cross_provider_contamination()
                 prompt_tokens: Some(actual),
                 completion_tokens: Some(1),
                 total_tokens: None,
+                ..Default::default()
             }),
         });
     }
