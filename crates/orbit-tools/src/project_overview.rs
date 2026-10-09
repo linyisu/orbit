@@ -25,6 +25,15 @@ const MAX_FILE_BYTES: u64 = 128 * 1024;
 const MAX_READ_BYTES: usize = 2 * 1024 * 1024;
 const MAX_READ_FILES: usize = 96;
 
+struct IndexedSource {
+    path: PathBuf,
+    source: std::sync::Arc<Source>,
+    score: usize,
+    // Request-scoped, within MAX_READ_BYTES; unsupported token streams are
+    // never retained in RepositoryIndex's shared cache.
+    fallback_text: Option<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Arguments {
@@ -448,7 +457,13 @@ fn collect_indexed(
             }
 
             let score = relevance(&path.to_string_lossy(), &terms) * 4 + relevance(&text, &terms);
-            sources.push((path.clone(), source, score));
+            let fallback_text = (!source.parsed).then_some(text);
+            sources.push(IndexedSource {
+                path: path.clone(),
+                source,
+                score,
+                fallback_text,
+            });
         }
     }
 
@@ -474,14 +489,10 @@ fn relevance(text: &str, terms: &[String]) -> usize {
         .count()
 }
 
-fn add_references(
-    result: &mut Value,
-    sources: &[(PathBuf, std::sync::Arc<Source>, usize)],
-    terms: &[String],
-) {
+fn add_references(result: &mut Value, sources: &[IndexedSource], terms: &[String]) {
     // Index all sampled definitions before applying the output's signature cap.
     let mut definitions = BTreeMap::<String, Vec<Value>>::new();
-    for (path, source, _) in sources {
+    for IndexedSource { path, source, .. } in sources {
         for symbol in &source.symbols {
             definitions
                 .entry(symbol.name.clone())
@@ -493,9 +504,27 @@ fn add_references(
     }
     let mut references = Vec::new();
     let mut connected = BTreeMap::<PathBuf, usize>::new();
-    for (path, source, score) in sources {
+    let names = definitions.keys().map(String::as_str).collect();
+    for IndexedSource {
+        path,
+        source,
+        score,
+        fallback_text,
+    } in sources
+    {
         let mut edges = std::collections::BTreeSet::new();
-        for identifier in &source.identifiers {
+        let fallback;
+        let identifiers = if let Some(text) = fallback_text {
+            let (found, truncated) = crate::repository::lexical::references(text, &names);
+            if truncated {
+                result["truncated"]["content"] = json!(true);
+            }
+            fallback = found;
+            &fallback
+        } else {
+            &source.identifiers
+        };
+        for identifier in identifiers {
             let Some(targets) = definitions.get(&identifier.name) else {
                 continue;
             };
@@ -524,7 +553,7 @@ fn add_references(
             }
         }
     }
-    let mut relevant: Vec<_> = sources.iter().filter_map(|(path,_,score)| {
+    let mut relevant: Vec<_> = sources.iter().filter_map(|IndexedSource {path,score,..}| {
         let graph = connected.get(path).copied().unwrap_or(0);
         (*score>0 || graph>0).then(|| json!({
             "path":path, "score":score+graph, "keyword_score":score, "connection_score":graph,
@@ -1029,6 +1058,29 @@ mod tests {
 #[cfg(test)]
 mod task_retrieval_tests {
     use super::*;
+    #[test]
+    fn fallback_references_are_computed_on_demand_from_sampled_definitions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Engine.java"), "class Engine {}\n").unwrap();
+        std::fs::write(dir.path().join("Entry.java"), "class Entry {\n// Engine\n/* Engine */\nString s = \"Engine\";\nvoid run() { new Engine(); }\n}\n").unwrap();
+        let result = collect(
+            Workspace::new(dir.path()).unwrap(),
+            Arguments {
+                max_tokens: 8000,
+                ..Default::default()
+            },
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let result: Value = serde_json::from_str(&result).unwrap();
+        let refs = result["references"].as_array().unwrap();
+        assert_eq!(refs.len(), 1, "{result}");
+        assert_eq!(refs[0]["path"], "Entry.java");
+        assert_eq!(refs[0]["line"], 5);
+        assert_eq!(refs[0]["kind"], "lexical_reference_candidate");
+        assert_eq!(refs[0]["targets"][0]["path"], "Engine.java");
+    }
+
     #[tokio::test]
     async fn focused_lookup_refreshes_shared_index_and_never_serves_inaccessible_cached_files() {
         let temp = tempfile::tempdir().unwrap();

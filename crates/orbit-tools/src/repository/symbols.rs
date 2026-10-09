@@ -15,6 +15,8 @@ pub(super) fn analyze(path: &Path, source: &str) -> Source {
         "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         "js" | "jsx" | "mjs" | "cjs" => Some(tree_sitter_javascript::LANGUAGE.into()),
         "go" => Some(tree_sitter_go::LANGUAGE.into()),
+        "c" | "h" => Some(tree_sitter_c::LANGUAGE.into()),
+        "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" => Some(tree_sitter_cpp::LANGUAGE.into()),
         _ => None,
     };
     let mut parser = Parser::new();
@@ -26,6 +28,9 @@ pub(super) fn analyze(path: &Path, source: &str) -> Source {
             "rs" => extract_rust_symbols(tree, source),
             "py" => extract_python_symbols(tree, source),
             "go" => extract_go_symbols(tree, source),
+            "c" | "h" | "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" => {
+                extract_c_symbols(tree, source)
+            }
             _ => extract_ts_js_symbols(tree, source),
         },
         None => extract_fallback_symbols(path, source),
@@ -51,16 +56,33 @@ pub(super) fn analyze(path: &Path, source: &str) -> Source {
                 continue;
             }
             if kind.ends_with("identifier") {
-                let declaration_name = node.parent().is_some_and(|parent| {
+                let mut declaration = node;
+                // Follow only the named declarator chain, never a function's
+                // body or parameter list, to distinguish C/C++ declarations.
+                while let Some(parent) = declaration.parent().filter(|parent| {
+                    parent.kind() == "qualified_identifier"
+                        && parent.child_by_field_name("name") == Some(declaration)
+                }) {
+                    declaration = parent;
+                }
+                let declaration_name = declaration.parent().is_some_and(|parent| {
                     let kind = parent.kind();
-                    (kind.ends_with("_item")
+                    ((kind.ends_with("_item")
                         || kind.ends_with("_definition")
                         || kind.ends_with("_declaration")
                         || matches!(
                             kind,
-                            "variable_declarator" | "type_spec" | "method_signature"
+                            "variable_declarator"
+                                | "type_spec"
+                                | "method_signature"
+                                | "struct_specifier"
+                                | "class_specifier"
+                                | "enum_specifier"
+                                | "union_specifier"
                         ))
-                        && parent.child_by_field_name("name") == Some(node)
+                        && parent.child_by_field_name("name") == Some(declaration))
+                        || (matches!(kind, "function_declarator" | "type_definition")
+                            && parent.child_by_field_name("declarator") == Some(declaration))
                 });
                 if declaration_name {
                     continue;
@@ -80,28 +102,6 @@ pub(super) fn analyze(path: &Path, source: &str) -> Source {
             }
             let mut cursor = node.walk();
             pending.extend(node.named_children(&mut cursor));
-        }
-    } else {
-        for (line, text) in source.lines().enumerate() {
-            if text.trim_start().starts_with("//") || text.trim_start().starts_with('#') {
-                continue;
-            }
-            for name in text
-                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                .filter(|s| !s.is_empty() && s.len() <= 128)
-            {
-                identifiers.push(Identifier {
-                    name: name.into(),
-                    line: line + 1,
-                });
-                if identifiers.len() >= 8192 {
-                    truncated = true;
-                    break;
-                }
-            }
-            if truncated {
-                break;
-            }
         }
     }
     Source {
@@ -134,6 +134,85 @@ fn clean_signature(sig: &str) -> String {
         .chars()
         .take(512)
         .collect()
+}
+
+fn extract_c_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol> {
+    let mut symbols = Vec::new();
+    let mut pending = vec![tree.root_node()];
+    while let Some(node) = pending.pop() {
+        let (name, kind) = match node.kind() {
+            "function_declarator" => (
+                node.child_by_field_name("declarator").filter(|n| {
+                    matches!(
+                        n.kind(),
+                        "identifier"
+                            | "field_identifier"
+                            | "qualified_identifier"
+                            | "destructor_name"
+                            | "operator_name"
+                    )
+                }),
+                "function",
+            ),
+            "struct_specifier" => (node.child_by_field_name("name"), "struct"),
+            "class_specifier" => (node.child_by_field_name("name"), "class"),
+            "union_specifier" => (node.child_by_field_name("name"), "union"),
+            "enum_specifier" => (node.child_by_field_name("name"), "enum"),
+            "type_definition" => (node.child_by_field_name("declarator"), "type"),
+            _ => (None, ""),
+        };
+        if let Some(mut name) = name {
+            // A qualified method uses its terminal name for cross-file hints.
+            while let Some(inner) = name
+                .child_by_field_name("name")
+                .or_else(|| name.child_by_field_name("declarator"))
+            {
+                name = inner;
+            }
+            let owner = if kind == "function" {
+                let mut owner = node;
+                while let Some(parent) = owner.parent().filter(|p| {
+                    !matches!(
+                        p.kind(),
+                        "translation_unit"
+                            | "field_declaration_list"
+                            | "declaration_list"
+                            | "namespace_definition"
+                            | "template_declaration"
+                    )
+                }) {
+                    owner = parent;
+                    if matches!(
+                        owner.kind(),
+                        "declaration" | "field_declaration" | "function_definition"
+                    ) {
+                        break;
+                    }
+                }
+                owner
+            } else {
+                node
+            };
+            let end = owner
+                .child_by_field_name("body")
+                .map_or(owner.end_byte(), |body| body.start_byte());
+            symbols.push(AstSymbol {
+                name: name.utf8_text(source.as_bytes()).unwrap_or_default().into(),
+                kind: kind.into(),
+                line: name.start_position().row + 1,
+                signature: clean_signature(&source[owner.start_byte()..end]),
+            });
+            if symbols.len() > 1024 {
+                break;
+            }
+        }
+        if node.kind() != "compound_statement" {
+            let mut cursor = node.walk();
+            pending.extend(node.named_children(&mut cursor));
+        }
+    }
+    symbols.sort_by_key(|s| s.line);
+    symbols
 }
 
 fn extract_rust_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol> {

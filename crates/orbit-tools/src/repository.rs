@@ -1,6 +1,7 @@
 //! Lazy syntax index. Callers must open/read through Workspace before lookup;
 //! cache keys include content, so unchanged timestamps never hide an edit.
 mod languages;
+pub(crate) mod lexical;
 pub(crate) mod symbols;
 pub(crate) use languages::language;
 
@@ -118,6 +119,78 @@ impl RepositoryIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unsupported_sources_do_not_cache_their_token_stream() {
+        let index = RepositoryIndex::default();
+        let source = index.analyze(
+            Path::new("large.java"),
+            &format!(
+                "class Engine {{\n{}\n}}",
+                "local local 123 \"text\";\n".repeat(4000)
+            ),
+        );
+        assert!(!source.parsed);
+        assert_eq!(source.symbols[0].name, "Engine");
+        assert!(source.identifiers.is_empty());
+        assert!(source.bytes() < 2048);
+    }
+
+    #[test]
+    fn imported_names_remain_reference_candidates() {
+        let index = RepositoryIndex::default();
+        let source = index.analyze(
+            Path::new("caller.ts"),
+            "import { resolve as run } from './engine';\nrun();\n",
+        );
+        assert!(
+            source
+                .identifiers
+                .iter()
+                .any(|id| id.name == "resolve" && id.line == 1)
+        );
+        assert!(
+            source
+                .identifiers
+                .iter()
+                .any(|id| id.name == "run" && id.line == 2)
+        );
+    }
+
+    #[test]
+    fn c_and_cpp_use_syntax_for_declarations_and_references() {
+        let index = RepositoryIndex::default();
+        for (path, text, expected) in [
+            (
+                "engine.c",
+                "typedef int Count;\nstruct Engine { int value; };\nint resolve(int value) { return value; }\nint caller(void) { /* ignored */ return resolve(1); }\nconst char *text = \"resolve\";",
+                vec!["Count", "Engine", "resolve", "caller"],
+            ),
+            (
+                "engine.cpp",
+                "namespace app {\nclass Engine { public: int resolve(int value); };\nint Engine::resolve(int value) { return value; }\nint caller(Engine &engine) { return engine.resolve(1); }\n}",
+                vec!["Engine", "resolve", "resolve", "caller"],
+            ),
+        ] {
+            let source = index.analyze(Path::new(path), text);
+            assert!(source.parsed);
+            assert_eq!(
+                source
+                    .symbols
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            let calls = source
+                .identifiers
+                .iter()
+                .filter(|id| id.name == "resolve")
+                .collect::<Vec<_>>();
+            assert_eq!(calls.len(), 1, "{path}: {calls:?}");
+            assert_eq!(calls[0].line, 4);
+        }
+    }
+
     #[test]
     fn shared_index_refreshes_by_content_and_bounds_retained_memory() {
         let index = RepositoryIndex::default();
