@@ -227,12 +227,11 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
     ensure!(files.len() == 1, "Unexpected deployed binaries: {files:?}");
     let executable = &files[0];
     let deployed = directory.path().join("deployed-server");
-    let file = fs::File::create(&deployed)?;
-    process::run(docker(container, &["cat", executable]).stdout(file)).await?;
+    process::run_to_file(&mut docker(container, &["cat", executable]), &deployed).await?;
     let digest = sha256(&deployed)?;
     ensure!(
         *executable == format!("/root/.cache/orbit/servers/{digest}/orbit"),
-        "deployed file digest does not match its cache path"
+        "deployed file digest does not match its cache path: {executable}; downloaded SHA-256: {digest}"
     );
     orbit_build::verify_static_server(&deployed).map_err(anyhow::Error::msg)?;
     ensure!(
