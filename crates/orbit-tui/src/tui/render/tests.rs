@@ -742,6 +742,41 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
 }
 
 #[test]
+fn web_fetch_resolves_relative_and_paginated_reference_links_against_final_url() {
+    use super::super::app::ToolRow;
+    let base = "https://docs.orbit.example/guide/topic.html";
+    let content = "* [当前文档][1]\n* [旧版](../archive/)\n* [其他站点](//other.orbit.example/help)\n* [不安全](javascript:alert)\n";
+    for definitions in ["", "\n[1]: /docs/\n"] {
+        let row = ToolRow {
+            id:"fetch".into(), name:"web_fetch".into(),
+            arguments:serde_json::json!({"url":"https://docs.orbit.example/redirect"}).to_string(),
+            status:ToolStatus::Finished,
+            output:serde_json::json!({"url":base, "content":format!("{content}{definitions}"), "links":[{"n":1,"url":"https://docs.orbit.example/docs/"}]}).to_string(),
+        };
+        for width in [18, 40, 100] {
+            let lines = tool_card_with_links(&row, true, width);
+            let targets: std::collections::BTreeSet<_> = lines
+                .iter()
+                .flat_map(|l| l.links.iter().map(|l| l.url.as_str()))
+                .collect();
+            for expected in [
+                base,
+                "https://docs.orbit.example/docs/",
+                "https://docs.orbit.example/archive/",
+                "https://other.orbit.example/help",
+            ] {
+                assert!(targets.contains(expected), "{width}: {targets:?}");
+            }
+            assert!(
+                targets
+                    .iter()
+                    .all(|url| super::super::browser_url(url).is_ok())
+            );
+        }
+    }
+}
+
+#[test]
 fn web_fetch_title_is_not_a_link_but_wrapped_body_urls_keep_the_full_target() {
     use super::super::app::ToolRow;
     let url = "https://orbit.example/docs/rendering/";

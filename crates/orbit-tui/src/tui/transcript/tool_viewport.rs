@@ -209,6 +209,72 @@ mod tests {
     }
 
     #[test]
+    fn web_links_keep_absolute_hit_targets_while_scrolling_grouped_and_standalone_bodies() {
+        for grouped in [false, true] {
+            let items = (0..if grouped { 2 } else { 1 }).map(|i| TranscriptItem::Tool(ToolRow {
+                id: format!("fetch-{i}"),
+                name: "web_fetch".into(),
+                arguments: serde_json::json!({"url":"https://docs.orbit.example/topic/"}).to_string(),
+                status: ToolStatus::Finished,
+                output: serde_json::json!({
+                    "url":"https://docs.orbit.example/topic/",
+                    "content":(1..=16).map(|n| format!("* [很长的文档链接 {n}][{n}]\n")).collect::<String>(),
+                    "links":(1..=16).map(|n| serde_json::json!({"n":n,"url":format!("https://docs.orbit.example/page/{n}")})).collect::<Vec<_>>()
+                }).to_string(),
+            })).collect::<Vec<_>>();
+            for width in [24, 80, 40] {
+                let mut layout = TranscriptLayout::default();
+                layout.update_expanded(
+                    &items,
+                    &(0..items.len()).collect(),
+                    &if grouped {
+                        [0].into()
+                    } else {
+                        Default::default()
+                    },
+                    width,
+                );
+                let area = Rect::new(3, 2, width, layout.height() as u16);
+                for index in 0..items.len() {
+                    let entry = &layout.entries[index];
+                    let view = entry.tool_body.as_ref().unwrap();
+                    let point = (
+                        area.x + 3,
+                        area.y
+                            + (entry.end - entry.height + entry.rows[view.rows.start].start) as u16,
+                    );
+                    let mut targets = std::collections::BTreeSet::new();
+                    loop {
+                        for y in area.y..area.bottom() {
+                            for x in area.x..area.right() {
+                                if let Some(url) = layout.link_at(area, 0, (x, y)) {
+                                    targets.insert(url.to_owned());
+                                }
+                            }
+                        }
+                        let before = layout.tool_scroll.get(&index).copied();
+                        assert!(layout.scroll_tool_body(area, 0, point, 1));
+                        if before == layout.tool_scroll.get(&index).copied() {
+                            break;
+                        }
+                    }
+                    for n in 1..=16 {
+                        assert!(
+                            targets.contains(&format!("https://docs.orbit.example/page/{n}")),
+                            "grouped={grouped} width={width} page={n}"
+                        );
+                    }
+                    assert!(
+                        targets
+                            .iter()
+                            .all(|url| crate::tui::browser_url(url).is_ok())
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn tool_viewport_counts_wrapped_rows_and_keeps_position_across_redraw_and_resize() {
         let mut items = [tool(
             (0..20)

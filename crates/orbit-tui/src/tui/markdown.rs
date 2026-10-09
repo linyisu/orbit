@@ -258,6 +258,7 @@ pub(super) fn slice_decorations(
 #[derive(Default)]
 pub(super) struct Context<'a> {
     parser: Option<Parser<'a>>,
+    references: std::collections::BTreeMap<String, String>,
     footnotes: footnotes::Catalog,
 }
 
@@ -307,6 +308,7 @@ impl<'a> Context<'a> {
 
     pub fn new(source: &'a str) -> Self {
         Self {
+            references: Default::default(),
             parser: source.contains('[').then(|| {
                 Parser::new_ext(source, Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES)
             }),
@@ -358,6 +360,9 @@ impl<'a> Context<'a> {
             source,
             options,
             Some(move |link: BrokenLink<'s>| {
+                if let Some(url) = self.references.get(link.reference.as_ref()) {
+                    return Some((CowStr::from(url.clone()), CowStr::from("")));
+                }
                 let definition = self
                     .parser
                     .as_ref()?
@@ -513,6 +518,18 @@ impl Context<'_> {
 
 pub(super) fn document(source: &str, width: u16) -> Vec<LinkedLine> {
     document_at(source, width, "body", 0)
+}
+
+/// Tool pages may carry reference definitions separately from a truncated
+/// content slice. Use the same parser and layout as an ordinary document.
+pub(super) fn document_with_references(
+    source: &str,
+    width: u16,
+    references: std::collections::BTreeMap<String, String>,
+) -> Vec<LinkedLine> {
+    let mut context = Context::new(source);
+    context.references = references;
+    document_with_context(source, width, "body", 0, &context, Some(0))
 }
 
 fn document_at(source: &str, width: u16, path: &str, depth: usize) -> Vec<LinkedLine> {

@@ -413,7 +413,11 @@ fn matcher(value: &Value) -> Option<Regex> {
 }
 
 fn markdown_preview(content: &str, width: u16) -> Vec<LinkedLine> {
-    super::markdown::document(content, width.saturating_add(2))
+    inset_markdown(super::markdown::document(content, width.saturating_add(2)))
+}
+
+fn inset_markdown(lines: Vec<LinkedLine>) -> Vec<LinkedLine> {
+    lines
         .into_iter()
         .map(|mut linked| {
             linked.line.spans.insert(0, Span::raw("  "));
@@ -424,12 +428,22 @@ fn markdown_preview(content: &str, width: u16) -> Vec<LinkedLine> {
 }
 
 fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
+    let mut base = None;
+    let mut references = BTreeMap::new();
     let (text, header_spans) = if let Ok(val) = serde_json::from_str::<Value>(output) {
         let content = val["content"].as_str().unwrap_or(output).to_owned();
         let url = val["url"]
             .as_str()
             .or_else(|| val["requested_url"].as_str())
             .unwrap_or_default();
+        base = super::browser_url(url).ok();
+        if let Some(links) = val["links"].as_array() {
+            for link in links {
+                if let (Some(n), Some(target)) = (link["n"].as_u64(), link["url"].as_str()) {
+                    references.insert(n.to_string(), target.to_owned());
+                }
+            }
+        }
         let start = val["start_char"].as_u64().unwrap_or(0);
         let total = val["total_chars"].as_u64().unwrap_or(0);
         let theme = &crate::tui::theme::THEME;
@@ -467,7 +481,35 @@ fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
         return Some(out);
     }
 
-    out.extend(markdown_preview(trimmed, width));
+    let mut body = inset_markdown(super::markdown::document_with_references(
+        trimmed,
+        width.saturating_add(2),
+        references,
+    ));
+    // HTML conversion keeps relative hrefs in the document. Resolve at the
+    // web-result boundary, never against the local workspace or browser state.
+    for line in &mut body {
+        line.links.retain_mut(|link| {
+            if super::markdown::footnotes::is_target(&link.url) {
+                return true;
+            }
+            if super::browser_url(&link.url).is_ok() {
+                return true;
+            }
+            let target = base
+                .as_ref()
+                .map_or_else(|| url::Url::parse(&link.url), |base| base.join(&link.url));
+            let Ok(target) = target else {
+                return false;
+            };
+            if super::browser_url(target.as_str()).is_err() {
+                return false;
+            }
+            link.url = target.to_string();
+            true
+        });
+    }
+    out.extend(body);
     Some(out)
 }
 
