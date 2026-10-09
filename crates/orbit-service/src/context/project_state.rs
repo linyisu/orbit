@@ -472,7 +472,6 @@ mod tests {
             .create(
                 project_directory.to_string_lossy().into_owned(),
                 "mock".into(),
-                false,
             )
             .await
             .unwrap();
@@ -481,7 +480,6 @@ mod tests {
             .create(
                 project_directory.to_string_lossy().into_owned(),
                 "mock".into(),
-                false,
             )
             .await
             .unwrap();
@@ -545,7 +543,6 @@ mod tests {
             .create(
                 project_directory.to_string_lossy().into_owned(),
                 "mock".into(),
-                false,
             )
             .await
             .unwrap();
@@ -554,7 +551,6 @@ mod tests {
             .create(
                 project_directory.to_string_lossy().into_owned(),
                 "mock".into(),
-                false,
             )
             .await
             .unwrap();
@@ -616,11 +612,11 @@ mod tests {
         std::fs::create_dir(&first_path).unwrap();
         std::fs::create_dir(&second_path).unwrap();
         let first = store
-            .create(first_path.display().to_string(), "mock".into(), false)
+            .create(first_path.display().to_string(), "mock".into())
             .await
             .unwrap();
         let second = store
-            .create(second_path.display().to_string(), "mock".into(), false)
+            .create(second_path.display().to_string(), "mock".into())
             .await
             .unwrap();
         let first_session = store.session(first.id()).await.unwrap();

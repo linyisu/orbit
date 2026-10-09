@@ -1057,7 +1057,7 @@ async fn packaged_service_lists_history_created_by_the_native_store() {
         .await
         .unwrap();
     let mut writer = store
-        .create(root.display().to_string(), "test::mock".into(), false)
+        .create(root.display().to_string(), "test::mock".into())
         .await
         .unwrap();
     let history_id = writer.id().to_owned();

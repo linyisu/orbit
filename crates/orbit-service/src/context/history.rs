@@ -169,7 +169,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
         let session = store
-            .create(dir.path().display().to_string(), "model".into(), false)
+            .create(dir.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let mut tools = ToolRegistry::new();
@@ -234,11 +234,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
         let first = store
-            .create(dir.path().display().to_string(), "model".into(), false)
+            .create(dir.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let second = store
-            .create(dir.path().display().to_string(), "model".into(), false)
+            .create(dir.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let id = store

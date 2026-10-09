@@ -7,7 +7,6 @@ pub struct Model {
     pub id: String,
     pub workspace: String,
     pub model: String,
-    pub demo: bool,
     pub title: String,
     pub updated_at: i64,
     pub history: String,

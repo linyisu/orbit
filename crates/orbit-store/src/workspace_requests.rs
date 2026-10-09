@@ -88,7 +88,6 @@ mod tests {
             .create(
                 directory.path().to_string_lossy().into_owned(),
                 "mock".into(),
-                false,
             )
             .await
             .unwrap();

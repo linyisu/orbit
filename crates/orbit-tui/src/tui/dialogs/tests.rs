@@ -312,7 +312,6 @@ fn session(id: &str, title: &str) -> Session {
         project_id: "project-id".into(),
         model: "model".into(),
         reasoning_effort: None,
-        demo: true,
         // 2024-06-15 12:00:00 UTC — a stable, non-zero timestamp so that
         // the rendered subtitle shows a date rather than "—".
         updated_at: 1_718_445_600,

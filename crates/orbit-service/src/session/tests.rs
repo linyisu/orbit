@@ -283,25 +283,10 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     std::fs::create_dir(&foreign_path).unwrap();
     let foreign = state
         .store
-        .create(
-            foreign_path.to_string_lossy().into_owned(),
-            "model".into(),
-            true,
-        )
+        .create(foreign_path.to_string_lossy().into_owned(), "model".into())
         .await
         .unwrap();
-    let legacy_demo = state
-        .store
-        .create(
-            state.snapshot.session.workspace.clone(),
-            "model".into(),
-            true,
-        )
-        .await
-        .unwrap();
-
     assert!(state.resume(foreign.id()).await.is_err());
-    assert!(state.resume(legacy_demo.id()).await.is_err());
     assert_eq!(
         state
             .resumable()
@@ -456,7 +441,6 @@ async fn test_session_switch_and_resume_clears_session_grants() {
         .create(
             session.snapshot.session.workspace.clone(),
             "a::model".into(),
-            false,
         )
         .await
         .unwrap();

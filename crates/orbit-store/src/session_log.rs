@@ -147,11 +147,7 @@ mod tests {
             .await
             .unwrap();
         let mut writer = store
-            .create(
-                directory.path().display().to_string(),
-                "model".into(),
-                false,
-            )
+            .create(directory.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let id = writer.id().to_owned();
@@ -209,11 +205,7 @@ mod tests {
         let path = directory.path().join("orbit.db");
         let store = Store::open(&path).await.unwrap();
         let mut writer = store
-            .create(
-                directory.path().display().to_string(),
-                "model".into(),
-                false,
-            )
+            .create(directory.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let id = writer.id().to_owned();
@@ -281,11 +273,7 @@ mod tests {
             .await
             .unwrap();
         let mut writer = store
-            .create(
-                directory.path().display().to_string(),
-                "model".into(),
-                false,
-            )
+            .create(directory.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let id = writer.id().to_owned();
@@ -338,11 +326,7 @@ mod tests {
             .await
             .unwrap();
         let mut writer = store
-            .create(
-                directory.path().display().to_string(),
-                "orbit-model".into(),
-                false,
-            )
+            .create(directory.path().display().to_string(), "orbit-model".into())
             .await
             .unwrap();
         let id = writer.id().to_owned();
@@ -401,11 +385,7 @@ mod tests {
             .await
             .unwrap();
         let mut writer = store
-            .create(
-                directory.path().display().to_string(),
-                "model".into(),
-                false,
-            )
+            .create(directory.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let id = writer.id().to_owned();

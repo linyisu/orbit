@@ -228,11 +228,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
         let owner = store
-            .create(dir.path().display().to_string(), "model".into(), false)
+            .create(dir.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let foreign = store
-            .create(dir.path().display().to_string(), "model".into(), false)
+            .create(dir.path().display().to_string(), "model".into())
             .await
             .unwrap();
 
@@ -317,11 +317,11 @@ mod tests {
         let path = dir.path().join("orbit.db");
         let store = Store::open(&path).await.unwrap();
         let owner = store
-            .create(dir.path().display().to_string(), "model".into(), false)
+            .create(dir.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let foreign = store
-            .create(dir.path().display().to_string(), "model".into(), false)
+            .create(dir.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let history = vec![

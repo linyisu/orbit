@@ -105,7 +105,6 @@ impl Store {
                     workspace: Set(row.workspace),
                     project_id: Set(row.project_id),
                     model: Set(model),
-                    demo: Set(row.demo),
                     ..Default::default()
                 }
                 .insert(&tx)
@@ -333,7 +332,7 @@ mod tests {
         let path = dir.path().join("orbit.db");
         let store = Store::open(&path).await.unwrap();
         let parent = store
-            .create(dir.path().display().to_string(), "model".into(), false)
+            .create(dir.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let child = store
@@ -354,9 +353,10 @@ mod tests {
         drop(child);
         drop(parent);
         drop(store);
-        // Recreate the v26 foreign key exactly, preserving queued data.
+        // Recreate the v26 schema, preserving queued data.
         let connection = rusqlite::Connection::open(&path).unwrap();
         connection.execute_batch("PRAGMA foreign_keys=OFF;
+            ALTER TABLE sessions ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
             CREATE TABLE old_inputs (id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
                 content TEXT NOT NULL, received INTEGER NOT NULL DEFAULT 0 CHECK(received IN (0,1)));
@@ -406,19 +406,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
         let parent = store
-            .create(
-                dir.path().display().to_string(),
-                "orbit-model".into(),
-                false,
-            )
+            .create(dir.path().display().to_string(), "orbit-model".into())
             .await
             .unwrap();
         let other = store
-            .create(
-                dir.path().display().to_string(),
-                "orbit-model".into(),
-                false,
-            )
+            .create(dir.path().display().to_string(), "orbit-model".into())
             .await
             .unwrap();
         let child = store
@@ -466,11 +458,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
         let mut parent = store
-            .create(
-                dir.path().display().to_string(),
-                "orbit-model".into(),
-                false,
-            )
+            .create(dir.path().display().to_string(), "orbit-model".into())
             .await
             .unwrap();
         let mut child = store

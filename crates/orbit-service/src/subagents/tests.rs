@@ -103,11 +103,7 @@ async fn fixture(
     fixture.write(&path).unwrap();
     let store = Store::open(dir.join("orbit.db")).await.unwrap();
     let mut parent = store
-        .create(
-            dir.display().to_string(),
-            "orbit::orbit-model".into(),
-            false,
-        )
+        .create(dir.display().to_string(), "orbit::orbit-model".into())
         .await
         .unwrap();
 

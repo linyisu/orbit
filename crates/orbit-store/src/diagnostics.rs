@@ -334,7 +334,6 @@ mod tests {
             .create(
                 directory.path().to_string_lossy().into_owned(),
                 "test".into(),
-                false,
             )
             .await
             .unwrap();

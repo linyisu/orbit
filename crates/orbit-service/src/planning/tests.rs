@@ -10,11 +10,7 @@ async fn fixture() -> (
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("sessions.db")).await.unwrap();
     let writer = store
-        .create(
-            dir.path().to_string_lossy().into_owned(),
-            "test".into(),
-            false,
-        )
+        .create(dir.path().to_string_lossy().into_owned(), "test".into())
         .await
         .unwrap();
     let plan = Planning::new(

@@ -65,7 +65,7 @@ async fn restart_preserves_event_order_and_successful_context() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -106,7 +106,7 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -156,7 +156,7 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
     let store = Store::open(db.path()).await.unwrap();
     let other = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -188,7 +188,7 @@ async fn invalid_finish_keeps_run_recoverable_and_migration_can_be_replayed() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     writer.begin("prompt".into(), "mock".into()).await.unwrap();
@@ -205,7 +205,10 @@ async fn invalid_finish_keeps_run_recoverable_and_migration_can_be_replayed() {
     drop(store);
     let connection = rusqlite::Connection::open(db.path()).unwrap();
     connection
-        .execute_batch("DROP TABLE seaql_migrations; PRAGMA user_version=14")
+        .execute_batch(
+            "ALTER TABLE sessions ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
+            DROP TABLE seaql_migrations; PRAGMA user_version=14",
+        )
         .unwrap();
     drop(connection);
 
@@ -239,7 +242,7 @@ async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -301,7 +304,7 @@ async fn finalization_rolls_back_events_status_and_context_together() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     writer.begin("prompt".into(), "mock".into()).await.unwrap();
@@ -354,7 +357,7 @@ async fn project_rename_preserves_history_without_markers_and_copy_is_separate()
     std::fs::write(old.join("user.txt"), "user content").unwrap();
     let project = store.resolve_project(&old).await.unwrap();
     let mut writer = store
-        .create(old.to_str().unwrap().into(), "mock".into(), true)
+        .create(old.to_str().unwrap().into(), "mock".into())
         .await
         .unwrap();
     let session = writer.id().to_owned();
@@ -476,7 +479,7 @@ async fn explicit_link_rejects_copies_active_writers_and_populated_destinations(
     std::fs::create_dir(&new).unwrap();
     let project = store.resolve_project(&old).await.unwrap();
     let writer = store
-        .create(old.to_str().unwrap().into(), "mock".into(), true)
+        .create(old.to_str().unwrap().into(), "mock".into())
         .await
         .unwrap();
     let session = writer.id().to_owned();
@@ -507,7 +510,7 @@ async fn explicit_link_rejects_copies_active_writers_and_populated_destinations(
     let destination = db.0.join("populated");
     std::fs::create_dir(&destination).unwrap();
     let mut other = store
-        .create(destination.to_str().unwrap().into(), "mock".into(), true)
+        .create(destination.to_str().unwrap().into(), "mock".into())
         .await
         .unwrap();
     other
@@ -629,7 +632,7 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into(), true)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -721,12 +724,12 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
     std::fs::write(old.join("user-file.txt"), "only user content").unwrap();
     let project = store.resolve_project(&old).await.unwrap();
     let first_writer = store
-        .create(old.to_string_lossy().into_owned(), "mock".into(), false)
+        .create(old.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     let first_session = first_writer.id().to_owned();
     let second_writer = store
-        .create(old.to_string_lossy().into_owned(), "mock".into(), false)
+        .create(old.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     let second_session = second_writer.id().to_owned();
@@ -902,7 +905,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create(db.0.display().to_string(), "mock".into(), false)
+        .create(db.0.display().to_string(), "mock".into())
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -1025,7 +1028,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
-        .create(db.0.display().to_string(), "mock".into(), false)
+        .create(db.0.display().to_string(), "mock".into())
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -1051,7 +1054,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
     );
 
     let other = store
-        .create(db.0.display().to_string(), "mock".into(), false)
+        .create(db.0.display().to_string(), "mock".into())
         .await
         .unwrap();
 
@@ -1109,7 +1112,7 @@ async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace()
         .await
         .unwrap();
     let mut writer = store
-        .create(old.to_string_lossy().into_owned(), "mock".into(), false)
+        .create(old.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     let id = writer.id().to_owned();
@@ -1169,7 +1172,7 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         let mut writer = store
-            .create(db.0.to_string_lossy().into_owned(), "mock".into(), false)
+            .create(db.0.to_string_lossy().into_owned(), "mock".into())
             .await
             .unwrap();
         let id = writer.id().to_owned();
@@ -1198,7 +1201,10 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
         }
 
         connection
-            .execute_batch("DROP TABLE seaql_migrations; PRAGMA user_version=19;")
+            .execute_batch(
+                "ALTER TABLE sessions ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
+                DROP TABLE seaql_migrations; PRAGMA user_version=19;",
+            )
             .unwrap();
         drop(connection);
 
@@ -1282,11 +1288,7 @@ async fn developer_role_migration_preserves_children_and_queued_messages() {
     let path = root.path().join("sessions.db");
     let store = Store::open(path.clone()).await.unwrap();
     let mut parent = store
-        .create(
-            root.path().to_string_lossy().into_owned(),
-            "mock".into(),
-            false,
-        )
+        .create(root.path().to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     parent.begin("parent".into(), "mock".into()).await.unwrap();
@@ -1310,7 +1312,10 @@ async fn developer_role_migration_preserves_children_and_queued_messages() {
     drop(store);
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
-        .execute_batch("DROP TABLE seaql_migrations; PRAGMA user_version=23;")
+        .execute_batch(
+            "ALTER TABLE sessions ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
+            DROP TABLE seaql_migrations; PRAGMA user_version=23;",
+        )
         .unwrap();
     drop(connection);
     let store = Store::open(path).await.unwrap();
@@ -1346,7 +1351,7 @@ async fn resume_history_excludes_drafts_but_keeps_failed_and_untitled_runs() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let draft = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into(), false)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     draft.set_title("named draft".into()).await.unwrap();
@@ -1354,7 +1359,7 @@ async fn resume_history_excludes_drafts_but_keeps_failed_and_untitled_runs() {
     assert_eq!(store.list().await.unwrap().len(), 1);
     assert!(store.load(draft.id()).await.unwrap().runs.is_empty());
     let mut conversation = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into(), false)
+        .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
     conversation

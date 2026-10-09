@@ -149,19 +149,11 @@ mod tests {
         let path = directory.path().join("orbit.db");
         let store = Store::open(&path).await.unwrap();
         let owner = store
-            .create(
-                directory.path().display().to_string(),
-                "model".into(),
-                false,
-            )
+            .create(directory.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let foreign = store
-            .create(
-                directory.path().display().to_string(),
-                "model".into(),
-                false,
-            )
+            .create(directory.path().display().to_string(), "model".into())
             .await
             .unwrap();
         let progress = SummaryProgress {

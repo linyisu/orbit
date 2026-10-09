@@ -10,10 +10,10 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 12;
-// BTW viewers are connection scoped and must explicitly release ephemeral state.
-// Both ends must implement the same open/close lifecycle.
-pub const MIN_COMPATIBLE_VERSION: u32 = 12;
+pub const VERSION: u32 = 13;
+// Session summaries no longer contain the removed demo-mode field.
+// Both ends must understand the same session schema.
+pub const MIN_COMPATIBLE_VERSION: u32 = 13;
 
 pub fn supports_version(version: u32) -> bool {
     (MIN_COMPATIBLE_VERSION..=VERSION).contains(&version)
@@ -468,7 +468,6 @@ pub struct Session {
     /// The selected reasoning setting, stored independently from provider
     /// configuration so a resumed conversation keeps its own preference.
     pub reasoning_effort: Option<String>,
-    pub demo: bool,
     pub title: String,
     pub updated_at: i64,
 }

@@ -44,10 +44,13 @@ async fn rust_schema_retains_domain_checks() {
     let current = Connection::open(path).unwrap();
     let historical = Connection::open_in_memory().unwrap();
     support::legacy_schema(&historical, 27);
+    historical
+        .execute_batch("ALTER TABLE sessions DROP COLUMN demo")
+        .unwrap();
     for db in [&current, &historical] {
         db.execute("INSERT INTO projects(id) VALUES('project')", [])
             .unwrap();
-        db.execute("INSERT INTO sessions(id,workspace,model,demo,project_id) VALUES('session','/workspace','model',0,'project')", []).unwrap();
+        db.execute("INSERT INTO sessions(id,workspace,model,project_id) VALUES('session','/workspace','model','project')", []).unwrap();
         for statement in [
             "INSERT INTO runs(session_id,prompt,status) VALUES('session','prompt','unknown')",
             "INSERT INTO project_tasks(project_id,title) VALUES('project','')",
@@ -76,6 +79,9 @@ async fn rust_schema_retains_domain_checks() {
 async fn every_released_schema_upgrades_without_losing_history_and_reopens_idempotently() {
     let reference = Connection::open_in_memory().unwrap();
     support::legacy_schema(&reference, 27);
+    reference
+        .execute_batch("ALTER TABLE sessions DROP COLUMN demo")
+        .unwrap();
     let expected_schema = schema(&reference);
     for version in 0..=27 {
         let dir = tempfile::tempdir().unwrap();
@@ -91,7 +97,7 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
                     )
                     .unwrap();
             }
-            legacy.execute("INSERT INTO sessions(id,workspace,model,demo,title,history) VALUES('session','/workspace','model',0,'Keep me','[]')", []).unwrap();
+            legacy.execute("INSERT INTO sessions(id,workspace,model,demo,title,history) VALUES('session','/workspace','model',1,'Keep me','[]')", []).unwrap();
             if version >= 2 {
                 legacy
                     .execute("UPDATE sessions SET project_id='project'", [])
@@ -135,12 +141,12 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
             db.query_row("SELECT count(*) FROM seaql_migrations", [], |r| r
                 .get::<_, i64>(0))
                 .unwrap(),
-            27
+            28
         );
         assert_eq!(
             db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            27
+            28
         );
     }
 }

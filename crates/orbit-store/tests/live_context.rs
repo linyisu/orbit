@@ -7,7 +7,7 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
     let mut writer = store
-        .create(dir.path().display().to_string(), "orbit-fast".into(), false)
+        .create(dir.path().display().to_string(), "orbit-fast".into())
         .await
         .unwrap();
     writer
@@ -103,7 +103,7 @@ async fn context_handles_the_gap_before_checkpoint_and_failed_partial_answers() 
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
     let mut writer = store
-        .create(dir.path().display().to_string(), "orbit-fast".into(), false)
+        .create(dir.path().display().to_string(), "orbit-fast".into())
         .await
         .unwrap();
     writer

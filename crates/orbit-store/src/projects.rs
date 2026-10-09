@@ -388,11 +388,7 @@ mod tests {
         let original = store.resolve_project(temporary.path()).await.unwrap();
         drop(
             store
-                .create(
-                    temporary.path().display().to_string(),
-                    "model".into(),
-                    false,
-                )
+                .create(temporary.path().display().to_string(), "model".into())
                 .await
                 .unwrap(),
         );
@@ -436,11 +432,7 @@ mod tests {
                 .unwrap();
             let original = store.resolve_project(temporary.path()).await.unwrap();
             let mut writer = store
-                .create(
-                    temporary.path().display().to_string(),
-                    "model".into(),
-                    false,
-                )
+                .create(temporary.path().display().to_string(), "model".into())
                 .await
                 .unwrap();
             writer
@@ -487,7 +479,7 @@ mod tests {
         for _ in 0..2 {
             drop(
                 store
-                    .create(workspace.display().to_string(), "model".into(), false)
+                    .create(workspace.display().to_string(), "model".into())
                     .await
                     .unwrap(),
             );
@@ -516,7 +508,7 @@ mod tests {
                     [&workspace_text],
                 )?;
                 conn.execute(
-                    "INSERT INTO sessions(id,workspace,model,demo,title,project_id) VALUES('new-session',?1,'model',0,'new','duplicate')",
+                    "INSERT INTO sessions(id,workspace,model,title,project_id) VALUES('new-session',?1,'model','new','duplicate')",
                     [&workspace_text],
                 )?;
 

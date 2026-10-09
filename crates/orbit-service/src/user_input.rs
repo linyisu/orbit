@@ -243,7 +243,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("test.sqlite")).await.unwrap();
         let writer = store
-            .create(dir.path().display().to_string(), "test".into(), false)
+            .create(dir.path().display().to_string(), "test".into())
             .await
             .unwrap();
         let questions = Questions::new(store, writer.id().into()).await.unwrap();
@@ -408,7 +408,7 @@ mod lifecycle_tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("db")).await.unwrap();
         let writer = store
-            .create(dir.path().display().to_string(), "test".into(), false)
+            .create(dir.path().display().to_string(), "test".into())
             .await
             .unwrap();
         let q = Questions::new(store.clone(), writer.id().into())

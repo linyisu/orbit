@@ -66,24 +66,18 @@ impl Store {
         self.connection.read(operation).await
     }
 
-    pub async fn create(
-        &self,
-        workspace: String,
-        model: String,
-        demo: bool,
-    ) -> Result<SessionWriter> {
-        let session = self.draft(workspace, model, demo).await?;
+    pub async fn create(&self, workspace: String, model: String) -> Result<SessionWriter> {
+        let session = self.draft(workspace, model).await?;
         self.persist_draft(&session, &[]).await
     }
 
     /// Allocate a stable identity without inserting a conversation or acquiring a writer.
-    pub async fn draft(&self, workspace: String, model: String, demo: bool) -> Result<Session> {
+    pub async fn draft(&self, workspace: String, model: String) -> Result<Session> {
         let project = self.project_at(&workspace).await?;
         Ok(Session {
             id: crate::database::new_id()?,
             workspace,
             model,
-            demo,
             project_id: project.map(|p| p.id).unwrap_or_default(),
             title: String::new(),
             reasoning_effort: None,
@@ -106,7 +100,6 @@ impl Store {
                 id: Set(session.id),
                 workspace: Set(session.workspace),
                 model: Set(session.model),
-                demo: Set(session.demo),
                 project_id: Set(Some(session.project_id)),
                 title: Set(session.title),
                 reasoning_effort: Set(session.reasoning_effort),
@@ -469,7 +462,6 @@ struct SessionSummary {
     workspace: String,
     model: String,
     reasoning_effort: Option<String>,
-    demo: bool,
     title: String,
     updated_at: i64,
     project_id: Option<String>,
@@ -481,7 +473,6 @@ impl SessionSummary {
             workspace: self.workspace,
             model: self.model,
             reasoning_effort: self.reasoning_effort,
-            demo: self.demo,
             title: self.title,
             updated_at: self.updated_at,
             project_id: self.project_id.context("session has no project")?,
@@ -495,7 +486,6 @@ fn session_summaries() -> Select<sessions::Entity> {
             sessions::Column::Id,
             sessions::Column::Model,
             sessions::Column::ReasoningEffort,
-            sessions::Column::Demo,
             sessions::Column::Title,
             sessions::Column::UpdatedAt,
             sessions::Column::ProjectId,
@@ -516,7 +506,6 @@ fn session_model(row: sessions::Model, project: Option<projects::Model>) -> Resu
         workspace: project.and_then(|p| p.path).unwrap_or(row.workspace),
         model: row.model,
         reasoning_effort: row.reasoning_effort,
-        demo: row.demo,
         title: row.title,
         updated_at: row.updated_at,
         project_id: row.project_id.context("session has no project")?,

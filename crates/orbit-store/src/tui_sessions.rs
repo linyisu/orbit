@@ -36,7 +36,6 @@ pub struct TuiRuntime {
 fn tabs_query() -> Select<tui_tabs::Entity> {
     tui_tabs::Entity::find()
         .join(JoinType::InnerJoin, tui_tabs::Relation::Session.def())
-        .filter(sessions::Column::Demo.eq(false))
         .filter(
             sessions::Column::Id.in_subquery(
                 runs::Entity::find()
@@ -52,7 +51,6 @@ impl Store {
         let id = id.to_owned();
         self.read_access(move |conn| async move {
             Ok(sessions::Entity::find_by_id(id)
-                .filter(sessions::Column::Demo.eq(false))
                 .select_only()
                 .column(sessions::Column::Title)
                 .into_tuple::<String>()
@@ -346,7 +344,7 @@ mod tests {
         let store = Store::open(&db).await.unwrap();
         let project = store.resolve_project(&a).await.unwrap();
         let mut first = store
-            .create(a.to_string_lossy().into_owned(), "m".into(), false)
+            .create(a.to_string_lossy().into_owned(), "m".into())
             .await
             .unwrap();
         first.begin("hello".into(), "m".into()).await.unwrap();
@@ -355,11 +353,11 @@ mod tests {
             .await
             .unwrap();
         let empty = store
-            .create(a.to_string_lossy().into_owned(), "m".into(), false)
+            .create(a.to_string_lossy().into_owned(), "m".into())
             .await
             .unwrap();
         let mut other = store
-            .create(b.to_string_lossy().into_owned(), "m".into(), false)
+            .create(b.to_string_lossy().into_owned(), "m".into())
             .await
             .unwrap();
         other.begin("hello".into(), "m".into()).await.unwrap();

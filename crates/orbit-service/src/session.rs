@@ -214,7 +214,6 @@ impl SessionState {
                 "session belongs to workspace {}",
                 saved.workspace
             );
-            ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
             let writer = if shared {
                 None
             } else {
@@ -226,7 +225,7 @@ impl SessionState {
                 store.git_baseline(&id).await?,
             )
         } else {
-            let session = store.draft(workspace, model, false).await?;
+            let session = store.draft(workspace, model).await?;
             (
                 Snapshot {
                     session,
@@ -558,7 +557,6 @@ impl SessionState {
             .into_iter()
             .filter(|saved| {
                 equivalent.contains(&saved.project_id)
-                    && !saved.demo
                     && saved.id != self.id()
                     && !saved.title.is_empty()
             })
@@ -598,7 +596,6 @@ impl SessionState {
             equivalent.contains(&saved.project_id),
             "该会话属于其他项目，请在对应目录恢复。"
         );
-        ensure!(!saved.demo, "演示会话已不再受支持，请创建新会话。");
 
         let writer = store.acquire(&id).await?;
         let snapshot = store.load(&id).await?;
@@ -625,7 +622,6 @@ impl SessionState {
         id: String,
     ) -> Result<PreparedResume> {
         let snapshot = store.load(&id).await?;
-        ensure!(!snapshot.session.demo, "演示会话已不再受支持。");
         let git_baseline = store.git_baseline(&id).await?;
         Ok(PreparedResume {
             store,
@@ -734,7 +730,7 @@ impl SessionState {
 
     pub async fn prepare_new_in(&self, model: String, directory: &Path) -> Result<PreparedResume> {
         let workspace = directory.canonicalize()?.to_string_lossy().into_owned();
-        let session = self.store.draft(workspace, model, false).await?;
+        let session = self.store.draft(workspace, model).await?;
         Ok(PreparedResume {
             store: self.store.clone(),
             title_task: None,
