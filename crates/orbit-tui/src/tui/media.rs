@@ -8,6 +8,7 @@ mod kitty_preview;
 mod preview;
 #[cfg(test)]
 mod tests;
+pub(super) mod thumbnails;
 mod view;
 
 use std::{

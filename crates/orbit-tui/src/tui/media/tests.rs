@@ -1521,8 +1521,16 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
                 .transcript_layout
                 .picture_area_at(area, state.max_scroll, point)
                 .unwrap();
-            assert!(bounds.width <= 32, "thumbnail width: {}", bounds.width);
-            assert!(bounds.height <= 6, "thumbnail height: {}", bounds.height);
+            assert!(
+                bounds.width <= thumbnails::MESSAGE_SIZE.width,
+                "thumbnail width: {}",
+                bounds.width
+            );
+            assert!(
+                bounds.height <= thumbnails::MESSAGE_SIZE.height,
+                "thumbnail height: {}",
+                bounds.height
+            );
         }
         let target = state
             .transcript_layout
@@ -2062,7 +2070,7 @@ fn table_math_decodes_automatically_and_only_requests_visible_rows() {
 }
 
 #[test]
-fn attachment_chips_decode_tiny_thumbnails_without_showing_filenames() {
+fn composer_thumbnails_use_the_attachment_area_without_labels() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("private-filename.png");
     image::RgbaImage::from_pixel(80, 60, image::Rgba([230, 100, 50, 255]))
@@ -2078,6 +2086,8 @@ fn attachment_chips_decode_tiny_thumbnails_without_showing_filenames() {
             mime_type: "image/png".into(),
             path,
         });
+    let second = state.attachments[0].clone();
+    state.attachments.push(second);
     state.input.insert("说明这张图片");
     let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -2099,9 +2109,24 @@ fn attachment_chips_decode_tiny_thumbnails_without_showing_filenames() {
     }
 
     let chip = state.attachment_areas[0];
-    assert_eq!(chip.height, 2);
-    assert!(chip.width <= 12);
-    assert!(state.input_area.y >= chip.bottom());
+    assert_eq!(chip.height, thumbnails::COMPOSER_SIZE.height);
+    assert_eq!(chip.width, thumbnails::COMPOSER_SIZE.width);
+    assert!(state.input_area.y > chip.bottom());
+    let next = state.attachment_areas[1];
+    assert_eq!(chip.y, next.y);
+    assert!(next.x >= chip.right() + 2);
+    assert!(!crate::tui::attachments::focus_attachment_at(
+        &mut state,
+        chip.right(),
+        chip.y
+    ));
+    assert!(crate::tui::attachments::focus_attachment_at(
+        &mut state, next.x, next.y
+    ));
+    assert!(crate::tui::attachments::remove_focused_attachment(
+        &mut state, false
+    ));
+    assert_eq!(state.attachments.len(), 1);
     let buffer = terminal.backend().buffer();
     let mut text = String::new();
     for y in buffer.area.y..buffer.area.bottom() {
@@ -2115,7 +2140,7 @@ fn attachment_chips_decode_tiny_thumbnails_without_showing_filenames() {
         text.push('\n');
     }
 
-    assert!(text.contains("图片 1"));
+    assert!(!text.contains("图片 1"));
     assert!(!text.contains("private-filename"));
     assert!(text.contains("说明这张图片"));
     let shared = state.media.shared.as_ref().unwrap();
@@ -2125,9 +2150,103 @@ fn attachment_chips_decode_tiny_thumbnails_without_showing_filenames() {
             .lock()
             .unwrap()
             .keys()
-            .all(|key| key.width == 4 && key.height == 2)
+            .all(|key| key.width == thumbnails::COMPOSER_SIZE.width
+                && key.height == thumbnails::COMPOSER_SIZE.height)
     );
     clear_layers();
+}
+
+#[test]
+fn message_thumbnails_are_spaced_above_text_and_remain_individually_previewable() {
+    let dir = tempfile::tempdir().unwrap();
+    let sources = [("landscape.png", (160, 80)), ("portrait.png", (80, 160))].map(
+        |(name, (width, height))| {
+            let path = dir.path().join(name);
+            image::RgbaImage::from_pixel(width, height, image::Rgba([80, 160, 230, 255]))
+                .save(&path)
+                .unwrap();
+            Source::Image(path.to_string_lossy().into_owned())
+        },
+    );
+    for width in [80, 30] {
+        let mut state = UiState::new("mock");
+        state.media = context(ProtocolType::Kitty);
+        for source in &sources {
+            ready(
+                &state.media,
+                source.clone(),
+                thumbnails::MESSAGE_SIZE.width,
+                thumbnails::MESSAGE_SIZE.height,
+            );
+        }
+        state.transcript.push(TranscriptItem::UserWithImages {
+            text: "message text".into(),
+            images: sources
+                .iter()
+                .map(|source| {
+                    let Source::Image(path) = source else {
+                        unreachable!()
+                    };
+                    orbit_protocol::MessageImage {
+                        name: "private filename.png".into(),
+                        path: path.clone(),
+                    }
+                })
+                .collect(),
+        });
+        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        draw_ui(&mut state, &mut terminal);
+        let area = state.selection.viewport;
+        let mut bounds = Vec::new();
+        for source in &sources {
+            let point = (area.y..area.bottom())
+                .find_map(|y| {
+                    (area.x..area.right()).find_map(|x| {
+                        (state
+                            .transcript_layout
+                            .media_at(area, state.max_scroll, (x, y))
+                            .as_ref()
+                            == Some(source))
+                        .then_some((x, y))
+                    })
+                })
+                .expect("each thumbnail has its own hit area");
+            let image = state
+                .transcript_layout
+                .picture_area_at(area, state.max_scroll, point)
+                .unwrap();
+            assert!(image.width <= thumbnails::MESSAGE_SIZE.width);
+            assert!(image.height <= thumbnails::MESSAGE_SIZE.height);
+            bounds.push(image);
+            assert!(crate::tui::toggle_transcript_at(&mut state, point));
+            assert!(state.media_preview.is_some());
+            state.media_preview = None;
+        }
+        let text_y = (area.y..area.bottom())
+            .find(|&y| {
+                let line = (area.x..area.right())
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>();
+                assert!(!line.contains("private filename") && !line.contains("图片 1"));
+                line.contains("message text")
+            })
+            .unwrap();
+        assert!(bounds.iter().all(|image| image.bottom() < text_y));
+        if width == 80 {
+            assert!(bounds[1].x >= bounds[0].right() + 2);
+            assert!(bounds[1].y < bounds[0].bottom());
+            let gap = (bounds[0].right(), bounds[0].y);
+            assert!(
+                state
+                    .transcript_layout
+                    .media_at(area, state.max_scroll, gap)
+                    .is_none()
+            );
+        } else {
+            assert!(bounds[1].y > bounds[0].bottom());
+        }
+        clear_layers();
+    }
 }
 
 /// Generates a real export for visual inspection, independently of the terminal.

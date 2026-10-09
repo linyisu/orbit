@@ -810,10 +810,10 @@ impl Entry {
         // contents wrap. Keep a plain fallback for terminals too narrow to
         // draw the two side rails without stealing all useful text width.
         if width < 9 {
-            let lines = text
-                .lines()
-                .map(str::to_owned)
-                .chain(images.iter().map(|image| format!("[图片：{}]", image.name)));
+            let lines = images
+                .iter()
+                .map(|_| super::icons::IMAGE_OUTLINE.to_owned())
+                .chain(text.lines().map(str::to_owned));
             for (index, line) in lines.enumerate() {
                 self.push(
                     Line::from(vec![
@@ -854,6 +854,39 @@ impl Entry {
         );
         let inner_width = width - 4;
 
+        let strip = super::media::thumbnails::Strip::new(
+            &self.media,
+            images.iter().map(|image| {
+                (
+                    super::media::Source::Image(image.path.clone()),
+                    format!("[图片：{}]", image.name),
+                )
+            }),
+            inner_width,
+            super::media::thumbnails::MESSAGE_SIZE,
+        );
+        for mut line in strip.rows {
+            let requests = std::mem::take(&mut line.media_requests);
+            self.push_physical(
+                line.framed(
+                    vec![Span::styled("│ ", border)],
+                    vec![Span::styled(" │", border)],
+                ),
+                width,
+                requests,
+            );
+        }
+        if !images.is_empty() && !text.is_empty() {
+            self.push_linked(
+                super::markdown::LinkedLine::chrome(Line::from(vec![
+                    Span::styled("│ ", border),
+                    Span::raw(" ".repeat(usize::from(inner_width))),
+                    Span::styled(" │", border),
+                ])),
+                width,
+            );
+        }
+
         for source in text
             .split('\n')
             .filter(|_| !text.is_empty() || images.is_empty())
@@ -873,28 +906,6 @@ impl Entry {
                     width,
                 );
             }
-        }
-
-        for image in images {
-            // Keep user text literal; only structured attachments create media.
-            let mut label = Line::from(format!("[图片：{}]", image.name));
-            render::sanitize_line(&mut label);
-            let mut line = super::markdown::LinkedLine::plain(label);
-            line.media_max_size = Some(ratatui::layout::Size::new(32, 6));
-            let length = line.text().len();
-            line.links.clear();
-            line.media.push(super::media::Target {
-                range: 0..length,
-                source: super::media::Source::Image(image.path.clone()),
-            });
-            let padding = usize::from(inner_width).saturating_sub(line.line.width());
-            self.push_linked(
-                line.framed(
-                    vec![Span::styled("│ ", border)],
-                    vec![Span::raw(" ".repeat(padding)), Span::styled(" │", border)],
-                ),
-                width,
-            );
         }
 
         self.push_linked(

@@ -1667,16 +1667,11 @@ fn pending_images_render_as_chips_above_the_prompt() {
 
     let chip = state.attachment_areas[0];
 
-    assert_eq!(terminal.backend().buffer()[(chip.x, chip.y)].symbol(), "图");
-    assert_eq!(
-        terminal.backend().buffer()[(chip.x + 2, chip.y)].symbol(),
-        "片"
-    );
-    assert_eq!(
-        terminal.backend().buffer()[(chip.x + 5, chip.y)].symbol(),
-        "1"
-    );
-
+    assert!(!screen.contains("图片 1"));
+    assert!((chip.y..chip.bottom()).any(|y| {
+        (chip.x..chip.right())
+            .any(|x| terminal.backend().buffer()[(x, y)].symbol() == icons::IMAGE_OUTLINE)
+    }));
     assert_eq!(terminal.backend().buffer()[(chip.x, chip.y)].bg, ACCENT);
 }
 
