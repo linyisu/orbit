@@ -298,12 +298,12 @@ impl Service {
                 Some(result) => result,
                 None => {
                     // A writer lease distinguishes an interrupted invocation from a live child.
-                    let Ok(_writer) = self.store.acquire(&record.agent.id).await else {
+                    let Ok(writer) = self.store.acquire(&record.agent.id).await else {
                         continue;
                     };
                     let result = json!({"agent_id":record.agent.id,"invocation_id":record.id,"role":record.agent.role,"model":record.agent.model,"status":"interrupted","error":"Previous execution stopped. Inspect read_agent and explicitly continue with send_agent_message; no actions were replayed."});
-                    self.store
-                        .finish_agent_invocation(&self.parent, record.id, result.clone())
+                    writer
+                        .finish_interrupted_subagent(self.parent.clone(), record.id, result.clone())
                         .await?;
                     result
                 }

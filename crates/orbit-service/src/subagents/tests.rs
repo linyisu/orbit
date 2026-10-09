@@ -656,7 +656,25 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
         .await
         .unwrap();
     let interrupted_id = interrupted.id().to_owned();
-    drop(interrupted);
+    let project = service
+        .store
+        .session(&interrupted_id)
+        .await
+        .unwrap()
+        .project_id;
+    let task = service
+        .store
+        .create_task(
+            &project,
+            orbit_store::tasks::NewTask::new("interrupted work"),
+        )
+        .await
+        .unwrap();
+    service
+        .store
+        .claim_task(&project, task.id, &interrupted_id)
+        .await
+        .unwrap();
     let recovered = Service {
         tool_policy: None,
         approvals: None,
@@ -674,7 +692,21 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
         backend: service.backend.clone(),
     };
 
+    drop(interrupted);
     recovered.recover().await.unwrap();
+    let released = service
+        .store
+        .tasks(&project, false)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(released.owner_session_id, None);
+    assert_eq!(released.status, orbit_store::types::TaskStatus::Pending);
+    service
+        .store
+        .claim_task(&project, task.id, parent.id())
+        .await
+        .unwrap();
     assert_eq!(model.requests.lock().unwrap().len(), 1);
     assert_eq!(
         recovered.store.load(&interrupted_id).await.unwrap().runs[0].status,

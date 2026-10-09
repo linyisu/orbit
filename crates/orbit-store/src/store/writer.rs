@@ -12,6 +12,34 @@ use sea_orm::*;
 
 use super::SessionWriter;
 
+// Both normal completion and crash recovery use one atomic receipt/claim
+// transition. Callers must hold the matching child's SessionWriter lease.
+async fn finish_invocation(
+    tx: &DatabaseTransaction,
+    parent: &str,
+    child: &str,
+    invocation: i64,
+    result: serde_json::Value,
+) -> Result<()> {
+    let updated = agent_invocations::Entity::update_many()
+        .col_expr(
+            agent_invocations::Column::Result,
+            sea_query::Expr::value(serde_json::to_string(&result)?),
+        )
+        .filter(agent_invocations::Column::Id.eq(invocation))
+        .filter(agent_invocations::Column::ParentSessionId.eq(parent))
+        .filter(agent_invocations::Column::ChildSessionId.eq(child))
+        .filter(agent_invocations::Column::Result.is_null())
+        .exec(tx)
+        .await?
+        .rows_affected;
+    ensure!(
+        updated == 1,
+        "subagent invocation is unavailable or already finished"
+    );
+    crate::tasks::release_unfinished(tx, child, None).await
+}
+
 impl SessionWriter {
     /// Move only this locked session. Historical messages and events remain intact.
     /// Write receipts from earlier workspaces must never be offered for undo here.
@@ -274,6 +302,26 @@ impl SessionWriter {
         .await
     }
 
+    /// Recovery must hold the child's OS writer lease. Acquiring that lease
+    /// marks abandoned runs interrupted; a live child cannot be acquired.
+    pub async fn finish_interrupted_subagent(
+        &self,
+        parent: String,
+        invocation: i64,
+        result: serde_json::Value,
+    ) -> Result<()> {
+        ensure!(self.active_run.is_none(), "a run is still active");
+        let id = self.id.clone();
+        self.store
+            .write_access(move |conn| async move {
+                let tx = conn.begin().await?;
+                finish_invocation(&tx, &parent, &id, invocation, result).await?;
+                tx.commit().await?;
+                Ok(())
+            })
+            .await
+    }
+
     async fn finish_with_result(
         &mut self,
         status: &str,
@@ -306,24 +354,7 @@ impl SessionWriter {
                 crate::event_log::append(&transaction, run, events).await?;
 
                 if let Some((parent, invocation, result)) = agent_result {
-                    crate::tasks::release_unfinished(&transaction, &id, None).await?;
-                    let updated = agent_invocations::Entity::update_many()
-                        .col_expr(
-                            agent_invocations::Column::Result,
-                            sea_query::Expr::value(serde_json::to_string(&result)?),
-                        )
-                        .filter(agent_invocations::Column::Id.eq(invocation))
-                        .filter(agent_invocations::Column::ParentSessionId.eq(parent))
-                        .filter(agent_invocations::Column::ChildSessionId.eq(&id))
-                        .filter(agent_invocations::Column::Result.is_null())
-                        .exec(&transaction)
-                        .await?
-                        .rows_affected;
-
-                    ensure!(
-                        updated == 1,
-                        "subagent invocation is unavailable or already finished"
-                    );
+                    finish_invocation(&transaction, &parent, &id, invocation, result).await?;
                 }
 
                 runs::Entity::update_many()

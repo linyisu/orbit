@@ -268,6 +268,95 @@ async fn dependency_changes_are_atomic_acyclic_project_scoped_and_gate_execution
 }
 
 #[tokio::test]
+async fn interrupted_child_finalization_requires_its_lease_and_matching_invocation() {
+    let board = Board::new().await;
+    let mut parent = board.first;
+    parent
+        .begin("delegate".into(), "mock".into())
+        .await
+        .unwrap();
+    let mut child = board
+        .store
+        .create_subagent(parent.id(), "mock".into(), "develop".into(), "work".into())
+        .await
+        .unwrap();
+    let task = board
+        .store
+        .create_task(&board.project, NewTask::new("unfinished"))
+        .await
+        .unwrap();
+    board
+        .store
+        .claim_task(&board.project, task.id, child.id())
+        .await
+        .unwrap();
+    child.begin("work".into(), "mock".into()).await.unwrap();
+    let invocation = board
+        .store
+        .begin_agent_invocation(
+            parent.id(),
+            child.id(),
+            orbit_model::types::ToolCall::function("child", "spawn_agent", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+    assert!(board.store.acquire(child.id()).await.is_err());
+    let id = child.id().to_owned();
+    drop(child);
+    let writer = board.store.acquire(&id).await.unwrap();
+    let result = serde_json::json!({"status":"interrupted"});
+    // A different child/parent must not finalize this receipt or free its tasks.
+    assert!(
+        board
+            .second
+            .finish_interrupted_subagent(parent.id().into(), invocation, result.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        writer
+            .finish_interrupted_subagent(board.second.id().into(), invocation, result.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        board.store.tasks(&board.project, false).await.unwrap()[0]
+            .owner_session_id
+            .as_deref(),
+        Some(id.as_str())
+    );
+    writer
+        .finish_interrupted_subagent(parent.id().into(), invocation, result.clone())
+        .await
+        .unwrap();
+    let released = board
+        .store
+        .tasks(&board.project, false)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(released.status, TaskStatus::Pending);
+    assert_eq!(released.owner_session_id, None);
+    board
+        .store
+        .claim_task(&board.project, task.id, board.second.id())
+        .await
+        .unwrap();
+    assert!(
+        writer
+            .finish_interrupted_subagent(parent.id().into(), invocation, result)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        board.store.tasks(&board.project, false).await.unwrap()[0]
+            .owner_session_id
+            .as_deref(),
+        Some(board.second.id())
+    );
+}
+
+#[tokio::test]
 async fn child_worktrees_share_the_board_and_terminal_receipts_release_unfinished_claims() {
     let board = Board::new().await;
     let mut parent = board.first;

@@ -195,32 +195,6 @@ impl Store {
         })
         .await
     }
-    pub async fn finish_agent_invocation(
-        &self,
-        parent: &str,
-        invocation: i64,
-        result: Value,
-    ) -> Result<()> {
-        let parent = parent.to_owned();
-        self.write_access(move |conn| async move {
-            let updated = agent_invocations::Entity::update_many()
-                .col_expr(
-                    agent_invocations::Column::Result,
-                    Expr::value(serde_json::to_string(&result)?),
-                )
-                .filter(agent_invocations::Column::Id.eq(invocation))
-                .filter(agent_invocations::Column::ParentSessionId.eq(parent))
-                .filter(agent_invocations::Column::Result.is_null())
-                .exec(&conn)
-                .await?;
-            ensure!(
-                updated.rows_affected == 1,
-                "subagent invocation is unavailable or already finished"
-            );
-            Ok(())
-        })
-        .await
-    }
     pub async fn pending_agent_results(&self, parent: &str) -> Result<Vec<AgentInvocation>> {
         let parent = parent.to_owned();
         self.read_access(move |conn| async move {
