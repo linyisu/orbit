@@ -14,6 +14,9 @@ pub(super) enum Action {
 }
 
 pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
+    if handle_tool_scroll(state, &event) {
+        return Action::Redraw;
+    }
     if let Event::Mouse(mouse) = event {
         match mouse.kind {
             MouseEventKind::ScrollUp => state.scroll_up(wheel::LINES),

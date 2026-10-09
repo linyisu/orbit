@@ -187,6 +187,7 @@ pub(in crate::tui) fn tool_card_with_links(
 pub(in crate::tui) struct ToolCard {
     pub lines: Vec<LinkedLine>,
     pub header: Range<usize>,
+    pub body: Range<usize>,
 }
 
 pub(in crate::tui) fn tool_card_layout(row: &ToolRow, expanded: bool, width: u16) -> ToolCard {
@@ -204,6 +205,7 @@ pub(in crate::tui) fn tool_card_layout(row: &ToolRow, expanded: bool, width: u16
         };
         return ToolCard {
             header: 0..lines.len(),
+            body: 0..0,
             lines,
         };
     }
@@ -214,13 +216,19 @@ pub(in crate::tui) fn tool_card_layout(row: &ToolRow, expanded: bool, width: u16
     let header = lines.len()..lines.len() + title.len();
     lines.extend(title.into_iter().map(|line| tool_frame_line(line, width)));
     lines.push(tool_frame_line(LinkedLine::chrome(Line::default()), width));
+    let start = lines.len();
     lines.extend(
         tool_body_with_links(row, inner_width)
             .into_iter()
             .map(|line| tool_frame_line(line, width)),
     );
+    let body = start..lines.len();
     lines.push(tool_border_line(width, ('╰', '╯')));
-    ToolCard { lines, header }
+    ToolCard {
+        lines,
+        header,
+        body,
+    }
 }
 
 pub(in crate::tui) fn tool_title_with_links(

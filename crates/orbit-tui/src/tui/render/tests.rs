@@ -1334,6 +1334,9 @@ fn shortcut_collapses_scrolled_tool_with_clickable_output() {
             output: (0..100).map(|line| format!("detail {line}\n")).collect(),
         }));
     }
+    state
+        .transcript
+        .push(TranscriptItem::Assistant("tail\n".repeat(100)));
 
     render(&mut state, 90, 24);
     super::super::toggle_transcript_item(&mut state, 1);
@@ -1342,6 +1345,7 @@ fn shortcut_collapses_scrolled_tool_with_clickable_output() {
     render(&mut state, 90, 24);
     let area = state.selection.viewport;
     let offset = state.max_scroll.saturating_sub(state.scroll);
+    assert_eq!(offset, after_tool - 5);
     assert!((area.y..area.bottom()).any(|y| {
         state
             .transcript_layout

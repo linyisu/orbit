@@ -769,6 +769,80 @@ fn file_approval_scroll_and_editing_use_the_live_event_route() {
 }
 
 #[test]
+fn tool_output_wheel_uses_the_live_route_and_copy_follows_visible_content() {
+    let (mut tab, mut requests) = tab("本地");
+    tab.state.transcript = vec![
+        TranscriptItem::Tool(crate::tui::app::ToolRow {
+            id: "output".into(),
+            name: "run_command".into(),
+            arguments: serde_json::json!({"command": "example"}).to_string(),
+            status: crate::tui::app::ToolStatus::Finished,
+            output: (0..30)
+                .map(|i| format!("https://orbit.example/{i:02}\n"))
+                .collect(),
+        }),
+        TranscriptItem::Assistant("tail\n".repeat(100)),
+    ];
+    tab.state.expanded.insert(0);
+    tab.state.input.set("unfinished draft".into());
+    let mut terminal = Terminal::new(TestBackend::new(90, 35)).unwrap();
+    terminal
+        .draw(|f| crate::tui::render::draw(f, &mut tab.state))
+        .unwrap();
+    tab.state.follow_bottom = false;
+    tab.state.scroll = tab.state.max_scroll;
+    terminal
+        .draw(|f| crate::tui::render::draw(f, &mut tab.state))
+        .unwrap();
+    let area = tab.state.selection.viewport;
+    let point = (area.y..area.bottom())
+        .find_map(|y| {
+            (area.x..area.right()).find_map(|x| {
+                (tab.state.transcript_layout.link_at(area, 0, (x, y))
+                    == Some("https://orbit.example/00"))
+                .then_some((x, y))
+            })
+        })
+        .unwrap();
+    let outer = (tab.state.scroll, tab.state.max_scroll);
+    tab.handle(mouse(MouseEventKind::ScrollDown, point.0, point.1))
+        .unwrap();
+    terminal
+        .draw(|f| {
+            crate::tui::render::draw(f, &mut tab.state);
+            tab.state.selection.paint(f);
+        })
+        .unwrap();
+    assert_eq!((tab.state.scroll, tab.state.max_scroll), outer);
+    let expected = format!("https://orbit.example/{:02}", crate::tui::wheel::TOOL_LINES);
+    assert_eq!(
+        tab.state.transcript_layout.link_at(area, 0, point),
+        Some(expected.as_str())
+    );
+    tab.handle(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        point.0,
+        point.1,
+    ))
+    .unwrap();
+    tab.handle(mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        point.0 + expected.len() as u16,
+        point.1,
+    ))
+    .unwrap();
+    tab.handle(mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        point.0 + expected.len() as u16,
+        point.1,
+    ))
+    .unwrap();
+    assert_eq!(tab.state.selection.text().trim(), expected);
+    assert_eq!(tab.state.input.text, "unfinished draft");
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
 fn replayed_reasoning_uses_saved_duration_and_live_reasoning_still_times_itself() {
     use orbit_agent::events::AgentEvent;
     use orbit_model::types::StreamEvent;

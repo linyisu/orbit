@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{
     Terminal,
     backend::TestBackend,
@@ -849,14 +849,99 @@ fn ctrl_o_and_collapse_from_scrolled_details_return_to_the_group_header() {
         unreachable!()
     };
     row.output = "Orbit 长输出\n".repeat(100);
+    state
+        .transcript
+        .push(TranscriptItem::Assistant("tail\n".repeat(100)));
     state.invalidate_transcript(2);
     state.expanded.insert(2);
     render(&mut state, 90, 24);
     let child = state.transcript_layout.item_offset(2).unwrap();
     state.follow_bottom = false;
-    state.scroll = state.max_scroll.saturating_sub(child + 15);
+    state.scroll = state.max_scroll.saturating_sub(child + 4);
     render(&mut state, 90, 24);
+    assert_eq!(state.max_scroll.saturating_sub(state.scroll), child + 4);
     super::super::toggle_transcript_group(&mut state, 0);
     assert!(text(&render(&mut state, 90, 24)).contains("read_file · orbit.rs · 4 次调用"));
     assert_eq!(state.max_scroll.saturating_sub(state.scroll), 0);
+}
+
+#[test]
+fn expanded_children_each_have_eight_rows_and_scroll_independently() {
+    let mut state = UiState::new("orbit-model");
+    state.transcript = (0..2)
+        .map(|i| {
+            let mut item = tool(i, "read_file", ToolStatus::Finished);
+            let TranscriptItem::Tool(row) = &mut item else {
+                unreachable!()
+            };
+            row.output = (0..24)
+                .map(|line| format!("https://orbit.example/{i}/{line:02}\n"))
+                .collect();
+            item
+        })
+        .collect();
+    state
+        .transcript
+        .push(TranscriptItem::Assistant("tail\n".repeat(100)));
+    state.expanded_tool_groups.insert(0);
+    state.expanded.extend([0, 1]);
+    render(&mut state, 90, 50);
+    state.follow_bottom = false;
+    state.scroll = state.max_scroll;
+    let initial = text(&render(&mut state, 90, 50));
+    for i in 0..2 {
+        for line in 0..8 {
+            assert!(initial.contains(&format!("https://orbit.example/{i}/{line:02}")));
+        }
+        assert!(!initial.contains(&format!("https://orbit.example/{i}/08")));
+    }
+    assert_eq!(initial.matches("1–8 / 24").count(), 2);
+    let area = state.selection.viewport;
+    let child_point = (area.y..area.bottom())
+        .find_map(|y| {
+            (area.x..area.right()).find_map(|x| {
+                (state.transcript_layout.link_at(area, 0, (x, y))
+                    == Some("https://orbit.example/1/00"))
+                .then_some((x, y))
+            })
+        })
+        .unwrap();
+    let outer = (state.scroll, state.max_scroll, state.follow_bottom);
+    for _ in 0..20 {
+        super::super::keyboard_action(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: child_point.0,
+                row: child_point.1,
+                modifiers: KeyModifiers::NONE,
+            }),
+            false,
+        );
+        let shown = text(&render(&mut state, 90, 50));
+        assert_eq!((state.scroll, state.max_scroll, state.follow_bottom), outer);
+        assert!(shown.contains("https://orbit.example/0/00"));
+        assert!(!shown.contains("https://orbit.example/0/08"));
+    }
+    let shown = text(&render(&mut state, 90, 50));
+    assert!(shown.contains("17–24 / 24"));
+    assert_eq!(
+        state.transcript_layout.link_at(area, 0, child_point),
+        Some("https://orbit.example/1/16")
+    );
+    assert!(!shown.contains("https://orbit.example/1/15"));
+    assert!(shown.contains("https://orbit.example/1/23"));
+
+    // Outside the tool body, the transcript still owns the wheel.
+    super::super::keyboard_action(
+        &mut state,
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: area.x + 3,
+            row: area.bottom() - 1,
+            modifiers: KeyModifiers::NONE,
+        }),
+        false,
+    );
+    assert!(state.scroll < outer.0);
 }

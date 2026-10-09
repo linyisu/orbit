@@ -1,5 +1,27 @@
 use super::*;
 
+pub(super) fn handle_tool_scroll(state: &mut UiState, event: &Event) -> bool {
+    let Event::Mouse(mouse) = event else {
+        return false;
+    };
+    let lines = match mouse.kind {
+        MouseEventKind::ScrollUp => -(wheel::TOOL_LINES as isize),
+        MouseEventKind::ScrollDown => wheel::TOOL_LINES as isize,
+        _ => return false,
+    };
+    if state.transcript_layout.scroll_tool_body(
+        state.selection.viewport,
+        state.max_scroll.saturating_sub(state.scroll),
+        (mouse.column, mouse.row),
+        lines,
+    ) {
+        state.selection.clear();
+        state.link_hovered = None;
+        return true;
+    }
+    false
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum TabAction {
     Select(String),

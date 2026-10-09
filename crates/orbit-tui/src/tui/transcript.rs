@@ -14,6 +14,9 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{app::TranscriptItem, render, theme::THEME};
 
+mod tool_viewport;
+use tool_viewport::ToolViewport;
+
 #[derive(Debug, Clone, Default)]
 pub(super) struct Decorations {
     // Terminal column ranges, after wrapping and adding repeated gutters.
@@ -22,7 +25,7 @@ pub(super) struct Decorations {
     pub copy: Vec<super::media::CopyText>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Row {
     line: Line<'static>,
     wrapped: Vec<Line<'static>>,
@@ -39,7 +42,7 @@ struct Row {
     media_requests: Vec<super::media::Request>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Gutter {
     first: Line<'static>,
     continuation: Line<'static>,
@@ -401,6 +404,7 @@ struct Entry {
     tool_group: Option<Range<usize>>,
     group_header: Option<usize>,
     tool_header: Option<Range<usize>>,
+    tool_body: Option<ToolViewport>,
     height: usize,
     end: usize,
     spacing: bool,
@@ -911,6 +915,7 @@ pub(super) struct TranscriptLayout {
     expanded_groups: std::collections::BTreeSet<usize>,
     dirty_from: usize,
     html_toggles: std::collections::BTreeMap<usize, std::collections::BTreeSet<String>>,
+    tool_scroll: std::collections::BTreeMap<usize, usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -976,10 +981,21 @@ impl TranscriptLayout {
             .graphics
             .iter()
             .find(|f| column >= f.x && column < f.x + f.picture.size.width)?;
-        let top = (entry.end - entry.height + row.start).checked_sub(usize::from(fragment.row))?;
-        let bottom = (top + usize::from(fragment.picture.size.height))
+        let absolute = entry.end - entry.height + row.start;
+        let mut top = absolute
+            .saturating_sub(usize::from(fragment.row))
+            .max(offset);
+        let mut bottom = (absolute + usize::from(fragment.picture.size.height - fragment.row))
             .min(offset + usize::from(area.height));
-        let top = top.max(offset);
+        if let Some(view) = &entry.tool_body {
+            let body_top = entry.end - entry.height + entry.rows[view.rows.start].start;
+            let body_height: usize = entry.rows[view.rows.clone()]
+                .iter()
+                .map(|row| row.height)
+                .sum();
+            top = top.max(body_top);
+            bottom = bottom.min(body_top + body_height);
+        }
         let x = area.x + gutter + fragment.x;
 
         Some(Rect::new(
@@ -1100,6 +1116,7 @@ impl TranscriptLayout {
     /// Discard cached source offsets when text is edited or entries are removed.
     pub(super) fn reset_from(&mut self, index: usize) {
         self.html_toggles.retain(|item, _| *item < index);
+        self.tool_scroll.retain(|item, _| *item < index);
         self.reset_rows_from(index);
     }
 
@@ -1136,6 +1153,7 @@ impl TranscriptLayout {
             self.dirty_from = 0;
             self.width = width;
         }
+        self.tool_scroll.retain(|item, _| *item < items.len());
 
         if &self.expanded != expanded {
             if let Some(index) = self.expanded.symmetric_difference(expanded).next().copied() {
@@ -1283,9 +1301,10 @@ impl TranscriptLayout {
                             )
                         } else {
                             let card = render::tool_card_layout(row, is_expanded, width);
-                            (card.lines, None, 0..0, card.header)
+                            (card.lines, None, card.body, card.header)
                         };
 
+                        let mut body_rows: Option<Range<usize>> = None;
                         for (index, line) in lines.into_iter().enumerate() {
                             let collapsible = header.map_or_else(
                                 || !line.line.to_string().is_empty(),
@@ -1295,12 +1314,23 @@ impl TranscriptLayout {
                             let start = entry.height;
                             let first_row = entry.rows.len();
                             entry.push_linked(line, width);
+                            if body.contains(&index) {
+                                body_rows.get_or_insert(first_row..first_row).end =
+                                    entry.rows.len();
+                            }
                             if collapsible {
                                 entry.disclosures.extend(first_row..entry.rows.len());
                             }
                             if title.contains(&index) {
                                 entry.tool_header.get_or_insert(start..start).end = entry.height;
                             }
+                        }
+                        if let Some(body) = body_rows {
+                            entry.limit_tool_body(
+                                body,
+                                self.tool_scroll.get(&item_index).copied().unwrap_or(0),
+                                width,
+                            );
                         }
                     }
                 }

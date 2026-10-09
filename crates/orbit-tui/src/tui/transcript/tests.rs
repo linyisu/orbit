@@ -440,13 +440,32 @@ fn markdown_file_links_remain_actionable_after_resize_and_scroll() {
         layout.update(&items, Some(0), width);
         let area = Rect::new(3, 2, width, 7);
         let mut targets = HashSet::new();
-        for offset in 0..layout.height() {
-            for y in area.y..area.bottom() {
-                for x in area.x..area.right() {
-                    if let Some(url) = layout.link_at(area, offset, (x, y)) {
-                        targets.insert(url.to_owned());
+        let full_area = Rect::new(0, 0, width, layout.height() as u16);
+        let body_point = (0..full_area.height).find_map(|y| {
+            layout
+                .scroll_tool_body(full_area, 0, (3, y), 0)
+                .then_some((3, y))
+        });
+        if let Some(point) = body_point {
+            layout.scroll_tool_body(full_area, 0, point, isize::MIN);
+        }
+        loop {
+            for offset in 0..layout.height() {
+                for y in area.y..area.bottom() {
+                    for x in area.x..area.right() {
+                        if let Some(url) = layout.link_at(area, offset, (x, y)) {
+                            targets.insert(url.to_owned());
+                        }
                     }
                 }
+            }
+            let Some(point) = body_point else {
+                break;
+            };
+            let before = layout.tool_scroll.get(&0).copied();
+            layout.scroll_tool_body(full_area, 0, point, 1);
+            if before == layout.tool_scroll.get(&0).copied() {
+                break;
             }
         }
 
