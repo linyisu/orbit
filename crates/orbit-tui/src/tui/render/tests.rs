@@ -519,8 +519,31 @@ fn incomplete_command_logs_are_not_presented_as_complete() {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("部分输出已留存") && text.contains("disk full") && text.contains("tail"));
+    assert!(text.contains("disk full") && text.contains("tail"));
     assert!(!text.contains("完整输出已留存"));
+}
+
+#[test]
+fn command_cards_show_all_returned_output_without_internal_log_instructions() {
+    let stdout = (0..200)
+        .map(|n| format!("output line {n}\n"))
+        .collect::<String>();
+    let row = super::super::app::ToolRow {
+        id: "command".into(), name: "run_command".into(),
+        arguments: serde_json::json!({"command":"example"}).to_string(),
+        status: ToolStatus::Finished,
+        output: serde_json::json!({"stdout":stdout,"stderr":"stderr content","exit_code":0,"output_id":"cmd-example","retained_output_truncated":false}).to_string(),
+    };
+    let text = tool_card(&row, true, 100)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for n in 0..200 {
+        assert!(text.contains(&format!("output line {n}")));
+    }
+    assert!(text.contains("stderr content"));
+    assert!(!text.contains("read_command_output") && !text.contains("cmd-example"));
 }
 
 #[test]
