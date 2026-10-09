@@ -22,7 +22,7 @@ impl State {
 
     pub fn label(&self) -> String {
         match self.pending {
-            Some(mode) => format!("{} → {}…", self.mode.label(), mode.label()),
+            Some(mode) => format!("{}…", mode.label()),
             None => self.mode.label().into(),
         }
     }

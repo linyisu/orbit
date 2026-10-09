@@ -451,7 +451,9 @@ fn composer_details(state: &UiState, width: usize) -> Vec<Line<'static>> {
             state.planning.mode().label().to_owned(),
             accent.add_modifier(Modifier::BOLD),
         ),
-        Span::styled(state.permissions.label(), accent),
+        // Reserve four cells for the longest mode and one for its pending
+        // marker so receipts never move or wrap the fields to the right.
+        Span::styled(format!("{:<5}", state.permissions.label()), accent),
         Span::raw(safe_output(model)),
     ];
 

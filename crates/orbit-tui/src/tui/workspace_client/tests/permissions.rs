@@ -36,7 +36,7 @@ fn permissions_follow_confirmation_and_ignore_stale_snapshots() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(screen.contains("build  auto → yolo…"), "{screen}");
+    assert!(screen.contains("build  yolo…"), "{screen}");
 
     // Another terminal changes the service before this terminal receives its earlier receipt.
     tab.profile(&permission_profile(Mode::Ask, 2));

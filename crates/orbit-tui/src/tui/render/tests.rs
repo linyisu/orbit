@@ -1424,6 +1424,53 @@ fn welcome_commands_and_small_terminal_render() {
 }
 
 #[test]
+fn permission_mode_changes_only_repaint_the_mode_field() {
+    use crate::tui::permissions::Mode;
+
+    for width in [24, 40, 70, 120] {
+        let mut state = UiState::new("provider::test-model");
+        state.workspace = "/project".into();
+        state.input.set("未发送的草稿".into());
+        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let baseline = terminal.backend().buffer().clone();
+        let start = baseline
+            .content
+            .windows(4)
+            .position(|cells| {
+                cells
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .eq(["a", "u", "t", "o"])
+            })
+            .expect("permission mode is visible");
+        let (x, y) = (start % width as usize, start / width as usize);
+
+        for confirmed in [Mode::Ask, Mode::Auto, Mode::Yolo] {
+            state.permissions.apply(confirmed, 1);
+            for pending in [Some(Mode::Ask), Some(Mode::Auto), Some(Mode::Yolo), None] {
+                state.permissions.pending = pending;
+                terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                for (index, (before, after)) in baseline
+                    .content
+                    .iter()
+                    .zip(&terminal.backend().buffer().content)
+                    .enumerate()
+                {
+                    if before != after {
+                        assert!(
+                            index / width as usize == y
+                                && (x..x + 5).contains(&(index % width as usize)),
+                            "mode change moved or repainted another field: width={width}, confirmed={confirmed:?}, pending={pending:?}, cell={index}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn environment_labels_never_appear_in_composer_details_or_workspace_footer() {
     for label in ["本地", "SSH 204", "WSL Ubuntu"] {
         let mut state = UiState::new("provider::model");
