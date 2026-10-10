@@ -56,7 +56,7 @@ impl Store {
                 .order_by_asc(runs::Column::Id)
                 .all(&tx)
                 .await?;
-            let mut events = crate::event_log::load_by_session(&tx, &session_id).await?;
+            let mut events = crate::event_log::load_by_session(&tx, &session_id, 0).await?;
             let mut diagnostics = Vec::with_capacity(runs.len());
             for row in runs {
                 let events = events

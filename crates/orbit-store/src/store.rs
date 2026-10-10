@@ -200,6 +200,40 @@ impl Store {
     }
 
     pub async fn load(&self, id: &str) -> Result<Snapshot> {
+        Ok(self.load_from(id, 0).await?.0)
+    }
+
+    /// Refresh the mutable projection and append only newly committed runs.
+    /// Existing run receipts are immutable while the caller owns its writer.
+    pub async fn refresh(&self, snapshot: &mut Snapshot) -> Result<()> {
+        let (mut latest, count) = self
+            .load_from(&snapshot.session.id, snapshot.runs.len())
+            .await?;
+        ensure!(
+            count == snapshot.runs.len() + latest.runs.len(),
+            "session history changed; reload the session"
+        );
+        let mut runs = std::mem::take(&mut snapshot.runs);
+        runs.append(&mut latest.runs);
+        latest.runs = runs;
+        *snapshot = latest;
+        Ok(())
+    }
+
+    /// Check a writer's optimistic precondition without decoding historical tool
+    /// receipts. Recovery uses the same checkpoint projection as a full load.
+    pub async fn matches_snapshot(&self, snapshot: &Snapshot) -> Result<bool> {
+        let (latest, count) = self
+            .load_from(&snapshot.session.id, snapshot.runs.len())
+            .await?;
+        Ok(count == snapshot.runs.len()
+            && latest.session.workspace == snapshot.session.workspace
+            && latest.session.model == snapshot.session.model
+            && latest.session.reasoning_effort == snapshot.session.reasoning_effort
+            && latest.history == snapshot.history)
+    }
+
+    async fn load_from(&self, id: &str, skip_runs: usize) -> Result<(Snapshot, usize)> {
         let id = id.to_owned();
 
         self.read_access(move |conn| async move {
@@ -211,26 +245,42 @@ impl Store {
                 .context("session not found")?;
             let history = row.history.clone();
             let session = session_model(row, project)?;
+            let count = runs::Entity::find()
+                .filter(runs::Column::SessionId.eq(&id))
+                .count(&transaction)
+                .await? as usize;
             let rows = runs::Entity::find()
                 .filter(runs::Column::SessionId.eq(&id))
                 .order_by_asc(runs::Column::Id)
+                .limit(count.saturating_sub(skip_runs) as u64)
+                .offset(skip_runs as u64)
                 .all(&transaction)
                 .await?;
-            let last_completed = rows
-                .iter()
-                .filter(|r| r.status == "completed")
-                .map(|r| r.id)
-                .max()
-                .unwrap_or(0);
-            let mut run_events = crate::event_log::load_by_session(&transaction, &id).await?;
-            let mut first_messages = session_messages::Entity::find()
-                .filter(session_messages::Column::SessionId.eq(&id))
-                .filter(session_messages::Column::Ordinal.eq(0))
-                .all(&transaction)
+            let last_completed = runs::Entity::find()
+                .filter(runs::Column::SessionId.eq(&id))
+                .filter(runs::Column::Status.eq("completed"))
+                .order_by_desc(runs::Column::Id)
+                .one(&transaction)
                 .await?
-                .into_iter()
-                .map(|message| (message.run_id, message))
-                .collect::<std::collections::HashMap<_, _>>();
+                .map_or(0, |run| run.id);
+            let mut run_events = if let Some(first) = rows.first() {
+                crate::event_log::load_by_session(&transaction, &id, first.id).await?
+            } else {
+                Default::default()
+            };
+            let mut first_messages = if let Some(first) = rows.first() {
+                session_messages::Entity::find()
+                    .filter(session_messages::Column::SessionId.eq(&id))
+                    .filter(session_messages::Column::Ordinal.eq(0))
+                    .filter(session_messages::Column::RunId.gte(first.id))
+                    .all(&transaction)
+                    .await?
+                    .into_iter()
+                    .map(|message| (message.run_id, message))
+                    .collect::<std::collections::HashMap<_, _>>()
+            } else {
+                Default::default()
+            };
             let mut runs = Vec::new();
             for row in rows {
                 let run_id = row.id;
@@ -302,12 +352,15 @@ impl Store {
             };
 
             transaction.commit().await?;
-            Ok(Snapshot {
-                session,
-                history: effective_history,
-                runs,
-                recovery,
-            })
+            Ok((
+                Snapshot {
+                    session,
+                    history: effective_history,
+                    runs,
+                    recovery,
+                },
+                count,
+            ))
         })
         .await
     }

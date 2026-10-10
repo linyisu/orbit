@@ -2,6 +2,57 @@ use orbit_model::types::{StreamEvent, ToolCall};
 
 use crate::tool::FileChange;
 
+pub const MAX_STREAM_FRAGMENT_BYTES: usize = 64 * 1024;
+
+/// Coalesce adjacent stream fragments without crossing semantic barriers.
+/// Live delivery may use this only before publishing the previous event's cursor.
+pub fn coalesce(previous: &mut AgentEvent, next: &AgentEvent) -> bool {
+    match (previous, next) {
+        (
+            AgentEvent::Model(StreamEvent::TextDelta(a)),
+            AgentEvent::Model(StreamEvent::TextDelta(b)),
+        )
+        | (
+            AgentEvent::Model(StreamEvent::ReasoningDelta(a)),
+            AgentEvent::Model(StreamEvent::ReasoningDelta(b)),
+        ) if a.len().saturating_add(b.len()) <= MAX_STREAM_FRAGMENT_BYTES => {
+            a.push_str(b);
+            true
+        }
+        (
+            AgentEvent::ContextUsage { estimated_input: a },
+            AgentEvent::ContextUsage { estimated_input: b },
+        ) => {
+            *a = *b;
+            true
+        }
+        (
+            AgentEvent::Model(StreamEvent::ToolCallDelta(a)),
+            AgentEvent::Model(StreamEvent::ToolCallDelta(b)),
+        ) if a.index == b.index
+            && a.arguments.len().saturating_add(b.arguments.len()) <= MAX_STREAM_FRAGMENT_BYTES
+            && a.id.as_ref().zip(b.id.as_ref()).is_none_or(|(a, b)| a == b)
+            && a.metadata
+                .as_ref()
+                .zip(b.metadata.as_ref())
+                .is_none_or(|(a, b)| a == b) =>
+        {
+            if let Some(id) = &b.id {
+                a.id = Some(id.clone());
+            }
+            if let Some(metadata) = &b.metadata {
+                a.metadata = Some(metadata.clone());
+            }
+            if let Some(name) = &b.name {
+                a.name.get_or_insert_default().push_str(name);
+            }
+            a.arguments.push_str(&b.arguments);
+            true
+        }
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum AgentEvent {
     TurnStarted {

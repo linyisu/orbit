@@ -415,7 +415,7 @@ impl SessionState {
         let result = self.writer.as_ref().unwrap().append_context(message).await;
         self.release_idle_writer();
         result?;
-        self.snapshot = self.store.load(self.id()).await?;
+        self.store.refresh(&mut self.snapshot).await?;
         Ok(())
     }
 
@@ -464,7 +464,7 @@ impl SessionState {
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
         self.persist().await?;
         self.ensure_writer().await?;
-        let latest = match self.store.load(self.id()).await {
+        let matches = match self.store.matches_snapshot(&self.snapshot).await {
             Ok(latest) => latest,
             Err(error) => {
                 self.release_idle_writer();
@@ -472,17 +472,10 @@ impl SessionState {
             }
         };
 
-        if let Some(workspace) = &self.audit_workspace
-            && workspace.root() != Path::new(&latest.session.workspace)
-        {
-            self.release_idle_writer();
-            return Err(SessionRefreshRequired.into());
-        }
-
-        if latest.history != self.snapshot.history
-            || latest.runs.len() != self.snapshot.runs.len()
-            || latest.session.model != self.snapshot.session.model
-            || latest.session.reasoning_effort != self.snapshot.session.reasoning_effort
+        if !matches
+            || self.audit_workspace.as_ref().is_some_and(|workspace| {
+                workspace.root() != Path::new(&self.snapshot.session.workspace)
+            })
         {
             self.release_idle_writer();
             return Err(SessionRefreshRequired.into());
@@ -528,7 +521,7 @@ impl SessionState {
             .await?;
         self.active = false;
         self.journal = None;
-        self.snapshot = self.store.load(self.id()).await?;
+        self.store.refresh(&mut self.snapshot).await?;
         self.release_idle_writer();
 
         Ok(())

@@ -13,6 +13,62 @@ use orbit_model::types::{ChatMessage, StreamEvent, ToolCall};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[tokio::test]
+async fn incremental_refresh_preserves_receipts_and_detects_stale_model_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("sessions.db")).await.unwrap();
+    let mut writer = store
+        .create(dir.path().to_string_lossy().into_owned(), "model".into())
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    let mut snapshot = store.load(&id).await.unwrap();
+    for turn in 0..24 {
+        assert!(store.matches_snapshot(&snapshot).await.unwrap());
+        writer
+            .begin(format!("question {turn}"), "model".into())
+            .await
+            .unwrap();
+        let history = vec![ChatMessage::assistant(format!("answer {turn}"))];
+        writer
+            .finish(
+                "completed",
+                vec![
+                    text(&format!("answer {turn}")),
+                    command_receipt("cargo test", 0),
+                ],
+                Some(history),
+            )
+            .await
+            .unwrap();
+        assert!(!store.matches_snapshot(&snapshot).await.unwrap());
+        store.refresh(&mut snapshot).await.unwrap();
+        assert_eq!(snapshot.runs.len(), turn + 1);
+        assert_eq!(snapshot.runs[0].prompt, "question 0");
+        assert!(store.matches_snapshot(&snapshot).await.unwrap());
+    }
+    assert_eq!(
+        serde_json::to_value(&snapshot).unwrap(),
+        serde_json::to_value(store.load(&id).await.unwrap()).unwrap()
+    );
+    // Metadata and an idle context append must be visible even without a new run.
+    writer
+        .set_model_profile("other-model".into(), None)
+        .await
+        .unwrap();
+    writer
+        .append_context(ChatMessage::user("follow-up constraint"))
+        .await
+        .unwrap();
+    assert!(!store.matches_snapshot(&snapshot).await.unwrap());
+    store.refresh(&mut snapshot).await.unwrap();
+    assert_eq!(snapshot.session.model, "other-model");
+    assert_eq!(
+        serde_json::to_value(&snapshot).unwrap(),
+        serde_json::to_value(store.load(&id).await.unwrap()).unwrap()
+    );
+}
+
 struct Database(std::path::PathBuf);
 
 impl Database {
